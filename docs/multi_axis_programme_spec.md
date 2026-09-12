@@ -193,6 +193,62 @@ window, smoke ONE, then A/B (4 anchor seeds, derived vs banked legacy) as the FI
 thing in the queue; then the 2x2 / window-k with derived ON; arm B once the delta
 label is re-based (same change).
 
+## 0b. D8 — the CPU replay trainer feeds STALE vertical features (audit finding, 11/09)
+
+STATUS: FOUND BY CODE READING, NOT YET MEASURED. Needs a Rust probe before any decision.
+
+Mechanism (file:line, tree 3b5fc37d):
+  · At rollout, `rollout_and_label_rs` sets the vertical observation EVERY step
+    (dagger_train.rs:1618-1630: `set_vertical_obs(collective, target_alt − z, vz)`),
+    so the student's live addresses carry per-step [collective, alt_err, vz] bits.
+  · The trajectory it records has NO vertical fields: `TrajectoryRs`
+    (dagger_train.rs:586-613) = gyros, accels, targets, pid/student pwms, integrals,
+    att_errs, label_base. Nothing about z.
+  · Training replays that record: `bptt_train_window` (controller.rs:3764-3800) takes
+    gyros/accels/targets/pwms only, and rebuilds each step's frame with
+    `compute_features(gyros[t], accels[t], targets[t])` (controller.rs:3892), which
+    appends `self.vert_obs` (controller.rs:5451-5464) — a field NOTHING in the replay
+    updates. `reset()` (controller.rs:949) does not clear it either.
+  ⇒ Every record of a training round is written at addresses whose three vertical
+    features equal the LAST rollout step of the LAST episode of that round (near
+    hover), while scoring/deploy reads addresses with the real per-step values. This
+    is the DOB frozen-accumulator bug (Fix A, 06/08) in the vertical channel — the
+    13/08 stage-1 review saw exactly this hazard for the GPU recorder and refused
+    that path (dagger_train.rs:2231-2237: "would append the vertical features as
+    ZEROS while the CPU/score path appends the real values") but called the CPU path
+    safe without checking it. The CPU split trainer (controller_split.rs) has no
+    vertical handling either (grep clean).
+
+Scope: every run with --obs-collective-cmd/--obs-alt-err/--obs-vz since 12/08/2026
+(d56576d7) — the anchor recipe sets all three (sweep_ladder_gamma.sh:62-63) — at
+sn=0 AND sn>0. That is the four anchors, arm A, the D0 A/B, the leak/label arms.
+
+Why it can still fly at 99% stable: the stale value is near hover, and so are most
+steps, so the thermometer bins agree on the majority of records; they DISAGREE on
+the transient steps after a disturbance — exactly where altitude error is made.
+With ~20 features x 16 bits and 24-bit neurons essentially every neuron addresses
+at least one vertical bit, so the effect is on address identity, not on a minority
+of neurons. This is a candidate mechanism for the 0.27 m altitude gap that no
+attitude lever has moved, and for "the floor is STRUCTURAL" (L1b).
+
+What must happen BEFORE axis C (and before treating the anchor's alt as a controller
+property):
+  1. MEASURE (Rust, read-only): a probe that, at scoring time, counts the fraction of
+     visited addresses that are EMPTY, vertical features on vs off, on one banked
+     anchor winner. Stale-write divergence shows as a high EMPTY fraction on the
+     transient steps. No wheel deploy needed for a probe binary; the run's cells are
+     in the banked winner.yaml.gz.
+  2. If confirmed, FIX by the Fix-A pattern: record [collective, alt_err, vz] (and
+     the stage-2 horizontal quad) per step in TrajectoryRs at rollout, slice them
+     into `bptt_train_window` like `student_pwms`, and call `set_vertical_obs` /
+     `set_horizontal_obs` before `compute_features(t)` at controller.rs:3892. Pin
+     test: replay frame bits == rollout frame bits for the vertical features on a
+     synthetic trajectory. Ship behind a flag, default legacy bit-identical (D0
+     precedent), A/B on the 4 anchor seeds, then flip. Wheel change ⇒ R9: anchor
+     re-fly or bit-identity, and the ABI bumps.
+  3. Until then, axis C's primary column (ALTITUDE) is measured against an anchor
+     whose altitude channel may be trained wrong — do not arm C.
+
 ## 1. The claim under test
 
 Every controller result to date sits at ONE point of the design space:
@@ -478,7 +534,25 @@ edits a running .sh. Queues behind the post-arm-A queue (~90 h).
       for L4A/L4B/L4C on cf21). PENDING: rerun all four on the D5 seed set once chosen.
   [ ] Failure-count export for stable (R11): does the marker carry per-episode
       counts? If not, add them or declare stable descriptive.
-  [ ] sn>0 path audit paragraph with file:line (axis C prereq 1).
+  [x] sn>0 path audit (11/09/2026, current tree 3b5fc37d). Every claim of the §3-C
+      path paragraph re-verified at today's lines, plus the D0 question the review
+      predates:
+        · Trainer dispatch: `use_split = WNN_STATE_SPLIT=="1" && sn>0`
+          (dagger_train.rs:2223-2226); the ladder exports no WNN_* (grep clean), so
+          sn>0 takes the non-split branch (dagger_train.rs:2341-2352) →
+          `train_on_trajectory_rs` (1759) → `bptt_train_window` (controller.rs:3764-4417),
+          CPU. GPU split needs WNN_CONTROLLER_GPU_TRAIN=1 AND refuses the vertical
+          channel (`!vert_on`, dagger_train.rs:2238-2247).
+        · sn=0-ONLY: write-priority / err-floor gated by `state_bits_in == 0`
+          (controller.rs:3981-3987); --dagger-label-delta asserts sn==0
+          (controller.rs:3832-3837; evaluator.py:151); output_full_window refuses sn>0
+          (controller.rs:1821-1824). Confirmed: axis C cannot inherit arm B / arm D.
+        · D0 REACHES sn>0: the derived hover enters through TeacherBank::get
+          (dagger_train.rs:968-975), consumed by `rollout_and_label_rs` (1481), which
+          both the split and the BPTT branch share — so a C arm under
+          --teacher-hover derived trains against the same re-based labels as the anchor.
+        · State-prefix offset from num_features(): controller.rs:8096 (pin test).
+      ⚠️ NEW FINDING — D8, applies to sn=0 TOO (i.e. to the ANCHOR). See §0b below.
   [ ] Smokes: one 4-minute phased_ga per new flag combination (L4A, L4B, pid, lqi,
       sn=4, sn=8, cf2x_firmware) — rc 0 and a sane grid line.
   [ ] Memory budget for sn=4/8 vs the 180k cap.
