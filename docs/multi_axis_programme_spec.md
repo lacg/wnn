@@ -455,8 +455,28 @@ edits a running .sh. Queues behind the post-arm-A queue (~90 h).
 
 ## 5. Stage 0 — prerequisites, no controller runs
 
-  [ ] Marker provenance fields (wheel hash, ABI, fitness_pools) exported by the
-      ladder — R9. Check whether they already exist; add if not (Python only).
+  [~] Marker provenance fields (wheel hash, ABI, fitness_pools) exported by the
+      ladder — R9. CHECKED 11/09/2026: they did NOT exist. `fitness_pools` was in
+      the .out header only; ABI and wheel identity were printed nowhere. BUILT on
+      branch `marker-provenance` (worktree /Users/lacg/wnn-provenance), NOT LANDED —
+      the live tree is what the A/B's runs import and `controller_arm_lib.sh` is
+      re-sourced by every ladder launch, so this merges at an IDLE window only:
+        · wnn/control/provenance.py — `collect_provenance()` → ONE greppable line
+          `[provenance] wheel=ram_controller-2026.212.37 abi=27 wheel_sha256=<16 hex
+          of the .so> git=<short HEAD>[+dirty] fitness_pools=CRN(all 5 pools/gen)`,
+          printed by phased_ga right after the `Pop=…` header. Fail-safe: every
+          field degrades to `unknown`/0, a run can never die on provenance.
+        · controller_arm_lib.sh `provenance_json` — the line becomes a nested
+          `"provenance":{wheel,abi,wheel_sha256,git,fitness_pools}` object in the
+          marker; a .out without the line banks `"provenance":null` (visible absence).
+        · tests/controller_provenance.py (15 checks) + R9 cases in
+          tests/controller_arm_marker_rules.sh. That harness had been FAILING since
+          the 04/08 stage-header anchoring (its canned body had no headers) — fixed.
+      CONSEQUENCE for R9: every marker banked before the merge — the four anchors,
+      all of arm A, the D0 A/B runs flown before it — carries `provenance:null`
+      and rests on the s=1 bit-identity pin; the leaderboard/paired_power readers
+      go through json.load and ignore the field. Hash is of the compiled .so, not
+      the version string: two builds of 2026.212.37 from different trees differ.
   [ ] Decision D5: fresh report-seed set for the final table — R10.
   [x] Baselines --translation for (cf21, L4A), (cf21, L4B), (cf2x_firmware, L4C) —
       DONE 11/09/2026 18:21 EDT, same args as the anchor file (5 report seeds

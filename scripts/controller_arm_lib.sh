@@ -26,6 +26,27 @@
 #
 # Returns 0 if a marker was written, non-zero otherwise.
 
+# provenance_json OUT — the `[provenance]` line of a .out as a JSON object, or
+# `null` when the run predates the line. Values are single tokens (no spaces,
+# no quotes) by construction in provenance.py, so a sed capture is exact.
+provenance_json() {
+	local out="$1" line
+	line=$(grep -E "^\[provenance\] " "$out" 2>/dev/null | head -1)
+	if [ -z "$line" ]; then
+		printf 'null'
+		return 0
+	fi
+	local wheel abi sha git pools
+	wheel=$(printf '%s' "$line" | sed -nE 's/.* wheel=([^ ]+).*/\1/p')
+	abi=$(printf '%s' "$line"   | sed -nE 's/.* abi=([0-9]+).*/\1/p')
+	sha=$(printf '%s' "$line"   | sed -nE 's/.* wheel_sha256=([^ ]+).*/\1/p')
+	git=$(printf '%s' "$line"   | sed -nE 's/.* git=([^ ]+).*/\1/p')
+	pools=$(printf '%s' "$line" | sed -nE 's/.* fitness_pools=(.*)$/\1/p')
+	printf '{"wheel":"%s","abi":%s,"wheel_sha256":"%s","git":"%s","fitness_pools":"%s"}' \
+		"${wheel:-unknown}" "${abi:-0}" "${sha:-unknown}" "${git:-unknown}" \
+		"$(printf '%s' "${pools:-unknown}" | tr -d '"')"
+}
+
 run_controller_arm() {
 	local tag="$1" markdir="$2" outdir="$3" vp="$4" logfn="$5" extra="$6"
 	shift 6
@@ -155,10 +176,20 @@ run_controller_arm() {
 		return 3
 	fi
 
+	# R9 (multi-axis spec, 11/09/2026) — PROVENANCE. phased_ga prints ONE line,
+	# `[provenance] wheel=… abi=… wheel_sha256=… git=… fitness_pools=…`
+	# (wnn/control/provenance.py); it becomes a nested object here so a reader can
+	# ask "which wheel banked this?" without the .out. A run whose .out predates the
+	# line (every marker before this date) gets `"provenance":null` — a visible
+	# absence, never a guessed value. The four multi-axis anchors are in that set;
+	# their validity argument is the s=1 bit-identity pin, cited in the spec (R9).
+	local prov_json
+	prov_json=$(provenance_json "$out")
+
 	# Field ORDER matters only for byte-parity with the markers run_l3d_feature_probe.sh
 	# wrote before it was migrated onto this helper; readers go through json.load.
 	[ -n "$extra" ] && extra="${extra},"
-	printf '{"tag":"%s",%s"rc":%s,"dur_s":%s,"peak_rss_bytes":%s,"cells":"%s","fpga":"%s","held_neurons":"%s","held_memory":"%s","held_neurons_multiseed":"%s","held_memory_multiseed":"%s","held_grid_multiseed":"%s","headline_stage":"%s","headline_holdout":"%s","stage_select_candidates":"%s","fixed_thresholds":true,"done":"%s"}\n' \
+	printf '{"tag":"%s",%s"rc":%s,"dur_s":%s,"peak_rss_bytes":%s,"cells":"%s","fpga":"%s","held_neurons":"%s","held_memory":"%s","held_neurons_multiseed":"%s","held_memory_multiseed":"%s","held_grid_multiseed":"%s","headline_stage":"%s","headline_holdout":"%s","stage_select_candidates":"%s","fixed_thresholds":true,"provenance":%s,"done":"%s"}\n' \
 		"$tag" "$extra" "$rc" "$dur" "${rss:-null}" \
 		"$cells" \
 		"$(echo "$fpga"   | tr -d '"' | sed 's/  */ /g')" \
@@ -170,6 +201,7 @@ run_controller_arm() {
 		"$(echo "$head_st" | tr -d '"' | sed 's/  */ /g')" \
 		"$(echo "$head_ho" | tr -d '"' | sed 's/  */ /g')" \
 		"$(echo "$sel_tab" | tr -d '"')" \
+		"$prov_json" \
 		"$(date -u +%FT%TZ)" > "$marker"
 	"$logfn" "$tag: rc=0 dur=${dur}s — marker written"
 	return 0

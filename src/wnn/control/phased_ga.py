@@ -239,6 +239,7 @@ def _wire_cancel(strat, args, stage_num: int, stage_name: str) -> None:
 		Path(_stage_emergency_path(args, stage_num, stage_name)),
 		ControllerGenomeCodec(), SaveCadence(budget, max_int), async_save=False)
 
+from wnn.control.provenance import collect_provenance
 from wnn.control.evaluator import (
 	ControllerSpec, ControllerEvaluator, arch_shape_from_spec, spec_from_arch,
 	fit_thresholds_from_pid_rollouts,
@@ -2994,6 +2995,14 @@ def _validate_rank_weights(args) -> None:
 				f"tuned value is bound to the capacity it was swept at. A rank is scale-free.")
 
 
+def fitness_pools_label(args) -> str:
+	"""The pool scheme the search scores under — printed in the run header AND
+	stamped into the provenance line, from one place so they cannot disagree."""
+	if args.score_crn:
+		return f"CRN(all {args.num_eval_folds} pools/gen)"
+	return "rotation(1 pool/gen)"
+
+
 def main():
 	args = build_arg_parser().parse_args()
 	_validate_rank_weights(args)
@@ -3240,7 +3249,10 @@ def main():
 	print(f"Pop={args.pop} elitism={args.elitism:.0%} crossover={args.crossover_rate:.0%} "
 	      f"eval_episodes={args.eval_episodes} steps={args.steps} tilt={args.tilt}° "
 	      f"levels={args.levels} "
-	      f"fitness_pools={'CRN(all ' + str(args.num_eval_folds) + ' pools/gen)' if args.score_crn else 'rotation(1 pool/gen)'}")
+	      f"fitness_pools={fitness_pools_label(args)}")
+	# R9 (multi-axis spec): one greppable line the ladder copies into the marker —
+	# wheel, ABI, .so hash, git HEAD, pool scheme. Fail-safe by construction.
+	print(collect_provenance(fitness_pools_label(args)).line())
 
 	# REPORT-ONLY re-selection: no search, no writes — rebuild the candidates from
 	# the saved stage checkpoints and re-run the val-based headline selection.

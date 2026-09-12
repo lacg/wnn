@@ -35,7 +35,13 @@ exit "$STUB_RC"
 EOS
 chmod +x "$STUB"
 
-GOOD_BODY='  RESULT — during-search winner (held-out): stable=99.0% err=2.27° steady=1.78°
+# The body carries the STAGE headers the helper anchors on (04/08/2026 fix): the
+# NEURONS triple follows "STAGE 1 (NEURONS) done", the MEMORY triple follows
+# "STAGE 4 (MEMORY) done". Before 11/09/2026 this body had no headers, so every
+# happy-path check here had been failing silently since that fix landed.
+GOOD_BODY='  STAGE 1 (NEURONS) done: gen 5/5
+  RESULT — during-search winner (held-out): stable=99.0% err=2.27° steady=1.78°
+  STAGE 4 (MEMORY) done: gen 6/120
   RESULT — during-search winner (held-out): stable=100.0% err=2.33° steady=1.91°
 cells[80160-277005 Σ9653k μ193k]'
 
@@ -66,7 +72,8 @@ check "rc=1 (crash) writes no marker" "$(has_marker crash)" "no"
 
 echo
 echo "=== R3: clean exit with no MEMORY triple is a truncated run ==="
-STUB_BODY="  RESULT — during-search winner (held-out): stable=99.0% err=2.27° steady=1.78°" STUB_RC=0 \
+STUB_BODY="  STAGE 1 (NEURONS) done: gen 5/5
+  RESULT — during-search winner (held-out): stable=99.0% err=2.27° steady=1.78°" STUB_RC=0 \
 	run_controller_arm "trunc" "$MARKDIR" "$OUTDIR" "$STUB" quiet "" -- --x >/dev/null 2>&1
 check "rc=0, only a NEURONS triple -> no marker" "$(has_marker trunc)" "no"
 STUB_BODY="no results at all" STUB_RC=0 \
@@ -86,6 +93,28 @@ check "held_memory is the SECOND triple" \
 	"$(python3 -c "import json;d=json.load(open('$MARKDIR/good.json'));print('100.0%' in d['held_memory'])" 2>/dev/null)" "True"
 check "cells captured" \
 	"$(python3 -c "import json;d=json.load(open('$MARKDIR/good.json'));print(d['cells'].startswith('cells[80160'))" 2>/dev/null)" "True"
+
+echo
+echo "=== R9: provenance is copied from the [provenance] line, null when absent ==="
+check "a .out WITHOUT the line banks provenance=null (pre-R9 run, visible absence)" \
+	"$(python3 -c "import json;d=json.load(open('$MARKDIR/good.json'));print(d['provenance'])" 2>/dev/null)" "None"
+PROV_BODY="Pop=50 fitness_pools=CRN(all 5 pools/gen)
+[provenance] wheel=ram_controller-2026.212.37 abi=27 wheel_sha256=08cdd0462eac0d15 git=3b5fc37d+dirty fitness_pools=CRN(all 5 pools/gen)
+$GOOD_BODY"
+STUB_BODY="$PROV_BODY" STUB_RC=0 \
+	run_controller_arm "prov" "$MARKDIR" "$OUTDIR" "$STUB" quiet "" -- --x >/dev/null 2>&1
+check "marker with the line is valid JSON" \
+	"$(python3 -c "import json;json.load(open('$MARKDIR/prov.json'));print('yes')" 2>/dev/null || echo no)" "yes"
+check "provenance.wheel" \
+	"$(python3 -c "import json;print(json.load(open('$MARKDIR/prov.json'))['provenance']['wheel'])" 2>/dev/null)" "ram_controller-2026.212.37"
+check "provenance.abi is an INTEGER" \
+	"$(python3 -c "import json;print(repr(json.load(open('$MARKDIR/prov.json'))['provenance']['abi']))" 2>/dev/null)" "27"
+check "provenance.wheel_sha256" \
+	"$(python3 -c "import json;print(json.load(open('$MARKDIR/prov.json'))['provenance']['wheel_sha256'])" 2>/dev/null)" "08cdd0462eac0d15"
+check "provenance.git keeps the +dirty suffix" \
+	"$(python3 -c "import json;print(json.load(open('$MARKDIR/prov.json'))['provenance']['git'])" 2>/dev/null)" "3b5fc37d+dirty"
+check "provenance.fitness_pools keeps its spaces and parens" \
+	"$(python3 -c "import json;print(json.load(open('$MARKDIR/prov.json'))['provenance']['fitness_pools'])" 2>/dev/null)" "CRN(all 5 pools/gen)"
 
 echo
 echo "=== an existing marker is never rewritten (idempotent resume) ==="
