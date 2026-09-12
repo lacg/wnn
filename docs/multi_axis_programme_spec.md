@@ -532,8 +532,28 @@ edits a running .sh. Queues behind the post-arm-A queue (~90 h).
 
 ## 5. Stage 0 — prerequisites, no controller runs
 
-  [ ] Marker provenance fields (wheel hash, ABI, fitness_pools) exported by the
-      ladder — R9. Check whether they already exist; add if not (Python only).
+  [~] Marker provenance fields (wheel hash, ABI, fitness_pools) exported by the
+      ladder — R9. CHECKED 11/09/2026: they did NOT exist. `fitness_pools` was in
+      the .out header only; ABI and wheel identity were printed nowhere. BUILT on
+      branch `marker-provenance` (worktree /Users/lacg/wnn-provenance), NOT LANDED —
+      the live tree is what the A/B's runs import and `controller_arm_lib.sh` is
+      re-sourced by every ladder launch, so this merges at an IDLE window only:
+        · wnn/control/provenance.py — `collect_provenance()` → ONE greppable line
+          `[provenance] wheel=ram_controller-2026.212.37 abi=27 wheel_sha256=<16 hex
+          of the .so> git=<short HEAD>[+dirty] fitness_pools=CRN(all 5 pools/gen)`,
+          printed by phased_ga right after the `Pop=…` header. Fail-safe: every
+          field degrades to `unknown`/0, a run can never die on provenance.
+        · controller_arm_lib.sh `provenance_json` — the line becomes a nested
+          `"provenance":{wheel,abi,wheel_sha256,git,fitness_pools}` object in the
+          marker; a .out without the line banks `"provenance":null` (visible absence).
+        · tests/controller_provenance.py (15 checks) + R9 cases in
+          tests/controller_arm_marker_rules.sh. That harness had been FAILING since
+          the 04/08 stage-header anchoring (its canned body had no headers) — fixed.
+      CONSEQUENCE for R9: every marker banked before the merge — the four anchors,
+      all of arm A, the D0 A/B runs flown before it — carries `provenance:null`
+      and rests on the s=1 bit-identity pin; the leaderboard/paired_power readers
+      go through json.load and ignore the field. Hash is of the compiled .so, not
+      the version string: two builds of 2026.212.37 from different trees differ.
   [ ] Decision D5: fresh report-seed set for the final table — R10.
   [x] Baselines --translation for (cf21, L4A), (cf21, L4B), (cf2x_firmware, L4C) —
       DONE 11/09/2026 18:21 EDT, same args as the anchor file (5 report seeds
@@ -553,8 +573,31 @@ edits a running .sh. Queues behind the post-arm-A queue (~90 h).
       their own airframe better, so axis D's PID gap is NOT comparable to axis A's
       (R6). alt m is set by the disturbance, not the controller (0.000/0.038/0.076
       for L4A/L4B/L4C on cf21). PENDING: rerun all four on the D5 seed set once chosen.
-  [ ] Failure-count export for stable (R11): does the marker carry per-episode
-      counts? If not, add them or declare stable descriptive.
+  [~] Failure-count export for stable (R11). CHECKED 11/09/2026: the marker carries
+      only the seed-mean±SD of stable; no count. But every report seed scores
+      exactly 100 episodes and prints its own RESULT line, so k = round(acc x 100)
+      is EXACT and recoverable for every marker ever banked, anchors included. BUILT
+      on branch `marker-provenance` (same idle-window merge as the provenance item):
+        · phased_ga `_stable_failure_count` appends `stable_fail=k/n` to every
+          MULTI-SEED line (last field; the leaderboard and paired_power regexes take
+          the first `stable=` and are unaffected — verified) and carries
+          stable_failures/stable_episodes on the aggregate.
+        · scripts/stable_failure_ci.py — exact Clopper-Pearson 95% CI on the failure
+          rate per run x stage; reads `stable_fail=` from the marker, else reconstructs
+          from the .out (exactly n_seeds trailing RESULT lines per MULTI-SEED line —
+          the stage-select val scoring prints 45 RESULT lines in between; HEADLINE
+          aliases the crowned stage when pop[0] is crowned, since it is not re-scored).
+          REFUSES any stable% off the 100/N grid rather than round a count. `--vs A B`
+          adds Fisher's exact test. 12 checks in tests/controller_stable_failure_ci.py.
+      UNIT DECISION (stated, not hidden): the interval pools all 500 episodes as
+      Bernoulli trials; episodes within a seed share that seed's disturbance stream,
+      so the honest replication unit is the seed — the per-seed counts print beside
+      the pooled CI so clustering is visible (s3 _hd HEADLINE: 2/2/2/4/12).
+      First read, MEMORY row, fail/500 [95% CI on fail-rate, %]:
+        s2 _hd 3 [0.1,1.7]  vs _crn 2 [0.0,1.4]     s3 _hd 3 [0.1,1.7]  vs plain 5 [0.3,2.3]
+        Fisher s3: p=0.725. GRID rows differ by an order of magnitude (21-38/500), i.e.
+        stable is resolved at GRID and saturated by MEMORY — at 2-5 failures in 500 a
+        t-CI on stable% is meaningless and R11's count is the only honest form.
   [x] sn>0 path audit (11/09/2026, current tree 3b5fc37d). Every claim of the §3-C
       path paragraph re-verified at today's lines, plus the D0 question the review
       predates:
@@ -586,6 +629,14 @@ edits a running .sh. Queues behind the post-arm-A queue (~90 h).
       have rate=None (training.py:513) so cf2x_urdf cannot be flown by accident.
       Python-only, inert on cf21 — but it is live-imported source: land it at an idle
       window, never while a chain is armed.
+  [~] HOLD sentinel (11/09/2026, Luiz): `touch experiments/HOLD_CONTROLLER` → every
+      chain banks the run it is flying and WAITS before the next launch
+      (`wait_while_held` in controller_arm_lib.sh, reached by every chain through the
+      ladder; post_d0_queue.sh checks it before launching a chain too); `rm` resumes.
+      Idle windows are requested, never made by killing the queue. On branch
+      marker-provenance with the R9/R11 work; the FIRST window is being made the old
+      way (queue killed 21:26 EDT 11/09, chain finishes 4/4 alone) because the
+      sentinel cannot land into running scripts. Harness case added.
   [ ] Actuator-lag plumbing (axis F): flag → EpisodeConfig → cfg → baseline scorer.
   [ ] A-cross scoring script: score the 4 banked anchor winners at L4A/L4B.
   [ ] Stale notes fixed so draft 1's error cannot recur: `_FW_UNIT_NOTE`

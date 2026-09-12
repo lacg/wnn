@@ -239,6 +239,7 @@ def _wire_cancel(strat, args, stage_num: int, stage_name: str) -> None:
 		Path(_stage_emergency_path(args, stage_num, stage_name)),
 		ControllerGenomeCodec(), SaveCadence(budget, max_int), async_save=False)
 
+from wnn.control.provenance import collect_provenance
 from wnn.control.evaluator import (
 	ControllerSpec, ControllerEvaluator, arch_shape_from_spec, spec_from_arch,
 	fit_thresholds_from_pid_rollouts,
@@ -1391,6 +1392,18 @@ def _heldout_row_stats(results) -> dict:
 	return stats
 
 
+def _stable_failure_count(results, args) -> tuple[int, int]:
+	"""(failed episodes, total episodes) across the report seeds — R11.
+
+	Each seed scores `report_episodes` (fallback: eval_episodes) episodes and
+	`acc` is the pass fraction k/N, so round(acc*N) recovers k exactly. Returns
+	counts, never a rate: a rate hides N, and N is what the exact CI needs."""
+	n_per_seed = int(getattr(args, "report_episodes", None) or args.eval_episodes)
+	passed = sum(int(round(r.acc * n_per_seed)) for r in results)
+	total = n_per_seed * len(results)
+	return total - passed, total
+
+
 def _heldout_row_agg_str(stats: dict) -> str:
 	"""MULTI-SEED tail: mean±SD for each metric present in stats, in report order."""
 	parts = []
@@ -1440,15 +1453,22 @@ def _maybe_holdout(args, ec, spec, res, seeds, label: str):
 		# _HELDOUT_ROW declaration, so the printed line and the returned namespace can
 		# never disagree about which metrics exist.
 		stats = _heldout_row_stats(results)
+		# R11 (multi-axis spec): stable is a bounded pass RATE, so its t-CI is
+		# approximate. Export the FAILURE COUNT over all report episodes so a reader
+		# can put an exact binomial CI on it. Exact because each seed scores
+		# report_episodes episodes and acc is k/N. Appended LAST so every existing
+		# regex anchored on "stable=…% err=…°" keeps matching.
+		fails, n_eps = _stable_failure_count(results, args)
 		print(f"  [report-seeds] {label} MULTI-SEED held-out ({len(results)} seeds {seed_list}): "
 		      f"stable={mean(stbs):.1f}±{sd(stbs):.1f}%  err={mean(errs):.2f}±{sd(errs):.2f}°"
-		      f"{_heldout_row_agg_str(stats)}")
+		      f"{_heldout_row_agg_str(stats)}  stable_fail={fails}/{n_eps}")
 		# Return the seed-mean as the stage held-out (so downstream recording uses the
 		# robust number). EVERY row metric is carried, present-or-None: a caller that
 		# ranks by a fitness weight needs the whole row, and the old hand-listed
 		# namespace silently dropped jerk, mono and effort.
 		aggregate = SimpleNamespace(acc=mean(stbs) / 100.0,
-		                            mean_attitude_error_deg=mean(errs), fitness=mean(fits))
+		                            mean_attitude_error_deg=mean(errs), fitness=mean(fits),
+		                            stable_failures=fails, stable_episodes=n_eps)
 		for attr, _label, _unit, _dp in _HELDOUT_ROW:
 			setattr(aggregate, attr, stats[attr][0] if attr in stats else None)
 		return aggregate
@@ -2994,6 +3014,14 @@ def _validate_rank_weights(args) -> None:
 				f"tuned value is bound to the capacity it was swept at. A rank is scale-free.")
 
 
+def fitness_pools_label(args) -> str:
+	"""The pool scheme the search scores under — printed in the run header AND
+	stamped into the provenance line, from one place so they cannot disagree."""
+	if args.score_crn:
+		return f"CRN(all {args.num_eval_folds} pools/gen)"
+	return "rotation(1 pool/gen)"
+
+
 def main():
 	args = build_arg_parser().parse_args()
 	_validate_rank_weights(args)
@@ -3240,7 +3268,10 @@ def main():
 	print(f"Pop={args.pop} elitism={args.elitism:.0%} crossover={args.crossover_rate:.0%} "
 	      f"eval_episodes={args.eval_episodes} steps={args.steps} tilt={args.tilt}° "
 	      f"levels={args.levels} "
-	      f"fitness_pools={'CRN(all ' + str(args.num_eval_folds) + ' pools/gen)' if args.score_crn else 'rotation(1 pool/gen)'}")
+	      f"fitness_pools={fitness_pools_label(args)}")
+	# R9 (multi-axis spec): one greppable line the ladder copies into the marker —
+	# wheel, ABI, .so hash, git HEAD, pool scheme. Fail-safe by construction.
+	print(collect_provenance(fitness_pools_label(args)).line())
 
 	# REPORT-ONLY re-selection: no search, no writes — rebuild the candidates from
 	# the saved stage checkpoints and re-run the val-based headline selection.

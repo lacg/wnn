@@ -16,12 +16,17 @@ controller_pids() { pgrep -f "MacOS/Python -u -m wnn.control.phased_ga" 2>/dev/n
 chain_pids() { pgrep -f "scripts/(sweep_ladder_gamma|leak_x_labelscale_chain|arm_b_delta_label_chain|queue_after_ab_chain|d0_hover_ab_chain)\.sh" 2>/dev/null || true; }
 busy() { [ -n "$(controller_pids)" ] || [ -n "$(chain_pids)" ]; }
 wait_box_clear() { local b=0; while busy; do sleep 60; b=$((b+1)); [ $((b%30)) = 0 ] && log "waiting — box busy"; done; sleep 120; }
+# HOLD sentinel: experiments/HOLD_CONTROLLER (wait_while_held in controller_arm_lib.sh).
+# Checked here before a chain launches AND inside every run launch, so `touch` it to
+# get an idle box after the current run banks, `rm` it to resume. No kills needed.
+. scripts/controller_arm_lib.sh
 count_markers() { ls "$MARK" 2>/dev/null | grep -cE "$1"; }
 run_step() {
 	local name="$1" regex="$2" want="$3"; shift 3
 	local have; have="$(count_markers "$regex")"
 	[ "$have" -ge "$want" ] && { log "SKIP ${name} — complete (${have}/${want})."; return 0; }
 	wait_box_clear
+	wait_while_held log "STEP ${name}"
 	log "===== STEP ${name}: starting (${have}/${want} markers) ====="
 	"$@"; local rc=$?
 	log "${name} chain exited rc=${rc}"

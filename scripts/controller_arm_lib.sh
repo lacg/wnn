@@ -26,6 +26,48 @@
 #
 # Returns 0 if a marker was written, non-zero otherwise.
 
+# HOLD SENTINEL (11/09/2026). `touch experiments/HOLD_CONTROLLER` and every chain
+# on the box finishes the run it is flying, banks it, and then WAITS here before
+# launching the next one — the box goes idle without killing anything. `rm` the
+# file and everything resumes on its own. Before this the only way to get an idle
+# window was to kill the queue supervisor and relaunch it by hand (done 09:50 and
+# 21:26 on 11/09). Every chain reaches run_controller_arm through the ladder, so
+# this one check covers them all; post_d0_queue.sh checks it too so the hold is
+# visible at the queue level, not only inside a chain.
+#   WNN_HOLD_FILE    override the path (tests)      WNN_HOLD_POLL_S  poll interval (default 60)
+wait_while_held() {
+	local logfn="$1" tag="$2"
+	local hold="${WNN_HOLD_FILE:-experiments/HOLD_CONTROLLER}" poll="${WNN_HOLD_POLL_S:-60}" n=0
+	[ -e "$hold" ] || return 0
+	"$logfn" "HOLD — $hold present; $tag will NOT launch until it is removed (box idle by request)"
+	while [ -e "$hold" ]; do
+		sleep "$poll"; n=$((n + 1))
+		[ $((n % 10)) = 0 ] && "$logfn" "HOLD — still held ($tag), $((n * poll / 60)) min"
+	done
+	"$logfn" "HOLD released — launching $tag"
+}
+
+# provenance_json OUT — the `[provenance]` line of a .out as a JSON object, or
+# `null` when the run predates the line. Values are single tokens (no spaces,
+# no quotes) by construction in provenance.py, so a sed capture is exact.
+provenance_json() {
+	local out="$1" line
+	line=$(grep -E "^\[provenance\] " "$out" 2>/dev/null | head -1)
+	if [ -z "$line" ]; then
+		printf 'null'
+		return 0
+	fi
+	local wheel abi sha git pools
+	wheel=$(printf '%s' "$line" | sed -nE 's/.* wheel=([^ ]+).*/\1/p')
+	abi=$(printf '%s' "$line"   | sed -nE 's/.* abi=([0-9]+).*/\1/p')
+	sha=$(printf '%s' "$line"   | sed -nE 's/.* wheel_sha256=([^ ]+).*/\1/p')
+	git=$(printf '%s' "$line"   | sed -nE 's/.* git=([^ ]+).*/\1/p')
+	pools=$(printf '%s' "$line" | sed -nE 's/.* fitness_pools=(.*)$/\1/p')
+	printf '{"wheel":"%s","abi":%s,"wheel_sha256":"%s","git":"%s","fitness_pools":"%s"}' \
+		"${wheel:-unknown}" "${abi:-0}" "${sha:-unknown}" "${git:-unknown}" \
+		"$(printf '%s' "${pools:-unknown}" | tr -d '"')"
+}
+
 run_controller_arm() {
 	local tag="$1" markdir="$2" outdir="$3" vp="$4" logfn="$5" extra="$6"
 	shift 6
@@ -39,6 +81,7 @@ run_controller_arm() {
 		"$logfn" "$tag: marker exists — skip"
 		return 0
 	fi
+	wait_while_held "$logfn" "$tag"
 
 	"$logfn" "===== START $tag ====="
 	local t0=$SECONDS
@@ -155,10 +198,20 @@ run_controller_arm() {
 		return 3
 	fi
 
+	# R9 (multi-axis spec, 11/09/2026) — PROVENANCE. phased_ga prints ONE line,
+	# `[provenance] wheel=… abi=… wheel_sha256=… git=… fitness_pools=…`
+	# (wnn/control/provenance.py); it becomes a nested object here so a reader can
+	# ask "which wheel banked this?" without the .out. A run whose .out predates the
+	# line (every marker before this date) gets `"provenance":null` — a visible
+	# absence, never a guessed value. The four multi-axis anchors are in that set;
+	# their validity argument is the s=1 bit-identity pin, cited in the spec (R9).
+	local prov_json
+	prov_json=$(provenance_json "$out")
+
 	# Field ORDER matters only for byte-parity with the markers run_l3d_feature_probe.sh
 	# wrote before it was migrated onto this helper; readers go through json.load.
 	[ -n "$extra" ] && extra="${extra},"
-	printf '{"tag":"%s",%s"rc":%s,"dur_s":%s,"peak_rss_bytes":%s,"cells":"%s","fpga":"%s","held_neurons":"%s","held_memory":"%s","held_neurons_multiseed":"%s","held_memory_multiseed":"%s","held_grid_multiseed":"%s","headline_stage":"%s","headline_holdout":"%s","stage_select_candidates":"%s","fixed_thresholds":true,"done":"%s"}\n' \
+	printf '{"tag":"%s",%s"rc":%s,"dur_s":%s,"peak_rss_bytes":%s,"cells":"%s","fpga":"%s","held_neurons":"%s","held_memory":"%s","held_neurons_multiseed":"%s","held_memory_multiseed":"%s","held_grid_multiseed":"%s","headline_stage":"%s","headline_holdout":"%s","stage_select_candidates":"%s","fixed_thresholds":true,"provenance":%s,"done":"%s"}\n' \
 		"$tag" "$extra" "$rc" "$dur" "${rss:-null}" \
 		"$cells" \
 		"$(echo "$fpga"   | tr -d '"' | sed 's/  */ /g')" \
@@ -170,6 +223,7 @@ run_controller_arm() {
 		"$(echo "$head_st" | tr -d '"' | sed 's/  */ /g')" \
 		"$(echo "$head_ho" | tr -d '"' | sed 's/  */ /g')" \
 		"$(echo "$sel_tab" | tr -d '"')" \
+		"$prov_json" \
 		"$(date -u +%FT%TZ)" > "$marker"
 	"$logfn" "$tag: rc=0 dur=${dur}s — marker written"
 	return 0
