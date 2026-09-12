@@ -141,6 +141,28 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
+QUEUE AS OF 12/09/2026 10:15 EDT (RE-FLY `_fix` FLYING; rerun chain WRITTEN, go-gated;
+supersedes the 10:xx block).
+FLYING: SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_fix (seed-2 anchor on the fixed
+wheel, derived hover, CRN) under /private/tmp/…/scratchpad/stale_refly.sh → sweep_ladder_gamma
+→ phased_ga; started 09:33 EDT, ETA ~18:40 EDT. Lever line: "stale-altitude fix re-fly —
+first read of how bad the void data was". On its marker: bank (count_true_keys →
+gate_distance_leaderboard → git add -f → commit/push) and report the PAIR per stage
+(GRID/CONNECTIONS/MEMORY/HEADLINE, four columns): the ONE-FLAG pair is `_fix` vs `_hd`
+s31337002 (both derived hover; only the fix differs); `_crn` also differs by hover.
+Luiz's DECISION (12/09 09:5x EDT): IF the pair shows a material shift → rerun the PAPER
+ROWS ONLY, 33 runs / ~150 h: scripts/stale_altitude_refly_chain.sh (written, dry-tested on
+a scratch copy, refuses without SAR_GO=1). Rankings whose arms were all equally affected
+(gatedwsweep, fitnessab, altweight, specialist1, stage1lambda, bits round 1, the round-2
+grid) are NOT re-flown. The chain archives the void markers to *_markers_void_abi27/
+(README in each), re-flies under the same tags, and pairs only against abi-28 markers.
+LAUNCH (only after Luiz's go, box idle, `_fix` banked):
+  SAR_GO=1 nohup bash scripts/stale_altitude_refly_chain.sh \
+    > /private/tmp/stale_altitude_refly.nohup 2>&1 &   (start_new_session; verify PPID=1)
+  then git add -f the *_void_abi27 dirs + commit. Log /private/tmp/stale_altitude_refly.log.
+IF the pair shows NO material shift → nothing reruns; the void rows stand with a caveat.
+The post-D0 queue must NOT be relaunched as-is. HOLD sentinel live.
+
 QUEUE AS OF 12/09/2026 10:xx EDT (STALE-ALTITUDE-FEATURES BUG FIXED; box IDLE awaiting
 Luiz's rerun-scope decision; supersedes the 02:30 block).
 Controller wheel ABI 28 INSTALLED (marker-provenance merged 50a9bdba + the fix): every
