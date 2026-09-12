@@ -534,6 +534,14 @@ edits a running .sh. Queues behind the post-arm-A queue (~90 h).
       have rate=None (training.py:513) so cf2x_urdf cannot be flown by accident.
       Python-only, inert on cf21 — but it is live-imported source: land it at an idle
       window, never while a chain is armed.
+  [~] HOLD sentinel (11/09/2026, Luiz): `touch experiments/HOLD_CONTROLLER` → every
+      chain banks the run it is flying and WAITS before the next launch
+      (`wait_while_held` in controller_arm_lib.sh, reached by every chain through the
+      ladder; post_d0_queue.sh checks it before launching a chain too); `rm` resumes.
+      Idle windows are requested, never made by killing the queue. On branch
+      marker-provenance with the R9/R11 work; the FIRST window is being made the old
+      way (queue killed 21:26 EDT 11/09, chain finishes 4/4 alone) because the
+      sentinel cannot land into running scripts. Harness case added.
   [ ] Actuator-lag plumbing (axis F): flag → EpisodeConfig → cfg → baseline scorer.
   [ ] A-cross scoring script: score the 4 banked anchor winners at L4A/L4B.
   [ ] Stale notes fixed so draft 1's error cannot recur: `_FW_UNIT_NOTE`

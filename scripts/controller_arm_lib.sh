@@ -26,6 +26,27 @@
 #
 # Returns 0 if a marker was written, non-zero otherwise.
 
+# HOLD SENTINEL (11/09/2026). `touch experiments/HOLD_CONTROLLER` and every chain
+# on the box finishes the run it is flying, banks it, and then WAITS here before
+# launching the next one — the box goes idle without killing anything. `rm` the
+# file and everything resumes on its own. Before this the only way to get an idle
+# window was to kill the queue supervisor and relaunch it by hand (done 09:50 and
+# 21:26 on 11/09). Every chain reaches run_controller_arm through the ladder, so
+# this one check covers them all; post_d0_queue.sh checks it too so the hold is
+# visible at the queue level, not only inside a chain.
+#   WNN_HOLD_FILE    override the path (tests)      WNN_HOLD_POLL_S  poll interval (default 60)
+wait_while_held() {
+	local logfn="$1" tag="$2"
+	local hold="${WNN_HOLD_FILE:-experiments/HOLD_CONTROLLER}" poll="${WNN_HOLD_POLL_S:-60}" n=0
+	[ -e "$hold" ] || return 0
+	"$logfn" "HOLD — $hold present; $tag will NOT launch until it is removed (box idle by request)"
+	while [ -e "$hold" ]; do
+		sleep "$poll"; n=$((n + 1))
+		[ $((n % 10)) = 0 ] && "$logfn" "HOLD — still held ($tag), $((n * poll / 60)) min"
+	done
+	"$logfn" "HOLD released — launching $tag"
+}
+
 # provenance_json OUT — the `[provenance]` line of a .out as a JSON object, or
 # `null` when the run predates the line. Values are single tokens (no spaces,
 # no quotes) by construction in provenance.py, so a sed capture is exact.
@@ -60,6 +81,7 @@ run_controller_arm() {
 		"$logfn" "$tag: marker exists — skip"
 		return 0
 	fi
+	wait_while_held "$logfn" "$tag"
 
 	"$logfn" "===== START $tag ====="
 	local t0=$SECONDS

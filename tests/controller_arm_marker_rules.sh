@@ -117,6 +117,18 @@ check "provenance.fitness_pools keeps its spaces and parens" \
 	"$(python3 -c "import json;print(json.load(open('$MARKDIR/prov.json'))['provenance']['fitness_pools'])" 2>/dev/null)" "CRN(all 5 pools/gen)"
 
 echo
+echo "=== HOLD sentinel: no launch while the file exists, resume when it is removed ==="
+HOLD="$TD/HOLD"; touch "$HOLD"
+( sleep 3; rm -f "$HOLD" ) &
+t0=$SECONDS
+WNN_HOLD_FILE="$HOLD" WNN_HOLD_POLL_S=1 STUB_BODY="$GOOD_BODY" STUB_RC=0 \
+	run_controller_arm "held" "$MARKDIR" "$OUTDIR" "$STUB" quiet "" -- --x >/dev/null 2>&1
+wait
+check "launch waited for the sentinel (>=2 s)" "$([ $((SECONDS - t0)) -ge 2 ] && echo waited || echo did-not-wait)" "waited"
+check "then banked the marker" "$(has_marker held)" "yes"
+check "no sentinel -> no wait" "$(WNN_HOLD_FILE="$TD/absent" wait_while_held quiet x; echo rc=$?)" "rc=0"
+
+echo
 echo "=== an existing marker is never rewritten (idempotent resume) ==="
 before=$(cat "$MARKDIR/good.json")
 STUB_BODY="$GOOD_BODY" STUB_RC=0 \
