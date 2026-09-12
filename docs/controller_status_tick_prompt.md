@@ -141,6 +141,30 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
+QUEUE AS OF 12/09/2026 12:50 EDT (RERUN DECLINED — option (a); POST-D0 QUEUE RELAUNCHED;
+supersedes the 10:15 block).
+`_fix` banked 12:26 EDT (5d423ef2): one-flag pair vs void `_hd` s2 at MEMORY −2.2pp/+0.22°/
++0.22°/−0.050m, headline −0.6pp/−0.32°/−0.19°/−0.351m, Fisher fails 14 vs 3 /500 p=0.012;
+vs `_crn` +0.46°/+0.61°. Luiz (12:4x EDT): the fix is good but the shift is NOT worth 150 h —
+NO rerun; void rows STAND with a caveat; revisit (b) step-2-only or (c) full if later data
+says so. scripts/stale_altitude_refly_chain.sh stays on disk, go-gated (SAR_GO=1), unused.
+CAVEAT FOR EVERY NEW READ: from now on every new run is ABI 28 (fixed) while its banked
+controls are void (ABI<=27). Measured bias direction at n=1: void controls look ~0.2–0.5°
+BETTER on attitude and ~0.05 m WORSE on alt than the fixed wheel — so a new arm LOSING by
+<=0.3° err / <=2pp stable against a void control is NOT evidence, and a new arm's alt win
+of <=0.05 m is NOT evidence either. Say this whenever a pair straddles the wheel.
+RELAUNCHED 12:49 EDT: scripts/post_d0_queue.sh (pid 6225, PPID 1, log
+/private/tmp/post_d0_queue.log, nohup /private/tmp/post_d0_queue.nohup). Step 1 skipped
+(4/4 _hd). Live steps, ONE controller at a time, marker-gated, HOLD sentinel honoured:
+  STEP 2  2x2 leak x label-scale, LS_STAR=2 forced, derived hover, 4 runs `_l090_ls2`
+          (~20 h) — leak_x_labelscale_chain.sh, log /private/tmp/leak_x_labelscale.log.
+          Lever line: "2x2 leak×label-scale — does s=2 remove leak 0.90's altitude cost?"
+  STEP 3  arm B true-delta label (--dagger-label-delta --obs-pwm), derived hover,
+          controls = _hd, 4 runs `_bd` (~20 h) — sentinel LABEL_REBASE_LANDED present.
+  STEP 4  window-k FRAMED runs 2..12 (~50 h) — queue_after_ab_chain.sh.
+  STEP 5  STOP — multi-axis programme is spec only. Box IDLE; say so.
+Idle window: touch experiments/HOLD_CONTROLLER (never kill the queue).
+
 QUEUE AS OF 12/09/2026 10:15 EDT (RE-FLY `_fix` FLYING; rerun chain WRITTEN, go-gated;
 supersedes the 10:xx block).
 FLYING: SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_fix (seed-2 anchor on the fixed
