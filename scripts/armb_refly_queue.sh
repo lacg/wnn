@@ -7,7 +7,9 @@
 # smoke (logs/controller/armb_smoke/) showed --obs-pwm alone kills and
 # --dagger-label-delta alone flies, so the hypothesis is UNTESTED, not refuted.
 #
-# This queue waits behind the window-k chain (12/12 `_win[234]` markers), archives the
+# v2 (13/09 15:45 EDT, Luiz): the window-k ladder STOPS at s2_win4 (n=1 per k already reads
+# as a direction: win2 79.8% -> win3 16.0%); this queue now waits for the win4 MARKER and an
+# idle box instead of 12/12. It then archives the
 # void `_bd` marker/out/winner to *_void_abi28 (README inside), then runs the unchanged
 # arm_b_delta_label_chain.sh — which re-flies all 4 seeds on the fixed wheel. Marker-
 # gated, idempotent, never preempts, fails closed. The HOLD sentinel is honoured by the
@@ -19,13 +21,13 @@ OUTDIR="logs/controller/sweep_ladder"
 VOID="experiments/sweepladder_markers_void_abi28"
 log() { echo "[armb-refly] $(date -u +%FT%TZ) $*" >> "$LOG"; }
 controller_pids() { pgrep -f "MacOS/Python -u -m wnn.control.phased_g[a]" 2>/dev/null || true; }
-wink_done() { ls "$MARK" 2>/dev/null | grep -cE "_win[234]\.json$"; }
+wink_done() { ls "$MARK" 2>/dev/null | grep -cE "s31337002_win4\.json$"; }  # v2: the last window run
 abi_ok() { PYTHONPATH=src/wnn /Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/bin/python -c "from wnn.control import _accel; import sys; sys.exit(0 if getattr(_accel,'_abi',0) >= 29 else 1)" 2>/dev/null; }
 
-log "########## ARMED — arm B re-fly on the obs_pwm-fixed wheel, behind window-k ($(wink_done)/12) ##########"
+log "########## ARMED v2 — arm B re-fly on the obs_pwm-fixed wheel, behind s2_win4 (banked: $(wink_done)/1) ##########"
 b=0
-while [ "$(wink_done)" -lt 12 ] || pgrep -f "scripts/queue_after_ab_chai[n]\.sh" >/dev/null; do
-	sleep 120; b=$((b + 1)); [ $((b % 30)) = 0 ] && log "waiting — window-k $(wink_done)/12"
+while [ "$(wink_done)" -lt 1 ] || pgrep -f "scripts/sweep_ladder_gamm[a]\.sh" >/dev/null; do
+	sleep 120; b=$((b + 1)); [ $((b % 30)) = 0 ] && log "waiting — win4 banked $(wink_done)/1"
 done
 while [ -n "$(controller_pids)" ]; do sleep 30; done
 sleep 120
