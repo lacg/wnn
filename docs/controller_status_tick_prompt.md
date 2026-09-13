@@ -141,6 +141,32 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
+QUEUE AS OF 13/09/2026 12:05 EDT (obs_pwm FIXED e554661b, ABI 29 wheel BUILT; deploy + arm B re-fly
+ARMED; window-k flying; supersedes the 10:45 block for what is queued).
+Luiz 11:3x EDT: "Fix both!" — DONE in source (207 controller tests incl. a new CPU/GPU record parity
+sweep with obs_pwm ON): ReplayObs.pwm_acc stream (rollout records the accumulator; CPU bptt/split +
+Metal train/record buffers 25/22 restore it; fail-loud guards) + WnnController.set_pwm_accumulator
+for the fitter (teacher's previous action ⇒ real ladder). obs_pwm-off runs bit-identical.
+WHEEL: built, NOT yet installed — /Volumes/…/cargo-target/wheels/ram_controller-2026.212.37-cp311-
+abi3-macosx_11_0_arm64.whl (sha 40b67d8c…). It also carries today's ram_core delta (the deferred
+swap): additive + the never-flown QUAD_BINARY read. Provenance line records wheel sha per run.
+THREE SUPERVISORS, all PPID 1, all fail closed:
+  1. window-k chain (queue_after_ab_chain.sh 61549) — run 2/12 s2_win3 flying, ETA ~15:20 EDT.
+  2. armb_deploy.sh (50153, scratchpad, log /private/tmp/armb_deploy.log): HOLD is SET (12:02);
+     when win3 banks the ladder parks; the deploy installs the wheel + sets EXPECTED_ABI=29 in ONE
+     step, smokes the arm B bundle (logs/controller/armb_smoke/both_fixed.out), and rm's the HOLD
+     ONLY if the smoke flies (stable>=50%, err<=10°). If it fails, HOLD STAYS and the box idles —
+     escalate; wheel and Python stay consistent either way. Expect ~10 min idle around 15:20-15:35.
+     While it runs the controller count reads 1 (the smoke) — expected. src/wnn/control/_accel.py
+     will show as modified (EXPECTED_ABI 28→29) — commit it after the deploy log says installed.
+  3. armb_refly_queue.sh (51294, scripts/, log /private/tmp/armb_refly_queue.log): waits for
+     12/12 _win markers AND the window-k chain to exit, checks the installed ABI >= 29, archives
+     the void `_bd` s2 marker/out/winner to experiments/sweepladder_markers_void_abi28/ (README),
+     then runs arm_b_delta_label_chain.sh (4 seeds, ~20 h). Lever line then: "arm B true-delta
+     label (--dagger-label-delta --obs-pwm) vs the _hd controls — RE-FLY on the obs_pwm-fixed wheel".
+Tick: lever = window-k until its 12/12; box line counts 1 controller. Any "ABORT" in the two
+armb logs is an escalation.
+
 ARM B DIAGNOSED (13/09 11:05 EDT, smoke DONE — box back to ONE controller = window-k).
 Smoke logs/controller/armb_smoke/{ctrl,obspwm,labeldelta,both}.out (same shape/recipe, tiny budget):
 ctrl 100%/2.48° · +label-delta 90%/3.18° (flies) · +obs-pwm 0.0%/70.1° (DEAD) · both DEAD.
