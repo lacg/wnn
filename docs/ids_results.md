@@ -128,6 +128,27 @@ WHAT CHANGED
   temporal statement is "trees lead under equal calibration"; the size argument
   (0.27 MB XGB vs ~1 KB WNN) is the surviving differentiator. Every paper table must pair
   the WNN's mode with the SAME mode on the comparator — never val_cal vs fixed_05.
+* **SWEEP-WINNER vs BEST-TREE-COLUMN table (13/09/2026, experiment-design readout; script
+  `scripts/idsxd_best_column.py`, held-out `validation_summaries` final rows, mean±SD over seeds).**
+  WNN column = the IDSXD column (arm × mode × phase × genome_type × thr_mode) with the best mean
+  held-out F1 per dataset, reported in `val_cal`; comparator = best tree column in the same mode
+  (`scripts/verify_ids_baselines.py`, RF/XGB/AdaBoost, raw and thermo, `logs/baselines_*/`).
+
+      dataset (random_3way)  WNN best column (val_cal)                                    best RAW tree      best THERMO tree     WNN−raw          WNN−thermo
+      UNSW-NB15              B34-CTRL qsr GA best_f1     94.38±0.06/0.59±0.03/99.15  n=5   RF 95.82/0.34      RF16b 95.30/0.36     −1.4 F1 +0.25 FPR  −0.9 F1 +0.23 FPR
+      CICIDS2017             CE20 quad GA best_f1        99.52±0.03/0.12±0.01/99.70  n=3   RF 99.85/0.10      RF8b  99.52/0.21      −0.3 F1 +0.02 FPR   0.0 F1 −0.09 FPR
+      CIC-IoT subsample      B15-AC quad GA best_fitness 92.99±0.05/7.49±0.85/96.48  n=3   RF 95.53/7.38      XGB8b 88.85/15.10    −2.5 F1 +0.11 FPR  +4.1 F1 −7.6 FPR
+      Pareto WNN: unswr B05-CE GA best_ce empirical_cumulative 94.33±0.07/0.50±0.06 (n=3);
+                  ciciot B15-AC GA best_f1 val_cal 92.98±0.08/6.79±0.76 (n=3, FPR SD 0.8 — noise).
+
+  Caveats from the readout: unswr is a FLOOR (102 columns / all 7 done arms within 0.07pp; the
+  quad half 0/30 and CE20/Wb-CTRL qsr unfinished); cicids CE20 leads Wa-CTRL by 0.04pp vs Wa's SD
+  0.09 (provisional, era-clean); ciciot B15-AC wins with or without the pre-fix arms but the arm
+  gap (0.02-0.03pp) is below the seed SD, IDSXD2 0/12 done; best_f1 and best_acc share a
+  genome_hash per seed (duplicate rows = one genome under several thresholds). Under equal
+  calibration the WNN trails the best RAW tree on F1 everywhere at ~equal FPR; on the SAME
+  thermometer input it ties CICIDS, trails UNSW by 0.9pp and beats CIC-IoT by +4.1pp F1 / −7.6pp FPR.
+  The old ciciot WNN row (93.34/8.37, 250n×100b) is superseded by the sweep's 92.99/7.49.
 
 ## 0B. Best individual genome (CEILING, not the claim)
 
