@@ -141,6 +141,22 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
+QUEUE AS OF 12/09/2026 22:45 EDT (2x2 run 4/4 flying; public package + wgpu landed; WHEEL
+SWAP DECISION DEFERRED to Luiz tomorrow morning; supersedes the 12:50 block).
+2x2 leak×label-scale (post-D0 step 2): runs 1-3/4 banked (s2/s3/s4 _l090_ls2), run 4/4 = seed
+31337005 flying since 21:42 EDT (ETA ~00:40 EDT 13/09). Interaction so far (HEADLINE, difference of
+differences): s2 alt −0.13 m / err +0.26°; s3 alt −1.06 m / err −0.66°; s4 alt +0.28 m / err +0.92°
+— three seeds, three signs; verdict = paired CI at n=4 (leak_x_labelscale_chain.sh prints it).
+Then the queue continues on its own: STEP 3 arm B (4 runs `_bd`, controls = _hd), STEP 4
+window-k 2..12 (11 runs), STEP 5 stop. Lever line for arm B: "arm B true-delta label
+(--dagger-label-delta --obs-pwm) vs the derived-hover anchors".
+SOURCE/WHEEL NOTE: ram_core source (public package work, 12/09) is ahead of BOTH installed research
+wheels; the delta is additive + the QUAD_BINARY read (mode never flown); controller 206 + worker 116
+tests pass on today's source; ABI unchanged. NO swap unless Luiz says so (decision deferred to 13/09
+morning); provenance line already records git sha per run. Options if he wants one: controller =
+touch experiments/HOLD_CONTROLLER → holds after the current run banks → smoke → install → rm;
+worker = scripts/worker_swap.py --auto-detect-running --install-wheel … at the flow boundary.
+
 QUEUE AS OF 12/09/2026 12:50 EDT (RERUN DECLINED — option (a); POST-D0 QUEUE RELAUNCHED;
 supersedes the 10:15 block).
 `_fix` banked 12:26 EDT (5d423ef2): HEADLINE 97.6%/1.75°/1.33°/0.335m; one-flag pair vs void
