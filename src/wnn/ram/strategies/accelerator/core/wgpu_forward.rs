@@ -65,7 +65,18 @@ impl WgpuForward
 			})
 			.await
 			.map_err(|e| ForwardError::Unavailable(format!("no wgpu adapter: {e}")))?;
-		let backend = adapter.get_info().backend;
+		let info = adapter.get_info();
+		// A software rasteriser (WARP on Windows, lavapipe/llvmpipe on Linux) is
+		// slower than the rayon CPU path and crashed the Windows CI runner mid-
+		// dispatch (13/09/2026, exit 122 on WARP). It is not a GPU; report none.
+		if matches!(info.device_type, wgpu::DeviceType::Cpu)
+		{
+			return Err(ForwardError::Unavailable(format!(
+				"only a software adapter is available ({} / {:?}); use the CPU backend",
+				info.name, info.backend
+			)));
+		}
+		let backend = info.backend;
 		// Take the adapter's own limits so a large sorted-key buffer is not
 		// capped at the 128 MiB WebGPU default.
 		let limits = adapter.limits();
