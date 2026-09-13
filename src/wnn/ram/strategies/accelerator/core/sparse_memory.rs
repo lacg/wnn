@@ -153,13 +153,29 @@ impl SparseLayerMemory
 
 	/// Read cell value for a specific neuron and address.
 	///
-	/// An unwritten address reads as the memory's canonical default cell — the
-	/// same value `write_cell` treats as "erase" — so read and write agree.
-	/// (Until 12/09/2026 this returned EMPTY(2) unconditionally: a QUAD memory
-	/// built with WEAK_FALSE(1) as its default read every miss as WEAK_TRUE.)
-	/// A memory built with `new()` (`NO_CANONICAL_DEFAULT`) keeps reading EMPTY.
+	/// A miss reads EMPTY(2) REGARDLESS of the memory's canonical default — and
+	/// that asymmetry is LOAD-BEARING: the drone controller builds its BINARY
+	/// memories with default FALSE(0) (so FALSE writes are deleted) and then
+	/// tests `read_cell(..) != EMPTY_U8` as "explicitly learned"
+	/// (controller.rs don't-punish rule). Making a miss read the default would
+	/// silently mark every untouched cell as learned on the live recipe. It was
+	/// changed and reverted on 12/09/2026 for exactly that reason. Code that
+	/// wants "what does this address READ as" goes through
+	/// `read_cell_or_default`; the scorers never call either (they read the
+	/// sorted export with an explicit miss cell).
 	#[inline]
 	pub fn read_cell(&self, neuron_idx: usize, address: u64) -> u8
+	{
+		self.neurons[neuron_idx]
+			.get(&address)
+			.map(|v| *v)
+			.unwrap_or(EMPTY)
+	}
+	/// Read with a miss resolving to the memory's canonical default cell — the
+	/// value the scorers' miss cell agrees with (`CellMode::default_cell`).
+	/// EMPTY when the memory has `NO_CANONICAL_DEFAULT`.
+	#[inline]
+	pub fn read_cell_or_default(&self, neuron_idx: usize, address: u64) -> u8
 	{
 		let miss = if self.default_cell == NO_CANONICAL_DEFAULT { EMPTY } else { self.default_cell };
 		self.neurons[neuron_idx]
@@ -167,7 +183,6 @@ impl SparseLayerMemory
 			.map(|v| *v)
 			.unwrap_or(miss)
 	}
-
 	/// Write cell value for a specific neuron and address
 	/// Returns true if the cell was modified
 	#[inline]

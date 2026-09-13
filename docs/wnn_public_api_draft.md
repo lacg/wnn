@@ -181,9 +181,11 @@ architecture, now stated on the public surface.
 Training: `ram_core::train::SparseTrainer` (DONE 12/09) — one order-independent rule per mode
 (BINARY set / TERNARY-PLN integer votes / QUAD-QSR OI counters via the existing `oi_apply_nudge`
 + `oi_bin_to_cell`), DashMap<u64,_> per neuron so wide hashed addresses fit; commits into
-`SparseLayerMemory`. Writing it found a second dormant bug: `SparseLayerMemory::read_cell`
-returned EMPTY(2) for every miss regardless of the canonical default the memory was built with
-(a QUAD memory read a miss as WEAK_TRUE). Fixed at the source, pinned.
+`SparseLayerMemory`. NOTE 12/09 evening: an earlier commit today changed `SparseLayerMemory::read_cell`
+to read a miss as the canonical default; the swap-risk audit showed the controller's BINARY recipe
+DEPENDS on the EMPTY-on-miss contract (`controller.rs:4489` don't-punish: `cur != EMPTY_U8` ⇒
+"learned"), so it was REVERTED and the public path uses a new explicit `read_cell_or_default`.
+The research wheels were never rebuilt in between; nothing flew on it.
 
 Parity: `forward::tests::metal_matches_cpu_every_mode` IS the trait test (DONE 12/09) — every
 `Forward` impl must match `CpuForward` to 1e-6 at a fixed `run_seed`, all six modes × 16/96 bits

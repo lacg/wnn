@@ -389,15 +389,15 @@ mod tests
 			t.accumulate(&input, &conns, &labels, None).unwrap();
 			let m = new_memory(mode, l);
 			t.commit(&m);
-			assert_eq!(m.read_cell(0, 3), TRUE_U8, "{mode}");
-			assert_eq!(m.read_cell(1, 3), FALSE_U8, "{mode}");
+			assert_eq!(m.read_cell_or_default(0, 3), TRUE_U8, "{mode}");
+			assert_eq!(m.read_cell_or_default(1, 3), FALSE_U8, "{mode}");
 			// tie: 1 positive, 1 negative → EMPTY, not stored
 			let (input, labels) = rows(&[0, 1]);
 			let t = SparseTrainer::new(mode, l);
 			t.accumulate(&input, &conns, &labels, None).unwrap();
 			let m = new_memory(mode, l);
 			t.commit(&m);
-			assert_eq!(m.read_cell(0, 3), EMPTY_U8, "{mode}");
+			assert_eq!(m.read_cell_or_default(0, 3), EMPTY_U8, "{mode}");
 			assert_eq!(m.total_cells(), 0, "{mode}: a tie must not be stored");
 		}
 	}
@@ -423,7 +423,7 @@ mod tests
 			t.accumulate(&input, &conns, &labels, None).unwrap();
 			let m = new_memory(CellMode::QuadWeighted, l);
 			t.commit(&m);
-			m.read_cell(neuron, 3)
+			m.read_cell_or_default(neuron, 3)
 		};
 		assert_eq!(cell(&[0], 0), QUAD_WEAK_TRUE as u8); // obs 1, net +1
 		assert_eq!(cell(&[0], 1), QUAD_WEAK_FALSE as u8); // obs 1, net −1
@@ -448,20 +448,22 @@ mod tests
 		let m = new_memory(CellMode::QuadWeighted, l);
 		t.commit(&m);
 		// obs==1 with net +3 → still WEAK_TRUE (obs gates the strong bins).
-		assert_eq!(m.read_cell(0, 3), QUAD_WEAK_TRUE as u8);
+		assert_eq!(m.read_cell_or_default(0, 3), QUAD_WEAK_TRUE as u8);
 	}
 
-	/// The memory a trainer commits into must READ its default for a miss —
-	/// `read_cell` used to return EMPTY regardless of the canonical default.
+	/// `read_cell_or_default` reads a miss as the mode's default cell (what the
+	/// scorers score); plain `read_cell` keeps its EMPTY-on-miss contract, which
+	/// the controller's BINARY don't-punish rule depends on.
 	#[test]
-	fn memory_reads_its_default_cell_on_a_miss()
+	fn memory_miss_reads()
 	{
 		for mode in CellMode::ALL
 		{
 			let m = new_memory(mode, layout());
-			assert_eq!(m.read_cell(0, 12345), mode.default_cell(), "{mode}");
+			assert_eq!(m.read_cell_or_default(0, 12345), mode.default_cell(), "{mode}");
+			assert_eq!(m.read_cell(0, 12345), EMPTY_U8, "{mode}: read_cell must stay EMPTY on a miss");
 		}
-		assert_eq!(SparseLayerMemory::new(1, 4).read_cell(0, 0), EMPTY_U8, "NO_CANONICAL_DEFAULT keeps EMPTY");
+		assert_eq!(SparseLayerMemory::new(1, 4).read_cell_or_default(0, 0), EMPTY_U8, "NO_CANONICAL_DEFAULT keeps EMPTY");
 	}
 
 	#[test]
