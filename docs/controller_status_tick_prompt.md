@@ -141,6 +141,22 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
+QUEUE AS OF 13/09/2026 15:50 EDT (WINDOW-K STOPPED at s2_win4; NO-STEAL WINDOW ARMS then ARM B;
+supersedes the 12:05 block's queue).
+Luiz: window-k n=1 per k on seed 2 already reads as a direction (win2 79.8%/3.96° → win3 16.0%/8.26°
+→ win4 flying); framed1 at k=2 takes ~85 of the anchor's 256 current-frame neurons (2:1 recency
+split). Window-k supervisor 61549 + refly queue 51294 KILLED (queued runs only); the ladder child
+94138 keeps flying s2_win4 (banks ~19:20 EDT). Seeds 3-5 of window-k are NOT flown.
+scripts/post_wink_queue.sh (pid 65814, PPID 1, log /private/tmp/post_wink_queue.log) waits for the
+win4 marker, then: STEP 1 `SL_C_b24n384_..._s31337002_win2` — k=2 framed1 at n=384 = exactly 256
+current + 128 previous (Luiz's "no-steal" arm; NOTE n=384 ⇒ 96 levels/motor vs the anchor's 64);
+STEP 2 `SL_C_b24n384_..._s31337002` — k=1 n=384 twin (separates neuron count from the timeline);
+STEP 3 arm B re-fly ×4 via armb_refly_queue.sh (~20 h); STEP 4 STOP — box IDLE, say so.
+Lever lines: STEP 1/2 "no-steal window: does adding a previous frame (256+128) match the 256n
+k=1 anchor?"; STEP 3 "arm B true-delta label (--dagger-label-delta --obs-pwm) vs the _hd controls —
+RE-FLY on the obs_pwm-fixed wheel". Markers: STEP 1/2 n/2 (`b24n384.*s31337002(_win2)?\.json`),
+STEP 3 `_bd\.json` n/4.
+
 DEPLOYED 13/09/2026 14:34-14:37 EDT (armb_deploy.sh, exited): ram_controller ABI 29 INSTALLED
 (wheel sha 026e02aa…) + EXPECTED_ABI=29 committed (0707c70a); smoke of the arm B bundle on the
 installed wheel 100%/2.53° → HOLD lifted; window-k resumed with s2_win4 on ABI 29 at 14:37 EDT
