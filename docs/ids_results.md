@@ -149,6 +149,11 @@ WHAT CHANGED
   calibration the WNN trails the best RAW tree on F1 everywhere at ~equal FPR; on the SAME
   thermometer input it ties CICIDS, trails UNSW by 0.9pp and beats CIC-IoT by +4.1pp F1 / −7.6pp FPR.
   The old ciciot WNN row (93.34/8.37, 250n×100b) is superseded by the sweep's 92.99/7.49.
+* **46M (neto_full) RAW comparators, TEST-only + val_cal (13/09/2026, Plane IDS-13;
+  `verify_ids_baselines.py --dataset ciciot46m --split random_3way --raw`):** RF 97.63 / 3.57 →
+  val_cal 97.63 / 3.11 (1.0 GB) · XGB 96.04 / 4.98 → 96.04 / 4.73 (0.39 MB) · AdaBoost-100 94.94 /
+  7.58 (0.05 MB). ~0.7pp F1 above the 28/04 merged read; Acc 99.5-99.8 is the 2.4%-benign base-rate
+  artifact. No Protocol-v2 WNN 46M row exists yet (IDS-6); the legacy 2-way rows are not like-for-like.
 
 ## 0B. Best individual genome (CEILING, not the claim)
 
