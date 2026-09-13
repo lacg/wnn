@@ -17,7 +17,7 @@ from sklearn.utils.validation import _check_sample_weight, check_is_fitted, vali
 from ._cell_mode import CellMode
 from ._core import SparseModel
 
-_BACKENDS = ("auto", "cpu", "gpu")
+_BACKENDS = ("auto", "cpu", "gpu", "metal", "wgpu")
 NOT_BITS = (
 	"X must be bits (bool or 0/1 values). Encode real-valued features first, "
 	"e.g. weightless.ThermometerEncoder in a Pipeline."
@@ -64,8 +64,9 @@ class WiSARDClassifier(ClassifierMixin, BaseEstimator):
 		Explicit connectivity. None draws it from `random_state`.
 	coverage_aware : bool, default False
 		Score a sparse miss as "no vote" (cell 0) instead of the mode's untrained cell.
-	backend : {"auto", "cpu", "gpu"}, default "auto"
-		Scoring device. "gpu" is Metal on Apple silicon; "auto" falls back to CPU.
+	backend : {"auto", "cpu", "gpu", "metal", "wgpu"}, default "auto"
+		Scoring device. "auto" = Metal on Apple silicon, else wgpu (Vulkan/DX12/Metal),
+		else CPU; "gpu" = the first GPU backend present (error if none). See `backends()`.
 	random_state : int, optional
 		Seeds the connectivity draw and the PLN/QSR read coins.
 	"""

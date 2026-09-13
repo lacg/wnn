@@ -195,23 +195,32 @@ GPU groups but thresholded on sparse GPU groups (`cell_to_weight` / `wnn_cell_we
 
 ---
 
-## 6. Portable GPU — the wgpu port, scoped
+## 6. Portable GPU — the wgpu port (DONE 12/09, verdict: portable backend, NOT a Metal replacement)
 
-Port scope is the public forward only: `common.metal` (284 lines) + `sparse_forward.metal` (564)
-+ `marker_slots.metal` (218) → one WGSL module. **No atomics** in any of them (checked 12/09).
+`core/shaders/sparse_forward.wgsl` + `core/wgpu_forward.rs`, feature `gpu-wgpu` (off in the
+research wheels, on in the public wheel). One WGSL kernel = the twin of `sparse_forward.metal`:
+u64 as `vec2<u32>` (shift/add/wrapping-mul via 16-bit limbs), keys as (lo, hi) pairs, cells 4 per
+u32, the same splitmix constants for the wide address and the QSR/PLN coin. Parity:
+`forward::tests::wgpu_matches_cpu_every_mode` — every mode × 16/96 bits × coverage on/off, plus
+200-bit QSR with a 64-bit seed — all within 1e-6; the Python suite repeats it through the wheel.
 
-- Keys: store `(hi: u32, lo: u32)` pairs in the wgpu upload path and compare two-step in the binary
-  search. Avoids `SHADER_INT64` entirely; works on Vulkan/DX12/Metal **and WebGPU**.
-- `WgpuForward` **replaces** `MetalForward` once it passes parity and a benchmark on our Macs (wgpu
-  runs on Metal underneath). One kernel, not two — the no-duplicates rule. Until then both exist
-  behind features and the benchmark decides.
-- `ram_accelerator` training kernels and `controller_rollout.metal` stay Metal — research only.
+Benchmark (M4 Max, min of 3, `packages/weightless/bench_backends.py`):
 
-Sequencing: v0 ships CPU + Metal ("GPU on Apple silicon; CPU elsewhere"). wgpu is the first
-post-v0 item, ~1–2 days, done in a worktree; it touches `ram_core` so it lands at a wheel-swap
-window (worker idle + HOLD sentinel), never mid-chain.
+```
+n=  20000 b=16 npc= 50 keys=  328988 | cpu     7.7 ms | metal   2.9 ms | wgpu   3.9 ms
+n= 100000 b=16 npc= 50 keys=  329690 | cpu    38.1 ms | metal  10.9 ms | wgpu  32.0 ms
+n= 100000 b=48 npc= 50 keys=  999493 | cpu    73.7 ms | metal  18.9 ms | wgpu  55.1 ms
+n= 200000 b=48 npc=100 keys= 4993121 | cpu   496.6 ms | metal  47.7 ms | wgpu  72.0 ms
+n= 100000 b=96 npc= 50 keys= 1000000 | cpu   102.6 ms | metal  22.0 ms | wgpu  71.9 ms
+```
 
----
+wgpu is 1.5–3.3× behind the hand-written Metal kernel (u64 emulation + per-call upload/readback),
+so by the rule in this section Metal stays primary on Apple silicon and wgpu is the portable
+backend for Linux/Windows/WebGPU. Backend order in the wheel: `metal` → `wgpu` → `cpu`; the
+estimator accepts `backend="metal"|"wgpu"|"cpu"|"gpu"|"auto"`. Two Metal-shaped kernels do exist
+now, one per API — the second is the price of portability, not a duplicate of the first (the WGSL
+cannot express the MSL and vice-versa). If the gap closes (buffer caching across calls is the
+obvious lever), the rule reopens.
 
 ## 9. Later (v0.2+) — not out of scope, just not v0
 
@@ -252,8 +261,8 @@ window (worker idle + HOLD sentinel), never mid-chain.
 | 1 | DONE — `CellMode` (`#[repr(u8)]`), `Forward` + `CpuForward`/`MetalForward`, `SparseTrainer`; 98 ram_core tests | small |
 | 2 | DONE — `accelerator/public/` cdylib `weightless._core` (`SparseModel`: train/forward/export_keys/reset, `backends()`), ABI 1 | small–medium |
 | 3 | DONE — `WiSARDClassifier` + `ThermometerEncoder(TransformerMixin)`; 28 pytest incl. CPU/GPU parity every mode, order-independence, partial_fit exactness, Pipeline+cross_val_score. sklearn `check_estimator` NOT run (it feeds float X; the estimator refuses non-bits by design) — revisit with tags | medium |
-| 4 | README DONE; CI wheels (macOS arm64, Linux x86_64/aarch64, Windows) NOT yet | small |
-| 5 | wgpu forward (§6) | 1–2 days, post-v0 |
+| 4 | README DONE; CI `weightless-wheels.yml` DONE — builds + pytests the wheel on macOS-arm64 / linux-x86_64 / linux-aarch64 / windows on every push; publishes on a `weightless-v*` tag only | small |
+| 5 | wgpu forward (§6) DONE — parity every mode, benchmark says Metal stays primary | done |
 
 Nothing here changes research behaviour: steps 1–2 wrap existing functions; the parity test is the
 gate. No launch, no wheel swap, until reviewed.

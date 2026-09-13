@@ -73,13 +73,14 @@ def test_sample_weight_scales_the_vote_not_the_observation_count():
 	assert (weighted.predict(X) == y).mean() > 0.9
 
 
+@pytest.mark.parametrize("gpu_backend", ["metal", "wgpu"])
 @pytest.mark.parametrize("mode", LADDER)
-def test_cpu_and_gpu_agree(mode):
-	if "metal" not in backends():
-		pytest.skip("no Metal device")
+def test_cpu_and_gpu_agree(mode, gpu_backend):
+	if not any(b.startswith(gpu_backend) for b in backends()):
+		pytest.skip(f"no {gpu_backend} backend here")
 	X, y = make_bits(seed=11)
 	cpu = WiSARDClassifier(neurons_per_class=8, bits_per_neuron=16, cell_mode=mode, backend="cpu", random_state=3).fit(X, y)
-	gpu = clone(cpu).set_params(backend="gpu").fit(X, y)
+	gpu = clone(cpu).set_params(backend=gpu_backend).fit(X, y)
 	np.testing.assert_allclose(cpu._scores(X, False), gpu._scores(X, False), atol=1e-6)
 	np.testing.assert_allclose(cpu.predict_proba(X), gpu.predict_proba(X), atol=1e-6)
 

@@ -10,6 +10,9 @@ path = "lib.rs"
 # Carries the shared WNN substrate (cells, packed bits, sparse Memory + its GPU
 # forward, cancel). One source, compiled once per dependent wheel.
 
+[features]
+gpu-wgpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
+
 [dependencies]
 # pyo3 WITHOUT extension-module here — the cdylibs that link this rlib add the
 # extension-module feature, and Cargo's feature unification applies it to this
@@ -22,6 +25,13 @@ dashmap = "6.1"
 rand = { version = "0.8", features = ["small_rng"] }
 chrono = "0.4"
 fs2 = "0.4"   # FileLogger advisory locking in neighbor_search
+
+# Portable GPU forward (feature `gpu-wgpu`): one WGSL kernel on Metal / Vulkan /
+# DX12 / WebGPU. Off by default so the research wheels are byte-identical; the
+# public `weightless` wheel turns it on.
+wgpu = { version = "30", optional = true, default-features = false, features = ["wgsl", "metal", "vulkan", "dx12"] }
+pollster = { version = "1", optional = true }
+bytemuck = { version = "1", optional = true, features = ["derive"] }
 
 # Metal GPU (Apple Silicon) — macOS only. Used by metal_sparse.rs.
 [target.'cfg(target_os = "macos")'.dependencies]

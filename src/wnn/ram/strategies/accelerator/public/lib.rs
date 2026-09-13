@@ -53,38 +53,82 @@ fn packed_rows(arr: &PyReadonlyArray2<'_, u8>, total_bits: usize) -> PyResult<Pa
 
 // ---- backends --------------------------------------------------------------
 
-#[cfg(target_os = "macos")]
+// Device init + shader compilation happen once per thread and are reused by
+// every later predict() call. Thread-local sidesteps any Send question.
 thread_local! {
-	// Shader compilation is per evaluator; cache one per thread so repeated
-	// predict() calls do not recompile. Thread-local avoids any Send question.
+	#[cfg(target_os = "macos")]
 	static METAL: std::cell::RefCell<Option<std::rc::Rc<ram_core::forward::MetalForward>>> =
+		const { std::cell::RefCell::new(None) };
+	static WGPU: std::cell::RefCell<Option<std::rc::Rc<ram_core::forward::WgpuForward>>> =
 		const { std::cell::RefCell::new(None) };
 }
 
+#[cfg(target_os = "macos")]
+fn metal() -> Option<std::rc::Rc<ram_core::forward::MetalForward>>
+{
+	METAL.with(|slot| {
+		let mut slot = slot.borrow_mut();
+		if slot.is_none()
+		{
+			if let Ok(m) = ram_core::forward::MetalForward::new()
+			{
+				*slot = Some(std::rc::Rc::new(m));
+			}
+		}
+		slot.clone()
+	})
+}
+
+fn wgpu_backend() -> Option<std::rc::Rc<ram_core::forward::WgpuForward>>
+{
+	WGPU.with(|slot| {
+		let mut slot = slot.borrow_mut();
+		if slot.is_none()
+		{
+			if let Ok(w) = ram_core::forward::WgpuForward::new()
+			{
+				*slot = Some(std::rc::Rc::new(w));
+			}
+		}
+		slot.clone()
+	})
+}
+
+/// "auto": Metal (Apple silicon) → wgpu (any GPU) → CPU. "gpu" = the first GPU
+/// backend that exists here; "metal" / "wgpu" / "cpu" name one exactly.
 fn with_backend<R>(name: &str, f: impl FnOnce(&dyn Forward) -> R) -> PyResult<R>
 {
 	match name
 	{
 		"cpu" => Ok(f(&CpuForward)),
-		"gpu" | "metal" | "auto" =>
+		"metal" =>
 		{
 			#[cfg(target_os = "macos")]
 			{
-				let cached = METAL.with(|slot| {
-					let mut slot = slot.borrow_mut();
-					if slot.is_none()
-					{
-						if let Ok(m) = ram_core::forward::MetalForward::new()
-						{
-							*slot = Some(std::rc::Rc::new(m));
-						}
-					}
-					slot.clone()
-				});
-				if let Some(m) = cached
+				if let Some(m) = metal()
 				{
 					return Ok(f(m.as_ref()));
 				}
+			}
+			Err(PyRuntimeError::new_err("Metal backend unavailable on this machine"))
+		}
+		"wgpu" => match wgpu_backend()
+		{
+			Some(w) => Ok(f(w.as_ref())),
+			None => Err(PyRuntimeError::new_err("wgpu backend unavailable on this machine (no GPU adapter)")),
+		},
+		"gpu" | "auto" =>
+		{
+			#[cfg(target_os = "macos")]
+			{
+				if let Some(m) = metal()
+				{
+					return Ok(f(m.as_ref()));
+				}
+			}
+			if let Some(w) = wgpu_backend()
+			{
+				return Ok(f(w.as_ref()));
 			}
 			if name == "auto"
 			{
@@ -92,26 +136,33 @@ fn with_backend<R>(name: &str, f: impl FnOnce(&dyn Forward) -> R) -> PyResult<R>
 			}
 			else
 			{
-				Err(PyRuntimeError::new_err("GPU backend unavailable on this machine (no Metal device)"))
+				Err(PyRuntimeError::new_err("GPU backend unavailable on this machine (no Metal device, no wgpu adapter)"))
 			}
 		}
-		other => Err(PyValueError::new_err(format!("unknown backend {other:?}; use 'auto', 'cpu' or 'gpu'"))),
+		other => Err(PyValueError::new_err(format!(
+			"unknown backend {other:?}; use 'auto', 'cpu', 'gpu', 'metal' or 'wgpu'"
+		))),
 	}
 }
 
-/// Backends that can run here, in preference order.
+/// Backends that can run here, in preference order; the wgpu entry names the
+/// API it sits on, e.g. "wgpu:Metal", "wgpu:Vulkan".
 #[pyfunction]
-fn backends() -> Vec<&'static str>
+fn backends() -> Vec<String>
 {
 	let mut v = Vec::new();
 	#[cfg(target_os = "macos")]
 	{
-		if ram_core::forward::MetalForward::new().is_ok()
+		if metal().is_some()
 		{
-			v.push("metal");
+			v.push("metal".to_string());
 		}
 	}
-	v.push("cpu");
+	if let Some(w) = wgpu_backend()
+	{
+		v.push(format!("wgpu:{}", w.backend_name()));
+	}
+	v.push("cpu".to_string());
 	v
 }
 

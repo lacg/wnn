@@ -14,28 +14,30 @@ from sklearn.utils.estimator_checks import check_estimator
 
 from weightless import CellMode, ThermometerEncoder, WiSARDClassifier
 
-BITS_ONLY = "WiSARDClassifier consumes bits (0/1) only; sklearn's generic checks fit it on random floats"
-
-FLOAT_X_CHECKS = [
-	"check_fit_score_takes_y", "check_estimators_overwrite_params", "check_dont_overwrite_parameters",
-	"check_estimators_fit_returns_self", "check_readonly_memmap_input", "check_n_features_in_after_fitting",
-	"check_estimators_dtypes", "check_sample_weights_pandas_series", "check_sample_weights_not_an_array",
-	"check_sample_weights_list", "check_sample_weights_shape", "check_sample_weights_not_overwritten",
-	"check_sample_weight_equivalence_on_dense_data", "check_dtype_object", "check_pipeline_consistency",
-	"check_estimators_nan_inf", "check_estimators_pickle", "check_f_contiguous_array_estimator",
-	"check_classifier_data_not_an_array", "check_classifiers_one_label", "check_classifiers_one_label_sample_weights",
-	"check_classifiers_classes", "check_estimators_partial_fit_n_features", "check_classifiers_train",
-	"check_supervised_y_2d", "check_decision_proba_consistency", "check_methods_sample_order_invariance",
-	"check_methods_subset_invariance", "check_fit2d_1sample", "check_fit2d_1feature", "check_dict_unchanged",
-	"check_fit_idempotent", "check_fit_check_is_fitted", "check_n_features_in", "check_fit2d_predict1d",
-]
+NOT_BITS = "must be bits"
 
 
 def test_classifier_passes_sklearn_checks_except_float_input():
-	check_estimator(
-		WiSARDClassifier(neurons_per_class=4, bits_per_neuron=4, random_state=0),
-		expected_failed_checks={name: BITS_ONLY for name in FLOAT_X_CHECKS},
-	)
+	"""Every failure must be the bits-only refusal (sklearn feeds random floats);
+	the check NAMES differ across sklearn versions, so we classify by cause, not
+	by name — any other failure is a real bug."""
+	results = check_estimator(WiSARDClassifier(neurons_per_class=4, bits_per_neuron=4, random_state=0), on_fail=None)
+	statuses = {r["status"] for r in results}
+	assert "passed" in statuses
+	def cause_chain(e):
+		seen = []
+		while e is not None and e not in seen:
+			seen.append(e)
+			yield str(e)
+			e = e.__cause__ or e.__context__
+
+	real = [
+		(r["check_name"], str(r["exception"])[:200])
+		for r in results
+		if r["status"] == "failed" and not any(NOT_BITS in m for m in cause_chain(r["exception"]))
+	]
+	assert not real, f"non-bits failures: {real}"
+	assert sum(r["status"] == "passed" for r in results) >= 20
 
 
 def test_encoder_passes_sklearn_checks():

@@ -302,7 +302,11 @@ impl Forward for MetalForward
 	}
 }
 
-/// The best backend available here: Metal when a device exists, else CPU.
+#[cfg(feature = "gpu-wgpu")]
+pub use crate::wgpu_forward::WgpuForward;
+
+/// The best backend available here: Metal when a device exists, else wgpu
+/// (feature `gpu-wgpu`), else CPU.
 pub fn default_backend() -> Box<dyn Forward + Send + Sync>
 {
 	#[cfg(target_os = "macos")]
@@ -310,6 +314,13 @@ pub fn default_backend() -> Box<dyn Forward + Send + Sync>
 		if let Ok(m) = MetalForward::new()
 		{
 			return Box::new(m);
+		}
+	}
+	#[cfg(feature = "gpu-wgpu")]
+	{
+		if let Ok(w) = WgpuForward::new()
+		{
+			return Box::new(w);
 		}
 	}
 	Box::new(CpuForward)
@@ -523,6 +534,39 @@ mod tests
 			eprintln!("skipping metal parity: no Metal device");
 			return;
 		};
+		backend_matches_cpu_every_mode(&metal);
+	}
+
+	/// Same contract for the portable backend — including 200 bits (four
+	/// hashed words) and a dispatch larger than one chunk would be, on the
+	/// u64-emulation paths the Metal kernel never needed.
+	#[cfg(feature = "gpu-wgpu")]
+	#[test]
+	fn wgpu_matches_cpu_every_mode()
+	{
+		let Ok(w) = WgpuForward::new()
+		else
+		{
+			eprintln!("skipping wgpu parity: no adapter");
+			return;
+		};
+		eprintln!("wgpu backend: {}", w.backend_name());
+		backend_matches_cpu_every_mode(&w);
+		let f = fixture(200, CellMode::Qsr, 0xABCDEF);
+		let read = ReadParams {
+			cell_mode: CellMode::Qsr,
+			empty_value: 0.37,
+			coverage_aware: false,
+			run_seed: 0x1234_5678_9ABC_DEF0,
+		};
+		let cpu = score(&CpuForward, &f, read);
+		let gpu = score(&w, &f, read);
+		let worst = cpu.iter().zip(&gpu).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+		assert!(worst <= 1e-6, "wgpu 200-bit QSR: max |cpu-gpu| = {worst}");
+	}
+
+	fn backend_matches_cpu_every_mode(backend: &dyn Forward)
+	{
 		for bits in [16usize, 96]
 		{
 			for mode in CellMode::ALL
@@ -537,7 +581,7 @@ mod tests
 						run_seed: 0xC0FFEE,
 					};
 					let cpu = score(&CpuForward, &f, read);
-					let gpu = score(&metal, &f, read);
+					let gpu = score(backend, &f, read);
 					assert_eq!(cpu.len(), gpu.len());
 					let worst = cpu
 						.iter()
