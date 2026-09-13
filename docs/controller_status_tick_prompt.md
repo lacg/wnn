@@ -141,6 +141,15 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
+DEPLOYED 13/09/2026 14:34-14:37 EDT (armb_deploy.sh, exited): ram_controller ABI 29 INSTALLED
+(wheel sha 026e02aa…) + EXPECTED_ABI=29 committed (0707c70a); smoke of the arm B bundle on the
+installed wheel 100%/2.53° → HOLD lifted; window-k resumed with s2_win4 on ABI 29 at 14:37 EDT
+(provenance line abi=29; obs_pwm-off runs bit-identical). win3 banked 14:33 EDT: HEADLINE
+16.0%/8.26°/9.00°/0.539m (MEMORY#2) vs win2 79.8%/3.96° vs _crn 99.6%/1.41° — k=3 worse at n=1.
+Remaining supervisors: window-k chain 61549 (10 runs to go) and armb_refly_queue 51294 (waits for
+12/12 then re-flies arm B ×4 on the fixed wheel). Wheel-swap question CLOSED for the controller
+wheel (the worker wheel is untouched, still ABI 12).
+
 UPDATE 13/09/2026 13:00 EDT — obs_pwm needed a THIRD fix (05fe0f68): fixes 1+2 alone still left the
 smoke dead (CPU miss diagnostic: 1-6 hits/256 per step vs 14-25 for the control). Cause: the raw
 accumulator encodes the per-episode COLLECTIVE JITTER (anchor 0.66-0.76 at t=0) and splits the memory
