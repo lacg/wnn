@@ -168,6 +168,38 @@ CIC-IoT-2023 neto-sub random        | 93.35 /  7.50 / 96.69    | RF  94.42/ 9.81
   sub-4% FPR point                  | 90.35 /  2.04 / 94.72    |                       |
 ```
 
+### 0B-IDSXD. Best individual genome per dataset from the IDSXD sweep vs RF raw (13/09/2026)
+
+Each WNN row = the MAX over ~1,600 non-independent (seed x genome x threshold) points (completed
+flows x 2 phases x 5 genome_types x 7 modes); RF = ONE deterministic fit (rs=42, raw top-20, TEST).
+Selection inflates the WNN side, so the true gap to RF is at least what is shown. Script:
+`scripts/idsxd_best_column.py` (second block). Mean±SD columns (§0A) are what a table may carry.
+
+    UNSW-NB15 random_3way (qsr 64b; max over 1610)                        F1     FPR    Acc
+    WNN best-F1  B15-CE qsr GA best_fitness val_cal   flow 5925 s20403   94.53   0.60  99.17  (= best-Acc genome)
+    WNN best-FPR B05-CE qsr GS best_ce emp_cum        flow 5913 s20403   93.95   0.37  99.13  @val_cal 94.14/0.78/99.08
+    WNN best-Acc B15-CE qsr GA best_fitness platt     flow 5925 s20403   94.49   0.46  99.19  @val_cal 94.53/0.60/99.17
+    RF raw fixed_05 / val_cal(0.47)                                      95.80/95.82  0.31/0.34  99.39/99.38
+
+    CICIDS2017 random_3way (quad 96b; max over 1680; era-immune)          F1     FPR    Acc
+    WNN best-F1  CE20 quad GA best_f1 train_cal       flow 5880 s20403   99.56   0.11  99.72  (= @val_cal; = best-Acc genome)
+    WNN best-FPR B05-CE quad GS best_fpr empirical    flow 5866 s20404   97.97   0.04  98.74  @val_cal 99.26/0.20/99.53
+    RF raw fixed_05 / val_cal(0.32)                                      99.83/99.85  0.07/0.10  99.89/99.90
+
+    CIC-IoT subsample random_3way (quad 96b; max over 1680; IDSXD2 0/12)  F1     FPR    Acc
+    WNN best-F1  B05-AC quad GA best_f1 train_cal     flow 5888 s20405   93.18   6.91  96.57  PRE-FIX wheel — do not cite
+      era-clean  B15-AC quad GA best_ce train_cal     flow 5900 s20405   93.06   7.56  96.53  @val_cal 93.04/7.08/96.50
+    WNN best-FPR CE20 quad GA best_acc emp_cum        flow 5905 s20404   91.30   2.71  95.33  @val_cal 92.89/7.29/96.42
+    WNN best-Acc B05-AC quad GA best_f1 val_cal       flow 5888 s20405   93.14   7.59  96.57  PRE-FIX
+    RF raw fixed_05 = val_cal(0.50)                                      95.53   7.38  97.84
+
+Reading: the F1/Acc ceilings are all GA-neurons genomes (never the grid) — CE-weighted arms on
+UNSW/CICIDS, AC-weighted on CIC-IoT — and best-F1/best-Acc share one genome hash per dataset. The
+FPR ceilings are empirical/empirical_cumulative threshold points that do NOT survive at val_cal
+(0.37→0.78, 0.04→0.20, 2.71→7.29): threshold-mode artifacts, not operating points. One RF raw fit
+beats the WNN ceiling on F1 and Acc on all three datasets (+1.3 / +0.27 / +2.35 pp F1) and ties or
+beats it on FPR wherever the WNN point is a real val_cal one.
+
 ## 0C. Reading — where the paper's claim actually is
 
 1. **UNSW-NB15 temporal is the strongest result and it is a cohort-level win**, not a
