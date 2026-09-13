@@ -103,6 +103,31 @@ WHAT CHANGED
   had the same test+val merge AND did not expose --split at all, so UNSW temporal could not
   previously be run through it. The re-measured values land within 0.2pp of the banked ones
   on every metric, so the old F1/FPR figures were sound; only Acc was missing.
+* ⚠️ **VAL-CALIBRATED RF/XGB on UNSW temporal_3way (13/09/2026, Plane IDS-9) — the trees
+  catch up once they get the WNN's threshold rule.** Every banked "WNN −18pp FPR vs RF/XGB"
+  read compared the WNN's `val_cal` row against trees scored at a FIXED 0.5 — not
+  like-for-like. Re-measured with `scripts/verify_unsw_temporal_baselines.py --split
+  temporal_3way [--n-bits 16]` (top-20, thermo-encoded exactly as the WNN sees it; the
+  F1-optimal threshold fit on the 10% VAL, scored on the 10% TEST; logs in
+  `logs/baselines_unsw/rf_xgb_temporal_3way_{8,16}b.log`):
+
+      encoding  method   mode       thr      F1     FPR     Acc     size
+      8b        RF       fixed_05   0.50   85.95   25.82   86.50   84.06 MB
+      8b        RF       val_cal    0.89   91.16    6.01   91.20
+      8b        XGBoost  fixed_05   0.50   84.67   28.95   85.38    0.25 MB
+      8b        XGBoost  val_cal    0.89   91.85    2.66   91.87
+      16b       RF       fixed_05   0.50   86.12   25.35   86.65  138.04 MB
+      16b       RF       val_cal    0.88   90.66    7.61   90.71
+      16b       XGBoost  fixed_05   0.50   84.96   28.42   85.64    0.27 MB
+      16b       XGBoost  val_cal    0.87   92.09    3.64   92.11
+
+  The `fixed_05` rows reproduce the banked 2-way numbers (RF 85.83/25.99, XGB 84.62/29.18)
+  within 0.2pp, so the split change is immaterial; the CALIBRATION is not. XGBoost val_cal
+  at 16b (92.09 / 3.64) beats the legacy WNN 16b-Wb row (88.86 / 8.78) on F1 AND FPR. Until
+  the IDSXD-unswt cohort (flows 6183-6236) lands a Protocol-v2 WNN row, the honest UNSW
+  temporal statement is "trees lead under equal calibration"; the size argument
+  (0.27 MB XGB vs ~1 KB WNN) is the surviving differentiator. Every paper table must pair
+  the WNN's mode with the SAME mode on the comparator — never val_cal vs fixed_05.
 
 ## 0B. Best individual genome (CEILING, not the claim)
 
