@@ -63,19 +63,19 @@ selection ran on) and never the during-search gen lines (anti-predictive, repeat
 ## Coverage
 
 ```
-markers with a headline held-out : 231
-  altitude regimen (alt= present) : 142
+markers with a headline held-out : 233
+  altitude regimen (alt= present) : 144
   attitude-only                   : 89
   state-neuron count unreadable   : 0  (no .out on disk)
-  h743 keys counted exactly       : 41  (experiments/h743_keys.json)
-  h743 fits, exact / bound        : 26 / 47
+  h743 keys counted exactly       : 42  (experiments/h743_keys.json)
+  h743 fits, exact / bound        : 27 / 48
 ```
 
 ## The 2x2 that is not filled
 
 ```
                  attitude-only   altitude
-  sn = 0                83          142
+  sn = 0                83          144
   sn > 0                 6            0
 ```
 
@@ -253,6 +253,10 @@ selection draw is visible when the two disagree.
     rot  same-rule 0.2358  ( 94.6% /  2.40° /  2.14°)   gate-dist 0.1972  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
     Δ same-rule (CRN − rot) -0.1138   Δ gate-dist -0.0308   AGREE
   b24 n256 s31337002
+    CRN  same-rule 2.9220  ( 15.4% /  8.51° /  9.25°)   gate-dist 2.8570  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
+    rot  same-rule 0.2358  ( 94.6% /  2.40° /  2.14°)   gate-dist 0.1972  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
+    Δ same-rule (CRN − rot) +2.6861   Δ gate-dist +2.6597   AGREE
+  b24 n256 s31337002
     CRN  same-rule 0.1029  ( 99.6% /  1.41° /  0.85°)   gate-dist 0.1029  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
     rot  same-rule 0.2358  ( 94.6% /  2.40° /  2.14°)   gate-dist 0.1972  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
     Δ same-rule (CRN − rot) -0.1329   Δ gate-dist -0.0943   AGREE
@@ -284,6 +288,10 @@ selection draw is visible when the two disagree.
     CRN  same-rule 0.0932  ( 99.6% /  1.27° /  0.80°)   gate-dist 0.0932  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
     rot  same-rule 0.2358  ( 94.6% /  2.40° /  2.14°)   gate-dist 0.1972  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
     Δ same-rule (CRN − rot) -0.1427   Δ gate-dist -0.1040   AGREE
+  b24 n256 s31337002
+    CRN  same-rule 12.8571  (  0.0% / 57.15° / 57.15°)   gate-dist 12.8571  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
+    rot  same-rule 0.2358  ( 94.6% /  2.40° /  2.14°)   gate-dist 0.1972  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
+    Δ same-rule (CRN − rot) +12.6212   Δ gate-dist +12.6598   AGREE
   b24 n256 s31337002
     CRN  same-rule 0.1253  ( 99.2% /  1.66° /  1.13°)   gate-dist 0.1211  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
     rot  same-rule 0.2358  ( 94.6% /  2.40° /  2.14°)   gate-dist 0.1972  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
