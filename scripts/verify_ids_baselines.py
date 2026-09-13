@@ -46,11 +46,13 @@ TOP20 = {
 	"ciciot": ciciot2023.TOP20_RF_FEATURES,
 	"ciciot46m": ciciot2023.TOP20_RF_FEATURES,
 }
+# the same repos the loaders read — ciciot is the NETO SUBSAMPLE (lacg030175/CIC-IoT-2023 is the
+# bencorn-era mirror: 13/20 canonical features, different rows — not what the WNN sweeps on)
 HF_REPOS = {
 	"unsw": "lacg030175/UNSW-NB15",
 	"cicids": "lacg030175/CICIDS2017",
-	"ciciot": "lacg030175/CIC-IoT-2023",
-	"ciciot46m": "lacg030175/CIC-IoT-2023-neto-full",   # 46.7M rows — RAW ONLY (never swept, never thermo'd here)
+	"ciciot": ciciot2023.HF_DATASET_NETO_SUBSAMPLE_ID,
+	"ciciot46m": ciciot2023.HF_DATASET_NETO_FULL_ID,   # 46.7M rows — RAW ONLY (never swept, never thermo'd here)
 }
 
 LOADERS = {
