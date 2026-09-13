@@ -237,6 +237,61 @@ impl SparseTrainer
 		}
 	}
 
+	/// Every accumulator as `(neuron, address, value)` — the trainer's complete
+	/// state, so a model can be serialised WITH its accumulators and keep
+	/// `partial_fit` exact across a save/load. `value` is 0 for BINARY (set
+	/// membership), the signed vote for TERNARY/PLN, the packed OI word (as
+	/// i64) for the QUAD family. Sorted, so equal states serialise identically.
+	pub fn export_accum(&self) -> Vec<(u32, u64, i64)>
+	{
+		let mut out: Vec<(u32, u64, i64)> = match &self.accum
+		{
+			Accum::Set(m) => m
+				.iter()
+				.enumerate()
+				.flat_map(|(n, d)| d.iter().map(move |e| (n as u32, *e.key(), 0i64)).collect::<Vec<_>>())
+				.collect(),
+			Accum::Votes(m) => m
+				.iter()
+				.enumerate()
+				.flat_map(|(n, d)| d.iter().map(move |e| (n as u32, *e.key(), *e.value())).collect::<Vec<_>>())
+				.collect(),
+			Accum::Oi(m) => m
+				.iter()
+				.enumerate()
+				.flat_map(|(n, d)| d.iter().map(move |e| (n as u32, *e.key(), *e.value() as i64)).collect::<Vec<_>>())
+				.collect(),
+		};
+		out.sort_unstable();
+		out
+	}
+
+	/// Fold an exported accumulator state in (the inverse of `export_accum`,
+	/// MERGING with whatever is already accumulated: set-union / vote sum /
+	/// `oi_merge`). Rejects a neuron index outside the layout.
+	pub fn import_accum(&self, entries: &[(u32, u64, i64)]) -> Result<(), TrainError>
+	{
+		let n = self.layout.num_neurons();
+		if let Some(bad) = entries.iter().find(|(neuron, _, _)| *neuron as usize >= n)
+		{
+			return Err(TrainError::Shape(format!("accumulator neuron {} outside the layout ({n} neurons)", bad.0)));
+		}
+		match &self.accum
+		{
+			Accum::Set(maps) => entries.iter().for_each(|(neuron, key, _)| {
+				maps[*neuron as usize].insert(*key, ());
+			}),
+			Accum::Votes(maps) => entries.iter().for_each(|(neuron, key, v)| {
+				*maps[*neuron as usize].entry(*key).or_insert(0) += v;
+			}),
+			Accum::Oi(maps) => entries.iter().for_each(|(neuron, key, v)| {
+				let mut e = maps[*neuron as usize].entry(*key).or_insert(OI_INITIAL);
+				*e = crate::neuron_memory::oi_merge(*e, *v as u32);
+			}),
+		}
+		Ok(())
+	}
+
 	/// Number of (neuron, address) accumulators touched so far.
 	pub fn touched(&self) -> usize
 	{
@@ -464,6 +519,38 @@ mod tests
 			assert_eq!(m.read_cell(0, 12345), EMPTY_U8, "{mode}: read_cell must stay EMPTY on a miss");
 		}
 		assert_eq!(SparseLayerMemory::new(1, 4).read_cell_or_default(0, 0), EMPTY_U8, "NO_CANONICAL_DEFAULT keeps EMPTY");
+	}
+
+	/// export → fresh trainer → import → commit gives the identical memory, and
+	/// importing into a trainer that already holds data MERGES (A then B == A+B).
+	#[test]
+	fn accum_round_trips_and_merges()
+	{
+		let (input, conns, labels) = data(21, 240);
+		let (ia, la) = (input.slice_rows(0..120), labels[..120].to_vec());
+		let (ib, lb) = (input.slice_rows(120..240), labels[120..].to_vec());
+		for mode in CellMode::ALL
+		{
+			let whole = train(mode, &input, &conns, &labels);
+			let ta = SparseTrainer::new(mode, layout());
+			ta.accumulate(&ia, &conns, &la, None).unwrap();
+			let saved = ta.export_accum();
+			// resume from the saved state in a NEW trainer, add B
+			let tb = SparseTrainer::new(mode, layout());
+			tb.import_accum(&saved).unwrap();
+			tb.accumulate(&ib, &conns, &lb, None).unwrap();
+			let m = new_memory(mode, layout());
+			tb.commit(&m);
+			let mut got = m.export();
+			got.sort();
+			assert_eq!(got, whole, "{mode}: import+continue != whole");
+			// and the export of the resumed trainer equals a trainer that saw A+B
+			let tab = SparseTrainer::new(mode, layout());
+			tab.accumulate(&input, &conns, &labels, None).unwrap();
+			assert_eq!(tb.export_accum(), tab.export_accum(), "{mode}: accumulators differ");
+		}
+		let t = SparseTrainer::new(CellMode::Binary, layout());
+		assert!(t.import_accum(&[(999, 1, 0)]).is_err());
 	}
 
 	#[test]

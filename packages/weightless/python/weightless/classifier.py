@@ -11,31 +11,36 @@ from __future__ import annotations
 
 import numpy as np
 from sklearn.base import BaseEstimator, ClassifierMixin
-from sklearn.utils.validation import check_is_fitted
+from sklearn.utils.multiclass import check_classification_targets
+from sklearn.utils.validation import _check_sample_weight, check_is_fitted, validate_data
 
 from ._cell_mode import CellMode
 from ._core import SparseModel
 
 _BACKENDS = ("auto", "cpu", "gpu")
+NOT_BITS = (
+	"X must be bits (bool or 0/1 values). Encode real-valued features first, "
+	"e.g. weightless.ThermometerEncoder in a Pipeline."
+)
 
 
-def _as_bits(X) -> np.ndarray:
-	"""Validate a 0/1 matrix and return it as uint8 (n, total_bits)."""
-	X = np.asarray(X)
-	if X.ndim != 2:
-		raise ValueError(f"X must be 2-D (n_samples, n_bits); got shape {X.shape}")
+def _as_bits(X: np.ndarray) -> np.ndarray:
+	"""A validated (finite, 2-D) numeric matrix → uint8 0/1, or ValueError."""
 	if X.dtype == bool:
 		return X.astype(np.uint8)
-	if not np.issubdtype(X.dtype, np.integer):
-		if np.issubdtype(X.dtype, np.floating) and np.all((X == 0) | (X == 1)):
-			return X.astype(np.uint8)
-		raise TypeError(
-			"X must be bits (bool or 0/1 integers). Encode real-valued features first, "
-			"e.g. weightless.ThermometerEncoder in a Pipeline."
-		)
-	if X.size and (X.min() < 0 or X.max() > 1):
-		raise ValueError("X must contain only 0 and 1")
+	if X.dtype == object:
+		X = X.astype(np.float64)
+	if X.size and X.min() < 0:
+		raise ValueError("Negative values in data passed to WiSARDClassifier: " + NOT_BITS)
+	if X.size and not np.all((X == 0) | (X == 1)):
+		raise ValueError(NOT_BITS)
 	return X.astype(np.uint8)
+
+
+def _mode_of(value) -> CellMode:
+	if isinstance(value, str):
+		return CellMode[value.upper()]
+	return CellMode(int(value))
 
 
 def _pack(bits: np.ndarray) -> np.ndarray:
@@ -52,7 +57,7 @@ class WiSARDClassifier(ClassifierMixin, BaseEstimator):
 	bits_per_neuron : int, default 16
 		Input positions each neuron observes (its address width). Above 64 the
 		address is a hash of the observed bits.
-	cell_mode : CellMode or int, default CellMode.QUAD_WEIGHTED
+	cell_mode : CellMode, int or str, default "quad_weighted"
 	empty_value : float, default 0.5
 		Weight of an untrained cell — TERNARY only (ignored by every other mode).
 	connections : ndarray of shape (n_classes, neurons_per_class, bits_per_neuron), optional
@@ -69,7 +74,7 @@ class WiSARDClassifier(ClassifierMixin, BaseEstimator):
 		self,
 		neurons_per_class: int = 50,
 		bits_per_neuron: int = 16,
-		cell_mode: CellMode | int = CellMode.QUAD_WEIGHTED,
+		cell_mode: CellMode | int | str = "quad_weighted",
 		empty_value: float = 0.5,
 		connections: np.ndarray | None = None,
 		coverage_aware: bool = False,
@@ -92,7 +97,7 @@ class WiSARDClassifier(ClassifierMixin, BaseEstimator):
 			raise ValueError("neurons_per_class and bits_per_neuron must be >= 1")
 		if self.backend not in _BACKENDS:
 			raise ValueError(f"backend must be one of {_BACKENDS}, got {self.backend!r}")
-		return CellMode(int(self.cell_mode))
+		return _mode_of(self.cell_mode)
 
 	def _draw_connections(self, n_classes: int, total_bits: int) -> np.ndarray:
 		if self.connections is not None:
@@ -138,14 +143,17 @@ class WiSARDClassifier(ClassifierMixin, BaseEstimator):
 			raise ValueError(f"y contains labels unseen at init: {np.unique(y[bad])[:5]}")
 		return idx.astype(np.int64)
 
+	def _validate_xy(self, X, y, reset: bool):
+		X, y = validate_data(self, X, y, reset=reset, dtype=None, ensure_2d=True, ensure_min_samples=1)
+		check_classification_targets(y)
+		return _as_bits(X), np.asarray(y).reshape(-1)
+
 	def fit(self, X, y, sample_weight=None):
 		"""Reset and train on (X, y). `sample_weight` is rounded to an integer vote weight >= 1:
 		it scales an example's vote (TERNARY sums, QUAD net); in the QUAD modes the observation
 		count still counts examples, so a weight of 2 is NOT two copies of the row."""
-		bits = _as_bits(X)
-		y = np.asarray(y).reshape(-1)
-		if len(y) != bits.shape[0]:
-			raise ValueError("X and y have different numbers of rows")
+		self._validate_params_()
+		bits, y = self._validate_xy(X, y, reset=True)
 		self._init_model(np.unique(y), bits.shape[1])
 		return self._train(bits, y, sample_weight)
 
@@ -153,23 +161,21 @@ class WiSARDClassifier(ClassifierMixin, BaseEstimator):
 		"""Fold (X, y) into the memory. RAM writes accumulate, so
 		`partial_fit(A); partial_fit(B)` equals `fit(A + B)` exactly.
 		`classes` is required on the first call."""
-		bits = _as_bits(X)
-		y = np.asarray(y).reshape(-1)
-		if not hasattr(self, "_model"):
+		first = not hasattr(self, "_model")
+		if first:
+			self._validate_params_()
 			if classes is None:
 				raise ValueError("classes must be passed on the first partial_fit call")
+		bits, y = self._validate_xy(X, y, reset=first)
+		if first:
 			self._init_model(np.unique(np.asarray(classes)), bits.shape[1])
-		elif bits.shape[1] != self.n_features_in_:
-			raise ValueError(f"X has {bits.shape[1]} bits, the model was built for {self.n_features_in_}")
 		return self._train(bits, y, sample_weight)
 
 	def _train(self, bits: np.ndarray, y: np.ndarray, sample_weight):
 		labels = self._encode_y(y)
 		weights = None
 		if sample_weight is not None:
-			w = np.asarray(sample_weight, dtype=np.float64).reshape(-1)
-			if len(w) != len(labels):
-				raise ValueError("sample_weight has the wrong length")
+			w = _check_sample_weight(sample_weight, bits, dtype=np.float64)
 			weights = np.ascontiguousarray(np.maximum(np.rint(w), 1).astype(np.uint32))
 		self.n_cells_ = self._model.train(_pack(bits), np.ascontiguousarray(labels), weights)
 		return self
@@ -178,9 +184,8 @@ class WiSARDClassifier(ClassifierMixin, BaseEstimator):
 
 	def _scores(self, X, expected: bool) -> np.ndarray:
 		check_is_fitted(self, "_model")
+		X = validate_data(self, X, reset=False, dtype=None, ensure_2d=True)
 		bits = _as_bits(X)
-		if bits.shape[1] != self.n_features_in_:
-			raise ValueError(f"X has {bits.shape[1]} bits, the model was built for {self.n_features_in_}")
 		read_mode = int(self._mode.expected_read_mode) if expected else None
 		flat = self._model.forward(
 			_pack(bits),
@@ -236,5 +241,8 @@ class WiSARDClassifier(ClassifierMixin, BaseEstimator):
 	def __sklearn_is_fitted__(self) -> bool:
 		return hasattr(self, "_model")
 
-	def _more_tags(self):
-		return {"binary_only": False, "requires_positive_X": True, "X_types": ["2darray"], "poor_score": True}
+	def __sklearn_tags__(self):
+		tags = super().__sklearn_tags__()
+		tags.input_tags.positive_only = True   # bits are 0/1; negatives are rejected
+		tags.classifier_tags.poor_score = True  # random float X cannot be learned (it is refused)
+		return tags

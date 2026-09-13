@@ -123,7 +123,7 @@ fn cell_mode_names() -> Vec<(u8, &'static str)>
 
 // ---- the model --------------------------------------------------------------
 
-#[pyclass]
+#[pyclass(module = "weightless._core")]
 struct SparseModel
 {
 	mode: CellMode,
@@ -313,6 +313,77 @@ impl SparseModel
 		self.memory = new_memory(self.mode, self.layout);
 		self.trainer = SparseTrainer::new(self.mode, self.layout);
 		self.export = None;
+	}
+
+	// ---- pickle ------------------------------------------------------------
+	// State = the constructor args + the trainer's accumulators (NOT the
+	// committed cells: they are a pure function of the accumulators, and
+	// carrying the accumulators is what keeps partial_fit exact after a
+	// save/load). numpy arrays throughout so the pickle is compact.
+
+	fn __reduce__<'py>(slf: PyRef<'py, Self>, py: Python<'py>) -> PyResult<(PyObject, PyObject, PyObject)>
+	{
+		let cls = py.get_type::<Self>().into_any().unbind();
+		let args = (
+			slf.layout.num_clusters,
+			slf.layout.neurons_per_cluster,
+			slf.layout.bits_per_neuron,
+			slf.total_bits,
+			slf.mode.as_u8(),
+			PyArray1::from_vec(py, slf.connections.clone()),
+		)
+			.into_pyobject(py)?
+			.into_any()
+			.unbind();
+		let acc = slf.trainer.export_accum();
+		let neurons: Vec<u32> = acc.iter().map(|e| e.0).collect();
+		let keys: Vec<u64> = acc.iter().map(|e| e.1).collect();
+		let values: Vec<i64> = acc.iter().map(|e| e.2).collect();
+		let state = (
+			ABI_VERSION,
+			PyArray1::from_vec(py, neurons),
+			PyArray1::from_vec(py, keys),
+			PyArray1::from_vec(py, values),
+		)
+			.into_pyobject(py)?
+			.into_any()
+			.unbind();
+		Ok((cls, args, state))
+	}
+
+	fn __setstate__(
+		&mut self,
+		state: (u32, PyReadonlyArray1<'_, u32>, PyReadonlyArray1<'_, u64>, PyReadonlyArray1<'_, i64>),
+	) -> PyResult<()>
+	{
+		let (abi, neurons, keys, values) = state;
+		if abi != ABI_VERSION
+		{
+			return Err(PyValueError::new_err(format!("pickled with weightless._core ABI {abi}, this build is {ABI_VERSION}")));
+		}
+		let neurons = neurons.as_slice().map_err(|_| PyValueError::new_err("bad pickle: neurons"))?;
+		let keys = keys.as_slice().map_err(|_| PyValueError::new_err("bad pickle: keys"))?;
+		let values = values.as_slice().map_err(|_| PyValueError::new_err("bad pickle: values"))?;
+		if neurons.len() != keys.len() || keys.len() != values.len()
+		{
+			return Err(PyValueError::new_err("bad pickle: accumulator arrays differ in length"));
+		}
+		let entries: Vec<(u32, u64, i64)> = neurons
+			.iter()
+			.zip(keys)
+			.zip(values)
+			.map(|((n, k), v)| (*n, *k, *v))
+			.collect();
+		self.reset();
+		self.trainer.import_accum(&entries).map_err(value_err)?;
+		self.trainer.commit(&self.memory);
+		Ok(())
+	}
+
+	/// Accumulator count (what a pickle carries).
+	fn accum_len(&self) -> usize
+	{
+		self.trainer.touched()
 	}
 }
 

@@ -98,7 +98,7 @@ def test_stochastic_reads_are_seeded_and_expected_is_deterministic():
 
 def test_rejects_non_bits_and_bad_shapes():
 	X, y = make_bits(n=50)
-	with pytest.raises(TypeError):
+	with pytest.raises(ValueError, match="must be bits"):
 		WiSARDClassifier().fit(X.astype(float) * 0.5, y)
 	with pytest.raises(ValueError):
 		WiSARDClassifier(bits_per_neuron=999).fit(X, y)

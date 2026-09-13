@@ -1,0 +1,79 @@
+# Wheels for the PUBLIC `weightless` package (packages/weightless + accelerator/{core,public}).
+#
+# BUILD on every push that touches it; PUBLISH to PyPI only on a `weightless-v*` tag
+# (trusted publishing via the `pypi` environment — nothing reaches PyPI before a tag is
+# cut deliberately, i.e. at camera-ready). Linux/Windows jobs build the non-macOS
+# (CPU-only) path, so the stub in core/lib.rs is compiled and tested on every push.
+name: weightless wheels
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "packages/weightless/**"
+      - "src/wnn/ram/strategies/accelerator/core/**"
+      - "src/wnn/ram/strategies/accelerator/public/**"
+      - "src/wnn/ram/strategies/accelerator/Cargo.*"
+      - ".github/workflows/weightless-wheels.yml"
+    tags: ["weightless-v*"]
+  pull_request:
+    paths:
+      - "packages/weightless/**"
+      - "src/wnn/ram/strategies/accelerator/core/**"
+      - "src/wnn/ram/strategies/accelerator/public/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wheels:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14,         target: aarch64,  label: macos-arm64 }
+          - { os: ubuntu-latest,    target: x86_64,   label: linux-x86_64,  manylinux: auto }
+          - { os: ubuntu-24.04-arm, target: aarch64,  label: linux-aarch64, manylinux: auto }
+          - { os: windows-latest,   target: x64,      label: windows-x64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build wheel (abi3, CPython >= 3.11)
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: packages/weightless
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux || 'auto' }}
+          args: --release --out dist --interpreter python3.12
+      - name: Test the built wheel
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install packages/weightless/dist/*.whl "pytest>=7" "scipy>=1.10"
+          cd packages/weightless && python -c "import weightless; print(weightless.__version__, weightless.backends())"
+          python -m pytest -q tests
+      - uses: actions/upload-artifact@v4
+        with:
+          name: weightless-${{ matrix.label }}
+          path: packages/weightless/dist/*.whl
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/weightless-v')
+    needs: wheels
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: weightless-*
+          merge-multiple: true
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/

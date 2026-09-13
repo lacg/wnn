@@ -21,7 +21,7 @@ from enum import Enum
 
 import numpy as np
 from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.utils.validation import check_is_fitted
+from sklearn.utils.validation import check_is_fitted, validate_data
 
 
 class ThermometerMethod(str, Enum):
@@ -50,7 +50,7 @@ class ThermometerEncoder(TransformerMixin, BaseEstimator):
 	method : {"distributive", "linear", "gaussian"}, default "distributive"
 	"""
 
-	def __init__(self, n_bits: int = 8, method: ThermometerMethod | str = ThermometerMethod.DISTRIBUTIVE):
+	def __init__(self, n_bits: int = 8, method: ThermometerMethod | str = "distributive"):
 		self.n_bits = n_bits
 		self.method = method
 
@@ -76,24 +76,25 @@ class ThermometerEncoder(TransformerMixin, BaseEstimator):
 		return _spread_duplicates(np.percentile(values, q))
 
 	def fit(self, X, y=None):
-		X = np.asarray(X, dtype=np.float64)
-		if X.ndim != 2:
-			raise ValueError(f"X must be 2-D, got shape {X.shape}")
 		if int(self.n_bits) < 1:
 			raise ValueError("n_bits must be >= 1")
-		self.n_features_in_ = X.shape[1]
+		X = validate_data(self, X, reset=True, dtype=np.float64, ensure_all_finite=False)
 		self.thresholds_ = np.stack([self._thresholds(X[:, j]) for j in range(X.shape[1])])
 		self.n_bits_out_ = X.shape[1] * int(self.n_bits)
 		return self
 
 	def transform(self, X) -> np.ndarray:
 		check_is_fitted(self, "thresholds_")
-		X = np.asarray(X, dtype=np.float64)
-		if X.ndim != 2 or X.shape[1] != self.n_features_in_:
-			raise ValueError(f"X must have shape (n, {self.n_features_in_}), got {X.shape}")
+		X = validate_data(self, X, reset=False, dtype=np.float64, ensure_all_finite=False)
 		# (n, d, 1) >= (d, nb) → (n, d, nb); NaN compares False → all-zero bits.
 		bits = X[:, :, None] >= self.thresholds_[None, :, :]
 		return bits.reshape(X.shape[0], self.n_bits_out_).astype(np.uint8)
+
+	def __sklearn_tags__(self):
+		tags = super().__sklearn_tags__()
+		tags.input_tags.allow_nan = True          # NaN / ±inf encode as all-zero bits by design
+		tags.transformer_tags.preserves_dtype = []  # output is always uint8 bits
+		return tags
 
 	def get_feature_names_out(self, input_features=None):
 		d, nb = self.thresholds_.shape

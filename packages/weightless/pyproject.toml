@@ -35,3 +35,6 @@ manifest-path = "../../src/wnn/ram/strategies/accelerator/public/Cargo.toml"
 python-source = "python"
 module-name = "weightless._core"
 features = ["pyo3/extension-module"]
+# No sdist yet: maturin cannot include files above the project root, and the
+# crate depends on ram_core by PATH. Once ram_core is on crates.io (scope item C)
+# the public crate depends on it by version and the sdist becomes self-contained.

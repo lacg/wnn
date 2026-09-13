@@ -23,5 +23,6 @@ extension-module = ["pyo3/extension-module"]
 
 [dependencies]
 ram_core = { path = "../core" }
-pyo3 = { version = "0.23" }
+# abi3-py311: ONE wheel per platform for every CPython >= 3.11 (numpy 0.23 supports abi3).
+pyo3 = { version = "0.23", features = ["abi3-py311"] }
 numpy = "0.23"
