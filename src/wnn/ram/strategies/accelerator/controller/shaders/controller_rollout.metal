@@ -1881,6 +1881,7 @@ kernel void controller_train(
 		device const float *init_q [[buffer(22)]], // yaw-anchor: per-episode q0 [num_episodes*4]
 		device const float *vert_obs [[buffer(23)]], // stale-altitude-features fix: [total_steps*3]
 		device const float *horiz_obs [[buffer(24)]], // [total_steps*4]
+		device const float *pwm_acc_rec [[buffer(25)]], // obs_pwm replay fix: [total_steps*4]
 		uint gid [[thread_position_in_grid]])
 {
 	uint g = gid;
@@ -1968,6 +1969,14 @@ kernel void controller_train(
 				F.horiz_err_y = horiz_obs[s4o + 1];
 				F.horiz_vx = horiz_obs[s4o + 2];
 				F.horiz_vy = horiz_obs[s4o + 3];
+				// obs_pwm replay fix: restore the accumulator this step's deploy
+				// compute_features read (the replay never runs decode). Only when the
+				// feature is on — obs_pwm-off stays bit-identical.
+				if (P.obs_pwm != 0u)
+				{
+					for (uint m = 0u; m < P.num_motors && m < 4u; ++m)
+						pwm_acc[m] = pwm_acc_rec[s4o + m];
+				}
 			}
 
 			// Action-repeat hold: accumulators tick; no ring push / forward /
@@ -2075,6 +2084,7 @@ kernel void controller_record(
 		device const uint *rec_base [[buffer(19)]], // [num_episodes]
 		device const float *vert_obs [[buffer(20)]], // stale-altitude-features fix: [total_steps*3]
 		device const float *horiz_obs [[buffer(21)]], // [total_steps*4]
+		device const float *pwm_acc_rec [[buffer(22)]], // obs_pwm replay fix: [total_steps*4]
 		uint2 tid [[thread_position_in_grid]])
 {
 	uint g = tid.x, ej = tid.y;
@@ -2157,6 +2167,14 @@ kernel void controller_record(
 			F.horiz_err_y = horiz_obs[s4o + 1];
 			F.horiz_vx = horiz_obs[s4o + 2];
 			F.horiz_vy = horiz_obs[s4o + 3];
+			// obs_pwm replay fix: restore the accumulator this step's deploy
+			// compute_features read (the replay never runs decode). Only when the
+			// feature is on — obs_pwm-off stays bit-identical.
+			if (P.obs_pwm != 0u)
+			{
+				for (uint m = 0u; m < P.num_motors && m < 4u; ++m)
+					pwm_acc[m] = pwm_acc_rec[s4o + m];
+			}
 		}
 
 		// Action-repeat hold: accumulators tick; no ring push / forward / record.

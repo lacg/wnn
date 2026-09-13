@@ -157,7 +157,15 @@ mod metal_controller;
 ///     (dagger_train::teacher_label_f32 / rebased_label_base). Default 0 is
 ///     bit-identical to ABI 26 for every banked run; the bump lets the Python
 ///     side ASSERT the ctor accepts the new key instead of a TypeError mid-run.
-pub const ABI_VERSION: u32 = 28;
+/// ABI 29 (13/09/2026): obs_pwm replay + ladder fix — `ReplayObs` gains the
+///     per-step `pwm_acc` stream (the accumulator compute_features read at
+///     rollout; recorded in TrajectoryRs.pwm_acc, restored by every replay
+///     trainer: CPU bptt, CPU split, Metal train/record buffers 25/22) and
+///     `WnnController.set_pwm_accumulator` (the threshold fitter's hook). Every
+///     obs_pwm-off run is bit-identical to ABI 28; obs_pwm-on runs before this
+///     (c2k, bit_sweep, e5, frame_fix, low_edge, arm B `_bd` s2) trained on a
+///     frozen accumulator and a degenerate ladder and are VOID.
+pub const ABI_VERSION: u32 = 29;
 
 /// Mode-aware untrained-cell decode anchor (ABI 12): QUAD→0.75, TERNARY→0.5
 /// (the fixed PLN empty_value), BINARY→0.5 (antagonist-pair effective neutral).

@@ -614,6 +614,9 @@ pub struct TrajectoryRs
 	// this the replay reused the controller's last live value for every record.
 	pub vert_obs: Vec<[f32; 3]>,
 	pub horiz_obs: Vec<[f32; 4]>,
+	// obs_pwm replay fix (13/09/2026): the throttle accumulator compute_features
+	// read at each step (snapshot BEFORE controller_step_4). ReplayObs.pwm_acc.
+	pub pwm_acc: Vec<[f32; 4]>,
 	pub cumulative_reward: f64,
 	pub mean_attitude_error_rad: f64,
 	pub diverged: bool,
@@ -1290,7 +1293,7 @@ impl TeacherBank
 /// controls [T, τ_roll, τ_pitch, τ_yaw]. Exact inverse (mix signs:
 /// p0=T-τp+τy, p1=T-τr-τy, p2=T+τp+τy, p3=T+τr-τy).
 #[inline]
-fn unmix_motors_to_controls(p: [f32; 4]) -> [f32; 4]
+pub(crate) fn unmix_motors_to_controls(p: [f32; 4]) -> [f32; 4]
 {
 	[
 		(p[0] + p[1] + p[2] + p[3]) * 0.25, // T  = mean
@@ -1595,6 +1598,7 @@ pub fn rollout_and_label_rs(
 	traj.student_pwms = Vec::with_capacity(cfg.steps_per_episode);
 	traj.att_errs = Vec::with_capacity(cfg.steps_per_episode);
 	traj.label_base = Vec::with_capacity(cfg.steps_per_episode);
+	traj.pwm_acc = Vec::with_capacity(cfg.steps_per_episode);
 
 	// Offset-free MPC observer state: the action ACTUALLY applied to the sim last
 	// step (the student's, under DAGGER). Hover default so step-0's observe() —
@@ -1650,6 +1654,9 @@ pub fn rollout_and_label_rs(
 			let [hvx, hvy] = sim.velocity_xy_rs();
 			controller.set_horizontal_obs(-hx, -hy, hvx, hvy);
 		}
+		// obs_pwm replay fix: the accumulator THIS step's compute_features reads
+		// (step() decodes into it afterwards), so the replay can restore it.
+		let pwm_acc_now = controller.pwm_accumulator_obs();
 		// Student forward + teacher label at student-visited state.
 		let student_pwm = controller_step_4(controller, gyro, accel, target_64);
 		// True-delta label baseline for THIS step (pwm_prev is the pre-step
@@ -1739,6 +1746,7 @@ pub fn rollout_and_label_rs(
 		// held when controller_step_4 ran (zeros while the channels are off).
 		traj.vert_obs.push(controller.vert_obs());
 		traj.horiz_obs.push(controller.horiz_obs());
+		traj.pwm_acc.push(pwm_acc_now);
 		// H3: when outputs are decoupled, the output banks are CONTROLS, so the
 		// training TARGETS (teacher + student MOTOR pwms) must be un-mixed into
 		// control space [T,τr,τp,τy]. Single point ⇒ all downstream paths (split /
@@ -1859,7 +1867,7 @@ pub fn train_on_trajectory_rs(
 		// Stale-altitude-features fix: the per-step observation streams, sliced
 		// exactly like gyros (None only for a pre-field trajectory; the replay's
 		// guard refuses that whenever the features are on).
-		let ro = ReplayObs::slice(&traj.vert_obs, &traj.horiz_obs, start, end);
+		let ro = ReplayObs::slice(&traj.vert_obs, &traj.horiz_obs, &traj.pwm_acc, start, end);
 		let (sw, ow) = controller.bptt_train_window(
 			g,
 			a,
@@ -2060,6 +2068,7 @@ struct GatedFlat
 	// observation, the kernels' twin of ReplayObs.
 	vert_obs: Vec<f32>,
 	horiz_obs: Vec<f32>,
+	pwm_acc: Vec<f32>, // obs_pwm replay fix: [total_steps*4]
 }
 
 /// Flatten the gated (episode-major) trajectories into `GatedFlat`. All episodes
@@ -2082,6 +2091,7 @@ fn flatten_gated(gated: &[&TrajectoryRs]) -> GatedFlat
 		init_q: Vec::with_capacity(ne * 4),
 		vert_obs: Vec::with_capacity(total_steps * 3),
 		horiz_obs: Vec::with_capacity(total_steps * 4),
+		pwm_acc: Vec::with_capacity(total_steps * 4),
 	};
 	let mut sbase = 0u32;
 	for t in gated
@@ -2100,6 +2110,7 @@ fn flatten_gated(gated: &[&TrajectoryRs]) -> GatedFlat
 			// (try_gpu_split) refuses such a batch when the features are on.
 			f.vert_obs.extend_from_slice(&t.vert_obs.get(s).copied().unwrap_or([0.0; 3]));
 			f.horiz_obs.extend_from_slice(&t.horiz_obs.get(s).copied().unwrap_or([0.0; 4]));
+			f.pwm_acc.extend_from_slice(&t.pwm_acc.get(s).copied().unwrap_or([0.0; 4]));
 		}
 		let (sn, cs) = (0.5 * t.init_yaw).sin_cos();
 		f.init_q.extend_from_slice(&[cs, 0.0, 0.0, sn]);
@@ -2156,6 +2167,7 @@ fn try_gpu_split(
 		init_q: &fb.init_q,
 		vert_obs: &fb.vert_obs,
 		horiz_obs: &fb.horiz_obs,
+		pwm_acc: &fb.pwm_acc,
 		selective: cfg.split_selective_output,
 		target_rpy: target,
 	};
@@ -2351,7 +2363,11 @@ pub fn dagger_train_inplace_rs(
 					// Stale-altitude-features fix: per-episode observation streams.
 					let ro: Vec<ReplayObs> = gated
 						.iter()
-						.map(|t| ReplayObs { vert: t.vert_obs.clone(), horiz: t.horiz_obs.clone() })
+						.map(|t| ReplayObs {
+							vert: t.vert_obs.clone(),
+							horiz: t.horiz_obs.clone(),
+							pwm_acc: t.pwm_acc.clone(),
+						})
 						.collect();
 					let (_r, _cf, planted, _pr, saturation, wishes) = controller.split_train_loop(
 						g,

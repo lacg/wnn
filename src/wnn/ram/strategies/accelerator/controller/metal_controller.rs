@@ -1655,6 +1655,9 @@ pub struct TrainBatch<'a>
 	// observation the student addressed on at rollout (ReplayObs twin).
 	pub vert_obs: &'a [f32],
 	pub horiz_obs: &'a [f32],
+	// obs_pwm replay fix (13/09/2026): per-step throttle accumulator (*4) the
+	// student's compute_features read at rollout (ReplayObs.pwm_acc twin).
+	pub pwm_acc: &'a [f32],
 	pub selective: bool,
 	pub target_rpy: [f32; 3],
 }
@@ -1672,6 +1675,13 @@ fn replay_obs_batch_guard(batch: &TrainBatch, site: &str)
 		 the kernel would address on a wrong or zero observation (stale-altitude-features bug)",
 		batch.vert_obs.len(),
 		batch.horiz_obs.len(),
+		total_steps
+	);
+	assert!(
+		batch.pwm_acc.len() == total_steps * 4,
+		"{site}: replay accumulator buffer misaligned (pwm_acc {} floats for {} steps) — \
+		 an obs_pwm student would train on a frozen accumulator (obs_pwm replay bug, 13/09/2026)",
+		batch.pwm_acc.len(),
 		total_steps
 	);
 }
@@ -2636,14 +2646,15 @@ impl ControllerTrainer
 		replay_obs_batch_guard(batch, "controller_train");
 		let b_vo = self.buf(batch.vert_obs); // stale-altitude-features fix (buffer 23)
 		let b_ho = self.buf(batch.horiz_obs); // (buffer 24)
+		let b_pa = self.buf(batch.pwm_acc); // obs_pwm replay fix (buffer 25)
 
 		let cmd = self.queue.new_command_buffer();
 		let enc = cmd.new_compute_command_encoder();
 		enc.set_compute_pipeline_state(&self.pipeline);
-		let bufs: [&Buffer; 25] = [
+		let bufs: [&Buffer; 26] = [
 			&b_sc, &b_oc, &b_sk, &b_sv, &b_so, &b_scn, &b_th, &b_epb, &b_epc, &b_stb, &b_stc, &b_gy,
 			&b_ac, &b_tg, &b_pp, &b_mk, &b_ky, &b_vl, &b_soff, &b_scap, &b_par, &b_wr, &b_iy, &b_vo,
-			&b_ho,
+			&b_ho, &b_pa,
 		];
 		for (i, b) in bufs.iter().enumerate()
 		{
@@ -2841,13 +2852,14 @@ impl ControllerTrainer
 		replay_obs_batch_guard(batch, "controller_record");
 		let b_vo = self.buf(batch.vert_obs); // stale-altitude-features fix (buffer 20)
 		let b_ho = self.buf(batch.horiz_obs); // (buffer 21)
+		let b_pa = self.buf(batch.pwm_acc); // obs_pwm replay fix (buffer 22)
 
 		let cmd = self.queue.new_command_buffer();
 		let enc = cmd.new_compute_command_encoder();
 		enc.set_compute_pipeline_state(&self.record_pipeline);
-		let bufs: [&Buffer; 22] = [
+		let bufs: [&Buffer; 23] = [
 			&b_sc, &b_sk, &b_sv, &b_so, &b_scn, &b_th, &b_epb, &b_epc, &b_stb, &b_stc, &b_gy, &b_ac,
-			&b_tg, &b_pp, &b_ro, &b_rs, &b_rp, &b_par, &b_iy, &b_rb, &b_vo, &b_ho,
+			&b_tg, &b_pp, &b_ro, &b_rs, &b_rp, &b_par, &b_iy, &b_rb, &b_vo, &b_ho, &b_pa,
 		];
 		for (i, b) in bufs.iter().enumerate()
 		{
@@ -4355,6 +4367,7 @@ struct ParityFixture
 	// fixtures run the channels OFF; the vertical parity test builds its own).
 	vert_obs: Vec<f32>,
 	horiz_obs: Vec<f32>,
+	pwm_acc: Vec<f32>, // obs_pwm replay fix: zeros (fixtures run obs_pwm OFF)
 	cpu_obs: Vec<ReplayObs>, // nested twin, per episode
 }
 
@@ -4498,7 +4511,7 @@ fn build_parity_fixture_mode(
 	let total_steps = gyros.len() / 3;
 	let cpu_obs: Vec<ReplayObs> = cpu_g
 		.iter()
-		.map(|g| ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()] })
+		.map(|g| ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_acc: vec![] })
 		.collect();
 	Ok(ParityFixture {
 		c,
@@ -4518,6 +4531,7 @@ fn build_parity_fixture_mode(
 		init_q,
 		vert_obs: vec![0.0; total_steps * 3],
 		horiz_obs: vec![0.0; total_steps * 4],
+		pwm_acc: vec![0.0; total_steps * 4],
 		cpu_obs,
 	})
 }
@@ -4542,6 +4556,7 @@ fn controller_train_parity_once(selective: bool) -> Result<(usize, usize, usize)
 		init_q: &f.init_q,
 		vert_obs: &f.vert_obs,
 		horiz_obs: &f.horiz_obs,
+		pwm_acc: &f.pwm_acc,
 		selective,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -4643,6 +4658,7 @@ fn controller_train_seeded_parity_once(
 		init_q: &f.init_q,
 		vert_obs: &f.vert_obs,
 		horiz_obs: &f.horiz_obs,
+		pwm_acc: &f.pwm_acc,
 		selective,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -5914,6 +5930,7 @@ fn controller_split_train_loop_parity_once(
 		init_q: &f_gpu.init_q,
 		vert_obs: &f_gpu.vert_obs,
 		horiz_obs: &f_gpu.horiz_obs,
+		pwm_acc: &f_gpu.pwm_acc,
 		selective,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -6041,6 +6058,7 @@ fn controller_record_parity_once() -> Result<(usize, usize, usize, usize), Strin
 		init_q: &f.init_q,
 		vert_obs: &f.vert_obs,
 		horiz_obs: &f.horiz_obs,
+		pwm_acc: &f.pwm_acc,
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -7164,6 +7182,7 @@ fn controller_record_and_scan_parity_once() -> Result<(usize, usize, usize, usiz
 		init_q: &f.init_q,
 		vert_obs: &f.vert_obs,
 		horiz_obs: &f.horiz_obs,
+		pwm_acc: &f.pwm_acc,
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -7266,6 +7285,7 @@ fn controller_record_search_parity_once() -> Result<(usize, usize, usize), Strin
 		init_q: &f.init_q,
 		vert_obs: &f.vert_obs,
 		horiz_obs: &f.horiz_obs,
+		pwm_acc: &f.pwm_acc,
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -7626,6 +7646,152 @@ pub fn run_controller_record_vertical_obs_parity_test() -> Vec<(String, bool, St
 	results
 }
 
+/// obs_pwm replay parity (13/09/2026): the record kernel restores the per-step
+/// accumulator from the `pwm_acc` buffer (buffer 22) exactly as the CPU
+/// split_record restores it from ReplayObs.pwm_acc. Same shape as the vertical
+/// test: zero mismatch AND stream-sensitive (a constant stream must change the
+/// CPU rows, else the pwm bits never reached the comparison).
+pub fn run_controller_record_obs_pwm_parity_test() -> Vec<(String, bool, String)>
+{
+	let mut results = Vec::new();
+	if Device::system_default().is_none()
+	{
+		results.push(("controller_record_obs_pwm_parity".to_string(), true, "skipped: no Metal device".to_string()));
+		return results;
+	}
+	match controller_record_obs_pwm_parity_once()
+	{
+		Ok((mism, n_cpu, n_gpu, sensitive)) => results.push((
+			"controller_record_obs_pwm_parity".to_string(),
+			mism == 0 && sensitive,
+			format!("cpu_conflicts={n_cpu} gpu_conflicts={n_gpu} mismatch={mism} stream_sensitive={sensitive}"),
+		)),
+		Err(e) => results.push(("controller_record_obs_pwm_parity".to_string(), false, e)),
+	}
+	results
+}
+
+fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool), String>
+{
+	let f = build_parity_fixture(0x0B5E_5A1Eu64)?;
+	let (num_motors, levels, n_state, sbpn, obpn, bpf, window) =
+		(4usize, 8usize, 8usize, 12usize, 12usize, 4usize, 4usize);
+	let num_features = 13usize; // 9 base + 4 pwm slots
+	let frame_bits = num_features * bpf;
+	let sensor_total = window * frame_bits;
+	let total_state_in = sensor_total + n_state;
+	let num_out = num_motors * levels;
+	let total_out_in = frame_bits + n_state;
+	let mut rng = 0x9E3779B97F4A7C15u64 ^ 0x0B5E_5A1Eu64.wrapping_mul(0xD1B54A32D192ED03);
+	let mut thresholds: Vec<f32> = (0..frame_bits).map(|_| xf(&mut rng) - 0.5).collect();
+	for fi in 9..13
+	{
+		for b in 0..bpf
+		{
+			thresholds[fi * bpf + b] = 0.35 + 0.1 * b as f32; // ladder .35 .45 .55 .65 around hover
+		}
+	}
+	let state_conns: Vec<i64> = (0..n_state * sbpn)
+		.map(|_| (xs(&mut rng) % total_state_in as u64) as i64)
+		.collect();
+	let output_conns: Vec<i64> = (0..num_out * obpn)
+		.map(|_| (xs(&mut rng) % total_out_in as u64) as i64)
+		.collect();
+	let mut c = WnnController::new(
+		num_motors, levels, bpf, window, n_state, sbpn, obpn, thresholds, state_conns, output_conns,
+		true, 0.05, 0.95, 1.0,
+		false, false, false, false, false, true, false, false, // obs_pwm ON
+		0.99, 1.0, 0.001, false, 1,
+		2, None, None, 0.05, false, 0.30,
+		false, false, false,
+		false, false,
+		false, 1, 1.0, false,
+	)
+	.map_err(|e| format!("{e}"))?;
+
+	// Per-step accumulator stream: each motor sweeps the ladder on its own phase.
+	let total_steps = f.gyros.len() / 3;
+	let vert_flat = vec![0.0f32; total_steps * 3];
+	let horiz_flat = vec![0.0f32; total_steps * 4];
+	let mut pwm_flat = Vec::with_capacity(total_steps * 4);
+	let mut cpu_obs: Vec<ReplayObs> = Vec::with_capacity(f.cpu_g.len());
+	for g in &f.cpu_g
+	{
+		let n = g.len().max(1);
+		let pwm_acc: Vec<[f32; 4]> = (0..g.len())
+			.map(|t| {
+				let u = t as f32 / n as f32;
+				[0.3 + 0.4 * u, 0.7 - 0.4 * u, 0.5 + 0.2 * ((t % 5) as f32 - 2.0) / 2.0, 0.4 + 0.3 * ((t % 3) as f32) / 2.0]
+			})
+			.collect();
+		for v in &pwm_acc
+		{
+			pwm_flat.extend_from_slice(v);
+		}
+		cpu_obs.push(ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_acc });
+	}
+	let (tau, target_min) = (0.05f32, 2usize);
+	let trainer = ControllerTrainer::new()?;
+	let batch = TrainBatch {
+		ep_base: &f.ep_base,
+		ep_count: &f.ep_count,
+		step_base: &f.step_base,
+		step_count: &f.step_count,
+		gyros: &f.gyros,
+		accels: &f.accels,
+		targets: &f.targets,
+		pid_pwms: &f.pids,
+		init_q: &f.init_q,
+		vert_obs: &vert_flat,
+		horiz_obs: &horiz_flat,
+		pwm_acc: &pwm_flat,
+		selective: false,
+		target_rpy: [0.0, 0.0, 0.0],
+	};
+	let (gpu_conf, _gpu_k) =
+		trainer.record_and_scan(&c, &batch, tau, bpf, num_features, frame_bits, target_min)?;
+
+	let (out_ins, pwms, _sf, _sl) = c.split_record_pub(
+		f.cpu_g.clone(), f.cpu_a.clone(), f.cpu_t.clone(), f.cpu_p.clone(), Some(&cpu_obs),
+	);
+	let (cpu_conf, _cpu_k) = crate::controller_split::scan_conflicts_coarse(
+		&out_ins, &pwms, tau, bpf, num_features, frame_bits, target_min,
+	);
+	let cpu_set: std::collections::HashMap<Vec<usize>, u32> = cpu_conf
+		.iter()
+		.map(|c| (c.instances.clone(), c.spread.to_bits()))
+		.collect();
+	let gpu_set = conflict_set(&gpu_conf);
+	let mut mism = 0usize;
+	for (k, v) in &cpu_set
+	{
+		if gpu_set.get(k) != Some(v)
+		{
+			mism += 1;
+		}
+	}
+	for (k, v) in &gpu_set
+	{
+		if cpu_set.get(k) != Some(v)
+		{
+			mism += 1;
+		}
+	}
+
+	// Sensitivity: a CONSTANT (hover) stream must change the CPU rows.
+	let const_obs: Vec<ReplayObs> = f
+		.cpu_g
+		.iter()
+		.map(|g| ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_acc: vec![[0.5; 4]; g.len()] })
+		.collect();
+	let mut c2 = c.clone();
+	let (rows_const, ..) = c2.split_record_pub(
+		f.cpu_g.clone(), f.cpu_a.clone(), f.cpu_t.clone(), f.cpu_p.clone(), Some(&const_obs),
+	);
+	let sensitive = rows_const != out_ins;
+	Ok((mism, cpu_conf.len(), gpu_conf.len(), sensitive))
+}
+
 fn conflict_set(conf: &[ScanConflict]) -> std::collections::HashMap<Vec<usize>, u32>
 {
 	conf.iter().map(|c| (c.instances.clone(), c.spread.to_bits())).collect()
@@ -7676,6 +7842,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 	let total_steps = f.gyros.len() / 3;
 	let mut vert_flat = Vec::with_capacity(total_steps * 3);
 	let horiz_flat = vec![0.0f32; total_steps * 4];
+	let pwm_flat = vec![0.0f32; total_steps * 4];
 	let mut cpu_obs: Vec<ReplayObs> = Vec::with_capacity(f.cpu_g.len());
 	for g in &f.cpu_g
 	{
@@ -7687,7 +7854,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 		{
 			vert_flat.extend_from_slice(v);
 		}
-		cpu_obs.push(ReplayObs { vert, horiz: vec![[0.0; 4]; g.len()] });
+		cpu_obs.push(ReplayObs { vert, horiz: vec![[0.0; 4]; g.len()], pwm_acc: vec![] });
 	}
 	let (tau, target_min) = (0.05f32, 2usize);
 	let trainer = ControllerTrainer::new()?;
@@ -7703,6 +7870,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 		init_q: &f.init_q,
 		vert_obs: &vert_flat,
 		horiz_obs: &horiz_flat,
+		pwm_acc: &pwm_flat,
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -7741,7 +7909,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 	let const_obs: Vec<ReplayObs> = f
 		.cpu_g
 		.iter()
-		.map(|g| ReplayObs { vert: vec![[0.7, 0.0, 0.0]; g.len()], horiz: vec![[0.0; 4]; g.len()] })
+		.map(|g| ReplayObs { vert: vec![[0.7, 0.0, 0.0]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_acc: vec![] })
 		.collect();
 	let mut c2 = c.clone();
 	let (rows_const, ..) = c2.split_record_pub(
@@ -7812,6 +7980,7 @@ mod tests
 		parity_record_vertical_obs,
 		run_controller_record_vertical_obs_parity_test
 	);
+	parity_sweep_test!(parity_record_obs_pwm, run_controller_record_obs_pwm_parity_test);
 	parity_sweep_test!(parity_state_commit, run_controller_state_commit_parity_test);
 	parity_sweep_test!(
 		parity_nudge_distance,
@@ -10115,6 +10284,7 @@ mod tests
 			init_q: &f.init_q,
 			vert_obs: &f.vert_obs,
 			horiz_obs: &f.horiz_obs,
+			pwm_acc: &f.pwm_acc,
 			selective: false,
 			target_rpy: [0.0, 0.0, 0.0],
 		};

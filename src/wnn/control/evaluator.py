@@ -646,6 +646,15 @@ def fit_thresholds_from_pid_rollouts(
 			feat_ctl.reset()   # zero the integral accumulators per episode
 			if _stage1_cal and _ec_translation:
 				feat_ctl.set_collective_anchor(_ep_coll)
+		# obs_pwm ladder fix (13/09/2026): feat_ctl is UNTRAINED, so its own
+		# accumulator never leaves the anchor and the pwm features it samples were
+		# CONSTANT — a quantile ladder of a constant is degenerate (every threshold
+		# = anchor; the first deploy deviation flipped all 32 pwm bits and every
+		# lookup missed: arm B `_bd` s2 flew 0.0%/57°). Deploy's accumulator holds
+		# the student's PREVIOUS action, so the teacher's previous action is the
+		# proxy — same substitution the fitter already makes for every feature.
+		_pwm_obs = bool(getattr(spec, "obs_pwm", False)) and feat_ctl is not None
+		_prev_pwm = [float(_ep_coll)] * 4
 		target = (0.0, 0.0, 0.0)
 		for _ in range(cfg.steps_per_episode):
 			gyro, accel = sim.read_imu()
@@ -670,8 +679,12 @@ def fit_thresholds_from_pid_rollouts(
 					feat_ctl.set_vertical_obs(_ep_coll,
 					                          _target_alt - sim.altitude,
 					                          sim.vertical_velocity)
+				if _pwm_obs:
+					feat_ctl.set_pwm_accumulator(_prev_pwm)
 				feat_ctl.step(list(gyro), list(accel), list(target))
 				feats = feat_ctl.get_last_feature_vector()
+				if _pwm_obs and len(pwm) == 4:
+					_prev_pwm = [float(v) for v in pwm]
 				for k in range(NUM_FEATURES, nf):
 					samples_per_feature[k].append(float(feats[k]))
 			if geometry is not None:
