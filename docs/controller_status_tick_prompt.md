@@ -141,6 +141,26 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
+QUEUE AS OF 13/09/2026 10:45 EDT (HOLD LIFTED; post-D0 queue KILLED; WINDOW-K FLYING directly;
+supersedes the 03:30 block).
+Luiz (10:3x EDT): "we have lots of things on queue... why is it on hold?" — the HOLD idled the whole
+sequential queue behind one broken arm. FIX: killed the parked supervisors (post_d0_queue 6225,
+arm_b_delta_label_chain 85345, sweep_ladder_gamma 15369 — all sleeping in wait_while_held, NO run
+was computing), rm'd experiments/HOLD_CONTROLLER, launched STEP 4 directly:
+  scripts/queue_after_ab_chain.sh  pid 61549 (PPID 1), log /private/tmp/queue_after_ab.log,
+  nohup /private/tmp/queue_after_ab.nohup. Idempotent: probe markers + leak090 4/4 + s2_win2 SKIPPED;
+  flies the remaining 11 window-k FRAMED runs, seed-major: s2 win3, win4; s3 win2,3,4; s4 win2,3,4;
+  s5 win2,3,4 (~4.7 h each, ~50 h). Controls = the banked b24 n256 CRN runs (s2 = _crn).
+  Lever line: "window-k FRAMED (input-window-k 2/3/4, conn-policy framed1, stride 10) vs the
+  b24 n256 anchors — does a longer framed input window buy attitude without an altitude cost?"
+  Markers count: `_win[234]\.json$` → n/12 (s2_win2 already banked 09/09).
+ARM B (STEP 3) is OUT of the queue: s2 `_bd` VOID (trainer dead at every stage, 0.0%/57°), runs
+2-4 NOT flown. Pending on Luiz/me: diagnose the --dagger-label-delta --obs-pwm trainer under a
+tiny smoke (levels 6) BEFORE any re-fly; then a fresh arm B chain (arm_b_delta_label_chain.sh is
+idempotent — it would skip s2 unless the void marker is moved aside). Do NOT relaunch
+post_d0_queue.sh as-is (it re-enters arm B at 1/4).
+Wheel-swap question (22:45 block) still open; no swap unasked.
+
 QUEUE AS OF 13/09/2026 03:30 EDT (arm B run 1/4 BANKED VOID 03:01 EDT; box HELD before run 2/4;
 supersedes the 01:05 block — which follows and still holds for the 2x2 verdict + arm B diagnosis).
 `_bd` s31337002 marker: rc 0, 8424 s, HEADLINE 0.0% / 57.15° / 57.15° / 0.238 m (CONNECTIONS#0);
