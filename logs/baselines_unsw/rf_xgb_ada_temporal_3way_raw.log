@@ -1,0 +1,53 @@
+/Users/lacg/wnn/scripts/verify_ids_baselines.py:168: Pandas4Warning: Constructing a Categorical with a dtype and values containing non-null entries not in that dtype's categories is deprecated and will raise in a future version.
+  df[f] = pd.Categorical(df[f], categories=levels).codes
+/Users/lacg/wnn/scripts/verify_ids_baselines.py:168: Pandas4Warning: Constructing a Categorical with a dtype and values containing non-null entries not in that dtype's categories is deprecated and will raise in a future version.
+  df[f] = pd.Categorical(df[f], categories=levels).codes
+==============================================================================
+  unsw temporal_3way binary — RF + XGBoost + AdaBoost (raw numeric)
+==============================================================================
+
+Loading unsw temporal_3way split (top-20 features, RAW numeric) from lacg030175/UNSW-NB15...
+  Loaded in 1.5s; 20/20 top-20 features present
+  categorical -> codes: ['proto', 'service', 'state']
+  Train (175341, 20)  Normal=31.9% Attack=68.1%
+  Test  (41166, 20)  Normal=44.9% Attack=55.1%
+  Val   (41166, 20)  Normal=44.9% Attack=55.1%
+
+------------------------------------------------------------------------------
+  RF (100 estimators, max_depth=None)
+------------------------------------------------------------------------------
+  Train time:  0.7s
+  Infer time:  0.027s  (0.6 µs/sample)
+  Model size:  99,941,080 bytes (95.31 MB)
+  [fixed_05 thr=0.50]  TN=13,771 FP=4,729 FN=680 TP=21,986  F1 86.32%  FPR 25.56%  Acc 86.86%
+  [val_cal  thr=0.85]  TN=17,406 FP=1,094 FN=2,202 TP=20,464  F1 91.95%  FPR 5.91%  Acc 91.99%
+
+------------------------------------------------------------------------------
+  XGBoost (100 estimators, max_depth=6, lr=0.1)
+------------------------------------------------------------------------------
+  Train time:  0.3s
+  Infer time:  0.003s  (0.1 µs/sample)
+  Model size:  267,761 bytes (0.26 MB)
+  [fixed_05 thr=0.50]  TN=13,474 FP=5,026 FN=620 TP=22,046  F1 85.66%  FPR 27.17%  Acc 86.28%
+  [val_cal  thr=0.86]  TN=17,836 FP=664 FN=2,462 TP=20,204  F1 92.38%  FPR 3.59%  Acc 92.41%
+
+------------------------------------------------------------------------------
+  AdaBoost (100 depth-1 stumps)
+------------------------------------------------------------------------------
+  Train time:  6.8s
+  Infer time:  0.052s  (1.3 µs/sample)
+  Model size:  55,860 bytes (0.05 MB)
+  [fixed_05 thr=0.50]  TN=11,760 FP=6,740 FN=468 TP=22,198  F1 81.29%  FPR 36.43%  Acc 82.49%
+  [val_cal  thr=0.55]  TN=17,441 FP=1,059 FN=3,210 TP=19,456  F1 89.60%  FPR 5.72%  Acc 89.63%
+
+==============================================================================
+  unsw temporal_3way (raw numeric) — scored on the TEST partition
+==============================================================================
+  Method   mode        thr        F1       FPR       Acc        Size
+  ------------------------------------------------------------------
+  RF       fixed_05   0.50    86.32%    25.56%    86.86%    95.31 MB
+  RF       val_cal    0.85    91.95%     5.91%    91.99%    95.31 MB
+  XGBoost  fixed_05   0.50    85.66%    27.17%    86.28%     0.26 MB
+  XGBoost  val_cal    0.86    92.38%     3.59%    92.41%     0.26 MB
+  AdaBoost fixed_05   0.50    81.29%    36.43%    82.49%     0.05 MB
+  AdaBoost val_cal    0.55    89.60%     5.72%    89.63%     0.05 MB

@@ -1,0 +1,49 @@
+==============================================================================
+  unsw random_3way binary — RF + XGBoost + AdaBoost (raw numeric)
+==============================================================================
+
+Loading unsw random_3way split (top-20 features, RAW numeric) from lacg030175/UNSW-NB15...
+  Loaded in 1.8s; 20/20 top-20 features present
+  categorical -> codes: ['proto', 'service', 'state']
+  Train (1267407, 20)  Normal=96.2% Attack=3.8%
+  Test  (158426, 20)  Normal=96.2% Attack=3.8%
+  Val   (158426, 20)  Normal=96.2% Attack=3.8%
+
+------------------------------------------------------------------------------
+  RF (100 estimators, max_depth=None)
+------------------------------------------------------------------------------
+  Train time:  4.2s
+  Infer time:  0.025s  (0.2 µs/sample)
+  Model size:  92,827,320 bytes (88.53 MB)
+  [fixed_05 thr=0.50]  TN=151,918 FP=472 FN=501 TP=5,535  F1 95.80%  FPR 0.31%  Acc 99.39%
+  [val_cal  thr=0.47]  TN=151,879 FP=511 FN=464 TP=5,572  F1 95.82%  FPR 0.34%  Acc 99.38%
+
+------------------------------------------------------------------------------
+  XGBoost (100 estimators, max_depth=6, lr=0.1)
+------------------------------------------------------------------------------
+  Train time:  0.7s
+  Infer time:  0.011s  (0.1 µs/sample)
+  Model size:  268,163 bytes (0.26 MB)
+  [fixed_05 thr=0.50]  TN=151,968 FP=422 FN=610 TP=5,426  F1 95.49%  FPR 0.28%  Acc 99.35%
+  [val_cal  thr=0.43]  TN=151,740 FP=650 FN=392 TP=5,644  F1 95.60%  FPR 0.43%  Acc 99.34%
+
+------------------------------------------------------------------------------
+  AdaBoost (100 depth-1 stumps)
+------------------------------------------------------------------------------
+  Train time:  63.7s
+  Infer time:  0.180s  (1.1 µs/sample)
+  Model size:  55,860 bytes (0.05 MB)
+  [fixed_05 thr=0.50]  TN=151,558 FP=832 FN=643 TP=5,393  F1 93.74%  FPR 0.55%  Acc 99.07%
+  [val_cal  thr=0.50]  TN=151,558 FP=832 FN=643 TP=5,393  F1 93.74%  FPR 0.55%  Acc 99.07%
+
+==============================================================================
+  unsw random_3way (raw numeric) — scored on the TEST partition
+==============================================================================
+  Method   mode        thr        F1       FPR       Acc        Size
+  ------------------------------------------------------------------
+  RF       fixed_05   0.50    95.80%     0.31%    99.39%    88.53 MB
+  RF       val_cal    0.47    95.82%     0.34%    99.38%    88.53 MB
+  XGBoost  fixed_05   0.50    95.49%     0.28%    99.35%     0.26 MB
+  XGBoost  val_cal    0.43    95.60%     0.43%    99.34%     0.26 MB
+  AdaBoost fixed_05   0.50    93.74%     0.55%    99.07%     0.05 MB
+  AdaBoost val_cal    0.50    93.74%     0.55%    99.07%     0.05 MB

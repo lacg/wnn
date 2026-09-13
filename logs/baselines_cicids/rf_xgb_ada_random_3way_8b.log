@@ -1,0 +1,55 @@
+==============================================================================
+  cicids random_3way binary — RF + XGBoost + AdaBoost (8-bit thermo)
+==============================================================================
+
+Loading cicids random_3way split (top-20 features, 8-bit thermo)...
+  Loading from HuggingFace: lacg030175/CICIDS2017 (random_3way)...
+  Random_3way split: 2,262,300 train, 282,788 test, 282,788 val
+  Using 78 features
+  Encoder: 160 total bits (distributive, 8 bits/feature, feature_selection=top20, 20 features)
+  Train: 1,817,055 normal, 445,245 attack
+  Test:  227,132 normal, 55,656 attack
+  Val:   227,133 normal, 55,655 attack
+  Loaded in 5.9s
+  Train (2262300, 160)  Normal=80.3% Attack=19.7%
+  Test  (282788, 160)  Normal=80.3% Attack=19.7%
+  Val   (282788, 160)  Normal=80.3% Attack=19.7%
+
+------------------------------------------------------------------------------
+  RF (100 estimators, max_depth=None)
+------------------------------------------------------------------------------
+  Train time:  12.8s
+  Infer time:  0.123s  (0.4 µs/sample)
+  Model size:  26,694,714 bytes (25.46 MB)
+  [fixed_05 thr=0.50]  TN=226,655 FP=477 FN=387 TP=55,269  F1 99.52%  FPR 0.21%  Acc 99.69%
+  [val_cal  thr=0.47]  TN=226,651 FP=481 FN=384 TP=55,272  F1 99.52%  FPR 0.21%  Acc 99.69%
+
+------------------------------------------------------------------------------
+  XGBoost (100 estimators, max_depth=6, lr=0.1)
+------------------------------------------------------------------------------
+  Train time:  5.9s
+  Infer time:  0.033s  (0.1 µs/sample)
+  Model size:  314,374 bytes (0.30 MB)
+  [fixed_05 thr=0.50]  TN=226,487 FP=645 FN=413 TP=55,243  F1 99.41%  FPR 0.28%  Acc 99.63%
+  [val_cal  thr=0.56]  TN=226,620 FP=512 FN=490 TP=55,166  F1 99.44%  FPR 0.23%  Acc 99.65%
+
+------------------------------------------------------------------------------
+  AdaBoost (100 depth-1 stumps)
+------------------------------------------------------------------------------
+  Train time:  283.5s
+  Infer time:  2.102s  (7.4 µs/sample)
+  Model size:  56,626 bytes (0.05 MB)
+  [fixed_05 thr=0.50]  TN=222,887 FP=4,245 FN=2,477 TP=53,179  F1 96.28%  FPR 1.87%  Acc 97.62%
+  [val_cal  thr=0.50]  TN=222,887 FP=4,245 FN=2,477 TP=53,179  F1 96.28%  FPR 1.87%  Acc 97.62%
+
+==============================================================================
+  cicids random_3way (8-bit thermo) — scored on the TEST partition
+==============================================================================
+  Method   mode        thr        F1       FPR       Acc        Size
+  ------------------------------------------------------------------
+  RF       fixed_05   0.50    99.52%     0.21%    99.69%    25.46 MB
+  RF       val_cal    0.47    99.52%     0.21%    99.69%    25.46 MB
+  XGBoost  fixed_05   0.50    99.41%     0.28%    99.63%     0.30 MB
+  XGBoost  val_cal    0.56    99.44%     0.23%    99.65%     0.30 MB
+  AdaBoost fixed_05   0.50    96.28%     1.87%    97.62%     0.05 MB
+  AdaBoost val_cal    0.50    96.28%     1.87%    97.62%     0.05 MB

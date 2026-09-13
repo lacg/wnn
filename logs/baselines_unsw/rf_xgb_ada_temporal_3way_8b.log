@@ -1,0 +1,55 @@
+==============================================================================
+  unsw temporal_3way binary — RF + XGBoost + AdaBoost (8-bit thermo)
+==============================================================================
+
+Loading unsw temporal_3way split (top-20 features, 8-bit thermo)...
+  Loading from HuggingFace: lacg030175/UNSW-NB15 (temporal_3way)...
+  Temporal_3way split: 175,341 train, 41,166 test, 41,166 val
+  Using 42 features
+  Encoder: 152 total bits (distributive, 8 bits/feature, feature_selection=top20, 20 features)
+  Train: 56,000 normal, 119,341 attack
+  Test:  18,500 normal, 22,666 attack
+  Val:   18,500 normal, 22,666 attack
+  Loaded in 1.8s
+  Train (175341, 152)  Normal=31.9% Attack=68.1%
+  Test  (41166, 152)  Normal=44.9% Attack=55.1%
+  Val   (41166, 152)  Normal=44.9% Attack=55.1%
+
+------------------------------------------------------------------------------
+  RF (100 estimators, max_depth=None)
+------------------------------------------------------------------------------
+  Train time:  0.7s
+  Infer time:  0.029s  (0.7 µs/sample)
+  Model size:  88,147,454 bytes (84.06 MB)
+  [fixed_05 thr=0.50]  TN=13,723 FP=4,777 FN=780 TP=21,886  F1 85.95%  FPR 25.82%  Acc 86.50%
+  [val_cal  thr=0.89]  TN=17,389 FP=1,111 FN=2,510 TP=20,156  F1 91.16%  FPR 6.01%  Acc 91.20%
+
+------------------------------------------------------------------------------
+  XGBoost (100 estimators, max_depth=6, lr=0.1)
+------------------------------------------------------------------------------
+  Train time:  0.6s
+  Infer time:  0.005s  (0.1 µs/sample)
+  Model size:  258,955 bytes (0.25 MB)
+  [fixed_05 thr=0.50]  TN=13,145 FP=5,355 FN=663 TP=22,003  F1 84.67%  FPR 28.95%  Acc 85.38%
+  [val_cal  thr=0.89]  TN=18,008 FP=492 FN=2,856 TP=19,810  F1 91.85%  FPR 2.66%  Acc 91.87%
+
+------------------------------------------------------------------------------
+  AdaBoost (100 depth-1 stumps)
+------------------------------------------------------------------------------
+  Train time:  17.0s
+  Infer time:  0.277s  (6.7 µs/sample)
+  Model size:  56,626 bytes (0.05 MB)
+  [fixed_05 thr=0.50]  TN=12,504 FP=5,996 FN=858 TP=21,808  F1 82.45%  FPR 32.41%  Acc 83.35%
+  [val_cal  thr=0.56]  TN=17,382 FP=1,118 FN=3,606 TP=19,060  F1 88.51%  FPR 6.04%  Acc 88.52%
+
+==============================================================================
+  unsw temporal_3way (8-bit thermo) — scored on the TEST partition
+==============================================================================
+  Method   mode        thr        F1       FPR       Acc        Size
+  ------------------------------------------------------------------
+  RF       fixed_05   0.50    85.95%    25.82%    86.50%    84.06 MB
+  RF       val_cal    0.89    91.16%     6.01%    91.20%    84.06 MB
+  XGBoost  fixed_05   0.50    84.67%    28.95%    85.38%     0.25 MB
+  XGBoost  val_cal    0.89    91.85%     2.66%    91.87%     0.25 MB
+  AdaBoost fixed_05   0.50    82.45%    32.41%    83.35%     0.05 MB
+  AdaBoost val_cal    0.56    88.51%     6.04%    88.52%     0.05 MB

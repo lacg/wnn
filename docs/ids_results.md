@@ -106,7 +106,7 @@ WHAT CHANGED
 * ⚠️ **VAL-CALIBRATED RF/XGB on UNSW temporal_3way (13/09/2026, Plane IDS-9) — the trees
   catch up once they get the WNN's threshold rule.** Every banked "WNN −18pp FPR vs RF/XGB"
   read compared the WNN's `val_cal` row against trees scored at a FIXED 0.5 — not
-  like-for-like. Re-measured with `scripts/verify_unsw_temporal_baselines.py --split
+  like-for-like. Re-measured with `scripts/verify_ids_baselines.py --dataset unsw --split
   temporal_3way [--n-bits 16]` (top-20, thermo-encoded exactly as the WNN sees it; the
   F1-optimal threshold fit on the 10% VAL, scored on the 10% TEST; logs in
   `logs/baselines_unsw/rf_xgb_temporal_3way_{8,16}b.log`):

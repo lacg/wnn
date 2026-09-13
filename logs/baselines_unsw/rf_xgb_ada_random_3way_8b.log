@@ -1,0 +1,55 @@
+==============================================================================
+  unsw random_3way binary — RF + XGBoost + AdaBoost (8-bit thermo)
+==============================================================================
+
+Loading unsw random_3way split (top-20 features, 8-bit thermo)...
+  Loading from HuggingFace: lacg030175/UNSW-NB15 (random_3way)...
+  Random_3way split: 1,267,407 train, 158,426 test, 158,426 val
+  Using 43 features
+  Encoder: 152 total bits (distributive, 8 bits/feature, feature_selection=top20, 20 features)
+  Train: 1,219,123 normal, 48,284 attack
+  Test:  152,390 normal, 6,036 attack
+  Val:   152,391 normal, 6,035 attack
+  Loaded in 3.9s
+  Train (1267407, 152)  Normal=96.2% Attack=3.8%
+  Test  (158426, 152)  Normal=96.2% Attack=3.8%
+  Val   (158426, 152)  Normal=96.2% Attack=3.8%
+
+------------------------------------------------------------------------------
+  RF (100 estimators, max_depth=None)
+------------------------------------------------------------------------------
+  Train time:  3.0s
+  Infer time:  0.068s  (0.4 µs/sample)
+  Model size:  54,322,494 bytes (51.81 MB)
+  [fixed_05 thr=0.50]  TN=151,828 FP=562 FN=608 TP=5,428  F1 94.94%  FPR 0.37%  Acc 99.26%
+  [val_cal  thr=0.43]  TN=151,680 FP=710 FN=464 TP=5,572  F1 95.04%  FPR 0.47%  Acc 99.26%
+
+------------------------------------------------------------------------------
+  XGBoost (100 estimators, max_depth=6, lr=0.1)
+------------------------------------------------------------------------------
+  Train time:  2.5s
+  Infer time:  0.021s  (0.1 µs/sample)
+  Model size:  262,961 bytes (0.25 MB)
+  [fixed_05 thr=0.50]  TN=151,937 FP=453 FN=756 TP=5,280  F1 94.67%  FPR 0.30%  Acc 99.24%
+  [val_cal  thr=0.44]  TN=151,664 FP=726 FN=476 TP=5,560  F1 94.93%  FPR 0.48%  Acc 99.24%
+
+------------------------------------------------------------------------------
+  AdaBoost (100 depth-1 stumps)
+------------------------------------------------------------------------------
+  Train time:  134.6s
+  Infer time:  1.069s  (6.7 µs/sample)
+  Model size:  56,626 bytes (0.05 MB)
+  [fixed_05 thr=0.50]  TN=151,557 FP=833 FN=713 TP=5,323  F1 93.41%  FPR 0.55%  Acc 99.02%
+  [val_cal  thr=0.50]  TN=151,557 FP=833 FN=713 TP=5,323  F1 93.41%  FPR 0.55%  Acc 99.02%
+
+==============================================================================
+  unsw random_3way (8-bit thermo) — scored on the TEST partition
+==============================================================================
+  Method   mode        thr        F1       FPR       Acc        Size
+  ------------------------------------------------------------------
+  RF       fixed_05   0.50    94.94%     0.37%    99.26%    51.81 MB
+  RF       val_cal    0.43    95.04%     0.47%    99.26%    51.81 MB
+  XGBoost  fixed_05   0.50    94.67%     0.30%    99.24%     0.25 MB
+  XGBoost  val_cal    0.44    94.93%     0.48%    99.24%     0.25 MB
+  AdaBoost fixed_05   0.50    93.41%     0.55%    99.02%     0.05 MB
+  AdaBoost val_cal    0.50    93.41%     0.55%    99.02%     0.05 MB
