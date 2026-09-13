@@ -141,6 +141,25 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
+ARM B DIAGNOSED (13/09 11:05 EDT, smoke DONE — box back to ONE controller = window-k).
+Smoke logs/controller/armb_smoke/{ctrl,obspwm,labeldelta,both}.out (same shape/recipe, tiny budget):
+ctrl 100%/2.48° · +label-delta 90%/3.18° (flies) · +obs-pwm 0.0%/70.1° (DEAD) · both DEAD.
+`--obs-pwm` is the killer, `--dagger-label-delta` is innocent. TWO defects on the pwm feature:
+ (1) THRESHOLD FITTER (evaluator.py fit_thresholds_from_pid_rollouts): the feature controller it
+     drives is untrained → its accumulator never leaves the anchor → the 4 pwm features are
+     CONSTANT during calibration → quantile ladder DEGENERATE (all 8 thresholds = 0.5, span 0,
+     verified). Any deploy deviation flips all 32 pwm bits → every RAM lookup misses → student
+     does nothing (effort 0.9, mono_viol 2).
+ (2) REPLAY (Rust, documented KNOWN GAP, test replay_parity_for_policy_state_features
+     OBS_PWM_FIXED=false): training replays the recorded trajectory without restoring the
+     accumulator, so pwm features are frozen at hover in TRAIN and evolve in DEPLOY. Fix = the
+     same student_pwms plumbing as Fix A (obs_dhat).
+Both must be fixed before --obs-pwm means anything; arm B (true-delta label) NEEDS obs_pwm by
+design ("or the student is taught a function it cannot see"). Every earlier --obs-pwm driver
+(c2k, bit_sweep, e5 x3, frame_fix x3, low_edge) carried at least defect (2). DECISION IS LUIZ'S:
+fix (1)+(2) → controller wheel rebuild (swap-free) + Python fitter → smoke → re-fly arm B ×4
+(~20 h) — or drop arm B. NOTHING queued for arm B until he rules.
+
 QUEUE AS OF 13/09/2026 10:45 EDT (HOLD LIFTED; post-D0 queue KILLED; WINDOW-K FLYING directly;
 supersedes the 03:30 block).
 Luiz (10:3x EDT): "we have lots of things on queue... why is it on hold?" — the HOLD idled the whole
