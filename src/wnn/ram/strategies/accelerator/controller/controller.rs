@@ -1694,16 +1694,34 @@ impl WnnController
 		self.horiz_obs
 	}
 
-	/// The throttle accumulator the NEXT compute_features() will read — what the
-	/// rollout records per step (before step()) so the replay can restore it
-	/// (ReplayObs.pwm_acc). Control space under decouple, exactly as obs_pwm
-	/// exposes it. Slots past num_motors are 0.
+	/// Diagnostic: how many output cells the LAST step() read as EMPTY (address
+	/// never written) — the address-miss count of that step.
+	pub(crate) fn last_output_empty_count(&self) -> usize
+	{
+		let e = ram_core::neuron_memory::EMPTY as u8;
+		self.last_output_cells.iter().filter(|&&c| c == e).count()
+	}
+
 	pub fn pwm_accumulator_obs(&self) -> [f32; 4]
 	{
 		let mut p = [0.0f32; 4];
 		for (m, slot) in p.iter_mut().enumerate().take(self.num_motors.min(4))
 		{
 			*slot = self.pwm[m];
+		}
+		p
+	}
+
+	/// The obs_pwm FEATURE the NEXT compute_features() will produce: the
+	/// accumulator's deviation from its bank anchor, exactly the expression
+	/// compute_features evaluates. The rollout records it per step (before
+	/// step()) into ReplayObs.pwm_dev so the replay can apply it verbatim.
+	pub fn pwm_feature_obs(&self) -> [f32; 4]
+	{
+		let mut p = [0.0f32; 4];
+		for (m, slot) in p.iter_mut().enumerate().take(self.num_motors.min(4))
+		{
+			*slot = self.pwm[m] - self.bank_anchor(m);
 		}
 		p
 	}
@@ -1763,14 +1781,14 @@ impl WnnController
 			obs.map(|o| o.horiz.len()),
 			w
 		);
-		let pwm_ok = !self.obs_pwm || obs.map(|o| o.pwm_acc.len() == w).unwrap_or(false);
+		let pwm_ok = !self.obs_pwm || obs.map(|o| o.pwm_dev.len() == w).unwrap_or(false);
 		assert!(
 			pwm_ok,
-			"{site}: obs_pwm is on but the replay accumulator stream is missing or \
-			 misaligned (got pwm_acc {:?}, need {} steps) — the pwm features would sit \
+			"{site}: obs_pwm is on but the replay pwm-feature stream is missing or \
+			 misaligned (got pwm_dev {:?}, need {} steps) — the pwm features would sit \
 			 at the hover init in train and evolve in deploy (obs_pwm replay bug, \
 			 13/09/2026)",
-			obs.map(|o| o.pwm_acc.len()),
+			obs.map(|o| o.pwm_dev.len()),
 			w
 		);
 	}
@@ -1791,16 +1809,15 @@ impl WnnController
 			{
 				self.horiz_obs = *h;
 			}
-			// obs_pwm: restore the accumulator the deploy step read. Only when the
-			// feature is on — a features-off controller stays byte-identical.
+			// obs_pwm: hand compute_features the recorded FEATURE value (the
+			// replay has neither the deploy accumulator nor that episode's anchor).
+			// Only when the feature is on — a features-off controller stays
+			// byte-identical.
 			if self.obs_pwm
 			{
-				if let Some(p) = o.pwm_acc.get(t)
+				if let Some(p) = o.pwm_dev.get(t)
 				{
-					for m in 0..self.num_motors.min(4)
-					{
-						self.pwm[m] = p[m];
-					}
+					self.pwm_feat_override = Some(*p);
 				}
 			}
 		}
@@ -2066,6 +2083,7 @@ impl WnnController
 			prev_state: vec![0u8; state_neurons],
 			input_history: VecDeque::with_capacity(input_window_k),
 			last_output_cells: vec![0u8; num_output_neurons],
+			pwm_feat_override: None,
 			last_state_layer_input: Vec::new(),
 			last_output_layer_input: Vec::new(),
 			delta_control,
@@ -2579,22 +2597,27 @@ pub struct ReplayObs
 {
 	pub vert: Vec<[f32; 3]>,  // (collective_cmd, alt_err, vz) per step
 	pub horiz: Vec<[f32; 4]>, // (err_x, err_y, vx, vy) per step
-	// obs_pwm replay fix (13/09/2026): the throttle accumulator compute_features(t)
-	// READ at rollout (self.pwm at step start, control space under decouple). The
-	// replay never runs decode_outputs, so without this stream the pwm features sit
-	// at the hover init in TRAIN and evolve in DEPLOY — every address the student
-	// learned differs from every address it is asked at (arm B `_bd` s2: 0.0%/57°).
-	pub pwm_acc: Vec<[f32; 4]>,
+	// obs_pwm replay fix (13/09/2026): the pwm FEATURE VALUE compute_features(t)
+	// produced at rollout — the accumulator's deviation from its bank anchor
+	// (pwm − bank_anchor, control space under decouple), NOT the raw accumulator:
+	// under --translation the per-episode collective jitter moves the anchor by
+	// ±10% while the student's own deviation is ±0.01–0.05, so a raw feature
+	// encodes "which episode" and splits the memory by context (measured: hits
+	// per step 1–6/256 vs 14–25 for the control). The replay never runs
+	// decode_outputs and never re-sets the anchor, so the value is recorded
+	// ready-made and applied as an override (apply_replay_obs); deploy computes
+	// the same expression live. Recorded from the same code path ⇒ bit-identical.
+	pub pwm_dev: Vec<[f32; 4]>,
 }
 
 #[pymethods]
 impl ReplayObs
 {
 	#[new]
-	#[pyo3(signature = (vert, horiz, pwm_acc = vec![]))]
-	fn new(vert: Vec<[f32; 3]>, horiz: Vec<[f32; 4]>, pwm_acc: Vec<[f32; 4]>) -> Self
+	#[pyo3(signature = (vert, horiz, pwm_dev = vec![]))]
+	fn new(vert: Vec<[f32; 3]>, horiz: Vec<[f32; 4]>, pwm_dev: Vec<[f32; 4]>) -> Self
 	{
-		Self { vert, horiz, pwm_acc }
+		Self { vert, horiz, pwm_dev }
 	}
 }
 
@@ -2602,20 +2625,20 @@ impl ReplayObs
 {
 	/// The window [start, end) of a trajectory's streams, or None when the
 	/// trajectory predates the vertical/horizontal fields (the guard then
-	/// decides). `pwm_acc` may be shorter on a trajectory that predates it —
+	/// decides). `pwm_dev` may be shorter on a trajectory that predates it —
 	/// the guard refuses that only when obs_pwm is on.
 	pub fn slice(
 		vert: &[[f32; 3]],
 		horiz: &[[f32; 4]],
-		pwm_acc: &[[f32; 4]],
+		pwm_dev: &[[f32; 4]],
 		start: usize,
 		end: usize,
 	) -> Option<Self>
 	{
 		if vert.len() >= end && horiz.len() >= end
 		{
-			let pwm_acc = if pwm_acc.len() >= end { pwm_acc[start..end].to_vec() } else { Vec::new() };
-			Some(Self { vert: vert[start..end].to_vec(), horiz: horiz[start..end].to_vec(), pwm_acc })
+			let pwm_dev = if pwm_dev.len() >= end { pwm_dev[start..end].to_vec() } else { Vec::new() };
+			Some(Self { vert: vert[start..end].to_vec(), horiz: horiz[start..end].to_vec(), pwm_dev })
 		}
 		else
 		{
@@ -2731,6 +2754,9 @@ pub struct WnnController
 	pwm: Vec<f32>, // delta-accumulator: per-motor throttle, OR (decouple_outputs)
 	// per-CONTROL [T, τ_roll, τ_pitch, τ_yaw] (Option A)
 	pwm_prev: Vec<f32>, // accumulator at the START of the current step (train baseline)
+	// obs_pwm replay: the recorded feature value for the NEXT compute_features
+	// (one-shot, set by apply_replay_obs). None on every deploy path.
+	pwm_feat_override: Option<[f32; 4]>,
 
 	// --- H3: decoupled outputs (18/06/2026) ---
 	// When true, the 4 output banks are CONTROLS [common thrust T, τ_roll, τ_pitch,
@@ -5625,12 +5651,21 @@ impl WnnController
 		if self.obs_pwm
 		{
 			// The throttle accumulator AS-OF step start (self.pwm is updated only
-			// AFTER the output decode), i.e. the hidden state the optimal delta
-			// depends on. Direct fix for delta's partial observability — unlike
-			// ∫error (obs_tilt_i), this is an EXACT readout in every regime.
+			// AFTER the output decode) as its DEVIATION from the bank anchor — the
+			// hidden state the optimal delta depends on. Raw pwm was the 13/09/2026
+			// context-split bug: under --translation the per-episode collective
+			// jitter dominates the raw value. A replay applies the recorded value
+			// (pwm_feat_override, one-shot) because it has neither the deploy
+			// accumulator nor that episode's anchor.
+			let over = self.pwm_feat_override.take();
 			for m in 0..self.num_motors
 			{
-				feats.push(self.pwm[m]);
+				let v = match over
+				{
+					Some(o) if m < 4 => o[m],
+					_ => self.pwm[m] - self.bank_anchor(m),
+				};
+				feats.push(v);
 			}
 		}
 		// Yaw-anchor (clean scalar channel, canonical order LAST): proportional yaw
@@ -7797,7 +7832,7 @@ mod sn0_tests
 			 to guard. Check that the trajectory actually exercises the observer."
 		);
 
-		// ---- obs_pwm: FIXED 13/09/2026 (ReplayObs.pwm_acc) --------------------
+		// ---- obs_pwm: FIXED 13/09/2026 (ReplayObs.pwm_dev) --------------------
 		// Deploy evolves the accumulator through decode_outputs(); the replay
 		// never calls it, so before the fix a replay's obs_pwm features sat at
 		// the hover init (arm B `_bd` s2: 0.0%/57°, every address missed). The
@@ -7812,14 +7847,14 @@ mod sn0_tests
 		let mut deploy = sn0_controller_obs_pwm();
 		deploy.reset(0.0);
 		let mut dep_feats: Vec<Vec<f32>> = Vec::with_capacity(n);
-		let mut pwm_acc: Vec<[f32; 4]> = Vec::with_capacity(n);
+		let mut pwm_dev: Vec<[f32; 4]> = Vec::with_capacity(n);
 		for t in 0..n
 		{
-			pwm_acc.push(deploy.pwm_accumulator_obs());
+			pwm_dev.push(deploy.pwm_feature_obs());
 			dep_feats.push(deploy.compute_features(g[t], a[t], tg[t]));
 			deploy.set_pwm_accumulator(pp[t]);
 		}
-		let ro = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_acc };
+		let ro = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev };
 		// REPLAY with the stream restored.
 		let mut replay = sn0_controller_obs_pwm();
 		replay.reset(0.0);
@@ -7863,11 +7898,11 @@ mod sn0_tests
 		);
 		// The guard is the fail-LOUD half: an obs_pwm controller must refuse a
 		// stream without the accumulator.
-		let short = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_acc: vec![] };
+		let short = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![] };
 		let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
 			sn0_controller_obs_pwm().replay_obs_guard(Some(&short), n, "test")
 		}));
-		assert!(r.is_err(), "replay_obs_guard must refuse an obs_pwm replay without pwm_acc");
+		assert!(r.is_err(), "replay_obs_guard must refuse an obs_pwm replay without pwm_dev");
 	}
 
 	/// sn=0 controller with obs_pwm ON (the second policy-state feature).
@@ -8999,12 +9034,12 @@ mod sn0_tests
 	fn vertical_stream(n: usize) -> ReplayObs
 	{
 		let vert: Vec<[f32; 3]> = (0..n).map(|t| [0.7, -4.0 + 0.5 * t as f32, 4.0 - 0.5 * t as f32]).collect();
-		ReplayObs { vert, horiz: vec![[0.0; 4]; n], pwm_acc: vec![] }
+		ReplayObs { vert, horiz: vec![[0.0; 4]; n], pwm_dev: vec![] }
 	}
 
 	fn constant_stream(n: usize, v: [f32; 3]) -> ReplayObs
 	{
-		ReplayObs { vert: vec![v; n], horiz: vec![[0.0; 4]; n], pwm_acc: vec![] }
+		ReplayObs { vert: vec![v; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![] }
 	}
 
 	fn distinct_output_addresses_per_neuron(c: &WnnController) -> Vec<usize>

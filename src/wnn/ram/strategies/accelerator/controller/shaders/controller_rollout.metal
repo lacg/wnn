@@ -583,7 +583,7 @@ inline void derive_features(
 		thread float *sensors, // [num_features]; [0..NUM_FEATURES) prefilled by caller
 		thread const FwdParams &P,
 		thread float *integ, thread float &yaw_heading,
-		thread const float *pwm_acc, // obs_pwm feature source (frozen in train, evolving in score)
+		thread const float *pwm_feat, // obs_pwm feature source: accumulator − bank anchor (score computes it; train/record load the recorded stream)
 		// DOB Fix A (12/08/2026): the pwm the PLANT received last step — dhat trim
 		// included. The d̂ observer's model term reads THIS (twin of controller.rs
 		// pwm_applied), never the pre-trim accumulator. The score kernel maintains
@@ -643,7 +643,7 @@ inline void derive_features(
 		if (P.obs_pwm != 0u)
 		{
 			for (uint m = 0u; m < P.num_motors; m++)
-				sensors[fi++] = pwm_acc[m];
+				sensors[fi++] = pwm_feat[m];
 		}
 		// Yaw-anchor clean scalar channel (canonical order LAST): proportional yaw
 		// error + its leaky integral. yaw_heading is the absolute anchored estimate.
@@ -727,7 +727,7 @@ inline void forward_state(
 		thread const FwdParams &P,
 		thread float *ring, thread uint &filled, thread uint &pushes,
 		thread float *integ, thread float &yaw_heading,
-		thread const float *pwm_acc,		 // obs_pwm feature source (frozen in train, evolving in score)
+		thread const float *pwm_feat,		 // obs_pwm feature source (accumulator − bank anchor)
 		thread const float *pwm_applied, // DOB Fix A: plant-received pwm for the d̂ model term
 		thread float *dhat, thread float *dhat_last_gyro, thread bool &dhat_have_last,
 		thread const uchar *prev_state,
@@ -738,7 +738,7 @@ inline void forward_state(
 		thread uchar *new_state) // OUT [n_state]
 {
 	// (1) H2 derived features + physical-time accumulator tick (single source).
-	derive_features(sensors, P, integ, yaw_heading, pwm_acc, pwm_applied, dhat, dhat_last_gyro, dhat_have_last);
+	derive_features(sensors, P, integ, yaw_heading, pwm_feat, pwm_applied, dhat, dhat_last_gyro, dhat_have_last);
 
 	// (2) push current frame into the ring, honouring the FRAME STRIDE — the
 	// bit-for-bit twin of controller.rs step() (15/08/2026). The newest slot
@@ -1227,9 +1227,15 @@ kernel void controller_rollout(
 		// step's (mirrors controller.rs step()'s hold branch). t=0 is a decision.
 		float pwm[MAX_ROTORS];
 		bool hold = (P.action_repeat > 1u) && (t % P.action_repeat != 0u);
+		// obs_pwm feature = accumulator − bank anchor (torque banks anchor 0 under
+		// decouple, the collective anchor otherwise) — twin of
+		// WnnController::compute_features / pwm_feature_obs.
+		float pwm_feat[MAX_ROTORS];
+		for (uint m = 0u; m < P.num_motors; m++)
+			pwm_feat[m] = pwm_acc[m] - ((P.decouple_outputs != 0u && m >= 1u) ? 0.0f : coll_anchor);
 		if (hold)
 		{
-			derive_features(sensors, F, integ, yaw_heading, pwm_acc, pwm_applied, dhat, dhat_last_gyro, dhat_have_last);
+			derive_features(sensors, F, integ, yaw_heading, pwm_feat, pwm_applied, dhat, dhat_last_gyro, dhat_have_last);
 			for (uint m = 0u; m < P.num_motors; m++)
 				pwm[m] = last_pwm[m];
 		}
@@ -1238,7 +1244,7 @@ kernel void controller_rollout(
 			// H2 features + K-window ring + state-layer forward, via the shared
 			// forward_state (single source with the training kernel).
 			uchar new_state[MAX_STATE_NEURONS];
-			forward_state(sensors, F, ring, filled, pushes, integ, yaw_heading, pwm_acc,
+			forward_state(sensors, F, ring, filled, pushes, integ, yaw_heading, pwm_feat,
 										pwm_applied,
 										dhat, dhat_last_gyro, dhat_have_last, prev_state,
 										state_conns, conn_state_g, state_keys, state_vals, state_off, state_cnt,
@@ -1881,7 +1887,7 @@ kernel void controller_train(
 		device const float *init_q [[buffer(22)]], // yaw-anchor: per-episode q0 [num_episodes*4]
 		device const float *vert_obs [[buffer(23)]], // stale-altitude-features fix: [total_steps*3]
 		device const float *horiz_obs [[buffer(24)]], // [total_steps*4]
-		device const float *pwm_acc_rec [[buffer(25)]], // obs_pwm replay fix: [total_steps*4]
+		device const float *pwm_dev_rec [[buffer(25)]], // obs_pwm replay fix: pwm FEATURE values [total_steps*4]
 		uint gid [[thread_position_in_grid]])
 {
 	uint g = gid;
@@ -1969,13 +1975,14 @@ kernel void controller_train(
 				F.horiz_err_y = horiz_obs[s4o + 1];
 				F.horiz_vx = horiz_obs[s4o + 2];
 				F.horiz_vy = horiz_obs[s4o + 3];
-				// obs_pwm replay fix: restore the accumulator this step's deploy
-				// compute_features read (the replay never runs decode). Only when the
-				// feature is on — obs_pwm-off stays bit-identical.
+				// obs_pwm replay fix: load the recorded pwm FEATURE values (accumulator −
+				// anchor, as deploy computed them) into the feature source — the replay
+				// never runs decode and has no per-episode anchor. Only when the feature
+				// is on — obs_pwm-off stays bit-identical.
 				if (P.obs_pwm != 0u)
 				{
 					for (uint m = 0u; m < P.num_motors && m < 4u; ++m)
-						pwm_acc[m] = pwm_acc_rec[s4o + m];
+						pwm_acc[m] = pwm_dev_rec[s4o + m];
 				}
 			}
 
@@ -2084,7 +2091,7 @@ kernel void controller_record(
 		device const uint *rec_base [[buffer(19)]], // [num_episodes]
 		device const float *vert_obs [[buffer(20)]], // stale-altitude-features fix: [total_steps*3]
 		device const float *horiz_obs [[buffer(21)]], // [total_steps*4]
-		device const float *pwm_acc_rec [[buffer(22)]], // obs_pwm replay fix: [total_steps*4]
+		device const float *pwm_dev_rec [[buffer(22)]], // obs_pwm replay fix: pwm FEATURE values [total_steps*4]
 		uint2 tid [[thread_position_in_grid]])
 {
 	uint g = tid.x, ej = tid.y;
@@ -2167,13 +2174,14 @@ kernel void controller_record(
 			F.horiz_err_y = horiz_obs[s4o + 1];
 			F.horiz_vx = horiz_obs[s4o + 2];
 			F.horiz_vy = horiz_obs[s4o + 3];
-			// obs_pwm replay fix: restore the accumulator this step's deploy
-			// compute_features read (the replay never runs decode). Only when the
-			// feature is on — obs_pwm-off stays bit-identical.
+			// obs_pwm replay fix: load the recorded pwm FEATURE values (accumulator −
+			// anchor, as deploy computed them) into the feature source — the replay
+			// never runs decode and has no per-episode anchor. Only when the feature
+			// is on — obs_pwm-off stays bit-identical.
 			if (P.obs_pwm != 0u)
 			{
 				for (uint m = 0u; m < P.num_motors && m < 4u; ++m)
-					pwm_acc[m] = pwm_acc_rec[s4o + m];
+					pwm_acc[m] = pwm_dev_rec[s4o + m];
 			}
 		}
 

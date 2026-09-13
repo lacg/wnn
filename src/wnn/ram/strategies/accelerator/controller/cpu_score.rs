@@ -219,6 +219,7 @@ pub(crate) fn rollout_one(
 		let mut ep_effort = 0.0f64;
 		let mut mono_last = 0.0f64;
 		let mut prev_pwm = vec![0.5f32; num_motors];
+		let miss_diag = std::env::var("WNN_CONTROLLER_MISS_DIAG").map(|v| v == "1").unwrap_or(false);
 		let mut first_step = true;
 		let mut ep_steps = 0usize;
 		let mut diverged = false;
@@ -265,6 +266,21 @@ pub(crate) fn rollout_one(
 				c.set_horizontal_obs(-hx, -hy, hvx, hvy);
 			}
 			let mut pwm = c.step(gyro, accel, target);
+			// DIAGNOSTIC (WNN_CONTROLLER_MISS_DIAG=1, 13/09/2026): per-step address
+			// misses of the output layer and the accumulator, printed for the first
+			// episode of each controller — the obs_pwm death investigation.
+			if miss_diag && ep == 0 && _t < 400 && _t % 20 == 0
+			{
+				let acc = c.pwm_accumulator_obs();
+				eprintln!(
+					"[miss-diag] t={_t} empty={}/{} err={:.2}° acc={:.4},{:.4},{:.4},{:.4} pwm={:.3},{:.3},{:.3},{:.3}",
+					c.last_output_empty_count(),
+					num_motors * levels_per_motor,
+					sim.attitude_error(None).to_degrees(),
+					acc[0], acc[1], acc[2], acc[3],
+					pwm[0], pwm[1], pwm[2], pwm[3]
+				);
+			}
 			if let Some(ab) = alloc
 			{
 				// Same q/gyro the kernel's alloc_step sees (true attitude,

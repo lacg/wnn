@@ -1655,9 +1655,10 @@ pub struct TrainBatch<'a>
 	// observation the student addressed on at rollout (ReplayObs twin).
 	pub vert_obs: &'a [f32],
 	pub horiz_obs: &'a [f32],
-	// obs_pwm replay fix (13/09/2026): per-step throttle accumulator (*4) the
-	// student's compute_features read at rollout (ReplayObs.pwm_acc twin).
-	pub pwm_acc: &'a [f32],
+	// obs_pwm replay fix (13/09/2026): per-step pwm FEATURE values (*4,
+	// accumulator − anchor) the student's compute_features produced at rollout
+	// (ReplayObs.pwm_dev twin). The kernels feed them to derive_features as-is.
+	pub pwm_dev: &'a [f32],
 	pub selective: bool,
 	pub target_rpy: [f32; 3],
 }
@@ -1678,10 +1679,10 @@ fn replay_obs_batch_guard(batch: &TrainBatch, site: &str)
 		total_steps
 	);
 	assert!(
-		batch.pwm_acc.len() == total_steps * 4,
-		"{site}: replay accumulator buffer misaligned (pwm_acc {} floats for {} steps) — \
+		batch.pwm_dev.len() == total_steps * 4,
+		"{site}: replay pwm-feature buffer misaligned (pwm_dev {} floats for {} steps) — \
 		 an obs_pwm student would train on a frozen accumulator (obs_pwm replay bug, 13/09/2026)",
-		batch.pwm_acc.len(),
+		batch.pwm_dev.len(),
 		total_steps
 	);
 }
@@ -2646,7 +2647,7 @@ impl ControllerTrainer
 		replay_obs_batch_guard(batch, "controller_train");
 		let b_vo = self.buf(batch.vert_obs); // stale-altitude-features fix (buffer 23)
 		let b_ho = self.buf(batch.horiz_obs); // (buffer 24)
-		let b_pa = self.buf(batch.pwm_acc); // obs_pwm replay fix (buffer 25)
+		let b_pa = self.buf(batch.pwm_dev); // obs_pwm replay fix (buffer 25)
 
 		let cmd = self.queue.new_command_buffer();
 		let enc = cmd.new_compute_command_encoder();
@@ -2852,7 +2853,7 @@ impl ControllerTrainer
 		replay_obs_batch_guard(batch, "controller_record");
 		let b_vo = self.buf(batch.vert_obs); // stale-altitude-features fix (buffer 20)
 		let b_ho = self.buf(batch.horiz_obs); // (buffer 21)
-		let b_pa = self.buf(batch.pwm_acc); // obs_pwm replay fix (buffer 22)
+		let b_pa = self.buf(batch.pwm_dev); // obs_pwm replay fix (buffer 22)
 
 		let cmd = self.queue.new_command_buffer();
 		let enc = cmd.new_compute_command_encoder();
@@ -4367,7 +4368,7 @@ struct ParityFixture
 	// fixtures run the channels OFF; the vertical parity test builds its own).
 	vert_obs: Vec<f32>,
 	horiz_obs: Vec<f32>,
-	pwm_acc: Vec<f32>, // obs_pwm replay fix: zeros (fixtures run obs_pwm OFF)
+	pwm_dev: Vec<f32>, // obs_pwm replay fix: zeros (fixtures run obs_pwm OFF)
 	cpu_obs: Vec<ReplayObs>, // nested twin, per episode
 }
 
@@ -4511,7 +4512,7 @@ fn build_parity_fixture_mode(
 	let total_steps = gyros.len() / 3;
 	let cpu_obs: Vec<ReplayObs> = cpu_g
 		.iter()
-		.map(|g| ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_acc: vec![] })
+		.map(|g| ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![] })
 		.collect();
 	Ok(ParityFixture {
 		c,
@@ -4531,7 +4532,7 @@ fn build_parity_fixture_mode(
 		init_q,
 		vert_obs: vec![0.0; total_steps * 3],
 		horiz_obs: vec![0.0; total_steps * 4],
-		pwm_acc: vec![0.0; total_steps * 4],
+		pwm_dev: vec![0.0; total_steps * 4],
 		cpu_obs,
 	})
 }
@@ -4556,7 +4557,7 @@ fn controller_train_parity_once(selective: bool) -> Result<(usize, usize, usize)
 		init_q: &f.init_q,
 		vert_obs: &f.vert_obs,
 		horiz_obs: &f.horiz_obs,
-		pwm_acc: &f.pwm_acc,
+		pwm_dev: &f.pwm_dev,
 		selective,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -4658,7 +4659,7 @@ fn controller_train_seeded_parity_once(
 		init_q: &f.init_q,
 		vert_obs: &f.vert_obs,
 		horiz_obs: &f.horiz_obs,
-		pwm_acc: &f.pwm_acc,
+		pwm_dev: &f.pwm_dev,
 		selective,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -5930,7 +5931,7 @@ fn controller_split_train_loop_parity_once(
 		init_q: &f_gpu.init_q,
 		vert_obs: &f_gpu.vert_obs,
 		horiz_obs: &f_gpu.horiz_obs,
-		pwm_acc: &f_gpu.pwm_acc,
+		pwm_dev: &f_gpu.pwm_dev,
 		selective,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -6058,7 +6059,7 @@ fn controller_record_parity_once() -> Result<(usize, usize, usize, usize), Strin
 		init_q: &f.init_q,
 		vert_obs: &f.vert_obs,
 		horiz_obs: &f.horiz_obs,
-		pwm_acc: &f.pwm_acc,
+		pwm_dev: &f.pwm_dev,
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -7182,7 +7183,7 @@ fn controller_record_and_scan_parity_once() -> Result<(usize, usize, usize, usiz
 		init_q: &f.init_q,
 		vert_obs: &f.vert_obs,
 		horiz_obs: &f.horiz_obs,
-		pwm_acc: &f.pwm_acc,
+		pwm_dev: &f.pwm_dev,
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -7285,7 +7286,7 @@ fn controller_record_search_parity_once() -> Result<(usize, usize, usize), Strin
 		init_q: &f.init_q,
 		vert_obs: &f.vert_obs,
 		horiz_obs: &f.horiz_obs,
-		pwm_acc: &f.pwm_acc,
+		pwm_dev: &f.pwm_dev,
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -7647,8 +7648,8 @@ pub fn run_controller_record_vertical_obs_parity_test() -> Vec<(String, bool, St
 }
 
 /// obs_pwm replay parity (13/09/2026): the record kernel restores the per-step
-/// accumulator from the `pwm_acc` buffer (buffer 22) exactly as the CPU
-/// split_record restores it from ReplayObs.pwm_acc. Same shape as the vertical
+/// pwm feature from the `pwm_dev` buffer (buffer 22) exactly as the CPU
+/// split_record applies it from ReplayObs.pwm_dev. Same shape as the vertical
 /// test: zero mismatch AND stream-sensitive (a constant stream must change the
 /// CPU rows, else the pwm bits never reached the comparison).
 pub fn run_controller_record_obs_pwm_parity_test() -> Vec<(String, bool, String)>
@@ -7688,7 +7689,7 @@ fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool)
 	{
 		for b in 0..bpf
 		{
-			thresholds[fi * bpf + b] = 0.35 + 0.1 * b as f32; // ladder .35 .45 .55 .65 around hover
+			thresholds[fi * bpf + b] = -0.15 + 0.1 * b as f32; // deviation ladder −.15 −.05 .05 .15
 		}
 	}
 	let state_conns: Vec<i64> = (0..n_state * sbpn)
@@ -7718,17 +7719,17 @@ fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool)
 	for g in &f.cpu_g
 	{
 		let n = g.len().max(1);
-		let pwm_acc: Vec<[f32; 4]> = (0..g.len())
+		let pwm_dev: Vec<[f32; 4]> = (0..g.len())
 			.map(|t| {
 				let u = t as f32 / n as f32;
-				[0.3 + 0.4 * u, 0.7 - 0.4 * u, 0.5 + 0.2 * ((t % 5) as f32 - 2.0) / 2.0, 0.4 + 0.3 * ((t % 3) as f32) / 2.0]
+				[-0.2 + 0.4 * u, 0.2 - 0.4 * u, 0.2 * ((t % 5) as f32 - 2.0) / 2.0, -0.1 + 0.3 * ((t % 3) as f32) / 2.0]
 			})
 			.collect();
-		for v in &pwm_acc
+		for v in &pwm_dev
 		{
 			pwm_flat.extend_from_slice(v);
 		}
-		cpu_obs.push(ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_acc });
+		cpu_obs.push(ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev });
 	}
 	let (tau, target_min) = (0.05f32, 2usize);
 	let trainer = ControllerTrainer::new()?;
@@ -7744,7 +7745,7 @@ fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool)
 		init_q: &f.init_q,
 		vert_obs: &vert_flat,
 		horiz_obs: &horiz_flat,
-		pwm_acc: &pwm_flat,
+		pwm_dev: &pwm_flat,
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -7782,7 +7783,7 @@ fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool)
 	let const_obs: Vec<ReplayObs> = f
 		.cpu_g
 		.iter()
-		.map(|g| ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_acc: vec![[0.5; 4]; g.len()] })
+		.map(|g| ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![[0.0; 4]; g.len()] })
 		.collect();
 	let mut c2 = c.clone();
 	let (rows_const, ..) = c2.split_record_pub(
@@ -7854,7 +7855,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 		{
 			vert_flat.extend_from_slice(v);
 		}
-		cpu_obs.push(ReplayObs { vert, horiz: vec![[0.0; 4]; g.len()], pwm_acc: vec![] });
+		cpu_obs.push(ReplayObs { vert, horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![] });
 	}
 	let (tau, target_min) = (0.05f32, 2usize);
 	let trainer = ControllerTrainer::new()?;
@@ -7870,7 +7871,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 		init_q: &f.init_q,
 		vert_obs: &vert_flat,
 		horiz_obs: &horiz_flat,
-		pwm_acc: &pwm_flat,
+		pwm_dev: &pwm_flat,
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -7909,7 +7910,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 	let const_obs: Vec<ReplayObs> = f
 		.cpu_g
 		.iter()
-		.map(|g| ReplayObs { vert: vec![[0.7, 0.0, 0.0]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_acc: vec![] })
+		.map(|g| ReplayObs { vert: vec![[0.7, 0.0, 0.0]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![] })
 		.collect();
 	let mut c2 = c.clone();
 	let (rows_const, ..) = c2.split_record_pub(
@@ -10284,7 +10285,7 @@ mod tests
 			init_q: &f.init_q,
 			vert_obs: &f.vert_obs,
 			horiz_obs: &f.horiz_obs,
-			pwm_acc: &f.pwm_acc,
+			pwm_dev: &f.pwm_dev,
 			selective: false,
 			target_rpy: [0.0, 0.0, 0.0],
 		};

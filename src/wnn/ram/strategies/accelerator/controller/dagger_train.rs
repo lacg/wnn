@@ -614,9 +614,10 @@ pub struct TrajectoryRs
 	// this the replay reused the controller's last live value for every record.
 	pub vert_obs: Vec<[f32; 3]>,
 	pub horiz_obs: Vec<[f32; 4]>,
-	// obs_pwm replay fix (13/09/2026): the throttle accumulator compute_features
-	// read at each step (snapshot BEFORE controller_step_4). ReplayObs.pwm_acc.
-	pub pwm_acc: Vec<[f32; 4]>,
+	// obs_pwm replay fix (13/09/2026): the pwm FEATURE value (accumulator −
+	// bank anchor) compute_features produced at each step, snapshot BEFORE
+	// controller_step_4. ReplayObs.pwm_dev.
+	pub pwm_dev: Vec<[f32; 4]>,
 	pub cumulative_reward: f64,
 	pub mean_attitude_error_rad: f64,
 	pub diverged: bool,
@@ -1598,7 +1599,7 @@ pub fn rollout_and_label_rs(
 	traj.student_pwms = Vec::with_capacity(cfg.steps_per_episode);
 	traj.att_errs = Vec::with_capacity(cfg.steps_per_episode);
 	traj.label_base = Vec::with_capacity(cfg.steps_per_episode);
-	traj.pwm_acc = Vec::with_capacity(cfg.steps_per_episode);
+	traj.pwm_dev = Vec::with_capacity(cfg.steps_per_episode);
 
 	// Offset-free MPC observer state: the action ACTUALLY applied to the sim last
 	// step (the student's, under DAGGER). Hover default so step-0's observe() —
@@ -1654,9 +1655,10 @@ pub fn rollout_and_label_rs(
 			let [hvx, hvy] = sim.velocity_xy_rs();
 			controller.set_horizontal_obs(-hx, -hy, hvx, hvy);
 		}
-		// obs_pwm replay fix: the accumulator THIS step's compute_features reads
-		// (step() decodes into it afterwards), so the replay can restore it.
-		let pwm_acc_now = controller.pwm_accumulator_obs();
+		// obs_pwm replay fix: the pwm FEATURE this step's compute_features will
+		// produce (accumulator − anchor; step() decodes afterwards), recorded so
+		// the replay applies the identical value.
+		let pwm_dev_now = controller.pwm_feature_obs();
 		// Student forward + teacher label at student-visited state.
 		let student_pwm = controller_step_4(controller, gyro, accel, target_64);
 		// True-delta label baseline for THIS step (pwm_prev is the pre-step
@@ -1746,7 +1748,7 @@ pub fn rollout_and_label_rs(
 		// held when controller_step_4 ran (zeros while the channels are off).
 		traj.vert_obs.push(controller.vert_obs());
 		traj.horiz_obs.push(controller.horiz_obs());
-		traj.pwm_acc.push(pwm_acc_now);
+		traj.pwm_dev.push(pwm_dev_now);
 		// H3: when outputs are decoupled, the output banks are CONTROLS, so the
 		// training TARGETS (teacher + student MOTOR pwms) must be un-mixed into
 		// control space [T,τr,τp,τy]. Single point ⇒ all downstream paths (split /
@@ -1867,7 +1869,7 @@ pub fn train_on_trajectory_rs(
 		// Stale-altitude-features fix: the per-step observation streams, sliced
 		// exactly like gyros (None only for a pre-field trajectory; the replay's
 		// guard refuses that whenever the features are on).
-		let ro = ReplayObs::slice(&traj.vert_obs, &traj.horiz_obs, &traj.pwm_acc, start, end);
+		let ro = ReplayObs::slice(&traj.vert_obs, &traj.horiz_obs, &traj.pwm_dev, start, end);
 		let (sw, ow) = controller.bptt_train_window(
 			g,
 			a,
@@ -2068,7 +2070,7 @@ struct GatedFlat
 	// observation, the kernels' twin of ReplayObs.
 	vert_obs: Vec<f32>,
 	horiz_obs: Vec<f32>,
-	pwm_acc: Vec<f32>, // obs_pwm replay fix: [total_steps*4]
+	pwm_dev: Vec<f32>, // obs_pwm replay fix: pwm feature values [total_steps*4]
 }
 
 /// Flatten the gated (episode-major) trajectories into `GatedFlat`. All episodes
@@ -2091,7 +2093,7 @@ fn flatten_gated(gated: &[&TrajectoryRs]) -> GatedFlat
 		init_q: Vec::with_capacity(ne * 4),
 		vert_obs: Vec::with_capacity(total_steps * 3),
 		horiz_obs: Vec::with_capacity(total_steps * 4),
-		pwm_acc: Vec::with_capacity(total_steps * 4),
+		pwm_dev: Vec::with_capacity(total_steps * 4),
 	};
 	let mut sbase = 0u32;
 	for t in gated
@@ -2110,7 +2112,7 @@ fn flatten_gated(gated: &[&TrajectoryRs]) -> GatedFlat
 			// (try_gpu_split) refuses such a batch when the features are on.
 			f.vert_obs.extend_from_slice(&t.vert_obs.get(s).copied().unwrap_or([0.0; 3]));
 			f.horiz_obs.extend_from_slice(&t.horiz_obs.get(s).copied().unwrap_or([0.0; 4]));
-			f.pwm_acc.extend_from_slice(&t.pwm_acc.get(s).copied().unwrap_or([0.0; 4]));
+			f.pwm_dev.extend_from_slice(&t.pwm_dev.get(s).copied().unwrap_or([0.0; 4]));
 		}
 		let (sn, cs) = (0.5 * t.init_yaw).sin_cos();
 		f.init_q.extend_from_slice(&[cs, 0.0, 0.0, sn]);
@@ -2167,7 +2169,7 @@ fn try_gpu_split(
 		init_q: &fb.init_q,
 		vert_obs: &fb.vert_obs,
 		horiz_obs: &fb.horiz_obs,
-		pwm_acc: &fb.pwm_acc,
+		pwm_dev: &fb.pwm_dev,
 		selective: cfg.split_selective_output,
 		target_rpy: target,
 	};
@@ -2366,7 +2368,7 @@ pub fn dagger_train_inplace_rs(
 						.map(|t| ReplayObs {
 							vert: t.vert_obs.clone(),
 							horiz: t.horiz_obs.clone(),
-							pwm_acc: t.pwm_acc.clone(),
+							pwm_dev: t.pwm_dev.clone(),
 						})
 						.collect();
 					let (_r, _cf, planted, _pr, saturation, wishes) = controller.split_train_loop(
@@ -4218,6 +4220,103 @@ mod d0_hover_anchor_tests
 		// refuses without it (guard) — the controller has the features on.
 		let (_sw, ow) = train_on_trajectory_rs(&mut c, &traj, &cfg);
 		assert!(ow > 0, "the replay wrote nothing from a recorded stream");
+	}
+	/// DIAGNOSTIC (13/09/2026, ignored — ~60 s, prints): does an obs_pwm
+	/// student's DEPLOY visit addresses its DAgger training wrote? Mini-DAgger on
+	/// the cf21 translation plant, then replay the student's own final trajectory
+	/// through step() with the recorded stream restored and count EMPTY output
+	/// reads (address misses). Run with `-- --ignored --nocapture`.
+	#[test]
+	#[ignore]
+	fn diag_obs_pwm_deploy_miss_rate()
+	{
+		for obs_pwm in [false, true]
+		{
+			let mut cfg = cf21_translation_cfg(TEACHER_HOVER_DERIVED);
+			cfg.steps_per_episode = 400;
+			let hover = AirframeRs::from_cfg(&cfg).teacher_hover.unwrap();
+			let mut teacher = Teacher::from_id_with_hover(
+				4, cfg.dt as f32, cfg.af_arm_length, cfg.af_k_thrust, cfg.af_k_drag,
+				cfg.af_inertia, cfg.af_gravity, hover,
+			);
+			let mut sim = AttitudeSim::new(
+				cfg.dt as f32, cfg.af_arm_length, cfg.af_k_thrust, cfg.af_k_drag,
+				cfg.af_inertia, cfg.af_gravity,
+			);
+			let (levels, bpf, obpn) = (16usize, 4usize, 24usize);
+			let nf = 9 + if obs_pwm { 4 } else { 0 };
+			let mut rng = SmallRng::seed_from_u64(0xB0B);
+			let frame_bits = nf * bpf;
+			let mut thresholds = Vec::with_capacity(frame_bits);
+			for f in 0..nf
+			{
+				let (lo, hi) = match f
+				{
+					0..=2 => (-3.0f32, 3.0f32),
+					3..=5 => (-12.0, 12.0),
+					6..=8 => (-0.1, 0.1),
+					_ => (hover as f32 - 0.02, hover as f32 + 0.02),
+				};
+				for b in 0..bpf
+				{
+					thresholds.push(lo + (hi - lo) * (b as f32 + 0.5) / bpf as f32);
+				}
+			}
+			let out_conn: Vec<i64> = (0..4 * levels * obpn)
+				.map(|_| rng.gen_range(0..frame_bits) as i64)
+				.collect();
+			let mut c = WnnController::new_core(
+				4, levels, bpf, 1, 0, 0, obpn, thresholds, Vec::new(), out_conn,
+				true, 0.05, 0.95, 1.0,
+				false, false, false, false, false, obs_pwm, false, false,
+				0.99, 1.0, 0.001, false, 1,
+				ram_core::neuron_memory::BINARY, None, None, 0.05, false, 0.30,
+				false, false, false, false, false, false, 1,
+			)
+			.expect("student must construct");
+			let mut last = None;
+			for _round in 0..6
+			{
+				let traj = rollout_and_label_rs(&mut c, &mut teacher, &mut sim, &cfg, 0.0873, &mut rng, ZERO3);
+				let (_sw, ow) = train_on_trajectory_rs(&mut c, &traj, &cfg);
+				assert!(ow > 0);
+				last = Some(traj);
+			}
+			let traj = last.unwrap();
+			let mean_err: f32 = traj.att_errs.iter().sum::<f32>() / traj.att_errs.len().max(1) as f32;
+			// Replay the student's own last trajectory through step() with the
+			// recorded observation restored — the addresses deploy visited.
+			c.reset(traj.init_yaw);
+			let coll = traj.vert_obs.first().map(|v| v[0]).unwrap_or(hover as f32);
+			c.set_collective_anchor(coll);
+			let n_out = 4 * levels;
+			let mut miss_total = 0usize;
+			let mut miss_first50 = 0usize;
+			for t in 0..traj.steps
+			{
+				if obs_pwm
+				{
+					let d = traj.pwm_dev[t];
+					c.set_pwm_accumulator([d[0] + coll, d[1] + coll, d[2] + coll, d[3] + coll]);
+				}
+				let _ = c.step(traj.gyros[t], traj.accels[t], traj.targets[t]);
+				let m = c.last_output_empty_count();
+				miss_total += m;
+				if t < 50
+				{
+					miss_first50 += m;
+				}
+			}
+			let frac = miss_total as f32 / (traj.steps * n_out) as f32;
+			let frac50 = miss_first50 as f32 / (50.min(traj.steps) * n_out) as f32;
+			eprintln!(
+				"[diag obs_pwm={obs_pwm}] steps={} mean_att_err={:.1}° pwm_dev[0]={:?} pwm_dev[last]={:?} miss_frac={frac:.3} miss_first50={frac50:.3}",
+				traj.steps,
+				mean_err.to_degrees(),
+				traj.pwm_dev.first(),
+				traj.pwm_dev.last(),
+			);
+		}
 	}
 	/// (v) mpcof observer: built at the nominal hover, a student applying a torque
 	/// AT that hover produces a model residual of ≈ 0 — no self-attribution. The
