@@ -141,6 +141,18 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
+QUEUE AS OF 13/09/2026 03:30 EDT (arm B run 1/4 BANKED VOID 03:01 EDT; box HELD before run 2/4;
+supersedes the 01:05 block — which follows and still holds for the 2x2 verdict + arm B diagnosis).
+`_bd` s31337002 marker: rc 0, 8424 s, HEADLINE 0.0% / 57.15° / 57.15° / 0.238 m (CONNECTIONS#0);
+GRID 0.0±0.0% / 62.05±1.96°; CONNECTIONS = MEMORY 0.0±0.0% / 57.15±2.62°; effort 0.916. VOID row —
+NOT banked into git/leaderboard by the tick (a dead trainer is not a result); leave it on disk for
+the diagnosis. The ladder (sweep_ladder_gamma.sh, child of arm_b_delta_label_chain.sh 85345, of
+post_d0_queue.sh 6225) is parked in wait_while_held before s31337003_bd — /private/tmp/
+sweep_ladder_gamma.log prints "HOLD — still held" every 10 min. NOTHING FLIES until
+experiments/HOLD_CONTROLLER is removed. Tick lines 2/3 while held: "no run — HOLD set after arm B
+run 1/4 banked void (grid dead 0.0%/62°); pending: Luiz's arm B diagnosis, then rm the HOLD (resumes
+at arm B run 2/4) or kill the queue supervisor + relaunch with arm B fixed/bypassed".
+
 QUEUE AS OF 13/09/2026 01:05 EDT (2x2 COMPLETE 4/4 + VERDICT; arm B run 1/4 flying DEAD-ON-ARRIVAL;
 HOLD SENTINEL SET by the tick; supersedes the 22:45 block).
 2x2 leak×label-scale COMPLETE 4/4, banked (s2/s3/s4/s5 `_l090_ls2`, ABI 28). VERDICT on the HEADLINE
