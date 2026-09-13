@@ -141,6 +141,33 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
+QUEUE AS OF 13/09/2026 01:05 EDT (2x2 COMPLETE 4/4 + VERDICT; arm B run 1/4 flying DEAD-ON-ARRIVAL;
+HOLD SENTINEL SET by the tick; supersedes the 22:45 block).
+2x2 leak×label-scale COMPLETE 4/4, banked (s2/s3/s4/s5 `_l090_ls2`, ABI 28). VERDICT on the HEADLINE
+(paired, n=4, t-CI): interaction (leak cost at s=2 − at s=1) err +0.16° [−0.88,+1.19] · steady +0.23°
+[−0.66,+1.11] · alt −0.24 m [−1.16,+0.68] · stable −0.8 pp [−4.6,+3.0] — ALL straddle 0; the leak's
+altitude cost at s=1 +0.35 m [−0.54,+1.25] (s3's 1.545 m drives it), at s=2 +0.12 m [−0.12,+0.35];
+NO evidence s=2 removes the leak's altitude cost; the two levers are independent at n=4 (a direction).
+s2's control is `_crn` (the bare s2 is rotation-era) — the chain's own ctrl_tag does the same.
+STEP 3 arm B (`--dagger-label-delta --obs-pwm --teacher-hover derived`, controls `_hd`) run 1/4
+`SL_C_..._s31337002_bd` started 00:40 EDT under scripts/arm_b_delta_label_chain.sh (pid 85345) →
+phased_ga 85433. ITS GRID IS DEAD: winner 0.0% stable / 60.19° err; GRID multi-seed held-out
+0.0±0.0% / 62.05±1.96° / mono_viol 2 / effort 1.19; ALL 55 grid+expand points ~70°/0.0% (control
+`_hd` s2 grid: 98.4% / 1.93°). Structural, not a draw — the two-flag bundle had NEVER flown end-to-end
+(d0_smoke flew hover only; no .out carries the flag). ESCALATED at the 01:00 tick; Luiz asleep.
+ACTION TAKEN: `experiments/HOLD_CONTROLLER` touched 01:02 EDT (reversible: rm) — the chain's
+wait_while_held holds BEFORE run 2/4 launches, after run 1/4 banks (~05:30 EDT). Run 1/4 was NOT
+killed (never kill a running run unasked). Lever line for arm B while it flies: "arm B true-delta
+label (--dagger-label-delta --obs-pwm) vs the derived-hover anchors — GRID DEAD, escalated, HOLD set".
+FOR LUIZ (morning): (1) decide arm B — diagnose the delta-label trainer under a smoke
+(scripts/…smoke with --dagger-label-delta --obs-pwm, levels 6, tiny budget) before any re-fly; the
+`_bd` s2 marker, if it banks, is a VOID row (label it); (2) rm the HOLD to resume the queue (it
+would resume at arm B run 2/4 — kill the queue supervisor first if arm B is to be skipped, then
+relaunch post_d0_queue.sh only once arm B is fixed or its step is bypassed); (3) the wheel-swap
+decision from the 22:45 block still stands (no swap unasked).
+Tick lines while HOLD is set and the box is idle: "no run — HOLD set after arm B run 1/4 (grid dead);
+pending: arm B diagnosis, then rm experiments/HOLD_CONTROLLER".
+
 QUEUE AS OF 12/09/2026 22:45 EDT (2x2 run 4/4 flying; public package + wgpu landed; WHEEL
 SWAP DECISION DEFERRED to Luiz tomorrow morning; supersedes the 12:50 block).
 2x2 leak×label-scale (post-D0 step 2): runs 1-3/4 banked (s2/s3/s4 _l090_ls2), run 4/4 = seed
