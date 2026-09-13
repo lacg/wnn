@@ -141,6 +141,15 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
+UPDATE 13/09/2026 13:00 EDT — obs_pwm needed a THIRD fix (05fe0f68): fixes 1+2 alone still left the
+smoke dead (CPU miss diagnostic: 1-6 hits/256 per step vs 14-25 for the control). Cause: the raw
+accumulator encodes the per-episode COLLECTIVE JITTER (anchor 0.66-0.76 at t=0) and splits the memory
+by episode; the feature is now pwm − bank_anchor, the replay stream carries the feature value
+(ReplayObs.pwm_dev). Smoke on the v2 wheel (logs/controller/armb_smoke_fixed2/): ctrl 100%/2.48° ·
++label-delta 90%/3.18° · +obs-pwm 100%/2.57° · both 100%/2.53° — all fly. The deploy script installs
+whatever wheel sits at the fixed path: now the v2 build (sha 9739f144…, ABI 29, 208 tests). Nothing
+else in the 12:05 block changes.
+
 QUEUE AS OF 13/09/2026 12:05 EDT (obs_pwm FIXED e554661b, ABI 29 wheel BUILT; deploy + arm B re-fly
 ARMED; window-k flying; supersedes the 10:45 block for what is queued).
 Luiz 11:3x EDT: "Fix both!" — DONE in source (207 controller tests incl. a new CPU/GPU record parity
