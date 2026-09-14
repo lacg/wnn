@@ -3251,10 +3251,12 @@ def main():
 			gravity=float(af.gravity)))
 		print(f"[L1] --obs-dhat ON: d̂ observer b={args._dhat_b} (from --airframe "
 		      f"{args.airframe}), l_gain={args.dhat_l_gain} → +3 input features")
-	if dist is not None:
+	# `dist` lives in episode_config_from_args() since 14/09/2026 — read it back off
+	# the ec (the NameError here killed arm B run 4/4 at launch, 17:57 EDT 14/09).
+	if ec.disturbance is not None:
 		print(f"[W2] disturbance={args.disturbance} armed for ALL rollouts "
-		      f"(tau_bias={dist.tau_bias[0]:.4f} N·m, gust_sigma={dist.gust_sigma:.4f}, "
-		      f"asym_mag=±{dist.motor_asym_mag:.0%}, gyro_sigma={dist.gyro_sigma})")
+		      f"(tau_bias={ec.disturbance.tau_bias[0]:.4f} N·m, gust_sigma={ec.disturbance.gust_sigma:.4f}, "
+		      f"asym_mag=±{ec.disturbance.motor_asym_mag:.0%}, gyro_sigma={ec.disturbance.gyro_sigma})")
 
 	# Overactuated residual mode (Phase 2): TRUE-vehicle geometry + alloc baseline.
 	_geo_base = args.base_seed if args.base_seed is not None else args.seed
