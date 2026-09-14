@@ -99,7 +99,7 @@ def parse_out(path: str) -> dict:
 
 
 # ---------------------------------------------------------------- recipe rebuild
-def build_run_args(tag: str, marker: dict, facts: dict):
+def build_run_args(tag: str, marker: dict, facts: dict, rep_eps: int | None = None):
 	"""The run's parsed flags, rebuilt from what the run itself recorded. Anything
 	this cannot recover is left at the parser default; the bit-exact reproduction
 	gate in classify() refuses the marker if that guess was wrong."""
@@ -117,10 +117,13 @@ def build_run_args(tag: str, marker: dict, facts: dict):
 		argv += ["--airframe", "cf21_brushless"]   # the alt-weight sweep's airframe (verified by the gate)
 	if "afcal" in tag:
 		argv += ["--calib-airframe"]
+
 	if "alt=" in (marker.get("headline_holdout") or ""):
 		argv += ["--translation"]
-	sf = re.search(r"stable_fail=\d+/(\d+)", marker.get("held_grid_multiseed") or marker.get("headline_holdout") or "")
-	rep_eps = (int(sf.group(1)) // len(facts["report_seeds"])) if sf else 100
+	if rep_eps is None:
+		blob = " ".join(str(v) for k, v in marker.items() if k.startswith("held_") or k.startswith("headline"))
+		sf = re.search(r"stable_fail=\d+/(\d+)", blob)
+		rep_eps = (int(sf.group(1)) // len(facts["report_seeds"])) if sf else 100
 	argv += ["--report-episodes", str(rep_eps), "--eval-episodes", str(facts.get("eval_episodes", 100))]
 	return build_arg_parser().parse_args(argv)
 
@@ -252,15 +255,38 @@ def process_marker(path: str, stages: list[str], dry_run: bool, log) -> str:
 		if not _matches(got[first], logged):
 			other = "report" if first == "train" else "train"
 			got[other] = score_seed(args, ec, spec, genome, s1, facts["train"], other)
+		if not any(_matches(v, logged) for v in got.values()):
+			# A marker without stable_fail hides its report-episode count; older
+			# recipes used 50. Retry the expected threshold set at the other counts
+			# before refusing — the reproduction gate still decides.
+			for alt_eps in (50, 200, 20):
+				if alt_eps == args.report_episodes:
+					continue
+				args2 = build_run_args(tag, marker, facts, rep_eps=alt_eps)
+				cand = score_seed(args2, ec, spec, genome, s1, facts["train"], first)
+				if _matches(cand, logged):
+					args, n_eps = args2, alt_eps
+					got = {first: cand}
+					other = "report" if first == "train" else "train"
+					got[other] = score_seed(args, ec, spec, genome, s1, facts["train"], other)
+					log(f"  (report-episodes resolved to {alt_eps})")
+					break
 		rep, tr = got.get("report"), got.get("train")
-		if rep is not None and _matches(rep, logged):
+		# Which threshold set reproduced the log decides the class; when both do
+		# (a genome insensitive to the fit), the expected one wins.
+		verdict = next((k for k in (first, "report" if first == "train" else "train")
+		                if got.get(k) is not None and _matches(got[k], logged)), None)
+		if verdict == "report":
 			aligned = tr if tr is not None else score_seed(args, ec, spec, genome, s1, facts["train"], "train")
 			rows = [aligned] + [per[s] for s in seeds[1:] if s in per]
 			ms = multiseed_string(stage, rows, seeds, n_eps)
 			align[stage] = dict(seed=s1, status="rescored", logged=logged, aligned=aligned,
 			                    multiseed_aligned=ms, secs=round(time.time() - t0, 1))
 			marker[f"held_{stage.lower()}_multiseed_aligned"] = ms
-			if stage == head_stage:
+			# The published HEADLINE reuses the stage row only when the crowned genome IS
+			# the stage's #0; a #k>0 headline was scored separately as HEADLINE-STAGE#k
+			# AFTER stage-select had written its cells back (score-only, aligned).
+			if stage == head_stage and head_genome in (stage, f"{stage}#0"):
 				hrow = headline_row_from_multiseed(rows)
 				marker["headline_holdout_aligned"] = headline_string(hrow)
 				align[stage]["headline_genome"] = head_genome
@@ -268,7 +294,7 @@ def process_marker(path: str, stages: list[str], dry_run: bool, log) -> str:
 			log(f"  {stage:11s} seed {s1}: MISALIGNED {logged['stable']:.1f}%/{logged['err']:.2f}° → aligned "
 			    f"{aligned['stable']:.1f}%/{aligned['err']:.2f}°   row: {ms.split(':',1)[1].strip()[:60]}")
 		else:
-			if tr is not None and _matches(tr, logged):
+			if verdict == "train":
 				align[stage] = dict(seed=s1, status="already_aligned", logged=logged, secs=round(time.time() - t0, 1))
 				log(f"  {stage:11s} seed {s1}: already aligned ({logged['stable']:.1f}%/{logged['err']:.2f}°)")
 			else:

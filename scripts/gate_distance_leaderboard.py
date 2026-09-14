@@ -187,12 +187,14 @@ def parse_marker(path, outs):
 		# CONNECTIONS headline is Lamarckian (cells present, aligned), so it is
 		# flagged only when the re-score classified it as misaligned and could not
 		# repair it — never on the absence of a record.
+		# Only a headline that IS the arch-only stage's #0 genome reused the stage row
+		# (and its misaligned first seed); a #k>0 headline was re-scored after
+		# stage-select wrote its cells back, i.e. on the aligned path.
 		align=('fixed' if 'headline_holdout_aligned' in d else
-		       ('unfixed' if (stage and (
-		                      (stage.group(1) in ('GRID', 'NEURONS', 'BITS')
-		                       and (d.get('done') or '') >= '2026-07-15'
-		                       and align.get(stage.group(1), {}).get('status', '') != 'already_aligned')
-		                      or align.get(stage.group(1), {}).get('status', '').startswith('refused')))
+		       ('unfixed' if (stage and stage.group(1) in ('GRID', 'NEURONS', 'BITS')
+		                      and stage.group(2) in (stage.group(1), stage.group(1) + '#0')
+		                      and (d.get('done') or '') >= '2026-07-15'
+		                      and align.get(stage.group(1), {}).get('status', '') != 'already_aligned')
 		        else '')),
 	)
 
