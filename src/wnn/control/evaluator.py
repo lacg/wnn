@@ -1160,6 +1160,14 @@ class ControllerEvaluator:
 		self._fold_seeds = [fold_pool_seed(seed, k) for k in range(self.num_eval_folds)]
 		self._fold_counter = 0
 		self._active_score_seed = seed
+		# Per-episode sink (14/09/2026, diagnostic only). None = the scorer's
+		# per-genome means, exactly as before. A list ⇒ every GPU scoring call
+		# also appends one dict {seed, q0, omega0, z0, vz0, mass, coll, x0, y0,
+		# episodes} where `episodes` are the kernel's per-episode rows
+		# (score_with_episodes contract). The aggregate the run sees is unchanged
+		# — the sink only stops the per-episode buffer being discarded. GPU
+		# scorer only; the CPU scorer does not take the kwarg.
+		self.per_episode_sink = None
 		self.episode_config = episode_config or EpisodeConfig(
 			dt=0.001, steps_per_episode=2000,
 			max_initial_tilt_rad=math.radians(30.0),
@@ -1765,6 +1773,7 @@ class ControllerEvaluator:
 		# their bit-identical attitude-only path.
 		from .training import sample_vertical_ics_flat
 		s1_on = bool(getattr(ec, "translation", False))
+		z0 = vz0 = coll = mass = x0 = y0 = None
 		if s1_on:
 			z0, vz0, coll, mass = sample_vertical_ics_flat(
 				self._active_score_seed, self.num_eval, ec)
@@ -1823,6 +1832,12 @@ class ControllerEvaluator:
 			else:
 				alloc_kwargs.update(residual_scale=float(ar.scale),
 				                    residual_clamp=float(ar.clamp))
+		# Per-episode export: only the GPU scorer takes the kwarg, and only when
+		# a sink is armed — every other call is byte-for-byte the old call.
+		sink = self.per_episode_sink
+		from wnn.control._accel import score_controllers_metal as _metal
+		if sink is not None and scorer is _metal:
+			stage1_kwargs = dict(stage1_kwargs, per_episode=True)
 		try:
 			if dist is None:
 				agg = scorer(
@@ -1856,6 +1871,13 @@ class ControllerEvaluator:
 					**ec.sim_kwargs(), **alloc_kwargs, **stage1_kwargs)
 		except Exception:
 			return None
+		if sink is not None and scorer is _metal:
+			n_g = len(controllers)
+			sink.append(dict(
+				seed=int(self._active_score_seed), q0=list(q0), omega0=list(omega0),
+				z0=z0, vz0=vz0, mass=mass, coll=coll, x0=x0, y0=y0,
+				episodes=[list(r) for r in agg[n_g:]]))
+			agg = agg[:n_g]
 		out = []
 		# Each row is 15 metrics (Vec<Vec<f64>> from score_controllers_metal):
 		# [reward, err_rad, stable, jerk, mono, steady_rad, rise_s, settle_abs_s,

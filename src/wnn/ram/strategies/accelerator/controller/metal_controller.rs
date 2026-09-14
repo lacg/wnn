@@ -452,6 +452,68 @@ impl ControllerRolloutEvaluator
 		omega0: &[f32],
 		num_episodes: usize,
 		steps: usize,
+		sim: (f32, f32, f32, [f32; 3], f32),
+		k_drag: f32,
+		motor_lag_s: f32,
+		target: [f32; 3],
+		dist: Option<crate::controller::Disturbance>,
+		residual: Option<ResidualCfg>,
+		geometry: Option<&[RotorGpu]>,
+		alloc_baseline: Option<&crate::optimal::AllocBaseline>,
+		stage1: Option<&crate::stage1::Stage1Cfg>,
+	) -> Result<Vec<Vec<f64>>, String>
+	{
+		self.score_impl(
+			controllers, q0, omega0, num_episodes, steps, sim, k_drag, motor_lag_s, target, dist,
+			residual, geometry, alloc_baseline, stage1, None,
+		)
+	}
+
+	/// Same dispatch as `score`, but ALSO hands back every episode the kernel
+	/// scored (14/09/2026 — the per-episode buffers were read back and summed
+	/// into per-genome means, then discarded; a 0/500 → 36/500 stable swing
+	/// between the val and report seed sets could not be diagnosed). Each
+	/// per-episode row is
+	///   [genome_idx, episode_idx, stable, diverged, mean_err_rad, steady_rad,
+	///    alt_err_m, pos_err_m, effort, jerk, steps]
+	/// with `stable` computed by the SAME rule the aggregate uses
+	/// (diverged == 0 && mean_err <= 5°). The aggregate rows are bit-identical
+	/// to `score` — the reduction is untouched, only the discard is removed.
+	#[allow(clippy::too_many_arguments)]
+	pub fn score_with_episodes(
+		&self,
+		controllers: &[&WnnController],
+		q0: &[f32],
+		omega0: &[f32],
+		num_episodes: usize,
+		steps: usize,
+		sim: (f32, f32, f32, [f32; 3], f32),
+		k_drag: f32,
+		motor_lag_s: f32,
+		target: [f32; 3],
+		dist: Option<crate::controller::Disturbance>,
+		residual: Option<ResidualCfg>,
+		geometry: Option<&[RotorGpu]>,
+		alloc_baseline: Option<&crate::optimal::AllocBaseline>,
+		stage1: Option<&crate::stage1::Stage1Cfg>,
+	) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>), String>
+	{
+		let mut episodes: Vec<Vec<f64>> = Vec::with_capacity(controllers.len() * num_episodes);
+		let agg = self.score_impl(
+			controllers, q0, omega0, num_episodes, steps, sim, k_drag, motor_lag_s, target, dist,
+			residual, geometry, alloc_baseline, stage1, Some(&mut episodes),
+		)?;
+		Ok((agg, episodes))
+	}
+
+	#[allow(clippy::too_many_arguments)]
+	fn score_impl(
+		&self,
+		controllers: &[&WnnController],
+		q0: &[f32],
+		omega0: &[f32],
+		num_episodes: usize,
+		steps: usize,
 		sim: (f32, f32, f32, [f32; 3], f32), // (dt, arm, k_thrust, inertia, gravity) ... k_drag below
 		k_drag: f32,
 		// MOTOR LAG: Molchanov eq. (7) 2% SETTLING time T (s); 0.0 = OFF and
@@ -482,6 +544,9 @@ impl ControllerRolloutEvaluator
 		// SCOPE C STAGE 1 (13/08/2026): the vertical channel. None ⇒ every
 		// pre-13/08 dispatch is bit-identical (the kernel's guards make it free).
 		stage1: Option<&crate::stage1::Stage1Cfg>,
+		// Per-episode sink (see score_with_episodes). None = the discard every
+		// caller before 14/09/2026 got; the aggregate is identical either way.
+		mut per_episode: Option<&mut Vec<Vec<f64>>>,
 	) -> Result<Vec<Vec<f64>>, String>
 	{
 		let g = controllers.len();
@@ -1019,9 +1084,26 @@ impl ControllerRolloutEvaluator
 					sum_effort_per_g[gi] += effortv[idx * 3] as f64;
 					sum_poserr_per_g[gi] += effortv[idx * 3 + 1] as f64;
 					sum_alterr_per_g[gi] += effortv[idx * 3 + 2] as f64;
-					if divv[idx] == 0 && mean_err <= stable_thresh
+					let is_stable = divv[idx] == 0 && mean_err <= stable_thresh;
+					if is_stable
 					{
 						stable_count_per_g[gi] += 1;
+					}
+					if let Some(sink) = per_episode.as_deref_mut()
+					{
+						sink.push(vec![
+							gi as f64,
+							(chunk_start + ce) as f64,
+							if is_stable { 1.0 } else { 0.0 },
+							if divv[idx] != 0 { 1.0 } else { 0.0 },
+							mean_err,
+							steadyv[idx] as f64,
+							effortv[idx * 3 + 2] as f64,
+							effortv[idx * 3 + 1] as f64,
+							effortv[idx * 3] as f64,
+							jerkv[idx] as f64,
+							stepsv[idx] as f64,
+						]);
 					}
 				}
 			}
@@ -1144,6 +1226,10 @@ impl ControllerRolloutEvaluator
 	lambda_pos = 0.0,
 	init_x = vec![],
 	init_y = vec![],
+	// 14/09/2026: true ⇒ the returned list is the g aggregate rows FOLLOWED BY
+	// g*num_episodes per-episode rows (see score_with_episodes). false ⇒
+	// exactly the pre-14/09 return. The aggregate rows are identical either way.
+	per_episode = false,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_controllers_metal(
@@ -1206,6 +1292,7 @@ pub fn score_controllers_metal(
 	lambda_pos: f32,
 	init_x: Vec<f32>,
 	init_y: Vec<f32>,
+	per_episode: bool,
 ) -> PyResult<Vec<Vec<f64>>>
 {
 	// STAGE 1: built here, validated inside score() against num_episodes.
@@ -1348,6 +1435,29 @@ pub fn score_controllers_metal(
 		None
 	};
 	let refs: Vec<&WnnController> = controllers.iter().map(|c| &**c).collect();
+	if per_episode
+	{
+		let (mut agg, episodes) = evaluator
+			.score_with_episodes(
+				&refs,
+				&q0,
+				&omega0,
+				num_episodes,
+				steps,
+				(dt, arm_length, k_thrust, inertia, gravity),
+				k_drag,
+				motor_lag_s,
+				target,
+				dist,
+				residual,
+				rotor_table.as_deref(),
+				alloc.as_ref(),
+				stage1_cfg.as_ref(),
+			)
+			.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+		agg.extend(episodes);
+		return Ok(agg);
+	}
 	evaluator
 		.score(
 			&refs,

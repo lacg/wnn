@@ -979,6 +979,11 @@ def _report_thresholds(args, ec, spec, report_seed: int, train_seed: int, use_sc
 
 	Still scoped to the score-only path: evaluate_batch trains fresh under whatever
 	thresholds it is handed, so refitting per report seed is correct there.
+
+	use_score=False is ONLY correct when the SAME evaluator both trains and scores
+	(evaluate_batch). `_holdout_report`'s arch-only branch trains with one evaluator
+	on the train seed and scores with another — it must pass use_score=True, and did
+	not from 15/07 to 14/09/2026 (see the note at its call site).
 	"""
 	seed = train_seed if use_score else report_seed
 	return fit_thresholds_from_pid_rollouts(
@@ -1860,12 +1865,22 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 	import statistics
 	if report_seed == train_seed:
 		print(f"  [report-seed] WARNING: report_seed == train_seed ({train_seed}) — NOT a held-out.")
-	# Score-only when the winner already carries trained cells (or the residual path);
-	# that is exactly the case where refitting thresholds on the report seed would
-	# misalign the address function — see _report_thresholds.
-	_use_score = (getattr(best_genome, "cells", None) is not None
-	              or getattr(ec, "geometry", None) is not None)
-	thresholds = _report_thresholds(args, ec, spec, report_seed, train_seed, _use_score)
+	# The scorer's thresholds are the TRAIN-seed fit in BOTH branches below (14/09/2026):
+	# a winner that carries cells had them written under train-seed thresholds during
+	# the search, and an arch-only winner has them written under train-seed thresholds
+	# by `train_ev` right below — either way `ev` reads a memory that was written under
+	# the train-seed address function. From 15/07 to 14/09 this line passed
+	# use_score=False for the arch-only case, so `ev` was built on the REPORT-seed fit
+	# while `train_ev` wrote the cells under the train-seed fit — the misalignment
+	# `_report_thresholds` describes, on every arch-only stage's FIRST report seed only
+	# (from the second seed on, the genome carried the written-back cells and took the
+	# score-only path). Measured on s31337003_bd GRID#0, report seed 99990101:
+	# 80.0%/4.24° misaligned vs 87.0%/2.02° aligned (scripts/probe_episode_failures.py);
+	# across 40 b24 n256 runs the first-seed GRID row sat 4.3 pp / 1.4° below the
+	# other four. The K=1 undertraining fix (0ab05a35) introduced it by replacing
+	# evaluate_batch — which trains and scores under ONE threshold set — with a
+	# train-then-score pair that used two.
+	thresholds = _report_thresholds(args, ec, spec, report_seed, train_seed, use_score=True)
 	# Held-out episode count decoupled from the GA's --eval-episodes (10/06/2026):
 	# the search eval runs every generation (cost ∝ episodes), but the held-out is
 	# scored ONCE per stage — so it can afford many more episodes to de-quantize
@@ -1901,11 +1916,10 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 		# grid winner 90%→8% stable / 24.7°, a pure K=1 artifact — 15/07/2026). Instead
 		# train on the TRAIN seed EXACTLY as the search did (K=num_eval_folds accumulate),
 		# THEN score those cells on the fresh report seed → train-on-A → score-on-B.
-		train_thr = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=train_seed,
-			geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None),
-		episode_config=_calib_ec(args, ec))
+		# Same fit as `thresholds` above (train seed, same calibration ec) — ONE threshold
+		# set for the write and the read, which is the whole point.
 		train_ev = ControllerEvaluator(spec, num_eval_episodes=rep_eps, seed=train_seed,
-		                               episode_config=ec, thresholds=train_thr,
+		                               episode_config=ec, thresholds=thresholds,
 		                               rg_config=_rg_config(args, ec, train_seed),
 		                               max_train_workers=args.train_workers,
 		                               num_eval_folds=getattr(args, "num_eval_folds", 5))
@@ -3022,6 +3036,55 @@ def fitness_pools_label(args) -> str:
 	return "rotation(1 pool/gen)"
 
 
+def episode_config_from_args(args) -> EpisodeConfig:
+	"""The run's EpisodeConfig from its parsed flags — the ONE place the plant,
+	disturbance preset, airframe and stage-1/2 draws are assembled (moved out of
+	main() 14/09/2026 so an offline probe scores a saved genome on EXACTLY the
+	episodes the run flew; a hand-copied EpisodeConfig is how a probe silently
+	flies the wrong aircraft). Pure: no printing except the motor-fault notice
+	main() always printed."""
+	from wnn.control.training import DisturbanceConfig
+	from wnn.control.airframe import Airframe as _Airframe
+	dist = DisturbanceConfig.preset(args.disturbance, seed=911)
+	if getattr(args, "motor_fault", None):
+		if dist is None:
+			raise SystemExit("--motor-fault requires --disturbance != OFF (the fault "
+			                 "rides on the DisturbanceConfig)")
+		from wnn.control.evaluator import apply_motor_fault
+		apply_motor_fault(dist, args.motor_fault)
+		print(f"[FAULT] motor fault {args.motor_fault} armed for ALL rollouts "
+		      f"(training AND scoring): fixed motor_asym={dist.motor_asym}")
+	return EpisodeConfig(
+		dt=0.001, steps_per_episode=args.steps,
+		max_initial_tilt_rad=math.radians(args.tilt),
+		max_initial_yaw_rad=math.radians(args.tilt),
+		max_initial_body_rate=args.body_rate, max_initial_yaw_rate=args.yaw_rate,
+		disturbance=dist,
+		# Airframe: None keeps the pre-airframe synthetic plant so untouched
+		# recipes stay bit-identical; a preset name swaps BOTH the sim and the
+		# model-based teachers (they read the same numbers) in one place.
+		airframe=(None if not getattr(args, 'airframe', None)
+		          else _Airframe.preset(args.airframe)),
+		# SCOPE C STAGE 1 (13/08/2026): the vertical channel. --translation off
+		# ⇒ every field below is inert and the run is bit-identical to a
+		# pre-stage-1 one. Episode axes default to a modest spread so the
+		# controller is actually ASKED to correct altitude — a controller that
+		# always starts at its target has never had to.
+		translation=bool(getattr(args, "translation", False)),
+		max_initial_alt_offset_m=float(getattr(args, "alt_offset", 0.3)),
+		max_initial_vz=float(getattr(args, "init_vz", 0.2)),
+		collective_cmd_jitter=float(getattr(args, "collective_jitter", 0.1)),
+		mass_jitter=float(getattr(args, "mass_jitter", 0.15)),
+		target_altitude=float(getattr(args, "target_altitude", 0.0)),
+		lambda_alt=float(getattr(args, "reward_lambda_alt", 0.0)),
+		# SCOPE C STAGE 2 (14/08/2026): the horizontal channel. --xy-offset 0.0
+		# ⇒ unarmed, bit-identical to stage 1.
+		max_initial_xy_offset_m=float(getattr(args, "xy_offset", 0.0)),
+		lambda_pos=float(getattr(args, "reward_lambda_pos", 0.0)),
+		calib_airframe=bool(getattr(args, "calib_airframe", False)),
+	)
+
+
 def main():
 	args = build_arg_parser().parse_args()
 	_validate_rank_weights(args)
@@ -3088,46 +3151,7 @@ def main():
 		      f"{_sw_desc} under --disturbance {args.disturbance}")
 
 	t_start = time.time()
-	from wnn.control.training import DisturbanceConfig
-	from wnn.control.airframe import Airframe as _Airframe
-	dist = DisturbanceConfig.preset(args.disturbance, seed=911)
-	if getattr(args, "motor_fault", None):
-		if dist is None:
-			raise SystemExit("--motor-fault requires --disturbance != OFF (the fault "
-			                 "rides on the DisturbanceConfig)")
-		from wnn.control.evaluator import apply_motor_fault
-		apply_motor_fault(dist, args.motor_fault)
-		print(f"[FAULT] motor fault {args.motor_fault} armed for ALL rollouts "
-		      f"(training AND scoring): fixed motor_asym={dist.motor_asym}")
-	ec = EpisodeConfig(
-		dt=0.001, steps_per_episode=args.steps,
-		max_initial_tilt_rad=math.radians(args.tilt),
-		max_initial_yaw_rad=math.radians(args.tilt),
-		max_initial_body_rate=args.body_rate, max_initial_yaw_rate=args.yaw_rate,
-		disturbance=dist,
-		# Airframe: None keeps the pre-airframe synthetic plant so untouched
-		# recipes stay bit-identical; a preset name swaps BOTH the sim and the
-		# model-based teachers (they read the same numbers) in one place.
-		airframe=(None if not getattr(args, 'airframe', None)
-		          else _Airframe.preset(args.airframe)),
-		# SCOPE C STAGE 1 (13/08/2026): the vertical channel. --translation off
-		# ⇒ every field below is inert and the run is bit-identical to a
-		# pre-stage-1 one. Episode axes default to a modest spread so the
-		# controller is actually ASKED to correct altitude — a controller that
-		# always starts at its target has never had to.
-		translation=bool(getattr(args, "translation", False)),
-		max_initial_alt_offset_m=float(getattr(args, "alt_offset", 0.3)),
-		max_initial_vz=float(getattr(args, "init_vz", 0.2)),
-		collective_cmd_jitter=float(getattr(args, "collective_jitter", 0.1)),
-		mass_jitter=float(getattr(args, "mass_jitter", 0.15)),
-		target_altitude=float(getattr(args, "target_altitude", 0.0)),
-		lambda_alt=float(getattr(args, "reward_lambda_alt", 0.0)),
-		# SCOPE C STAGE 2 (14/08/2026): the horizontal channel. --xy-offset 0.0
-		# ⇒ unarmed, bit-identical to stage 1.
-		max_initial_xy_offset_m=float(getattr(args, "xy_offset", 0.0)),
-		lambda_pos=float(getattr(args, "reward_lambda_pos", 0.0)),
-		calib_airframe=bool(getattr(args, "calib_airframe", False)),
-	)
+	ec = episode_config_from_args(args)
 	# STAGE 1 GUARD: the vertical FEATURES read the sim's z/vz, so enabling them
 	# without --translation would feed the controller a permanently-zero channel
 	# — three wasted features and a silently different address space. Refuse

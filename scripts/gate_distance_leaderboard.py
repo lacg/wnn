@@ -139,7 +139,13 @@ def parse_marker(path, outs):
 		d = json.load(open(path))
 	except Exception:
 		return None
-	h = d.get('headline_holdout', '')
+	# 14/09/2026: arch-only stage rows had their FIRST report seed scored under
+	# report-seed thresholds while the cells were written under train-seed ones
+	# (phased_ga._holdout_report, 15/07→14/09). scripts/rescore_first_report_seed.py
+	# repairs banked markers into *_aligned fields; the aligned headline is the
+	# published one when it exists, the original stays in the marker untouched.
+	h = d.get('headline_holdout_aligned') or d.get('headline_holdout', '')
+	align = d.get('holdout_alignment') or {}
 	ms = re.search(r'stable=([0-9.]+)%', h)
 	me = re.search(r'err=([0-9.]+)', h)
 	if not (ms and me):
@@ -174,6 +180,20 @@ def parse_marker(path, outs):
 		fit=scorer_era(outs.get(tag)),
 		mem=mem,
 		hd_mem=gate_distance(mem['stable'], mem['err']) if mem else None,
+		# 'fixed'  = headline re-scored aligned; 'unfixed' = an arch-only headline with
+		# no checkpoint to re-score from (its first report seed is still misaligned);
+		# ''       = MEMORY headline (score-only, never misaligned) or pre-15/07 run.
+		# CONNECTIONS is arch-only only in a non-Lamarckian run; every ladder-era
+		# CONNECTIONS headline is Lamarckian (cells present, aligned), so it is
+		# flagged only when the re-score classified it as misaligned and could not
+		# repair it — never on the absence of a record.
+		align=('fixed' if 'headline_holdout_aligned' in d else
+		       ('unfixed' if (stage and (
+		                      (stage.group(1) in ('GRID', 'NEURONS', 'BITS')
+		                       and (d.get('done') or '') >= '2026-07-15'
+		                       and align.get(stage.group(1), {}).get('status', '') != 'already_aligned')
+		                      or align.get(stage.group(1), {}).get('status', '').startswith('refused')))
+		        else '')),
 	)
 
 
@@ -231,7 +251,7 @@ def table(rows, n, show_alt, key='hd'):
 		w.append('  %4d  %9.4f  %s  %-3s  %5.1f%%  %6.2f  %6.2f%s  %-5s  %3s  %-11s  %-10s  %-15s  %s'
 		         % (i, r['hd'], hm, r['fit'], r['stable'], r['err'], r['steady'],
 		            alt if show_alt else '       ', r['h743'], sn, r['stage'][:11], r['date'],
-		            r['cohort'][:15], r['tag'][:52]))
+		            r['cohort'][:15], r['tag'][:52] + (' [unfixed]' if r['align'] == 'unfixed' else '')))
 	return '\n'.join(w)
 
 
@@ -343,6 +363,8 @@ def main():
 	print('  state-neuron count unreadable   : %d  (no .out on disk)' % unknown)
 	print('  h743 keys counted exactly       : %d  (experiments/h743_keys.json)' % sum(r['tag'] in cache for r in rows))
 	print('  h743 fits, exact / bound        : %d / %d' % (sum(r['h743'] == 'fits' for r in rows), sum(r['h743'] == 'fits*' for r in rows)))
+	print('  first-seed alignment (14/09)    : headline re-scored %d, arch-only headline NOT re-scorable %d  (rows marked in the tag column: [unfixed])'
+	      % (sum(r['align'] == 'fixed' for r in rows), sum(r['align'] == 'unfixed' for r in rows)))
 	print('```')
 	print()
 	print('## The 2x2 that is not filled')
