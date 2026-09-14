@@ -154,6 +154,20 @@ WHAT CHANGED
   val_cal 97.63 / 3.11 (1.0 GB) · XGB 96.04 / 4.98 → 96.04 / 4.73 (0.39 MB) · AdaBoost-100 94.94 /
   7.58 (0.05 MB). ~0.7pp F1 above the 28/04 merged read; Acc 99.5-99.8 is the 2.4%-benign base-rate
   artifact. No Protocol-v2 WNN 46M row exists yet (IDS-6); the legacy 2-way rows are not like-for-like.
+* **WHY THE RAID-2026 TABLES DISAGREE WITH THE ROWS ABOVE (13/09/2026 audit, Plane IDS-14).**
+  (1) 46M "RF (ours) 92.64/13.48, XGB 91.67/14.80" = the 23/04 run on bencorn's re-merge
+  (`canonical-neto`, 45.0M rows, 39 features, fabricated Time_To_Live; logs/canonical_baselines_
+  20260423T023819Z.log). The Kaggle/Neto copy (46,686,580 rows, 46 features) reads 96.98/4.24 and
+  95.28/5.98 on 28/04 with the OLD 19/20 features and 97.63/3.57, 96.04/4.98 today: the DATASET COPY
+  is +4.3pp/−9pp FPR, the feature list +0.65pp, calibration FPR-only. Neto's own rows (RF 96.53,
+  Ada 95.63) agree with the Kaggle copy. (2) 1.3M subsample "RF 85.53/25.18, XGB 84.13/28.34" = the
+  bencorn 1.07M/268K mirror (13/20 canonical features); reproduced today raw 83.46/29.62, 83.08/29.43;
+  on neto-subsample thermo 88.46/19.98 · raw 95.53/7.38. (3) UNSW temporal "RF 86.41/25.22" = 2-way
+  test at 0.5; temporal_3way TEST at 0.5 is 85.95/25.82 (partition/encoder noise); the +6pp is
+  VAL-fitted calibration the paper never gave the trees (Elkan 2001; Sheng & Ling 2006; Lipton et
+  al. 2014; sklearn TunedThresholdClassifierCV) — legitimate, VAL-only, same rule as the WNN's val_cal;
+  inert on UNSW-random/CICIDS (thr 0.43-0.56, ≤0.3pp) = prior correction, not VAL overfit.
+  Every CIC-IoT row in the next paper comes from the Kaggle/Neto copies; every table pairs modes.
 
 ## 0B. Best individual genome (CEILING, not the claim)
 
