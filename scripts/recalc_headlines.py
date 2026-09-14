@@ -19,6 +19,14 @@ chains' idle gate never sees it), capture the STAGE TABLE / HEADLINE block, and:
 
 Usage:  PYTHONPATH=src/wnn python scripts/recalc_headlines.py [--only TAG ...] [--dry-run]
         [--wait-pid PID]   (start only after that process has exited — GPU courtesy)
+        [--headline-stages GRID NEURONS BITS] [--any-genome]
+
+Two blast radii, two passes. The DEFAULT targets are the REPORTING radius: headlines
+that ARE an arch-only stage's #0 genome (their published number was misaligned). The
+SELECTION radius is wider — the bias only ever DEMOTED an arch-only candidate behind a
+cells-carrying one (MEMORY, Lamarckian CONNECTIONS), so a run whose headline is
+MEMORY#k may have crowned the wrong genome for ANY k. Second pass (14/09/2026, Luiz):
+    --headline-stages MEMORY --any-genome
 """
 from __future__ import annotations
 
@@ -40,7 +48,10 @@ import rescore_first_report_seed as rs  # noqa: E402  (shared recipe rebuild + .
 ARCH_ONLY = ("GRID", "NEURONS", "BITS")
 
 
-def targets(paths: list[str]) -> list[str]:
+def targets(paths: list[str], stages: tuple[str, ...] = ARCH_ONLY,
+            any_genome: bool = False) -> list[str]:
+	"""Markers whose headline is a `stages` genome (#0 only unless `any_genome`),
+	banked since the bug landed, not yet re-selected, with checkpoint + .out."""
 	out = []
 	for p in paths:
 		try:
@@ -48,11 +59,12 @@ def targets(paths: list[str]) -> list[str]:
 		except Exception:
 			continue
 		hs = re.search(r"stage=(\w+) genome=(\S+)", m.get("headline_stage") or "")
-		if not hs or hs.group(1) not in ARCH_ONLY:
+		if not hs or hs.group(1) not in stages:
 			continue
-		if hs.group(2) not in (hs.group(1), hs.group(1) + "#0"):
+		if not any_genome and hs.group(2) not in (hs.group(1), hs.group(1) + "#0"):
 			continue
-		if (m.get("done") or "") < "2026-07-15":
+		done = m.get("done")
+		if not isinstance(done, str) or done < "2026-07-15":
 			continue
 		if "headline_recalc" in m:
 			continue
@@ -210,6 +222,10 @@ def main() -> None:
 	ap.add_argument("--dry-run", action="store_true")
 	ap.add_argument("--wait-pid", type=int, default=None)
 	ap.add_argument("--markers-glob", default=os.path.join(ROOT, "experiments", "*_markers", "*.json"))
+	ap.add_argument("--headline-stages", nargs="+", default=list(ARCH_ONLY),
+	                help="headline stages to re-select (default: the arch-only three)")
+	ap.add_argument("--any-genome", action="store_true",
+	                help="accept headline genome #k for any k, not only #0")
 	pa = ap.parse_args()
 	if pa.wait_pid:
 		while True:
@@ -224,7 +240,7 @@ def main() -> None:
 		want = set(pa.only)
 		paths = [p for p in paths if os.path.basename(p)[:-5] in want]
 	else:
-		paths = targets(paths)
+		paths = targets(paths, tuple(pa.headline_stages), pa.any_genome)
 	def log(s):
 		print(s, flush=True)
 	log(f"{len(paths)} markers to re-select")
