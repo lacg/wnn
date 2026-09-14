@@ -69,6 +69,7 @@ markers with a headline held-out : 237
   state-neuron count unreadable   : 0  (no .out on disk)
   h743 keys counted exactly       : 44  (experiments/h743_keys.json)
   h743 fits, exact / bound        : 27 / 49
+  first-seed alignment (14/09)    : headline re-scored 10, arch-only headline NOT re-scorable 16  (rows marked in the tag column: [unfixed])
 ```
 
 ## The 2x2 that is not filled
@@ -153,8 +154,8 @@ moved the ceiling, with the caveat that no run has ever changed only that one fl
     21     0.1271     0.1271  CRN   99.0%    1.65    1.35  0.351  fits     0  CONNECTIONS  2026-09-07  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_mut1ta
     22     0.1299     0.1299  CRN   99.0%    1.69    1.06  0.237  fits     0  MEMORY       2026-09-12  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_hd
     23     0.1303     0.1509  CRN   98.8%    1.66    1.16  0.341  fits     0  CONNECTIONS  2026-09-10  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_ls2
-    24     0.1349     0.1232  CRN   98.6%    1.69    1.32  0.351  1.2x     0  MEMORY       2026-09-04  sweepladder      SL_C_b28n256_cf21_brushless_L4C_g10_s31337003
-    25     0.1365     0.1278  CRN   98.2%    1.64    1.01  0.337  2.6x?    0  CONNECTIONS  2026-09-05  translationab    TAB_on_b32n256_cf21_brushless_L4C_s31337003
+    24     0.1317     0.1047  CRN   98.2%    1.57    1.21  0.326  fits     0  GRID         2026-09-12  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_l090_l
+    25     0.1331     0.1285  CRN   98.8%    1.70    1.23  1.599  fits     0  GRID         2026-09-08  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_leak09
 ```
 
 ## Attitude-only — a DIFFERENT task, never a comparator
@@ -188,7 +189,7 @@ moved the ceiling, with the caveat that no run has ever changed only that one fl
      2     0.0569     0.0569  rot  100.0%    0.82    0.47         —        4  MEMORY       2026-08-12  sn_state         S1_lqi_sn4_cf21_brushless_L4C_s31337004
      3     0.0581     0.0633  rot   99.8%    0.80    0.54         —        4  MEMORY       2026-08-11  sn_state         S1_lqi_sn4_cf21_brushless_L4C_s31337002
      4     0.0590     0.0590  rot  100.0%    0.85    0.56         —        8  MEMORY       2026-08-11  sn_state         S1_lqi_sn8_cf21_brushless_L4C_s31337002
-     5     0.0597     0.0618  rot  100.0%    0.86    0.31         —        0  NEURONS      2026-08-09  alphabet_probe   ALP_lqi_L64_cf21_brushless_L4C_s31337002
+     5     0.0597     0.0618  rot  100.0%    0.86    0.31         —        0  NEURONS      2026-08-09  alphabet_probe   ALP_lqi_L64_cf21_brushless_L4C_s31337002 [unfixed]
      6     0.0597     0.0653  rot  100.0%    0.86    0.47         —        8  MEMORY       2026-08-12  sn_state         S1_lqi_sn8_cf21_brushless_L4C_s31337004
      7     0.0611     0.0639  rot  100.0%    0.88    0.36         —        0  MEMORY       2026-08-10  e1_coverage      E1_lqi_c30_refitoff_cf21_brushless_L4C_s31337003
      8     0.0611     0.0625  rot  100.0%    0.88    0.35         —        0  NEURONS      2026-08-10  e1_coverage      E1_lqi_c30_refiton_cf21_brushless_L4C_s31337004
@@ -197,8 +198,8 @@ moved the ceiling, with the caveat that no run has ever changed only that one fl
     11     0.0618     0.0703  rot  100.0%    0.89    0.48         —        4  MEMORY       2026-08-11  sn_state         S1_lqi_sn4_cf21_brushless_L4C_s31337003
     12     0.0667     0.0667  rot  100.0%    0.96    0.42         —        0  MEMORY       2026-08-10  alphabet_probe   ALP2_lqi_L64_cf21_brushless_L4C_s31337002
     13     0.0674     0.0740  rot  100.0%    0.97    0.51         —        0  NEURONS      2026-08-10  e1_coverage      E1_lqi_c30_refiton_cf21_brushless_L4C_s31337002
-    14     0.0708     0.0701  rot  100.0%    1.02    0.63         —        0  NEURONS      2026-08-10  e1_coverage      E1_lqi_c30_refitoff_cf21_brushless_L4C_s31337002
-    15     0.0708     0.0701  rot  100.0%    1.02    0.63         —        0  NEURONS      2026-08-10  outerq_sweep     OQ_lqi_c30_cf21_brushless_L4C_s31337002
+    14     0.0708     0.0701  rot  100.0%    1.02    0.63         —        0  NEURONS      2026-08-10  e1_coverage      E1_lqi_c30_refitoff_cf21_brushless_L4C_s31337002 [unfixed]
+    15     0.0708     0.0701  rot  100.0%    1.02    0.63         —        0  NEURONS      2026-08-10  outerq_sweep     OQ_lqi_c30_cf21_brushless_L4C_s31337002 [unfixed]
 ```
 
 ## Same rule for everyone — ranked on the MEMORY stage (altitude regimen)
@@ -215,23 +216,23 @@ same-rule rank: a large value means that row owes its placing to the draw.
      2     0.0960  CRN   99.6%    1.31    0.88  0.449  3.8x      0.1064     +6  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_bd
      3     0.1000  CRN  100.0%    1.44    1.00  0.473  fits      0.1000     +1  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_l090_l
      4     0.1001  CRN   99.6%    1.37    0.86  0.401  1.0x      0.1001     +1  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_ls2
-     5     0.1002  CRN   98.6%    1.19    0.76  0.440  3.5x      0.2369    +56  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_bd
+     5     0.1002  CRN   98.6%    1.19    0.76  0.440  3.5x      0.1870    +39  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_bd
      6     0.1029  CRN   99.6%    1.41    0.85  0.300  fits      0.1029     +1  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_crn
      7     0.1036  CRN   99.6%    1.42    0.96  0.195  2.0x      0.1096     +2  TAB_on_b32n256_cf21_brushless_L4C_s31337005
-     8     0.1047  CRN   99.4%    1.40    1.03  0.494  fits      0.1446    +23  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_l090_l
+     8     0.1047  CRN   99.4%    1.40    1.03  0.494  fits      0.1317    +16  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_l090_l
      9     0.1093  CRN   99.2%    1.43    0.99  0.436  fits      0.0986     -7  SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_leak09
     10     0.1099  CRN   99.6%    1.51    0.95  0.463  fits      0.1099     +0  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_leak09
     11     0.1104  CRN  100.0%    1.59    1.22  0.626  fits      0.1104     +0  LKR_l090_b32n64_cf21_brushless_L4C_g10_s31337002
-    12     0.1122  CRN   99.8%    1.58    1.14  0.394  2.5x      0.1442    +18  TAB_on_b32n256_cf21_brushless_L4C_s31337002
+    12     0.1122  CRN   99.8%    1.58    1.14  0.394  2.5x      0.1442    +22  TAB_on_b32n256_cf21_brushless_L4C_s31337002
     13     0.1129  rot   99.8%    1.59    1.13  0.394  1.7x      0.1129     -1  SL_C_b32n256_cf21_brushless_L4C_g10_s31337002
     14     0.1147  CRN   99.6%    1.58    1.11  0.349  fits      0.1232     +3  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005
     15     0.1149  CRN   99.2%    1.51    0.95  0.314  fits      0.1149     -2  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_mut1ta
-    16     0.1163  CRN   99.2%    1.53    1.12  0.237  1.3x      0.1472    +18  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_ls4
+    16     0.1163  CRN   99.2%    1.53    1.12  0.237  1.3x      0.1472    +20  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_ls4
     17     0.1181  CRN   99.0%    1.52    1.02  0.538  fits      0.1181     -2  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_hd
     18     0.1214  CRN   99.4%    1.64    1.07  0.294  fits      0.1950    +29  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_hd
-    19     0.1221  CRN   99.4%    1.65    1.24  0.331  fits      0.1664    +21  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_hd
+    19     0.1221  CRN   99.4%    1.65    1.24  0.331  fits      0.1664    +22  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_hd
     20     0.1227  CRN   98.8%    1.55    1.03  0.372  fits      0.0988    -17  SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_ls2
-    21     0.1232  CRN   99.2%    1.63    1.21  0.317  1.2x      0.1349     +3  SL_C_b28n256_cf21_brushless_L4C_g10_s31337003
+    21     0.1232  CRN   99.2%    1.63    1.21  0.317  1.2x      0.1349     +5  SL_C_b28n256_cf21_brushless_L4C_g10_s31337003
     22     0.1241  CRN   98.8%    1.57    0.95  0.379  2.2x?     0.1167     -8  TAB_on_b32n256_cf21_brushless_L4C_s31337004
     23     0.1253  CRN   99.2%    1.66    1.13  0.261  fits      0.1211     -7  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_ls2
     24     0.1271  CRN   99.0%    1.65    1.35  0.351  fits      0.1271     -4  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003
@@ -277,17 +278,17 @@ selection draw is visible when the two disagree.
     rot  same-rule 0.2358  ( 94.6% /  2.40° /  2.14°)   gate-dist 0.1972  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
     Δ same-rule (CRN − rot) -0.1210   Δ gate-dist -0.0823   AGREE
   b24 n256 s31337002
-    CRN  same-rule 0.1047  ( 99.4% /  1.40° /  1.03°)   gate-dist 0.1446  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
+    CRN  same-rule 0.1047  ( 99.4% /  1.40° /  1.03°)   gate-dist 0.1317  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
     rot  same-rule 0.2358  ( 94.6% /  2.40° /  2.14°)   gate-dist 0.1972  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
-    Δ same-rule (CRN − rot) -0.1311   Δ gate-dist -0.0526   AGREE
+    Δ same-rule (CRN − rot) -0.1311   Δ gate-dist -0.0656   AGREE
   b24 n256 s31337002
     CRN  same-rule 0.1664  ( 98.2% /  2.07° /  1.62°)   gate-dist 0.1476  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
     rot  same-rule 0.2358  ( 94.6% /  2.40° /  2.14°)   gate-dist 0.1972  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
     Δ same-rule (CRN − rot) -0.0695   Δ gate-dist -0.0496   AGREE
   b24 n256 s31337002
-    CRN  same-rule 0.4017  ( 88.0% /  3.49° /  3.27°)   gate-dist 0.4048  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
+    CRN  same-rule 0.4017  ( 88.0% /  3.49° /  3.27°)   gate-dist 0.3647  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
     rot  same-rule 0.2358  ( 94.6% /  2.40° /  2.14°)   gate-dist 0.1972  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
-    Δ same-rule (CRN − rot) +0.1658   Δ gate-dist +0.2076   AGREE
+    Δ same-rule (CRN − rot) +0.1658   Δ gate-dist +0.1675   AGREE
   b24 n256 s31337002
     CRN  same-rule 0.0932  ( 99.6% /  1.27° /  0.80°)   gate-dist 0.0932  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
     rot  same-rule 0.2358  ( 94.6% /  2.40° /  2.14°)   gate-dist 0.1972  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
@@ -314,24 +315,24 @@ selection draw is visible when the two disagree.
     Δ same-rule (CRN − rot) -0.0270   Δ gate-dist +0.0113   DISAGREE — the headline gap is a selection draw
   b32 n64 s31337002
     CRN  same-rule 0.1104  (100.0% /  1.59° /  1.22°)   gate-dist 0.1104  LKR_l090_b32n64_cf21_brushless_L4C_g10_s3133
-    rot  same-rule 1.0042  ( 63.0% /  6.17° /  6.60°)   gate-dist 0.6067  SL_C_b32n64_cf21_brushless_L4C_g20_s31337002
-    Δ same-rule (CRN − rot) -0.8938   Δ gate-dist -0.4963   AGREE
+    rot  same-rule 1.0042  ( 63.0% /  6.17° /  6.60°)   gate-dist 1.4097  SL_C_b32n64_cf21_brushless_L4C_g20_s31337002
+    Δ same-rule (CRN − rot) -0.8938   Δ gate-dist -1.2993   AGREE
   b32 n64 s31337002
     CRN  same-rule 0.1104  (100.0% /  1.59° /  1.22°)   gate-dist 0.1104  LKR_l090_b32n64_cf21_brushless_L4C_g10_s3133
     rot  same-rule 0.3368  ( 90.0% /  2.96° /  2.73°)   gate-dist 0.2240  SL_C_b32n64_cf21_brushless_L4C_g10_s31337002
     Δ same-rule (CRN − rot) -0.2264   Δ gate-dist -0.1135   AGREE
   b32 n64 s31337002
     CRN  same-rule 0.2223  ( 96.6% /  2.58° /  2.12°)   gate-dist 0.1872  LKR_l080_b32n64_cf21_brushless_L4C_g10_s3133
-    rot  same-rule 1.0042  ( 63.0% /  6.17° /  6.60°)   gate-dist 0.6067  SL_C_b32n64_cf21_brushless_L4C_g20_s31337002
-    Δ same-rule (CRN − rot) -0.7819   Δ gate-dist -0.4195   AGREE
+    rot  same-rule 1.0042  ( 63.0% /  6.17° /  6.60°)   gate-dist 1.4097  SL_C_b32n64_cf21_brushless_L4C_g20_s31337002
+    Δ same-rule (CRN − rot) -0.7819   Δ gate-dist -1.2224   AGREE
   b32 n64 s31337002
     CRN  same-rule 0.2223  ( 96.6% /  2.58° /  2.12°)   gate-dist 0.1872  LKR_l080_b32n64_cf21_brushless_L4C_g10_s3133
     rot  same-rule 0.3368  ( 90.0% /  2.96° /  2.73°)   gate-dist 0.2240  SL_C_b32n64_cf21_brushless_L4C_g10_s31337002
     Δ same-rule (CRN − rot) -0.1146   Δ gate-dist -0.0367   AGREE
   b32 n64 s31337002
     CRN  same-rule 0.2792  ( 92.8% /  2.68° /  2.29°)   gate-dist 0.2792  SL_C_b32n64_cf21_brushless_L4C_g10_s31337002
-    rot  same-rule 1.0042  ( 63.0% /  6.17° /  6.60°)   gate-dist 0.6067  SL_C_b32n64_cf21_brushless_L4C_g20_s31337002
-    Δ same-rule (CRN − rot) -0.7250   Δ gate-dist -0.3275   AGREE
+    rot  same-rule 1.0042  ( 63.0% /  6.17° /  6.60°)   gate-dist 1.4097  SL_C_b32n64_cf21_brushless_L4C_g20_s31337002
+    Δ same-rule (CRN − rot) -0.7250   Δ gate-dist -1.1304   AGREE
   b32 n64 s31337002
     CRN  same-rule 0.2792  ( 92.8% /  2.68° /  2.29°)   gate-dist 0.2792  SL_C_b32n64_cf21_brushless_L4C_g10_s31337002
     rot  same-rule 0.3368  ( 90.0% /  2.96° /  2.73°)   gate-dist 0.2240  SL_C_b32n64_cf21_brushless_L4C_g10_s31337002
@@ -344,7 +345,7 @@ Wider than most effects any sweep has measured. An n=1 point sits inside this ba
 so a "new best" needs the paired same-seed comparator, not the leaderboard top.
 
 ```
-  TAB_on_b32n256_cf21_brushless_L4C              n=5   hd 0.1096-0.1555 (mean 0.1325)   stable 97.6-99.4%
+  TAB_on_b32n256_cf21_brushless_L4C              n=5   hd 0.1096-0.1442 (mean 0.1286)   stable 97.6-99.4%
   SL_C_b24n256_cf21_brushless_L4C_g10            n=4   hd 0.1232-0.1972 (mean 0.1467)   stable 95.8-99.2%
   GWS_C10noJM_cf21_brushless_L4C                 n=5   hd 0.1578-0.3994 (mean 0.2637)   stable 85.4-97.4%
   GWS_S16noJM_cf21_brushless_L4C                 n=5   hd 0.1717-0.3071 (mean 0.2390)   stable 90.8-98.0%
