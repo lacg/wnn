@@ -2591,6 +2591,83 @@ impl AttitudeSim
 /// the address of the last rollout step of the round). Same shape as DOB Fix A's
 /// applied-pwm stream: fail LOUDLY when a controller that has the features on
 /// replays without it.
+/// Per-fold, per-output-neuron address → (count FALSE, count TRUE) tallies for the
+/// offline connectivity probe. Fold = episode % folds; held-out conditional
+/// entropy trains on the other folds' tallies and scores this fold's.
+#[derive(Clone, Debug, Default)]
+pub struct OfflineTapCounts
+{
+	pub folds: usize,
+	pub neurons: usize,
+	/// [fold][neuron] → address → (n_false, n_true)
+	pub counts: Vec<Vec<std::collections::HashMap<u64, (u32, u32)>>>,
+}
+
+impl OfflineTapCounts
+{
+	pub fn new(folds: usize, neurons: usize) -> Self
+	{
+		OfflineTapCounts {
+			folds,
+			neurons,
+			counts: (0..folds).map(|_| (0..neurons).map(|_| std::collections::HashMap::new()).collect()).collect(),
+		}
+	}
+
+	#[inline]
+	pub fn add(&mut self, fold: usize, neuron: usize, addr: u64, target: bool)
+	{
+		let e = self.counts[fold][neuron].entry(addr).or_insert((0, 0));
+		if target { e.1 += 1 } else { e.0 += 1 }
+	}
+
+	/// Per neuron: (held-out conditional entropy in bits/record, label entropy H(y) of the
+	/// same held-out records, records). Each fold is scored by the lookup table the OTHER
+	/// folds build: p(y=1|a) = (n1 + alpha·q) / (n0 + n1 + alpha), q = the training folds'
+	/// TRUE rate (an unseen address falls back to q). Folds are weighted by their records.
+	pub fn held_out_entropy(&self, alpha: f64) -> Vec<(f64, f64, u64)>
+	{
+		let mut out = Vec::with_capacity(self.neurons);
+		for n in 0..self.neurons
+		{
+			let (mut ce_sum, mut h_sum, mut total) = (0.0_f64, 0.0_f64, 0_u64);
+			for test in 0..self.folds
+			{
+				// training prior over the other folds
+				let (mut t0, mut t1) = (0_u64, 0_u64);
+				for f in 0..self.folds
+				{
+					if f == test { continue; }
+					for &(a, b) in self.counts[f][n].values() { t0 += a as u64; t1 += b as u64; }
+				}
+				if t0 + t1 == 0 { continue; }
+				let q = (t1 as f64 + 0.5) / ((t0 + t1) as f64 + 1.0);
+				let (mut e0, mut e1) = (0_u64, 0_u64);
+				for (&addr, &(c0, c1)) in self.counts[test][n].iter()
+				{
+					let (mut n0, mut n1) = (0_u64, 0_u64);
+					for f in 0..self.folds
+					{
+						if f == test { continue; }
+						if let Some(&(a, b)) = self.counts[f][n].get(&addr) { n0 += a as u64; n1 += b as u64; }
+					}
+					let p1 = (n1 as f64 + alpha * q) / ((n0 + n1) as f64 + alpha);
+					let p1 = p1.clamp(1e-9, 1.0 - 1e-9);
+					ce_sum -= c1 as f64 * p1.log2() + c0 as f64 * (1.0 - p1).log2();
+					e0 += c0 as u64; e1 += c1 as u64;
+				}
+				let m = e0 + e1;
+				if m == 0 { continue; }
+				let r = (e1 as f64 / m as f64).clamp(1e-9, 1.0 - 1e-9);
+				h_sum -= m as f64 * (r * r.log2() + (1.0 - r) * (1.0 - r).log2());
+				total += m;
+			}
+			if total == 0 { out.push((0.0, 0.0, 0)); } else { out.push((ce_sum / total as f64, h_sum / total as f64, total)); }
+		}
+		out
+	}
+}
+
 #[pyclass]
 #[derive(Clone, Debug, Default)]
 pub struct ReplayObs
@@ -2948,6 +3025,200 @@ pub struct WnnController
 	// cell_mode::is_stochastic(memory_mode) (QSR/PLN); deterministic modes never
 	// touch these two fields → the QUAD/TERNARY/BINARY parity anchor is untouched.
 	decode_step: u32,
+}
+
+impl WnnController
+{
+	/// The replay's FORWARD roll: encode each step exactly as deploy does (features →
+	/// thermometer frame → K-frame window → state read) and record the per-step
+	/// state-layer and output-layer inputs. Shared by `bptt_train_window` (which
+	/// then commits) and `offline_tap_records` (which only counts address/label
+	/// pairs), so the two can never encode a record differently. Returns None on a
+	/// cooperative cancel. Records exist only at decision steps (action-repeat).
+	pub(crate) fn replay_forward_records(
+		&mut self,
+		gyros: &[[f32; 3]],
+		accels: &[[f32; 3]],
+		targets: &[[f32; 3]],
+		student_pwms: Option<&[[f32; 4]]>,
+		replay_obs: Option<&ReplayObs>,
+		reset_state: bool,
+	) -> Option<(Vec<Vec<bool>>, Vec<Vec<bool>>, Vec<usize>)>
+	{
+		let w = gyros.len();
+		let bpf = self.bits_per_feature;
+		let frame_bits = self.num_features * bpf;
+		let state_bits_in = self.state_neurons;
+		let sensor_window = self.input_window_k * frame_bits;
+		let state_input_len = sensor_window + state_bits_in;
+		// ---- Forward roll, recording per-step inputs ----
+		// reset_state=true: independent window from hover (deployment-consistent
+		// for episode-start windows). false: carry recurrent state across windows
+		// (truncated BPTT within an episode).
+		if reset_state
+		{
+			// Yaw-anchor: bptt trains ONE trajectory → its init yaw is pending_init_yaws[0].
+			let iy = self.pending_init_yaws.first().copied().unwrap_or(0.0);
+			self.reset(iy);
+		}
+		let mut rec_state_input: Vec<Vec<bool>> = Vec::with_capacity(w);
+		let mut rec_out_input: Vec<Vec<bool>> = Vec::with_capacity(w);
+		// Action-repeat: physical step index of each record (records exist only
+		// at decision steps), so the backward commit reads pid_pwms / integral
+		// targets at the right PHYSICAL step. N=1 ⇒ rec_step[d] == d.
+		let mut rec_step: Vec<usize> = Vec::with_capacity(w);
+		// 31/05/2026: cooperative SIGTERM cancellation. Poll at the top of
+		// every per-step iteration in the forward roll. ~1 ns/step Relaxed
+		// atomic load, negligible vs the per-step Rust work (~100 µs-1 ms).
+		// Returns the already-recorded prefix so the caller's bookkeeping
+		// sees consistent state.
+		for t in 0..w
+		{
+			if ram_core::cancel::check_cancel()
+			{
+				return None;
+			}
+			self.apply_replay_obs(replay_obs, t);
+			let feats = self.compute_features(gyros[t], accels[t], targets[t]);
+			// DOB Fix A: compute_features(t) consumed applied[t−1]; now record
+			// applied[t] for the NEXT step — the recorded rollout value, so the
+			// replay's observer input stream is bit-identical to deploy's.
+			// Before the hold-continue: holds re-record the held value (equal),
+			// mirroring live where pwm_applied is unchanged across holds.
+			if let Some(sp) = student_pwms
+			{
+				self.observe_applied(sp[t]);
+			}
+			// Action-repeat hold: tick the accumulators only — no ring push, no
+			// forward, no record (deploy visits NO addresses on hold steps, so
+			// training one would write cells deploy never reads). The persistent
+			// step_counter keeps W-chunked windows episode-aligned (reset_state
+			// zeroes it via reset(); carry-chunks continue it), mirroring step().
+			if self.action_repeat > 1
+			{
+				let hold = self.step_counter % self.action_repeat != 0;
+				self.step_counter += 1;
+				if hold
+				{
+					continue;
+				}
+			}
+			let mut frame = vec![false; frame_bits];
+			for f in 0..self.num_features
+			{
+				let v = feats[f];
+				let row = f * bpf;
+				for b in 0..bpf
+				{
+					frame[row + b] = v >= self.thresholds[row + b];
+				}
+			}
+			if self.input_history.len() == self.input_window_k
+			{
+				self.input_history.pop_front();
+			}
+			self.input_history.push_back(frame.clone());
+
+			let mut in_state = vec![false; state_input_len];
+			let pad = self.input_window_k - self.input_history.len();
+			for (i, fr) in self.input_history.iter().enumerate()
+			{
+				let slot = (pad + i) * frame_bits;
+				in_state[slot..slot + frame_bits].copy_from_slice(fr);
+			}
+			for (n, &v) in self.prev_state.iter().enumerate()
+			{
+				in_state[sensor_window + n] = cell_fire_bit(v, self.memory_mode); // 1-bit side
+			}
+
+			let mut new_state = vec![0u8; self.state_neurons];
+			for n in 0..self.state_neurons
+			{
+				let cs = n * self.state_bits_per_neuron;
+				let ce = cs + self.state_bits_per_neuron;
+				let addr = compute_address_sparse(
+					&in_state,
+					&self.state_connections[cs..ce],
+					self.state_bits_per_neuron,
+				);
+				new_state[n] = self.state_memory.read_cell(n, addr);
+			}
+
+			let in_out = self.build_output_input(&in_state, &frame, &new_state);
+
+			rec_state_input.push(in_state);
+			rec_out_input.push(in_out);
+			rec_step.push(t);
+			self.prev_state = new_state;
+		}
+
+		Some((rec_state_input, rec_out_input, rec_step))
+	}
+
+	/// OFFLINE CONNECTIVITY PROBE (15/09/2026): replay ONE trajectory window and, instead
+	/// of committing, hand every (output neuron, address, target bit) triple to `sink`
+	/// under fold `fold`. Encoding, target and address are the training path's own
+	/// (replay_forward_records / output_target_at / otb / compute_address_sparse), so
+	/// the count is of exactly the cells the trainer would have written. sn=0 only —
+	/// the state layer's addresses depend on the order of commits. Returns records seen.
+	#[allow(clippy::too_many_arguments)]
+	pub(crate) fn offline_tap_records(
+		&mut self,
+		gyros: &[[f32; 3]],
+		accels: &[[f32; 3]],
+		targets: &[[f32; 3]],
+		pid_pwms: &[[f32; 4]],
+		student_pwms: Option<&[[f32; 4]]>,
+		label_base: Option<&[[f32; 4]]>,
+		replay_obs: Option<&ReplayObs>,
+		reset_state: bool,
+		init_yaw: f32,
+		fold: usize,
+		sink: &mut OfflineTapCounts,
+	) -> usize
+	{
+		assert!(self.state_neurons == 0, "offline_tap_records: sn=0 only");
+		if self.dagger_label_delta
+		{
+			assert!(
+				label_base.map(|b| b.len() == gyros.len()).unwrap_or(false),
+				"offline_tap_records: dagger_label_delta is on but label_base is missing or misaligned"
+			);
+		}
+		self.replay_obs_guard(replay_obs, gyros.len(), "offline_tap_records");
+		self.pending_init_yaws = vec![init_yaw];
+		let Some((_rec_state, rec_out, rec_step)) = self.replay_forward_records(
+			gyros, accels, targets, student_pwms, replay_obs, reset_state,
+		) else {
+			return 0;
+		};
+		let levels = self.levels_per_motor;
+		let obpn = self.output_bits_per_neuron;
+		for (d, &t) in rec_step.iter().enumerate()
+		{
+			for m in 0..self.num_motors
+			{
+				let p = self.output_target_at(m, t, pid_pwms, label_base);
+				for i in 0..levels
+				{
+					let n = m * levels + i;
+					let addr = compute_address_sparse(&rec_out[d], &self.output_connections[n * obpn..(n + 1) * obpn], obpn);
+					sink.add(fold, n, addr, self.otb(p, i));
+				}
+			}
+		}
+		rec_step.len()
+	}
+
+	/// Swap the output taps (the CONNECTIONS genome) on a cloned controller — the
+	/// probe scores many tap layouts against one dataset without rebuilding the
+	/// feature/threshold state. Same flat layout as the constructor's.
+	pub(crate) fn set_output_connections_flat(&mut self, conns: Vec<i64>)
+	{
+		assert_eq!(conns.len(), self.output_connections.len(), "set_output_connections_flat: length");
+		self.output_connections = conns;
+	}
+
 }
 
 #[pymethods]
@@ -4110,106 +4381,12 @@ impl WnnController
 		let obpn = self.output_bits_per_neuron;
 		let num_out = self.num_motors * levels;
 
-		// ---- Forward roll, recording per-step inputs ----
-		// reset_state=true: independent window from hover (deployment-consistent
-		// for episode-start windows). false: carry recurrent state across windows
-		// (truncated BPTT within an episode).
-		if reset_state
-		{
-			// Yaw-anchor: bptt trains ONE trajectory → its init yaw is pending_init_yaws[0].
-			let iy = self.pending_init_yaws.first().copied().unwrap_or(0.0);
-			self.reset(iy);
-		}
-		let mut rec_state_input: Vec<Vec<bool>> = Vec::with_capacity(w);
-		let mut rec_out_input: Vec<Vec<bool>> = Vec::with_capacity(w);
-		// Action-repeat: physical step index of each record (records exist only
-		// at decision steps), so the backward commit reads pid_pwms / integral
-		// targets at the right PHYSICAL step. N=1 ⇒ rec_step[d] == d.
-		let mut rec_step: Vec<usize> = Vec::with_capacity(w);
-		// 31/05/2026: cooperative SIGTERM cancellation. Poll at the top of
-		// every per-step iteration in the forward roll. ~1 ns/step Relaxed
-		// atomic load, negligible vs the per-step Rust work (~100 µs-1 ms).
-		// Returns the already-recorded prefix so the caller's bookkeeping
-		// sees consistent state.
-		for t in 0..w
-		{
-			if ram_core::cancel::check_cancel()
-			{
-				return (0, 0);
-			}
-			self.apply_replay_obs(replay_obs.as_ref(), t);
-			let feats = self.compute_features(gyros[t], accels[t], targets[t]);
-			// DOB Fix A: compute_features(t) consumed applied[t−1]; now record
-			// applied[t] for the NEXT step — the recorded rollout value, so the
-			// replay's observer input stream is bit-identical to deploy's.
-			// Before the hold-continue: holds re-record the held value (equal),
-			// mirroring live where pwm_applied is unchanged across holds.
-			if let Some(sp) = &student_pwms
-			{
-				self.observe_applied(sp[t]);
-			}
-			// Action-repeat hold: tick the accumulators only — no ring push, no
-			// forward, no record (deploy visits NO addresses on hold steps, so
-			// training one would write cells deploy never reads). The persistent
-			// step_counter keeps W-chunked windows episode-aligned (reset_state
-			// zeroes it via reset(); carry-chunks continue it), mirroring step().
-			if self.action_repeat > 1
-			{
-				let hold = self.step_counter % self.action_repeat != 0;
-				self.step_counter += 1;
-				if hold
-				{
-					continue;
-				}
-			}
-			let mut frame = vec![false; frame_bits];
-			for f in 0..self.num_features
-			{
-				let v = feats[f];
-				let row = f * bpf;
-				for b in 0..bpf
-				{
-					frame[row + b] = v >= self.thresholds[row + b];
-				}
-			}
-			if self.input_history.len() == self.input_window_k
-			{
-				self.input_history.pop_front();
-			}
-			self.input_history.push_back(frame.clone());
-
-			let mut in_state = vec![false; state_input_len];
-			let pad = self.input_window_k - self.input_history.len();
-			for (i, fr) in self.input_history.iter().enumerate()
-			{
-				let slot = (pad + i) * frame_bits;
-				in_state[slot..slot + frame_bits].copy_from_slice(fr);
-			}
-			for (n, &v) in self.prev_state.iter().enumerate()
-			{
-				in_state[sensor_window + n] = cell_fire_bit(v, self.memory_mode); // 1-bit side
-			}
-
-			let mut new_state = vec![0u8; self.state_neurons];
-			for n in 0..self.state_neurons
-			{
-				let cs = n * self.state_bits_per_neuron;
-				let ce = cs + self.state_bits_per_neuron;
-				let addr = compute_address_sparse(
-					&in_state,
-					&self.state_connections[cs..ce],
-					self.state_bits_per_neuron,
-				);
-				new_state[n] = self.state_memory.read_cell(n, addr);
-			}
-
-			let in_out = self.build_output_input(&in_state, &frame, &new_state);
-
-			rec_state_input.push(in_state);
-			rec_out_input.push(in_out);
-			rec_step.push(t);
-			self.prev_state = new_state;
-		}
+		// ---- Forward roll, recording per-step inputs (shared with the offline tap probe) ----
+		let Some((rec_state_input, rec_out_input, rec_step)) = self.replay_forward_records(
+			&gyros, &accels, &targets, student_pwms.as_deref(), replay_obs.as_ref(), reset_state,
+		) else {
+			return (0, 0);
+		};
 
 		// ---- Backward pass + commit ----
 		// Action-repeat: the walk is over RECORDS (= decision steps); d indexes

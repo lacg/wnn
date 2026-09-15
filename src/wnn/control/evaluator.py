@@ -1590,9 +1590,11 @@ class ControllerEvaluator:
 			trained.append((controller, stats))
 		return trained
 
-	def _train_genome_rust(self, spec, state_conns, output_conns, init_s, init_o, seed):
-		"""Rust dagger_train_inplace fast-path. Returns (WnnController, stats_dict)
-		matching the Python reward_gated_train return shape."""
+	def packed_train_config(self):
+		"""The Rust RewardGatedConfigPacked for THIS evaluator's rg_config — the one
+		object the trainer (dagger_train_inplace) and the offline connectivity probe
+		(offline_tap_probe) both roll out with, so the probe's dataset is the
+		trainer's own episode distribution. Split out of _train_genome_rust 15/09/2026."""
 		from wnn.control import _accel as ra
 		# Map the Python RewardGatedConfig → RewardGatedConfigPacked. String
 		# enums become integers (0=improvement/pid, 1=quantile/student).
@@ -1648,6 +1650,13 @@ class ControllerEvaluator:
 			# (the DOB divergence — the Rust side asserts on the mismatch).
 			**_stage1_train_kwargs(rg.episode_config),
 		)
+		return cfg
+
+	def controller_for(self, spec, state_conns, output_conns, init_s=None, init_o=None):
+		"""Build the Rust WnnController for one genome (spec + taps + optional
+		warm-start cells) exactly as training does. Shared by _train_genome_rust
+		and the offline connectivity probe."""
+		from wnn.control import _accel as ra
 		controller = ra.WnnController(
 			num_motors=spec.num_motors, levels_per_motor=spec.levels_per_motor,
 			bits_per_feature=spec.bits_per_feature, input_window_k=spec.input_window_k,
@@ -1682,8 +1691,19 @@ class ControllerEvaluator:
 		# write, 2-bit mask, bounds check — unlike restore_cells, which uses the
 		# raw import and would store default-valued cells the write path drops.
 		controller.load_cells(init_s or [], init_o or [])
-		target_rpy = list(rg.target_rpy) if rg.target_rpy is not None else [0.0, 0.0, 0.0]
-		ts = ra.dagger_train_inplace(controller, cfg, target_rpy, int(seed))
+		return controller
+
+	def target_rpy(self) -> list:
+		rg = self.rg_config
+		return list(rg.target_rpy) if rg.target_rpy is not None else [0.0, 0.0, 0.0]
+
+	def _train_genome_rust(self, spec, state_conns, output_conns, init_s, init_o, seed):
+		"""Rust dagger_train_inplace fast-path. Returns (WnnController, stats_dict)
+		matching the Python reward_gated_train return shape."""
+		from wnn.control import _accel as ra
+		cfg = self.packed_train_config()
+		controller = self.controller_for(spec, state_conns, output_conns, init_s, init_o)
+		ts = ra.dagger_train_inplace(controller, cfg, self.target_rpy(), int(seed))
 		# Re-pack stats to match Python reward_gated_train's dict shape (the
 		# fields ControllerEvaluator + downstream actually read).
 		stats = {

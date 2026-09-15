@@ -878,6 +878,7 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()>
 	m.add_class::<dagger_train::RewardGatedConfigPacked>()?;
 	m.add_class::<dagger_train::TrainStats>()?;
 	m.add_function(wrap_pyfunction!(dagger_train::dagger_train_inplace, m)?)?;
+	m.add_function(wrap_pyfunction!(dagger_train::offline_tap_probe, m)?)?;
 	m.add_function(wrap_pyfunction!(
 		dagger_train::dagger_train_batch_inplace,
 		m

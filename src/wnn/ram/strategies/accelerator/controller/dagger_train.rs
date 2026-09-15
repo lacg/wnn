@@ -752,6 +752,7 @@ pub struct TrainStats
 // ============================================================================
 
 use crate::controller::{
+	OfflineTapCounts,
 	compute_reward, monotonicity_violations, yaw_from_quat_rs, AttitudeSim, ReplayObs,
 	WnnController,
 };
@@ -2471,6 +2472,88 @@ pub fn dagger_train_inplace(
 ) -> TrainStats
 {
 	dagger_train_inplace_rs(controller, &cfg, target_rpy, seed)
+}
+
+/// OFFLINE CONNECTIVITY VALIDITY PROBE (15/09/2026, Luiz: true-delta label, held-out
+/// conditional entropy). ONE dataset, MANY tap layouts:
+///   1. roll out `episodes` DAgger episodes with `controller` (the elite, cells loaded)
+///      exactly as the trainer does (rollout_and_label_rs: same sim, same teacher, same
+///      per-episode draws; tilt = the LAST curriculum round's, i.e. full), fold = ep % folds;
+///   2. for every tap layout in `taps_per_genome`, clone the elite's feature/threshold state,
+///      swap the output taps, replay every episode through the trainer's own forward pass and
+///      tally (neuron, address, target-bit) per fold — nothing is trained or committed;
+///   3. return per genome, per output neuron: (held-out conditional entropy bits/record,
+///      label entropy H(y) bits/record, records), plus the dataset's (episodes, records,
+///      mean reward, mean err rad, diverged count).
+/// The proxy = mean over neurons of column 0; its rank correlation with the genomes'
+/// rollout fitness is the validity read. sn=0 only.
+#[pyfunction]
+#[pyo3(signature = (controller, taps_per_genome, cfg, target_rpy = [0.0, 0.0, 0.0], seed = 0, episodes = 200, folds = 5, alpha = 1.0, tilt_deg = None))]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn offline_tap_probe(
+	controller: &mut WnnController,
+	taps_per_genome: Vec<Vec<i64>>,
+	cfg: RewardGatedConfigPacked,
+	target_rpy: [f32; 3],
+	seed: u64,
+	episodes: usize,
+	folds: usize,
+	alpha: f64,
+	tilt_deg: Option<f64>,
+) -> (Vec<Vec<(f64, f64, u64)>>, (usize, usize, f64, f64, usize))
+{
+	assert!(controller.gpu_dims().2 == 0, "offline_tap_probe: sn=0 only");
+	assert!(folds >= 2, "offline_tap_probe: folds >= 2");
+	let mut rng = SmallRng::seed_from_u64(seed);
+	let af = AirframeRs::from_cfg(&cfg);
+	let mut teachers = TeacherBank::new(af);
+	let mut sim = sim_default(&cfg);
+	// The trainer's own episode distribution: episodes spread over the curriculum
+	// rounds (easy_tilt -> full_tilt, e.g. 8 -> 30 deg) with the round's teacher —
+	// what the DAgger dataset actually contains. `tilt_deg` overrides the tilt
+	// (e.g. the scorer's 5 deg) for a regime-matched second read.
+	let mut trajs: Vec<TrajectoryRs> = Vec::with_capacity(episodes);
+	for ep in 0..episodes
+	{
+		let it = (ep * cfg.num_rounds.max(1)) / episodes.max(1);
+		let tilt_rad = tilt_deg.map(|d| d.to_radians()).unwrap_or_else(|| cfg.round_tilt_rad(it));
+		let teacher = teachers.get_mut(cfg.teacher_id_for(it, ep));
+		trajs.push(rollout_and_label_rs(controller, teacher, &mut sim, &cfg, tilt_rad, &mut rng, target_rpy));
+	}
+	let records: usize = trajs.iter().map(|t| t.steps).sum();
+	let mean_reward = trajs.iter().map(|t| t.cumulative_reward).sum::<f64>() / episodes.max(1) as f64;
+	let mean_err = trajs.iter().map(|t| t.mean_attitude_error_rad).sum::<f64>() / episodes.max(1) as f64;
+	let diverged = trajs.iter().filter(|t| t.diverged).count();
+	let neurons = controller.gpu_dims().0 * controller.gpu_dims().1;
+	// One cloned controller per layout, built on the main thread; the replay only
+	// mutates each clone's own encoder state.
+	let mut clones: Vec<WnnController> = taps_per_genome
+		.into_iter()
+		.map(|taps| {
+			let mut c = controller.clone();
+			c.set_output_connections_flat(taps);
+			c
+		})
+		.collect();
+	use rayon::prelude::*;
+	let per_genome: Vec<Vec<(f64, f64, u64)>> = clones
+		.par_iter_mut()
+		.map(|c| {
+			let mut sink = OfflineTapCounts::new(folds, neurons);
+			for (ep, t) in trajs.iter().enumerate()
+			{
+				let ro = ReplayObs::slice(&t.vert_obs, &t.horiz_obs, &t.pwm_dev, 0, t.steps);
+				let sp = if t.student_pwms.len() >= t.steps { Some(&t.student_pwms[..t.steps]) } else { None };
+				let lb = if t.label_base.len() >= t.steps { Some(&t.label_base[..t.steps]) } else { None };
+				c.offline_tap_records(
+					&t.gyros[..t.steps], &t.accels[..t.steps], &t.targets[..t.steps], &t.pid_pwms[..t.steps],
+					sp, lb, ro.as_ref(), true, t.init_yaw, ep % folds, &mut sink,
+				);
+			}
+			sink.held_out_entropy(alpha)
+		})
+		.collect();
+	(per_genome, (episodes, records, mean_reward, mean_err, diverged))
 }
 
 /// B.5 — Batched dagger training across N genomes using Rayon par_iter.
