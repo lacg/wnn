@@ -11,8 +11,10 @@ chain is live, which arms have landed, the current results, what counts as an
 escalation today. Refresh the STATE block here whenever the programme moves, and
 re-arm the cron from it.
 
-**Currently armed:** job `82aa3883`, schedule `13,43 * * * *` (off the :00/:30 marks on purpose).
-Re-armed 15/09/2026 10:20 EDT after the macOS 27 reboot (CLI restart). Previous: `5ed39033` (13/09).
+**Currently armed:** job `7f271521`, schedule `13,43 * * * *` (off the :00/:30 marks on purpose).
+Re-armed 15/09/2026 16:05 EDT (Luiz: the box is NOT idle while the recalc/probe run — lines 2/3 now
+report those controller-side jobs with progress + ETA; STATE block refreshed for the repair sequence,
+the offline-connectivity probe and the post-repair queue). Previous: `82aa3883` (10:20), `5ed39033` (13/09).
 NOTE 15/09: the armed prompt is the FORMAT + rules + the CURRENT (15/09) STATE block + a pointer to this
 file for the provenance history — no longer the full 75 KB history verbatim. Everything that governs a
 tick every time is in the armed text; the older QUEUE blocks are consulted from this file on demand.
@@ -145,6 +147,23 @@ MISSING VALUES — never invent one, never print 0.000 for "not measured" (a zer
 If NO chain and NO controller are running, say so plainly on lines 2-3 and name what is pending.
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
+
+AS OF 15/09/2026 16:00 EDT (supersedes the 10:15 block below).
+TICK RULE (Luiz 15:5x EDT): NEVER print "box idle" while a controller-side job runs. The marker-repair
+sequence (recalc_headlines.py passes, pid 66162) and the offline-connectivity validity probe
+(offline_connectivity_probe.py, worktree /Users/lacg/wnn-offline, isolated wheel) take the GPU/CPU —
+line 2 names them with progress + ETA, line 3 carries the current pass's changed/unchanged/refused
+tally and the probe's latest milestone. "box idle" is reserved for nothing controller-side at all.
+FLYING: (1) repair sequence — rescore 3rd pass done → arch-only done (14 unch / 1 changed / 1 refused)
+→ MEMORY pass 53 (since ~14:55 EDT, ~10 min/marker) → CONNECTIONS 75; ETA ~14:00-18:00 EDT 16/09;
+then leaderboard precedence recalc > aligned > holdout (step 5). (2) offline probe — launched 15:35
+EDT (scratchpad/probe_run.sh|.log): population = _bd s2 CONNECTIONS ckpt (57), dataset A = 200 DAgger
+episodes over the 8→30° curriculum (400k records, 5 folds), proxy = mean held-out H(y|a) (elite 0.7357,
+pop 0.7321-0.7389, H(y) 0.905), truth = evaluate_batch ZRank fitness; then dataset B at the scorer's
+5°. Verdict = Spearman: rho >= 0.7 build · <= 0.4 CLOSED · between report. Output
+experiments/offline_probe/PROBE_*.json.
+QUEUED: scripts/post_repair_queue.sh (pid 28596, PPID 1) → stage D `_pipeN` ×4 → arm B label-only
+`_dl` ×4 → STOP (both via scripts/seed_arm_chain.sh; CTRL-7 / CTRL-9 on the Plane board).
 
 QUEUE AS OF 15/09/2026 10:15 EDT (POST-REBOOT, macOS 27; BOX IDLE BY DESIGN — the queue DRAINED;
 supersedes the 13/09 15:50 block).
