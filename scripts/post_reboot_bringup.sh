@@ -74,7 +74,8 @@ fi
 # ---- 6. marker repair, sequential (all idempotent: done rows are skipped) ---
 # second re-score pass (retries the rows the first pass refused) -> stage-select
 # recalc for arch-only #0 headlines -> MEMORY-headline runs -> CONNECTIONS-headline runs.
-if up "recalc_headline[s].py" || up "rescore_first_report_see[d].py"; then log "a repair job is already running — not relaunching the sequence"; else
+if [ "${SKIP_REPAIR:-0}" = "1" ]; then log "SKIP_REPAIR=1 — repair sequence NOT launched (recalc gate-3 fault open, 15/09)"
+elif up "recalc_headline[s].py" || up "rescore_first_report_see[d].py"; then log "a repair job is already running — not relaunching the sequence"; else
 	nohup bash -c "
 		cd '$PROJ'; export PYTHONPATH='$PROJ/src/wnn:'
 		nice -n 10 '$PY' -u scripts/rescore_first_report_seed.py >> logs/controller/rescore_first_seed.log 2>&1

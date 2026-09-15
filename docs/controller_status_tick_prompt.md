@@ -11,7 +11,11 @@ chain is live, which arms have landed, the current results, what counts as an
 escalation today. Refresh the STATE block here whenever the programme moves, and
 re-arm the cron from it.
 
-**Currently armed:** job `5ed39033`, schedule `13,43 * * * *` (off the :00/:30 marks on purpose).
+**Currently armed:** job `82aa3883`, schedule `13,43 * * * *` (off the :00/:30 marks on purpose).
+Re-armed 15/09/2026 10:20 EDT after the macOS 27 reboot (CLI restart). Previous: `5ed39033` (13/09).
+NOTE 15/09: the armed prompt is the FORMAT + rules + the CURRENT (15/09) STATE block + a pointer to this
+file for the provenance history — no longer the full 75 KB history verbatim. Everything that governs a
+tick every time is in the armed text; the older QUEUE blocks are consulted from this file on demand.
 Re-armed 13/09/2026 16:06 EDT after a CLI update (genuine restart — the documented killer). Previous: `da2eb7c7` (04/09).
 Re-armed 04/09/2026 08:50 EDT after the power outage (CLI restart). Previous: `5ad9d655` (01/09).
 Re-armed 01/09/2026 23:4x UTC after `649beddb` was lost. WHAT KILLED IT: the CLI was EXITED
@@ -141,6 +145,38 @@ MISSING VALUES — never invent one, never print 0.000 for "not measured" (a zer
 If NO chain and NO controller are running, say so plainly on lines 2-3 and name what is pending.
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
+
+QUEUE AS OF 15/09/2026 10:15 EDT (POST-REBOOT, macOS 27; BOX IDLE BY DESIGN — the queue DRAINED;
+supersedes the 13/09 15:50 block).
+Everything the 13/09 block queued has FLOWN and BANKED: no-steal window 2/2 (b24n384 s2 _win2 + k=1
+twin, 14/09), arm B re-fly 4/4 (`_bd` s2-s5, ABI 29, last banked 23:20 EDT 14/09, commit 1661bf55),
+mut1tap 4/4 earlier. NOTHING IS QUEUED and NO chain/supervisor exists — that is the 13/09 STEP 4
+"STOP". Tick lines 2/3: "no run — box idle BY DESIGN, queue drained; pending on Luiz: pick the next
+lever". Candidate levers, all UNQUEUED (Luiz's call): window-k seeds 3-5 (declined 13/09), Stage D
+pipeline A/B, stage-2 horizontal translation (needs trainer audit), 3rd translation arm (plant ON,
+features OFF), sn>0 x altitude (low priority), offline connectivity (design first), leak multi-seed
+ladder (conditional), the paper-rows stale-altitude rerun (declined 12/09).
+ARM B 4/4 HEADLINE paired verdict (n=4, t-CI, arm − _hd control): err −0.39° [−0.68,−0.10] EXCLUDES 0
+(4/4); steady −0.16° [−0.43,+0.12]; alt −0.10 m [−0.44,+0.23]; stable +0.25 pp [−1.7,+2.2] — steady/
+stable/alt INDETERMINATE at n=4. Two-flag bundle. Arm winners 2.6-4.0x the H743 flash — NOT deployable.
+REBOOT 15/09 ~09:36 EDT (macOS 27): scripts/post_reboot_bringup.sh relaunched dashboard (CARGO_TARGET_DIR
+binary), IDS worker (rayon 13, requeued flow 5938), mem sampler + watchdog, vite (https://localhost:5173);
+all PPID 1. The MARKER-REPAIR SEQUENCE WAS DELIBERATELY NOT RELAUNCHED (SKIP_REPAIR=1): both recalc
+passes were refusing ~all rows — DIAGNOSED 15/09 09:3x EDT: GRID#2 is the only arch-only candidate in the
+GRID top-3 (checkpoint cells-carrying idx [0,1,10,11,23,24,26,34] = the 8-genome holdout sample), so it is
+RE-TRAINED by the recalc, and `build_run_args` rebuilds NO training-side flag (teacher-hover guessed
+'legacy' when the marker lacks the field — every derived-hover run before ABI 29 refuses; and every run
+flown before ABI 28 trained under the pre-stale-altitude-fix replay, so today's wheel can never reproduce
+its cells). Gate 3 is CORRECT; its inputs are wrong. The 7 gate-1 "identity None" refusals are old .out
+files with no `fit =` line (alt-weight sweep). Fix = Luiz's call: (a) rebuild the training flags from the
+.out/marker (hover, leak, dmax, gamma, label scale) AND accept that pre-ABI-28 rows cannot pass gate 3 on
+this wheel — score GRID#2 with cells trained TODAY and label the row, or (b) drop GRID#2 from the recalc
+candidate set (select over the cells-carrying 8), or (c) abandon the recalc. Do NOT relaunch the sequence
+as-is (each refused marker costs 12-36 GPU-min). Recalc so far: 1 accepted-unchanged (s2_bd), 0 changed.
+XCODE 27 (auto-installed 00:13 EDT 15/09) BROKE /usr/bin/git: "You have not agreed to the Xcode license".
+Workaround in any shell: `export DEVELOPER_DIR=/Library/Developer/CommandLineTools` before git. Permanent
+fix needs Luiz: `sudo xcodebuild -license accept`. Every commit/push in a tick must set DEVELOPER_DIR.
+Tick cron re-armed 15/09 after the reboot (session-only; CLI restarts kill it).
 
 QUEUE AS OF 13/09/2026 15:50 EDT (WINDOW-K STOPPED at s2_win4; NO-STEAL WINDOW ARMS then ARM B;
 supersedes the 12:05 block's queue).
