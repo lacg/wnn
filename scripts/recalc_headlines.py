@@ -46,6 +46,46 @@ sys.path.insert(0, os.path.join(ROOT, "scripts"))
 import rescore_first_report_seed as rs  # noqa: E402  (shared recipe rebuild + .out parsing)
 
 ARCH_ONLY = ("GRID", "NEURONS", "BITS")
+# --teacher-hover's DEFAULT flipped legacy -> derived at a88cb7c1 (11/09/2026 19:31Z);
+# a run launched after that flew derived even when nothing recorded it.
+HOVER_DEFAULT_FLIP = "2026-09-11T19:31:12Z"
+# The stage table's `fit = ...` footer exists since e41cb400 (20/08/2026 10:51Z);
+# earlier .outs printed no selection identity at all.
+FIT_FOOTER_SINCE = "2026-08-20T10:51:27Z"
+# The stale-altitude replay fix (ABI 28, 12/09/2026): a run flown on an older wheel
+# trained its arch-only candidates with a trainer that no longer exists, so their
+# re-trained cells cannot reproduce the run's val rows on the installed wheel.
+FIXED_TRAINER_ABI = 28
+
+
+def _launched_iso(marker: dict) -> str | None:
+	"""Launch time = done - dur_s (both always present on a headline marker)."""
+	done, dur = marker.get("done"), marker.get("dur_s")
+	if not isinstance(done, str) or not isinstance(dur, (int, float)):
+		return None
+	t = _dt.datetime.fromisoformat(done.replace("Z", "+00:00")) - _dt.timedelta(seconds=float(dur))
+	return t.astimezone(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _teacher_hover(marker: dict) -> str:
+	"""What the run actually trained with: the marker's own field when a chain
+	recorded it, else the parser default at LAUNCH time. Guessing 'legacy' for
+	every unrecorded run re-trained the 12-13/09 rows with the wrong anchor
+	(probe 15/09: _fix passes all three gates with 'derived', refuses with 'legacy')."""
+	if marker.get("teacher_hover") in ("legacy", "derived"):
+		return marker["teacher_hover"]
+	launched = _launched_iso(marker)
+	return "derived" if launched and launched >= HOVER_DEFAULT_FLIP else "legacy"
+
+
+def _run_abi(marker: dict) -> int | None:
+	abi = (marker.get("provenance") or {}).get("abi")
+	return int(abi) if isinstance(abi, (int, float, str)) and str(abi).isdigit() else None
+
+
+def _installed_wheel() -> dict:
+	from wnn.control._accel import require_accel
+	return dict(abi=int(getattr(require_accel(), "ABI_VERSION", 0)))
 
 
 def targets(paths: list[str], stages: tuple[str, ...] = ARCH_ONLY,
@@ -152,7 +192,7 @@ def recalc_one(path: str, dry_run: bool, log) -> str:
 	# time). Recovered from the marker/tag; GATE 3 below checks the outcome.
 	tm = re.search(r"_(mpcof|lqi|lqr|mpc|pid)_", tag)
 	args.teacher = marker.get("teacher") or (tm.group(1) if tm else "mpcof")
-	args.teacher_hover = marker.get("teacher_hover") or "legacy"
+	args.teacher_hover = _teacher_hover(marker)
 	ec = episode_config_from_args(args)
 	old_hs = re.search(r"stage=(\w+) genome=(\S+)", marker.get("headline_stage") or "")
 	prev = f"{old_hs.group(1)}/{old_hs.group(2)}" if old_hs else "?"
@@ -163,17 +203,31 @@ def recalc_one(path: str, dry_run: bool, log) -> str:
 	text = buf.getvalue()
 	hs = re.search(r"\[stage-select\] HEADLINE stage=(\w+) genome=(\S+)", text)
 	hh = re.search(r"\[stage-select\] HEADLINE held-out: (.*)", text)
+	out_dir = os.path.join(ROOT, "logs", "controller", "recalc_headlines")
+	def keep(text_, suffix):
+		with open(os.path.join(out_dir, f"{tag}.{suffix}"), "w") as fh:
+			fh.write(text_)
 	if not hs:
+		keep(text, "recalc.refused.out")
 		return "refused: no HEADLINE line in the recalc output"
+	notes: list = []
 	# GATE 1: the fitness identity the selector printed must be the run's own.
+	# A .out older than the footer (20/08) printed none — the run's selection was
+	# the hardcoded arithmetic combine with the checkpoint's weights, which is
+	# exactly what _apply_fitness_identity rebuilt; accept and say so.
 	want_id, got_id = _fit_identity(open(out, errors="replace").read()), _fit_identity(text)
-	if want_id != got_id:
+	launched = _launched_iso(marker) or ""
+	if want_id is None and launched < FIT_FOOTER_SINCE:
+		notes.append(f"identity unverifiable (pre-footer .out): recalc ranked with {got_id}")
+	elif want_id != got_id:
+		keep(text, "recalc.refused.out")
 		return f"refused: fitness identity differs — run {want_id!r} vs recalc {got_id!r}"
 	# GATE 2: cells-carrying candidates must reproduce their original val line.
 	new_val, old_val = _val_lines(text), _val_lines(marker.get("stage_select_candidates") or "")
 	carrying = _cells_carrying(ck)
 	bad = [c for c in carrying if c in old_val and c in new_val and old_val[c] != new_val[c]]
 	if bad:
+		keep(text, "recalc.refused.out")
 		return f"refused: cells-carrying candidates do not reproduce their val line: {bad[:4]}"
 	# GATE 3: a candidate the checkpoint holds WITHOUT cells is re-trained here; the
 	# run trained it the same way at val time and its val seeds 2..5 were already on
@@ -184,8 +238,21 @@ def recalc_one(path: str, dry_run: bool, log) -> str:
 	mismatch = [(c, sd) for (c, sd), v in orig_rows.items()
 	            if c not in carrying and sd != first_val and (c, sd) in new_rows
 	            and (abs(new_rows[(c, sd)][0] - v[0]) > 0.051 or abs(new_rows[(c, sd)][1] - v[1]) > 0.0051)]
+	retrained_diff: dict = {}
 	if mismatch:
-		return f"refused: re-trained candidates do not reproduce their aligned val seeds: {mismatch[:3]}"
+		run_abi = _run_abi(marker)
+		if run_abi is not None and run_abi >= FIXED_TRAINER_ABI:
+			# Same trainer as today's wheel: a mismatch IS a wrong recipe. Refuse.
+			keep(text, "recalc.refused.out")
+			return f"refused: re-trained candidates do not reproduce their aligned val seeds: {mismatch[:3]}"
+		# Pre-fix wheel (or no provenance = pre-12/09): the run's trainer fed stale
+		# vertical features; the installed wheel trains different cells for the same
+		# genome BY DESIGN. Decision 15/09/2026 (Luiz): re-select with the candidate
+		# re-trained on the FIXED trainer and label the row — never silently.
+		for (c, sd) in mismatch:
+			retrained_diff.setdefault(c, {})[str(sd)] = dict(run=list(orig_rows[(c, sd)]), fixed=list(new_rows[(c, sd)]))
+		notes.append(f"re-trained on the fixed trainer (run abi={run_abi}, installed abi={_installed_wheel()['abi']}): "
+		             f"{sorted(retrained_diff)} differ from the run's val rows")
 	changed = {c for c in new_val if c in old_val and old_val[c] != new_val[c]}
 	winner = hs.group(2)
 	ms = re.search(rf"\[report-seeds\] HEADLINE-{re.escape(winner)} MULTI-SEED held-out.*", text)
@@ -194,14 +261,21 @@ def recalc_one(path: str, dry_run: bool, log) -> str:
 	elif hh:
 		holdout = " [stage-select] HEADLINE held-out: " + hh.group(1)
 	else:
+		keep(text, "recalc.refused.out")
 		return "refused: selected genome has no held-out line"
 	table = re.search(r"STAGE TABLE.*?(?=\n\s*\[stage-select\] HEADLINE stage=)", text, re.S)
 	cands = " ; ".join(l.strip() for l in (table.group(0).split("\n") if table else []) if " val " in l)
 	rec = dict(previous=prev, new=f"{hs.group(1)}/{winner}", changed=(prev != f"{hs.group(1)}/{winner}"),
 	           val_lines_changed=sorted(changed), cells_carrying=sorted(carrying),
+	           teacher_hover=args.teacher_hover, run_abi=_run_abi(marker), recalc_abi=_installed_wheel()["abi"],
+	           retrained_on_fixed_trainer=retrained_diff, notes=notes,
 	           at=_dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"), secs=round(time.time() - t0, 1))
 	log(f"  headline {prev} → {hs.group(1)}/{winner}{'  (CHANGED)' if rec['changed'] else ''}; "
 	    f"val lines re-derived for {sorted(changed) or 'none'}; held-out: {holdout.split(':', 1)[1].strip()[:70]}")
+	for n_ in notes:
+		log(f"  note: {n_}")
+	if winner in retrained_diff:
+		log(f"  ⚠️ the NEW headline {winner} is a candidate re-trained on the fixed trainer — its number is not the run's era")
 	if not dry_run:
 		marker["headline_stage_recalc"] = hs.group(0)
 		marker["headline_holdout_recalc"] = holdout
@@ -211,8 +285,7 @@ def recalc_one(path: str, dry_run: bool, log) -> str:
 		with open(tmp, "w") as fh:
 			json.dump(marker, fh)
 		os.replace(tmp, path)
-		with open(os.path.join(ROOT, "logs", "controller", "recalc_headlines", f"{tag}.recalc.out"), "w") as fh:
-			fh.write(text)
+		keep(text, "recalc.out")
 	return "changed" if rec["changed"] else "unchanged"
 
 

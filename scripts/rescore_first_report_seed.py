@@ -118,7 +118,13 @@ def build_run_args(tag: str, marker: dict, facts: dict, rep_eps: int | None = No
 	if "afcal" in tag:
 		argv += ["--calib-airframe"]
 
-	if "alt=" in (marker.get("headline_holdout") or ""):
+	# The z plant is ON whenever the held-out printed an altitude OR a position
+	# column: `pos=` predates the altitude column (row 14, 17/08) and a run cannot
+	# carry pos without --translation (phased_ga refuses the xy features
+	# otherwise). Keying on `alt=` alone dropped --translation for the 14-16/08
+	# translation runs and the re-train panicked (SP1_B_b15spread, 14/09 pass).
+	hh = marker.get("headline_holdout") or ""
+	if "alt=" in hh or "pos=" in hh:
 		argv += ["--translation"]
 	if rep_eps is None:
 		blob = " ".join(str(v) for k, v in marker.items() if k.startswith("held_") or k.startswith("headline"))
