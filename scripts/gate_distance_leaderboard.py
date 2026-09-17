@@ -144,16 +144,23 @@ def parse_marker(path, outs):
 	# (phased_ga._holdout_report, 15/07→14/09). scripts/rescore_first_report_seed.py
 	# repairs banked markers into *_aligned fields; the aligned headline is the
 	# published one when it exists, the original stays in the marker untouched.
-	h = d.get('headline_holdout_aligned') or d.get('headline_holdout', '')
+	# 15-17/09/2026: scripts/recalc_headlines.py re-ran stage-select over every
+	# marker's candidates on the FIXED trainer (headline_*_recalc fields; originals
+	# untouched). Precedence: recalc > aligned > original (Luiz's step 5, 15/09).
+	h = (d.get('headline_holdout_recalc') or d.get('headline_holdout_aligned')
+	     or d.get('headline_holdout', ''))
 	align = d.get('holdout_alignment') or {}
-	ms = re.search(r'stable=([0-9.]+)%', h)
+	# The recalc line is MULTI-SEED (stable=99.0±0.9%, alt=0.000±0.000m): take the
+	# mean, skip the ±SD. The original single-draw line has no SD and still matches.
+	ms = re.search(r'stable=([0-9.]+)(?:±[0-9.]+)?%', h)
 	me = re.search(r'err=([0-9.]+)', h)
 	if not (ms and me):
 		return None
 	md = re.search(r'steady=([0-9.]+)', h)
-	ma = re.search(r'alt=([0-9.]+)m', h)
+	ma = re.search(r'alt=([0-9.]+)(?:±[0-9.]+)?m', h)
 	tag = os.path.basename(path)[:-5]
-	stage = re.search(r'stage=(\w+) genome=(\S+)', d.get('headline_stage', ''))
+	stage = re.search(r'stage=(\w+) genome=(\S+)',
+	                  d.get('headline_stage_recalc') or d.get('headline_stage', ''))
 	mem = stage_triple(d.get('held_memory_multiseed', '') or d.get('held_memory', ''))
 	pop = re.search(r'populated=(\d+)', d.get('fpga', '') or '')
 	geo = re.search(r'_b(\d+)n(\d+)_', tag)
@@ -190,7 +197,8 @@ def parse_marker(path, outs):
 		# Only a headline that IS the arch-only stage's #0 genome reused the stage row
 		# (and its misaligned first seed); a #k>0 headline was re-scored after
 		# stage-select wrote its cells back, i.e. on the aligned path.
-		align=('fixed' if 'headline_holdout_aligned' in d else
+		align=('recalc' if 'headline_holdout_recalc' in d else
+		       'fixed' if 'headline_holdout_aligned' in d else
 		       ('unfixed' if (stage and stage.group(1) in ('GRID', 'NEURONS', 'BITS')
 		                      and stage.group(2) in (stage.group(1), stage.group(1) + '#0')
 		                      and (d.get('done') or '') >= '2026-07-15'
@@ -367,6 +375,8 @@ def main():
 	print('  h743 fits, exact / bound        : %d / %d' % (sum(r['h743'] == 'fits' for r in rows), sum(r['h743'] == 'fits*' for r in rows)))
 	print('  first-seed alignment (14/09)    : headline re-scored %d, arch-only headline NOT re-scorable %d  (rows marked in the tag column: [unfixed])'
 	      % (sum(r['align'] == 'fixed' for r in rows), sum(r['align'] == 'unfixed' for r in rows)))
+	print('  stage-select recalc (15-17/09)  : headline re-selected on the fixed trainer %d  (headline_holdout_recalc takes precedence over _aligned / original)'
+	      % sum(r['align'] == 'recalc' for r in rows))
 	print('```')
 	print()
 	print('## The 2x2 that is not filled')

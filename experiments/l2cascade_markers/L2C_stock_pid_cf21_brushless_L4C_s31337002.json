@@ -1,0 +1,1 @@
+{"tag":"L2C_stock_pid_cf21_brushless_L4C_s31337002","arm":"L2CASCADE","baseline":"stock_pid","airframe":"cf21_brushless","disturbance":"L4C","expert":"mpcof","clamp":0.4,"state_neurons":16,"state_bits":32,"seed":31337002,"rc":0,"dur_s":177,"done":"2026-08-06T21:17:15Z"}
