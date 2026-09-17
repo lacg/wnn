@@ -12,8 +12,9 @@ import random
 import threading
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Any, Callable, Optional, TYPE_CHECKING
+from typing import Any, Callable, Optional, Sequence, TYPE_CHECKING
 
+from wnn.ram.genome import mode_or_midpoint
 from wnn.ram.strategies.connectivity.framework import GAConfig, OptimizerResult, StopReason
 from wnn.ram.strategies.connectivity.generic_ga import GenericGAStrategy
 from wnn.ram.strategies.connectivity.adaptive_cluster import PhaseType
@@ -30,6 +31,20 @@ if TYPE_CHECKING:
 		ClusterGenome,
 		AdaptiveClusterConfig,
 	)
+
+
+def _cluster_band(per_cluster: Optional[list[tuple[int, int]]], c: int, lo: int, hi: int) -> tuple[int, int]:
+	"""Cluster c's (min, max) band: its MCST per-cluster bounds when set, else the global band."""
+	if per_cluster is not None and c < len(per_cluster):
+		return per_cluster[c]
+	return lo, hi
+
+
+def _reference_view(reference: Sequence['ClusterGenome'] | None, num_clusters: int) -> list[tuple['ClusterGenome', list[int]]]:
+	"""(genome, cluster_neuron_offsets) pairs for the reference genomes that have
+	this phase's cluster count — offsets computed once per genome so per-cluster
+	pooling is linear, not quadratic in num_clusters."""
+	return [(g, g.cluster_neuron_offsets) for g in (reference or ()) if g.num_clusters == num_clusters]
 
 
 def _ids_to_checkpoint(phase_name, iteration, population, best_genome,
@@ -143,95 +158,88 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		self._ensure_rng()
 		return parent1.crossover(parent2, self._phase_type, self._rng)
 
-	def create_random_genome(self) -> 'ClusterGenome':
+	def create_random_genome(self, reference: Sequence['ClusterGenome'] | None = None) -> 'ClusterGenome':
 		"""
-		Create a random genome based on optimize_* flags.
+		Fresh genome — random init (reference=None) or an immigrant into a live
+		population (reference = that population's genomes; see create_immigrant).
 
-		- If optimize_bits=True: random bits per neuron in [min_bits, max_bits]
-		- If optimize_bits=False: use default_bits for all neurons
-		- Same logic for neurons
+		A dimension the phase OPTIMIZES is sampled inside its band (bits from
+		bits_grid ∩ band when a grid is set, else uniform). A dimension it does
+		NOT optimize follows the phase: it is inherited from `reference` through
+		mode_or_midpoint — per cluster, the mode of the reference's values,
+		falling back to the band midpoint, clamped — the SAME convention as the
+		Rust neurons operator. default_bits/default_neurons are NOT consulted
+		(IDS-17: the hard-coded 8 bred 34/8 hybrids in a min_bits=34 phase).
 
-		Bits are generated per-neuron (flat list), not per-cluster.
-		When optimizing connections only, both bits and neurons use defaults.
+		Bits are per-neuron (flat list). Per-cluster MCST bounds override the
+		global band for their cluster.
 		"""
-		from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
-
 		self._ensure_rng()
 		cfg = self._arch_config
-
 		if cfg.token_frequencies is not None:
-			return self._create_frequency_scaled_genome()
+			return self._create_frequency_scaled_genome(reference)
+		return self._build_genome(reference, None)
 
-		# Initialize neurons: random if optimizing, default otherwise
-		if cfg.optimize_neurons:
-			neurons = [self._rng.randint(cfg.min_neurons, cfg.max_neurons) for _ in range(cfg.num_clusters)]
-		else:
-			neurons = [cfg.default_neurons] * cfg.num_clusters
+	def create_immigrant(self, reference: Sequence['ClusterGenome']) -> 'ClusterGenome':
+		"""Base-class hook: an immigrant inherits the non-optimized dimensions
+		from the population it joins."""
+		return self.create_random_genome(reference)
 
-		# Initialize per-neuron bits: random if optimizing, default otherwise
-		total_neurons = sum(neurons)
-		if cfg.optimize_bits:
-			bits_per_neuron = [self._rng.randint(cfg.min_bits, cfg.max_bits) for _ in range(total_neurons)]
-		else:
-			bits_per_neuron = [cfg.default_bits] * total_neurons
-
-		# Initialize connections if total_input_bits available
-		connections = None
-		if cfg.total_input_bits is not None:
-			from wnn.ram.strategies.connectivity.adaptive_cluster import generate_connections
-			connections = generate_connections(bits_per_neuron, cfg.total_input_bits, self._rng.randint(0, 2**63))
-
-		return ClusterGenome(bits_per_neuron=bits_per_neuron, neurons_per_cluster=neurons, connections=connections)
-
-	def _create_frequency_scaled_genome(self) -> 'ClusterGenome':
-		"""
-		Create genome with bits/neurons scaled by token frequency.
-
-		- If optimize_bits=True: scale bits by frequency (per-neuron)
-		- If optimize_bits=False: use default_bits
-		- Same logic for neurons
-
-		Bits are expanded to per-neuron (flat list) after computing per-cluster values.
-		"""
-		from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
-
+	def _create_frequency_scaled_genome(self, reference: Sequence['ClusterGenome'] | None) -> 'ClusterGenome':
+		"""LM-era init: optimized dimensions scale with token frequency
+		(min + f·(max−min), per cluster); non-optimized ones follow the phase
+		exactly as in create_random_genome."""
 		cfg = self._arch_config
 		freqs = cfg.token_frequencies
-
-		# Normalize frequencies to [0, 1]
 		max_freq = max(freqs) if freqs else 1
 		norm_freqs = [f / max_freq if max_freq > 0 else 0 for f in freqs]
+		return self._build_genome(reference, norm_freqs)
 
-		cluster_bits = []
-		neurons = []
-		for nf in norm_freqs:
-			# Bits: scaled if optimizing, default otherwise
-			if cfg.optimize_bits:
-				b = int(cfg.min_bits + nf * (cfg.max_bits - cfg.min_bits))
-			else:
-				b = cfg.default_bits
+	def _build_genome(self, reference: Sequence['ClusterGenome'] | None, freqs: list[float] | None) -> 'ClusterGenome':
+		"""Assemble neurons → per-neuron bits → connections for one genome.
+		`freqs` (per cluster, in [0, 1]) selects frequency scaling over uniform
+		sampling for the optimized dimensions."""
+		from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome, generate_connections
 
-			# Neurons: scaled if optimizing, default otherwise
-			if cfg.optimize_neurons:
-				n = int(cfg.min_neurons + nf * (cfg.max_neurons - cfg.min_neurons))
-			else:
-				n = cfg.default_neurons
+		cfg = self._arch_config
+		ref = _reference_view(reference, cfg.num_clusters)
+		neurons: list[int] = []
+		bits_per_neuron: list[int] = []
+		for c in range(cfg.num_clusters):
+			f = freqs[c] if freqs is not None else None
+			n = self._new_cluster_neurons(c, ref, f)
+			neurons.append(n)
+			bits_per_neuron.extend(self._new_neuron_bits(c, n, ref, f))
 
-			cluster_bits.append(max(cfg.min_bits, min(cfg.max_bits, b)))
-			neurons.append(max(cfg.min_neurons, min(cfg.max_neurons, n)))
-
-		# Expand per-cluster bits to per-neuron (flat list)
-		bits_per_neuron = []
-		for i in range(cfg.num_clusters):
-			bits_per_neuron.extend([cluster_bits[i]] * neurons[i])
-
-		# Initialize connections if total_input_bits available
 		connections = None
 		if cfg.total_input_bits is not None:
-			from wnn.ram.strategies.connectivity.adaptive_cluster import generate_connections
 			connections = generate_connections(bits_per_neuron, cfg.total_input_bits, self._rng.randint(0, 2**63))
-
 		return ClusterGenome(bits_per_neuron=bits_per_neuron, neurons_per_cluster=neurons, connections=connections)
+
+	def _new_cluster_neurons(self, c: int, ref: list[tuple['ClusterGenome', list[int]]], freq: float | None) -> int:
+		"""Neuron count for cluster c: sampled/scaled when optimizing neurons,
+		else inherited from the reference population (mode_or_midpoint)."""
+		cfg = self._arch_config
+		lo, hi = _cluster_band(cfg.neuron_bounds_per_cluster, c, cfg.min_neurons, cfg.max_neurons)
+		if not cfg.optimize_neurons:
+			return mode_or_midpoint([g.neurons_per_cluster[c] for g, _ in ref], lo, hi)
+		if freq is not None:
+			return max(lo, min(hi, int(lo + freq * (hi - lo))))
+		return self._rng.randint(lo, hi)
+
+	def _new_neuron_bits(self, c: int, n: int, ref: list[tuple['ClusterGenome', list[int]]], freq: float | None) -> list[int]:
+		"""Bits for the n neurons of cluster c: from bits_grid ∩ band (or
+		uniform / frequency-scaled) when optimizing bits, else the reference
+		population's mode for that cluster (mode_or_midpoint)."""
+		cfg = self._arch_config
+		lo, hi = _cluster_band(cfg.bits_bounds_per_cluster, c, cfg.min_bits, cfg.max_bits)
+		if not cfg.optimize_bits:
+			pooled = [b for g, off in ref for b in g.bits_per_neuron[off[c]:off[c + 1]]]
+			return [mode_or_midpoint(pooled, lo, hi)] * n
+		if freq is not None:
+			return [max(lo, min(hi, int(lo + freq * (hi - lo))))] * n
+		grid = [b for b in (cfg.bits_grid or ()) if lo <= b <= hi]
+		return [self._rng.choice(grid) if grid else self._rng.randint(lo, hi) for _ in range(n)]
 
 	# =========================================================================
 	# Hooks: Rust-accelerated offspring generation + lifecycle

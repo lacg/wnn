@@ -41,10 +41,14 @@ from typing import Optional
 # --- repo imports -----------------------------------------------------------
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "wnn"))
 
-from wnn.ram.strategies.connectivity.architecture_strategies import (
-	CheckpointConfig,
-	CheckpointManager,
+# Unified checkpoint store (the legacy CheckpointManager was replaced by
+# phased.PhasedCheckpointManager; the GA's own (de)serialisers are reused so
+# the file is byte-for-byte what the worker would have written).
+from wnn.ram.strategies.connectivity.architecture_ga import (
+	_ids_to_checkpoint,
+	_ids_resume_from_checkpoint,
 )
+from wnn.ram.strategies.phased import PhasedCheckpointManager, SaveCadence, ClusterGenomeCodec
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 
 DEFAULT_DB_CANDIDATES = [
@@ -88,17 +92,27 @@ def pick_ga_experiment(con: sqlite3.Connection, flow_id: int) -> int:
 
 
 def tiers_to_arch(tiers_json: str) -> tuple[list[int], list[int]]:
-	"""Expand a tiers_json descriptor into (bits_per_neuron, neurons_per_cluster)."""
+	"""Expand a tiers_json descriptor into (bits_per_neuron, neurons_per_cluster).
+
+	Handles both list shapes the genomes table has carried: the legacy one entry
+	per cluster run (bits = rounded mean), and the exact one (since 16/09/2026)
+	where a heterogeneous cluster run yields several entries over the SAME
+	(start_cluster, end_cluster) range, one per (bits, neuron-count) group —
+	those are folded back into one cluster with the concatenated bits."""
 	tiers = json.loads(tiers_json)
+	groups: dict[tuple, list[dict]] = {}
+	for i, t in enumerate(tiers):
+		rng = (t.get("start_cluster"), t.get("end_cluster"))
+		key = rng if rng[0] is not None and rng[1] is not None else ("entry", i)
+		groups.setdefault(key, []).append(t)
 	neurons_per_cluster: list[int] = []
 	bits_per_neuron: list[int] = []
-	for t in tiers:
-		clusters = int(t.get("clusters", 1))
-		neurons = int(t["neurons"])
-		bits = int(t["bits"])
+	for entries in groups.values():
+		clusters = int(entries[0].get("clusters", 1))
+		cluster_bits = [int(t["bits"]) for t in entries for _ in range(int(t["neurons"]))]
 		for _ in range(clusters):
-			neurons_per_cluster.append(neurons)
-			bits_per_neuron.extend([bits] * neurons)
+			neurons_per_cluster.append(len(cluster_bits))
+			bits_per_neuron.extend(cluster_bits)
 	return bits_per_neuron, neurons_per_cluster
 
 
@@ -226,34 +240,29 @@ def main() -> int:
 	print(f"  threshold                : {it['fitness_threshold']}")
 	print(f"  seed (connectivity)      : {seed}")
 	print(f"  checkpoint dir           : {ckpt_dir}")
-	print(f"  checkpoint file          : {ckpt_dir / 'ga_checkpoint_ga.json'}")
+	print(f"  checkpoint path stem     : {ckpt_dir / 'ga_checkpoint_ga'}")
 
 	if args.dry_run:
 		print("\n[dry-run] no checkpoint written.")
 		return 0
 
-	mgr = CheckpointManager(
-		config=CheckpointConfig(enabled=True, checkpoint_dir=ckpt_dir, filename_prefix="ga_checkpoint"),
-		phase_name=phase_type or "GA",
-		optimizer_type="GA",
-		total_iterations=max_iters or (gen + 1),
-		logger=print,
+	# Same path stem the worker resumes from ("{prefix}_ga", see ArchitectureGAStrategy.optimize).
+	mgr = PhasedCheckpointManager(
+		ckpt_dir / "ga_checkpoint_ga", ClusterGenomeCodec(), SaveCadence(None, 1), logger=print,
 	)
-	mgr.save(
-		iteration=gen,
-		population=population,
-		best_genome=best_genome,
-		best_fitness=(it["best_ce"], it["best_accuracy"]),
-		current_threshold=it["fitness_threshold"] or 0.0,
-		extra_state={
+	mgr.save(_ids_to_checkpoint(
+		phase_type or "GA", gen, population, best_genome,
+		(it["best_ce"], it["best_accuracy"]),
+		it["fitness_threshold"] or 0.0,
+		{
 			"patience_counter": it["patience_counter"] or 0,
 			"reconstructed_from_db": True,
 			"complete": False,
 		},
-	)
+	))
 
 	# Round-trip verification.
-	state = mgr.load(ClusterGenome)
+	state = _ids_resume_from_checkpoint(mgr.load())
 	assert state["current_iteration"] == gen, "round-trip iteration mismatch"
 	assert len(state["population"]) == len(population), "round-trip population size mismatch"
 	print(f"\n✓ Wrote + verified checkpoint: resume will start at generation {gen + 1} "

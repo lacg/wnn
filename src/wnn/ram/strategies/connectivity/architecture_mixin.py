@@ -28,6 +28,29 @@ if TYPE_CHECKING:
 		AdaptiveClusterConfig,
 	)
 
+def _bits_composition(cluster_bits: list[int]) -> tuple[tuple[int, int], ...]:
+	"""A cluster's exact bits make-up as ((bits, neuron_count), ...), dominant
+	group first (count desc, then bits desc). An empty cluster is ((0, 0),) so it
+	still counts toward total_clusters."""
+	if not cluster_bits:
+		return ((0, 0),)
+	counts: dict[int, int] = {}
+	for b in cluster_bits:
+		counts[b] = counts.get(b, 0) + 1
+	return tuple(sorted(counts.items(), key=lambda kv: (-kv[1], -kv[0])))
+
+
+def _contiguous_runs(compositions: list[tuple]) -> list[tuple[int, int, tuple]]:
+	"""Merge equal neighbours: [(start, end, composition), ...] with end exclusive."""
+	runs: list[tuple[int, int, tuple]] = []
+	run_start = 0
+	for i in range(1, len(compositions) + 1):
+		if i == len(compositions) or compositions[i] != compositions[run_start]:
+			runs.append((run_start, i, compositions[run_start]))
+			run_start = i
+	return runs
+
+
 class ArchitectureStrategyMixin:
 	"""
 	Mixin providing common functionality for GA and TS architecture strategies.
@@ -136,73 +159,33 @@ class ArchitectureStrategyMixin:
 
 	def _genome_to_config_impl(self, genome: 'ClusterGenome') -> Optional['GenomeConfig']:
 		"""
-		Convert a ClusterGenome to a GenomeConfig for tracking.
+		Convert a ClusterGenome to a GenomeConfig for tracking — EXACT.
 
-		Finds contiguous runs of clusters with the same (neurons, mean_bits) config.
-		This enables proper tracking of which cluster indices belong to which tier.
-
-		The tier index is assigned based on the order of first appearance
-		(earliest cluster index = tier 0), preserving the original tier config order.
-
-		Per-neuron bits are averaged per cluster to produce a representative bits value.
+		A cluster whose neurons carry different bit counts yields one TierConfig
+		per (bits, neuron-count) group over the same cluster range, never a rounded
+		mean (a 34/8 hybrid used to track as "27"; it now tracks as 27×34 + 7×8,
+		the per-neuron truth the winners' tiers_json already records). Contiguous
+		clusters with the same exact composition merge into one run, so homogeneous
+		genomes serialize exactly as before (same hash, no dedupe churn). The tier
+		index is the order of first appearance of a composition.
 		"""
 		if not HAS_GENOME_TRACKING or GenomeConfig is None or TierConfig is None:
 			return None
-
-		# Find contiguous runs of clusters with same (neurons, mean_bits)
-		runs: list[tuple[int, int, int, int]] = []  # (start, end, neurons, mean_bits)
 		if len(genome.neurons_per_cluster) == 0:
 			return GenomeConfig(tiers=[])
 
-		neuron_offsets = genome.cluster_neuron_offsets
-
-		def _cluster_mean_bits(c: int) -> int:
-			"""Compute rounded mean bits for cluster c."""
-			start_n = neuron_offsets[c]
-			end_n = neuron_offsets[c + 1]
-			if end_n == start_n:
-				return 0
-			return round(sum(genome.bits_per_neuron[start_n:end_n]) / (end_n - start_n))
-
-		current_neurons = genome.neurons_per_cluster[0]
-		current_bits = _cluster_mean_bits(0)
-		run_start = 0
-
-		for i in range(1, len(genome.neurons_per_cluster)):
-			neurons = genome.neurons_per_cluster[i]
-			bits = _cluster_mean_bits(i)
-			if neurons != current_neurons or bits != current_bits:
-				# End current run, start new one
-				runs.append((run_start, i, current_neurons, current_bits))
-				current_neurons = neurons
-				current_bits = bits
-				run_start = i
-
-		# Don't forget the last run
-		runs.append((run_start, len(genome.neurons_per_cluster), current_neurons, current_bits))
-
-		# Assign tier indices based on first appearance of each (neurons, bits) config
-		config_to_tier: dict[tuple[int, int], int] = {}
-		next_tier = 0
-		for _, _, neurons, bits in runs:
-			key = (neurons, bits)
-			if key not in config_to_tier:
-				config_to_tier[key] = next_tier
-				next_tier += 1
-
-		# Create TierConfig for each contiguous run
+		offsets = genome.cluster_neuron_offsets
+		compositions = [_bits_composition(genome.bits_per_neuron[offsets[c]:offsets[c + 1]])
+		                for c in range(len(genome.neurons_per_cluster))]
+		tier_of: dict[tuple, int] = {}
 		tiers = []
-		for start, end, neurons, bits in runs:
-			tier_idx = config_to_tier[(neurons, bits)]
-			tiers.append(TierConfig(
-				tier=tier_idx,
-				clusters=end - start,
-				neurons=neurons,
-				bits=bits,
-				start_cluster=start,
-				end_cluster=end,
-			))
-
+		for start, end, composition in _contiguous_runs(compositions):
+			tier_idx = tier_of.setdefault(composition, len(tier_of))
+			for bits, count in composition:
+				tiers.append(TierConfig(
+					tier=tier_idx, clusters=end - start, neurons=count, bits=bits,
+					start_cluster=start, end_cluster=end,
+				))
 		return GenomeConfig(tiers=tiers)
 
 	def _determine_stop_reason(

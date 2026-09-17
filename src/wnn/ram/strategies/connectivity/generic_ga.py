@@ -13,7 +13,7 @@ from abc import ABC, abstractmethod
 from collections import deque
 from dataclasses import dataclass, field
 from enum import IntEnum, auto
-from typing import Callable, Generic, Optional, TypeVar, Any
+from typing import Callable, Generic, Optional, Sequence, TypeVar, Any
 
 from wnn.ram.fitness import FitnessCalculatorType, FitnessCalculatorFactory
 
@@ -77,6 +77,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 	- mutate_genome: Generate a mutated variant
 	- crossover_genomes: Combine two parents
 	- create_random_genome: Create a new random genome
+	- create_immigrant (optional): fresh genome that follows the live population
 
 	The core GA loop (selection, crossover, mutation, elitism) is implemented here.
 	"""
@@ -120,8 +121,17 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 
 	@abstractmethod
 	def create_random_genome(self) -> T:
-		"""Create a new random genome (for population initialization)."""
+		"""Create a new random genome (random population init — no population exists yet)."""
 		...
+
+	def create_immigrant(self, reference: Sequence[T]) -> T:
+		"""A fresh genome injected into an EXISTING population (random immigrants,
+		random-search slots, adaptive-scaling growth). `reference` is the live
+		population's genomes. Default: a plain random genome. Subclasses whose
+		genomes carry dimensions the phase does not optimize override this so
+		the immigrant follows the phase (ArchitectureGAStrategy: bits in a
+		neurons phase are the population's mode, not a hard-coded default)."""
+		return self.create_random_genome()
 
 	# =========================================================================
 	# Hooks for subclass customization
@@ -140,6 +150,9 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		Default: Python tournament selection + crossover/mutation via _build_viable_population.
 		"""
 		cfg = self._config
+		# Live population (bare genomes) — immigrants inherit the dimensions this
+		# phase does not optimize from it (create_immigrant), never from a default.
+		genomes = [t[0] for t in population]
 
 		def offspring_generator() -> T:
 			# Random immigrants (E1, diversity preservation): a fresh random genome
@@ -148,7 +161,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			# insert would never win a tournament and the lineage pressure would
 			# remain). Counters premature convergence / lineage fixation.
 			if cfg.immigrant_fraction > 0.0 and self._rng.random() < cfg.immigrant_fraction:
-				return self.create_random_genome()
+				return self.create_immigrant(genomes)
 			p1 = self._tournament_select(population)
 			p2 = self._tournament_select(population)
 			if self._rng.random() < cfg.crossover_rate:
@@ -157,10 +170,14 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 				child = self.clone_genome(p1)
 			return self.mutate_genome(child, cfg.mutation_rate)
 
-		# Random-search baseline (Review C): zero selection pressure — every
-		# slot is a fresh random genome; evaluation, viability filtering and
-		# μ+λ best-of-pool tracking stay identical to the GA.
-		generator_fn = self.create_random_genome if getattr(cfg, 'random_search', False) \
+		def random_search_generator() -> T:
+			# Random-search baseline (Review C): zero selection pressure — every
+			# slot is a fresh random genome; evaluation, viability filtering and
+			# μ+λ best-of-pool tracking stay identical to the GA. Non-optimized
+			# dimensions still follow the phase (same rule as immigrants).
+			return self.create_immigrant(genomes)
+
+		generator_fn = random_search_generator if getattr(cfg, 'random_search', False) \
 			else offspring_generator
 
 		return self._build_viable_population(
@@ -767,12 +784,14 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 
 				# Adjust population size if needed
 				if cfg.population_size > old_pop_size:
-					# Need more individuals - generate random ones
+					# Need more individuals — immigrants that follow the phase
+					# (non-optimized dimensions inherited from the live population).
 					needed = cfg.population_size - len(population)
 					if needed > 0:
+						growth_reference = [t[0] for t in population]
 						new_individuals = self._build_viable_population(
 							target_size=needed,
-							generator_fn=self.create_random_genome,
+							generator_fn=lambda: self.create_immigrant(growth_reference),
 							batch_fn=batch_evaluate_fn,
 							single_fn=evaluate_fn,
 							min_accuracy=current_threshold,

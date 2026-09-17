@@ -31,12 +31,14 @@ class ArchitectureConfig:
 	by setting the optimize_* flags.
 
 	Example usage:
-		# Phase 1: Optimize neurons only (bits fixed at default_bits)
+		# Phase 1: Optimize neurons only (bits FIXED: new neurons/immigrants
+		# inherit the live population's mode bits, clamped to [min_bits, max_bits];
+		# default_bits only documents the phase and must sit inside that band)
 		config = ArchitectureConfig(
 			num_clusters=50257,
 			optimize_bits=False,
 			optimize_neurons=True,
-			default_bits=8,  # All genomes start with 8 bits
+			default_bits=8,
 		)
 
 		# Phase 2: Optimize bits only (pass seed genome from Phase 1)
@@ -63,9 +65,17 @@ class ArchitectureConfig:
 	optimize_bits: bool = True
 	optimize_neurons: bool = True
 	optimize_connections: bool = False
-	# Default values for dimensions not being optimized (used in random genome init)
+	# The phase's FIXED value for a dimension it does not optimize. Validated
+	# against the band in __post_init__ (never clamped). NOT consulted by the
+	# random-genome/immigrant builders any more (IDS-17, 16/09/2026): those
+	# inherit the dimension from the live population via mode_or_midpoint —
+	# construction sites derive these the same way (experiment.py), so they
+	# document the phase rather than drive it.
 	default_bits: int = 8
 	default_neurons: int = 5
+	# Grid the bits phase samples immigrants from (∩ [min_bits, max_bits]);
+	# None/empty = uniform over the band.
+	bits_grid: Optional[list[int]] = None
 	# Token frequencies for frequency-scaled initialization
 	token_frequencies: Optional[list[int]] = None
 	# Total input bits for connection initialization/mutation
@@ -81,3 +91,23 @@ class ArchitectureConfig:
 	# Per-cluster (min, max) bounds — MCST support tiering (None = global bounds)
 	neuron_bounds_per_cluster: Optional[list[tuple[int, int]]] = None
 	bits_bounds_per_cluster: Optional[list[tuple[int, int]]] = None
+
+	def __post_init__(self) -> None:
+		"""VALIDATE the fixed defaults against their bands — never clamp. An
+		out-of-band default_bits (the dataclass literal 8 under min_bits=34)
+		is exactly how the B34 recipe bred 34/8 hybrids (IDS-17); a construction
+		site must DERIVE the defaults from the phase (the seed population's mode
+		or the band midpoint — see experiment.py) rather than rely on a repair."""
+		_require_in_band("default_bits", self.default_bits, "min_bits", self.min_bits, "max_bits", self.max_bits)
+		_require_in_band("default_neurons", self.default_neurons,
+		                 "min_neurons", self.min_neurons, "max_neurons", self.max_neurons)
+
+
+def _require_in_band(name: str, value: int, lo_name: str, lo: int, hi_name: str, hi: int) -> None:
+	"""Raise ValueError naming the flow-visible params when value ∉ [lo, hi]."""
+	if lo > hi:
+		raise ValueError(f"ArchitectureConfig: {lo_name}={lo} > {hi_name}={hi} (empty band)")
+	if not (lo <= value <= hi):
+		raise ValueError(
+			f"ArchitectureConfig: {name}={value} is outside [{lo_name}={lo}, {hi_name}={hi}] — "
+			f"derive it from the phase (seed population mode or band midpoint), do not clamp")

@@ -21,10 +21,34 @@ import random
 from enum import IntEnum
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 import torch
 from torch import Tensor
+
+
+def mode_or_midpoint(values: Sequence[int], lo: int, hi: int) -> int:
+	"""The value a NEW neuron/cluster takes for a dimension the phase does NOT
+	optimize — the SAME convention as the Rust neurons operator
+	(neighbor_search.rs mutate_neurons_phase): the MODE of `values` (the
+	cluster's current per-neuron bits, or the reference population's values
+	for that cluster), falling back to the band midpoint (lo+hi)//2 when there
+	is nothing to inherit, always clamped to [lo, hi]. Ties resolve to the
+	smallest value, so the result is deterministic.
+
+	ONE rule, ONE place — shared by ClusterGenome._mutate_neurons (new neurons
+	inherit their cluster's bits) and the GA immigrant builders (bits AND
+	neurons follow the live population). Before 16/09/2026 the immigrant path
+	used the hard-coded ArchitectureConfig.default_bits (=8) instead, so a
+	neurons phase at min_bits=34 bred 34/8 hybrids (IDS-17)."""
+	if lo > hi:
+		raise ValueError(f"empty band: lo={lo} > hi={hi}")
+	if values:
+		picked = max(sorted(set(values)), key=values.count)
+	else:
+		picked = (lo + hi) // 2
+	return max(lo, min(hi, picked))
+
 
 def generate_connections(bits_per_neuron: list[int], total_input_bits: int, seed: int | None = None) -> list[int]:
 	"""Generate random connections via the Rust accelerator (numpy fallback
@@ -819,14 +843,19 @@ class ClusterGenome:
 		# Rebuild bits + connections
 		new_bits = []
 		new_conns = [] if self.connections is not None else None
+		bb = config.bits_bounds_per_cluster
 		for c in range(len(new_neurons)):
 			old_n = self.neurons_per_cluster[c]
 			new_n = new_neurons[c]
 			keep = min(old_n, new_n)
 
-			# Mode bit size for new neurons
+			# New neurons inherit the cluster's mode bits (shared rule, see
+			# mode_or_midpoint — same convention as the Rust neurons operator),
+			# clamped to the cluster's band (per-cluster MCST bounds when set).
 			cluster_bits = self.bits_per_neuron[offsets[c]:offsets[c + 1]]
-			mode_bits = max(set(cluster_bits), key=cluster_bits.count) if cluster_bits else config.min_bits
+			b_lo, b_hi = (bb[c] if bb is not None and c < len(bb)
+			              else (config.min_bits, config.max_bits))
+			mode_bits = mode_or_midpoint(cluster_bits, b_lo, b_hi)
 
 			# Copy existing neurons verbatim
 			for local in range(keep):

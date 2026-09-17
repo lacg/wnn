@@ -18,8 +18,26 @@ from wnn.ram.metrics import IDSMetrics, Metrics, GenomeType, FitnessWeights
 from wnn.ram.fitness import FitnessCalculatorType, FitnessCalculatorFactory
 from wnn.ram.strategies.factory import OptimizerStrategyFactory, OptimizerStrategyType
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
+from wnn.ram.genome import mode_or_midpoint
 from wnn.ram.experiments.phased_search import PhaseResult
 
+
+
+def _phase_defaults(
+	seed_pop: list[ClusterGenome],
+	min_bits: int, max_bits: int, min_neurons: int, max_neurons: int,
+) -> tuple[int, int]:
+	"""(default_bits, default_neurons) for ArchitectureConfig, DERIVED from the
+	phase instead of the dataclass literals (8 / 5): the seed population's mode
+	(the grid's pick, or the previous phase's winners) or the band midpoint,
+	clamped — the same mode_or_midpoint rule the immigrants use, so the
+	validator in ArchitectureConfig.__post_init__ passes by construction even
+	under min_bits=34 (the B34 recipe)."""
+	clusters = [g for g in seed_pop if isinstance(g, ClusterGenome)]  # controller seeds carry no bits
+	bits = [b for g in clusters for b in g.bits_per_neuron]
+	neurons = [n for g in clusters for n in g.neurons_per_cluster]
+	return (mode_or_midpoint(bits, min_bits, max_bits),
+	        mode_or_midpoint(neurons, min_neurons, max_neurons))
 
 
 def _compute_per_class_breakdown(predictions, y_test_multi, class_names):
@@ -145,6 +163,8 @@ class ExperimentConfig:
 	max_bits: int = 20
 	min_neurons: int = 1
 	max_neurons: int = 15
+	# Not forwarded to ArchitectureConfig any more (16/09/2026): the phase's
+	# fixed dims are derived from the seed population / band (_phase_defaults).
 	default_bits: int = 8
 	default_neurons: int = 5
 
@@ -667,6 +687,9 @@ class Experiment:
 			mutable_clusters = list(range(tier0_clusters))
 			self.log(f"  Tier0-only mode: mutating first {tier0_clusters} clusters")
 
+		default_bits, default_neurons = _phase_defaults(
+			initial_population or ([initial_genome] if initial_genome else []),
+			min_bits, max_bits, min_neurons, max_neurons)
 		arch_config = ArchitectureConfig(
 			num_clusters=num_clusters,
 			min_bits=min_bits,
@@ -676,8 +699,9 @@ class Experiment:
 			optimize_bits=cfg.optimize_bits,
 			optimize_neurons=cfg.optimize_neurons,
 			optimize_connections=cfg.optimize_connections,
-			default_bits=cfg.default_bits,
-			default_neurons=cfg.default_neurons,
+			default_bits=default_bits,
+			default_neurons=default_neurons,
+			bits_grid=cfg.bits_grid,
 			total_input_bits=self.total_input_bits,
 			mutable_clusters=mutable_clusters,
 			cluster_crossover_ratio=cfg.cluster_crossover_ratio,

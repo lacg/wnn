@@ -42,9 +42,14 @@ def _capture_build(strategy):
 def test_random_search_uses_create_random_genome():
 	s = _strategy(random_search=True)
 	captured = _capture_build(s)
+	# Every slot must be a fresh genome from the immigrant path (which, with no
+	# population, is a plain create_random_genome) — count the calls.
+	calls = []
+	real = s.create_random_genome
+	s.create_random_genome = lambda reference=None: calls.append(reference) or real(reference)
 	offspring = s._generate_offspring(population=[], n_needed=3, threshold=0.0, generation=1)
-	# Bound method comparison: __func__ identity is the strongest available check.
-	assert captured["generator_fn"].__func__ is type(s).create_random_genome
+	assert len(calls) == 3 and all(r == [] for r in calls)
+	assert getattr(captured["generator_fn"], "__name__", "") == "random_search_generator"
 	assert len(offspring) == 3
 
 
@@ -73,8 +78,8 @@ def test_ga_default_keeps_breeding_generator():
 	s._current_fitness_scores = [0.1, 0.2, 0.3]
 	population = [(g, M()) for g in genomes]
 	s._generate_offspring(population=population, n_needed=2, threshold=0.0, generation=1)
-	# Default path uses the local breeding closure, not the bound method.
-	assert getattr(captured["generator_fn"], "__func__", None) is not type(s).create_random_genome
+	# Default path uses the local breeding closure, not the random-search one.
+	assert getattr(captured["generator_fn"], "__name__", "") == "offspring_generator"
 
 
 def test_random_genomes_are_diverse():
