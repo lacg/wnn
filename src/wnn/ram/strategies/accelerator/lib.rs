@@ -305,7 +305,14 @@ use pyapi::*;
 /// 12 (29/08/2026): address naming above 64 bits (ram_core compute_address_wide;
 /// see project_bits_above_64_or_fold). Identity at <= 64 bits — every existing
 /// <=64 result is bit-reproducible; >64 neurons stop OR-folding slots i and i+64.
-pub const ABI_VERSION: u32 = 12;
+/// 13 (16/09/2026): NO surface change — bumped because QSR (mode 4) TRAINING
+/// semantics changed: the order-independent (OI) gates keyed on a literal
+/// `memory_mode == QUAD_WEIGHTED`, so QSR silently trained on the legacy
+/// clamped-nudge path (z=1 chunking, ~12x slower) with OI_INITIAL slot
+/// defaults. Every OI gate now asks `CellMode::uses_oi_counters` (QUAD_WEIGHTED /
+/// QUAD_BINARY / QSR). QUAD_WEIGHTED results are bit-identical; a QSR result
+/// from an ABI-12 wheel is not comparable to one from this wheel.
+pub const ABI_VERSION: u32 = 13;
 
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()>

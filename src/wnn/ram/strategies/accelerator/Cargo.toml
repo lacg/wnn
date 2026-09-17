@@ -17,12 +17,24 @@ name = "ram_accelerator"
 crate-type = ["cdylib"]
 path = "lib.rs"  # Source file in same directory
 
+[features]
+default = ["extension-module"]
+extension-module = ["pyo3/extension-module"]
+
 [dependencies]
 # Shared WNN substrate (cells, packed bits, sparse Memory + GPU forward, cancel).
 ram_core = { path = "core" }
 
-# Python bindings (0.23+ supports Python 3.13)
-pyo3 = { version = "0.23", features = ["extension-module"] }
+# Python bindings (0.23+ supports Python 3.13). extension-module is a cargo
+# feature (default ON) — the same gate controller/Cargo.toml carries and for the
+# same reason: the cdylib must NOT link libpython (the host CPython supplies the
+# symbols), but a `cargo test` binary is a standalone executable and MUST. With
+# the feature unconditional, `cargo test -p ram_accelerator --lib` could not link,
+# so the marker_train / adaptive / multistage parity tests were unreachable from
+# cargo (16/09/2026). The wheel is unchanged: maturin uses default features.
+#   maturin build --release            -> default features -> extension-module -> wheel
+#   cargo test --no-default-features   -> links libpython (PYO3_PYTHON)  -> tests run
+pyo3 = { version = "0.23" }
 
 # NumPy support for zero-copy array access
 numpy = "0.23"

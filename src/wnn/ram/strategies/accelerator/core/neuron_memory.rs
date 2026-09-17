@@ -1601,6 +1601,19 @@ pub fn order_independent_training_enabled() -> bool
 		.unwrap_or(false)
 }
 
+/// Returns true iff order-independent training is enabled AND `memory_mode`
+/// is one that trains through the OI packed counters
+/// (`CellMode::uses_oi_counters`: QUAD_WEIGHTED / QUAD_BINARY / QSR).
+///
+/// THE gate every trainer must use — never `order_independent_training_enabled()
+/// && memory_mode == QUAD_WEIGHTED` inline (that literal shipped the 16/09/2026
+/// QSR-falls-to-legacy defect). An unknown mode code is never OI.
+pub fn order_independent_training_active(memory_mode: u8) -> bool
+{
+	order_independent_training_enabled()
+		&& crate::cell_mode::CellMode::from_u8(memory_mode).map_or(false, |m| m.uses_oi_counters())
+}
+
 #[cfg(test)]
 mod oi_tests
 {

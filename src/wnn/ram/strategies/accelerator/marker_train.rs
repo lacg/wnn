@@ -1401,16 +1401,24 @@ pub mod batched_path
 		// one bin toward TRUE, and compounds per duplicate slot under merge).
 		// Found 07/07/2026 by the oi_z_parity net-sum audit. Legacy mode keeps
 		// the cell default.
-		let default_value: u8 = match memory_mode
+		//
+		// The OI decision is the SAME predicate the kernel's `oi_mode` flag uses
+		// (`order_independent_training_active`: env AND `CellMode::uses_oi_counters`),
+		// so a slot is zeroed to OI_INITIAL iff the kernel will treat it as a
+		// counter. Otherwise the mode's own untrained cell (`default_cell_for_mode`
+		// — the one table on `CellMode`): TERNARY/PLN → EMPTY(2) (claimed-but-
+		// unwritten shouldn't occur — every claim writes — so it exports
+		// harmlessly), BINARY → FALSE(0) (FALSE-direction work is skipped
+		// pre-claim), QUAD_*/QSR legacy → WEAK_FALSE(1). Before 16/09/2026 the
+		// OI arm keyed on the env var alone while the trainer gate below keyed on
+		// `== QUAD_WEIGHTED`, so QSR got OI_INITIAL slots under a legacy trainer.
+		let default_value: u8 = if ram_core::neuron_memory::order_independent_training_active(memory_mode)
 		{
-			// TERNARY / PLN: claimed-but-unwritten shouldn't occur (every claim
-			// writes); init to EMPTY so any such slot exports harmlessly. PLN
-			// shares TERNARY's 3-state cells + training.
-			ram_core::neuron_memory::TERNARY | ram_core::neuron_memory::PLN => 2,
-			// BINARY: FALSE — but note FALSE-direction work is skipped pre-claim.
-			ram_core::neuron_memory::BINARY => 0,
-			_ if ram_core::neuron_memory::order_independent_training_enabled() => 0, // OI_INITIAL (QUAD only — earlier arms catch T/B)
-			_ => 1, // QUAD_WEAK_FALSE (memory_mode=QUAD_WEIGHTED)
+			ram_core::neuron_memory::OI_INITIAL as u8
+		}
+		else
+		{
+			ram_core::metal_sparse::default_cell_for_mode(memory_mode) as u8
 		};
 		let _ = empty_value;
 
@@ -1659,11 +1667,13 @@ pub mod batched_path
 		const MAX_EXAMPLE_CHUNKS: u64 = 8;
 		let ng_n_product = (num_genomes as u64) * (num_neurons_per_genome as u64);
 		// OI gating for the batched Metal path (hoisted above the chunk heuristic
-		// — the z-axis policy depends on it). OI only exists for QUAD_WEIGHTED;
+		// — the z-axis policy depends on it). OI exists for the 4-state nudging
+		// family (QUAD_WEIGHTED / QUAD_BINARY / QSR — `CellMode::uses_oi_counters`);
 		// TERNARY/BINARY use lattice writes that are order-independent natively
-		// (12/07/2026 GPU-train generalization).
-		let use_oi = ram_core::neuron_memory::order_independent_training_enabled()
-			&& memory_mode == ram_core::neuron_memory::QUAD_WEIGHTED;
+		// (12/07/2026 GPU-train generalization). 16/09/2026: was a literal
+		// `== QUAD_WEIGHTED`, which dropped QSR to the legacy clamped-nudge
+		// trainer and its z<=8 / z=1 chunk policy (~12x slower).
+		let use_oi = ram_core::neuron_memory::order_independent_training_active(memory_mode);
 		// WNN_EXAMPLE_CHUNKS overrides the z heuristic (tuning/bench escape hatch).
 		let env_chunks = std::env::var("WNN_EXAMPLE_CHUNKS")
 			.ok()
@@ -2006,9 +2016,25 @@ pub mod batched_path
 		/// Mode-parameterized body — the GPU batched trainer must match the CPU
 		/// per-genome reference for QUAD (nudge/OI), TERNARY (TRUE-wins lattice)
 		/// and BINARY (classical one-shot own-class) — 12/07/2026 GPU-train
-		/// generalization (Luiz order).
+		/// generalization (Luiz order). 16/09/2026: QSR and QUAD_BINARY added
+		/// (the OI gate used to be a `== QUAD_WEIGHTED` literal, so QSR trained
+		/// on a different path than the mode it shares its cells with).
+		///
+		/// Training happens in `memory_mode`; SCORING of a stochastic mode (QSR)
+		/// goes through its deterministic twin QUAD_WEIGHTED — same 4-state cells,
+		/// graded read instead of the coin — so the comparison is exact and the
+		/// argmax-separation check is meaningful (a coin on the untrained 0.25
+		/// cells would tie the wrong cluster ~6% of the time by design).
 		fn run_multigroup_parity(memory_mode: u8)
 		{
+			let score_mode = match ram_core::cell_mode::CellMode::from_u8(memory_mode)
+			{
+				Some(m) if m.is_stochastic() && m.uses_oi_counters() =>
+				{
+					ram_core::neuron_memory::QUAD_WEIGHTED
+				}
+				_ => memory_mode,
+			};
 			use crate::adaptive::{
 				build_neuron_metadata, compute_per_example_scores, export_genome_for_gpu,
 				train_genome_in_slot, GroupMemory,
@@ -2172,7 +2198,7 @@ pub mod batched_path
 				num_classes,
 				total_input_bits,
 				0.5,
-				memory_mode,
+				score_mode,
 				0,
 				false, // coverage_aware: default scoring
 				None,
@@ -2187,7 +2213,7 @@ pub mod batched_path
 				num_classes,
 				total_input_bits,
 				0.5,
-				memory_mode,
+				score_mode,
 				0,
 				false, // coverage_aware: default scoring
 				None,
@@ -2240,6 +2266,22 @@ pub mod batched_path
 		fn multigroup_parity_binary()
 		{
 			run_multigroup_parity(ram_core::neuron_memory::BINARY);
+		}
+
+		/// QSR trains EXACTLY like QUAD_WEIGHTED (OI counters under
+		/// WNN_ORDER_INDEPENDENT_TRAIN=1, clamped nudge otherwise) on both the
+		/// batched Metal path and the CPU slot trainer. Regression for the
+		/// 16/09/2026 literal-gate defect.
+		#[test]
+		fn multigroup_parity_qsr()
+		{
+			run_multigroup_parity(ram_core::neuron_memory::QSR);
+		}
+
+		#[test]
+		fn multigroup_parity_quad_binary()
+		{
+			run_multigroup_parity(ram_core::neuron_memory::QUAD_BINARY);
 		}
 
 		/// Chunked-vs-unchunked parity. Data is built so every (neuron, example)
@@ -2414,6 +2456,12 @@ pub mod batched_path
 		/// Also catches slot_nudge_oi retry exhaustion (dropped nudges would
 		/// change net tallies ⇒ different cells).
 		/// Run: WNN_ORDER_INDEPENDENT_TRAIN=1 cargo test --release oi_z_parity -- --nocapture --test-threads=1
+		///
+		/// Runs the audit for QUAD_WEIGHTED and then QSR (16/09/2026): both are
+		/// `CellMode::uses_oi_counters` modes and must take the OI path; before
+		/// the shared gate QSR fell to the legacy trainer, where z=1024 vs z=1 is
+		/// NOT exact (clamped nudges are order-dependent) — so this audit is also
+		/// the regression test for the literal `== QUAD_WEIGHTED` gate.
 		#[test]
 		fn oi_z_parity_with_collisions()
 		{
@@ -2427,10 +2475,30 @@ pub mod batched_path
 				eprintln!("[oi_z_parity] no Metal device — skipping");
 				return;
 			}
+			for mode in [ram_core::neuron_memory::QUAD_WEIGHTED, ram_core::neuron_memory::QSR]
+			{
+				assert!(
+					ram_core::neuron_memory::order_independent_training_active(mode),
+					"mode {mode} must be OI-active under WNN_ORDER_INDEPENDENT_TRAIN=1"
+				);
+				run_oi_z_parity(mode);
+			}
+		}
+
+		fn run_oi_z_parity(memory_mode: u8)
+		{
 			let num_train = 200_000usize;
 			let total_input_bits = 16usize;
 			let n_neurons = 8usize;
-			let bits = 12usize;
+			// One above SPARSE_THRESHOLD (12): this audit reads the hash-table
+			// (sparse) export — keys/counts/values and duplicate-slot oi_merge.
+			// Since 28/08/2026 a group at or below the threshold is DENSIFIED at
+			// export (sparse_exports is empty), so at the old bits=12 the test
+			// panicked on sparse_exports[0] — unnoticed because it is env-gated and
+			// the worker crate's tests could not link from cargo until 16/09/2026.
+			// The collision design (256 distinct 8-bit input patterns) does not
+			// depend on `bits`.
+			let bits = 13usize;
 
 			let mut bools = vec![false; num_train * total_input_bits];
 			for ex in 0..num_train
@@ -2480,7 +2548,7 @@ pub mod batched_path
 					42,
 					None,
 					0,
-					ram_core::neuron_memory::QUAD_WEIGHTED,
+					memory_mode,
 				)
 				.expect("oi_z_parity train failed");
 				let g = out.into_iter().next().unwrap();
@@ -2490,7 +2558,8 @@ pub mod batched_path
 					hist[(v as usize).min(3)] += 1;
 				}
 				eprintln!(
-					"[oi_z_parity] z={:4} keys={} cells F/wF/wT/T = {:?}",
+					"[oi_z_parity] mode={} z={:4} keys={} cells F/wF/wT/T = {:?}",
+					memory_mode,
 					z,
 					g.sparse_exports[0].keys.len(),
 					hist
@@ -2524,7 +2593,8 @@ pub mod batched_path
 				total
 			);
 			eprintln!(
-				"[oi_z_parity] exact across z=1 vs z=1024 ({} distinct addresses)",
+				"[oi_z_parity] mode={} exact across z=1 vs z=1024 ({} distinct addresses)",
+				memory_mode,
 				total
 			);
 		}
@@ -2654,7 +2724,12 @@ pub mod batched_path
 			let num_train = 200_000usize;
 			let total_input_bits = 16usize;
 			let n_neurons = 8usize;
-			let bits = 12usize;
+			// One above SPARSE_THRESHOLD (12) — the CPU reference reads the
+			// sparse export; at or below the threshold the export is densified
+			// (28/08/2026) and sparse_exports[0] panicked. See run_oi_z_parity.
+			// Misses still come from input bit 8 (every neuron observes it with
+			// conns (k+n) % 16 for n < 8).
+			let bits = 13usize;
 			let sample_rate = 0.5f32;
 
 			let mut train_bools = vec![false; num_train * total_input_bits];

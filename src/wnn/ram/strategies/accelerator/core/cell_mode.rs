@@ -95,6 +95,28 @@ impl CellMode
 		matches!(self, CellMode::Qsr | CellMode::Pln)
 	}
 
+	/// The mode trains through the 4-state nudging lattice and therefore
+	/// takes the ORDER-INDEPENDENT packed (obs, net) counter path
+	/// (`oi_apply_nudge` / `oi_bin_to_cell`, `OI_INITIAL` slot default) when
+	/// `WNN_ORDER_INDEPENDENT_TRAIN=1`. QUAD_WEIGHTED, QUAD_BINARY and QSR
+	/// share the lattice — QSR differs from QUAD_WEIGHTED ONLY in the read
+	/// (a coin with p = graded weight), never in the write. BINARY (one-shot
+	/// set) and TERNARY/PLN (TRUE-wins lattice) are order-independent by
+	/// construction and keep their own rules.
+	///
+	/// THE single source of truth for every OI gate: `SparseTrainer::new`,
+	/// `neuron_memory::order_independent_training_active`, the batched Metal
+	/// trainer and the CPU slot trainers all ask here. Before 16/09/2026 six
+	/// sites compared `memory_mode == QUAD_WEIGHTED` literally, so QSR fell
+	/// silently to the legacy clamped-nudge trainer (z=1 chunking once
+	/// genomes×neurons >= 320 → ~12x slower) while its claimed slots were
+	/// still zeroed to OI_INITIAL by the default-cell chooser.
+	#[inline]
+	pub fn uses_oi_counters(self) -> bool
+	{
+		matches!(self, CellMode::QuadWeighted | CellMode::QuadBinary | CellMode::Qsr)
+	}
+
 	/// Whether `empty_value` enters the read at all. Only TERNARY reads its
 	/// u-state as `empty_value`; PLN fixes the coin at 0.5, QUAD's baseline is
 	/// WEAK_FALSE = 0.25 by construction, BINARY has no untrained state.
@@ -227,6 +249,31 @@ mod tests
 		assert_eq!(w(CellMode::Qsr), 0.25);
 		assert_eq!(w(CellMode::QuadBinary), 0.0);
 		assert_eq!(w(CellMode::Binary), 0.0);
+	}
+
+	/// The OI-counter predicate is exactly the 4-state nudging family: QSR
+	/// (mode 4) MUST be in it — the 16/09/2026 defect was QSR falling out of
+	/// literal `== QUAD_WEIGHTED` gates.
+	#[test]
+	fn uses_oi_counters_is_the_quad_family()
+	{
+		assert!(CellMode::QuadWeighted.uses_oi_counters());
+		assert!(CellMode::QuadBinary.uses_oi_counters());
+		assert!(CellMode::Qsr.uses_oi_counters());
+		assert!(!CellMode::Binary.uses_oi_counters());
+		assert!(!CellMode::Ternary.uses_oi_counters());
+		assert!(!CellMode::Pln.uses_oi_counters());
+		// Every OI mode is a 4-state mode and vice versa.
+		for mode in CellMode::ALL
+		{
+			assert_eq!(mode.uses_oi_counters(), mode.num_states() == 4, "{mode}");
+		}
+		// And every OI mode's untrained cell is WEAK_FALSE (the legacy default
+		// the OI slot default OI_INITIAL=0 replaces — see marker_train.rs).
+		for mode in CellMode::ALL.into_iter().filter(|m| m.uses_oi_counters())
+		{
+			assert_eq!(mode.default_cell(), QUAD_WEAK_FALSE as u8, "{mode}");
+		}
 	}
 
 	#[test]

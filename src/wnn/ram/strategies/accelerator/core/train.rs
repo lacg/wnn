@@ -84,11 +84,23 @@ impl SparseTrainer
 		{
 			(0..n).map(|_| DashMap::with_hasher(FxBuildHasher::default())).collect()
 		}
-		let accum = match mode
+		// The OI family comes from the ONE predicate (`CellMode::uses_oi_counters`),
+		// not a local mode list; the remaining modes split on their own rule.
+		let accum = if mode.uses_oi_counters()
 		{
-			CellMode::Binary => Accum::Set(maps(n)),
-			CellMode::Ternary | CellMode::Pln => Accum::Votes(maps(n)),
-			CellMode::QuadBinary | CellMode::QuadWeighted | CellMode::Qsr => Accum::Oi(maps(n)),
+			Accum::Oi(maps(n))
+		}
+		else
+		{
+			match mode
+			{
+				CellMode::Binary => Accum::Set(maps(n)),
+				CellMode::Ternary | CellMode::Pln => Accum::Votes(maps(n)),
+				CellMode::QuadBinary | CellMode::QuadWeighted | CellMode::Qsr =>
+				{
+					unreachable!("{mode}: uses_oi_counters() is false for a 4-state mode")
+				}
+			}
 		};
 		Self { mode, layout, accum }
 	}
@@ -381,6 +393,25 @@ mod tests
 		let input2 = input.select_rows(&idx);
 		let labels2: Vec<i64> = idx.iter().map(|&i| labels[i]).collect();
 		(input2, labels2)
+	}
+
+	/// The accumulator kind follows `CellMode::uses_oi_counters` — the one
+	/// predicate every OI gate in the workspace asks (16/09/2026 QSR fix).
+	#[test]
+	fn accumulator_kind_follows_uses_oi_counters()
+	{
+		for mode in CellMode::ALL
+		{
+			let t = SparseTrainer::new(mode, layout());
+			let is_oi = matches!(t.accum, Accum::Oi(_));
+			assert_eq!(is_oi, mode.uses_oi_counters(), "{mode}");
+			match mode
+			{
+				CellMode::Binary => assert!(matches!(t.accum, Accum::Set(_)), "{mode}"),
+				CellMode::Ternary | CellMode::Pln => assert!(matches!(t.accum, Accum::Votes(_)), "{mode}"),
+				_ => assert!(is_oi, "{mode}"),
+			}
+		}
 	}
 
 	/// THE property: the memory is a function of the multiset of examples, not

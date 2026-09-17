@@ -1383,7 +1383,11 @@ pub(crate) fn train_into(
 			// OI gating (WNN_ORDER_INDEPENDENT_TRAIN=1): swap clamped per-example
 			// nudges for a packed (obs, net) accumulator + commit pass. Same
 			// semantic as the IDS fix — see project_oi_training_shipped.
-			let use_oi = ram_core::neuron_memory::order_independent_training_enabled();
+			// (This arm is exactly the `CellMode::uses_oi_counters` family, so the
+			// shared gate reduces to the env var here — kept as the one call site
+			// so the arm list and the predicate cannot drift apart.)
+			let use_oi = ram_core::neuron_memory::order_independent_training_active(memory_mode);
+			debug_assert!(use_oi == ram_core::neuron_memory::order_independent_training_enabled());
 			if use_oi
 			{
 				for c in 0..num_clusters
