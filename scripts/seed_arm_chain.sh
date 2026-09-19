@@ -19,6 +19,10 @@
 #   ARM_BITS/ARM_NEURONS   default 24/256
 #   ARM_REQUIRE_FLAGS      space-separated flags that must exist in phased_ga --help (skew guard)
 #   ARM_LOG          default /private/tmp/seed_arm<SUFFIX>.log
+#   ARM_NO_CONTROL   =1 → no paired control exists for these seeds (e.g. a NEW seed whose
+#                    control flies in this very chain as the first step): skip the control
+#                    preflight and the paired verdict; the marker still records control_tag.
+#                    Added 19/09/2026 for the CTRL-7 5th seed (s31337006: _hd29 first, then _pipeN).
 #
 # VERDICT is the mean paired delta and its 95% CI (scripts/paired_power.py), never a
 # win tally. n=4 resolves ~0.3 deg err / ~0.1 m alt / ~0.6 deg steady; a steady or
@@ -66,6 +70,10 @@ preflight() {
 	for f in ${ARM_REQUIRE_FLAGS:-}; do
 		echo "$help" | grep -q -- "$f" || { log "ABORT — the Python tree has no $f (source/wheel skew)."; exit 1; }
 	done
+	if [ "${ARM_NO_CONTROL:-0}" = "1" ]; then
+		log "preflight OK — box idle, flags present; ARM_NO_CONTROL=1: no paired control for these seeds (verdict skipped)."
+		return 0
+	fi
 	local missing=""
 	for seed in $SEEDS; do
 		[ -f "${MARK}/$(ctrl_tag "$seed").json" ] || missing="${missing} $(ctrl_tag "$seed")"
@@ -95,6 +103,9 @@ run_seed() {
 
 verdict() {
 	$VP scripts/gate_distance_leaderboard.py > docs/controller_gate_distance_leaderboard.md 2>/dev/null
+	if [ "${ARM_NO_CONTROL:-0}" = "1" ]; then
+		log "---------- no paired verdict (ARM_NO_CONTROL=1) — leaderboard refreshed only ----------"; return 0
+	fi
 	log "---------- VERDICT: mean paired delta + 95% CI vs ${CTRL} (NOT a win tally) ----------"
 	PYTHONPATH=src/wnn $VP scripts/paired_power.py \
 		--arm "$SUFFIX" \
