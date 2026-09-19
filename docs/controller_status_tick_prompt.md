@@ -148,7 +148,20 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
-AS OF 19/09/2026 12:00 EDT (supersedes the 15/09 16:00 block below; BOX IDLE BY DESIGN).
+AS OF 19/09/2026 12:10 EDT (supersedes the 12:00 block below — the QUEUE IS FLYING).
+LEVER = scripts/queue_1909_close_then_full.sh (pid 180, PPID 1; log /private/tmp/queue_1909.log). Order
+(Luiz: "close what is in the middle before a new chapter"): STEP 1 `_hd29` s31337006 (control for the
+5th seed; ARM_NO_CONTROL, log /private/tmp/hd29_s6.log) → STEP 2 `_pipeN` s31337006 vs `_hd29` + n=5
+paired verdict (CTRL-7) → STEP 3 `_op` ×4 (CTRL-15, --obs-pwm only, vs `_hd29`; secondary vs `_bd`) →
+STEP 4 `_pon` s2 (CTRL-10: plant ON, vertical features OFF, vs `_hd29`) → STEP 5 `_full` ×4 (CTRL-16:
+GRID→NEURONS→BITS→CONNECTIONS→MEMORY, --skip-stages "," --bits-gens 5 --bits-patience 3, vs `_hd29`,
+second read vs `_pipeN`) → STOP. ~60 h total; each arm's .out is logs/controller/sweep_ladder/<tag>.out.
+Line 2 names the CURRENT step's tag + what it tests; markers count = the step's own seeds. Stage order
+for `_full` has FIVE stage rows (GRID/NEURONS/BITS/CONNECTIONS/MEMORY) — print all of them on its marker.
+Smoke of the 5-stage path passed 12:03 EDT (scratchpad/full_smoke, rc 0). IDS: 6072 is the ABI-13 smoke;
+56 flows still PAUSED until its gen 67 lands, then un-pause (ids in scratchpad/abi13_paused_ids.txt).
+
+AS OF 19/09/2026 12:00 EDT (superseded 12:10; BOX IDLE BY DESIGN — no longer true).
 EVERYTHING THE 15/09 BLOCK QUEUED HAS FLOWN AND BANKED — the repair sequence (recalc passes)
 finished, the offline-connectivity probe CLOSED (rho 0.33/0.29), stage D `_pipeN` 4/4 (5d81bb44),
 arm B label-only `_dl` 4/4 (035e06b2), clean control `_hd29` 4/4 (b8068f05, 08:03 EDT 19/09).
