@@ -66,11 +66,12 @@ def test_paired_cli_is_byte_identical_to_the_banked_fixture():
 
 def test_welch_cli_runs_on_the_banked_markers():
 	r = _cli(["--welch", "--primary", "err", "--anchor-seed", "31337002", "--anchor-seed", "31337003",
-	          "--anchor-seed", "31337004", "--anchor-seed", "31337005", "--anchor-seed", "31337006"])
+	          "--anchor-seed", "31337004", "--anchor-seed", "31337005", "--anchor-seed", "31337099"])
 	check("welch CLI exits 0", r.returncode, 0)
 	check("names the test", "UNPAIRED Welch two-sample t" in r.stdout, True)
+	# 31337099 never banks (s31337006 _hd29 banked 19/09 15:19 EDT and broke the original choice).
 	check("an unbanked anchor seed is SKIPPED, not silently dropped",
-	      "anchor seed 31337006: SKIPPED" in r.stdout, True)
+	      "anchor seed 31337099: SKIPPED" in r.stdout, True)
 	check("reports both group sizes", "condition seeds: 4   anchor seeds: 4" in r.stdout, True)
 	check("PRIMARY tag lands on err", bool(re.search(r"^  err .*\[PRIMARY\]", r.stdout, re.M)), True)
 	check("no sign-test gate in unpaired mode", "the win/loss gate" in r.stdout, False)
