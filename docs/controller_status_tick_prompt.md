@@ -155,7 +155,12 @@ Luiz: fix + re-fly everything on the fixed trainer. `_hd29` s6 was allowed to ba
 0.258 — the ABI-29 lineage is 5/5 and CLOSED); queue_1909 was then killed at HOLD (logged in its log), the
 ABI-30 controller wheel installed (airframe-in-trainer fix + axis-F actuator lag `--motor-lag-s`, settling
 time T; τ=T/4), pin held (60/60 legacy-plant lines bit-identical ABI 29→30), Rust 213/213, cf21 smoke rc 0.
-LEVER = scripts/queue_2009_abi30_lineage.sh (pid 39944, PPID 1; log /private/tmp/queue_2009.log). Order:
+LEVER = scripts/queue_2009b_promote_gate.sh (pid 67249, PPID 1; log /private/tmp/queue_2009.log; the 2009
+supervisor was swapped out at 16:04 EDT, its `_hd30` chain 39966 untouched). PROMOTION GATE after step 2 (Luiz
+16:0x): if `_pipeN30 − _hd30` favours `_pipeN30` on >=3/4 HEADLINE columns and err is not worse by >0.10°, the
+neurons-GA pipeline becomes the RECIPE and `_pipeN30` the ANCHOR for `_op30`, `_pon30`, the levels rungs and the
+multi-axis round 1 (experiments/promotion_gate_2009.json records the verdict; the tick reads it and names the
+anchor on line 2 from then on). Order:
 STEP 1 `_hd30` ×4 (anchor, ARM_NO_CONTROL; era A/B vs `_hd29` printed after) → STEP 2 `_pipeN30` ×4 vs `_hd30`
 (CTRL-7) → STEP 3 `_op30` ×4 (CTRL-15) → STEP 4 `_pon30` s2 (CTRL-10) → STEP 5 `_full30` ×4 (CTRL-16) →
 STEP 6 LEVELS n=5 (CTRL-18: `_hd30` s6, then 96 levels n384 `_L30` ×5, 128 levels n512 `_L30` ×5; off-chip
