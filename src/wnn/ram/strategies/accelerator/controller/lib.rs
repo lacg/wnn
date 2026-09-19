@@ -168,7 +168,19 @@ mod metal_controller;
 ///     obs_pwm-off run is bit-identical to ABI 28; obs_pwm-on runs before this
 ///     (c2k, bit_sweep, e5, frame_fix, low_edge, arm B `_bd` s2) trained on a
 ///     frozen accumulator and a degenerate ladder and are VOID.
-pub const ABI_VERSION: u32 = 29;
+/// ABI 30 (19/09/2026): AXIS F actuator lag reaches EVERY place the plant is
+/// stepped, not only score_controllers_metal (which had `motor_lag_s` since
+/// 12/08 while nothing else did — a lagged cohort would have TRAINED lag-free
+/// and SCORED lagged, the stage-1 trainer-gap pattern). New `motor_lag_s`
+/// (Molchanov eq. 7 2% settling time T, s; 0.0 = OFF) on:
+///   RewardGatedConfigPacked (training rollout + per-round eval, via
+///   AirframeRs::sim), score_controllers_cpu, trace_controller_cpu,
+///   score_classical_baseline, trace_classical_baseline,
+///   eval_ensemble_closed_loop, score_position_teacher, record_address_universe.
+/// Every default is 0.0 and the 0.0 path never calls set_motor_lag, so ABI 29
+/// results reproduce bit-for-bit (pinned by the motor_lag_zero_* tests). The
+/// bump exists so the Python facade can ASSERT the ctor accepts the key.
+pub const ABI_VERSION: u32 = 30;
 
 /// Mode-aware untrained-cell decode anchor (ABI 12): QUAD→0.75, TERNARY→0.5
 /// (the fixed PLN empty_value), BINARY→0.5 (antagonist-pair effective neutral).
@@ -583,7 +595,8 @@ fn arch_pick_mask(n: usize, seed: u64, generation: u64, genome: u64, layer: u64)
                     af_gravity = 9.81,
                     s1_target_altitude = None, s1_init_z = None, s1_init_vz = None,
                     s1_mass = None, s1_collective_frac = None,
-                    s2_init_x = None, s2_init_y = None))]
+                    s2_init_x = None, s2_init_y = None,
+                    motor_lag_s = 0.0))]
 #[allow(clippy::too_many_arguments)]
 fn record_address_universe(
 	mut controller: PyRefMut<'_, controller::WnnController>,
@@ -614,6 +627,9 @@ fn record_address_universe(
 	s1_collective_frac: Option<Vec<f32>>,
 	s2_init_x: Option<Vec<f32>>,
 	s2_init_y: Option<Vec<f32>>,
+	// AXIS F (19/09/2026): the MEMORY-phase address universe is recorded on the
+	// same lagged plant the run trains and scores on. 0.0 = OFF, bit-identical.
+	motor_lag_s: f32,
 ) -> PyResult<(Vec<(usize, u64)>, Vec<(usize, u64)>)>
 {
 	let mut sim = controller::AttitudeSim::new(
@@ -624,6 +640,10 @@ fn record_address_universe(
 		af_inertia,
 		af_gravity,
 	);
+	if motor_lag_s > 0.0
+	{
+		sim.set_motor_lag(motor_lag_s);
+	}
 	// Stage 1 is all-or-nothing: a partial config would silently record a
 	// half-vertical universe, which is the failure this parameter exists to end.
 	let s1_cfg = match (

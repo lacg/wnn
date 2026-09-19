@@ -50,6 +50,13 @@ from .training import EpisodeConfig, _sample_initial_state
 # Address-universe recording
 # ----------------------------------------------------------------------------
 
+def _recorder_lag_kwargs(ec) -> dict:
+	"""AXIS F: `motor_lag_s=` for the recorder, from the run's EpisodeConfig.
+	Duck-typed (tests hand the recorder bare objects), inert at 0.0 / None."""
+	lag = float(getattr(ec, "motor_lag_s", 0.0) or 0.0) if ec is not None else 0.0
+	return {"motor_lag_s": lag} if lag > 0.0 else {}
+
+
 def _recorder_plant_kwargs(ec, num_episodes: int, seed: int) -> dict:
 	"""The aircraft the reference rollout flies, as recorder kwargs.
 
@@ -170,6 +177,10 @@ def record_address_universe(
 	# Only the episode ICs are drawn in Python and injected — the established
 	# parity convention — so this is a bit-exact port of the loop.
 	plant = _recorder_plant_kwargs(episode_config, num_episodes, seed)
+	# AXIS F: the universe is recorded on the run's lagged plant, translation or
+	# not — the lag is a plant property every rollout shares, not a stage-1 draw.
+	# {} when the axis is off, so every banked universe reproduces bit-for-bit.
+	plant.update(_recorder_lag_kwargs(episode_config))
 	# REFUSE a silently-degenerate universe. If the controller carries stage-1
 	# features but no vertical plant reached us, the rollout would fly a
 	# NON-TRANSLATING aircraft: the three vertical features would sit frozen and
@@ -351,7 +362,8 @@ class ControllerMemoryEvaluator:
 		controllers = [build_controller_from_memory(g, self.thresholds) for g in genomes]
 		q0, omega0 = self._ics()
 		agg = score_controllers_metal(controllers, q0, omega0, self.num_eval,
-		                               self.episode_config.steps_per_episode)
+		                               self.episode_config.steps_per_episode,
+		                               **self.episode_config.motor_lag_kwargs())
 		out = []
 		# 12-metric rows (Vec<Vec<f64>>): the trailing 6 are transient-speed
 		# metrics (rise/settle/ITAE) — carried but not yet part of fitness.

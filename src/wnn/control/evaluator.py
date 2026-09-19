@@ -543,6 +543,12 @@ def fit_thresholds_from_pid_rollouts(
 	else:
 		sim = AttitudeSim()
 		_hover_pwm, _target_alt = 0.5, 0.0
+	# AXIS F: the ladder is fit on the CONDITION's PID rollouts (spec §1), so the
+	# calibration plant carries the run's motor lag too. 0.0 = no call = the
+	# banked fit, bit-identical.
+	_ec_lag = float(getattr(episode_config, "motor_lag_s", 0.0)) if episode_config is not None else 0.0
+	if _ec_lag > 0.0:
+		sim.set_motor_lag(_ec_lag)
 	if geometry is not None:
 		from wnn.control._accel import AllocLqrRs
 		sim.set_geometry([list(r) for r in geometry.rows])
@@ -834,6 +840,10 @@ def collect_student_feature_samples(genome, episode_config, num_episodes: int,
 
 	ctl = build_controller(genome)
 	sim = AttitudeSim()
+	# AXIS F: same plant the student flies (the docstring's promise) — lag included.
+	_lag = float(getattr(episode_config, "motor_lag_s", 0.0))
+	if _lag > 0.0:
+		sim.set_motor_lag(_lag)
 	rng = np.random.default_rng(seed)
 	nf = genome.spec.num_features()
 	samples: list[list[float]] = [[] for _ in range(nf)]
@@ -1521,6 +1531,9 @@ class ControllerEvaluator:
 			# scorer does, or the vertical features are zeros here and real there
 			# (the DOB divergence — the Rust side asserts on the mismatch).
 			**_stage1_train_kwargs(rg.episode_config),
+			# AXIS F: the TRAINING rollout + per-round eval fly the same lagged
+			# plant the scorers and baselines do (empty when the axis is off).
+			**rg.episode_config.motor_lag_kwargs(),
 		)
 		target_rpy = list(rg.target_rpy) if rg.target_rpy is not None else [0.0, 0.0, 0.0]
 
@@ -1647,6 +1660,9 @@ class ControllerEvaluator:
 			# scorer does, or the vertical features are zeros here and real there
 			# (the DOB divergence — the Rust side asserts on the mismatch).
 			**_stage1_train_kwargs(rg.episode_config),
+			# AXIS F: the TRAINING rollout + per-round eval fly the same lagged
+			# plant the scorers and baselines do (empty when the axis is off).
+			**rg.episode_config.motor_lag_kwargs(),
 		)
 		controller = ra.WnnController(
 			num_motors=spec.num_motors, levels_per_motor=spec.levels_per_motor,
@@ -1843,7 +1859,8 @@ class ControllerEvaluator:
 				agg = scorer(
 					controllers, q0, omega0, self.num_eval, ec.steps_per_episode,
 					geometry=geo_rows, rotor_asym=geo_asym,
-					**ec.sim_kwargs(), **alloc_kwargs, **stage1_kwargs)
+					**ec.sim_kwargs(), **ec.motor_lag_kwargs(),
+					**alloc_kwargs, **stage1_kwargs)
 			else:
 				# W2: weather-on scoring. Base seed = dist.seed XOR the active
 				# fold seed, so each K-fold episode pool gets its own weather
@@ -1868,7 +1885,8 @@ class ControllerEvaluator:
 					dist_obs_delay_steps=int(dist.obs_delay_steps),
 					dist_torque_scale_jitter=float(dist.torque_scale_jitter),
 					geometry=geo_rows, rotor_asym=geo_asym,
-					**ec.sim_kwargs(), **alloc_kwargs, **stage1_kwargs)
+					**ec.sim_kwargs(), **ec.motor_lag_kwargs(),
+					**alloc_kwargs, **stage1_kwargs)
 		except Exception:
 			return None
 		if sink is not None and scorer is _metal:
