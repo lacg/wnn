@@ -1300,6 +1300,8 @@ def _pid_baseline(ec: EpisodeConfig, episodes: int, seed: int, folds: int = 5) -
 			# baseline row must be the scale=0 rollout.
 			residual_scale=0.0,
 			residual_clamp=float(ar.clamp) if ar else 0.15,
+			# AXIS F: the allocator baseline flies the run's lagged plant too.
+			**ec.motor_lag_kwargs(),
 		)[0]
 		return [{"stable_rate": row[2], "mean_attitude_error_deg": math.degrees(row[1]),
 		         "mean_reward": row[0], "label": "alloc-LQR",
@@ -2371,6 +2373,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "cascade) instead of the historical synthetic plant. Default OFF "
 	                     "= every banked run reproduces. Adopting this is a LINEAGE BREAK "
 	                     "(~85%% of addresses move) — see task #11's paired A/B.")
+	ap.add_argument("--motor-lag-s", type=float, default=0.0,
+	                help="AXIS F (multi-axis spec §3-F): first-order motor lag (Molchanov eq. 7) "
+	                     "as the 2%% SETTLING TIME T in seconds, NOT the time constant "
+	                     "(tau = T/4). Nominal T=0.15 (tau 37.5 ms); the 2tau stress arm is "
+	                     "T=0.30. ONE value for every plant step: DAgger training + per-round "
+	                     "eval, both batch scorers, the classical baselines, the MEMORY-phase "
+	                     "address recorder and the thermometer calibration. Default 0.0 = OFF "
+	                     "= bit-identical to every run flown before ABI 30.")
 	ap.add_argument("--alt-offset", type=float, default=0.3,
 	                help="Stage 1: initial altitude offset bound (m); z0 ~ U(-x, x).")
 	ap.add_argument("--init-vz", type=float, default=0.2,
@@ -3082,6 +3092,8 @@ def episode_config_from_args(args) -> EpisodeConfig:
 		max_initial_xy_offset_m=float(getattr(args, "xy_offset", 0.0)),
 		lambda_pos=float(getattr(args, "reward_lambda_pos", 0.0)),
 		calib_airframe=bool(getattr(args, "calib_airframe", False)),
+		# AXIS F: actuator lag, 0.0 = OFF (bit-identical).
+		motor_lag_s=float(getattr(args, "motor_lag_s", 0.0)),
 	)
 
 
@@ -3170,6 +3182,14 @@ def main():
 	if ec.translation and ec.airframe is None:
 		raise SystemExit("--translation requires --airframe: mass is a PLANT parameter "
 		                 "and the synthetic default has none.")
+	if ec.motor_lag_s < 0.0:
+		raise SystemExit(f"--motor-lag-s must be >= 0 s (got {ec.motor_lag_s}); it is Molchanov's "
+		                 "2% settling time T, nominal 0.15.")
+	if ec.motor_lag_s > 0.0:
+		# One line a smoke / marker can grep, like [FAULT]: the axis is armed for
+		# EVERY plant step (training, eval, baselines, recorder, calibration).
+		print(f"[AXIS-F] motor lag T={ec.motor_lag_s:.4f} s (tau={ec.motor_lag_s / 4.0 * 1e3:.2f} ms) "
+		      "armed for ALL rollouts (training AND scoring AND baselines)", flush=True)
 	# STAGE 2 GUARD, same reasoning one level up: the horizontal FEATURES read
 	# x/y, which never leave the origin unless episodes start displaced. Refuse
 	# a run whose horizontal channel would be constant zeros.

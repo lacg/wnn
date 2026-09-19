@@ -68,7 +68,15 @@ import os
 # teacher_hover_mode (0 legacy 0.5 | 1 derived nominal hover) + the label
 # re-base it switches on. Default 0 bit-identical to 26; the bump lets the
 # packed-config ctor be ASSERTED to accept the key (--teacher-hover derived).
-EXPECTED_ABI = 29
+# 30 (19/09/2026): AXIS F actuator lag plumbed to EVERY plant step — motor_lag_s
+# (Molchanov eq. 7 2% settling time T, s; 0.0 = OFF) on RewardGatedConfigPacked
+# (training rollout + per-round eval), score_controllers_cpu, trace_controller_cpu,
+# score_classical_baseline, trace_classical_baseline, eval_ensemble_closed_loop,
+# score_position_teacher, record_address_universe. score_controllers_metal had it
+# since 12/08 while nothing else did (a lagged cohort would have TRAINED lag-free
+# and SCORED lagged). 0.0 is bit-identical to 29. Python source: EpisodeConfig.
+# motor_lag_s (phased_ga --motor-lag-s). STAGE THIS FILE WITH THE WHEEL.
+EXPECTED_ABI = 30
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

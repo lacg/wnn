@@ -206,6 +206,19 @@ b=24 n=256 CRN winners fit unaided AND sit at the top of the leaderboard. See be
 
 ## Recipe constraint: the winner must fit the H743's 2 MB internal flash (06/09/2026)
 
+> **AMENDED 19/09/2026 (Luiz) — two deployment tiers, not one gate.** "Fits the 2 MB internal
+> flash" stays the HEADLINE column and the minimal-hardware claim. A winner over 2 MB but under the
+> 16 MB memory-mapped QSPI flash that H743 flight controllers ship is a legitimate second tier,
+> reported in its own "off-chip" row group (leaderboard `h743` = `qspi`), never excluded. Why it is
+> viable at 1 kHz: incremental addressing looks up only the neurons whose address changed this step
+> (820 instr/step, `docs/controller_820_instructions_step` measurement), so a few dozen random
+> external fetches at ~0.5 µs each (memory-mapped QUADSPI, XIP) fit a 1000 µs budget with room;
+> external SDRAM via the FMC would be faster still. What it costs: the latency figures are
+> datasheet arithmetic until measured on hardware (the QEMU harness cannot time external memory),
+> and the paper must state the tier per row. This reopens 96/128 levels (CTRL-18) and the b28/b32
+> widths that were benched at 2.4-5 MB.
+
+
 **Rule.** "Fits in the STM32H743's internal flash (2 MB) as TRUE-only sorted keys +
 connectivity table, no external memory" is a HARD constraint on any published
 controller winner — a selection criterion, not a tie-breaker. A width or neuron count

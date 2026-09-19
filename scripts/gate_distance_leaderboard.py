@@ -214,16 +214,31 @@ def load_keys_cache():
 		return {}
 
 
+H743_QSPI_BYTES = 16 * 1024 * 1024   # the 16 MB QSPI flash H743 flight controllers ship (off-chip tier)
+
+
 def h743_column(r, cache):
-	"""'fits' / '1.7x' exactly from the cache; 'fits*' / '1.7x?' from the populated bound."""
+	"""'fits' / 'qspi' / '17.0x' exactly from the cache; '*'/'?' suffix = populated bound.
+
+	Two deployment TIERS (Luiz 19/09/2026, docs/chip_selection.md "Off-chip tier"):
+	  fits  = TRUE-only uint32 keys + connectivity <= the 2 MB INTERNAL flash (headline tier)
+	  qspi  = over internal flash but <= the 16 MB memory-mapped QSPI flash on the board
+	          (off-chip tier: a legitimate row group, ~0.5 us/random fetch, dirty-only lookups)
+	  N.Nx  = over 16 MB (ratio to the internal flash, as before)
+	"""
+	def tier(nbytes, exact):
+		ratio = nbytes / H743_FLASH_BYTES
+		if ratio <= 1.0:
+			return 'fits' if exact else 'fits*'
+		if nbytes <= H743_QSPI_BYTES:
+			return 'qspi' if exact else 'qspi?'
+		return ('%.1fx' if exact else '%.1fx?') % ratio
 	e = cache.get(r['tag'])
-	if e:
-		ratio = e['bytes_uint32'] / H743_FLASH_BYTES
-		return 'fits' if ratio <= 1.0 else '%.1fx' % ratio
+	if e is not None:
+		return tier(e['bytes_uint32'], True)
 	if r['populated'] is None or r['bits'] is None or r['neurons'] is None:
 		return '—'
-	ratio = (r['populated'] * 4 + r['neurons'] * r['bits']) / H743_FLASH_BYTES
-	return 'fits*' if ratio <= 1.0 else '%.1fx?' % ratio
+	return tier(r['populated'] * 4 + r['neurons'] * r['bits'], False)
 
 
 LEGEND = """  COLUMNS
@@ -373,6 +388,7 @@ def main():
 	print('  state-neuron count unreadable   : %d  (no .out on disk)' % unknown)
 	print('  h743 keys counted exactly       : %d  (experiments/h743_keys.json)' % sum(r['tag'] in cache for r in rows))
 	print('  h743 fits, exact / bound        : %d / %d' % (sum(r['h743'] == 'fits' for r in rows), sum(r['h743'] == 'fits*' for r in rows)))
+	print('  h743 off-chip (16 MB QSPI) tier : %d / %d' % (sum(r['h743'] == 'qspi' for r in rows), sum(r['h743'] == 'qspi?' for r in rows)))
 	print('  first-seed alignment (14/09)    : headline re-scored %d, arch-only headline NOT re-scorable %d  (rows marked in the tag column: [unfixed])'
 	      % (sum(r['align'] == 'fixed' for r in rows), sum(r['align'] == 'unfixed' for r in rows)))
 	print('  stage-select recalc (15-17/09)  : headline re-selected on the fixed trainer %d  (headline_holdout_recalc takes precedence over _aligned / original)'

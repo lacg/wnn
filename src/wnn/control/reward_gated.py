@@ -484,6 +484,9 @@ def reward_gated_train(
 	sim = AttitudeSim()
 	rng = np.random.default_rng(config.seed)
 	base_ec = config.episode_config
+	# AXIS F: twin of RewardGatedConfigPacked.motor_lag_s (Rust path). 0.0 = no call.
+	if float(getattr(base_ec, "motor_lag_s", 0.0)) > 0.0:
+		sim.set_motor_lag(float(base_ec.motor_lag_s))
 	target = config.target_rpy
 
 	history_scores: list[float] = []

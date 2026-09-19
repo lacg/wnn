@@ -479,6 +479,27 @@ class EpisodeConfig:
 	# synthetic plant, for attitude-only runs too (task #11 A/B). False = the
 	# banked behaviour, bit-identical.
 	calib_airframe: bool = False
+	# --- AXIS F (19/09/2026, multi_axis_programme_spec §3-F): actuator lag.
+	# Molchanov eq. (7) first-order motor lag, given as the 2% SETTLING TIME T in
+	# seconds — NOT the time constant (τ = T/4). Nominal T = 0.15 s ⇒ τ = 37.5 ms;
+	# the "2τ" stress arm is T = 0.30. 0.0 = OFF = the anchor plant, bit-identical
+	# to every run flown before. ONE value, read by every place the plant is
+	# stepped: the DAgger training rollout + per-round eval (RewardGatedConfigPacked),
+	# both batch scorers, the serial run_episode, the classical baselines, the
+	# MEMORY-phase address recorder and the thermometer calibration rollouts —
+	# a scorer-only lag would train lag-free and score lagged (the stage-1
+	# trainer-gap pattern). Reaches Rust through motor_lag_kwargs().
+	motor_lag_s: float = 0.0
+
+	def motor_lag_kwargs(self) -> dict:
+		"""The `motor_lag_s=` kwarg every Rust plant-stepping entry point takes
+		(same name on the trainer config, both batch scorers, the baselines and
+		the address recorder — ONE spelling, unlike the airframe). Empty when the
+		axis is off, so every existing call stays byte-identical."""
+		lag = float(self.motor_lag_s)
+		if lag < 0.0:
+			raise ValueError(f"EpisodeConfig.motor_lag_s must be >= 0 s, got {lag}")
+		return {"motor_lag_s": lag} if lag > 0.0 else {}
 
 	def airframe_kwargs(self) -> dict:
 		"""The af_* kwargs the Rust scorers/trainer take. Empty when no airframe
@@ -763,6 +784,10 @@ def run_episode(
 		getattr(config, "active_axes", (True, True, True)),
 	)
 	sim.reset(q=list(init_q), omega=list(init_omega))
+	# AXIS F: arm (or clear) the motor lag from the config, every episode, so a
+	# sim shared across configs cannot carry a stale lag — the disturbance idiom
+	# below. set_motor_lag(0.0) on a fresh reset is a no-op (filter already clear).
+	sim.set_motor_lag(float(getattr(config, "motor_lag_s", 0.0)))
 
 	# W2: arm this episode's weather (per-episode seed drawn from the episode
 	# rng AFTER the IC draw — see apply_disturbance). Clear when the config has

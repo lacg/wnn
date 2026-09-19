@@ -51,7 +51,8 @@ use crate::position_loop::PositionLoop;
 	af_inertia = [0.0023, 0.0023, 0.0046], af_gravity = 9.81, af_dt = 0.001,
 	af_pid_att = [0.0; 12], af_pid_rate = [0.0; 12], af_pid_out_limit_n = 0.0,
 	af_pid_hover_n = 0.0, af_pid_attitude_hz = 0.0, af_pid_lpf_hz = 0.0,
-	use_estimator = false, est_kp = 2.0, est_ki = 0.1))]
+	use_estimator = false, est_kp = 2.0, est_ki = 0.1,
+	motor_lag_s = 0.0))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_position_teacher(
 	teacher_id: u8,
@@ -95,6 +96,8 @@ pub fn score_position_teacher(
 	use_estimator: bool,
 	est_kp: f64,
 	est_ki: f64,
+	// AXIS F: motor lag (2% settling time T, s); 0.0 = OFF, bit-identical.
+	motor_lag_s: f32,
 ) -> PyResult<(f64, f64, f64, f64, f64)>
 {
 	let err = |m: String| pyo3::exceptions::PyValueError::new_err(m);
@@ -160,6 +163,7 @@ pub fn score_position_teacher(
 		// The teacher below is built directly at this episode's true hover; the
 		// airframe's teacher_hover is not consulted here.
 		teacher_hover: None,
+		motor_lag_s,
 	};
 	let mut sim = af.sim();
 	// ANCHOR AT TRUE HOVER, not the attitude teachers' legacy 0.5 neutral. With
