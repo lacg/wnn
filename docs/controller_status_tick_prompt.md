@@ -158,11 +158,10 @@ GRID→NEURONS→BITS→CONNECTIONS→MEMORY, --skip-stages "," --bits-gens 5 --
 second read vs `_pipeN`) → STOP. ~60 h total; each arm's .out is logs/controller/sweep_ladder/<tag>.out.
 Line 2 names the CURRENT step's tag + what it tests; markers count = the step's own seeds. Stage order
 for `_full` has FIVE stage rows (GRID/NEURONS/BITS/CONNECTIONS/MEMORY) — print all of them on its marker.
-Smoke of the 5-stage path passed 12:03 EDT (scratchpad/full_smoke, rc 0). IDS: 6072 is the ABI-13 smoke; 56 flows
-PAUSED until its gen 67 lands — a DETACHED watcher (pid 10378, scratchpad/abi13_unpause_watcher.sh) un-pauses
-them itself and writes scratchpad/abi13_smoke_result.json (status OK / FAIL). Tick: if that file exists, read
-it and say so on line 6; if FAIL, escalate (nothing un-paused). Re-eval is slow (~28 min/GPU batch) because the
-controller run shares the GPU — expected gen-67 line ~13:00 EDT.
+Smoke of the 5-stage path passed 12:03 EDT (scratchpad/full_smoke, rc 0). IDS: ABI-13 swap COMPLETE 12:22 EDT —
+6072 finished gen 67 on the new wheel clean, the watcher un-paused all 56 (queue 1 running / 150 queued incl. the
+94 `-abi13` QSR reruns / 297 older paused untouched). 6073 (ablqsr) is the first QSR flow on the fixed trainer:
+expect ~1.5-2 h, not 10 h — if it runs >4 h, say so on line 6.
 
 AS OF 19/09/2026 12:00 EDT (superseded 12:10; BOX IDLE BY DESIGN — no longer true).
 EVERYTHING THE 15/09 BLOCK QUEUED HAS FLOWN AND BANKED — the repair sequence (recalc passes)
