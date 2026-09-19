@@ -15,8 +15,13 @@
 #   STEP 3  `_op30` x4 vs `_hd30` (CTRL-15: --obs-pwm only; secondary read vs `_bd` is CROSS-ERA — say so).
 #   STEP 4  `_pon30` s2 vs `_hd30` (CTRL-10: plant ON, vertical features OFF; direction, n=1).
 #   STEP 5  `_full30` x4 vs `_hd30`, second read vs `_pipeN30` (CTRL-16: GRID->NEURONS->BITS->CONNECTIONS->MEMORY).
-#   STEP 6  STOP — box idle, say so. Then the multi-axis round 1 (scripts/multi_axis_chain.sh, MA_ANCHOR_SUFFIX=_hd30).
-# ~78 h. Every step = scripts/seed_arm_chain.sh (idle-gated, marker-gated, fails closed, HOLD-aware).
+#   STEP 6  LEVELS n=5 (CTRL-18, Luiz 19/09: "we are competing against controllers that are continuous"):
+#           `_hd30` s6 (64 levels → n=5), then 96 levels (n384) and 128 levels (n512) at s2-s6, suffix `_L30`.
+#           Off-chip deployment tier (16 MB QSPI) is a legitimate row group now — no flash gate on these.
+#           Primary read = alt AND stable (the 96-level n=1 point was +2 pp / −7 cm), all four columns.
+#           Controls are the `_hd30` seeds (n256 tags differ from n384/n512 tags → ARM_NO_CONTROL, paired by hand).
+#   STEP 7  STOP — box idle, say so. Then the multi-axis round 1 (scripts/multi_axis_chain.sh, MA_ANCHOR_SUFFIX=_hd30).
+# ~78 h for steps 1-5, ~48 h for step 6. Every step = scripts/seed_arm_chain.sh (idle-gated, marker-gated, fails closed, HOLD-aware).
 # PRECONDITIONS (checked by preflight): installed ram_controller ABI == 30 AND the Python facade agrees
 # (a half-landed wheel kills every fresh launch); phased_ga --help has --motor-lag-s; a cf21 EpisodeConfig
 # packs k_thrust 0.2 (the trainer-airframe dead-plumbing check).
@@ -103,4 +108,29 @@ if [ "$(count _full30)" -ge 4 ]; then log "STEP 5 already complete (4/4 _full30)
 	log "---------- CTRL-16 second read: _full30 − _pipeN30 ----------"; pair "_full30" "_pipeN30"
 fi
 
-log "########## QUEUE COMPLETE — _hd30 4/4, _pipeN30 4/4, _op30 4/4, _pon30 1/1, _full30 4/4; box IDLE. Next: multi_axis_chain.sh --round 1 (MA_ANCHOR_SUFFIX=_hd30) ##########"
+# ---- STEP 6: LEVELS n=5 — 64 (anchor s6), 96 (n384), 128 (n512), seeds s2-s6 ----------------
+SEEDS5="31337002 31337003 31337004 31337005 31337006"
+countn() { ls ${MARK}/SL_C_b24n$1_cf21_brushless_L4C_g10_s3133700[2-6]$2.json 2>/dev/null | wc -l | tr -d ' '; }
+if have 31337006 $A; then log "STEP 6a already banked ($A s31337006)"; else
+	log "STEP 6a — CTRL-18: $A s31337006 (64 levels → n=5)"
+	ARM_SUFFIX="$A" ARM_LABEL="anchor-abi30-airframe-in-trainer" ARM_SEEDS="31337006" ARM_NO_CONTROL=1 \
+		ARM_EXTRA_ARGS="--teacher-hover derived" ARM_REQUIRE_FLAGS="--teacher-hover --motor-lag-s" ARM_CTRL_SUFFIX="_hd29" \
+		ARM_MARKER_JSON=",\"refly_of\":\"_hd29\",\"purpose\":\"5th seed of the 64-level rung (CTRL-18)\"" \
+		ARM_LOG="/private/tmp/seed_arm_hd30.log" bash scripts/seed_arm_chain.sh
+	have 31337006 $A || { log "ABORT — $A s31337006 missing. A run needs a human. Box left idle."; exit 1; }
+fi
+for N in 384 512; do
+	LV=$((N / 4))
+	if [ "$(countn $N _L30)" -ge 5 ]; then log "STEP 6 ${LV} levels already complete (5/5)"; continue; fi
+	log "STEP 6 — CTRL-18: ${LV} levels (n${N}) x5 (s2-s6), suffix _L30; off-chip tier allowed, no flash gate"
+	ARM_SUFFIX="_L30" ARM_LABEL="levels-${LV}-abi30" ARM_SEEDS="$SEEDS5" ARM_NEURONS="$N" ARM_NO_CONTROL=1 \
+		ARM_EXTRA_ARGS="--teacher-hover derived" ARM_REQUIRE_FLAGS="--teacher-hover --motor-lag-s" ARM_CTRL_SUFFIX="$A" \
+		ARM_MARKER_JSON=",\"levels_study\":true,\"levels\":${LV},\"control\":\"${A} n256 same seed\",\"deploy_tier\":\"off-chip allowed\"" \
+		ARM_LOG="/private/tmp/seed_arm_L30_n${N}.log" bash scripts/seed_arm_chain.sh
+	[ "$(countn $N _L30)" -ge 5 ] || { log "ABORT — ${LV} levels $(countn $N _L30)/5. A run needs a human. Box left idle."; exit 1; }
+	log "---------- CTRL-18 read: ${LV} levels − 64 levels ($A), same seeds, n=5 ----------"
+	PYTHONPATH=src/wnn $VP scripts/paired_power.py --arm "_L30" --base "SL_C_b24n${N}_cf21_brushless_L4C_g10_s{seed}" \
+		$(for sd in $SEEDS5; do printf -- "--seed %s --control-override %s=${BASE}_s%s${A} " "$sd" "$sd" "$sd"; done) 2>&1 | tee -a "$LOG"
+done
+
+log "########## QUEUE COMPLETE — _hd30 5/5, _pipeN30 4/4, _op30 4/4, _pon30 1/1, _full30 4/4, levels 96/128 5/5; box IDLE. Next: multi_axis_chain.sh --round 1 (MA_ANCHOR_SUFFIX=_hd30) ##########"
