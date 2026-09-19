@@ -415,6 +415,10 @@ def train_dagger(
 	sim = AttitudeSim()
 	rng = np.random.default_rng(config.seed)
 	ec = config.episode_config
+	# AXIS F: the Python DAgger trainer flies the run's lagged plant too (twin of
+	# RewardGatedConfigPacked.motor_lag_s on the Rust path). 0.0 = no call.
+	if float(getattr(ec, "motor_lag_s", 0.0)) > 0.0:
+		sim.set_motor_lag(float(ec.motor_lag_s))
 	target = config.target_rpy
 
 	stats = {

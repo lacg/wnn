@@ -44,6 +44,10 @@ pub(crate) fn rollout_one(
 	k_drag: f32,
 	inertia: [f32; 3],
 	gravity: f32,
+	// AXIS F (19/09/2026): Molchanov eq. (7) motor lag as the 2% SETTLING time
+	// T (s), the same quantity score_controllers_metal's motor_lag_s carries.
+	// 0.0 = OFF = the anchor plant (set_motor_lag is not even called).
+	motor_lag_s: f32,
 	target: [f32; 3],
 	dist_enabled: bool,
 	dist_tau_bias: [f32; 3],
@@ -85,6 +89,10 @@ pub(crate) fn rollout_one(
 ) -> [f64; 15]
 {
 	let mut sim = AttitudeSim::new(dt, arm, k_thrust, k_drag, inertia, gravity);
+	if motor_lag_s > 0.0
+	{
+		sim.set_motor_lag(motor_lag_s);
+	}
 	if let Some(rows) = geometry
 	{
 		// Validated in score_controllers_cpu before the rayon fan-out; these
@@ -562,6 +570,9 @@ pub(crate) fn rollout_one(
 	controllers, q0, omega0, num_episodes, steps,
 	dt = 0.001, arm_length = 0.075, k_thrust = 2.4, k_drag = 0.05,
 	inertia = [0.0023, 0.0023, 0.0046], gravity = 9.81,
+	// AXIS F (19/09/2026): same name, same semantics, same position as
+	// score_controllers_metal — the two scorers stay interchangeable.
+	motor_lag_s = 0.0,
 	target = [0.0, 0.0, 0.0],
 	dist_enabled = false,
 	dist_tau_bias = [0.0, 0.0, 0.0],
@@ -624,6 +635,7 @@ pub fn score_controllers_cpu(
 	k_drag: f32,
 	inertia: [f32; 3],
 	gravity: f32,
+	motor_lag_s: f32,
 	target: [f32; 3],
 	dist_enabled: bool,
 	dist_tau_bias: [f32; 3],
@@ -807,6 +819,7 @@ pub fn score_controllers_cpu(
 						k_drag,
 						inertia,
 						gravity,
+						motor_lag_s,
 						target,
 						dist_enabled,
 						dist_tau_bias,
@@ -867,6 +880,7 @@ pub fn score_controllers_cpu(
 	dist_dropout_len_steps = 0,
 	dist_obs_delay_steps = 0,
 	dist_torque_scale_jitter = 0.0,
+	motor_lag_s = 0.0,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn trace_controller_cpu(
@@ -896,6 +910,7 @@ pub fn trace_controller_cpu(
 	dist_dropout_len_steps: u32,
 	dist_obs_delay_steps: u32,
 	dist_torque_scale_jitter: f32,
+	motor_lag_s: f32,
 ) -> PyResult<Vec<Vec<f64>>>
 {
 	if q0.len() != num_episodes * 4 || omega0.len() != num_episodes * 3
@@ -921,6 +936,7 @@ pub fn trace_controller_cpu(
 			k_drag,
 			inertia,
 			gravity,
+			motor_lag_s,
 			target,
 			dist_enabled,
 			dist_tau_bias,

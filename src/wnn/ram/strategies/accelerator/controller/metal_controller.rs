@@ -9319,6 +9319,7 @@ mod tests
 			SIM_KD,
 			SIM_INERTIA,
 			SIM_G,
+			0.0, // motor_lag_s OFF (axis F anchor)
 			[0.0, 0.0, 0.0],
 			false,
 			[0.0; 3],
@@ -9529,6 +9530,7 @@ mod tests
 			SIM_KD,
 			SIM_INERTIA,
 			SIM_G,
+			0.0, // motor_lag_s OFF (axis F anchor)
 			[0.0, 0.0, 0.0],
 			false,
 			[0.0; 3],
@@ -9773,6 +9775,96 @@ mod tests
 		);
 	}
 
+	/// AXIS F (19/09/2026): the PRODUCTION CPU scorer (cpu_score::rollout_one, the
+	/// path score_controllers_cpu fans out over) with motor_lag_s set. The lag
+	/// model and its shader twin were already pinned (parity_motor_lag_quad) —
+	/// this pins the PLUMBING at the two values the axis flies:
+	/// T = 0.15 (nominal, τ = 37.5 ms) and T = 0.0375 (a 4x faster actuator, the
+	/// value a τ/T confusion would pass), against the SAME kernel argument.
+	fn cpu_scorer_row(c: &mut WnnController, q0: &[f32], w0: &[f32], eps: usize, steps: usize, lag: f32) -> [f64; 15]
+	{
+		let (num_motors, levels, ..) = c.gpu_dims();
+		crate::cpu_score::rollout_one(
+			c, q0, w0, eps, steps,
+			SIM_DT, SIM_ARM, SIM_KT, SIM_KD, SIM_INERTIA, SIM_G,
+			lag,
+			[0.0, 0.0, 0.0],
+			false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0,
+			0.0, 0, 0, 0.0,
+			levels, num_motors, None, None, None, 1.0, 0.4, None, None,
+		)
+	}
+
+	/// CPU-only half (runs without a GPU): lag 0.0 through rollout_one equals the
+	/// test oracle's explicit set_motor_lag(0.0) path, and a non-zero lag CHANGES
+	/// the scorer's row — the dead-plumbing check for score_controllers_cpu.
+	#[test]
+	fn motor_lag_reaches_the_cpu_scorer()
+	{
+		let (num_eps, steps) = (6usize, 300usize);
+		let (q0, w0) = test_episodes(0x1A7, num_eps);
+		let mut c = sn0_controller_for_parity(0xB1A6);
+		let off = cpu_scorer_row(&mut c, &q0, &w0, num_eps, steps, 0.0);
+		let oracle = cpu_oracle_quad(&mut c, &q0, &w0, num_eps, steps);
+		for (i, name) in ["reward", "err", "stable", "jerk", "mono"].iter().enumerate()
+		{
+			assert_rel_close(off[i], oracle[i], 1e-9, 1e-12, &format!("lag-off cpu_score {name}"));
+		}
+		for lag in [0.0375f32, 0.15]
+		{
+			let on = cpu_scorer_row(&mut c, &q0, &w0, num_eps, steps, lag);
+			assert!(
+				(on[1] - off[1]).abs() > 1e-9,
+				"rollout_one ignored motor_lag_s={lag}: err {} vs {}",
+				on[1], off[1]
+			);
+			// The oracle applies the same lag via set_motor_lag directly.
+			let oracle_lag = cpu_oracle_quad_lag(&mut c, &q0, &w0, num_eps, steps, lag);
+			for (i, name) in ["reward", "err", "stable", "jerk", "mono"].iter().enumerate()
+			{
+				assert_rel_close(on[i], oracle_lag[i], 1e-9, 1e-12, &format!("lag={lag} cpu_score {name}"));
+			}
+		}
+	}
+
+	/// GPU half: CPU scorer ↔ Metal kernel at lag ON, all 5 fitness metrics, at
+	/// both axis values. Extends the parity_motor_lag_quad pattern to the
+	/// PRODUCTION CPU scorer (the oracle there is a test-local twin).
+	#[test]
+	fn parity_motor_lag_cpu_scorer_vs_gpu()
+	{
+		if std::env::var("WNN_SKIP_GPU_TESTS").is_ok()
+		{
+			return;
+		}
+		let ev = match ControllerRolloutEvaluator::new()
+		{
+			Ok(e) => e,
+			Err(_) => return,
+		};
+		let (num_eps, steps) = (8usize, 400usize);
+		let (q0, w0) = test_episodes(0x1A8, num_eps);
+		let mut c = sn0_controller_for_parity(0xB1A7);
+		for lag in [0.0375f32, 0.15]
+		{
+			let cpu = cpu_scorer_row(&mut c, &q0, &w0, num_eps, steps, lag);
+			let gpu = ev
+				.score(
+					&[&c], &q0, &w0, num_eps, steps,
+					(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD,
+					lag,
+					[0.0, 0.0, 0.0],
+					None, None, None, None, None,
+				)
+				.expect("gpu score (lag on)");
+			for (i, name) in ["reward", "err", "stable", "jerk", "mono"].iter().enumerate()
+			{
+				assert_rel_close(gpu[0][i], cpu[i], 2e-2, 1e-4, &format!("lag={lag} {name}"));
+			}
+			assert!(cpu[1] > 1e-3, "lag={lag}: rollout has no attitude error (err={})", cpu[1]);
+		}
+	}
+
 	/// SCOPE C STAGE 1 — two-sided GPU parity, the motor-lag precedent:
 	/// (a) with the vertical channel ON, GPU must match the CPU rollout, and
 	/// (b) ON must differ from OFF, or (a) passed trivially against a shader
@@ -9821,6 +9913,7 @@ mod tests
 			SIM_KD,
 			SIM_INERTIA,
 			SIM_G,
+			0.0, // motor_lag_s OFF (axis F anchor)
 			[0.0, 0.0, 0.0],
 			false,
 			[0.0; 3],
@@ -9988,6 +10081,7 @@ mod tests
 			SIM_KD,
 			SIM_INERTIA,
 			SIM_G,
+			0.0, // motor_lag_s OFF (axis F anchor)
 			[0.0, 0.0, 0.0],
 			false,
 			[0.0; 3],
@@ -10272,6 +10366,7 @@ mod tests
 				SIM_KD,
 				SIM_INERTIA,
 				SIM_G,
+				0.0, // motor_lag_s OFF (axis F anchor)
 				[0.0, 0.0, 0.0],
 				false,
 				[0.0; 3],
@@ -10697,6 +10792,7 @@ mod tests
 			SIM_KD,
 			SIM_INERTIA,
 			SIM_G,
+			0.0, // motor_lag_s OFF (axis F anchor)
 			[0.0, 0.0, 0.0],
 			false,
 			[0.0; 3],
@@ -10770,6 +10866,7 @@ mod tests
 			SIM_KD,
 			SIM_INERTIA,
 			SIM_G,
+			0.0, // motor_lag_s OFF (axis F anchor)
 			[0.0, 0.0, 0.0],
 			false,
 			[0.0; 3],
@@ -11285,6 +11382,7 @@ mod tests
 			SIM_KD,
 			SIM_INERTIA,
 			SIM_G,
+			0.0, // motor_lag_s OFF (axis F anchor)
 			[0.0, 0.0, 0.0],
 			false,
 			[0.0; 3],
@@ -11391,6 +11489,7 @@ mod tests
 			SIM_KD,
 			SIM_INERTIA,
 			SIM_G,
+			0.0, // motor_lag_s OFF (axis F anchor)
 			[0.0, 0.0, 0.0],
 			false,
 			[0.0; 3],

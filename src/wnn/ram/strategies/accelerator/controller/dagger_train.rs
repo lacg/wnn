@@ -335,6 +335,15 @@ pub struct RewardGatedConfigPacked
 	// path usable under translation. Off-translation the field is inert.
 	#[pyo3(get, set)]
 	pub teacher_hover_mode: u8,
+	// --- AXIS F (19/09/2026): actuator lag in TRAINING. Molchanov eq. (7) 2%
+	// settling time T (s), τ = T/4; 0.0 = OFF = bit-identical to every earlier
+	// run. Read by AirframeRs::from_cfg, so the training rollout AND the
+	// per-round closed-loop eval fly the same lagged plant the scorers
+	// (score_controllers_metal/cpu motor_lag_s) and the classical baselines do.
+	// Without this field a lagged cohort would TRAIN lag-free and SCORE lagged —
+	// the stage-1 trainer-gap pattern, caught 19/09 before axis F flew.
+	#[pyo3(get, set)]
+	pub motor_lag_s: f32,
 }
 
 #[pymethods]
@@ -376,6 +385,7 @@ impl RewardGatedConfigPacked
 			xy_offset = 0.0, lambda_pos = 0.0,
 		pos_omega = 1.0, pos_zeta = 1.0, pos_max_tilt_rad = 0.5236,
 		teacher_hover_mode = 0,
+		motor_lag_s = 0.0,
 ))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -457,6 +467,7 @@ impl RewardGatedConfigPacked
 		pos_zeta: f32,
 		pos_max_tilt_rad: f32,
 		teacher_hover_mode: u8,
+		motor_lag_s: f32,
 	) -> Self
 	{
 		Self {
@@ -538,6 +549,7 @@ impl RewardGatedConfigPacked
 			pos_zeta,
 			pos_max_tilt_rad,
 			teacher_hover_mode,
+			motor_lag_s,
 		}
 	}
 }
@@ -917,6 +929,17 @@ pub struct AirframeRs
 	/// two are the same law by construction. PID (id 0) never reads it: PidFw
 	/// carries the firmware's own hover_n and the legacy single loop stays at 0.5.
 	pub teacher_hover: Option<f64>,
+	/// AXIS F (19/09/2026): Molchanov eq. (7) first-order motor lag, as the 2%
+	/// SETTLING time T in seconds (τ = T/4; nominal T = 0.15 s ⇒ τ = 37.5 ms).
+	/// 0.0 = OFF = the anchor plant, bit-identical to every rollout flown before.
+	/// This is the ONE field every sim built through `sim()` reads — trainer,
+	/// per-round eval, ensemble eval, classical baselines, position scorer — so
+	/// the trainer cannot fly a lag-free plant while the scorer flies a lagged
+	/// one (the stage-1 trainer-gap pattern). NOT mirrored from
+	/// wnn/control/airframe.py::Airframe: it is a sweep AXIS carried by
+	/// EpisodeConfig.motor_lag_s, not an airframe constant. The teachers stay
+	/// lag-blind on purpose (the axis reads how much each controller degrades).
+	pub motor_lag_s: f32,
 }
 
 impl AirframeRs
@@ -930,6 +953,7 @@ impl AirframeRs
 		gravity: 9.81,
 		pid_fw: None,
 		teacher_hover: None,
+		motor_lag_s: 0.0,
 	};
 	fn from_cfg(cfg: &RewardGatedConfigPacked) -> Self
 	{
@@ -951,18 +975,27 @@ impl AirframeRs
 				cfg.af_pid_lpf_hz,
 			),
 			teacher_hover: teacher_hover_for(cfg),
+			motor_lag_s: cfg.motor_lag_s,
 		}
 	}
+	/// The plant, with the motor lag armed when the axis is on. `set_motor_lag`
+	/// is only CALLED when T > 0 so the anchor (0.0) builds the sim exactly as
+	/// before — pinned by `motor_lag_zero_sim_is_bit_identical`.
 	pub(crate) fn sim(&self) -> AttitudeSim
 	{
-		AttitudeSim::new(
+		let mut sim = AttitudeSim::new(
 			self.dt,
 			self.arm_length,
 			self.k_thrust,
 			self.k_drag,
 			self.inertia,
 			self.gravity,
-		)
+		);
+		if self.motor_lag_s > 0.0
+		{
+			sim.set_motor_lag(self.motor_lag_s);
+		}
+		sim
 	}
 	pub(crate) fn teacher(&self, id: u8) -> Teacher
 	{
@@ -2786,7 +2819,8 @@ pub fn dagger_train_batch_inplace(
 	dist_dropout_prob = 0.0, dist_dropout_len_steps = 0,
 	dist_obs_delay_steps = 0, dist_torque_scale_jitter = 0.0,
 	af_arm_length = 0.075, af_k_thrust = 2.4, af_k_drag = 0.05,
-	af_inertia = [0.0023, 0.0023, 0.0046], af_gravity = 9.81, af_dt = 0.001))]
+	af_inertia = [0.0023, 0.0023, 0.0046], af_gravity = 9.81, af_dt = 0.001,
+	motor_lag_s = 0.0))]
 #[allow(clippy::too_many_arguments)]
 pub fn eval_ensemble_closed_loop(
 	py: Python<'_>,
@@ -2819,6 +2853,8 @@ pub fn eval_ensemble_closed_loop(
 	af_inertia: [f32; 3],
 	af_gravity: f32,
 	af_dt: f32,
+	// AXIS F: motor lag (2% settling time T, s); 0.0 = OFF, bit-identical.
+	motor_lag_s: f32,
 ) -> PyResult<(f64, f64, f64)>
 {
 	if controllers.is_empty()
@@ -2850,6 +2886,7 @@ pub fn eval_ensemble_closed_loop(
 		gravity: af_gravity,
 		pid_fw: None,
 		teacher_hover: None,
+		motor_lag_s,
 	};
 	let mut sim = af.sim();
 	let target = [0.0_f32, 0.0, 0.0];
@@ -3033,7 +3070,10 @@ pub fn eval_ensemble_closed_loop(
 	// the same shape as the L2 GPU plant omission. Empty ⇒ the byte-identical
 	// stage-1 path, so the lambda_alt sweep's numbers are untouched.
 	s2_init_x = vec![], s2_init_y = vec![],
-	pos_omega_n = 1.0, pos_zeta = 1.0, pos_max_tilt_rad = 0.5236))]
+	pos_omega_n = 1.0, pos_zeta = 1.0, pos_max_tilt_rad = 0.5236,
+	// AXIS F (19/09/2026): the rival flies the SAME lagged plant the WNN is
+	// trained and scored on. 0.0 = OFF, bit-identical.
+	motor_lag_s = 0.0))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_classical_baseline(
 	teacher_id: u8,
@@ -3083,6 +3123,7 @@ pub fn score_classical_baseline(
 	pos_omega_n: f64,
 	pos_zeta: f64,
 	pos_max_tilt_rad: f64,
+	motor_lag_s: f32,
 ) -> PyResult<(f64, f64, f64, f64, f64, f64)>
 {
 	if init_qs.len() % 4 != 0
@@ -3197,6 +3238,7 @@ pub fn score_classical_baseline(
 		teacher_hover: s1.as_ref().map(|cfg| {
 			nominal_hover_pwm(af_pid_hover_n, mean_mass(cfg), af_gravity, af_k_thrust)
 		}),
+		motor_lag_s,
 	};
 	let mut sim = af.sim();
 	let mut teacher = af.teacher(teacher_id);
@@ -3479,7 +3521,8 @@ pub fn score_classical_baseline(
 	af_inertia = [0.0023, 0.0023, 0.0046], af_gravity = 9.81, af_dt = 0.001,
 	af_pid_att = [0.0; 12], af_pid_rate = [0.0; 12], af_pid_out_limit_n = 0.0,
 	af_pid_hover_n = 0.0, af_pid_attitude_hz = 0.0, af_pid_lpf_hz = 0.0,
-	use_estimator = false, est_kp = 2.0, est_ki = 0.1))]
+	use_estimator = false, est_kp = 2.0, est_ki = 0.1,
+	motor_lag_s = 0.0))]
 #[allow(clippy::too_many_arguments)]
 pub fn trace_classical_baseline(
 	teacher_id: u8,
@@ -3515,6 +3558,7 @@ pub fn trace_classical_baseline(
 	use_estimator: bool,
 	est_kp: f64,
 	est_ki: f64,
+	motor_lag_s: f32,
 ) -> PyResult<(f64, f64, f64, Vec<Vec<f64>>)>
 {
 	if init_qs.len() % 4 != 0
@@ -3546,6 +3590,7 @@ pub fn trace_classical_baseline(
 			af_pid_lpf_hz,
 		),
 		teacher_hover: None, // attitude-only baseline: legacy 0.5 teachers
+		motor_lag_s,
 	};
 	let mut sim = af.sim();
 	let mut teacher = af.teacher(teacher_id);
@@ -3758,6 +3803,7 @@ mod rival_plant_tests
 			1.0,
 			1.0,
 			0.5236,
+			0.0,
 		)
 		.expect("scorer must accept a well-formed plant")
 	}
@@ -3957,6 +4003,7 @@ mod d0_hover_anchor_tests
 			xy_offset: 0.0, lambda_pos: 0.0,
 			pos_omega: 1.0, pos_zeta: 1.0, pos_max_tilt_rad: 0.5236,
 			teacher_hover_mode,
+			motor_lag_s: 0.0,
 		}
 	}
 
@@ -4362,5 +4409,231 @@ mod d0_hover_anchor_tests
 			"derived-hover observer attributes {on:.3}·b·u of the student's own action"
 		);
 		assert!(off > 0.25, "legacy observer should book ≈0.39·b·u as disturbance, got {off:.3}");
+	}
+}
+
+#[cfg(test)]
+mod motor_lag_axis_f_tests
+{
+	//! AXIS F PINS (19/09/2026, docs/multi_axis_programme_spec.md §3-F, §5.1 #11).
+	//!
+	//! The lag model itself is pinned in controller.rs (motor_lag_off_is_bit_identical,
+	//! motor_lag_matches_molchanov_settling_time) and its Metal twin in
+	//! metal_controller.rs (parity_motor_lag_quad). What was missing — and what
+	//! these pin — is the PLUMBING: that ONE field reaches the training rollout,
+	//! the per-round eval and the classical baselines, that 0.0 leaves the anchor
+	//! plant untouched, and that a non-zero value actually changes the trajectory
+	//! (a plumbed-but-dead parameter passes every parity test trivially).
+	use super::*;
+	use crate::controller::{AttitudeSim, WnnController};
+
+	const STEPS: usize = 300;
+	const T_NOMINAL: f32 = 0.15; // Molchanov nominal 2% settling time (τ = 37.5 ms)
+
+	/// A deterministic, non-hover PWM sequence: varying enough that a filtered
+	/// command differs from the raw one on every step after the first.
+	fn pwm_at(t: usize) -> [f32; 4]
+	{
+		let s = (t as f32 * 0.07).sin() * 0.2;
+		let c = (t as f32 * 0.05).cos() * 0.15;
+		[0.5 + s, 0.5 - s, 0.5 + c, 0.5 - c]
+	}
+
+	fn drive(sim: &mut AttitudeSim) -> Vec<u32>
+	{
+		sim.reset(Some([0.98, 0.1, 0.1, 0.05]), Some([0.3, -0.2, 0.1]));
+		let mut bits = Vec::with_capacity(STEPS * 7);
+		for t in 0..STEPS
+		{
+			sim.step(pwm_at(t));
+			let q = sim.quaternion();
+			let (g, _) = sim.read_imu();
+			bits.extend(q.iter().chain(g.iter()).map(|x| x.to_bits()));
+		}
+		bits
+	}
+
+	/// (1) The anchor: AirframeRs::sim() at motor_lag_s = 0.0 is BIT-IDENTICAL to a
+	/// raw AttitudeSim::new on the same plant — set_motor_lag is never called. This
+	/// is the R9 pin's Rust half (the Python half is the pre/post-wheel smoke).
+	#[test]
+	fn motor_lag_zero_sim_is_bit_identical()
+	{
+		let af = AirframeRs::DEFAULT;
+		assert_eq!(af.motor_lag_s, 0.0, "DEFAULT airframe must be lag-free");
+		let mut via_af = af.sim();
+		let mut raw = AttitudeSim::new(
+			af.dt,
+			af.arm_length,
+			af.k_thrust,
+			af.k_drag,
+			af.inertia,
+			af.gravity,
+		);
+		assert_eq!(via_af.motor_lag(), 0.0);
+		assert_eq!(drive(&mut via_af), drive(&mut raw), "lag 0.0 must not touch the plant");
+	}
+
+	/// (2) Dead-plumbing check at the sim level: a non-zero field reaches the sim
+	/// and changes the trajectory.
+	#[test]
+	fn motor_lag_on_changes_sim_trajectory()
+	{
+		let af = AirframeRs {
+			motor_lag_s: T_NOMINAL,
+			..AirframeRs::DEFAULT
+		};
+		let mut lagged = af.sim();
+		assert_eq!(lagged.motor_lag(), T_NOMINAL, "sim() must arm the lag");
+		let mut raw = AirframeRs::DEFAULT.sim();
+		assert_ne!(drive(&mut lagged), drive(&mut raw), "lag {T_NOMINAL} left the trajectory unchanged");
+	}
+
+	/// The attitude-only anchor training config on the synthetic plant (the
+	/// pre-airframe defaults), legacy PID teacher, one DAgger round.
+	fn anchor_cfg(motor_lag_s: f32) -> RewardGatedConfigPacked
+	{
+		let af = AirframeRs::DEFAULT;
+		RewardGatedConfigPacked {
+			num_rounds: 1, episodes_per_round: 2, steps_per_episode: STEPS,
+			bptt_window: 32, topk_per_neuron: 4, protect_learned: false,
+			gate_mode: 0, gate_use_best: false, gate_window: 0,
+			gate_quantile: 0.5, gate_running: true, target_source: 0,
+			teacher: 0, teacher_schedule: vec![], teacher_blend: vec![],
+			keep_best_checkpoint: true, explore_eps: 0.0, explore_scale: 0.1,
+			curriculum: false, easy_tilt_deg: 8.0, full_tilt_deg: 8.0,
+			dt: af.dt as f64, max_initial_yaw_rad: 0.3,
+			max_initial_body_rate: 0.5, max_initial_yaw_rate: 0.3,
+			eval_episodes: 2,
+			split_tau: 0.1, split_clean_gain: 0.999, split_accum_corr: 0.9,
+			split_max_rounds: 5, split_k_start: 1, split_coarse_target: 32,
+			split_selective_output: true,
+			active_roll: true, active_pitch: true, active_yaw: true,
+			dist_enabled: false, dist_tau_bias: [0.0; 3],
+			dist_gust_sigma: 0.0, dist_gust_tau_c: 0.1,
+			dist_motor_asym: [1.0; 4],
+			dist_gyro_sigma: 0.0, dist_gyro_bias_walk: 0.0, dist_accel_sigma: 0.0,
+			dist_dropout_prob: 0.0, dist_dropout_len_steps: 0,
+			dist_obs_delay_steps: 0, dist_torque_scale_jitter: 0.0,
+			expert_drives: false,
+			af_arm_length: af.arm_length, af_k_thrust: af.k_thrust, af_k_drag: af.k_drag,
+			af_inertia: af.inertia, af_gravity: af.gravity,
+			af_pid_att: [0.0; 12], af_pid_rate: [0.0; 12],
+			af_pid_out_limit_n: 0.0, af_pid_hover_n: 0.0,
+			af_pid_attitude_hz: 0.0, af_pid_lpf_hz: 0.0,
+			write_priority_err: false, write_err_floor_deg: 0.0,
+			translation: false, af_mass: 0.0, mass_jitter: 0.0,
+			alt_offset: 0.0, init_vz: 0.0, collective_jitter: 0.0,
+			target_altitude: 0.0,
+			alt_pd_omega: 2.0, alt_pd_zeta: 1.0, alt_pd_max_delta: 0.25,
+			xy_offset: 0.0, lambda_pos: 0.0,
+			pos_omega: 1.0, pos_zeta: 1.0, pos_max_tilt_rad: 0.5236,
+			teacher_hover_mode: 0,
+			motor_lag_s,
+		}
+	}
+
+	/// sn=0 QUAD student, 9 base features (the smallest controller the trainer
+	/// accepts), deterministic connectivity.
+	fn student(seed: u64) -> WnnController
+	{
+		let (levels, bpf, obpn) = (8usize, 3usize, 6usize);
+		let mut rng = SmallRng::seed_from_u64(seed);
+		let frame_bits = 9 * bpf;
+		let thresholds: Vec<f32> = (0..frame_bits).map(|_| rng.gen_range(-5.0f32..5.0)).collect();
+		let out_conn: Vec<i64> = (0..4 * levels * obpn)
+			.map(|_| rng.gen_range(0..frame_bits) as i64)
+			.collect();
+		WnnController::new_core(
+			4, levels, bpf, 1, 0, 0, obpn, thresholds, Vec::new(), out_conn,
+			false, 0.1, 0.9, 1.0,
+			false, false, false, false, false, false, false, false,
+			0.99, 1.0, 0.001, false, 1,
+			ram_core::neuron_memory::QUAD_WEIGHTED, None, None, 0.05, false, 0.30,
+			false, false, false, false, false, false, 1,
+		)
+		.expect("axis-F student must construct")
+	}
+
+	fn train(motor_lag_s: f32) -> (Vec<f64>, Vec<f64>, Vec<f64>)
+	{
+		let cfg = anchor_cfg(motor_lag_s);
+		assert_eq!(
+			AirframeRs::from_cfg(&cfg).motor_lag_s, motor_lag_s,
+			"from_cfg must carry the packed field into the plant"
+		);
+		let mut c = student(0xAF);
+		let st = dagger_train_inplace_rs(&mut c, &cfg, [0.0; 3], 0x1A6);
+		(st.iter_mean_err_deg, st.iter_mean_episode_reward, st.iter_fitness)
+	}
+
+	/// (3) TRAINING ROLLOUT: lag 0.0 is deterministic and carries no hidden state
+	/// (two runs bit-identical); lag ON changes what the student trains and
+	/// evals on. The second half is the trainer-gap check: before this field
+	/// existed, `dagger_train_inplace_rs` could not be made to fly a lagged plant
+	/// at all, so a lagged cohort would have trained lag-free.
+	#[test]
+	fn motor_lag_reaches_the_training_rollout()
+	{
+		let a = train(0.0);
+		let b = train(0.0);
+		assert_eq!(a, b, "lag 0.0 training must be bit-reproducible");
+		let lagged = train(T_NOMINAL);
+		assert!(
+			a.0[0].is_finite() && lagged.0[0].is_finite(),
+			"round-0 mean err must be finite (a={:?}, lagged={:?})", a.0, lagged.0
+		);
+		assert_ne!(
+			a, lagged,
+			"lag {T_NOMINAL} produced identical training stats to lag 0.0 — the field is \
+			 not reaching the training rollout (err {:?} vs {:?})",
+			a.0, lagged.0
+		);
+	}
+
+	/// Bit patterns of the 6-tuple — the position error is NaN off-translation
+	/// (by design: never a fake 0.0 hold), so `==` on the floats would fail.
+	fn bits6(t: (f64, f64, f64, f64, f64, f64)) -> [u64; 6]
+	{
+		[t.0.to_bits(), t.1.to_bits(), t.2.to_bits(), t.3.to_bits(), t.4.to_bits(), t.5.to_bits()]
+	}
+
+	fn baseline(teacher_id: u8, motor_lag_s: f32) -> (f64, f64, f64, f64, f64, f64)
+	{
+		// Tilted starts, so the rival has a transient the lag can shape.
+		let init_qs: Vec<f32> = vec![0.98, 0.15, 0.1, 0.0, 0.97, -0.12, 0.18, 0.05];
+		let init_om: Vec<f32> = vec![0.3, -0.2, 0.1, -0.25, 0.3, -0.05];
+		let af = AirframeRs::DEFAULT;
+		score_classical_baseline(
+			teacher_id, init_qs, init_om, STEPS, 5.0,
+			false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0, 0.0, 0, 0, 0.0,
+			af.arm_length, af.k_thrust, af.k_drag, af.inertia, af.gravity, af.dt,
+			[0.0; 12], [0.0; 12], 0.0, 0.0, 0.0, 0.0,
+			false, 2.0, 0.1,
+			false, 0.0, vec![], vec![], vec![], vec![],
+			2.0, 1.0, 0.25, vec![], vec![], 1.0, 1.0, 0.5236,
+			motor_lag_s,
+		)
+		.expect("baseline scores")
+	}
+
+	/// (4) CLASSICAL BASELINES fly the lag too — for every teacher id, since the
+	/// axis's read is whether the WNN degrades MORE than the classicals. lag 0.0
+	/// is reproducible; lag ON moves the rival's error.
+	#[test]
+	fn motor_lag_reaches_the_classical_baselines()
+	{
+		for id in 0u8..=4
+		{
+			let a = baseline(id, 0.0);
+			assert_eq!(bits6(a), bits6(baseline(id, 0.0)), "teacher {id}: lag 0.0 must be reproducible");
+			let l = baseline(id, T_NOMINAL);
+			assert!(
+				(a.1 - l.1).abs() > 1e-9,
+				"teacher {id}: lag {T_NOMINAL} did not change the rival's err ({} vs {}) — \
+				 score_classical_baseline is not applying it",
+				a.1, l.1
+			);
+		}
 	}
 }

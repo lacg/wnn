@@ -166,8 +166,10 @@ def score_all(ec, draw: HoldoutDraw, feed: TeacherFeed = TeacherFeed()) -> dict:
 	from ._accel import score_classical_baseline
 	q0, w0, fields = _episode_fields(ec, draw)
 	# The plant the baselines fly MUST be the plant the WNN flies, or the
-	# comparison is between two different aircraft.
-	fields = {**fields, **ec.airframe_kwargs(), **feed.fields(), **_stage1_fields(ec, draw)}
+	# comparison is between two different aircraft. AXIS F: that includes the
+	# actuator lag (motor_lag_kwargs — empty when the axis is off).
+	fields = {**fields, **ec.airframe_kwargs(), **ec.motor_lag_kwargs(),
+	          **feed.fields(), **_stage1_fields(ec, draw)}
 	out = {}
 	for tid, name in _NAMES.items():
 		# Slice, don't destructure: the scorer gained a 6th value (jerk) on
@@ -189,7 +191,7 @@ def pid_metrics(ec, draw: HoldoutDraw, feed: TeacherFeed = TeacherFeed()) -> dic
 	from ._accel import score_classical_baseline
 	q0, w0, fields = _episode_fields(ec, draw)
 	s1 = _stage1_fields(ec, draw)
-	fields = {**fields, **ec.airframe_kwargs(), **feed.fields(), **s1}
+	fields = {**fields, **ec.airframe_kwargs(), **ec.motor_lag_kwargs(), **feed.fields(), **s1}
 	# 6th value (21/08/2026): mean motor-command jerk, same definition as the
 	# WNN scorer's, so teacher and WNN jerk are directly comparable. Tolerate a
 	# 5-tuple wheel so this Python can land before the wheel does.

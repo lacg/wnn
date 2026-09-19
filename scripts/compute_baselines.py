@@ -65,7 +65,10 @@ def _score_seed(seed, a):
 		max_initial_xy_offset_m=float(a.xy_offset),
 		airframe=(None if not a.airframe else
 		          __import__('wnn.control.airframe', fromlist=['Airframe'])
-		          .Airframe.preset(a.airframe)))
+		          .Airframe.preset(a.airframe)),
+		# AXIS F: the rivals fly the SAME lagged plant the WNN run flies
+		# (phased_ga --motor-lag-s). 0.0 = OFF, bit-identical to every earlier table.
+		motor_lag_s=float(a.motor_lag_s))
 	# Motor-fault experiment: SAME injection as phased_ga (shared helper), or the
 	# baseline flies a healthy aircraft against a WNN trained on a broken one.
 	if a.motor_fault:
@@ -96,6 +99,10 @@ def main():
 	                help="Max initial horizontal displacement (m). Mirrors phased_ga's "
 	                     "--xy-offset; x/y never leave the origin at 0.0, so pos3d is then "
 	                     "the vertical error alone. Requires --translation.")
+	ap.add_argument("--motor-lag-s", type=float, default=0.0,
+	                help="AXIS F: Molchanov eq. 7 motor lag as the 2%% SETTLING TIME T (s), "
+	                     "tau = T/4 — pass the SAME value as the WNN run's --motor-lag-s "
+	                     "(nominal 0.15, stress 0.30). Default 0.0 = OFF, bit-identical.")
 	ap.add_argument("--tilt", type=float, default=5.0)
 	ap.add_argument("--report-seed", type=int, default=99990101)
 	# Multi-seed held-out: each seed is an independent held-out draw. The
@@ -130,6 +137,8 @@ def main():
 		                 "and the synthetic default has none.")
 	if a.xy_offset > 0.0 and not a.translation:
 		raise SystemExit("--xy-offset requires --translation: x/y cannot move without it.")
+	if a.motor_lag_s < 0.0:
+		raise SystemExit(f"--motor-lag-s must be >= 0 s (got {a.motor_lag_s}).")
 
 	seeds = a.report_seeds if a.report_seeds else [a.report_seed]
 
@@ -190,6 +199,8 @@ def main():
 	        "translation": bool(a.translation),
 	        "xy_offset_m": float(a.xy_offset),
 	        "airframe": a.airframe,
+	        # AXIS F. A file without this key predates ABI 30 and is lag-free (0.0).
+	        "motor_lag_s": float(a.motor_lag_s),
 	        "report_seed": seeds[0], "report_seeds": seeds,
 	        "report_episodes": a.report_episodes,
 	        "steps": a.steps, "stable_deg": a.stable_deg,
