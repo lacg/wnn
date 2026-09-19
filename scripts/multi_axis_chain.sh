@@ -24,6 +24,7 @@
 #
 # ROUND 1 ORDER (spec §5.1.5), 12 launches, ~46 h at 3.2 h/run (C budgeted 6-7 h):
 #   1 anchor _hd29 s7,s8,s9   2 A L4A,L4B   3 F tau,2tau   4 B pid,lqr   5 D cf2x_firmware   6 C sn4,sn8
+#   (C flies by default — its memory budget is DECIDED, spec §5.1.4a, see the table)
 # Rounds 2-4: the 9 conditions at seeds 31337003/4/5 (no anchor; D4's 8 seeds are complete
 # after round 1). 12 + 27 = 39 runs. §4 escalation (+2 seeds where the primary CI straddles 0
 # AND includes the MEI after 4 seeds) is a HUMAN decision after round 4 — not automated.
@@ -53,7 +54,12 @@
 #      airframe; D's statement is a guess until its 2nd seed lands (round 2).
 #   C  STATE NEURONS primary ALT, MEI 0.16 m (the n=4 MDE at the pessimistic SD 0.077). A state
 #      layer that closes less than that is indistinguishable from nothing at n=4 — said up
-#      front. Reports the CONNECTIONS row too (R7): sn>0 adds a stage. GATED on MEM_BUDGET_OK.
+#      front. Reports the CONNECTIONS row too (R7): sn>0 adds a stage.
+#      MEMORY BUDGET (Luiz 19/09, spec §5.1.4a): the ladder's --max-cells 180000 --max-cells-strict
+#      would clamp sn>0 to a 5-50x SMALLER memory than the prior sn runs, so axis C OPENS the cap:
+#      sn=4 --max-cells 1000000000 (open; ~18 GB peak fits the box), sn=8 --max-cells 4000000 (the
+#      4 M cap — uncapped sn=8 peaks 35-38 GB and trips the watchdog HOG_GB 28). Each C marker
+#      records "max_cells". Escape hatch: MA_REFUSE_AXIS_C=1 refuses both C runs (exit 2).
 #   anchor extension  Welch 8-vs-4 is the payoff; n=8 alone also tightens the anchor's own
 #      err CI (currently [0.086, 0.167] hd at n=4 spans MPC..worse-than-PID).
 #   stable is DESCRIPTIVE everywhere (R11: 2-5 failures in 500; t-CI meaningless; counts only).
@@ -68,9 +74,9 @@
 # PRE-CONDITIONS (human, at the idle window — §5.1.2; this script checks only what it can):
 #   F wheel (ABI 30) installed + Python patch applied ATOMICALLY; s=1 pin bit-identical;
 #   per-condition 60 s smokes rc=0 (B: the label-saturation print must NOT fire);
-#   D5 baselines banked; MEM_BUDGET_OK=1 exported ONLY once §5 #8 (sn=4/8 vs the 180k cap) is
-#   written down. Skew guard: the chain aborts BEFORE the first launch if phased_ga --help lacks
-#   any flag a launch in the requested round(s) depends on (e.g. --motor-lag-s not yet landed).
+#   D5 baselines banked. The axis-C budget (§5 #8) is DECIDED (§5.1.4a) and encoded in the table —
+#   no env is needed to fly it. Skew guard: the chain aborts BEFORE the first launch if phased_ga
+#   --help lacks any flag a launch in the requested round(s) depends on (e.g. --motor-lag-s).
 #
 # USAGE
 #   bash scripts/multi_axis_chain.sh --dry-run [--round N]     print the plan, touch nothing, exit 0
@@ -88,37 +94,38 @@
 # EXIT CODES  0 every planned launch in the requested round(s) is banked
 #             1 ABORT — lock held / box not idle / flag skew / control marker missing / a run
 #               finished without a marker (R1-R3 in controller_arm_lib.sh). Box left idle. Human.
-#             2 round(s) done but >=1 launch REFUSED by a gate (MEM_BUDGET_OK unset). Relaunch
-#               the same round once the gate is released — idempotent, banked runs are skipped.
+#             2 round(s) done but >=1 launch REFUSED by an escape hatch (MA_REFUSE_AXIS_C=1).
+#               Relaunch the same round without it — idempotent, banked runs are skipped.
 #             3 usage error
 # HOLD  touch experiments/HOLD_CONTROLLER -> the flying run banks, then this chain waits (logged
 #       here AND inside the ladder); rm resumes. Never kill the chain to get an idle window.
 # IT WILL NOT: launch beside another controller/ladder/chain; re-fly a banked marker; retry a
 #   crash (R2); write a marker (only controller_arm_lib.sh does); edit any script; fly axis C
-#   without MEM_BUDGET_OK=1; fly axis G/E; decide escalation; pkill anything (no kill path at all).
+#   when MA_REFUSE_AXIS_C=1; fly axis G/E; decide escalation; pkill anything (no kill path at all).
 # A RUNNING COPY HOLDS THIS FILE IN MEMORY — editing it changes nothing until relaunch, and
 #   NEVER edit it while a copy is running (bash resumes at a byte offset).
 set -u
 cd "$(dirname "$0")/.." || exit 1
 
 # =============================== THE TABLE — edit here ===============================
-# One line per condition:  axis|value|suffix|primary|flags|require-flags|gate-env
-#   suffix   = ARM_SUFFIX (marker/tag suffix; the ONLY thing that names the condition)
-#   primary  = paired_power.py --primary column (R1: ONE pre-registered column per axis)
-#   flags    = the condition's phased_ga flags (appended last -> override the ladder's)
-#   require  = flags that must exist in phased_ga --help before launch (skew guard)
-#   gate-env = env var that must be =1 to launch, else REFUSED (empty = no gate)
+# One line per condition:  axis|value|suffix|primary|flags|require-flags|refuse-env|extra-json
+#   suffix     = ARM_SUFFIX (marker/tag suffix; the ONLY thing that names the condition)
+#   primary    = paired_power.py --primary column (R1: ONE pre-registered column per axis)
+#   flags      = the condition's phased_ga flags (appended last -> override the ladder's)
+#   require    = flags that must exist in phased_ga --help before launch (skew guard)
+#   refuse-env = escape hatch: if this env var is =1 the launch is REFUSED (empty = none)
+#   extra-json = extra marker fields (raw JSON, no leading comma; empty = none)
 # Order = §5.1.5 round-1 order. Seed r of each line flies in round r.
 CONDITIONS=(
-	"A|L4A|_axA_L4A|err|--disturbance L4A|--disturbance|"
-	"A|L4B|_axA_L4B|err|--disturbance L4B|--disturbance|"
-	"F|lag0.0375|_axF_lag0375|err|--motor-lag-s 0.0375|--motor-lag-s|"
-	"F|lag0.075|_axF_lag075|err|--motor-lag-s 0.075|--motor-lag-s|"
-	"B|pid|_axB_pid|err|--teacher pid|--teacher|"
-	"B|lqr|_axB_lqr|err|--teacher lqr|--teacher|"
-	"D|cf2x_firmware|_axD_cf2xfw|alt|--airframe cf2x_firmware|--airframe|"
-	"C|sn4|_axC_sn4|alt|--grid-state-neurons 4 --max-state-neurons 4|--grid-state-neurons --max-state-neurons|MEM_BUDGET_OK"
-	"C|sn8|_axC_sn8|alt|--grid-state-neurons 8 --max-state-neurons 8|--grid-state-neurons --max-state-neurons|MEM_BUDGET_OK"
+	"A|L4A|_axA_L4A|err|--disturbance L4A|--disturbance||"
+	"A|L4B|_axA_L4B|err|--disturbance L4B|--disturbance||"
+	"F|lag0.0375|_axF_lag0375|err|--motor-lag-s 0.0375|--motor-lag-s||"
+	"F|lag0.075|_axF_lag075|err|--motor-lag-s 0.075|--motor-lag-s||"
+	"B|pid|_axB_pid|err|--teacher pid|--teacher||"
+	"B|lqr|_axB_lqr|err|--teacher lqr|--teacher||"
+	"D|cf2x_firmware|_axD_cf2xfw|alt|--airframe cf2x_firmware|--airframe||"
+	"C|sn4|_axC_sn4|alt|--grid-state-neurons 4 --max-state-neurons 4 --max-cells 1000000000|--grid-state-neurons --max-state-neurons --max-cells|MA_REFUSE_AXIS_C|\"max_cells\":1000000000,\"max_cells_note\":\"open; ~18 GB peak (spec 5.1.4a)\""
+	"C|sn8|_axC_sn8|alt|--grid-state-neurons 8 --max-state-neurons 8 --max-cells 4000000|--grid-state-neurons --max-state-neurons --max-cells|MA_REFUSE_AXIS_C|\"max_cells\":4000000,\"max_cells_note\":\"4M cap; uncapped 35-38 GB trips HOG_GB 28 (spec 5.1.4a)\""
 )
 COND_SEEDS="31337002 31337003 31337004 31337005"          # seed r flies in round r (R4)
 ANCHOR_SUFFIX="_hd29"                                     # D9
@@ -127,8 +134,8 @@ ANCHOR_FLAGS="--teacher-hover derived"
 ANCHOR_REQUIRE="--teacher-hover"
 ANCHOR_ROUND1_SEEDS="31337007 31337008 31337009"          # D4: + s31337006 from queue_1909 = 8
 REPORT_SEEDS_D5="99990201 99990202 99990203 99990204 99990205"   # D5, on EVERY run
-# MEM_BUDGET_OK: export MEM_BUDGET_OK=1 ONLY after §5 #8 is written (sn=4/8 reachable cells vs
-# the 180k grow cap; sn smoke peak RSS < 6 GB). Default = REFUSE axis C, loudly, and exit 2.
+# MA_REFUSE_AXIS_C=1: escape hatch that REFUSES both C runs (loud, exit 2). Default = fly them with
+# the §5.1.4a caps above. The ladder's --max-cells-strict stays; with the cap opened it is inert.
 # =====================================================================================
 
 BASE="SL_C_b24n256_cf21_brushless_L4C_g10"
@@ -179,47 +186,47 @@ wait_box_clear() {
 }
 
 # ---- plan --------------------------------------------------------------------------
-# A plan record: r|idx|axis|value|suffix|seed|primary|flags|require|gate|label|control
-# control = _hd29 (paired) or NONE (anchor extension, ARM_NO_CONTROL=1).
+# A plan record: r|idx|axis|value|suffix|seed|primary|flags|require|refuse|label|control|extra
+# control = _hd29 (paired) or NONE (anchor extension, ARM_NO_CONTROL=1); refuse = escape-hatch env.
 PLAN=()
 build_plan() {
-	local r="$1" idx=0 seed rec axis value suffix primary flags require gate
+	local r="$1" idx=0 seed rec axis value suffix primary flags require gate extra
 	PLAN=()
 	if [ "$r" = "1" ]; then
 		for seed in $ANCHOR_ROUND1_SEEDS; do
 			idx=$((idx + 1))
-			PLAN[${#PLAN[@]}]="$r|$idx|anchor|hd29-ext|${ANCHOR_SUFFIX}|${seed}|-|${ANCHOR_FLAGS}|${ANCHOR_REQUIRE}||${ANCHOR_LABEL}|NONE"
+			PLAN[${#PLAN[@]}]="$r|$idx|anchor|hd29-ext|${ANCHOR_SUFFIX}|${seed}|-|${ANCHOR_FLAGS}|${ANCHOR_REQUIRE}||${ANCHOR_LABEL}|NONE|"
 		done
 	fi
 	seed="$(nth_seed "$r")"
 	for rec in "${CONDITIONS[@]}"; do
-		IFS='|' read -r axis value suffix primary flags require gate <<< "$rec"
+		IFS='|' read -r axis value suffix primary flags require gate extra <<< "$rec"
 		idx=$((idx + 1))
-		PLAN[${#PLAN[@]}]="$r|$idx|${axis}|${value}|${suffix}|${seed}|${primary}|${flags}|${require}|${gate}|multi-axis-${axis}-${value}|${ANCHOR_SUFFIX}"
+		PLAN[${#PLAN[@]}]="$r|$idx|${axis}|${value}|${suffix}|${seed}|${primary}|${flags}|${require}|${gate}|multi-axis-${axis}-${value}|${ANCHOR_SUFFIX}|${extra}"
 	done
 }
-status_of() {   # <suffix> <seed> <gate>
+status_of() {   # <suffix> <seed> <refuse-env>
 	if banked "$2" "$1"; then echo banked
-	elif [ -n "$3" ] && [ "$(eval "echo \${$3:-0}")" != "1" ]; then echo "GATED(${3} unset)"
+	elif [ -n "$3" ] && [ "$(eval "echo \${$3:-0}")" = "1" ]; then echo "REFUSED(${3}=1)"
 	else echo todo; fi
 }
 print_plan_line() {
-	local r idx axis value suffix seed primary flags require gate label control
-	IFS='|' read -r r idx axis value suffix seed primary flags require gate label control <<< "$1"
+	local r idx axis value suffix seed primary flags require gate label control extra
+	IFS='|' read -r r idx axis value suffix seed primary flags require gate label control extra <<< "$1"
 	printf 'PLAN r%s #%02d axis=%s cond=%s seed=%s tag=%s control=%s primary=%s status=%s flags="%s --report-seeds %s"\n' \
 		"$r" "$idx" "$axis" "$suffix" "$seed" "$(tag_of "$seed" "$suffix")" "$control" "$primary" \
 		"$(status_of "$suffix" "$seed" "$gate")" "$flags" "$REPORT_SEEDS_D5"
 }
 print_plan_json() {
-	local first=1 r idx axis value suffix seed primary flags require gate label control
+	local first=1 r idx axis value suffix seed primary flags require gate label control extra
 	echo "["
 	for rr in $ROUNDS; do
 		build_plan "$rr"
 		for rec in "${PLAN[@]}"; do
-			IFS='|' read -r r idx axis value suffix seed primary flags require gate label control <<< "$rec"
+			IFS='|' read -r r idx axis value suffix seed primary flags require gate label control extra <<< "$rec"
 			[ "$first" = 1 ] || echo ","
 			first=0
-			printf '  {"round":%s,"idx":%s,"axis":"%s","condition":"%s","suffix":"%s","seed":%s,"tag":"%s","control":"%s","primary":"%s","status":"%s","flags":"%s --report-seeds %s","require_flags":"%s --report-seeds","gate":"%s"}' \
+			printf '  {"round":%s,"idx":%s,"axis":"%s","condition":"%s","suffix":"%s","seed":%s,"tag":"%s","control":"%s","primary":"%s","status":"%s","flags":"%s --report-seeds %s","require_flags":"%s --report-seeds","refuse_env":"%s"}' \
 				"$r" "$idx" "$axis" "$value" "$suffix" "$seed" "$(tag_of "$seed" "$suffix")" "$control" "$primary" \
 				"$(status_of "$suffix" "$seed" "$gate")" "$flags" "$REPORT_SEEDS_D5" "$require" "$gate"
 		done
@@ -245,13 +252,13 @@ preflight() {
 	[ -x "$VP" ] || { log "ABORT — venv python $VP missing."; exit 1; }
 	# Skew guard over EVERY launch in the requested rounds that will actually fly — abort
 	# BEFORE the first launch, not 20 h in when seed_arm_chain reaches the condition.
-	local help need="--report-seeds" rec r idx axis value suffix seed primary flags require gate label control f missing=""
+	local help need="--report-seeds" rec r idx axis value suffix seed primary flags require gate label control extra f missing=""
 	help="$(PYTHONPATH=src/wnn "$VP" -m wnn.control.phased_ga --help 2>/dev/null)"
 	[ -n "$help" ] || { log "ABORT — phased_ga --help printed nothing (tree broken?)."; exit 1; }
 	for r in $ROUNDS; do
 		build_plan "$r"
 		for rec in "${PLAN[@]}"; do
-			IFS='|' read -r r idx axis value suffix seed primary flags require gate label control <<< "$rec"
+			IFS='|' read -r r idx axis value suffix seed primary flags require gate label control extra <<< "$rec"
 			[ "$(status_of "$suffix" "$seed" "$gate")" = "todo" ] || continue
 			need="$need $require"
 			if [ "$control" != "NONE" ] && ! banked "$seed" "$control"; then
@@ -268,18 +275,19 @@ preflight() {
 
 # ---- one launch ------------------------------------------------------------------------
 launch_one() {
-	local r idx axis value suffix seed primary flags require gate label control tag st
-	IFS='|' read -r r idx axis value suffix seed primary flags require gate label control <<< "$1"
+	local r idx axis value suffix seed primary flags require gate label control extra tag st
+	IFS='|' read -r r idx axis value suffix seed primary flags require gate label control extra <<< "$1"
 	tag="$(tag_of "$seed" "$suffix")"
 	st="$(status_of "$suffix" "$seed" "$gate")"
 	case "$st" in
 		banked) log "r$r #$idx SKIP — $tag already banked."; return 0 ;;
-		GATED*) log "r$r #$idx REFUSED — $tag: ${gate} is not 1 (§5 #8 memory budget not stated). Export ${gate}=1 and relaunch --round $r to fly it."; REFUSED=$((REFUSED + 1)); return 0 ;;
+		REFUSED*) log "r$r #$idx REFUSED — $tag: escape hatch ${gate}=1. Unset it and relaunch --round $r to fly it."; REFUSED=$((REFUSED + 1)); return 0 ;;
 	esac
 	wait_while_held log "$tag"
 	wait_box_clear
 	log "===== r$r #$idx LAUNCH $tag (axis $axis = $value; control $control; primary $primary) ====="
 	local marker_json=",\"programme\":\"multi-axis\",\"axis\":\"${axis}\",\"condition\":\"${value}\",\"round\":${r},\"primary\":\"${primary}\",\"report_seed_set\":\"D5\",\"report_seeds\":\"${REPORT_SEEDS_D5}\""
+	[ -n "$extra" ] && marker_json="${marker_json},${extra}"
 	if [ "$control" = "NONE" ]; then
 		ARM_SUFFIX="$suffix" ARM_LABEL="$label" ARM_SEEDS="$seed" ARM_NO_CONTROL=1 ARM_CTRL_SUFFIX="_hd" \
 			ARM_EXTRA_ARGS="${flags} --report-seeds ${REPORT_SEEDS_D5}" \
@@ -308,12 +316,12 @@ anchor_inventory() {
 	echo "$n:$list"
 }
 round_verdict() {
-	local r="$1" rec axis value suffix primary flags require gate s seeds inv nn
+	local r="$1" rec axis value suffix primary flags require gate extra s seeds inv nn
 	inv="$(anchor_inventory)"; nn="${inv%%:*}"
 	log "---------- ROUND $r VERDICT — anchor ${ANCHOR_SUFFIX} banked n=${nn} (seeds${inv#*:}) ----------"
 	[ "$r" = "1" ] && log "ROUND 1 = n=1 per condition: DIRECTION only. Nothing below is a verdict (R2)."
 	for rec in "${CONDITIONS[@]}"; do
-		IFS='|' read -r axis value suffix primary flags require gate <<< "$rec"
+		IFS='|' read -r axis value suffix primary flags require gate extra <<< "$rec"
 		seeds=""
 		for s in $(echo "$COND_SEEDS" | awk -v n="$r" '{for(i=1;i<=n;i++) print $i}'); do
 			banked "$s" "$suffix" && seeds="$seeds $s"
@@ -349,8 +357,8 @@ case "$MODE" in
 			log "ROUND $r — ${#PLAN[@]} launches, round-major (seed $( [ "$r" = 1 ] && echo "$(nth_seed 1) + anchor ${ANCHOR_ROUND1_SEEDS}" || nth_seed "$r"))"
 			for rec in "${PLAN[@]}"; do print_plan_line "$rec"; done
 		done
-		if [ "${MEM_BUDGET_OK:-0}" = "1" ]; then log "MEM_BUDGET_OK=1 — axis C would fly."
-		else log "MEM_BUDGET_OK=${MEM_BUDGET_OK:-unset} — axis C is REFUSED (exit 2 in run mode) until §5 #8 is written and MEM_BUDGET_OK=1 is exported."; fi
+		if [ "${MA_REFUSE_AXIS_C:-0}" = "1" ]; then log "MA_REFUSE_AXIS_C=1 — axis C is REFUSED (exit 2 in run mode)."
+		else log "axis C flies with the spec 5.1.4a caps (sn4 --max-cells 1000000000, sn8 --max-cells 4000000); MA_REFUSE_AXIS_C=1 is the escape hatch."; fi
 		exit 0 ;;
 esac
 
