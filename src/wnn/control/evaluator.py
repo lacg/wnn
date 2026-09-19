@@ -463,6 +463,31 @@ def calib_episode_config(args, ec):
 	return dataclasses.replace(ec, max_initial_tilt_rad=_m.radians(float(tilt)))
 
 
+def _calib_plant_gate(episode_config) -> bool:
+	"""Does a CALIBRATION rollout (thermometer fit, student refit) fly the
+	airframe? Only when one is set AND the run flies translation or opted in via
+	--calib-airframe. The attitude-only default stays the synthetic plant: flipping
+	it moves ~85% of 30-bit addresses (lineage break), a decision for the
+	calib-airframe A/B — not a side effect (see fit_thresholds_from_pid_rollouts)."""
+	if episode_config is None or getattr(episode_config, "airframe", None) is None:
+		return False
+	return bool(getattr(episode_config, "translation", False)) \
+		or bool(getattr(episode_config, "calib_airframe", False))
+
+
+def _calib_plant_sim(episode_config) -> AttitudeSim:
+	"""The calibration rollout's plant: the airframe when _calib_plant_gate says
+	so, else the synthetic default. Shared by the teacher fit AND the student
+	refit so the two ladders can never be fitted on different aircraft."""
+	if not _calib_plant_gate(episode_config):
+		return AttitudeSim()
+	af = episode_config.airframe
+	return AttitudeSim(dt=float(getattr(episode_config, "dt", 0.001)),
+	                   arm_length=float(af.arm_length), k_thrust=float(af.k_thrust),
+	                   k_drag=float(af.k_drag), inertia=[float(x) for x in af.inertia],
+	                   gravity=float(af.gravity))
+
+
 def fit_thresholds_from_pid_rollouts(
 	spec: ControllerSpec,
 	num_episodes: int = 20,
@@ -523,29 +548,21 @@ def fit_thresholds_from_pid_rollouts(
 	# bit-identical until the A/B says otherwise. Adoption is a lineage break
 	# (~85% of 30-bit addresses move), hence a flag and a paired experiment
 	# rather than a silent flip.
-	_ec_calib_af = bool(getattr(episode_config, "calib_airframe", False)) if episode_config is not None else False
-	_stage1_cal = (_ec_translation or _ec_calib_af) and _ec_af is not None
+	_stage1_cal = _calib_plant_gate(episode_config)
+	sim = _calib_plant_sim(episode_config)
+	_hover_pwm, _target_alt = 0.5, 0.0
 	if _stage1_cal:
-		sim = AttitudeSim(dt=float(getattr(episode_config, "dt", 0.001)),
-		                  arm_length=float(_ec_af.arm_length), k_thrust=float(_ec_af.k_thrust),
-		                  k_drag=float(_ec_af.k_drag),
-		                  inertia=[float(x) for x in _ec_af.inertia],
-		                  gravity=float(_ec_af.gravity))
-		# Vertical dynamics only when the RUN has them; the calib-airframe arm on
-		# an attitude-only run must stay attitude-only or it is not an A/B of the
-		# ladder, it is an A/B of the plant.
-		if _ec_translation:
-			sim.set_translation(float(_ec_af.mass))
-			_hover_pwm = sim.hover_pwm()
-		else:
-			_hover_pwm = 0.5
 		_target_alt = float(getattr(episode_config, "target_altitude", 0.0))
-	else:
-		sim = AttitudeSim()
-		_hover_pwm, _target_alt = 0.5, 0.0
+	# Vertical dynamics only when the RUN has them; the calib-airframe arm on
+	# an attitude-only run must stay attitude-only or it is not an A/B of the
+	# ladder, it is an A/B of the plant.
+	if _stage1_cal and _ec_translation:
+		sim.set_translation(float(_ec_af.mass))
+		_hover_pwm = sim.hover_pwm()
 	# AXIS F: the ladder is fit on the CONDITION's PID rollouts (spec §1), so the
-	# calibration plant carries the run's motor lag too. 0.0 = no call = the
-	# banked fit, bit-identical.
+	# calibration plant carries the run's motor lag too — applied AFTER the plant
+	# is chosen (airframe or synthetic). 0.0 = no call = the banked fit,
+	# bit-identical.
 	_ec_lag = float(getattr(episode_config, "motor_lag_s", 0.0)) if episode_config is not None else 0.0
 	if _ec_lag > 0.0:
 		sim.set_motor_lag(_ec_lag)
@@ -839,7 +856,9 @@ def collect_student_feature_samples(genome, episode_config, num_episodes: int,
 	from .training import _sample_initial_state, apply_disturbance
 
 	ctl = build_controller(genome)
-	sim = AttitudeSim()
+	# Same plant gate as the teacher fit (19/09/2026): a refit on the synthetic
+	# plant under an airframe run would re-fit the ladder on the wrong aircraft.
+	sim = _calib_plant_sim(episode_config)
 	# AXIS F: same plant the student flies (the docstring's promise) — lag included.
 	_lag = float(getattr(episode_config, "motor_lag_s", 0.0))
 	if _lag > 0.0:
@@ -902,6 +921,36 @@ def _stage1_train_kwargs(ec) -> dict:
 		xy_offset=float(getattr(ec, "max_initial_xy_offset_m", 0.0)),
 		lambda_pos=float(getattr(ec, "lambda_pos", 0.0)),
 	)
+
+
+def _airframe_train_kwargs(ec) -> dict:
+	"""The airframe PLANT + firmware PID cascade for RewardGatedConfigPacked —
+	EXACTLY what the classical scorer hands score_classical_baseline
+	(EpisodeConfig.airframe_kwargs), minus af_dt: the trainer takes `dt`, which
+	every site already passes, and AirframeRs::from_cfg reads cfg.dt.
+
+	PAPER-CRITICAL GAP closed 19/09/2026: before this the trainer received only
+	af_mass, so every --airframe run TRAINED on the synthetic plant (k_thrust
+	2.4, hover 0.20) and SCORED on the airframe (cf21: k_thrust 0.2, hover
+	0.694), and its teachers derived synthetic-plant labels. af_pid_* ride
+	along so the trainer's PID teacher (id 0) is the same firmware cascade the
+	scorer's PID rival runs. Empty when no airframe is set — the Rust defaults
+	ARE the synthetic plant, which keeps the parity anchors bit-identical."""
+	if getattr(ec, "airframe", None) is None:
+		return {}
+	kw = dict(ec.airframe_kwargs())
+	kw.pop("af_dt", None)
+	return kw
+
+
+def _plant_train_kwargs(ec) -> dict:
+	"""Everything plant-side the trainer config takes: airframe + cascade
+	(_airframe_train_kwargs) and the stage-1 vertical channel
+	(_stage1_train_kwargs, the sole owner of af_mass). One owner per key —
+	a duplicate kwarg would raise at the ctor, so assert disjointness here."""
+	af, s1 = _airframe_train_kwargs(ec), _stage1_train_kwargs(ec)
+	assert not (af.keys() & s1.keys()), af.keys() & s1.keys()
+	return {**af, **s1}
 
 
 def _target_levels_kwarg(ra, spec) -> dict:
@@ -1527,10 +1576,11 @@ class ControllerEvaluator:
 			write_priority_err=getattr(rg, "write_priority_err", False),
 			write_err_floor_deg=getattr(rg, "write_err_floor_deg", 0.0),
 			teacher_hover_mode=_TEACHER_HOVER_MODES[getattr(rg, "teacher_hover_mode", "derived")],
-			# SCOPE C STAGE 1: the TRAINING rollout must fly the same plant the
-			# scorer does, or the vertical features are zeros here and real there
-			# (the DOB divergence — the Rust side asserts on the mismatch).
-			**_stage1_train_kwargs(rg.episode_config),
+			# The TRAINING rollout must fly the same plant the scorer does: the
+			# airframe + firmware cascade (19/09/2026 gap — trainer got af_mass
+			# only) and the stage-1 vertical channel (or the vertical features
+			# are zeros here and real there — the DOB divergence; Rust asserts).
+			**_plant_train_kwargs(rg.episode_config),
 			# AXIS F: the TRAINING rollout + per-round eval fly the same lagged
 			# plant the scorers and baselines do (empty when the axis is off).
 			**rg.episode_config.motor_lag_kwargs(),
@@ -1656,10 +1706,11 @@ class ControllerEvaluator:
 			write_priority_err=getattr(rg, "write_priority_err", False),
 			write_err_floor_deg=getattr(rg, "write_err_floor_deg", 0.0),
 			teacher_hover_mode=_TEACHER_HOVER_MODES[getattr(rg, "teacher_hover_mode", "derived")],
-			# SCOPE C STAGE 1: the TRAINING rollout must fly the same plant the
-			# scorer does, or the vertical features are zeros here and real there
-			# (the DOB divergence — the Rust side asserts on the mismatch).
-			**_stage1_train_kwargs(rg.episode_config),
+			# The TRAINING rollout must fly the same plant the scorer does: the
+			# airframe + firmware cascade (19/09/2026 gap — trainer got af_mass
+			# only) and the stage-1 vertical channel (or the vertical features
+			# are zeros here and real there — the DOB divergence; Rust asserts).
+			**_plant_train_kwargs(rg.episode_config),
 			# AXIS F: the TRAINING rollout + per-round eval fly the same lagged
 			# plant the scorers and baselines do (empty when the axis is off).
 			**rg.episode_config.motor_lag_kwargs(),
