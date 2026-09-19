@@ -148,7 +148,25 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
-AS OF 19/09/2026 12:10 EDT (supersedes the 12:00 block below — the QUEUE IS FLYING).
+AS OF 19/09/2026 15:40 EDT (supersedes the 12:10 block below — ABI-30 LINEAGE RESTART FLYING).
+WHAT HAPPENED 19/09 afternoon: the DAgger trainer never received the airframe (spec §5.1.3a, memory
+project_trainer_airframe_gap — every cf21 run trained on the SYNTHETIC plant, hover 0.20 vs cf21's 0.694).
+Luiz: fix + re-fly everything on the fixed trainer. `_hd29` s6 was allowed to bank (15:19 EDT, 98.8/1.73/1.19/
+0.258 — the ABI-29 lineage is 5/5 and CLOSED); queue_1909 was then killed at HOLD (logged in its log), the
+ABI-30 controller wheel installed (airframe-in-trainer fix + axis-F actuator lag `--motor-lag-s`, settling
+time T; τ=T/4), pin held (60/60 legacy-plant lines bit-identical ABI 29→30), Rust 213/213, cf21 smoke rc 0.
+LEVER = scripts/queue_2009_abi30_lineage.sh (pid 39944, PPID 1; log /private/tmp/queue_2009.log). Order:
+STEP 1 `_hd30` ×4 (anchor, ARM_NO_CONTROL; era A/B vs `_hd29` printed after) → STEP 2 `_pipeN30` ×4 vs `_hd30`
+(CTRL-7) → STEP 3 `_op30` ×4 (CTRL-15) → STEP 4 `_pon30` s2 (CTRL-10) → STEP 5 `_full30` ×4 (CTRL-16) →
+STEP 6 LEVELS n=5 (CTRL-18: `_hd30` s6, then 96 levels n384 `_L30` ×5, 128 levels n512 `_L30` ×5; off-chip
+QSPI tier allowed) → STOP. ~78 h + ~48 h. Then multi_axis_chain.sh --round 1 with MA_ANCHOR_SUFFIX=_hd30.
+SUFFIX RULE: the lineage suffix carries the ABI (`_hd30`) — same-suffix re-flies are SKIPPED as banked and
+paired_power pairs by suffix. Line 2 names the current step's tag + what it tests. Any `_L30` marker has
+levels_per_motor 96 or 128 — print it. The 4 worktree branches (actuator-lag, stats-tools, multi-axis-chain,
+trainer-airframe) are MERGED (e43ae0a0); scripts/multi_axis_chain.sh --dry-run is the round-1 plan.
+IDS (line 6 only): worker ABI 13, 6072 ~gen 85, 150 queued incl. 94 `-abi13` QSR reruns.
+
+AS OF 19/09/2026 12:10 EDT (superseded 15:40 — queue_1909 killed after step 1; steps 2-5 re-flown as ABI-30 lineage).
 LEVER = scripts/queue_1909_close_then_full.sh (pid 180, PPID 1; log /private/tmp/queue_1909.log). Order
 (Luiz: "close what is in the middle before a new chapter"): STEP 1 `_hd29` s31337006 (control for the
 5th seed; ARM_NO_CONTROL, log /private/tmp/hd29_s6.log) → STEP 2 `_pipeN` s31337006 vs `_hd29` + n=5
