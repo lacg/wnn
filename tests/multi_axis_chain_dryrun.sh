@@ -71,7 +71,7 @@ EOS
 chmod +x "$SR/bin/pgrep"
 FULL_HELP="--disturbance --motor-lag-s --teacher --airframe --grid-state-neurons --max-state-neurons --max-cells --report-seeds --teacher-hover --welch"
 D5="--report-seeds 99990201 99990202 99990203 99990204 99990205"
-WANT_ORDER="_hd29 _hd29 _hd29 _axA_L4A _axA_L4B _axF_lag0375 _axF_lag075 _axB_pid _axB_lqr _axD_cf2xfw _axC_sn4 _axC_sn8"
+WANT_ORDER="_hd29 _hd29 _hd29 _axA_L4A _axA_L4B _axF_T015 _axF_T030 _axB_pid _axB_lqr _axD_cf2xfw _axC_sn4 _axC_sn8"
 
 chain() {   # run the scratch copy with the harness env; args pass through
 	( cd "$SR" && PATH="$SR/bin:$PATH" MA_PYTHON="$SR/bin/python" MA_LOG="$TD/chain.log" MA_LOCK="$TD/lock" \
@@ -96,7 +96,9 @@ check "all 12 are todo (axis C flies by default — §5.1.4a)" "$(echo "$PLAN1" 
 check "axis C carries its caps: sn4 open, sn8 4 M" "$(echo "$PLAN1" | grep 'axis=C' | sed -E 's/.*(--max-cells [0-9]+).*/\1/' | tr '\n' ';')" "--max-cells 1000000000;--max-cells 4000000;"
 check "condition flags are the plain last-wins stores" \
 	"$(echo "$PLAN1" | grep -v 'cond=_hd29' | sed -E 's/.*flags="([^"]*) --report-seeds.*/\1/' | tr '\n' ';')" \
-	"--disturbance L4A;--disturbance L4B;--motor-lag-s 0.0375;--motor-lag-s 0.075;--teacher pid;--teacher lqr;--airframe cf2x_firmware;--grid-state-neurons 4 --max-state-neurons 4 --max-cells 1000000000;--grid-state-neurons 8 --max-state-neurons 8 --max-cells 4000000;"
+	"--disturbance L4A;--disturbance L4B;--motor-lag-s 0.15;--motor-lag-s 0.30;--teacher pid;--teacher lqr;--airframe cf2x_firmware;--grid-state-neurons 4 --max-state-neurons 4 --max-cells 1000000000;--grid-state-neurons 8 --max-state-neurons 8 --max-cells 4000000;"
+check "axis F flags are SETTLING TIMES (T=0.15/0.30), never the tau values" "$(echo "$PLAN1" | grep 'axis=F' | grep -c -- '--motor-lag-s 0.\(15\|30\) ')/$(echo "$PLAN1" | grep -c -- '--motor-lag-s 0.0\(375\|75\)')" "2/0"
+check "MA_ANCHOR_SUFFIX=_hd30 switches anchor + control in one edit" "$(MA_ANCHOR_SUFFIX=_hd30 chain --dry-run --round 1 | grep '^PLAN r1 ' | grep -c 'cond=_hd30 .*control=NONE\|control=_hd30 ')" "12"
 check "MA_REFUSE_AXIS_C=1 -> axis C REFUSED, others todo" "$(MA_REFUSE_AXIS_C=1 chain --dry-run --round 1 | grep -c 'axis=C .*status=REFUSED(MA_REFUSE_AXIS_C=1)')/$(MA_REFUSE_AXIS_C=1 chain --dry-run --round 1 | grep -c 'status=todo')" "2/10"
 check "dry-run wrote no log, no lock, no marker" "$([ ! -e "$TD/chain.log" ] && [ ! -e "$TD/lock" ] && [ "$(ls "$SR/experiments/sweepladder_markers" | wc -l | tr -d ' ')" = 4 ] && echo clean || echo DIRTY)" "clean"
 cp "$SR/experiments/sweepladder_markers/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_hd29.json" "$SR/experiments/sweepladder_markers/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_axA_L4A.json"
@@ -129,6 +131,9 @@ OUT="$(chain --round 1 2>&1)"; rc=$?
 check "exit 1 naming the control" "$rc/$(echo "$OUT" | grep -c 'control markers missing: SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_hd29')" "1/1"
 check "zero seed_arm_chain calls" "$(grep -c . "$CALLS")" "0"
 mv "$TD/keep.json" "$SR/experiments/sweepladder_markers/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_hd29.json"
+: > "$CALLS"
+OUT="$(MA_ANCHOR_SUFFIX=_hd30 chain --round 1 2>&1)"; rc=$?
+check "MA_ANCHOR_SUFFIX=_hd30 with no _hd30 markers -> abort, 0 calls" "$rc/$(echo "$OUT" | grep -c 'control markers missing: .*_s31337002_hd30')/$(grep -c . "$CALLS")" "1/1/0"
 
 echo
 echo "=== RUN: happy round 1 — all 12 launches in plan order, ARM_* contract, exit 0 ==="
@@ -140,6 +145,8 @@ check "call order = plan order" "$(cut -d'|' -f1 "$CALLS" | tr '\n' ' ' | sed 's
 check "one seed per call; anchors 7,8,9 then 31337002 x9" "$(cut -d'|' -f2 "$CALLS" | tr '\n' ' ' | sed 's/ $//')" "31337007 31337008 31337009 31337002 31337002 31337002 31337002 31337002 31337002 31337002 31337002 31337002"
 check "anchors ARM_NO_CONTROL=1, conditions ARM_CTRL_SUFFIX=_hd29" "$(grep -c '^_hd29|[0-9]*|1|' "$CALLS")/$(grep -v '^_hd29' "$CALLS" | grep -c '|0|_hd29|')" "3/9"
 check "every ARM_EXTRA_ARGS carries the D5 report seeds" "$(grep -c -- "$D5" "$CALLS")" "12"
+check "F markers record motor_lag_settling_s and derived tau_s" "$(grep '^_axF_T015|' "$CALLS" | grep -c '"motor_lag_settling_s":0.15,"tau_s":0.0375')/$(grep '^_axF_T030|' "$CALLS" | grep -c '"motor_lag_settling_s":0.30,"tau_s":0.075')" "1/1"
+check "F flags reach ARM_EXTRA_ARGS as settling times" "$(grep '^_axF_T015|' "$CALLS" | grep -c -- '|--motor-lag-s 0.15 --report-seeds')/$(grep '^_axF_T030|' "$CALLS" | grep -c -- '|--motor-lag-s 0.30 --report-seeds')" "1/1"
 check "C flags + caps reach ARM_EXTRA_ARGS" "$(grep '^_axC_sn4|' "$CALLS" | grep -c -- '|--grid-state-neurons 4 --max-state-neurons 4 --max-cells 1000000000 --report-seeds')/$(grep '^_axC_sn8|' "$CALLS" | grep -c -- '|--grid-state-neurons 8 --max-state-neurons 8 --max-cells 4000000 --report-seeds')" "1/1"
 check "C markers record max_cells" "$(grep '^_axC_sn4|' "$CALLS" | grep -c '"max_cells":1000000000')/$(grep '^_axC_sn8|' "$CALLS" | grep -c '"max_cells":4000000')" "1/1"
 check "non-C markers carry no max_cells field" "$(grep -v '^_axC_' "$CALLS" | grep -c 'max_cells')" "0"

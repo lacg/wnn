@@ -18,12 +18,18 @@
 #   D4 anchor extended to 8 seeds: s31337006 flies in queue_1909 (CTRL-7); this chain adds
 #      s31337007..09 in round 1, first (every Welch primary shares them)
 #   D5 report seeds 99990201..05 on EVERY programme run (interim ticks keep reading 99990101..05)
-#   D6 axis F actuator lag: --motor-lag-s 0.0375 (tau, sourced) and 0.075 (2 tau, stress)
+#   D6 axis F actuator lag. UNITS (actuator-lag branch, cfcee4ad): --motor-lag-s is the Molchanov
+#      eq. 7 two-percent SETTLING TIME T in seconds, tau = T/4. Nominal tau 0.0375 s => T = 0.15;
+#      2-tau stress => T = 0.30. Passing 0.0375 would model a 4x FASTER actuator than nominal.
 #   D7 axis G optional tail after round 2 — NOT in this table (add a line when decided)
-#   D9 programme anchor = _hd29 (ABI-29 era control), the paired control for seeds 2-5
+#   D9 programme anchor = _hd29 (ABI-29 era control), the paired control for seeds 2-5.
+#      ANCHOR SWITCH: the trainer-airframe fix (spec §5.1.3a, Stage-0 items #14/#15) must LAND and
+#      the anchor be RE-FLOWN as `_hd30` (s2-s6, on D5 seeds, outside this chain) BEFORE round 1.
+#      Then launch with MA_ANCHOR_SUFFIX=_hd30 — one edit; the preflight refuses to fly a paired
+#      condition whose `_hd30` control marker is missing, and the s7-9 extension inherits the suffix.
 #
 # ROUND 1 ORDER (spec §5.1.5), 12 launches, ~46 h at 3.2 h/run (C budgeted 6-7 h):
-#   1 anchor _hd29 s7,s8,s9   2 A L4A,L4B   3 F tau,2tau   4 B pid,lqr   5 D cf2x_firmware   6 C sn4,sn8
+#   1 anchor s7,s8,s9   2 A L4A,L4B   3 F T=0.15,0.30   4 B pid,lqr   5 D cf2x_firmware   6 C sn4,sn8
 #   (C flies by default — its memory budget is DECIDED, spec §5.1.4a, see the table)
 # Rounds 2-4: the 9 conditions at seeds 31337003/4/5 (no anchor; D4's 8 seeds are complete
 # after round 1). 12 + 27 = 39 runs. §4 escalation (+2 seeds where the primary CI straddles 0
@@ -43,9 +49,11 @@
 #   A  DISTURBANCE  primary ERR, MEI 0.6 deg.  Resolvable at n=4 (MDE 0.44-0.69 < MEI): the plant-
 #      jitter step is expected well above it (PID err 0.58 -> 1.08 -> 1.79 deg L4A/L4B/L4C).
 #      CANNOT resolve V2 (gap to PID) as a test — PID moves with the rung; V2 is the READ.
-#   F  ACTUATOR LAG primary ERR. Expected LARGE (every controller degrades) — resolvable at n=4;
-#      the question is whether the WNN degrades MORE than the classicals (V2 read). CANNOT
-#      say anything until the ABI-30 s=1 bit-identity pin at lag 0 is banked (§5.1.2 step 3).
+#   F  ACTUATOR LAG primary ERR. Arms: T = 0.15 s (tau 0.0375, Molchanov nominal) and T = 0.30 s
+#      (tau 0.075, stress) vs the lag-free anchor. Expected LARGE (every controller degrades) —
+#      resolvable at n=4; the question is whether the WNN degrades MORE than the classicals (V2
+#      read). CANNOT say anything until the ABI-30 s=1 bit-identity pin at lag 0 is banked
+#      (§5.1.2 step 3). Each F marker records motor_lag_settling_s AND the derived tau_s.
 #   B  TEACHER      primary ERR. Resolves FULL tracking (student err moves ~the 1.1 deg teacher
 #      gap) vs NONE. CANNOT resolve PARTIAL tracking (0.3-0.6 deg) at n=4; the null is an
 #      EQUIVALENCE claim: margin 0.55 deg, TOST 90%, decidable only if |d| < 0.2 AND SD <= 0.3.
@@ -65,11 +73,11 @@
 #   stable is DESCRIPTIVE everywhere (R11: 2-5 failures in 500; t-CI meaningless; counts only).
 # ==========================================================================================
 #
-# KNOWN TENSION THE SCRIPT CANNOT RESOLVE (flagged, not hidden): the banked _hd29 s2-s6 were
-# READ on report seeds 99990101..05; every run here (anchor s7-9 included) flies D5 = 99990201..05.
-# An 8-vs-4 Welch that mixes the two sets is NOT clean. Before the FINAL table, re-score the
-# s2-s6 _hd29 winners on the D5 set (rescore_winners.py, §5 #12 — minutes) and recompute the
-# classical baselines on D5 (R6, §5 #6). The marker records report_seed_set so a reader can tell.
+# KNOWN TENSION (flagged, not hidden): the banked _hd29 s2-s6 were READ on report seeds
+# 99990101..05; every run here (anchor s7-9 included) flies D5 = 99990201..05. An 8-vs-4 Welch that
+# mixes the two sets is NOT clean. The `_hd30` re-fly above dissolves it if s2-s6 are re-flown on
+# D5; otherwise re-score the s2-s6 winners on D5 (rescore_winners.py, §5 #12 — minutes) and
+# recompute the classical baselines on D5 (R6, §5 #6). Markers record report_seed_set.
 #
 # PRE-CONDITIONS (human, at the idle window — §5.1.2; this script checks only what it can):
 #   F wheel (ABI 30) installed + Python patch applied ATOMICALLY; s=1 pin bit-identical;
@@ -82,8 +90,9 @@
 #   bash scripts/multi_axis_chain.sh --dry-run [--round N]     print the plan, touch nothing, exit 0
 #   bash scripts/multi_axis_chain.sh --plan-only-json [--round N]   same plan as JSON, exit 0
 #   bash scripts/multi_axis_chain.sh [--round N]               fly (default: rounds 1..4 in order)
-# ARM (detached, PPID=1; macOS has no setsid — detach_launch.py uses start_new_session):
-#   cd /Users/lacg/wnn && /Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/bin/python \
+# ARM (detached, PPID=1; macOS has no setsid — detach_launch.py uses start_new_session).
+# MA_ANCHOR_SUFFIX must name the RE-FLOWN anchor (`_hd30` once §5.1.3a has landed):
+#   cd /Users/lacg/wnn && MA_ANCHOR_SUFFIX=_hd30 /Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/bin/python \
 #     scripts/detach_launch.py /private/tmp/multi_axis_chain.launch.log /Users/lacg/wnn -- \
 #     bash scripts/multi_axis_chain.sh --round 1
 # VERIFY ARMED:  ps -o pid,ppid,etime,command -p <printed pid>   -> PPID must be 1
@@ -119,8 +128,8 @@ cd "$(dirname "$0")/.." || exit 1
 CONDITIONS=(
 	"A|L4A|_axA_L4A|err|--disturbance L4A|--disturbance||"
 	"A|L4B|_axA_L4B|err|--disturbance L4B|--disturbance||"
-	"F|lag0.0375|_axF_lag0375|err|--motor-lag-s 0.0375|--motor-lag-s||"
-	"F|lag0.075|_axF_lag075|err|--motor-lag-s 0.075|--motor-lag-s||"
+	"F|T0.15|_axF_T015|err|--motor-lag-s 0.15|--motor-lag-s||\"motor_lag_settling_s\":0.15,\"tau_s\":0.0375,\"lag_note\":\"T = 2% settling time (Molchanov eq. 7), tau = T/4; nominal\""
+	"F|T0.30|_axF_T030|err|--motor-lag-s 0.30|--motor-lag-s||\"motor_lag_settling_s\":0.30,\"tau_s\":0.075,\"lag_note\":\"T = 2% settling time (Molchanov eq. 7), tau = T/4; 2-tau stress\""
 	"B|pid|_axB_pid|err|--teacher pid|--teacher||"
 	"B|lqr|_axB_lqr|err|--teacher lqr|--teacher||"
 	"D|cf2x_firmware|_axD_cf2xfw|alt|--airframe cf2x_firmware|--airframe||"
@@ -128,8 +137,8 @@ CONDITIONS=(
 	"C|sn8|_axC_sn8|alt|--grid-state-neurons 8 --max-state-neurons 8 --max-cells 4000000|--grid-state-neurons --max-state-neurons --max-cells|MA_REFUSE_AXIS_C|\"max_cells\":4000000,\"max_cells_note\":\"4M cap; uncapped 35-38 GB trips HOG_GB 28 (spec 5.1.4a)\""
 )
 COND_SEEDS="31337002 31337003 31337004 31337005"          # seed r flies in round r (R4)
-ANCHOR_SUFFIX="_hd29"                                     # D9
-ANCHOR_LABEL="d0-derived-hover-abi29-refly"               # same ARM_LABEL as the banked _hd29
+ANCHOR_SUFFIX="${MA_ANCHOR_SUFFIX:-_hd29}"                # D9; MA_ANCHOR_SUFFIX=_hd30 after the §5.1.3a re-fly
+ANCHOR_LABEL="${MA_ANCHOR_LABEL:-d0-derived-hover-abi29-refly}"   # ARM_LABEL of the banked anchor; set with the suffix
 ANCHOR_FLAGS="--teacher-hover derived"
 ANCHOR_REQUIRE="--teacher-hover"
 ANCHOR_ROUND1_SEEDS="31337007 31337008 31337009"          # D4: + s31337006 from queue_1909 = 8
