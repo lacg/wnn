@@ -688,6 +688,127 @@ edits a running .sh. Queues behind the post-arm-A queue (~90 h).
       pinned (pid_firmware._SiGains.from_firmware, boundary training._pid_cascade_kwargs)
       and gains are sourced, never re-derived — landed 12/09/2026. Memory note fixed 11/09.
 
+## 5.1 Stage 0 closure plan (19/09/2026)
+
+Written while the box is committed ~60 h to scripts/queue_1909_close_then_full.sh (CTRL-7
+5th seed, CTRL-15 _op x4, CTRL-10 _pon s2, CTRL-16 _full x4); the next idle window is its
+STEP 6 STOP. Nothing here launches or edits a chain-sourced script before that window.
+STATE CHECK FIRST: three §5 items are STALE. Branch `marker-provenance` MERGED 12/09/2026
+07:39 EDT (50a9bdba); the worktree /Users/lacg/wnn-provenance is gone and origin/marker-
+provenance is 0 ahead / 80 behind. Every marker banked since (13, all `_hd29`) carries
+`"provenance":{wheel:ram_controller-2026.212.37, abi:29, wheel_sha256:026e02aa7f2a5a23,
+fitness_pools:CRN}` and `stable_fail=k/500` on every MULTI-SEED line. There is NO
+provenance/failure-count merge left for the idle window. One nit: `git=unknown` in every
+detached launch (the .so hash is the load-bearing field; fix optional).
+PROGRAMME ANCHOR = `_hd29` (ABI 29 wheel, 4/4 banked 19/09; s31337006 flies in the current
+queue as the first extension seed). The §1 table is the pre-ABI-29 `_hd` era and must be
+restated on `_hd29` before any V1 is computed. Run cost measured on `_hd29`: 3.1 h, peak RSS
+3.1-4.0 GB (the §4 budget's 5 h/run is conservative; axis C's CPU BPTT path is unmeasured).
+
+### 5.1.1 Every open §5 item — what closes it
+```
+#  item (§5)                          closes with                                         kind      idle?  effort  depends on         evidence = closed
+1  [~] R9 provenance                  NOTHING — merged 12/09; flip to [x]                 doc       no     5 min   —                  13 markers with non-null provenance (checked 19/09)
+2  [~] R11 failure count              NOTHING — merged 12/09; flip to [x]                 doc       no     5 min   —                  stable_fail=14/500 on _hd29 s2 MEMORY line
+3  [~] HOLD sentinel                  NOTHING — live (controller_arm_lib.sh:38); flip [x] doc       no     5 min   —                  seed_arm_chain + queue_1909 honour it
+4  [ ] D0 resolved                    NOTHING — §0.10 derived default 12/09; flip to [x]  doc       no     5 min   —                  a88cb7c1 flipped; A/B 4/4 straddles
+5  [ ] D5 fresh report seeds          Luiz answers D5 (rec 99990201..05)                  decision  no     1 msg   —                  D5 line in §8 marked DECIDED + date
+6  [x] baselines PENDING D5 rerun     compute_baselines x4 conditions (+tau,2tau) on D5   run       yes*   20 min  #5, #11            experiments/l4teach_markers/baselines_*_d5.json
+7  [ ] smokes per flag combo          ONE 60 s phased_ga per condition (8 incl. tau)      run       yes    40 min  #11 for tau        rc=0 + grid line + HEADLINE + [provenance] abi
+8  [ ] memory budget sn=4/8           anchor populates ~300k output cells at b24 n256; add   doc       no     30 min  —                  number in chain header; sn smoke peak_rss < 6 GB
+                                      the state layer's reachable cells vs the 180k grow cap
+9  [ ] round-major chain              scripts/multi_axis_chain.sh over seed_arm_chain.sh: code      write  3 h     #5, #8, #10        shellcheck clean; --dry-run prints 12 launches;
+                                      ARM_EXTRA_ARGS last-wins for --disturbance/--teacher/  (bash)  no,           harness case (marker-gated, idempotent, fails closed)
+                                      --airframe/--grid-state-neurons/--max-state-neurons/         smoke
+                                      --report-seeds (all plain store args, verified);            yes
+                                      ARM_SUFFIX=_ax<A|B|C|D|F>_<value>, ARM_CTRL_SUFFIX=_hd29,
+                                      ARM_NO_CONTROL=1 for anchor seeds; round ends in
+                                      paired_power.py --primary per condition. ZERO ladder edits
+                                      (ladder tag still reads cf21_brushless_L4C — suffix disambiguates)
+10 [ ] power statement per axis       paired_power.py re-run on _hd29 n=4 SDs -> R2 MDE     doc+code  no     2 h     —                  docs/controller_paired_power.txt refreshed;
+                                      ranges; add `--welch` (anchor n=8 vs cond n=4; grep:                                            MDE line per axis pasted into the chain header
+                                      paired_power.py has NO Welch today) — extend, no sibling
+11 [ ] actuator-lag plumbing (F)      NOT Python-only as §3-F says: score_controllers_metal code      build  Rust 3 h  —                cargo test motor_lag_off_is_bit_identical + new
+                                      exposes motor_lag_s, but RewardGatedConfigPacked       Rust+Py no,   Py 2 h                     packed-cfg pin; s=1 smoke RESULT line identical
+                                      (dagger_train.rs) has no field, the training rollout          install                           pre/post wheel (the R9 pin); baselines at tau, 2tau
+                                      never calls set_motor_lag, cpu_score.rs:614 and                yes
+                                      compute_baselines lack it -> trainer/scorer mismatch
+                                      (stage-1 trainer-gap pattern). Field + apply in the
+                                      rollout + cpu scorer + ABI 30; Python --motor-lag ->
+                                      EpisodeConfig -> both scorers + compute_baselines.
+                                      Wheel BUILT on a worktree, Python staged as a patch
+12 [ ] A-cross scoring                extend scripts/rescore_winners.py with --translation   code+run write  2 h     #5 (seed set)      JSON: 4 _hd29 winners x {L4A,L4B} x 5 report
+                                      regimen + --airframe (today: --disturbance only);      (Py)    no,                              seeds, triple + alt; classical rows from #6
+                                      score the 4 _hd29 winners at L4A/L4B                          run yes
+13 NEW anchor restated on _hd29       §1 table from the 4 _hd29 MEMORY multi-seed rows       doc       no     30 min  —                  §1 shows _hd29 n=4 (n=5 once s6 banks) + wheel sha
+```
+`yes*` = minutes and tiny RSS; fits the queue's 120 s between-step gap, but do it at the window.
+
+### 5.1.2 The idle window — what lands, in what order
+No merge is pending (5.1 header). The window is for the ONE deploy the programme needs (F wheel,
+ABI 30) and the runs that cannot fly beside a chain. Order, each step gated on the previous:
+  1. PRE-PIN smoke on ABI 29: the smoke shape below with the anchor flags, `--base-seed 1`; keep
+     its RESULT/HEADLINE lines.
+  2. Install the F wheel + apply the staged Python patch ATOMICALLY (`maturin develop --release
+     -m controller/Cargo.toml`); `cargo test -p ram_controller --lib --no-default-features`;
+     `tests/controller_provenance.py`; `python -c "import wnn.control._accel"` asserts ABI 30.
+  3. POST-PIN smoke, identical flags: RESULT lines must be bit-identical to step 1 and
+     `[provenance]` must print abi=30 + the new sha. Any drift = STOP, uninstall, do not arm.
+  4. Per-condition smokes (#7): L4A, L4B, pid, lqr, cf2x_firmware, sn=4, sn=8, --motor-lag
+     0.0375. For pid/lqr also grep the label-saturation print (§0.9(c)) — must not fire.
+  5. Baselines on the D5 seeds (#6), A-cross scoring (#12) — minutes each.
+  6. Arm `multi_axis_chain.sh` round 1 (5.1.5) detached (start_new_session, PPID=1), then leave.
+Smoke shape (bypasses the ladder so no marker is banked; numbers are NOT read):
+    cd /Users/lacg/wnn && /Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/bin/python -u -m \
+      wnn.control.phased_ga <the ladder's exact flag block from sweep_ladder_gamma.sh:124-146> \
+      --pop 6 --steps 200 --neurons-gens 1 --conns-gens 1 --memory-gens 1 --eval-episodes 2 \
+      --memory-eval-episodes 2 --report-episodes 2 --base-seed 1 \
+      --save-stage-checkpoints /private/tmp/smoke_ckpt  [+ the condition's flags, last-wins]
+    assert rc=0; grep -E '^\[provenance\]|HEADLINE|GRID' — all three present.
+
+### 5.1.3 D0-D7 in one line each (answer in one message)
+```
+D0  CLOSED 12/09 (derived hover default, A/B equivalent 4/4) — no answer needed, acknowledge.
+D1  Axis D flies cf2x_firmware ONLY; cf2x_urdf waits for a citable DSL single-loop PID port.   rec: YES
+D2  Axis E: DROP with the R2 justification; re-open on altitude only if flight-dynamics endorses 1/L.  rec: DROP
+D3  Round-major interleaving (§4) replaces stage-major.                                        rec: CONFIRM
+D4  Anchor extension to 8 seeds: s31337006 is already flying (_hd29, CTRL-7); +3 = s7..s9.    rec: YES
+D5  Final-table report seeds 99990201..05; interim ticks keep 99990101..05.                    rec: CONFIRM BOTH
+D6  Add axis F (actuator lag), ahead of D — note it is Rust+Python, ABI 30, forces the s=1 pin. rec: YES
+D7  Axis G (500 Hz) as an optional 4-run tail after F.                                          rec: OPTIONAL, after round 2
+D9  NEW: programme anchor = _hd29 (ABI 29 era), the §1 _hd-era table is restated on it.        rec: YES
+```
+
+### 5.1.4 Order of work during the ~60 h (nothing below touches the box)
+```
+1  spec edits: flip #1-#4 to [x]; #13 anchor restated on _hd29; #10 MDE refresh (reads markers only)   1 h
+2  Luiz: D1-D7 + D9 in one message; D5 is the only one with a downstream run (#6)                       —
+3  F plumbing (#11) on worktree branch `actuator-lag`: Rust field + rollout apply + cpu scorer + tests;  5 h
+   Python flag/EpisodeConfig/compute_baselines; wheel BUILT (maturin build), NOT installed; Python
+   kept OFF the live tree (git apply patch staged with the wheel — feedback_stage_python_with_wheel)
+4  paired_power.py --welch (#10) + rescore_winners.py --translation/--airframe (#12); unit-level only     3 h
+5  multi_axis_chain.sh (#9) with --dry-run, power statements in its header, harness case                 3 h
+6  sn=4/8 memory budget (#8)                                                                             0.5 h
+CANNOT run before the window: every smoke (#7), the D5 baselines (#6), A-cross scoring (#12), the
+F install (#11). A controller-wheel install is "anytime" by the crate split but NEVER while a chain
+is armed (three cohorts died 10/08) — the queue is a chain of chains until STEP 6.
+```
+
+### 5.1.5 Round 1 once Stage 0 is closed (per §4 round-major)
+```
+order  condition                         runs  h (3.2 h/run measured; C 6-7 h budgeted)  why here
+1      anchor _hd29 s31337007..9          3     ~10    every Welch primary shares it; R9-clean re-fly on the ABI-30 wheel
+2      A  L4A, L4B                         2     ~6.5   no prereqs, baselines banked, A-cross free; largest expected effect (PID err 0.58->1.79)
+3      F  tau=0.0375, 2tau                 2     ~6.5   reviewer-priority axis; the pin in 5.1.2 step 3 is its validity argument
+4      B  pid, lqr                         2     ~6.5   unblocked by D0; smoke must show no label saturation
+5      D  cf2x_firmware                    1     ~3.2   baseline banked; inertia-sensitivity read
+6      C  sn=4, sn=8                       2     ~13    last: CPU BPTT (slow), cannot inherit arm flags, budget #8 gates it
+       round 1 total                       12    ~46 h  (~2 days); then round 2 = second seed of every condition -> per-condition SD -> re-size
+```
+Axis A leads the axes because every prerequisite is banked and its effect is expected above the
+MDE, so it returns the first resolved V1 within a day. All 12 runs fly on ONE wheel (ABI 30,
+pinned bit-identical at lag 0), so no anchor seed mixes eras. §4 escalation and §6 verdicts unchanged.
+
 ## 6. Verdict protocol (pre-registered, per condition)
 
   V1. Δ(WNN_condition − WNN_anchor) on the PRIMARY column: Welch mean, 95% CI
