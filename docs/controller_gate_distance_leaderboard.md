@@ -63,12 +63,12 @@ selection ran on) and never the during-search gen lines (anti-predictive, repeat
 ## Coverage
 
 ```
-markers with a headline held-out : 249
-  altitude regimen (alt= present) : 165
+markers with a headline held-out : 250
+  altitude regimen (alt= present) : 166
   attitude-only                   : 84
   state-neuron count unreadable   : 0  (no .out on disk)
-  h743 keys counted exactly       : 55  (experiments/h743_keys.json)
-  h743 fits, exact / bound        : 32 / 50
+  h743 keys counted exactly       : 56  (experiments/h743_keys.json)
+  h743 fits, exact / bound        : 33 / 50
   first-seed alignment (14/09)    : headline re-scored 4, arch-only headline NOT re-scorable 18  (rows marked in the tag column: [unfixed])
   stage-select recalc (15-17/09)  : headline re-selected on the fixed trainer 143  (headline_holdout_recalc takes precedence over _aligned / original)
 ```
@@ -77,7 +77,7 @@ markers with a headline held-out : 249
 
 ```
                  attitude-only   altitude
-  sn = 0                78          165
+  sn = 0                78          166
   sn > 0                 6            0
 ```
 
