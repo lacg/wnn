@@ -821,8 +821,9 @@ Reads:
   give up). Options: (i) raise HOG_GB to 44 for the axis-C runs (watchdog relaunch — a safety change, discuss
   first per feedback_discuss_before_config_change); (ii) cap at `--max-cells 4000000` (μ of the S1 sn=8
   runs) and state it; (iii) fly sn=8 only when the IDS worker is paused. Recommendation: (ii) — it keeps the
-  run under ~20 GB, is honest about the condition, and needs no safety-tool edit. MEM_BUDGET_OK gate in
-  multi_axis_chain.sh stays REFUSE for sn=8 until Luiz picks.
+  run under ~20 GB, is honest about the condition, and needs no safety-tool edit.
+  DECIDED 19/09/2026 (Luiz): (ii) — sn=4 flies with the cap OPEN, sn=8 at --max-cells 4000000; the chain
+  records max_cells in each C marker; item #8 CLOSED.
 · Both are CPU BPTT (no GPU split for sn>0 with the vertical channel): 6-7 h/run budgeted, unmeasured on
   the ladder recipe — the first sn=4 run IS the measurement.
 
@@ -869,7 +870,7 @@ pinned bit-identical at lag 0), so no anchor seed mixes eras. §4 escalation and
 
   DECIDED 19/09/2026 (Luiz, one message): D1 YES · D2 DROP as attitude axis (levels ladder at s2:
   8/16/24/64/96 levels → err 7.18/2.68/2.95/1.75/2.04°; 96 levels held alt 0.264 vs 0.335 m — re-open
-  on altitude only if wanted) · D3 CONFIRMED · D4 YES (8 seeds; s6 flying, +s7-9) · D5 CONFIRMED
+  on altitude only if wanted; the 96-level point is n=1, 4.0 h/run, 396k cells ≤1.19 MB packed — fits) · D3 CONFIRMED · D4 YES (8 seeds; s6 flying, +s7-9) · D5 CONFIRMED
   (99990201..05 final; ticks keep 99990101..05) · D6 YES (anchor lag 0 vs τ vs 2τ = the with/without)
   · D7 OPTIONAL tail after round 2 · D9 YES (anchor = _hd29). Off-box work started 19/09 in worktrees:
   actuator-lag (Rust+Python, ABI 30), stats-tools (paired_power --welch, rescore_winners flags),
