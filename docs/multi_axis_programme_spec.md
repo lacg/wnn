@@ -338,7 +338,11 @@ THE ANCHOR, correctly stated as a 4-seed mean±SD on the MEMORY multi-seed row
     LQR           100.0 ± 0.0   1.05 ± 0.08  0.59 ± 0.11  0.076 ± 0.04 0.0726
     MPC           100.0 ± 0.0   1.38 ± 0.17  1.04 ± 0.22  0.076 ± 0.04 0.0958
     PID           100.0 ± 0.0   1.79 ± 0.36  1.03 ± 0.36  0.076 ± 0.04 0.1241  weakest classical
-    WNN anchor    98.95 ± 0.94  1.63 ± 0.20  1.17 ± 0.25  0.346 ± 0.035 0.127 ± 0.025  n=4
+    WNN anchor    98.95 ± 0.94  1.63 ± 0.20  1.17 ± 0.25  0.346 ± 0.035 0.127 ± 0.025  n=4  (`_hd`, pre-ABI-28 era)
+    WNN _hd29     97.50 ± 2.14  1.79 ± 0.34  1.22 ± 0.42  0.334 ± 0.048 0.161 ± 0.043  n=4  THE PROGRAMME ANCHOR (D9, 19/09)
+    (_hd29 = the same recipe re-flown 19/09 on ABI 29; MEMORY multi-seed row over seeds 31337002-05;
+     hd is the headline draw per seed: 0.1518/0.1458/0.2217/0.1247. Era A/B vs _hd: no systematic
+     shift, seed 4 moved most. s31337006 is flying (queue_1909 step 1) = first extension seed of D4.)
     (classical SDs are over the 5 report seeds x 5 folds; classical alt is the outer
      loop's, not the controller's; lower hd = better)
 
@@ -577,7 +581,8 @@ edits a running .sh. Queues behind the post-arm-A queue (~90 h).
 
 ## 5. Stage 0 — prerequisites, no controller runs
 
-  [~] Marker provenance fields (wheel hash, ABI, fitness_pools) exported by the
+  [x] (CLOSED 19/09/2026 — merged 12/09 as 50a9bdba; 13 markers since carry provenance)
+      Marker provenance fields (wheel hash, ABI, fitness_pools) exported by the
       ladder — R9. CHECKED 11/09/2026: they did NOT exist. `fitness_pools` was in
       the .out header only; ABI and wheel identity were printed nowhere. BUILT on
       branch `marker-provenance` (worktree /Users/lacg/wnn-provenance), NOT LANDED —
@@ -618,7 +623,8 @@ edits a running .sh. Queues behind the post-arm-A queue (~90 h).
       their own airframe better, so axis D's PID gap is NOT comparable to axis A's
       (R6). alt m is set by the disturbance, not the controller (0.000/0.038/0.076
       for L4A/L4B/L4C on cf21). PENDING: rerun all four on the D5 seed set once chosen.
-  [~] Failure-count export for stable (R11). CHECKED 11/09/2026: the marker carries
+  [x] (CLOSED 19/09/2026 — merged 12/09 as 50a9bdba; `stable_fail=k/500` on every MULTI-SEED line)
+      Failure-count export for stable (R11). CHECKED 11/09/2026: the marker carries
       only the seed-mean±SD of stable; no count. But every report seed scores
       exactly 100 episodes and prints its own RESULT line, so k = round(acc x 100)
       is EXACT and recoverable for every marker ever banked, anchors included. BUILT
@@ -669,12 +675,13 @@ edits a running .sh. Queues behind the post-arm-A queue (~90 h).
       ending each round in a paired_power.py --primary verdict per condition against
       the extended anchor AND the condition's own baseline.
   [ ] Power statement per axis written INTO the chain header (R2).
-  [ ] D0 resolved (§0) before axis B or the anchor extension flies.
+  [x] D0 resolved (§0.10, 12/09/2026: derived hover EQUIVALENT, default) — flipped 19/09.
   [x] Hard refusal in `_pid_cascade_kwargs` for an airframe whose registered gains
       have rate=None — LANDED 12/09/2026 at the idle window (training.py raises
       ValueError naming the airframe; the KeyError path for the synthetic plant
       still returns {} so the parity anchors stay bit-identical).
-  [~] HOLD sentinel (11/09/2026, Luiz): `touch experiments/HOLD_CONTROLLER` → every
+  [x] (CLOSED 19/09/2026 — live in controller_arm_lib.sh, honoured by seed_arm_chain + queue_1909)
+      HOLD sentinel (11/09/2026, Luiz): `touch experiments/HOLD_CONTROLLER` → every
       chain banks the run it is flying and WAITS before the next launch
       (`wait_while_held` in controller_arm_lib.sh, reached by every chain through the
       ladder; post_d0_queue.sh checks it before launching a chain too); `rm` resumes.
@@ -708,10 +715,10 @@ restated on `_hd29` before any V1 is computed. Run cost measured on `_hd29`: 3.1
 ### 5.1.1 Every open §5 item — what closes it
 ```
 #  item (§5)                          closes with                                         kind      idle?  effort  depends on         evidence = closed
-1  [~] R9 provenance                  NOTHING — merged 12/09; flip to [x]                 doc       no     5 min   —                  13 markers with non-null provenance (checked 19/09)
-2  [~] R11 failure count              NOTHING — merged 12/09; flip to [x]                 doc       no     5 min   —                  stable_fail=14/500 on _hd29 s2 MEMORY line
-3  [~] HOLD sentinel                  NOTHING — live (controller_arm_lib.sh:38); flip [x] doc       no     5 min   —                  seed_arm_chain + queue_1909 honour it
-4  [ ] D0 resolved                    NOTHING — §0.10 derived default 12/09; flip to [x]  doc       no     5 min   —                  a88cb7c1 flipped; A/B 4/4 straddles
+1  [x] R9 provenance                  NOTHING — merged 12/09; flip to [x]                 doc       no     5 min   —                  13 markers with non-null provenance (checked 19/09)
+2  [x] R11 failure count              NOTHING — merged 12/09; flip to [x]                 doc       no     5 min   —                  stable_fail=14/500 on _hd29 s2 MEMORY line
+3  [x] HOLD sentinel                  NOTHING — live (controller_arm_lib.sh:38); flip [x] doc       no     5 min   —                  seed_arm_chain + queue_1909 honour it
+4  [x] D0 resolved                    NOTHING — §0.10 derived default 12/09; flip to [x]  doc       no     5 min   —                  a88cb7c1 flipped; A/B 4/4 straddles
 5  [ ] D5 fresh report seeds          Luiz answers D5 (rec 99990201..05)                  decision  no     1 msg   —                  D5 line in §8 marked DECIDED + date
 6  [x] baselines PENDING D5 rerun     compute_baselines x4 conditions (+tau,2tau) on D5   run       yes*   20 min  #5, #11            experiments/l4teach_markers/baselines_*_d5.json
 7  [ ] smokes per flag combo          ONE 60 s phased_ga per condition (8 incl. tau)      run       yes    40 min  #11 for tau        rc=0 + grid line + HEADLINE + [provenance] abi
@@ -794,6 +801,31 @@ F install (#11). A controller-wheel install is "anytime" by the crate split but 
 is armed (three cohorts died 10/08) — the queue is a chain of chains until STEP 6.
 ```
 
+### 5.1.4a Memory budget for axis C (sn=4 / sn=8) — CHECKED 19/09/2026 (closes item #8)
+```
+evidence (banked markers, per-genome cells = min-max Σ μ; peak RSS = /usr/bin/time -l)
+  sn=0  _hd29 s5 (ladder recipe, --max-cells 180000 --max-cells-strict)   275k cells        3.6 GB peak
+  sn=4  S1_lqi_sn4 s2-4 (Aug era, no cap)   6k-2.8M cells, μ 1.0-1.4M            13.4-18.0 GB peak
+  sn=8  S1_lqi_sn8 s2-4 (Aug era, no cap)   5k-9.1M cells, μ 4.4-5.3M            35.0-37.7 GB peak
+watchdog (scripts/controller_mem_watchdog.sh defaults): HOG_GB 28 = controller RSS at/above 28 GB → SIGKILL;
+HARD_AVAIL 6 GB; the IDS worker's flow runner co-resides at ~10 GB (flow 6072: 9.8 GB RSS).
+```
+Reads:
+· Under the ladder's `--max-cells 180000 --max-cells-strict` an sn>0 genome is CLAMPED at grow time, so axis
+  C would fly at ≤180k cells — a 5-50x smaller memory than the S1 runs that produced the sn>0 results the
+  §3-C prior rests on. That is a different controller, not the one the prior describes. Axis C must
+  therefore OPEN the cap like `_pipeN` (`--max-cells 1000000000`) or state the cap as part of the condition.
+· sn=4 uncapped: ~18 GB peak → fits beside the IDS worker (18 + 10 + dashboard ≈ 30 GB of 64) with the
+  watchdog's HOG_GB 28 NOT tripped. GO with the cap open.
+· sn=8 uncapped: 35-38 GB peak → ABOVE HOG_GB 28 → the watchdog WOULD SIGKILL it (rc 137, R1 retry x2, then
+  give up). Options: (i) raise HOG_GB to 44 for the axis-C runs (watchdog relaunch — a safety change, discuss
+  first per feedback_discuss_before_config_change); (ii) cap at `--max-cells 4000000` (μ of the S1 sn=8
+  runs) and state it; (iii) fly sn=8 only when the IDS worker is paused. Recommendation: (ii) — it keeps the
+  run under ~20 GB, is honest about the condition, and needs no safety-tool edit. MEM_BUDGET_OK gate in
+  multi_axis_chain.sh stays REFUSE for sn=8 until Luiz picks.
+· Both are CPU BPTT (no GPU split for sn>0 with the vertical channel): 6-7 h/run budgeted, unmeasured on
+  the ladder recipe — the first sn=4 run IS the measurement.
+
 ### 5.1.5 Round 1 once Stage 0 is closed (per §4 round-major)
 ```
 order  condition                         runs  h (3.2 h/run measured; C 6-7 h budgeted)  why here
@@ -834,6 +866,14 @@ pinned bit-identical at lag 0), so no anchor seed mixes eras. §4 escalation and
   label re-base lands; this programme queues behind whatever runs.
 
 ## 8. Open decisions for Luiz
+
+  DECIDED 19/09/2026 (Luiz, one message): D1 YES · D2 DROP as attitude axis (levels ladder at s2:
+  8/16/24/64/96 levels → err 7.18/2.68/2.95/1.75/2.04°; 96 levels held alt 0.264 vs 0.335 m — re-open
+  on altitude only if wanted) · D3 CONFIRMED · D4 YES (8 seeds; s6 flying, +s7-9) · D5 CONFIRMED
+  (99990201..05 final; ticks keep 99990101..05) · D6 YES (anchor lag 0 vs τ vs 2τ = the with/without)
+  · D7 OPTIONAL tail after round 2 · D9 YES (anchor = _hd29). Off-box work started 19/09 in worktrees:
+  actuator-lag (Rust+Python, ABI 30), stats-tools (paired_power --welch, rescore_winners flags),
+  multi-axis-chain (round-major chain + --dry-run).
 
   D1. Axis D: fly cf2x_firmware only now (recommended); cf2x_urdf waits for a citable
       DSL single-loop PID port, or is dropped.
