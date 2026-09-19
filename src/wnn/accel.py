@@ -42,7 +42,16 @@ import os
 #   assert is the DESIGNED place to catch that, and it did not, because an
 #   additive surface change had left the version alone. Bump on any surface
 #   change, additive or not — the assert is only worth what it is kept current.
-EXPECTED_ABI = 12
+# 13 (19/09/2026, fix committed 16/09 dc801622): NO surface change — QSR (mode 4)
+#   TRAINING semantics changed. The order-independent (OI) gates keyed on a literal
+#   memory_mode == QUAD_WEIGHTED, so QSR silently trained on the legacy clamped-nudge
+#   path (z=1 chunking, ~12x slower) with OI_INITIAL slot defaults; every OI gate now
+#   asks CellMode::uses_oi_counters (QUAD_WEIGHTED / QUAD_BINARY / QSR).
+#   QUAD_WEIGHTED results are bit-identical; a QSR result from an ABI-12 wheel is
+#   not comparable to one from ABI 13, so a stale wheel must fail loudly.
+#   Landed at the worker-idle swap in the SAME step as the wheel install (the live
+#   worker's flow_runner spawns import this file from the editable tree).
+EXPECTED_ABI = 13
 
 BUILD_HINT = (
 	"Rebuild the accelerator: cd src/wnn/ram/strategies/accelerator && "

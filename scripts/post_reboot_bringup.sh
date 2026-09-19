@@ -9,6 +9,14 @@
 #
 #     bash scripts/post_reboot_bringup.sh
 #
+# DETACH (19/09/2026): every launch goes through scripts/detach_launch.py, which
+# calls setsid(2) so the child gets its OWN session and is reparented to launchd
+# (PPID=1). The previous `nohup … & disown` only ignored SIGHUP: the children stayed
+# in the launching shell's process group, and when that shell was a Claude Code
+# Bash call, the CLI restart at 11:13 EDT 19/09 reaped dashboard, worker, sampler,
+# watchdog and vite in one go (see feedback_detach_background_processes).
+# `nohup`/`disown` are NOT enough on macOS, which ships no setsid(1).
+#
 # What it deliberately does NOT do:
 #   - re-arm the Claude tick cron (session-only — CronCreate from
 #     docs/controller_status_tick_prompt.md in the CLI session)
@@ -25,6 +33,8 @@ cd "$PROJ" || exit 1
 unset CONDA_PREFIX || true
 export PYTHONPATH="$PROJ/src/wnn:"
 log() { echo "[bringup $(date -u +%FT%TZ)] $*"; }
+# detach <logfile> <cwd> -- <command…>  → prints the detached PID (PPID=1)
+detach() { python3 "$PROJ/scripts/detach_launch.py" "$@"; }
 
 # ---- preconditions ---------------------------------------------------------
 [ -f "$VOL/wnn/db/wnn.db" ] || { log "ABORT: $VOL not mounted (DB missing)"; exit 1; }
@@ -35,30 +45,30 @@ up() { pgrep -f "$1" >/dev/null 2>&1; }   # caller brackets the pattern's last c
 
 # ---- 1. dashboard (cwd dashboard/, CARGO_TARGET_DIR, log dashboard.out) -----
 if up "release/wnn-dashboar[d]"; then log "dashboard already up"; else
-	( cd "$PROJ/dashboard" && CARGO_TARGET_DIR="$VOL/cargo-target" nohup "$DASH" >> "$PROJ/dashboard.out" 2>&1 < /dev/null & ) ; disown 2>/dev/null || true
+	pid=$(CARGO_TARGET_DIR="$VOL/cargo-target" detach "$PROJ/dashboard.out" "$PROJ/dashboard" -- "$DASH")
 	for i in $(seq 1 30); do curl -sk -o /dev/null https://localhost:3000/api/flows && break; sleep 1; done
-	log "dashboard launched (pid $(pgrep -f 'release/wnn-dashboar[d]' | head -1))"
+	log "dashboard launched (pid $pid, ppid $(ps -o ppid= -p "$pid" | tr -d ' '))"
 fi
 
 # ---- 2. IDS worker (rayon 13, log /private/tmp/wnn_worker.log) ---------------
 if up "wnn.ram.experiments.worke[r]"; then log "worker already up"; else
-	RAYON_NUM_THREADS=13 nohup "$PY" -u -B -m wnn.ram.experiments.worker --url https://localhost:3000 --no-ssl-verify \
-		>> /private/tmp/wnn_worker.log 2>&1 < /dev/null & disown
-	log "worker launched (pid $!) — it requeues the flow that was running at the reboot"
+	pid=$(RAYON_NUM_THREADS=13 detach /private/tmp/wnn_worker.log "$PROJ" -- \
+		"$PY" -u -B -m wnn.ram.experiments.worker --url https://localhost:3000 --no-ssl-verify)
+	log "worker launched (pid $pid, ppid $(ps -o ppid= -p "$pid" | tr -d ' ')) — it requeues the flow that was running at the reboot"
 fi
 
 # ---- 3. memory sampler + watchdog -------------------------------------------
 if up "controller_mem_sample[r].sh"; then log "mem sampler already up"; else
-	nohup bash scripts/controller_mem_sampler.sh > /dev/null 2>&1 < /dev/null & disown; log "mem sampler launched (pid $!)"
+	pid=$(detach /dev/null "$PROJ" -- bash scripts/controller_mem_sampler.sh); log "mem sampler launched (pid $pid)"
 fi
 if up "controller_mem_watchdo[g].sh"; then log "mem watchdog already up"; else
-	nohup bash scripts/controller_mem_watchdog.sh >> logs/controller/mem_watchdog.log 2>&1 < /dev/null & disown; log "mem watchdog launched (pid $!)"
+	pid=$(detach "$PROJ/logs/controller/mem_watchdog.log" "$PROJ" -- bash scripts/controller_mem_watchdog.sh); log "mem watchdog launched (pid $pid)"
 fi
 
 # ---- 4. vite dev server (:5173) ---------------------------------------------
 if up "node_modules/.bin/vit[e] dev"; then log "vite already up"; else
-	( cd "$PROJ/dashboard/frontend" && nohup npm run dev >> "$PROJ/logs/vite.log" 2>&1 < /dev/null & ) ; disown 2>/dev/null || true
-	log "vite launched"
+	pid=$(detach "$PROJ/logs/vite.log" "$PROJ/dashboard/frontend" -- npm run dev)
+	log "vite launched (pid $pid)"
 fi
 
 # ---- 5. controller: arm B re-fly, remaining seeds (idempotent chain) --------
@@ -67,8 +77,8 @@ if [ "$bd" -ge 4 ]; then log "arm B re-fly complete ($bd/4) — nothing to fly; 
 elif [ -f experiments/HOLD_CONTROLLER ]; then log "HOLD_CONTROLLER present — NOT launching the arm B chain ($bd/4 banked); rm it to resume"
 elif pgrep -f "MacOS/Python -u -m wnn.control.phased_g[a]" >/dev/null; then log "a controller is already flying — not launching"
 else
-	nohup bash scripts/arm_b_delta_label_chain.sh >> /private/tmp/arm_b_delta_label.log 2>&1 < /dev/null & disown
-	log "arm B chain launched (pid $!) — skips the $bd banked seeds, flies the rest (~5 h each); log /private/tmp/arm_b_delta_label.log"
+	pid=$(detach /private/tmp/arm_b_delta_label.log "$PROJ" -- bash scripts/arm_b_delta_label_chain.sh)
+	log "arm B chain launched (pid $pid) — skips the $bd banked seeds, flies the rest (~5 h each); log /private/tmp/arm_b_delta_label.log"
 fi
 
 # ---- 6. marker repair, sequential (all idempotent: done rows are skipped) ---
@@ -76,14 +86,14 @@ fi
 # recalc for arch-only #0 headlines -> MEMORY-headline runs -> CONNECTIONS-headline runs.
 if [ "${SKIP_REPAIR:-0}" = "1" ]; then log "SKIP_REPAIR=1 — repair sequence NOT launched (recalc gate-3 fault open, 15/09)"
 elif up "recalc_headline[s].py" || up "rescore_first_report_see[d].py"; then log "a repair job is already running — not relaunching the sequence"; else
-	nohup bash -c "
+	pid=$(detach /dev/null "$PROJ" -- bash -c "
 		cd '$PROJ'; export PYTHONPATH='$PROJ/src/wnn:'
 		nice -n 10 '$PY' -u scripts/rescore_first_report_seed.py >> logs/controller/rescore_first_seed.log 2>&1
 		nice -n 10 '$PY' -u scripts/recalc_headlines.py >> logs/controller/recalc_headlines.log 2>&1
 		nice -n 10 '$PY' -u scripts/recalc_headlines.py --headline-stages MEMORY --any-genome >> logs/controller/recalc_headlines_memory.log 2>&1
 		nice -n 10 '$PY' -u scripts/recalc_headlines.py --headline-stages CONNECTIONS --any-genome >> logs/controller/recalc_headlines_connections.log 2>&1
-	" > /dev/null 2>&1 < /dev/null & disown
-	log "repair sequence launched (pid $!): re-score 2nd pass -> recalc arch-only -> MEMORY -> CONNECTIONS"
+	")
+	log "repair sequence launched (pid $pid): re-score 2nd pass -> recalc arch-only -> MEMORY -> CONNECTIONS"
 fi
 
 log "DONE. Remaining by hand: (1) re-arm the tick cron in the Claude session from docs/controller_status_tick_prompt.md;"

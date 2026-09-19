@@ -60,11 +60,21 @@ def true_onset(winner: str) -> dict:
 	can never disagree on what a key is.
 	"""
 	from wnn.control.checkpoint_io import load_controller_checkpoint
+	from wnn.control.evaluator import spec_from_arch
 	ckpt = load_controller_checkpoint(winner, skip_population=True)
-	spec, genome = ckpt["spec"], ckpt["best_genome"]
+	genome = ckpt["best_genome"]
+	# The neuron count is the GENOME's, not motors x levels of the base spec
+	# (19/09/2026). The NEURONS GA adds/removes output neurons in multiples of
+	# num_motors, and the evaluator derives levels_per_motor = output_neurons //
+	# num_motors from the genome (spec_from_arch). The base spec in the checkpoint
+	# still says 64 levels, so assuming 256 refused every winner the GA reshaped
+	# (`_pipeN` s4: on=248 -> 4 motors x 62 levels). Same derivation as the runtime.
+	spec = spec_from_arch(genome, ckpt["spec"])
 	bits = int(spec.output_bits_per_neuron)
 	motors, levels = int(spec.num_motors), int(spec.levels_per_motor)
-	neurons = motors * levels
+	neurons = int(genome.output_neurons)
+	if neurons != motors * levels:
+		raise SystemExit(f"output_neurons {neurons} is not a multiple of num_motors {motors}")
 	# num_features / bits_per_feature are METHODS on ControllerSpec, not fields —
 	# int() on the bound method silently reads as a TypeError, not a wrong number.
 	nf = spec.num_features() if callable(spec.num_features) else spec.num_features

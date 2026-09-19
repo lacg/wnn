@@ -148,6 +148,30 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
+AS OF 19/09/2026 12:00 EDT (supersedes the 15/09 16:00 block below; BOX IDLE BY DESIGN).
+EVERYTHING THE 15/09 BLOCK QUEUED HAS FLOWN AND BANKED — the repair sequence (recalc passes)
+finished, the offline-connectivity probe CLOSED (rho 0.33/0.29), stage D `_pipeN` 4/4 (5d81bb44),
+arm B label-only `_dl` 4/4 (035e06b2), clean control `_hd29` 4/4 (b8068f05, 08:03 EDT 19/09).
+NO chain, NO supervisor, NO phased_ga, NO repair job, NO probe is running or queued. Tick lines 2/3:
+"no run — box idle BY DESIGN; pending on Luiz: pick the next lever (CTRL-15 `_op`, full pipeline arm,
+5th seed)". Do NOT call the IDS worker a controller job.
+VERDICTS (era-clean, arm − `_hd29`, n=4, mean [95% t-CI]):
+  `_pipeN` (GRID→NEURONS→MEMORY): stable +2.05 pp [−1.6,+5.7] · err −0.21° [−0.50,+0.09] · steady −0.16°
+  [−0.20,−0.12] EXCLUDES 0 · alt −0.07 m [−0.10,−0.05] EXCLUDES 0 · hd −0.041; all 4 winners FIT the H743
+  (325k/351k/399,425 EXACT/325k TRUE keys). CTRL-7 → DONE 19/09 ("err unresolved at n=4").
+  `_dl` (label only): null on attitude (err +0.13°, steady +0.17° 0/4), alt −0.17 m, 2-3x jerk. Not adopted.
+  `_hd29 − _hd` era A/B: NO systematic trainer-era shift (every CI straddles 0) — STRADDLE caveat RETIRED.
+EXPORTER FIXED 19/09: export_controller_c.py / count_true_keys.py read the GENOME's neuron count
+(spec_from_arch: levels = output_neurons // motors) — `_pipeN` s4 on=248 = 4×62 levels, 1176 KB packed.
+PLANE: CTRL-7 Done · CTRL-9 (`_dl`) banked, still In Progress (Luiz to close) · CTRL-15 `_op` ×4 in Todo
+(NOT launched) · candidate not yet a story: FULL pipeline GRID→NEURONS→BITS→CONNECTIONS→MEMORY
+(--skip-stages "" — phased_ga's native order; Luiz 19/09) ×4 ≈ 32 h.
+IDS SIDE (for line 6 only): worker on ABI 13 since 11:40 EDT 19/09 (QSR OI-trainer fix); flow 6072
+resumed from gen 66 as the smoke; 94 QSR `-abi13` reruns queued (ids 6264-6357) behind the 56 earlier
+flows. IDS is FIFO — never reorder.
+SERVICES: dashboard/worker/sampler/watchdog/vite all relaunched via detach_launch.py (PPID=1) after the
+11:13 EDT CLI restart reaped the nohup-launched set; post_reboot_bringup.sh now uses the helper.
+
 AS OF 15/09/2026 16:00 EDT (supersedes the 10:15 block below).
 TICK RULE (Luiz 15:5x EDT): NEVER print "box idle" while a controller-side job runs. The marker-repair
 sequence (recalc_headlines.py passes, pid 66162) and the offline-connectivity validity probe
