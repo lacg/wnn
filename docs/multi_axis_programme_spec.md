@@ -801,6 +801,30 @@ F install (#11). A controller-wheel install is "anytime" by the crate split but 
 is armed (three cohorts died 10/08) — the queue is a chain of chains until STEP 6.
 ```
 
+### 5.1.3a NEW STAGE-0 ITEM (19/09/2026, found by the axis-F plumbing audit): THE TRAINER NEVER GETS THE AIRFRAME
+```
+RewardGatedConfigPacked(af_mass=0.0393)  →  af_k_thrust 2.4   af_inertia [2.3e-3, 2.3e-3, 4.6e-3]   arm 0.075   (synthetic plant)
+cf21_brushless registry                   →  k_thrust  0.2    inertia   [3.0e-5, 3.02e-5, 5.3e-5]  arm 0.0707
+implied hover pwm (thrust = k·pwm²):  trainer 0.200   scorer 0.694        runtime-verified 19/09 on the installed ABI-29 wheel
+```
+evaluator.py packs the trainer config at two sites (~L1485, ~L1604) from `_dist_packed_fields` +
+`_stage1_train_kwargs`, which passes ONLY `af_mass`. `EpisodeConfig.airframe_kwargs()` exists and is
+used by the scorers/baselines (classical_baseline.py) and the Lamarckian recorder (ga_memory.py) —
+not by the trainer pack. 12c62df9 (04/08) wired the plant "end to end" except here. Every one of the
+270 `*cf21_brushless*` markers — `_hd`, `_hd29`, `_pipeN`, `_bd`, `_dl`, the D0 and translation A/Bs,
+queue_1909 in flight — TRAINED against the synthetic plant (and DAgger labels from teachers whose
+gains derive from it) and SCORED on cf21. Within-lineage A/Bs stay valid (same trainer both arms);
+the absolute claim "trained and deployed on the Crazyflie 2.1 model" does not, D0's trainer-side
+"derived hover" was 0.200 not 0.694, and AXIS D IS VOID until the trainer sees the airframe.
+  [ ] #14 FIX: pass `ec.airframe_kwargs()` (plant fields + af_pid_* cascade) at both evaluator sites;
+      audit the thermometer-calibration sim (~L546) and `collect_student_feature_samples` (~L843)
+      for the same omission; test = a cf21 EpisodeConfig packs k_thrust 0.2 (dead-plumbing check).
+      kind: code (Python 4 lines + test) · lands WITH the ABI-30 wheel at the idle window · lineage break.
+  [ ] #15 RE-FLY the anchor on the fixed trainer: `_hd30` s31337002-05 (+s6-9 for D4), ~3.2 h each;
+      re-read the flash footprint (the student may need more or fewer keys on the true plant).
+      DECISION (Luiz): fix + re-fly before round 1 (recommended — axis D and the paper's cf21 claim
+      depend on it), or disclose as a limitation and keep the synthetic-plant lineage.
+
 ### 5.1.4a Memory budget for axis C (sn=4 / sn=8) — CHECKED 19/09/2026 (closes item #8)
 ```
 evidence (banked markers, per-genome cells = min-max Σ μ; peak RSS = /usr/bin/time -l)
