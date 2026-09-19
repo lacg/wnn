@@ -63,12 +63,12 @@ selection ran on) and never the during-search gen lines (anti-predictive, repeat
 ## Coverage
 
 ```
-markers with a headline held-out : 248
-  altitude regimen (alt= present) : 164
+markers with a headline held-out : 249
+  altitude regimen (alt= present) : 165
   attitude-only                   : 84
   state-neuron count unreadable   : 0  (no .out on disk)
-  h743 keys counted exactly       : 54  (experiments/h743_keys.json)
-  h743 fits, exact / bound        : 31 / 50
+  h743 keys counted exactly       : 55  (experiments/h743_keys.json)
+  h743 fits, exact / bound        : 32 / 50
   first-seed alignment (14/09)    : headline re-scored 4, arch-only headline NOT re-scorable 18  (rows marked in the tag column: [unfixed])
   stage-select recalc (15-17/09)  : headline re-selected on the fixed trainer 143  (headline_holdout_recalc takes precedence over _aligned / original)
 ```
@@ -77,7 +77,7 @@ markers with a headline held-out : 248
 
 ```
                  attitude-only   altitude
-  sn = 0                78          164
+  sn = 0                78          165
   sn > 0                 6            0
 ```
 
@@ -217,7 +217,7 @@ same-rule rank: a large value means that row owes its placing to the draw.
      2     0.0960  CRN   99.6%    1.31    0.88  0.449  3.8x      0.1064     +8  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_bd
      3     0.1000  CRN  100.0%    1.44    1.00  0.473  fits      0.1000     +2  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_l090_l
      4     0.1001  CRN   99.6%    1.37    0.86  0.401  1.0x      0.1001     +2  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_ls2
-     5     0.1002  CRN   98.6%    1.19    0.76  0.440  3.5x      0.1870    +50  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_bd
+     5     0.1002  CRN   98.6%    1.19    0.76  0.440  3.5x      0.1870    +51  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_bd
      6     0.1029  CRN   99.6%    1.41    0.85  0.300  fits      0.1029     +1  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_crn
      7     0.1036  CRN   99.6%    1.42    0.96  0.195  2.0x      0.1096     +5  TAB_on_b32n256_cf21_brushless_L4C_s31337005
      8     0.1038  CRN   99.2%    1.35    0.66  0.433  3.4x      0.1038     +0  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_bd
@@ -231,10 +231,10 @@ same-rule rank: a large value means that row owes its placing to the draw.
     16     0.1129  rot   99.8%    1.59    1.13  0.394  1.7x      0.1129     -1  SL_C_b32n256_cf21_brushless_L4C_g10_s31337002
     17     0.1147  CRN   99.6%    1.58    1.11  0.349  fits      0.1232     +5  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005
     18     0.1149  CRN   99.2%    1.51    0.95  0.314  fits      0.1149     -2  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_mut1ta
-    19     0.1163  CRN   99.2%    1.53    1.12  0.237  1.3x      0.1472    +24  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_ls4
+    19     0.1163  CRN   99.2%    1.53    1.12  0.237  1.3x      0.1472    +25  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_ls4
     20     0.1181  CRN   99.0%    1.52    1.02  0.538  fits      0.1181     -1  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_hd
-    21     0.1214  CRN   99.4%    1.64    1.07  0.294  fits      0.1950    +36  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_hd
-    22     0.1221  CRN   99.4%    1.65    1.24  0.331  fits      0.1664    +28  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_hd
+    21     0.1214  CRN   99.4%    1.64    1.07  0.294  fits      0.1950    +37  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_hd
+    22     0.1221  CRN   99.4%    1.65    1.24  0.331  fits      0.1664    +29  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_hd
     23     0.1227  CRN   98.8%    1.55    1.03  0.372  fits      0.0988    -19  SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_ls2
     24     0.1232  CRN   99.2%    1.63    1.21  0.317  1.2x      0.1349     +8  SL_C_b28n256_cf21_brushless_L4C_g10_s31337003
     25     0.1234  CRN   98.8%    1.56    0.94  0.422  4.0x      0.0921    -24  SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_bd
