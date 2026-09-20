@@ -58,6 +58,36 @@ fixed scale — `(=)` means "this generation's leader did not out-rank a number 
 over a pool that no longer exists". Watching `gen:` regress is how population collapse
 becomes visible before `elite:` ever moves.
 
+### Since 20/09/2026: `elite:` IS pool[0], the second block is `offspring:`
+
+The "(=) means the leader did not out-rank a number computed over a pool that no longer
+exists" paragraph above describes a defect, not a feature: under `--fit-aggregation zscore`
+the frozen `best_fitness` is a z-score in the frame of whichever generation minted it, so a
+genome that out-ranks the incumbent head-to-head in the current pool can still print `(=)`
+for the rest of the stage. Measured on the ABI-30 runs: 16 of 48 GA generations printed
+`(=)` while a *different* genome held rank 1 (15 of those better on ≥2 of err/stable/steady).
+Runs launched after ~19:00 EDT 20/09 print:
+
+```
+best=-1.1817 (new), stable=99.20%, err=1.90°, steady=1.28°, alt=0.175m
+  | offspring: stable=98.80%, err=1.99°, steady=1.28°, alt=0.102m
+```
+
+- First block — **pool[0]**: rank 1 of this generation's pool under the current frame, the
+  genome `_holdout_report` publishes if the stage ends now. `best=` is its score in this
+  frame. `(new)` = rank 1 changed identity since the previous generation; `(=)` = same genome.
+  Print it as `elite:`.
+- `offspring:` — the best genome **generated this generation** (elites excluded): what the
+  population is producing now. On a plateau it trails pool[0]; watching it regress is how
+  collapse shows. Print it as `offspring:` (it replaces the old `gen:` line).
+- Old-format `.out` files (label `gen:` after the `|`): read `gen:` as pool[0] and ignore `(=)`.
+
+Still open (search-control, not log — needs a decision before it changes): the magnitude
+patience tracker watches `best_err_deg`/`best_accuracy_val` of the *frozen* elite, so the
+one-time improvement that put a new genome at rank 1 earns no patience credit. On the four
+`_hd30` runs the un-credited genomes were column-mixed near-ties (e.g. 98.8/1.38/0.72 vs
+98.5/1.34/0.73), so the 6/120 MEMORY early-stops would very likely have fired anyway.
+
 **Neither is what gets published.** Stage-select ranks the union of the top-3 of *every*
 stage on the val seeds, so the headline is drawn from nine candidates and is frequently
 neither — arm 2 of the alt-weight sweep headlined `CONNECTIONS#2`, arm 5 `CONNECTIONS#1`.

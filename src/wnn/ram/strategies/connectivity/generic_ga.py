@@ -411,6 +411,14 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 
 		# Track previous best for delta computation
 		prev_best_fitness = best_fitness
+		# Identity of the previous generation's pool[0] (metric tuple — metrics
+		# are frozen per genome under CRN, so equality is identity). Drives the
+		# (new)/(=) flag on the gen line: under a pool-relative aggregation
+		# (zscore) `best_fitness` is a z-score from whichever generation's frame
+		# minted it and cannot be compared across generations, so the old
+		# `(=)` was a frame artifact — measured 20/09/2026 on the ABI-30 runs:
+		# 16 of 48 GA gens printed (=) while a DIFFERENT genome held rank 1.
+		prev_pool0_key = None
 
 		def _fmt_duration(s):
 			if s < 60:
@@ -582,18 +590,36 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			avg_gen_secs = total_elapsed / gens_done
 			eta_secs = gens_remaining * avg_gen_secs
 			delta = best_fitness - prev_best_fitness
-			delta_str = f"{delta:+.4f}" if delta != 0 else "="
+			# The gen line reports pool[0] — rank 1 of THIS generation's pool under
+			# the current frame, i.e. the genome that is published if the stage
+			# ends now (`_holdout_report` scores final_population[0], never the
+			# frozen `best`). `best=` is its score in this frame; the tag says
+			# whether rank 1 changed IDENTITY since the previous generation.
+			_p0_g, _p0_m = population[gen_best_idx]
+			pool0_key = (
+				getattr(_p0_m, "acc", None), getattr(_p0_m, "mean_attitude_error_deg", None),
+				getattr(_p0_m, "mean_steady_error_deg", None), getattr(_p0_m, "mean_altitude_error_m", None),
+			)
+			pool0_changed = prev_pool0_key is not None and pool0_key != prev_pool0_key
+			delta_str = "new" if pool0_changed else "="
+			prev_pool0_key = pool0_key
+			# Physical columns of pool[0] for the line (fall back to the frozen
+			# best's values for IDS/LM, which have no controller columns).
+			_line_err = getattr(_p0_m, "mean_attitude_error_deg", best_err_deg)
+			_line_acc = _p0_m.acc if best_err_deg is not None else best_accuracy_val
+			_line_steady = getattr(_p0_m, "mean_steady_error_deg", best_steady_deg)
+			_line_alt = getattr(_p0_m, "mean_altitude_error_m", best_alt_m)
 			# Controller repurposes acc as the stability rate — label it 'stable' when
 			# the controller-only err is present, else 'acc' for IDS/LM.
 			_acc_label = "stable" if best_err_deg is not None else "acc"
-			acc_str = f", {_acc_label}={best_accuracy_val:.2%}" if best_accuracy_val is not None else ""
+			acc_str = f", {_acc_label}={_line_acc:.2%}" if _line_acc is not None else ""
 			# Controller-only: mean attitude error in degrees.
-			err_str = f", err={best_err_deg:.2f}°" if best_err_deg is not None else ""
+			err_str = f", err={_line_err:.2f}°" if _line_err is not None else ""
 			# Controller-only: steady-state error, the third leg of the err/stable/steady
 			# triple. It was ALWAYS computed (evaluator stores mean_steady_error_deg per
 			# genome) but never printed, which is why steady used to appear only in
 			# HELD-OUT blocks. An em dash when a path lacks it — never 0.00.
-			_steady = best_steady_deg if best_err_deg is not None else None
+			_steady = _line_steady if best_err_deg is not None else None
 			steady_str = f", steady={_steady:.2f}°" if _steady is not None else (
 				", steady=—" if best_err_deg is not None else "")
 			# Controller-only: the VERTICAL channel, in metres. Same history as steady
@@ -604,7 +630,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			# elite getting worse on err/steady and give no clue what it bought.
 			# Metres are not degrees, so the unit is explicit and the em dash rule
 			# from steady applies — never print 0.000 for "we do not know".
-			_alt = best_alt_m if best_err_deg is not None else None
+			_alt = _line_alt if best_err_deg is not None else None
 			alt_str = f", alt={_alt:.3f}m" if _alt is not None else (
 				", alt=—" if best_err_deg is not None else "")
 			# THIS GENERATION'S leader, printed BESIDE the incumbent rather than
@@ -619,17 +645,26 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			#                is a DIFFERENT genome, and watching it regress is how
 			#                population collapse becomes visible before the
 			#                incumbent line ever moves.
+			# Since 20/09/2026 the first block IS pool[0], so the second block
+			# shows this generation's best OFFSPRING (rank 1 among the genomes
+			# generated THIS gen, elites excluded) — "what the population is
+			# producing now". On a plateau it trails pool[0]; watching it regress
+			# is how population collapse shows before rank 1 ever moves.
 			gen_str = ""
 			if best_err_deg is not None:
-				gm = population[gen_best_idx][1]
-				g_steady = getattr(gm, "mean_steady_error_deg", None)
-				g_alt = getattr(gm, "mean_altitude_error_m", None)
-				gen_str = (
-					f" | gen: stable={gm.acc * 100:.2f}%"
-					f", err={gm.mean_attitude_error_deg:.2f}°"
-					f", steady={f'{g_steady:.2f}°' if g_steady is not None else '—'}"
-					f", alt={f'{g_alt:.3f}m' if g_alt is not None else '—'}"
-				)
+				_off = [i for i in ranked_indices if i >= total_elites]
+				if _off:
+					gm = pool[_off[0]][1]
+					g_steady = getattr(gm, "mean_steady_error_deg", None)
+					g_alt = getattr(gm, "mean_altitude_error_m", None)
+					gen_str = (
+						f" | offspring: stable={gm.acc * 100:.2f}%"
+						f", err={gm.mean_attitude_error_deg:.2f}°"
+						f", steady={f'{g_steady:.2f}°' if g_steady is not None else '—'}"
+						f", alt={f'{g_alt:.3f}m' if g_alt is not None else '—'}"
+					)
+				else:
+					gen_str = " | offspring: —"
 			# Controller-only: population shape + cell-count spread — diagnoses the
 			# variable-shape GPU explosion AND the memory bloat (cells replicate on
 			# bit-grow). Guarded so non-controller genomes never trip it.
@@ -666,7 +701,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			)
 			self._log.info(
 				f"[{self.name}] Gen {generation + 1:0{gen_width}d}/{cfg.generations}: "
-				f"best={best_fitness:.4f} ({delta_str})"
+				f"best={combined_scores[gen_best_idx]:.4f} ({delta_str})"
 				f"{f', avg={gen_avg_ce:.4f}' if best_err_deg is None else ''}"
 				f"{acc_str}{err_str}{steady_str}{alt_str}{gen_str} "
 				f"[elites survived: {surviving_elites}/{total_elites}]{shape_str} "

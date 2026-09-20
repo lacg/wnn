@@ -89,6 +89,18 @@ TWO GENOMES, TWO LINES. The .out gen line carries both blocks split by `|`:
 · They are DIFFERENT GENOMES on any `(=)` generation. Metrics are frozen per genome; if the blocks disagree that is two genomes, not one re-measured. Do NOT re-merge them.
 · `(=)` does NOT mean idle — the fitness is a rank/z combine over the CURRENT pool, so it is not a fixed scale. Watching `gen:` regress is how population collapse shows before `elite:` moves.
 · NEITHER is published. Stage-select ranks the union of the top-3 of EVERY stage on the val seeds.
+GEN-LINE SEMANTICS CHANGED 20/09/2026 (commit on generic_ga.py; runs LAUNCHED after ~19:00 EDT
+20/09 print the new form, older .out files keep the old one — tell them apart by the label after `|`):
+  best=-1.1817 (new), stable=99.20%, err=1.90°, steady=1.28°, alt=0.175m | offspring: stable=98.80%, err=1.99°, steady=1.28°, alt=0.102m
+· First block = pool[0], rank 1 of THIS generation's pool under the current frame — the genome that
+  is published if the stage ends now (`_holdout_report` scores final_population[0]). `best=` is its
+  score in this frame. `(new)` = rank 1 changed IDENTITY since the previous gen; `(=)` = same genome.
+· `offspring:` = the best genome GENERATED this generation (elites excluded) — "what the population
+  is producing now". On a plateau it trails pool[0]; watching it regress is population collapse.
+· Print the first block as `elite:` and the second as `offspring:` (was `gen:`). The tag `(=)` in the
+  OLD format was a z-frame artifact (the frozen `best_fitness` is not comparable across generations):
+  16/48 ABI-30 gens printed (=) while a different genome held rank 1. In the old format read the
+  `gen:` block as pool[0] and ignore `(=)`.
 
 ALTITUDE IS NOT OPTIONAL IN A TABLE (06/09/2026, Luiz: "WHY didn't we follow the rule
 of showing stable, err, steady AND ALTITUDE on all results?").
