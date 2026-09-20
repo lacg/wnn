@@ -246,6 +246,7 @@ class OptimizationTemplate(ABC, Generic[T]):
 			# Magnitude-aware patience (controller redesign (a)). getattr keeps
 			# non-GA configs (which never set these) on the rank-WHM path.
 			magnitude_aware=getattr(cfg, "magnitude_aware_patience", False),
+			track_pool0=getattr(cfg, "patience_tracks_pool0", False),
 			mag_eps_err=getattr(cfg, "mag_patience_eps_err", 0.5),
 			mag_stable_offset=getattr(cfg, "mag_patience_stable_offset", 0.05),
 			mag_delta=getattr(cfg, "mag_patience_delta", 0.05),

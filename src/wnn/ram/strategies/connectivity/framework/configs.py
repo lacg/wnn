@@ -85,6 +85,14 @@ class OptimizationConfig:
 	# preserved. Off by default here; the IDS worker defaults it ON via the
 	# magnitude_aware_patience flow param (SP wave-1 restart, 11/07/2026).
 	magnitude_aware_patience: bool = False
+	# 20/09/2026: feed the magnitude tracker pool[0]'s err/stable (rank 1 of the
+	# CURRENT pool) instead of the frozen `best`'s. Under a pool-relative
+	# aggregation (zscore) `best_fitness` is a z-score in the frame of the
+	# generation that minted it, so a genome that out-ranks the incumbent
+	# head-to-head can never replace `best` and its improvement earns no
+	# patience credit (16/48 ABI-30 gens). Off = legacy (frozen best); a recipe
+	# turns it on at a lineage boundary — it changes when a stage stops.
+	patience_tracks_pool0: bool = False
 	mag_patience_eps_err: float = 0.5        # ε_err floor (deg) — guards div-0 near 0°
 	mag_patience_stable_offset: float = 0.05  # s0 additive — tames stable=0 in the ratio
 	mag_patience_delta: float = 0.05         # δ noise gate — ρ below 1+δ counts as no-improvement

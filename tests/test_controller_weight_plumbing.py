@@ -85,6 +85,7 @@ def _args_with_all_weights(**extra):
 	"""An argparse-ish namespace carrying every controller weight at 0.37."""
 	from types import SimpleNamespace
 	base = dict(pop=6, check_interval=2, magnitude_aware_patience=False,
+	            patience_track_pool0=False,
 	            elitism=0.2, crossover_rate=0.7, immigrants=0.0)
 	base.update({f"fit_weight_{s}": 0.37 for s in CONTROLLER_WEIGHTS})
 	base.update(extra)
@@ -162,6 +163,7 @@ def test_ts_builder_forwards_every_weight():
 
 	args = SimpleNamespace(
 		pop=6, check_interval=2, magnitude_aware_patience=False,
+		patience_track_pool0=False,
 		**{f"fit_weight_{s}": 0.37 for s in CONTROLLER_WEIGHTS})
 	tscfg = _build_ts_config(args, gens=3, patience=2)
 	for stem in CONTROLLER_WEIGHTS:
@@ -318,3 +320,39 @@ def test_cli_flag_reaches_the_builders():
 	default = build_arg_parser().parse_args([])
 	assert default.fit_aggregation is None
 	assert default.zrank_clamp == pytest.approx(3.0)
+
+
+# ---------------------------------------------------------------------------
+# --patience-track-pool0 (20/09/2026): the path the run takes, end to end.
+# The alt-weight lesson: test the BUILDER + the TRACKER, not the dataclass.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("on", [False, True])
+def test_patience_track_pool0_reaches_the_early_stopper(on):
+	"""args → _build_ga_config → OptimizationTemplate → EarlyStoppingConfig.track_pool0."""
+	from wnn.control.phased_ga import _build_ga_config, _build_ts_config
+	from wnn.ram.strategies.connectivity.framework.early_stopping import EarlyStoppingConfig
+
+	args = _args_with_all_weights(patience_track_pool0=on)
+	for name, cfg in (("GA", _build_ga_config(args, gens=3, patience=2)),
+	                  ("TS", _build_ts_config(args, gens=3, patience=2))):
+		assert cfg.patience_tracks_pool0 is on, f"{name} builder dropped patience_track_pool0"
+	# The template copies the knob onto the tracker's config the same way it
+	# copies magnitude_aware — pin that copy with a minimal stand-in config.
+	from types import SimpleNamespace
+	from wnn.ram.strategies.connectivity.optimization_template import OptimizationTemplate
+	stub = SimpleNamespace(patience=2, check_interval=1, min_improvement_pct=0.0,
+	                       magnitude_aware_patience=True, patience_tracks_pool0=on)
+	import logging
+	tmpl = SimpleNamespace(_config=stub, _log=logging.getLogger("t"), name="t")
+	tracker = OptimizationTemplate._setup_early_stopping(tmpl, initial_fitness=0.0)
+	assert isinstance(tracker._config, EarlyStoppingConfig)
+	assert tracker._config.track_pool0 is on
+
+
+def test_patience_track_pool0_default_is_legacy():
+	"""OFF by default: a banked lineage must stay bit-comparable."""
+	from wnn.ram.strategies.connectivity.framework.configs import OptimizationConfig
+	from wnn.ram.strategies.connectivity.framework.early_stopping import EarlyStoppingConfig
+	assert OptimizationConfig().patience_tracks_pool0 is False
+	assert EarlyStoppingConfig().track_pool0 is False

@@ -549,6 +549,7 @@ def _build_ga_config(args, gens: int, patience: int, mutation_rate=None):
 	# + C10 sweep). When on, it watches err°/stable% magnitude — recovers patience
 	# proportional to real improvement so genuine jumps don't get mis-early-stopped.
 	gacfg.magnitude_aware_patience = args.magnitude_aware_patience
+	gacfg.patience_tracks_pool0 = args.patience_track_pool0
 	# E1 random immigrants: fraction of each gen's offspring drawn fresh from
 	# create_random_genome (applies to BOTH arch and memory stages — the memory
 	# strategy's create_random_genome makes fresh random cell-genomes).
@@ -591,6 +592,7 @@ def _build_ts_config(args, gens: int, patience: int):
 	tscfg.patience = patience
 	tscfg.check_interval = args.check_interval
 	tscfg.magnitude_aware_patience = args.magnitude_aware_patience
+	tscfg.patience_tracks_pool0 = args.patience_track_pool0
 	return tscfg
 
 
@@ -2734,6 +2736,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	# for physical err°/stable% metrics; every driver already passed it. --no-... to opt out.
 	ap.add_argument("--magnitude-aware-patience", action=argparse.BooleanOptionalAction, default=True,
 	                help="Patience watches err°/stable° magnitude (not rank-WHM); recovers ∝ real gain. Default ON.")
+	# 20/09/2026: patience watches pool[0] (rank 1 of the current pool = the
+	# published genome) instead of the frozen `best`, whose z-score is not
+	# comparable across generations. DEFAULT OFF = legacy, so a banked lineage
+	# stays bit-comparable; turn on at a lineage boundary (both arms of an A/B).
+	ap.add_argument("--patience-track-pool0", action=argparse.BooleanOptionalAction, default=False,
+	                help="Magnitude patience watches pool[0]'s err/stable, not the frozen best's. Default OFF (legacy).")
 	ap.add_argument("--universe-episodes", type=int, default=8)
 	# Inner reward-gated train knobs (production: leave None → 8 rounds × 24 eps);
 	# smoke tests pass tiny values to keep per-genome training under a few seconds.
@@ -3314,7 +3322,8 @@ def main():
 	print(f"Pop={args.pop} elitism={args.elitism:.0%} crossover={args.crossover_rate:.0%} "
 	      f"eval_episodes={args.eval_episodes} steps={args.steps} tilt={args.tilt}° "
 	      f"levels={args.levels} "
-	      f"fitness_pools={fitness_pools_label(args)}")
+	      f"fitness_pools={fitness_pools_label(args)} "
+	      f"patience={'pool0' if args.patience_track_pool0 else 'frozen-best'}")
 	# R9 (multi-axis spec): one greppable line the ladder copies into the marker —
 	# wheel, ABI, .so hash, git HEAD, pool scheme. Fail-safe by construction.
 	print(collect_provenance(fitness_pools_label(args)).line())

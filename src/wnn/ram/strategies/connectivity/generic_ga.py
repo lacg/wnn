@@ -800,8 +800,15 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			# check_magnitude_metrics core. Falls back to the WHM check for
 			# LM (no physical metrics) or when the flag is off.
 			_mag_on = getattr(early_stopper._config, "magnitude_aware", False)
+			# track_pool0 (20/09/2026): watch rank 1 of the CURRENT pool (the
+			# genome that is published), not the frozen `best` — see
+			# OptimizationConfig.patience_tracks_pool0. `_line_err`/`_line_acc`
+			# are pool[0]'s columns, computed for the gen line above.
+			_track0 = getattr(early_stopper._config, "track_pool0", False)
+			_watch_err = _line_err if _track0 else best_err_deg
+			_watch_acc = _line_acc if _track0 else best_accuracy_val
 			if _mag_on and best_err_deg is not None:
-				_stop = early_stopper.check_magnitude(generation, best_err_deg, best_accuracy_val)
+				_stop = early_stopper.check_magnitude(generation, _watch_err, _watch_acc)
 			elif _mag_on and best_f1_val is not None and best_fpr_val is not None:
 				_stop = early_stopper.check_magnitude_ids(generation, best_f1_val, best_fpr_val)
 			else:

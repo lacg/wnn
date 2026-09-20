@@ -16,6 +16,7 @@ class EarlyStoppingConfig:
 	# OptimizationConfig.magnitude_aware_patience for the rationale. These mirror
 	# the knobs there and only take effect via check_magnitude().
 	magnitude_aware: bool = False
+	track_pool0: bool = False           # watch pool[0]'s metrics, not the frozen best's (20/09/2026)
 	mag_eps_err: float = 0.5            # ε_err floor (deg)
 	mag_stable_offset: float = 0.05     # s0 additive offset
 	mag_delta: float = 0.05             # δ noise gate
