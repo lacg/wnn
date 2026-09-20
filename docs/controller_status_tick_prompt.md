@@ -160,6 +160,17 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
+AS OF 20/09/2026 19:10 EDT (addendum to the 15:40 19/09 block below; queue_2009b unchanged, STEP 2 flying).
+`_hd30` 4/4 CLOSED 12:46 EDT: era A/B `_hd30 − _hd29` every CI straddles 0 (MEMORY row: stable −1.05 pp
+[−5.5,+3.4] · err −0.25° [−0.79,+0.29] · steady −0.30° [−1.03,+0.44] · alt −0.05 m); the systematic change
+is SIZE — 573-776k TRUE keys, every `_hd30` winner is QSPI tier (none fits the 2 MB internal flash).
+GEN-LINE FORMAT CHANGED (723c1ed0): runs launched after ~19:00 EDT 20/09 print `best=… (new|=)` = pool[0]
+and `| offspring:` — see the GEN-LINE SEMANTICS block above; s2 `_pipeN30` keeps the old `| gen:` form.
+`--patience-track-pool0` landed DEFAULT OFF (551fe127) — NOT in any recipe; adopt at the multi-axis
+round-1 boundary. CTRL-19 (Todo): `_alt30` ×4 = anchor recipe + `--fit-weight-alt 0.05` vs the anchor of
+the day, patience flag OFF both sides, slot AFTER queue_2009b STOP and BEFORE multi_axis_chain --round 1.
+Line 2 keeps naming the queue_2009b step; when the queue STOPs, name CTRL-19 as the next lever (Luiz to arm).
+
 AS OF 19/09/2026 15:40 EDT (supersedes the 12:10 block below — ABI-30 LINEAGE RESTART FLYING).
 WHAT HAPPENED 19/09 afternoon: the DAgger trainer never received the airframe (spec §5.1.3a, memory
 project_trainer_airframe_gap — every cf21 run trained on the SYNTHETIC plant, hover 0.20 vs cf21's 0.694).
