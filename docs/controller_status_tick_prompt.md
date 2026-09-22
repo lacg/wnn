@@ -160,6 +160,16 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
+AS OF 22/09/2026 05:00 EDT — GATE FIRED: PROMOTED (04:53 EDT). experiments/promotion_gate_2009.json: mean delta
+_pipeN30 − _hd30 (n=4 headline) stable −1.0 pp · err −0.08° · steady −0.15° · alt −0.04 m → 3/4 favourable, err ≤ +0.10°.
+Every 95% CI straddles 0 (a pre-registered MEAN rule fired; carry the caveat: sign 3/4 fires by chance 31%; s4 was
+a 1/4 loser with alt the only win). ANCHOR = `_pipeN30` and RECIPE = `--skip-stages connections,bits
+--max-output-neurons 512 --max-cells 1000000000` from here: STEP 3 `_op30` ×4 (CTRL-15, --obs-pwm ONLY, vs `_pipeN30`)
+flying since 04:53 EDT → STEP 4 `_pon30` s2 → STEP 5 `_full30` ×4 → STEP 6 LEVELS n=5 → STOP → CTRL-19 `_alt30`
+(now pairs vs `_pipeN30` with the promoted recipe) → multi-axis round 1 (MA_ANCHOR_SUFFIX=_pipeN30 + MA_RECIPE_EXTRA,
+--patience-track-pool0 ON there). Line 2 names `_pipeN30` as the control. `_pipeN30` 4/4: hd 0.1165/0.1021/0.1906/0.1224
+(ranks 19/7/>40/40), all QSPI-tier (676-1170k TRUE keys), 8.6-11.6 h each vs the anchor's 4.7-6.1 h.
+
 AS OF 20/09/2026 19:10 EDT (addendum to the 15:40 19/09 block below; queue_2009b unchanged, STEP 2 flying).
 `_hd30` 4/4 CLOSED 12:46 EDT: era A/B `_hd30 − _hd29` every CI straddles 0 (MEMORY row: stable −1.05 pp
 [−5.5,+3.4] · err −0.25° [−0.79,+0.29] · steady −0.30° [−1.03,+0.44] · alt −0.05 m); the systematic change
