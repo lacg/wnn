@@ -1,0 +1,42 @@
+{
+ "rule": "promote iff >=3/4 columns favour _pipeN30 (stable up, err down, steady down, alt down) AND err delta <= +0.10 deg",
+ "mean_delta": {
+  "stable_pp": -1.0,
+  "err_deg": -0.078,
+  "steady_deg": -0.148,
+  "alt_m": -0.0387
+ },
+ "per_seed": {
+  "31337002": [
+   0.6,
+   -0.23,
+   -0.25,
+   0.031
+  ],
+  "31337003": [
+   -1.0,
+   -0.29,
+   -0.4,
+   -0.026
+  ],
+  "31337004": [
+   -2.8,
+   0.51,
+   0.64,
+   -0.267
+  ],
+  "31337005": [
+   -0.8,
+   -0.3,
+   -0.58,
+   0.107
+  ]
+ },
+ "favourable": [
+  false,
+  true,
+  true,
+  true
+ ],
+ "promote": true
+}
