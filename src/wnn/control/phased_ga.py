@@ -534,6 +534,7 @@ def _build_ga_config(args, gens: int, patience: int, mutation_rate=None):
 		# the weights above — this caller passing it is what makes the flag real.
 		aggregation=_search_aggregation(args),
 		zrank_clamp=getattr(args, "zrank_clamp", 3.0),
+		zrank_mad_floor=getattr(args, "zrank_mad_floor", False),
 		# Viability gate (21/08): same caller-must-pass-it lesson as alt/pos.
 		gate_stable_min=_gate_args(args)[0],
 		gate_err_max=_gate_args(args)[1],
@@ -584,6 +585,7 @@ def _build_ts_config(args, gens: int, patience: int):
 	tscfg.fitness_aggregation = _search_aggregation(args)
 	tscfg.fitness_gate_stable_min, tscfg.fitness_gate_err_max = _gate_args(args)
 	tscfg.zrank_clamp = getattr(args, "zrank_clamp", 3.0)
+	tscfg.zrank_mad_floor = getattr(args, "zrank_mad_floor", False)
 	if tscfg.fitness_aggregation != "harmonic":
 		# The single-objective CONTROLLER type has no aggregation knob — a
 		# non-default aggregation needs the multi-objective calculator even
@@ -1223,6 +1225,7 @@ def _save_winner(path: str, args, spec: ControllerSpec,
 			"aggregation_search": _search_aggregation(args),
 			"aggregation_select": _select_aggregation(args),
 			"zrank_clamp": getattr(args, "zrank_clamp", 3.0),
+			"zrank_mad_floor": getattr(args, "zrank_mad_floor", False),
 		},
 		"meta": {
 			"saved_at_unix": time.time(),
@@ -1747,6 +1750,7 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 			weight_pos=getattr(args, "fit_weight_pos", 0.0),
 			aggregation=_select_aggregation(args),
 			zrank_clamp=getattr(args, "zrank_clamp", 3.0),
+		zrank_mad_floor=getattr(args, "zrank_mad_floor", False),
 			gate_stable_min=_gate_args(args)[0],
 			gate_err_max=_gate_args(args)[1])
 		try:
@@ -2893,6 +2897,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--gate-err", type=float, default=None,
 		help="Viability gate: maximum mean attitude error in DEGREES. Set with "
 		     "--gate-stable or not at all. Approved 21/08/2026: 8.0.")
+	# MAD FLOOR (23/09/2026). DEFAULT OFF = legacy, byte-identical: it changes
+	# which genome the combine crowns, so it belongs to a lineage boundary with
+	# BOTH arms carrying it, never to a live A/B.
+	ap.add_argument("--zrank-mad-floor", action=argparse.BooleanOptionalAction, default=False,
+	                help="Floor the zscore robust scale at each metric's MEASURED noise "
+	                     "(stable 1.1pp, steady 0.18deg — the CRN pool-noise SEM). The clamp "
+	                     "bounds the tail; this bounds the denominator, so a near-saturated "
+	                     "column with a collapsing MAD can no longer dominate. Default OFF.")
 	ap.add_argument("--zrank-clamp", type=float, default=3.0,
 	                help="Winsorization bound for --fit-aggregation zscore: per-metric robust "
 	                     "z is clamped to ±this, so no single dimension can capture the score "
@@ -3323,7 +3335,8 @@ def main():
 	      f"eval_episodes={args.eval_episodes} steps={args.steps} tilt={args.tilt}° "
 	      f"levels={args.levels} "
 	      f"fitness_pools={fitness_pools_label(args)} "
-	      f"patience={'pool0' if args.patience_track_pool0 else 'frozen-best'}")
+	      f"patience={'pool0' if args.patience_track_pool0 else 'frozen-best'} "
+	      f"madfloor={'on' if args.zrank_mad_floor else 'off'}")
 	# R9 (multi-axis spec): one greppable line the ladder copies into the marker —
 	# wheel, ABI, .so hash, git HEAD, pool scheme. Fail-safe by construction.
 	print(collect_provenance(fitness_pools_label(args)).line())

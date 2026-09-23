@@ -96,6 +96,7 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		weight_pos:    float = 0.0,
 		aggregation:   str   = "harmonic",
 		zrank_clamp:   float = 3.0,
+		zrank_mad_floor: bool = False,
 		gate_stable_min: "float | None" = None,
 		gate_err_max:    "float | None" = None,
 		# The ONE fitted anchor in the controller table. 0.06 is "~2x the median of
@@ -155,6 +156,9 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		# Winsorization bound for zscore (the λ_alt lesson: no single dimension
 		# may capture the score, however extreme the outlier). Read only by zscore.
 		self.zrank_clamp = float(zrank_clamp)
+		# MAD FLOOR (23/09/2026, default OFF = legacy). The clamp bounds the
+		# TAIL; the floor bounds the DENOMINATOR. See MEASURED_SCALE_FLOORS.
+		self.zrank_mad_floor = bool(zrank_mad_floor)
 		self.weight_err_sq = float(weight_err_sq)
 		self.weight_stable = float(weight_stable)
 		self.weight_jerk   = float(weight_jerk)
@@ -217,6 +221,27 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		 "the run is not a --translation run, or the scorer predates metric row 13."),
 	)
 
+	# Per-column noise floors for the zscore robust scale, in each column's OWN
+	# units (ram_core::fitness::MetricColumn::scale_floor). A column absent from
+	# this map floors at 0.0 = legacy: a floor is a MEASUREMENT, and one that is
+	# guessed would silently re-weight the search.
+	#
+	# The two entries here come from the CRN diagnosis (project_crn_fitness_landed,
+	# 03/09/2026): one 100-episode pool score carries ~2.5 pp of stable and ~0.4°
+	# of attitude noise for the SAME genome. `--score-crn` averages 5 pools, so
+	# the standard error of a scored value is 2.5/sqrt(5) = 1.1 pp and
+	# 0.4/sqrt(5) = 0.18°. A difference at that size is a coin flip, and the
+	# floor makes it worth ~1 sigma instead of the 6.7 sigma an 0.2 pp MAD gave it.
+	#   stable — the column that caused this (`_op30` s31337002 stage-select).
+	#   steady — degrees, same instrument, same derivation.
+	# NOT floored, deliberately: the err² column ranks REWARD (not degrees), so
+	# the 0.18° figure does not apply to it; jerk/mono/effort/alt/pos have no
+	# measured per-genome noise yet. Measure, then add.
+	MEASURED_SCALE_FLOORS = {
+		"weight_stable": 0.011,   # fraction (stable_rate is 0..1, not percent)
+		"weight_steady": 0.18,    # degrees
+	}
+
 	def fitness(self, metrics_list: list[Metrics]) -> list[float]:
 		"""Reduce Metrics to domain-blind columns and let the WHEEL rank them.
 
@@ -240,6 +265,14 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		flat: list[float] = []
 		weights: list[float] = []
 		higher: list[bool] = []
+		# Parallel to `weights`: floors[i] is the noise floor of column i, in
+		# that column's units. Built in lockstep so the two can never misalign.
+		floors: list[float] = []
+
+		def _floor(weight_attr: str) -> float:
+			if not self.zrank_mad_floor:
+				return 0.0
+			return float(self.MEASURED_SCALE_FLOORS.get(weight_attr, 0.0))
 
 		# err² → ranked on reward, higher reward = better (reward has its OWN
 		# field since 05/08/2026; the "-reward mirrored into ce" hack is gone).
@@ -247,12 +280,14 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 			flat.extend(_controller_reward(m) for m in metrics_list)
 			weights.append(self.weight_err_sq)
 			higher.append(True)
+			floors.append(_floor("weight_err_sq"))
 
 		# stable_rate → higher = better.
 		if self.weight_stable > 0:
 			flat.extend(float(m.stable_rate) for m in metrics_list)
 			weights.append(self.weight_stable)
 			higher.append(True)
+			floors.append(_floor("weight_stable"))
 
 		for attr, weight_attr, warned_attr, why in self._OPTIONAL_COLUMNS:
 			weight = getattr(self, weight_attr)
@@ -270,6 +305,7 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 			flat.extend(float(v) for v in vals)
 			weights.append(weight)
 			higher.append(False)
+			floors.append(_floor(weight_attr))
 
 		if not weights:
 			return [1.0] * n
@@ -294,10 +330,21 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 						"controller metrics. Disarm the gate or fix the scorer.")
 				gate_er.append(float(e))
 			from wnn.control._accel import gated_fitness_combine
+			if any(f > 0.0 for f in floors):
+				return list(gated_fitness_combine(
+					flat, n, weights, higher, self.aggregation, self.zrank_clamp,
+					gate_st, gate_er, self.gate_stable_min, self.gate_err_max,
+					floors))
 			return list(gated_fitness_combine(
 				flat, n, weights, higher, self.aggregation, self.zrank_clamp,
 				gate_st, gate_er, self.gate_stable_min, self.gate_err_max))
 		from wnn.control._accel import fitness_combine
+		# Pass the floors ONLY when at least one is armed: the default path then
+		# stays callable against a wheel that predates the kwarg, so this file is
+		# safe to sit in the tree while an older ram_controller is installed.
+		if any(f > 0.0 for f in floors):
+			return list(fitness_combine(flat, n, weights, higher,
+			                            self.aggregation, self.zrank_clamp, floors))
 		return list(fitness_combine(flat, n, weights, higher,
 		                            self.aggregation, self.zrank_clamp))
 
@@ -368,6 +415,8 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		# failure this label would have caught on 18/08 and did not. Printing the
 		# zero is what turns the label into evidence that the dimension was ranked.
 		parts.append(f"alt={self.weight_alt}")
+		if self.zrank_mad_floor:
+			parts.append("madfloor=on")
 		# pos stays conditional while it is inert (every genome sits at the origin
 		# until --xy-offset > 0, so the rank is one big tie). Make it unconditional
 		# the day stage 2 arms, for the reason above.

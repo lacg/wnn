@@ -30,6 +30,13 @@ pub struct MetricColumn<'a>
 	pub values: &'a [f64],
 	pub weight: f64,
 	pub higher_is_better: bool,
+	/// Noise floor for the zscore scale, in this column's OWN units. The
+	/// robust scale becomes max(1.4826*MAD, scale_floor), so a column whose
+	/// candidates are clustered inside measurement noise cannot dominate the
+	/// combine. 0.0 (the default everywhere until a floor is measured) is
+	/// byte-identical legacy behaviour. Read ONLY by zrank_combine; the rank
+	/// combines have no scale. See MAD_FLOOR below.
+	pub scale_floor: f64,
 }
 
 /// How rank_combine aggregates the weighted per-metric ranks.
@@ -176,6 +183,19 @@ pub fn rank_combine(columns: &[MetricColumn], aggregation: RankAggregation)
 /// MAD = 0 (a majority of candidates share the median) degenerates gracefully:
 /// values at the median score z = 0, values off it score the full ±clamp —
 /// exactly the limit of (x−med)/ε under the clamp, without the ε.
+///
+/// MAD FLOOR (23/09/2026). Robustness is a property about OUTLIERS, not about
+/// SCALE: MAD discards the very tail that would have widened the denominator,
+/// so a column whose candidates are all clustered — a SATURATED metric — gets
+/// a collapsing scale and its differences are amplified without limit. Measured
+/// on `_op30` s31337002's 9 stage-select candidates: stable spanned 98.6-100.0%
+/// with MAD = 0.2 pp, so 1.4826*MAD = 0.2965 pp turned GRID#0's 0.4 pp edge
+/// (2 episodes in 500 — inside the CRN pool noise) into +1.35 sigma and −0.337
+/// of fitness at weight 0.25. That single term outweighed its losses on err²,
+/// steady AND alt, and crowned it over a genome that beat it on three of four
+/// columns on the report seeds. The ±clamp cannot help: it bounds the tail,
+/// not the denominator. `scale_floor` bounds the denominator from below, so a
+/// difference smaller than the metric's measured noise can no longer buy rank.
 pub fn zrank_combine(columns: &[MetricColumn], clamp: f64) -> Result<Vec<f64>, String>
 {
 	if !(clamp > 0.0) || !clamp.is_finite()
@@ -189,7 +209,8 @@ pub fn zrank_combine(columns: &[MetricColumn], clamp: f64) -> Result<Vec<f64>, S
 	{
 		let med = median(c.values);
 		let abs_dev: Vec<f64> = c.values.iter().map(|v| (v - med).abs()).collect();
-		let scale = 1.4826 * median(&abs_dev);
+		let floor = if c.scale_floor.is_finite() && c.scale_floor > 0.0 { c.scale_floor } else { 0.0 };
+		let scale = (1.4826 * median(&abs_dev)).max(floor);
 		for (i, v) in c.values.iter().enumerate()
 		{
 			let z = if scale > 0.0
@@ -224,8 +245,10 @@ pub fn zrank_combine(columns: &[MetricColumn], clamp: f64) -> Result<Vec<f64>, S
 /// drift apart in how Python reaches these combines.
 ///
 /// `values_flat` is column-major: column c's candidate i sits at c*n + i.
-/// `mode` ∈ {"harmonic", "arithmetic", "zscore"}; `clamp` is read only by
-/// zscore. Errors are strings for the wrappers to raise as ValueError.
+/// `mode` ∈ {"harmonic", "arithmetic", "zscore"}; `clamp` and `scale_floors`
+/// are read only by zscore. `scale_floors` is per column, in that column's own
+/// units (see MetricColumn::scale_floor); None = all zero = legacy. Errors are
+/// strings for the wrappers to raise as ValueError.
 pub fn combine_flat(
 	values_flat: &[f64],
 	num_candidates: usize,
@@ -233,9 +256,22 @@ pub fn combine_flat(
 	higher_is_better: &[bool],
 	mode: &str,
 	clamp: f64,
+	scale_floors: Option<&[f64]>,
 ) -> Result<Vec<f64>, String>
 {
 	let cols = weights.len();
+	if let Some(f) = scale_floors
+	{
+		if f.len() != cols
+		{
+			return Err(format!(
+				"combine_flat: {} scale floors but {} columns", f.len(), cols));
+		}
+		if let Some(bad) = f.iter().find(|v| !v.is_finite() || **v < 0.0)
+		{
+			return Err(format!("combine_flat: scale floor {} must be finite and >= 0", bad));
+		}
+	}
 	if higher_is_better.len() != cols
 	{
 		return Err(format!(
@@ -251,6 +287,7 @@ pub fn combine_flat(
 		values: &values_flat[c * num_candidates..(c + 1) * num_candidates],
 		weight: weights[c],
 		higher_is_better: higher_is_better[c],
+		scale_floor: scale_floors.map_or(0.0, |f| f[c]),
 	}).collect();
 	match mode
 	{
@@ -298,6 +335,7 @@ pub fn gated_combine_flat(
 	higher_is_better: &[bool],
 	mode: &str,
 	clamp: f64,
+	scale_floors: Option<&[f64]>,
 	gate_stable: &[f64],
 	gate_err: &[f64],
 	gate_stable_min: f64,
@@ -332,7 +370,8 @@ pub fn gated_combine_flat(
 	if n_feasible == num_candidates
 	{
 		// Everything flies: the gate is inert, the base combine IS the answer.
-		return combine_flat(values_flat, num_candidates, weights, higher_is_better, mode, clamp);
+		return combine_flat(
+			values_flat, num_candidates, weights, higher_is_better, mode, clamp, scale_floors);
 	}
 	if n_feasible == 0
 	{
@@ -350,7 +389,8 @@ pub fn gated_combine_flat(
 			sub_flat.push(values_flat[c * num_candidates + i]);
 		}
 	}
-	let sub_scores = combine_flat(&sub_flat, n_feasible, weights, higher_is_better, mode, clamp)?;
+	let sub_scores = combine_flat(
+		&sub_flat, n_feasible, weights, higher_is_better, mode, clamp, scale_floors)?;
 	let worst = sub_scores.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
 	let mut out = vec![0.0; num_candidates];
 	for (k, &i) in idx.iter().enumerate()
@@ -509,7 +549,7 @@ mod tests
 
 	fn col<'a>(values: &'a [f64], weight: f64, higher: bool) -> MetricColumn<'a>
 	{
-		MetricColumn { values, weight, higher_is_better: higher }
+		MetricColumn { values, weight, higher_is_better: higher, scale_floor: 0.0 }
 	}
 
 	// --- compute_ranks: parity with the Python helper, ties included ---------
@@ -560,7 +600,8 @@ mod tests
 	fn arm9_columns() -> Vec<MetricColumn<'static>>
 	{
 		arm9().into_iter()
-			.map(|(v, w, h)| MetricColumn { values: v, weight: w, higher_is_better: h })
+			.map(|(v, w, h)| MetricColumn {
+				values: v, weight: w, higher_is_better: h, scale_floor: 0.0 })
 			.collect()
 	}
 
@@ -568,6 +609,128 @@ mod tests
 	{
 		scores.iter().enumerate()
 			.min_by(|a, b| a.1.total_cmp(b.1)).map(|(i, _)| i).unwrap()
+	}
+
+	// --- MAD floor: a saturated column must not buy rank (23/09/2026) -------
+
+	/// The measured case. `_op30` s31337002's nine stage-select candidates:
+	/// GRID#0 wins ONLY stable (100.0 vs 99.6 — 2 episodes in 500, inside the
+	/// CRN pool noise) and loses err², steady AND alt to NEURONS#0, yet the
+	/// unfloored combine crowns it because stable's MAD is 0.2 pp.
+	#[test]
+	fn saturated_column_cannot_buy_rank_once_floored()
+	{
+		// stable %, err deg, steady deg — the three weighted columns.
+		const STABLE9: [f64; 9] = [100.0, 91.8, 99.2, 99.6, 98.6, 99.6, 99.8, 99.6, 99.4];
+		const ERR9:    [f64; 9] = [1.30, 3.11, 1.84, 1.28, 1.71, 1.41, 1.34, 1.28, 1.39];
+		const STEADY9: [f64; 9] = [0.75, 3.10, 1.14, 0.73, 1.11, 1.08, 0.80, 0.73, 0.86];
+		let err_sq: Vec<f64> = ERR9.iter().map(|e| e * e).collect();
+		let grid0 = 0usize;      // the saturated-column winner
+		let neurons0 = 3usize;   // better on err, steady (and alt, unweighted)
+
+		let build = |floor_stable: f64| -> Vec<MetricColumn> { vec![
+			MetricColumn { values: &err_sq, weight: 0.3125, higher_is_better: false,
+			               scale_floor: 0.0 },
+			MetricColumn { values: &STABLE9, weight: 0.25, higher_is_better: true,
+			               scale_floor: floor_stable },
+			MetricColumn { values: &STEADY9, weight: 0.4375, higher_is_better: false,
+			               scale_floor: 0.0 },
+		]};
+
+		// Unfloored: the 0.4 pp stable edge wins it. This is the shipped result
+		// (marker SL_C_b24n256_..._s31337002_op30, headline GRID#0).
+		let bare = zrank_combine(&build(0.0), 3.0).unwrap();
+		assert!(bare[grid0] < bare[neurons0],
+			"legacy behaviour changed: {} vs {}", bare[grid0], bare[neurons0]);
+
+		let gap = |sc: &[f64]| sc[neurons0] - sc[grid0];   // > 0 while GRID#0 leads
+		let bare_gap = gap(&bare);
+
+		// Floored at 1.1 pp — the CRN pool-noise SEM (2.5 pp for a single
+		// 100-episode pool, averaged over 5 CRN pools). This does NOT reverse
+		// the decision: it removes 96.7% of the saturated column's advantage
+		// (0.2548 -> 0.0085), which is what a floor AT the noise level should
+		// do — a difference exactly at the noise is worth ~1 sigma, not 6.7.
+		let at_sem = zrank_combine(&build(1.1), 3.0).unwrap();
+		assert!(gap(&at_sem) > 0.0, "1.1 pp should not yet reverse it");
+		assert!(gap(&at_sem) < 0.05 * bare_gap,
+			"floor at the CRN SEM should collapse the gap, got {} of {}",
+			gap(&at_sem), bare_gap);
+
+		// Floored at the RAW single-pool noise (2.5 pp), the decision reverses
+		// and the genome that wins three of four report-seed columns is crowned.
+		let at_raw = zrank_combine(&build(2.5), 3.0).unwrap();
+		assert!(gap(&at_raw) < 0.0,
+			"floor at the raw pool noise should reverse it: {} vs {}",
+			at_raw[neurons0], at_raw[grid0]);
+
+		// Monotone in the floor: more floor never gives the saturated column
+		// back more of its edge.
+		let mut prev = bare_gap;
+		for f in [0.5_f64, 1.1, 1.5, 2.0, 2.5, 3.0]
+		{
+			let g = gap(&zrank_combine(&build(f), 3.0).unwrap());
+			assert!(g <= prev + 1e-12, "gap grew at floor {}: {} > {}", f, g, prev);
+			prev = g;
+		}
+	}
+
+	/// The floor is a LOWER bound only: a column whose spread already exceeds
+	/// it must be scored exactly as before.
+	#[test]
+	fn floor_below_the_spread_is_inert()
+	{
+		let wide = [1.0, 5.0, 9.0, 13.0, 17.0];
+		let cols = |f: f64| vec![MetricColumn {
+			values: &wide, weight: 1.0, higher_is_better: false, scale_floor: f }];
+		let bare = zrank_combine(&cols(0.0), 3.0).unwrap();
+		let floored = zrank_combine(&cols(0.5), 3.0).unwrap();  // 1.4826*MAD = 5.93
+		assert_eq!(bare, floored);
+	}
+
+	/// MAD = 0 with a floor: the old branch returned the full +/-clamp for any
+	/// off-median value. With a floor the scale is finite, so a difference
+	/// smaller than the floor scores BELOW the clamp — the whole point.
+	#[test]
+	fn floor_tames_the_zero_mad_degenerate()
+	{
+		let tied = [0.990, 0.990, 0.990, 0.990, 0.994];
+		let cols = |f: f64| vec![MetricColumn {
+			values: &tied, weight: 1.0, higher_is_better: true, scale_floor: f }];
+		let bare = zrank_combine(&cols(0.0), 3.0).unwrap();
+		assert!((bare[4] + 3.0).abs() < 1e-12, "expected full clamp, got {}", bare[4]);
+		let floored = zrank_combine(&cols(0.011), 3.0).unwrap();
+		assert!(floored[4] > -1.0 && floored[4] < 0.0,
+			"0.4 pp against an 1.1 pp floor should be a fraction of a sigma, got {}", floored[4]);
+	}
+
+	/// combine_flat validates the floors it is handed.
+	#[test]
+	fn combine_flat_rejects_bad_floors()
+	{
+		let flat = [1.0, 2.0, 3.0, 4.0];
+		assert!(combine_flat(&flat, 2, &[0.5, 0.5], &[false, false], "zscore", 3.0,
+			Some(&[0.1])).is_err(), "arity mismatch must be refused");
+		assert!(combine_flat(&flat, 2, &[0.5, 0.5], &[false, false], "zscore", 3.0,
+			Some(&[0.1, -1.0])).is_err(), "negative floor must be refused");
+		assert!(combine_flat(&flat, 2, &[0.5, 0.5], &[false, false], "zscore", 3.0,
+			Some(&[0.1, f64::NAN])).is_err(), "non-finite floor must be refused");
+		assert!(combine_flat(&flat, 2, &[0.5, 0.5], &[false, false], "zscore", 3.0,
+			Some(&[0.0, 0.0])).is_ok());
+	}
+
+	/// The rank combines have no scale, so a floor cannot reach them.
+	#[test]
+	fn floors_do_not_touch_the_rank_combines()
+	{
+		let vals = [0.990, 0.990, 0.994];
+		let mk = |f: f64| vec![MetricColumn {
+			values: &vals, weight: 1.0, higher_is_better: true, scale_floor: f }];
+		for agg in [RankAggregation::Harmonic, RankAggregation::Arithmetic]
+		{
+			assert_eq!(rank_combine(&mk(0.0), agg).unwrap(),
+			           rank_combine(&mk(9.9), agg).unwrap());
+		}
 	}
 
 	#[test]
@@ -714,7 +877,7 @@ mod tests
 		let structured = arm9_columns();
 		for mode in ["harmonic", "arithmetic", "zscore"]
 		{
-			let got = combine_flat(&flat, n, &weights, &higher, mode, 3.0).unwrap();
+			let got = combine_flat(&flat, n, &weights, &higher, mode, 3.0, None).unwrap();
 			let want = match mode
 			{
 				"harmonic" => rank_combine(&structured, RankAggregation::Harmonic).unwrap(),
@@ -729,9 +892,9 @@ mod tests
 	fn flat_rejects_shape_and_mode_errors()
 	{
 		let flat = [1.0, 2.0, 3.0, 4.0];
-		assert!(combine_flat(&flat, 2, &[1.0], &[false, true], "zscore", 3.0).is_err());
-		assert!(combine_flat(&flat, 3, &[1.0, 1.0], &[false, false], "zscore", 3.0).is_err());
-		assert!(combine_flat(&flat, 2, &[0.5, 0.5], &[false, false], "geometric", 3.0).is_err());
+		assert!(combine_flat(&flat, 2, &[1.0], &[false, true], "zscore", 3.0, None).is_err());
+		assert!(combine_flat(&flat, 3, &[1.0, 1.0], &[false, false], "zscore", 3.0, None).is_err());
+		assert!(combine_flat(&flat, 2, &[0.5, 0.5], &[false, false], "geometric", 3.0, None).is_err());
 	}
 
 	// --- gated_combine_flat: the viability gate (21/08/2026) -----------------
@@ -740,7 +903,7 @@ mod tests
 	{
 		// Two columns: reward (higher better, w .7), jerk (lower better, w .3).
 		gated_combine_flat(vals, n, &[0.7, 0.3], &[true, false],
-			"zscore", 3.0, st, er, 0.70, 8.0).unwrap()
+			"zscore", 3.0, None, st, er, 0.70, 8.0).unwrap()
 	}
 
 	#[test]
@@ -764,7 +927,7 @@ mod tests
 		let st = [0.95, 0.90, 0.80];
 		let er = [2.5, 3.0, 4.0];
 		let gated = gate_call(&vals, 3, &st, &er);
-		let base = combine_flat(&vals, 3, &[0.7, 0.3], &[true, false], "zscore", 3.0).unwrap();
+		let base = combine_flat(&vals, 3, &[0.7, 0.3], &[true, false], "zscore", 3.0, None).unwrap();
 		assert_eq!(gated, base);
 	}
 
@@ -789,7 +952,7 @@ mod tests
 		let er = [2.5, 3.0, 86.3];
 		let gated = gate_call(&vals, 3, &st, &er);
 		let sub = combine_flat(&[-10.0, -12.0, 0.031, 0.033], 2,
-			&[0.7, 0.3], &[true, false], "zscore", 3.0).unwrap();
+			&[0.7, 0.3], &[true, false], "zscore", 3.0, None).unwrap();
 		assert_eq!(&gated[..2], &sub[..]);
 	}
 
@@ -801,7 +964,7 @@ mod tests
 		let st = [0.70, 0.95];
 		let er = [8.0, 2.0];
 		let s = gate_call(&vals, 2, &st, &er);
-		let base = combine_flat(&vals, 2, &[0.7, 0.3], &[true, false], "zscore", 3.0).unwrap();
+		let base = combine_flat(&vals, 2, &[0.7, 0.3], &[true, false], "zscore", 3.0, None).unwrap();
 		assert_eq!(s, base);
 	}
 
@@ -809,11 +972,11 @@ mod tests
 	fn gate_rejects_bad_inputs()
 	{
 		let vals = [1.0, 2.0];
-		assert!(gated_combine_flat(&vals, 2, &[1.0], &[true], "zscore", 3.0,
+		assert!(gated_combine_flat(&vals, 2, &[1.0], &[true], "zscore", 3.0, None,
 			&[0.9], &[1.0, 2.0], 0.7, 8.0).is_err());          // gate len mismatch
-		assert!(gated_combine_flat(&vals, 2, &[1.0], &[true], "zscore", 3.0,
+		assert!(gated_combine_flat(&vals, 2, &[1.0], &[true], "zscore", 3.0, None,
 			&[0.9, 0.9], &[1.0, 2.0], 0.0, 8.0).is_err());     // zero threshold
-		assert!(gated_combine_flat(&vals, 2, &[1.0], &[true], "zscore", 3.0,
+		assert!(gated_combine_flat(&vals, 2, &[1.0], &[true], "zscore", 3.0, None,
 			&[0.9, f64::NAN], &[1.0, 2.0], 0.7, 8.0).is_err()); // non-finite gate
 	}
 

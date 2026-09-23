@@ -773,6 +773,7 @@ fn record_input_entropy(
 /// wheel: the combine is results-determining logic shared by both substrates,
 /// and Python adapters hold only the Metrics→columns mapping.
 #[pyfunction]
+#[pyo3(signature = (values_flat, num_candidates, weights, higher_is_better, mode, clamp, scale_floors=None))]
 fn fitness_combine(
 	values_flat: Vec<f64>,
 	num_candidates: usize,
@@ -780,10 +781,12 @@ fn fitness_combine(
 	higher_is_better: Vec<bool>,
 	mode: &str,
 	clamp: f64,
+	scale_floors: Option<Vec<f64>>,
 ) -> PyResult<Vec<f64>>
 {
 	ram_core::fitness::combine_flat(
-		&values_flat, num_candidates, &weights, &higher_is_better, mode, clamp)
+		&values_flat, num_candidates, &weights, &higher_is_better, mode, clamp,
+		scale_floors.as_deref())
 		.map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
@@ -794,6 +797,8 @@ fn fitness_combine(
 /// fly" needs its own inputs. Additive export — fitness_combine is untouched,
 /// so every banked recipe stays bit-identical.
 #[pyfunction]
+#[pyo3(signature = (values_flat, num_candidates, weights, higher_is_better, mode, clamp,
+                    gate_stable, gate_err, gate_stable_min, gate_err_max, scale_floors=None))]
 fn gated_fitness_combine(
 	values_flat: Vec<f64>,
 	num_candidates: usize,
@@ -805,10 +810,12 @@ fn gated_fitness_combine(
 	gate_err: Vec<f64>,
 	gate_stable_min: f64,
 	gate_err_max: f64,
+	scale_floors: Option<Vec<f64>>,
 ) -> PyResult<Vec<f64>>
 {
 	ram_core::fitness::gated_combine_flat(
 		&values_flat, num_candidates, &weights, &higher_is_better, mode, clamp,
+		scale_floors.as_deref(),
 		&gate_stable, &gate_err, gate_stable_min, gate_err_max)
 		.map_err(pyo3::exceptions::PyValueError::new_err)
 }

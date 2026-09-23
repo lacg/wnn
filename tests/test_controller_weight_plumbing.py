@@ -85,7 +85,7 @@ def _args_with_all_weights(**extra):
 	"""An argparse-ish namespace carrying every controller weight at 0.37."""
 	from types import SimpleNamespace
 	base = dict(pop=6, check_interval=2, magnitude_aware_patience=False,
-	            patience_track_pool0=False,
+	            patience_track_pool0=False, zrank_mad_floor=False,
 	            elitism=0.2, crossover_rate=0.7, immigrants=0.0)
 	base.update({f"fit_weight_{s}": 0.37 for s in CONTROLLER_WEIGHTS})
 	base.update(extra)
@@ -163,7 +163,7 @@ def test_ts_builder_forwards_every_weight():
 
 	args = SimpleNamespace(
 		pop=6, check_interval=2, magnitude_aware_patience=False,
-		patience_track_pool0=False,
+		patience_track_pool0=False, zrank_mad_floor=False,
 		**{f"fit_weight_{s}": 0.37 for s in CONTROLLER_WEIGHTS})
 	tscfg = _build_ts_config(args, gens=3, patience=2)
 	for stem in CONTROLLER_WEIGHTS:
@@ -356,3 +356,90 @@ def test_patience_track_pool0_default_is_legacy():
 	from wnn.ram.strategies.connectivity.framework.early_stopping import EarlyStoppingConfig
 	assert OptimizationConfig().patience_tracks_pool0 is False
 	assert EarlyStoppingConfig().track_pool0 is False
+
+
+# ---------------------------------------------------------------------------
+# --zrank-mad-floor (23/09/2026): the path the run takes, end to end.
+# The 0d58e0c7 lesson — test the BUILDER and the CALCULATOR, not the dataclass.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("on", [False, True])
+def test_mad_floor_reaches_both_builders_and_the_calculator(on):
+	from wnn.control.phased_ga import _build_ga_config, _build_ts_config
+
+	args = _args_with_all_weights(zrank_mad_floor=on, fit_aggregation="zscore")
+	for name, cfg in (("GA", _build_ga_config(args, gens=3, patience=2)),
+	                  ("TS", _build_ts_config(args, gens=3, patience=2))):
+		assert cfg.zrank_mad_floor is on, f"{name} builder dropped zrank_mad_floor"
+		calc = cfg.create_fitness_calculator()
+		assert calc.zrank_mad_floor is on, f"{name} config did not reach the calculator"
+
+
+def test_mad_floor_default_is_legacy():
+	"""OFF by default: it changes which genome the combine crowns."""
+	from wnn.ram.strategies.connectivity.framework.configs import OptimizationConfig
+	from wnn.ram.fitness import FitnessCalculatorControllerHarmonic
+	assert OptimizationConfig().zrank_mad_floor is False
+	assert FitnessCalculatorControllerHarmonic(
+		weight_err_sq=1.0, aggregation="zscore").zrank_mad_floor is False
+
+
+def _wheel_takes_scale_floors() -> bool:
+	"""Does the INSTALLED ram_controller accept the scale_floors argument?
+
+	The floor is a ram_core change, so it needs a rebuilt controller wheel. The
+	wheel can only be swapped at an idle window, and this file must be green in
+	the tree meanwhile — so the behaviour test skips (never fails) against an
+	older wheel, and starts running the moment the wheel lands.
+	"""
+	try:
+		from wnn.control._accel import fitness_combine
+	except Exception:
+		return False
+	try:
+		fitness_combine([1.0, 2.0], 2, [1.0], [False], "zscore", 3.0, [0.0])
+		return True
+	except TypeError:
+		return False
+
+
+@pytest.mark.skipif(not _wheel_takes_scale_floors(),
+                    reason="installed ram_controller predates fitness_combine(scale_floors=) "
+                           "— rebuild the controller wheel (swap-free) to run this")
+def test_mad_floor_reverses_the_measured_stage_select():
+	"""The `_op30` s31337002 stage-select, through the REAL calculator.
+
+	GRID#0 wins only stable (100.0 vs 99.6 — 2 episodes in 500) and loses err²,
+	steady and alt, yet the unfloored combine crowns it. Floored at the CRN
+	pool noise the decision reverses. Pins BOTH the defect and the fix.
+	"""
+	from types import SimpleNamespace
+	from wnn.ram.fitness import FitnessCalculatorControllerHarmonic
+
+	# (reward, stable_rate, steady deg, alt m) for the nine candidates; reward
+	# is the err² column's value, monotone in -err, so -(err**2) stands in.
+	rows = [(100.0, 1.30, 0.75), (91.8, 3.11, 3.10), (99.2, 1.84, 1.14),
+	        (99.6, 1.28, 0.73), (98.6, 1.71, 1.11), (99.6, 1.41, 1.08),
+	        (99.8, 1.34, 0.80), (99.6, 1.28, 0.73), (99.4, 1.39, 0.86)]
+	metrics = [SimpleNamespace(
+		reward=-(e * e), stable_rate=st / 100.0, mean_steady_error_deg=sd,
+		mean_attitude_error_deg=e, acc=st / 100.0, ce=0.0)
+		for (st, e, sd) in rows]
+	GRID0, NEURONS0 = 0, 3
+
+	def crowned(floor_on):
+		calc = FitnessCalculatorControllerHarmonic(
+			weight_err_sq=0.3125, weight_stable=0.25, weight_steady=0.4375,
+			aggregation="zscore", zrank_mad_floor=floor_on)
+		scores = calc.fitness(metrics)
+		return min(range(len(scores)), key=lambda i: scores[i]), scores
+
+	bare_winner, bare = crowned(False)
+	assert bare_winner == GRID0, f"legacy behaviour changed: winner {bare_winner}"
+	gap = bare[NEURONS0] - bare[GRID0]
+	assert gap > 0
+
+	_, floored = crowned(True)
+	floored_gap = floored[NEURONS0] - floored[GRID0]
+	assert floored_gap < 0.05 * gap, (
+		f"floor should collapse the saturated column's edge: {floored_gap} of {gap}")

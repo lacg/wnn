@@ -143,6 +143,7 @@ class ControllerGridSearch(GenericGridSearch):
 			# legacy harmonic, set applies the one coherent mode end-to-end.
 			aggregation=search_aggregation(args),
 			zrank_clamp=getattr(args, "zrank_clamp", 3.0),
+			zrank_mad_floor=getattr(args, "zrank_mad_floor", False),
 			# Viability gate (21/08): the grid is site 3 of 3 — a gate armed for
 			# the GA but absent here would seed stage 1 from exactly the
 			# degenerate points the gate exists to exclude.
