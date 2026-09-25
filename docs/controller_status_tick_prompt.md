@@ -160,6 +160,17 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
+AS OF 25/09/2026 10:16 EDT — HOLD ARMED BY REQUEST (Luiz). experiments/HOLD_CONTROLLER exists. `_full30` s31337002
+(CTRL-16) flies on untouched and banks normally; the chain then PARKS before s3 (wait_while_held logs `HOLD —` to the
+arm log every 10 min). When the box goes idle with the sentinel present, lines 2-3 say "idle BY REQUEST — HOLD for the
+eval-batch-pack merge", NOT a failure. At that idle: (1) print the s2 NEW-MARKER block (FIVE stage rows), (2) merge branch
+`eval-batch-pack` (34d71ad4: eval sub-batches packed by the SUM of cells, not N x the largest genome; parity-tested),
+(3) smoke one short run and confirm a `[ControllerEvaluator] N genomes -> K sub-batches (widths [...])` line with widths
+well above 2, (4) rm the sentinel. WHY: s2 ran BITS at width 2 = 199% CPU of 1600% (~4.2 h/gen) because one 3.26M-cell
+genome sized the whole population. CTRL-16 verdict rule PRE-REGISTERED (325e11ec, experiments/ctrl16_rule.json): gate bar
++ mean TRUE keys <= the anchor's 808,168; apply with `python scripts/ctrl16_verdict.py` once 4/4 bank. Stage line: print
+BITS/CONNECTIONS widths when visible (`dagger-batch: w/w`).
+
 AS OF 22/09/2026 05:00 EDT — GATE FIRED: PROMOTED (04:53 EDT). experiments/promotion_gate_2009.json: mean delta
 _pipeN30 − _hd30 (n=4 headline) stable −1.0 pp · err −0.08° · steady −0.15° · alt −0.04 m → 3/4 favourable, err ≤ +0.10°.
 Every 95% CI straddles 0 (a pre-registered MEAN rule fired; carry the caveat: sign 3/4 fires by chance 31%; s4 was
