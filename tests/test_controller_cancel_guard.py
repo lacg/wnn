@@ -27,6 +27,7 @@ def _make_evaluator(scored_reward=2.5, scored_stable=0.8, scored_err=3.0):
 	methods the evaluate_batch guard path touches, stubbed to be cheap."""
 	ev = ControllerEvaluator.__new__(ControllerEvaluator)
 	ev.seed = 7
+	ev.score_crn = False              # CRN fitness (03/09) — legacy single-pool path here
 	ev.max_train_workers = 1
 	# _evaluate_core attributes the guard path reads (kept current with the
 	# production path — this stub going stale is exactly how these three tests
@@ -39,7 +40,7 @@ def _make_evaluator(scored_reward=2.5, scored_stable=0.8, scored_err=3.0):
 	ev._ensure_ga_ready = lambda: None
 	ev._advance_fold = lambda: None
 	ev._shape_key = lambda g: 0
-	ev._eval_batch_size = lambda gs: max(1, len(gs))
+	ev._eval_batch_bounds = lambda gs: [(0, len(gs))]
 	# Fallback (non-Rust-batch) train path: materialize -> _train_core per fold.
 	ev._materialize = lambda g: (None, None, None)
 	ev._train_core = lambda spec, sc, oc, init_s, init_o, seed: (object(), {})

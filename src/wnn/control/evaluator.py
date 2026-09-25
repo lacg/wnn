@@ -2088,56 +2088,88 @@ class ControllerEvaluator:
 	# Overridable end-to-end by WNN_CTRL_EVAL_BATCH if a run disagrees.
 	SPLIT_FILL = 0.2
 
-	def _eval_batch_size(self, genomes: list) -> int:
-		"""Genomes per train+score sub-batch (fix 3), so peak memory stays near a budget
-		instead of scaling with the whole population. Light modes (QUAD/QSR/BINARY) take
-		the whole population in one batch = full parallelism; heavy modes (TERNARY/PLN
-		accumulate ~30x QUAD's cells during DAGGER) get small batches. Sized from the
-		per-genome cell count (measured from warm-start cells if present, else a mode
-		floor). Override with WNN_CTRL_EVAL_BATCH."""
-		import os
+	# 6GB, not 10: the mem-watchdog SIGTERMs a controller on sustained swap
+	# thrash, and every 20/07 phase-2 kill fired with the controller at
+	# 9.5-10.6GB RSS. A budget set AT the kill threshold is not a budget.
+	EVAL_BUDGET_BYTES = 6 * 1024 * 1024 * 1024
+	# PEAK bytes per cell for one ADDITIONAL live genome — retained cells PLUS
+	# that genome's share of the training working set. NOT the same quantity as
+	# cpu_score.rs's BYTES_PER_CELL (160), which is clone-only: the DashMap
+	# entries a read-only rollout copy costs. Two different questions; neither
+	# used to say which, which is how they came to disagree 4x.
+	# Measured 20/07/2026, marginal batch=1 -> batch=8 under WNN_STATE_SPLIT=1:
+	#   1269 B/cell  original
+	#    985 B/cell  + pre-sized split_record buffers
+	#    758 B/cell  + state_ins_flat bit-packed to the Metal word layout
+	# 800 tracks the current build with ~5% headroom.
+	EVAL_BYTES_PER_CELL = 800
+
+	def _eval_batch_bounds(self, genomes: list) -> list[tuple[int, int]]:
+		"""Contiguous [start, end) train+score sub-batches whose SUMMED peak cells fit
+		the budget (fix 3), so peak memory stays near a budget instead of scaling with
+		the whole population.
+
+		Summed, not N x largest (25/09/2026): the old width was budget / (800 B x the
+		LARGEST genome), so one BITS-stage outlier (3.26M cells, mean 870k) pinned the
+		whole population to width 2 = 2 of 16 cores (199% CPU, RSS 2.45 GB). Each
+		genome is now charged its OWN cells; the same per-genome model, aggregated
+		honestly. A genome bigger than the whole budget still runs alone.
+
+		CONTIGUOUS on purpose: each sub-batch re-enters _evaluate_core with
+		seed_offset = start*K, so legacy position seeds, CRN shared seeds, the
+		cancel-guard and write-back stay bit-identical to the unbatched path —
+		packing moves only the boundaries. Override with WNN_CTRL_EVAL_BATCH."""
 		N = len(genomes)
+		fixed = self._eval_batch_override(N)
+		if fixed:
+			return [(s, min(s + fixed, N)) for s in range(0, N, fixed)]
+		cap = self.EVAL_BUDGET_BYTES // self.EVAL_BYTES_PER_CELL
+		bounds, start, acc = [], 0, 0
+		for i, cells in enumerate(self._genome_cell_estimates(genomes)):
+			if i > start and acc + cells > cap:
+				bounds.append((start, i))
+				start, acc = i, 0
+			acc += cells
+		bounds.append((start, N))
+		return bounds
+
+	@staticmethod
+	def _eval_batch_override(N: int) -> int:
+		"""Fixed sub-batch width from WNN_CTRL_EVAL_BATCH, or 0 when unset/invalid."""
+		import os
 		ov = os.environ.get("WNN_CTRL_EVAL_BATCH")
-		if ov:
-			try:
-				return max(1, min(N, int(ov)))
-			except ValueError:
-				pass
-		mode = self.spec.memory_mode_int()
-		heavy = mode in (0, 5)  # TERNARY, PLN — hard cells that never consolidate
-		measured = 0
-		for g in genomes:
-			c = getattr(g, "cells", None)
-			if c is not None:
-				try:
-					# O(1) count off the Rust handle — no materialisation at all.
-					# (History: this site once called to_triples() to read two
-					# lengths, ~1 GB of tuples per genome, BEFORE the sub-batching
-					# it feeds; then len() on on-demand numpy views, which still
-					# copied both value buffers per genome.)
-					measured = max(measured, c.cell_count())
-				except Exception:
-					pass
-		floor = 7_000_000 if heavy else 200_000
-		per_genome = max(measured, floor, self._split_cell_floor(genomes))
-		# 6GB, not 10: the mem-watchdog SIGTERMs a controller on sustained swap
-		# thrash, and every 20/07 phase-2 kill fired with the controller at
-		# 9.5-10.6GB RSS. A budget set AT the kill threshold is not a budget.
-		budget_bytes = 6 * 1024 * 1024 * 1024
-		# PEAK bytes per cell for one ADDITIONAL live genome — retained cells PLUS
-		# that genome's share of the training working set. NOT the same quantity as
-		# cpu_score.rs's BYTES_PER_CELL (160), which is clone-only: the DashMap
-		# entries a read-only rollout copy costs. Two different questions; neither
-		# used to say which, which is how they came to disagree 4x.
-		# Measured 20/07/2026, marginal batch=1 -> batch=8 under WNN_STATE_SPLIT=1:
-		#   1269 B/cell  original
-		#    985 B/cell  + pre-sized split_record buffers
-		#    758 B/cell  + state_ins_flat bit-packed to the Metal word layout
-		# 800 tracks the current build with ~5% headroom. It sat at 1000 while the
-		# bit-packed wheel was built-but-not-installed, so the figure stayed valid
-		# for whichever wheel a run picked up; that skew window is closed.
-		bytes_per_cell = 800
-		return max(1, min(N, budget_bytes // (per_genome * bytes_per_cell)))
+		if not ov:
+			return 0
+		try:
+			return max(1, min(N, int(ov)))
+		except ValueError:
+			return 0
+
+	def _genome_cell_estimates(self, genomes: list) -> list[int]:
+		"""Per-genome peak-cell estimate. Measured from warm-start cells where present;
+		a genome with none (fresh, or cells dropped) will train from scratch to an
+		unknown size, so it is charged the largest MEASURED genome — the old
+		whole-population stance, kept only where nothing is known. Light modes
+		(QUAD/QSR/BINARY) floor at 200k; heavy (TERNARY/PLN accumulate ~30x QUAD's
+		cells during DAGGER) at 7M; the split trainer adds its own floor."""
+		heavy = self.spec.memory_mode_int() in (0, 5)
+		floor = max(7_000_000 if heavy else 200_000, self._split_cell_floor(genomes))
+		counts = [self._measured_cells(g) for g in genomes]
+		unknown = max((c for c in counts if c), default=0)
+		return [max(floor, c if c else unknown) for c in counts]
+
+	@staticmethod
+	def _measured_cells(genome) -> int:
+		"""O(1) cell count off the Rust handle; 0 when the genome carries none.
+		(History: this once called to_triples() to read two lengths, ~1 GB of
+		tuples per genome, BEFORE the sub-batching it feeds.)"""
+		c = getattr(genome, "cells", None)
+		if c is None:
+			return 0
+		try:
+			return int(c.cell_count())
+		except Exception:
+			return 0
 
 	def _evaluate_core(self, genomes: list, *, write_back: bool = False,
 	                   return_stats: bool = False, seed_offset: int = 0,
@@ -2193,12 +2225,14 @@ class ControllerEvaluator:
 		# genomes, so K-fold accumulate, per-genome seeds (base_seeds use the GLOBAL index
 		# via seed_offset), the cancel-guard and write-back are all bit-identical to the
 		# unbatched path. `_skip_advance` keeps the fold counter advancing exactly ONCE.
-		_batch = self._eval_batch_size(genomes)
-		if _batch < N:
+		bounds = self._eval_batch_bounds(genomes)
+		if len(bounds) > 1:
+			print(f"[ControllerEvaluator] {N} genomes -> {len(bounds)} sub-batches "
+			      f"(widths {[e - s for s, e in bounds]})", flush=True)
 			out = []
-			for _bs in range(0, N, _batch):
+			for _bs, _be in bounds:
 				out.extend(self._evaluate_core(
-					genomes[_bs:_bs + _batch], write_back=write_back,
+					genomes[_bs:_be], write_back=write_back,
 					return_stats=return_stats, seed_offset=seed_offset + _bs * K,
 					generation=generation, _skip_advance=True))
 			return out
