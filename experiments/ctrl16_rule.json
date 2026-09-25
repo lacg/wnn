@@ -1,0 +1,21 @@
+{
+ "story": "CTRL-16 \u2014 FULL phased pipeline GRID->NEURONS->BITS->CONNECTIONS->MEMORY (_full30 x4)",
+ "registered": "2026-09-25 (EDT), before any _full30 marker existed; s31337002 was in BITS gen 2/5",
+ "registered_by": "Luiz: 'gate bar plus no larger TRUE keys'",
+ "rule": "REPLACE the anchor iff >=3/4 columns favour _full30 (stable up, err down, steady down, alt down) on the mean paired HEADLINE delta vs _pipeN30 over seeds s31337002-s31337005, AND err delta <= +0.10 deg, AND the mean TRUE keys of the four _full30 winners <= the mean TRUE keys of the four _pipeN30 winners. Otherwise _pipeN30 stands; a tie goes to the simpler pipeline.",
+ "why_parsimony": "The shared GRID->NEURONS prefix is deterministic: _full30 s2's NEURONS held-out is bit-identical to _pipeN30 s2's. Every difference is bought by BITS+CONNECTIONS, which cost 2-4x the wall time and grow genomes (BITS pool reached 3.26M cells vs the anchor winner's 0.69M). Matching the anchor at a larger footprint is a loss, not a tie.",
+ "comparator": "_pipeN30 (the promoted anchor). The queue's _full30 - _hd30 read stays descriptive only.",
+ "rows": "HEADLINE held-out, exactly as the promotion gate (experiments/promotion_gate_2009.json). Stage rows are reported alongside but do not decide.",
+ "anchor_true_keys": {
+  "31337002": 692531,
+  "31337003": 694703,
+  "31337004": 1169649,
+  "31337005": 675789
+ },
+ "anchor_true_keys_mean": 808168,
+ "caveats": [
+  "n=4: every CI in the gate's own verdict straddled 0; a 3-of-4 column rule fires by chance ~31%. Say 'the rule fired', not 'the pipeline is better'.",
+  "_full30 s31337002 runs on the pre-fix evaluator batching (width 2); s3-s5 may run on branch eval-batch-pack. Parity tests show per-genome seeds and metrics are bit-identical across batch boundaries, so this does not break the pairing."
+ ],
+ "apply_with": "python scripts/ctrl16_verdict.py  ->  experiments/ctrl16_verdict.json"
+}
