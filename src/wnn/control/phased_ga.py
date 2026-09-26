@@ -286,6 +286,7 @@ from wnn.control.training import EpisodeConfig, make_pid_action_fn
 from wnn.control.dagger import eval_closed_loop_reset
 from wnn.control.pid import AttitudePID, AttitudePIDConfig
 from wnn.control.reward_gated import RewardGatedConfig
+from wnn.control.gate_lambdas import gate_lambda_line, resolve_gate_lambdas, reward_lambda
 from wnn.ram.strategies.optimization_dimension import OptimizationDimension
 from wnn.seeds import resolve_seed_set, log_seed_set, record_seed_set
 
@@ -694,6 +695,11 @@ def _parse_teacher_list(spec: str, flag: str) -> list[str]:
 	return names
 
 
+def _gate_lambda_header(args, ec: EpisodeConfig) -> str:
+	"""The [GATE-λ] provenance line, at the tilt the trainer's rollouts are drawn at."""
+	return gate_lambda_line(args, ec, math.radians(RewardGatedConfig(episode_config=ec).full_tilt_deg))
+
+
 def _rg_config(args, ec: EpisodeConfig, seed: int) -> RewardGatedConfig:
 	"""Reward-gated inner-train config — exposed knobs let the smoke test shrink
 	the per-genome training cost (default: full 8 rounds × 24 episodes_per_round).
@@ -707,6 +713,10 @@ def _rg_config(args, ec: EpisodeConfig, seed: int) -> RewardGatedConfig:
 		getattr(args, "teacher_blend", ""), "--teacher-blend")
 	# D0: teacher hover anchoring under translation (default legacy = bit-identical).
 	rg.teacher_hover_mode = getattr(args, "teacher_hover", "derived")
+	# CTRL-17 G4: the λ the Rust gate + checkpoint rank on — the explicit reward λ,
+	# else derived from the rank weights at the trainer's own tilt (gate_lambdas.py).
+	rg.gate_lambda_alt, rg.gate_lambda_pos, _src = resolve_gate_lambdas(
+		args, ec, math.radians(rg.full_tilt_deg))
 	# Pure BC (19/07/2026): teacher drives the training rollouts (see reward_gated).
 	rg.expert_drives = bool(getattr(args, "expert_drives", False))
 	if args.rg_rounds is not None:
@@ -2419,12 +2429,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "thrust-to-weight and never inputs it).")
 	ap.add_argument("--target-altitude", type=float, default=0.0,
 	                help="Stage 1: the altitude every episode holds (m).")
-	ap.add_argument("--reward-lambda-alt", type=float, default=0.0,
+	ap.add_argument("--reward-lambda-alt", type=float, default=None,
 	                help="Stage 1 REWARD SHAPING (λ_alt): weight on the altitude-error term "
-	                     "INSIDE the per-step reward, -λ_alt·alt_err². 0.0 = OFF "
-	                     "(bit-identical). ⚠️ This λ carries the metres↔radians unit "
-	                     "conversion, so its value is tied to the CAPACITY it was swept at "
-	                     "— see the rename note on --fit-weight-alt. Prefer the rank weight.")
+	                     "INSIDE the per-step reward, -λ_alt·alt_err² — the scorer's reward AND "
+	                     "(CTRL-17 G4) the DAgger gate + per-round checkpoint. UNSET (default): "
+	                     "scorer term 0, gate λ DERIVED from the rank weights "
+	                     "(wnn/control/gate_lambdas.py; 0 when --fit-weight-alt is 0). An "
+	                     "explicit value, 0 included, is used as given for both. ⚠️ This λ "
+	                     "carries the metres↔radians unit conversion — see the rename note on "
+	                     "--fit-weight-alt. Prefer the rank weight."),
 	ap.add_argument("--obs-pos-err-xy", action=argparse.BooleanOptionalAction, default=False,
 	                help="Stage 2: feed the controller its HORIZONTAL POSITION ERROR "
 	                     "(e_x, e_y — 2 features; one flag carries BOTH axes, x and y are "
@@ -2438,12 +2451,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "start displaced AT REST. 0.0 = the horizontal channel is unarmed "
 	                     "(bit-identical to stage 1, and the trainer draws NOTHING so the "
 	                     "rng sequence of stage-1 runs is untouched).")
-	ap.add_argument("--reward-lambda-pos", type=float, default=0.0,
+	ap.add_argument("--reward-lambda-pos", type=float, default=None,
 	                help="Stage 2 REWARD SHAPING (λ_pos): weight on the RADIAL horizontal "
-	                     "position error λ_pos·(e_x²+e_y²) INSIDE the per-step reward. "
-	                     "0.0 = OFF (bit-identical). Radial, not per-axis — per-axis weights "
-	                     "would let the GA learn a compass direction that exists only in the "
-	                     "reward. Same unit-carrying caveat as λ_alt; prefer --fit-weight-pos.")
+	                     "position error λ_pos·(e_x²+e_y²) INSIDE the per-step reward — the "
+	                     "scorer's reward AND (CTRL-17 G4) the DAgger gate + checkpoint. UNSET "
+	                     "(default): scorer term 0, gate λ DERIVED from the rank weights "
+	                     "(0 when --fit-weight-pos is 0). Radial, not per-axis — per-axis "
+	                     "weights would let the GA learn a compass direction that exists only in "
+	                     "the reward. Same unit-carrying caveat as λ_alt; prefer --fit-weight-pos.")
 	ap.add_argument("--obs-dhat", action=argparse.BooleanOptionalAction, default=False,
 	                help="L1 (06/08/2026): add the mpcof teacher's DISTURBANCE ESTIMATE d̂ as 3 "
 	                     "input features (roll/pitch/yaw estimated external angular accel). The "
@@ -3118,11 +3133,13 @@ def episode_config_from_args(args) -> EpisodeConfig:
 		collective_cmd_jitter=float(getattr(args, "collective_jitter", 0.1)),
 		mass_jitter=float(getattr(args, "mass_jitter", 0.15)),
 		target_altitude=float(getattr(args, "target_altitude", 0.0)),
-		lambda_alt=float(getattr(args, "reward_lambda_alt", 0.0)),
+		# CTRL-17 G4: unset (None) ⇒ 0 for the SCORER; the gate λ is resolved
+		# separately in _rg_config (wnn/control/gate_lambdas.py).
+		lambda_alt=reward_lambda(args, "reward_lambda_alt"),
 		# SCOPE C STAGE 2 (14/08/2026): the horizontal channel. --xy-offset 0.0
 		# ⇒ unarmed, bit-identical to stage 1.
 		max_initial_xy_offset_m=float(getattr(args, "xy_offset", 0.0)),
-		lambda_pos=float(getattr(args, "reward_lambda_pos", 0.0)),
+		lambda_pos=reward_lambda(args, "reward_lambda_pos"),
 		calib_airframe=bool(getattr(args, "calib_airframe", False)),
 		# AXIS F: actuator lag, 0.0 = OFF (bit-identical).
 		motor_lag_s=float(getattr(args, "motor_lag_s", 0.0)),
@@ -3208,8 +3225,8 @@ def main():
 				f"{'/'.join('--' + n.replace('_', '-') for n in _vert_on)} require "
 				"--translation: without it the sim has no altitude, so those features "
 				"would be constant zeros.")
-		if float(getattr(args, "reward_lambda_alt", 0.0)) != 0.0:
-			raise SystemExit("--fit-weight-alt requires --translation: there is no "
+		if reward_lambda(args, "reward_lambda_alt") != 0.0:
+			raise SystemExit("--reward-lambda-alt requires --translation: there is no "
 			                 "altitude to reward without it.")
 	if ec.translation and ec.airframe is None:
 		raise SystemExit("--translation requires --airframe: mass is a PLANT parameter "
@@ -3231,10 +3248,14 @@ def main():
 			f"{'/'.join('--' + n.replace('_', '-') for n in _horiz_on)} require "
 			"--translation AND --xy-offset > 0: without them x/y never leave the "
 			"origin, so those features would be constant zeros.")
-	if float(getattr(args, "reward_lambda_pos", 0.0)) != 0.0 \
+	if reward_lambda(args, "reward_lambda_pos") != 0.0 \
 			and not (ec.translation and ec.max_initial_xy_offset_m > 0.0):
-		raise SystemExit("--fit-weight-pos requires --translation and --xy-offset > 0: "
+		# G11 (CTRL-17): the message named --fit-weight-pos while the test is on the
+		# REWARD λ (the two were split 18/08); name the flag that tripped it.
+		raise SystemExit("--reward-lambda-pos requires --translation and --xy-offset > 0: "
 		                 "there is no horizontal error to reward without them.")
+	# CTRL-17 G4: one greppable line with the λ the DAgger gate + checkpoint rank on.
+	print(_gate_lambda_header(args, ec), flush=True)
 	# ARM D sanity gate: the Rust constructor refuses sn>0 + full window, but
 	# failing at arg-parse beats failing 30 min into the grid.
 	if getattr(args, "output_full_window", False):

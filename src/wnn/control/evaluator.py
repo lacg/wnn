@@ -63,7 +63,13 @@ def _dist_packed_fields(rg) -> tuple:
 	levers (0 = exactly-off). Note: the batched Rust trainer uses the FIXED
 	motor_asym multipliers — motor_asym_mag's per-episode δ draw is a
 	run_episode-only convenience (motor wear is per-airframe)."""
-	d = getattr(getattr(rg, "episode_config", None), "disturbance", None)
+	return _dist_packed_fields_ec(getattr(rg, "episode_config", None))
+
+
+def _dist_packed_fields_ec(ec) -> tuple:
+	"""_dist_packed_fields for a bare EpisodeConfig (the reference rollouts —
+	calibration sampler, MEMORY recorder — have no RewardGatedConfig)."""
+	d = getattr(ec, "disturbance", None)
 	if d is None:
 		return (False, [0.0, 0.0, 0.0], 0.0, 0.1, [1.0, 1.0, 1.0, 1.0], 0.0, 0.0, 0.0,
 		        0.0, 0, 0, 0.0)
@@ -488,6 +494,90 @@ def _calib_plant_sim(episode_config) -> AttitudeSim:
 	                   gravity=float(af.gravity))
 
 
+def _feature_controller(spec: ControllerSpec) -> WnnController:
+	"""An UNTRAINED controller of `spec`'s feature layout, used only to evolve the
+	integral state and expose compute_features to the threshold fitter. Dummy
+	thresholds/connections: compute_features reads neither. It keeps the default
+	action_repeat=1 — calibration samples features at EVERY physical step."""
+	dummy_th = [0.0] * (spec.num_features() * spec.bits_per_feature)
+	s_conns = [0] * (spec.state_neurons * spec.state_bits_per_neuron)
+	o_conns = [0] * (spec.num_motors * spec.levels_per_motor * spec.output_bits_per_neuron)
+	return WnnController(
+		num_motors=spec.num_motors, levels_per_motor=spec.levels_per_motor,
+		bits_per_feature=spec.bits_per_feature, input_window_k=spec.input_window_k,
+		state_neurons=spec.state_neurons, state_bits_per_neuron=spec.state_bits_per_neuron,
+		output_bits_per_neuron=spec.output_bits_per_neuron, thresholds=dummy_th,
+		state_connections=s_conns, output_connections=o_conns,
+		delta_control=spec.delta_control, delta_max=spec.delta_max, delta_leak=spec.delta_leak, delta_gamma=getattr(spec, 'delta_gamma', 1.0), delta_label_scale=getattr(spec, 'delta_label_scale', 1.0), dagger_label_delta=getattr(spec, 'dagger_label_delta', False),
+		obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i,
+		obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i,
+		obs_collective_cmd=spec.obs_collective_cmd, obs_alt_err=spec.obs_alt_err, obs_vz=spec.obs_vz,
+			obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
+		output_full_window=getattr(spec, 'output_full_window', False),
+		frame_stride=int(getattr(spec, 'frame_stride', 1)),
+		dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
+		integral_leak=spec.integral_leak, integral_scale=spec.integral_scale)
+
+
+def _thresholds_from_samples(samples_per_feature, spec, method, outer_quantile, extra_samples) -> list[float]:
+	"""Per-feature thermometer thresholds from the sampled operating distribution
+	(base 9 + enabled H2 extras) — shared by the Python reference-rollout fitter and
+	the Rust training-cascade sampler (CTRL-17 G1)."""
+	nf = spec.num_features()
+	bpf = spec.bits_per_feature
+	thresholds = []
+	for f in range(nf):
+		# STUDENT STATES (option A, 10/08/2026). The fitter rolls out PID — a BETTER
+		# controller than the student — so the ladder is fitted on a distribution the
+		# student never visits: DAgger covariate shift, but in the INPUT
+		# REPRESENTATION, where no amount of training can repair it. `extra_samples`
+		# carries per-feature values collected from a real student rollout; they are
+		# CONCATENATED with the teacher's rather than replacing them, so the ladder
+		# covers both the recovery the teacher demonstrates and the excursions the
+		# student actually makes.
+		_samples = samples_per_feature[f]
+		if extra_samples is not None and f < len(extra_samples) and extra_samples[f]:
+			_samples = list(_samples) + list(extra_samples[f])
+		arr = np.array(_samples, dtype=float)
+		if arr.size == 0:
+			# Feature never observed (constant target?). Fall back to [-1, 1] linear.
+			arr = np.array([-1.0, 1.0])
+		if method == "quantile":
+			# Uniform percentiles 1/(bpf+1)..bpf/(bpf+1)
+			# COVERAGE MARGIN (option C, 10/08/2026). The default outer quantiles are
+			# 1/(b+1) and b/(b+1) — with b=8 that is 0.111/0.889, so ~22% of the
+			# operating distribution falls OUTSIDE the ladder by construction and
+			# saturates to an all-0/all-1 code. That is survivable for the settled
+			# window and expensive for the transient, where a saturated encoder is
+			# blind exactly when the controller is furthest from target (measured:
+			# calib=5deg lost stable as well as steady, 2/2 seeds). outer_quantile
+			# reaches further into the tails: 0.02 spans [0.02, 0.98]. None keeps the
+			# legacy positions, so every flown number stays reproducible.
+			if outer_quantile is not None:
+				lo_q = float(outer_quantile)
+				qs = np.linspace(lo_q, 1.0 - lo_q, bpf)
+			else:
+				qs = np.linspace(1.0 / (bpf + 1), bpf / (bpf + 1), bpf)
+			# E3 gamma warp: pull quantile POSITIONS toward 0.5 (the median) with
+			# |2q-1|^gamma, gamma>1 → threshold VALUES cluster near the feature's
+			# hover region → finer decode where the controller actually settles.
+			# gamma=1.0 is the exact identity (parity anchor).
+			gamma = getattr(spec, "threshold_gamma", 1.0)
+			if gamma and gamma != 1.0:
+				qs = 0.5 + np.sign(qs - 0.5) * 0.5 * np.abs(2.0 * qs - 1.0) ** gamma
+			ts = np.quantile(arr, qs)
+		elif method == "linear":
+			lo, hi = float(arr.min()), float(arr.max())
+			# If lo == hi (constant feature), spread by ±1 around it
+			if hi - lo < 1e-9:
+				lo, hi = lo - 1.0, hi + 1.0
+			ts = np.linspace(lo, hi, bpf, endpoint=False)
+		else:
+			raise ValueError(f"unknown method: {method!r}")
+		thresholds.extend(float(t) for t in ts)
+	return thresholds
+
+
 def fit_thresholds_from_pid_rollouts(
 	spec: ControllerSpec,
 	num_episodes: int = 20,
@@ -549,6 +639,20 @@ def fit_thresholds_from_pid_rollouts(
 	# (~85% of 30-bit addresses move), hence a flag and a paired experiment
 	# rather than a silent flip.
 	_stage1_cal = _calib_plant_gate(episode_config)
+	# CTRL-17 G1 (26/09/2026): under TRANSLATION the ladder is fitted on the
+	# TRAINING cascade, in Rust (ram_controller.sample_calibration_features): the
+	# training episode's mass/vertical/horizontal draws, weather and motor lag, the
+	# firmware PID inside the same altitude + position loops the DAgger labels come
+	# from. The attitude-only PID below left all four xy features at 0.0 (every
+	# threshold 0 — a sign-only code) and fitted alt_err/vz on an uncontrolled
+	# drift. Attitude-only and overactuated runs keep the Python rollout below,
+	# byte-identical.
+	if _stage1_cal and _ec_translation and geometry is None:
+		from wnn.control import _accel as ra
+		samples = ra.sample_calibration_features(
+			_feature_controller(spec), reference_packed_config(episode_config),
+			int(num_episodes), int(seed))
+		return _thresholds_from_samples(samples, spec, method, outer_quantile, extra_samples)
 	sim = _calib_plant_sim(episode_config)
 	_hover_pwm, _target_alt = 0.5, 0.0
 	if _stage1_cal:
@@ -600,31 +704,7 @@ def fit_thresholds_from_pid_rollouts(
 	nf = spec.num_features()
 	needs_extras = nf > NUM_FEATURES
 	samples_per_feature: list[list[float]] = [[] for _ in range(nf)]
-	feat_ctl = None
-	if needs_extras:
-		# Dummy thresholds/connections: compute_features reads neither, so this
-		# controller exists ONLY to evolve the integral state + expose features.
-		# NOTE: feat_ctl deliberately keeps the default action_repeat=1 — the
-		# threshold calibration must sample features at EVERY physical step
-		# (the accumulators tick per step regardless of the deploy-time N).
-		dummy_th = [0.0] * (nf * spec.bits_per_feature)
-		s_conns = [0] * (spec.state_neurons * spec.state_bits_per_neuron)
-		o_conns = [0] * (spec.num_motors * spec.levels_per_motor * spec.output_bits_per_neuron)
-		feat_ctl = WnnController(
-			num_motors=spec.num_motors, levels_per_motor=spec.levels_per_motor,
-			bits_per_feature=spec.bits_per_feature, input_window_k=spec.input_window_k,
-			state_neurons=spec.state_neurons, state_bits_per_neuron=spec.state_bits_per_neuron,
-			output_bits_per_neuron=spec.output_bits_per_neuron, thresholds=dummy_th,
-			state_connections=s_conns, output_connections=o_conns,
-			delta_control=spec.delta_control, delta_max=spec.delta_max, delta_leak=spec.delta_leak, delta_gamma=getattr(spec, 'delta_gamma', 1.0), delta_label_scale=getattr(spec, 'delta_label_scale', 1.0), dagger_label_delta=getattr(spec, 'dagger_label_delta', False),
-			obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i,
-			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i,
-			obs_collective_cmd=spec.obs_collective_cmd, obs_alt_err=spec.obs_alt_err, obs_vz=spec.obs_vz,
-			obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
-		output_full_window=getattr(spec, 'output_full_window', False),
-		frame_stride=int(getattr(spec, 'frame_stride', 1)),
-			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
-			integral_leak=spec.integral_leak, integral_scale=spec.integral_scale)
+	feat_ctl = _feature_controller(spec) if needs_extras else None
 
 	for ep_idx in range(num_episodes):
 		ep_seed = int(rng.integers(0, 2**32 - 1))
@@ -717,59 +797,7 @@ def fit_thresholds_from_pid_rollouts(
 			if sim.is_unstable():
 				break
 
-	# Now derive thresholds per feature (base 9 + enabled H2 extras).
-	bpf = spec.bits_per_feature
-	thresholds = []
-	for f in range(nf):
-		# STUDENT STATES (option A, 10/08/2026). The fitter rolls out PID — a BETTER
-		# controller than the student — so the ladder is fitted on a distribution the
-		# student never visits: DAgger covariate shift, but in the INPUT
-		# REPRESENTATION, where no amount of training can repair it. `extra_samples`
-		# carries per-feature values collected from a real student rollout; they are
-		# CONCATENATED with the teacher's rather than replacing them, so the ladder
-		# covers both the recovery the teacher demonstrates and the excursions the
-		# student actually makes.
-		_samples = samples_per_feature[f]
-		if extra_samples is not None and f < len(extra_samples) and extra_samples[f]:
-			_samples = list(_samples) + list(extra_samples[f])
-		arr = np.array(_samples, dtype=float)
-		if arr.size == 0:
-			# Feature never observed (constant target?). Fall back to [-1, 1] linear.
-			arr = np.array([-1.0, 1.0])
-		if method == "quantile":
-			# Uniform percentiles 1/(bpf+1)..bpf/(bpf+1)
-			# COVERAGE MARGIN (option C, 10/08/2026). The default outer quantiles are
-			# 1/(b+1) and b/(b+1) — with b=8 that is 0.111/0.889, so ~22% of the
-			# operating distribution falls OUTSIDE the ladder by construction and
-			# saturates to an all-0/all-1 code. That is survivable for the settled
-			# window and expensive for the transient, where a saturated encoder is
-			# blind exactly when the controller is furthest from target (measured:
-			# calib=5deg lost stable as well as steady, 2/2 seeds). outer_quantile
-			# reaches further into the tails: 0.02 spans [0.02, 0.98]. None keeps the
-			# legacy positions, so every flown number stays reproducible.
-			if outer_quantile is not None:
-				lo_q = float(outer_quantile)
-				qs = np.linspace(lo_q, 1.0 - lo_q, bpf)
-			else:
-				qs = np.linspace(1.0 / (bpf + 1), bpf / (bpf + 1), bpf)
-			# E3 gamma warp: pull quantile POSITIONS toward 0.5 (the median) with
-			# |2q-1|^gamma, gamma>1 → threshold VALUES cluster near the feature's
-			# hover region → finer decode where the controller actually settles.
-			# gamma=1.0 is the exact identity (parity anchor).
-			gamma = getattr(spec, "threshold_gamma", 1.0)
-			if gamma and gamma != 1.0:
-				qs = 0.5 + np.sign(qs - 0.5) * 0.5 * np.abs(2.0 * qs - 1.0) ** gamma
-			ts = np.quantile(arr, qs)
-		elif method == "linear":
-			lo, hi = float(arr.min()), float(arr.max())
-			# If lo == hi (constant feature), spread by ±1 around it
-			if hi - lo < 1e-9:
-				lo, hi = lo - 1.0, hi + 1.0
-			ts = np.linspace(lo, hi, bpf, endpoint=False)
-		else:
-			raise ValueError(f"unknown method: {method!r}")
-		thresholds.extend(float(t) for t in ts)
-	return thresholds
+	return _thresholds_from_samples(samples_per_feature, spec, method, outer_quantile, extra_samples)
 
 
 def random_connectivity(spec: ControllerSpec, seed: int = 0) -> tuple[list[int], list[int]]:
@@ -919,7 +947,57 @@ def _stage1_train_kwargs(ec) -> dict:
 		# STAGE 2 (14/08): xy_offset doubles as the enable — 0.0 draws NOTHING
 		# in the trainer, keeping every stage-1 run's rng sequence intact.
 		xy_offset=float(getattr(ec, "max_initial_xy_offset_m", 0.0)),
-		lambda_pos=float(getattr(ec, "lambda_pos", 0.0)),
+		# λ_alt / λ_pos are NOT plant fields: _gate_lambda_kwargs owns them (G4).
+	)
+
+
+def _gate_lambda_kwargs(rg) -> dict:
+	"""CTRL-17 G4: λ_alt / λ_pos for the Rust DAgger gate + per-round checkpoint.
+	rg.gate_lambda_* when resolved (phased_ga: explicit flag, else derived from the
+	rank weights — wnn.control.gate_lambdas), else the episode config's reward-
+	shaping λ. Empty off translation: the Rust defaults (0) are the attitude-only
+	gate, and step_reward never reads them there."""
+	ec = getattr(rg, "episode_config", None)
+	if not getattr(ec, "translation", False):
+		return {}
+	lam_alt = getattr(rg, "gate_lambda_alt", None)
+	lam_pos = getattr(rg, "gate_lambda_pos", None)
+	return dict(
+		lambda_alt=float(getattr(ec, "lambda_alt", 0.0) if lam_alt is None else lam_alt),
+		lambda_pos=float(getattr(ec, "lambda_pos", 0.0) if lam_pos is None else lam_pos),
+	)
+
+
+def reference_packed_config(ec, teacher: str = "pid", teacher_hover_mode: str = "derived"):
+	"""The RewardGatedConfigPacked a REFERENCE rollout flies (CTRL-17 G1/G2): the
+	threshold-calibration sampler and the MEMORY recorder. Same plant, weather,
+	motor lag, translation draws and teacher cascade as the training rollout —
+	built from the same helpers (_plant_train_kwargs, _dist_packed_fields_ec) —
+	with the teacher driving at the episode config's own tilt (no curriculum).
+	`teacher` defaults to the airframe's firmware PID cascade ("pid"); the recorder
+	passes the run's DAgger teacher when it has one."""
+	from wnn.control import _accel as ra
+	(dist_en, dist_tb, dist_gs, dist_gtc, dist_ma, dist_gys, dist_gbw, dist_acs,
+	 dist_dp, dist_dls, dist_ods, dist_tsj) = _dist_packed_fields_ec(ec)
+	return ra.RewardGatedConfigPacked(
+		steps_per_episode=int(ec.steps_per_episode),
+		teacher=_TEACHER_IDS[teacher],
+		curriculum=False,
+		full_tilt_deg=math.degrees(float(ec.max_initial_tilt_rad)),
+		dt=float(ec.dt),
+		max_initial_yaw_rad=float(ec.max_initial_yaw_rad),
+		max_initial_body_rate=float(ec.max_initial_body_rate),
+		max_initial_yaw_rate=float(ec.max_initial_yaw_rate),
+		expert_drives=True,
+		dist_enabled=dist_en, dist_tau_bias=dist_tb,
+		dist_gust_sigma=dist_gs, dist_gust_tau_c=dist_gtc,
+		dist_motor_asym=dist_ma, dist_gyro_sigma=dist_gys,
+		dist_gyro_bias_walk=dist_gbw, dist_accel_sigma=dist_acs,
+		dist_dropout_prob=dist_dp, dist_dropout_len_steps=dist_dls,
+		dist_obs_delay_steps=dist_ods, dist_torque_scale_jitter=dist_tsj,
+		teacher_hover_mode=_TEACHER_HOVER_MODES[teacher_hover_mode],
+		**_plant_train_kwargs(ec),
+		**ec.motor_lag_kwargs(),
 	)
 
 
@@ -1581,6 +1659,8 @@ class ControllerEvaluator:
 			# only) and the stage-1 vertical channel (or the vertical features
 			# are zeros here and real there — the DOB divergence; Rust asserts).
 			**_plant_train_kwargs(rg.episode_config),
+			# CTRL-17 G4: the λ terms the gate + checkpoint rank on.
+			**_gate_lambda_kwargs(rg),
 			# AXIS F: the TRAINING rollout + per-round eval fly the same lagged
 			# plant the scorers and baselines do (empty when the axis is off).
 			**rg.episode_config.motor_lag_kwargs(),
@@ -1711,6 +1791,8 @@ class ControllerEvaluator:
 			# only) and the stage-1 vertical channel (or the vertical features
 			# are zeros here and real there — the DOB divergence; Rust asserts).
 			**_plant_train_kwargs(rg.episode_config),
+			# CTRL-17 G4: the λ terms the gate + checkpoint rank on.
+			**_gate_lambda_kwargs(rg),
 			# AXIS F: the TRAINING rollout + per-round eval fly the same lagged
 			# plant the scorers and baselines do (empty when the axis is off).
 			**rg.episode_config.motor_lag_kwargs(),

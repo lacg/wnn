@@ -1861,6 +1861,18 @@ impl WnnController
 	{
 		self.delta_control
 	}
+	/// Whether the obs_pwm (accumulator-deviation) features are on — the
+	/// calibration sampler's accumulator proxy is gated on it (calib_sampler.rs).
+	pub(crate) fn obs_pwm_flag(&self) -> bool
+	{
+		self.obs_pwm
+	}
+	/// Borrow of the last compute_features output (no clone) — the calibration
+	/// sampler reads it once per step.
+	pub(crate) fn last_feature_vector_ref(&self) -> &[f32]
+	{
+		&self.last_feature_vector
+	}
 
 	/// Action-repeat N (arm R; uniform across a population). The GPU score /
 	/// train / record hosts read it so the kernels mirror step()'s decision mask.

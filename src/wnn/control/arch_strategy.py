@@ -58,6 +58,12 @@ def _random_arch_genome(shape: RecurrentArchShape, dimension: OptimizationDimens
 	return RecurrentArchGenome.random(shape, sn, on, ssuf, osuf, rng, config=cfg)
 
 
+def _rg_field(evaluator, name: str, default: str) -> str:
+	"""A field of the evaluator's RewardGatedConfig (the run's DAgger regime), or
+	the default when there is no evaluator/config (tests, bare strategies)."""
+	return getattr(getattr(evaluator, "rg_config", None), name, default) or default
+
+
 def _arch_move_info(dimension: OptimizationDimension, before: RecurrentArchGenome,
                     after: RecurrentArchGenome):
 	"""Tabu move descriptor. NEURONS/BITS → directional axis tokens (axis, ±1) so
@@ -403,7 +409,11 @@ class _ControllerMemoryOps:
 			alloc=getattr(ec, "alloc_residual", None),
 			# The plant + stage-1 vertical draws. Without it the recorder flies a
 			# non-translating aircraft and the vertical universe is degenerate.
-			episode_config=ec)
+			episode_config=ec,
+			# CTRL-17 G2: under translation the recorder's reference driver is the
+			# run's OWN DAgger teacher inside the training outer loops.
+			teacher=_rg_field(ev, "teacher", "pid"),
+			teacher_hover_mode=_rg_field(ev, "teacher_hover_mode", "derived"))
 
 	def _make_cell_genome(self) -> RecurrentArchGenome:
 		from .recurrent_genome import MemoryPayload
