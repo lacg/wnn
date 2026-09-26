@@ -165,7 +165,7 @@ the _full30 chain (seed_arm_chain 14691, now PPID 1) keeps flying s3-s5. NEW LEV
 (pid 74062, PPID 1, same log /private/tmp/queue_2009.log, tag [q2009c]): waits for the chain -> CTRL-16 verdict (STOPs if
 _full30 replaces the anchor) -> STEP 5b CTRL-21 probe (~47 min, controller gap) -> STEP 5c PARK until experiments/ABI31_LANDED (OPTION B, Luiz 26/09: the CTRL-17 stage-2 trainer fixes, ABI 31, altitude side incl., land HERE by hand + smoke ONE) -> _op31 x5 anchor re-fly -> LEVELS 96/128 as `_Lop31` x5 vs _op31. When parked, lines 2-3 say "PARKED BY DESIGN — ABI-31 landing" and the session LANDS per docs/ctrl17_abi31_landing_runbook.md (branch stage2-trainer-fixes 9aaaef1e, wheel staged, sha in the runbook) — nothing pending on Luiz for it.
 Roadmap after STOP: CTRL-17 audit -> CTRL-8 stage 2 -> multi-axis round 1 (stage 2 BEFORE multi-axis, Luiz 26/09).
-IDS: 94 QSR -abi13 reruns PAUSED. IDS IS HIGHEST PRIORITY — never stop/pause/hold IDS for controller work. Open checks below still apply.
+IDS: 94 QSR -abi13 reruns PAUSED. IDS IS HIGHEST PRIORITY — never stop/pause/hold IDS for controller work. Open check (1) ga_state PASSED 17:48 (WNN-1 CLOSED); (2) done; (3) marker repair when s3 banks still applies.
 
 AS OF 26/09/2026 15:10 EDT — WNN-1 LANDED, HOLD RELEASED, s3 FLYING. Merge 68f408c2 (ga-template-unify: WNN-1 +
 eval-batch-pack) + worker wheel ABI 14 installed in one step; smoke rc 0 (5 stages, 15-candidate stage-select). s2
