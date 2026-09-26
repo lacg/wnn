@@ -1,0 +1,322 @@
+[
+ {
+  "source": "IDSX-cicids-quad-96b-Wa-CTRL-r20401",
+  "name": "IDSAGG-cicids-quad-96b-Wa-CTRL-zs-r20414",
+  "set": {
+   "seed": 20414
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSXD-cicids-quad-96b-Wa-CTRL-r20403",
+  "name": "IDSAGG-cicids-quad-96b-Wa-CTRL-desir-r20414",
+  "set": {
+   "seed": 20414
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSX-cicids-quad-96b-CE20-r20401",
+  "name": "IDSAGG-cicids-quad-96b-CE20-zs-r20414",
+  "set": {
+   "seed": 20414
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSXD-cicids-quad-96b-CE20-r20403",
+  "name": "IDSAGG-cicids-quad-96b-CE20-desir-r20414",
+  "set": {
+   "seed": 20414
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSX-ciciot-quad-96b-Wc-CTRL-r20401",
+  "name": "IDSAGG-ciciot-quad-96b-Wc-CTRL-zs-r20414",
+  "set": {
+   "seed": 20414
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-Wc-CTRL-r20406",
+  "name": "IDSAGG-ciciot-quad-96b-Wc-CTRL-desir-r20414",
+  "set": {
+   "seed": 20414
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSX-ciciot-quad-96b-B15-AC-r20401",
+  "name": "IDSAGG-ciciot-quad-96b-B15-AC-zs-r20414",
+  "set": {
+   "seed": 20414
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-B15-AC-r20406",
+  "name": "IDSAGG-ciciot-quad-96b-B15-AC-desir-r20414",
+  "set": {
+   "seed": 20414
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSX-cicids-quad-96b-Wa-CTRL-r20401",
+  "name": "IDSAGG-cicids-quad-96b-Wa-CTRL-zs-r20415",
+  "set": {
+   "seed": 20415
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSXD-cicids-quad-96b-Wa-CTRL-r20403",
+  "name": "IDSAGG-cicids-quad-96b-Wa-CTRL-desir-r20415",
+  "set": {
+   "seed": 20415
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSX-cicids-quad-96b-CE20-r20401",
+  "name": "IDSAGG-cicids-quad-96b-CE20-zs-r20415",
+  "set": {
+   "seed": 20415
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSXD-cicids-quad-96b-CE20-r20403",
+  "name": "IDSAGG-cicids-quad-96b-CE20-desir-r20415",
+  "set": {
+   "seed": 20415
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSX-ciciot-quad-96b-Wc-CTRL-r20401",
+  "name": "IDSAGG-ciciot-quad-96b-Wc-CTRL-zs-r20415",
+  "set": {
+   "seed": 20415
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-Wc-CTRL-r20406",
+  "name": "IDSAGG-ciciot-quad-96b-Wc-CTRL-desir-r20415",
+  "set": {
+   "seed": 20415
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSX-ciciot-quad-96b-B15-AC-r20401",
+  "name": "IDSAGG-ciciot-quad-96b-B15-AC-zs-r20415",
+  "set": {
+   "seed": 20415
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-B15-AC-r20406",
+  "name": "IDSAGG-ciciot-quad-96b-B15-AC-desir-r20415",
+  "set": {
+   "seed": 20415
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSX-cicids-quad-96b-Wa-CTRL-r20401",
+  "name": "IDSAGG-cicids-quad-96b-Wa-CTRL-zs-r20416",
+  "set": {
+   "seed": 20416
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSXD-cicids-quad-96b-Wa-CTRL-r20403",
+  "name": "IDSAGG-cicids-quad-96b-Wa-CTRL-desir-r20416",
+  "set": {
+   "seed": 20416
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSX-cicids-quad-96b-CE20-r20401",
+  "name": "IDSAGG-cicids-quad-96b-CE20-zs-r20416",
+  "set": {
+   "seed": 20416
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSXD-cicids-quad-96b-CE20-r20403",
+  "name": "IDSAGG-cicids-quad-96b-CE20-desir-r20416",
+  "set": {
+   "seed": 20416
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSX-ciciot-quad-96b-Wc-CTRL-r20401",
+  "name": "IDSAGG-ciciot-quad-96b-Wc-CTRL-zs-r20416",
+  "set": {
+   "seed": 20416
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-Wc-CTRL-r20406",
+  "name": "IDSAGG-ciciot-quad-96b-Wc-CTRL-desir-r20416",
+  "set": {
+   "seed": 20416
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSX-ciciot-quad-96b-B15-AC-r20401",
+  "name": "IDSAGG-ciciot-quad-96b-B15-AC-zs-r20416",
+  "set": {
+   "seed": 20416
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-B15-AC-r20406",
+  "name": "IDSAGG-ciciot-quad-96b-B15-AC-desir-r20416",
+  "set": {
+   "seed": 20416
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSX-cicids-quad-96b-Wa-CTRL-r20401",
+  "name": "IDSAGG-cicids-quad-96b-Wa-CTRL-zs-r20417",
+  "set": {
+   "seed": 20417
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSXD-cicids-quad-96b-Wa-CTRL-r20403",
+  "name": "IDSAGG-cicids-quad-96b-Wa-CTRL-desir-r20417",
+  "set": {
+   "seed": 20417
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSX-cicids-quad-96b-CE20-r20401",
+  "name": "IDSAGG-cicids-quad-96b-CE20-zs-r20417",
+  "set": {
+   "seed": 20417
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSXD-cicids-quad-96b-CE20-r20403",
+  "name": "IDSAGG-cicids-quad-96b-CE20-desir-r20417",
+  "set": {
+   "seed": 20417
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSX-ciciot-quad-96b-Wc-CTRL-r20401",
+  "name": "IDSAGG-ciciot-quad-96b-Wc-CTRL-zs-r20417",
+  "set": {
+   "seed": 20417
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-Wc-CTRL-r20406",
+  "name": "IDSAGG-ciciot-quad-96b-Wc-CTRL-desir-r20417",
+  "set": {
+   "seed": 20417
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSX-ciciot-quad-96b-B15-AC-r20401",
+  "name": "IDSAGG-ciciot-quad-96b-B15-AC-zs-r20417",
+  "set": {
+   "seed": 20417
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-B15-AC-r20406",
+  "name": "IDSAGG-ciciot-quad-96b-B15-AC-desir-r20417",
+  "set": {
+   "seed": 20417
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSX-cicids-quad-96b-Wa-CTRL-r20401",
+  "name": "IDSAGG-cicids-quad-96b-Wa-CTRL-zs-r20418",
+  "set": {
+   "seed": 20418
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSXD-cicids-quad-96b-Wa-CTRL-r20403",
+  "name": "IDSAGG-cicids-quad-96b-Wa-CTRL-desir-r20418",
+  "set": {
+   "seed": 20418
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSX-cicids-quad-96b-CE20-r20401",
+  "name": "IDSAGG-cicids-quad-96b-CE20-zs-r20418",
+  "set": {
+   "seed": 20418
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSXD-cicids-quad-96b-CE20-r20403",
+  "name": "IDSAGG-cicids-quad-96b-CE20-desir-r20418",
+  "set": {
+   "seed": 20418
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSX-ciciot-quad-96b-Wc-CTRL-r20401",
+  "name": "IDSAGG-ciciot-quad-96b-Wc-CTRL-zs-r20418",
+  "set": {
+   "seed": 20418
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-Wc-CTRL-r20406",
+  "name": "IDSAGG-ciciot-quad-96b-Wc-CTRL-desir-r20418",
+  "set": {
+   "seed": 20418
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSX-ciciot-quad-96b-B15-AC-r20401",
+  "name": "IDSAGG-ciciot-quad-96b-B15-AC-zs-r20418",
+  "set": {
+   "seed": 20418
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-B15-AC-r20406",
+  "name": "IDSAGG-ciciot-quad-96b-B15-AC-desir-r20418",
+  "set": {
+   "seed": 20418
+  },
+  "why": "Paired aggregation A/B (pre-registered: experiments/ids_aggregation_ab_rule.json); fresh seed, zscore vs desirability differ only in aggregation + CE anchor."
+ }
+]
