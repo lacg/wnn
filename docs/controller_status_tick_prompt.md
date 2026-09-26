@@ -163,8 +163,9 @@ STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 AS OF 26/09/2026 09:30 EDT — LANDING AT THE s2->s3 HOLD CHANGED (Luiz): merge branch `ga-template-unify`
 (b4392f95, WNN-1, CONTAINS eval-batch-pack) — NOT eval-batch-pack alone. It needs worker wheel ABI 14 installed in
 the SAME step (wnn/accel.py asserts 14; controller runs import it too). Follow the LANDING RUNBOOK in
-.claude/plans/ga_template_unification.md — it includes pausing queued IDS flows first. DECIDED (Luiz 26/09 ~12:50): land AROUND the in-flight IDS
-flow, no waiting. Wheel 14 is PRE-STAGED at /Volumes/20260401-WDBlack-SN850X-2TB/cargo-target/wheels/abi14_wnn1_b4392f95/;
+.claude/plans/ga_template_unification.md — it includes pausing queued IDS flows first. DECIDED (Luiz 26/09 ~13:15): deploy as soon as the CONTROLLER
+allows (no waiting on IDS); the in-flight IDS flow finishes on its imported code, then worker_swap.py RESTARTS the
+IDS worker clean (runbook steps 6-7), and the paused IDS flows are requeued after the relaunch. Wheel 14 is PRE-STAGED at /Volumes/20260401-WDBlack-SN850X-2TB/cargo-target/wheels/abi14_wnn1_b4392f95/;
 merge-tree dry run is clean. When s2 banks and the box idles, say "idle BY REQUEST — WNN-1 landing" and DO the
 runbook (nothing is pending on Luiz for it).
 
