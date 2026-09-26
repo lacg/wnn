@@ -160,6 +160,13 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
+AS OF 26/09/2026 ~12:00 EDT — LANDING AT THE s2->s3 HOLD CHANGED (Luiz): merge branch `ga-template-unify`
+(b4392f95, WNN-1, CONTAINS eval-batch-pack) — NOT eval-batch-pack alone. It needs worker wheel ABI 14 installed in
+the SAME step (wnn/accel.py asserts 14; controller runs import it too). Follow the LANDING RUNBOOK in
+.claude/plans/ga_template_unification.md — it includes pausing queued IDS flows first and one decision for Luiz
+(land with the in-flight IDS flow running, or wait for it). When s2 banks and the box idles, say "idle BY REQUEST —
+HOLD for the WNN-1 landing" and name that decision on line 3.
+
 AS OF 25/09/2026 10:16 EDT — HOLD ARMED BY REQUEST (Luiz). experiments/HOLD_CONTROLLER exists. `_full30` s31337002
 (CTRL-16) flies on untouched and banks normally; the chain then PARKS before s3 (wait_while_held logs `HOLD —` to the
 arm log every 10 min). When the box goes idle with the sentinel present, lines 2-3 say "idle BY REQUEST — HOLD for the
