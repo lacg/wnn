@@ -12,6 +12,7 @@
 #
 #   STEP 5  wait for the `_full30` chain; apply the pre-registered CTRL-16 rule (scripts/ctrl16_verdict.py).
 #           If `_full30` REPLACES `_pipeN30`, STOP: full-pipeline + obs-pwm is an untested combination.
+#   STEP 5b CTRL-21 CRN noise probe in the controller gap (~47 min, score-only; IDS never paused for it).
 #   STEP 6  LEVELS n=5 (CTRL-18) on the obs-pwm recipe: `_op30` s31337006 (64 levels), then 96 (n384) and
 #           128 (n512) `_Lop30` x5, each paired vs `_op30` n256 same seed.
 #   STEP 7  STOP. Next, in this order: CTRL-17 audit → CTRL-8 stage 2 (horizontal) → multi-axis round 1.
@@ -52,6 +53,22 @@ PYTHONPATH=src/wnn $VP scripts/ctrl16_verdict.py 2>&1 | tee -a "$LOG"
 if $VP -c "import json,sys; sys.exit(0 if json.load(open('experiments/ctrl16_verdict.json'))['replace_anchor'] else 1)"; then
 	log "STOP — CTRL-16 says _full30 REPLACES _pipeN30. Full pipeline + --obs-pwm is untested; the recipe needs Luiz. Box left idle."
 	exit 0
+fi
+
+# ---- STEP 5b: CTRL-21 CRN noise probe in the controller gap (Luiz 26/09: waits for the controller
+# side; IDS is never paused or stopped for it). Score-only, ~47 min, peak ~10-12 GB. A failed probe
+# is logged and does NOT block LEVELS — it only feeds CTRL-20's floors.
+PROBE_TAG="SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_op30"
+if [ -f "experiments/crn_noise_probe/PROBE_${PROBE_TAG}.json" ] && ! grep -q '"smoke": true' "experiments/crn_noise_probe/PROBE_${PROBE_TAG}.json"; then
+	log "STEP 5b already done (CTRL-21 probe JSON present)"
+else
+	log "STEP 5b — CTRL-21: CRN noise probe on ${PROBE_TAG} MEMORY population (--frames 3); out /private/tmp/ctrl21_probe.out"
+	PYTHONPATH=src/wnn /usr/bin/time -l $VP -u scripts/crn_noise_probe.py \
+		--ckpt "logs/controller/sweep_ladder/ckpt/${PROBE_TAG}/stage4_memory.yaml.gz" \
+		--run-args-file "experiments/crn_noise_probe/ARGS_${PROBE_TAG}.txt" \
+		--run-out "logs/controller/sweep_ladder/${PROBE_TAG}.out" \
+		--frames 3 > /private/tmp/ctrl21_probe.out 2>&1
+	log "STEP 5b — CTRL-21 probe rc=$? (see /private/tmp/ctrl21_probe.out; JSON in experiments/crn_noise_probe/)"
 fi
 
 # ---- STEP 6: LEVELS n=5 on the obs-pwm recipe -----------------------------------------------------
