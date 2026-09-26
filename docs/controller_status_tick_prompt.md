@@ -160,7 +160,7 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
-AS OF 26/09/2026 ~12:00 EDT — LANDING AT THE s2->s3 HOLD CHANGED (Luiz): merge branch `ga-template-unify`
+AS OF 26/09/2026 09:30 EDT — LANDING AT THE s2->s3 HOLD CHANGED (Luiz): merge branch `ga-template-unify`
 (b4392f95, WNN-1, CONTAINS eval-batch-pack) — NOT eval-batch-pack alone. It needs worker wheel ABI 14 installed in
 the SAME step (wnn/accel.py asserts 14; controller runs import it too). Follow the LANDING RUNBOOK in
 .claude/plans/ga_template_unification.md — it includes pausing queued IDS flows first and one decision for Luiz
