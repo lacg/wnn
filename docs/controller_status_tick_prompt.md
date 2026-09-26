@@ -160,6 +160,19 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
+AS OF 26/09/2026 15:10 EDT — WNN-1 LANDED, HOLD RELEASED, s3 FLYING. Merge 68f408c2 (ga-template-unify: WNN-1 +
+eval-batch-pack) + worker wheel ABI 14 installed in one step; smoke rc 0 (5 stages, 15-candidate stage-select). s2
+_full30 banked 14:40 (marker 1/4; writer bug fixed 64059ede — markers now carry held_stage_multiseed, all 5 stages;
+s2 repaired from its .out). s3 _full30 launched 15:08 on git=68f408c2 (counter-RNG; packed eval sub-batches — watch
+BITS widths: expect >> 2, the "[ControllerEvaluator] N genomes -> K sub-batches (widths [...])" line). OPEN CHECKS for
+the ticks: (1) once s3 NEURONS writes an in-stage checkpoint (gen >= 2), read its header
+(load_checkpoint(..., skip_population=True)) and confirm extra["ga_state"] = {stopper, scaler, incumbent} — the
+smoke's 2-gen stages could not exercise the cadence path; (2) IDS: worker_swap pid 45016 watches flow 6253 and
+restarts the worker when it ends (log /private/tmp/worker_swap_wnn1.log) — confirm the relaunch and that new IDS
+flows run on ABI 14; (3) when s3 banks, REPAIR its marker the same way as s2 (its ladder sourced the pre-fix lib).
+Era note: s2 = old RNG scheme, s3-s5 = counter-RNG (pairing vs _pipeN30 unaffected; the bit-identical NEURONS prefix
+holds for s2 only).
+
 AS OF 26/09/2026 09:30 EDT — LANDING AT THE s2->s3 HOLD CHANGED (Luiz): merge branch `ga-template-unify`
 (b4392f95, WNN-1, CONTAINS eval-batch-pack) — NOT eval-batch-pack alone. It needs worker wheel ABI 14 installed in
 the SAME step (wnn/accel.py asserts 14; controller runs import it too). Follow the LANDING RUNBOOK in
