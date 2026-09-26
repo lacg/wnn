@@ -47,6 +47,20 @@ wait_while_held() {
 	"$logfn" "HOLD released — launching $tag"
 }
 
+# stage_multiseed_json OUT — {"GRID":"…","NEURONS":"…",…}: each stage's LAST
+# "<STAGE> MULTI-SEED held-out" line, whitespace-squeezed, quotes stripped; only
+# stages that printed one appear, so a 3-stage run yields 3 keys and _full30 yields 5.
+stage_multiseed_json() {
+	local out="$1" st line body="" sep=""
+	for st in GRID NEURONS BITS CONNECTIONS MEMORY; do
+		line=$(grep -E " ${st} MULTI-SEED held-out" "$out" | tail -1 | tr -d '"' | sed 's/  */ /g; s/^ //')
+		[ -n "$line" ] || continue
+		body="${body}${sep}\"${st}\":\"${line}\""
+		sep=","
+	done
+	printf '{%s}' "$body"
+}
+
 # provenance_json OUT — the `[provenance]` line of a .out as a JSON object, or
 # `null` when the run predates the line. Values are single tokens (no spaces,
 # no quotes) by construction in provenance.py, so a sed capture is exact.
@@ -180,13 +194,21 @@ run_controller_arm() {
 	# GA earn its runtime?" was unanswerable). The HEADLINE lines name the stage that
 	# a fresh val draw picked — selection never touches the published report seeds.
 	held_gm=$(grep -E "GRID MULTI-SEED held-out" "$out" | tail -1)
+	# 26/09/2026 — EVERY stage's multi-seed held-out, keyed by stage name. held_neurons_multiseed
+	# keeps its old meaning (the ONE GA-arch stage of a 3-stage pipeline: NEURONS for _pipeN,
+	# CONNECTIONS for _hd) because readers depend on it; with BOTH stages run (_full30) it held
+	# CONNECTIONS under a "neurons" name and BITS was never recorded. This object has no
+	# ambiguity: one entry per stage that printed a MULTI-SEED line.
+	held_stages=$(stage_multiseed_json "$out")
 	head_st=$(grep -E "\[stage-select\] HEADLINE stage=" "$out" | tail -1)
 	head_ho=$(grep -E "\[stage-select\] HEADLINE held-out:" "$out" | tail -1)
 	# The per-candidate val rows of the STAGE TABLE (top-3 selection, 09/08/2026):
 	# pop[0..K-1] of every stage on the val seeds, with the whm that ranked them.
 	# Captured so the marker can answer "why did THIS candidate win?" without the
 	# .out. One line per candidate, joined with " ; ". Empty on pre-top-3 runs.
-	sel_tab=$(grep -E "^\s+(GRID|NEURONS|CONNECTIONS|MEMORY)#[0-9]+\s+val " "$out" | tail -12 \
+	# 26/09/2026: BITS added and tail widened to 15 — a five-stage run (_full30) has
+	# top-3 x 5 = 15 candidates, and the old 4-stage pattern + tail -12 dropped BITS.
+	sel_tab=$(grep -E "^\s+(GRID|NEURONS|BITS|CONNECTIONS|MEMORY)#[0-9]+\s+val " "$out" | tail -15 \
 		| sed 's/  */ /g; s/^ //' | paste -sd ';' - | sed 's/;/ ; /g')
 	[ -f "$winner" ] && "$vp" -u scripts/gran_fpga_count.py "$winner" >> "$out" 2>&1
 	fpga=$(grep -E "^\[FPGA\]" "$out" | tail -1)
@@ -211,7 +233,7 @@ run_controller_arm() {
 	# Field ORDER matters only for byte-parity with the markers run_l3d_feature_probe.sh
 	# wrote before it was migrated onto this helper; readers go through json.load.
 	[ -n "$extra" ] && extra="${extra},"
-	printf '{"tag":"%s",%s"rc":%s,"dur_s":%s,"peak_rss_bytes":%s,"cells":"%s","fpga":"%s","held_neurons":"%s","held_memory":"%s","held_neurons_multiseed":"%s","held_memory_multiseed":"%s","held_grid_multiseed":"%s","headline_stage":"%s","headline_holdout":"%s","stage_select_candidates":"%s","fixed_thresholds":true,"provenance":%s,"done":"%s"}\n' \
+	printf '{"tag":"%s",%s"rc":%s,"dur_s":%s,"peak_rss_bytes":%s,"cells":"%s","fpga":"%s","held_neurons":"%s","held_memory":"%s","held_neurons_multiseed":"%s","held_memory_multiseed":"%s","held_grid_multiseed":"%s","held_stage_multiseed":%s,"headline_stage":"%s","headline_holdout":"%s","stage_select_candidates":"%s","fixed_thresholds":true,"provenance":%s,"done":"%s"}\n' \
 		"$tag" "$extra" "$rc" "$dur" "${rss:-null}" \
 		"$cells" \
 		"$(echo "$fpga"   | tr -d '"' | sed 's/  */ /g')" \
@@ -220,6 +242,7 @@ run_controller_arm() {
 		"$(echo "$held_nm" | tr -d '"' | sed 's/  */ /g')" \
 		"$(echo "$held_mm" | tr -d '"' | sed 's/  */ /g')" \
 		"$(echo "$held_gm" | tr -d '"' | sed 's/  */ /g')" \
+		"$held_stages" \
 		"$(echo "$head_st" | tr -d '"' | sed 's/  */ /g')" \
 		"$(echo "$head_ho" | tr -d '"' | sed 's/  */ /g')" \
 		"$(echo "$sel_tab" | tr -d '"')" \
