@@ -12,3 +12,9 @@ from `validation_summaries` final rows — never `iterations.best_f1`.
 Verdict (both agents, 26/09): NO statistically supported winner on cicids or ciciot. Chosen configs:
 cicids CE20 (FPR direction 3/3 seeds, fewer generations), ciciot B15-AC (non-dominated 32/35, FPR −1.10pp
 5/5 — provisional, post-hoc). unswr: blocked on IDS-16. Plane: IDS-2.
+
+Era-restricted best-row readout (26/09, Luiz: no SP/SP100 era, best rows WITH their config):
+- `era.py` — strict: `_3way`, started >= 30/08/2026 02:27 UTC (OR-fold fix), val_cal only.
+- `era_cicids.py` — relaxed CICIDS set (IDSX+IDSXD from 22/08; the fix cannot touch <=34-bit cicids).
+- `era_cicids_d.py` — IDSXD (desirability) only.
+- `topf1.py` / `top2.py` — the all-era top-F1 extractor/ranker (includes SP/SP100; kept for reference).
