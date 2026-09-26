@@ -1,0 +1,79 @@
+#!/bin/bash
+# queue_2009c — successor to queue_2009b from STEP 6 on, with --obs-pwm ADOPTED into the recipe.
+#
+# Why (Luiz 26/09/2026: "if it is better, yeah, let's adopt it"): `_op30` x4 vs `_pipeN30` on the
+# promotion gate's own bar (HEADLINE rows, n=4 mean paired delta): stable +1.35 pp, err −0.295° (4/4),
+# steady −0.17°, alt +0.010 m → 3/4 columns favourable, err not worse → the rule FIRES. Cost: mean
+# TRUE keys 1.62M vs 0.81M (all QSPI tier, which CTRL-18 already allows).
+# So ANCHOR = `_op30`, RECIPE = PIPE_FLAGS + --obs-pwm.
+#
+# queue_2009b's supervisor was stopped (plain TERM, queue only) so it would not launch STEP 6 without
+# --obs-pwm; its `_full30` chain keeps running and banks s3-s5 by itself.
+#
+#   STEP 5  wait for the `_full30` chain; apply the pre-registered CTRL-16 rule (scripts/ctrl16_verdict.py).
+#           If `_full30` REPLACES `_pipeN30`, STOP: full-pipeline + obs-pwm is an untested combination.
+#   STEP 6  LEVELS n=5 (CTRL-18) on the obs-pwm recipe: `_op30` s31337006 (64 levels), then 96 (n384) and
+#           128 (n512) `_Lop30` x5, each paired vs `_op30` n256 same seed.
+#   STEP 7  STOP. Next, in this order: CTRL-17 audit → CTRL-8 stage 2 (horizontal) → multi-axis round 1.
+set -u
+cd "$(dirname "$0")/.." || exit 1
+LOG="/private/tmp/queue_2009.log"
+MARK="experiments/sweepladder_markers"
+VP="/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/bin/python"
+BASE="SL_C_b24n256_cf21_brushless_L4C_g10"
+PIPE_FLAGS="--skip-stages connections,bits --max-output-neurons 512 --max-cells 1000000000"
+RECIPE="--obs-pwm ${PIPE_FLAGS}"
+RECIPE_NAME="grid-neurons-memory+obs-pwm"
+ANCHOR="_op30"
+REQ="--obs-pwm --skip-stages --max-output-neurons"
+SEEDS4="31337002 31337003 31337004 31337005"
+SEEDS5="$SEEDS4 31337006"
+log() { echo "[q2009c] $(date -u +%FT%TZ) $*" | tee -a "$LOG"; }
+have() { [ -f "${MARK}/${BASE}_s$1$2.json" ]; }
+count() { ls ${MARK}/${BASE}_s3133700[2-5]$1.json 2>/dev/null | wc -l | tr -d ' '; }
+countn() { ls ${MARK}/SL_C_b24n$1_cf21_brushless_L4C_g10_s3133700[2-6]$2.json 2>/dev/null | wc -l | tr -d ' '; }
+busy() { pgrep -f "MacOS/Python -u -m wnn.control.phased_g[a]" >/dev/null || pgrep -f "scripts/sweep_ladder_gamm[a].sh" >/dev/null || pgrep -f "scripts/seed_arm_chai[n].sh" >/dev/null; }
+arm() {  # arm <suffix> <label> <seeds> <extra_args> <require_flags> <ctrl_suffix> <marker_json> [neurons] [no_control]
+	ARM_SUFFIX="$1" ARM_LABEL="$2" ARM_SEEDS="$3" ARM_EXTRA_ARGS="$4" ARM_REQUIRE_FLAGS="$5" ARM_CTRL_SUFFIX="$6" \
+		ARM_MARKER_JSON="$7" ARM_NEURONS="${8:-256}" ARM_NO_CONTROL="${9:-0}" \
+		ARM_LOG="/private/tmp/seed_arm$1${8:+_n$8}.log" bash scripts/seed_arm_chain.sh
+}
+RJ=",\"recipe\":\"${RECIPE_NAME}\",\"anchor\":\"${ANCHOR}\",\"obs_pwm\":true,\"adopted\":\"CTRL-15 gate bar 26/09\""
+
+log "########## ARMED (2009c) — wait _full30 x4 -> CTRL-16 verdict -> LEVELS n=5 on obs-pwm recipe -> STOP ##########"
+
+# ---- STEP 5: wait for the _full30 chain (launched by 2009b) and apply the CTRL-16 rule ------------
+beat=0
+while busy; do sleep 60; beat=$((beat + 1)); [ $((beat % 30)) = 0 ] && log "waiting — _full30 chain flying ($(count _full30)/4)"; done
+[ -f experiments/HOLD_CONTROLLER ] && { log "HOLD present after the _full30 chain — rm it and relaunch 2009c."; exit 1; }
+[ "$(count _full30)" -ge 4 ] || { log "ABORT — _full30 $(count _full30)/4 after the chain exited. A run needs a human."; exit 1; }
+log "---------- CTRL-16 verdict (pre-registered, experiments/ctrl16_rule.json) ----------"
+PYTHONPATH=src/wnn $VP scripts/ctrl16_verdict.py 2>&1 | tee -a "$LOG"
+if $VP -c "import json,sys; sys.exit(0 if json.load(open('experiments/ctrl16_verdict.json'))['replace_anchor'] else 1)"; then
+	log "STOP — CTRL-16 says _full30 REPLACES _pipeN30. Full pipeline + --obs-pwm is untested; the recipe needs Luiz. Box left idle."
+	exit 0
+fi
+
+# ---- STEP 6: LEVELS n=5 on the obs-pwm recipe -----------------------------------------------------
+if have 31337006 "$ANCHOR"; then log "STEP 6a already banked (${ANCHOR} s31337006)"; else
+	log "STEP 6a — CTRL-18: ${ANCHOR} s31337006 (64 levels -> n=5)"
+	arm "_op30" "arm-b-obs-pwm-only" "31337006" "$RECIPE" "$REQ" "_pipeN30" \
+		",\"obs_pwm\":true,\"dagger_label_delta\":false,\"purpose\":\"5th seed of the 64-level rung (CTRL-18)\"${RJ}" 256 1
+	have 31337006 "$ANCHOR" || { log "ABORT — ${ANCHOR} s31337006 missing. A run needs a human. Box left idle."; exit 1; }
+fi
+for N in 384 512; do
+	LV=$((N / 4))
+	if [ "$(countn $N _Lop30)" -ge 5 ]; then log "STEP 6 ${LV} levels already complete (5/5)"; continue; fi
+	log "STEP 6 — CTRL-18: ${LV} levels (n${N}) x5 (s2-s6) on ${RECIPE_NAME}; off-chip tier allowed"
+	# --max-output-neurons must follow the rung, not the 512 cap: last-wins after RECIPE.
+	arm "_Lop30" "levels-${LV}-obs-pwm-abi30" "$SEEDS5" "--teacher-hover derived ${RECIPE} --max-output-neurons ${N}" \
+		"--teacher-hover --motor-lag-s ${REQ}" "$ANCHOR" \
+		",\"levels_study\":true,\"levels\":${LV},\"control\":\"${ANCHOR} n256 same seed\",\"deploy_tier\":\"off-chip allowed\"${RJ}" "$N" 1
+	[ "$(countn $N _Lop30)" -ge 5 ] || { log "ABORT — ${LV} levels $(countn $N _Lop30)/5. A run needs a human. Box left idle."; exit 1; }
+	log "---------- CTRL-18 read: ${LV} levels − 64 levels (${ANCHOR}), same seeds, n=5 ----------"
+	PYTHONPATH=src/wnn $VP scripts/paired_power.py --arm "_Lop30" --base "SL_C_b24n${N}_cf21_brushless_L4C_g10_s{seed}" \
+		$(for sd in $SEEDS5; do printf -- "--seed %s --control-override %s=${BASE}_s%s${ANCHOR} " "$sd" "$sd" "$sd"; done) 2>&1 | tee -a "$LOG"
+done
+
+log "########## QUEUE COMPLETE — anchor ${ANCHOR} (${RECIPE_NAME}); box IDLE. ##########"
+log "NEXT (Luiz 26/09): CTRL-17 audit -> CTRL-8 stage 2 (horizontal) -> multi-axis round 1 with MA_ANCHOR_SUFFIX=${ANCHOR} + recipe flags (${RECIPE})."
