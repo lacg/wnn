@@ -160,6 +160,13 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
+AS OF 26/09/2026 16:45 EDT — LEVER HANDED OVER (Luiz: adopt --obs-pwm). queue_2009b supervisor 67249 TERMed alone;
+the _full30 chain (seed_arm_chain 14691, now PPID 1) keeps flying s3-s5. NEW LEVER = scripts/queue_2009c_obs_pwm_recipe.sh
+(pid 26592, PPID 1, same log /private/tmp/queue_2009.log, tag [q2009c]): waits for the chain -> CTRL-16 verdict (STOPs if
+_full30 replaces the anchor) -> _op30 s31337006 -> LEVELS 96/128 as `_Lop30` x5 on the obs-pwm recipe, ANCHOR = _op30.
+Roadmap after STOP: CTRL-17 audit -> CTRL-8 stage 2 -> multi-axis round 1 (stage 2 BEFORE multi-axis, Luiz 26/09).
+IDS: 94 QSR -abi13 reruns PAUSED; CTRL-21 probe runs before IDS-18/19/20. Open checks below still apply.
+
 AS OF 26/09/2026 15:10 EDT — WNN-1 LANDED, HOLD RELEASED, s3 FLYING. Merge 68f408c2 (ga-template-unify: WNN-1 +
 eval-batch-pack) + worker wheel ABI 14 installed in one step; smoke rc 0 (5 stages, 15-candidate stage-select). s2
 _full30 banked 14:40 (marker 1/4; writer bug fixed 64059ede — markers now carry held_stage_multiseed, all 5 stages;
