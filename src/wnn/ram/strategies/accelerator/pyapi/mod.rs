@@ -34,3 +34,5 @@ mod multistage_api;
 pub(crate) use multistage_api::*;
 mod connections_api;
 pub(crate) use connections_api::*;
+mod counter_rng_api;
+pub(crate) use counter_rng_api::*;

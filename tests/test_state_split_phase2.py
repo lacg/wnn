@@ -80,7 +80,7 @@ def test_2a_scan():
 	print("=" * 70)
 	c = build_controller()
 	g, a, tg, p = make_episodes()
-	total, conflicts = c.split_scan(g, a, tg, p, 0.1)
+	total, conflicts = c.split_scan(g, a, tg, p, [], 0.1)
 
 	print(f"\n  records: {total}  (expect {2 * L})")
 	print(f"  conflicts: {len(conflicts)}  (expect 1)")
@@ -114,7 +114,7 @@ def test_2b_walk_plant_resolve():
 	c = build_controller()
 	g, a, tg, p = make_episodes()
 
-	(before, after, mode, sbit, slag, sgain, shigh, n_planted) = c.split_train(g, a, tg, p, 0.1, 0.999, 0.9)
+	(before, after, mode, sbit, slag, sgain, shigh, n_planted) = c.split_train(g, a, tg, p, [], 0.1, 0.999, 0.9)
 	print(f"\n  conflicts: before={before}  after={after}  mode={mode} (1=Type-1 latch)")
 	print(f"  separator: bit={sbit} (cue={CUE_IDX})  lag={slag}  gain={sgain:.3f}  high_on={shigh}")
 	print(f"  state neurons planted: {n_planted}")

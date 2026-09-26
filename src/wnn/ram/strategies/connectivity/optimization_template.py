@@ -92,16 +92,83 @@ class OptimizationTemplate(ABC, Generic[T]):
 		self._fitness_calculator = None
 		# Resume contract (formal fields — were duck-typed getattr channels,
 		# which is where the 01/06/2026 resume bug lived). Strategies that load
-		# a checkpoint call restore_resume_state(); loops read these directly.
+		# a checkpoint call resume_state_from_checkpoint(); loops read these.
 		self._resume_start_gen: int = 0
-		self._resume_patience: int = 0
+		self._resume_ga_state: dict = {}
+		self._resume_best_genome: Optional[T] = None
 
-	def restore_resume_state(self, start_gen: int, patience: int) -> None:
-		"""Set checkpoint-resume state: the next generation to run and the
-		early-stopping patience to carry. The optimization loop continues from
-		here instead of restarting at gen 0 with patience reset."""
+	# ---- resume contract: ONE entry point for every substrate (WNN-1) -------
+	# IDS used to restore generation + an int patience inline in
+	# ArchitectureGAStrategy.optimize(); the controller restored nothing (a resumed
+	# stage restarted at gen 0 with patience and escalation reset). Both now go
+	# through resume_state_from_checkpoint(), and the GA loop restores the FULL
+	# tracker + scaler snapshot the shared checkpoint path stamps as
+	# extra["ga_state"].
+
+	def restore_resume_state(self, start_gen: int, ga_state: Optional[dict] = None) -> None:
+		"""Set checkpoint-resume state: the next generation to run and the GA
+		control snapshot ({"stopper": ..., "scaler": ...}) to restore. The loop
+		continues from here instead of restarting at gen 0."""
 		self._resume_start_gen = max(0, int(start_gen))
-		self._resume_patience = max(0, int(patience))
+		self._resume_ga_state = dict(ga_state or {})
+
+	def resume_state_from_checkpoint(self, ckpt) -> None:
+		"""Restore generation + GA control state from a PhaseCheckpoint.
+
+		The checkpoint is written at the START of generation g with the post-(g-1)
+		population and state, so the loop resumes AT g (iterations_run), not g+1.
+		Pre-WNN-1 checkpoints carry only an integer patience counter
+		(extra["patience_counter"]); that is restored as a counter-only snapshot."""
+		extra = getattr(ckpt, "extra", None) or {}
+		ga_state = extra.get("ga_state")
+		if ga_state is None:
+			counter = extra.get("patience_counter", getattr(ckpt, "patience", 0)) or 0
+			ga_state = {"stopper": {"patience_counter": counter}}
+		self.restore_resume_state(int(getattr(ckpt, "iterations_run", 0) or 0), ga_state)
+		# The incumbent (best-so-far) genome: the loop's early-stopper compares each
+		# generation against it, so a resume must carry it, not recompute it from
+		# the current pool.
+		self._resume_best_genome = getattr(ckpt, "best_genome", None)
+
+	# ---- counter-based RNG (WNN-1) -------------------------------------------
+	# Every generation's generators are rebuilt from ram_core::counter_rng draws at
+	# coordinates (run seed, generation, stage, stream). A generation's randomness
+	# is then a pure function of those coordinates: a resume at generation g replays
+	# g's draws exactly with NO RNG state in the checkpoint, and Rust and Python
+	# agree by construction. The `stream` coordinate keeps generators independent.
+	RNG_STREAM_PYTHON = 0      # self._rng: selection, crossover coin, immigrants
+	RNG_STREAM_NUMPY = 1       # substrate numpy generators (controller operators)
+	RNG_STREAM_OFFSPRING = 2   # Rust offspring generators (IDS search_offspring)
+	_SEED_MASK = (1 << 64) - 1
+
+	def _counter_rng(self):
+		"""The Rust module that exports counter_rng_draw_u64. Default: the worker
+		wheel. Controller strategies override with their own facade — both wheels
+		export the same ram_core function, so the draw is identical either way."""
+		from wnn.accel import require_accel
+		return require_accel()
+
+	def _stage_rng_key(self) -> int:
+		"""Stable per-strategy integer for the `genome` coordinate, so stages that
+		share a run seed never share draws."""
+		import zlib
+		return zlib.crc32(self.name.encode("utf-8"))
+
+	def _derive_seed(self, generation: int, stream: int) -> int:
+		"""The u64 seed for one (generation, stream), from ram_core::counter_rng."""
+		seed = (0 if self._seed is None else int(self._seed)) & self._SEED_MASK
+		return int(self._counter_rng().counter_rng_draw_u64(
+			seed, int(generation), self._stage_rng_key(), int(stream), 0, 0))
+
+	def _reseed_generation(self, generation: int) -> None:
+		"""Rebuild every generator for `generation`, then let the substrate rebuild
+		its own (numpy / Rust-offspring) via _on_reseed."""
+		self._rng = random.Random(self._derive_seed(generation, self.RNG_STREAM_PYTHON))
+		self._on_reseed(generation)
+
+	def _on_reseed(self, generation: int) -> None:
+		"""Hook: rebuild substrate generators for `generation` from _derive_seed()."""
+		pass
 
 	def set_tracker(self, tracker: "ExperimentTracker", experiment_id: int, _unused: Optional[int] = None) -> None:
 		"""Set the experiment tracker for iteration recording."""

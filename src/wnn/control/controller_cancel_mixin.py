@@ -20,12 +20,6 @@ from __future__ import annotations
 class ControllerCancelMixin:
 	"""Mixed into the controller GA strategies to share the cancel/crash-save core."""
 
-	def _on_generation_start(self, generation: int, **ctx) -> None:
-		# All the logic (adaptive crash-save + cooperative shutdown → StopIteration)
-		# is the shared base implementation; the controller only customises the
-		# checkpoint payload via _build_checkpoint below.
-		self._checkpoint_and_maybe_stop(generation, ctx)
-
 	def _build_checkpoint(self, generation: int, genomes: list, ctx: dict,
 	                      complete: bool):
 		"""Controller GA state → PhaseCheckpoint via the historical payload shape,

@@ -139,10 +139,37 @@ class EarlyStoppingTracker:
 		# here). None ⇒ "first check, nothing to compare yet".
 		self._mag_watermarks: Optional[dict] = None
 
-	def restore(self, patience_counter: int) -> None:
-		"""Restore checkpointed patience after reset() — the explicit resume
-		counterpart (callers used to poke _patience_counter directly)."""
-		self._patience_counter = max(0, int(patience_counter))
+	# Plain fields that fully determine the next check() / check_magnitude*()
+	# outcome. state() / restore_state() round-trip them through a checkpoint so a
+	# resumed stage early-stops exactly when the uninterrupted one would (WNN-1).
+	_STATE_FIELDS = ("_patience_counter", "_prev_best", "_baseline", "_initial_fitness",
+	                 "_mag_watermarks", "_prev_trend_mean", "_prev_health_mean")
+
+	def state(self) -> dict:
+		"""Checkpointable snapshot: plain data only (floats, None, str-keyed dict)."""
+		snap = {f: getattr(self, f, None) for f in self._STATE_FIELDS}
+		snap["_last_level"] = int(self._last_level)
+		if snap["_mag_watermarks"] is not None:
+			snap["_mag_watermarks"] = dict(snap["_mag_watermarks"])
+		return snap
+
+	def restore_state(self, snap: dict) -> None:
+		"""Restore a state() snapshot after reset(). A pre-WNN-1 checkpoint carries
+		only {"patience_counter": n}; that restores the counter alone. The counter
+		is NOT truncated to int: magnitude-aware patience decays fractionally
+		(e.g. 2.5/5), and the old restore() cast it to int on every resume."""
+		from wnn.ram.strategies.connectivity.generic_strategies import AdaptiveLevel
+		if "patience_counter" in snap and "_patience_counter" not in snap:
+			self._patience_counter = max(0.0, float(snap["patience_counter"]))
+			return
+		for f in self._STATE_FIELDS:
+			if f in snap:
+				setattr(self, f, snap[f])
+		self._patience_counter = max(0.0, float(self._patience_counter or 0.0))
+		if self._mag_watermarks is not None:
+			self._mag_watermarks = dict(self._mag_watermarks)
+		if "_last_level" in snap:
+			self._last_level = AdaptiveLevel(int(snap["_last_level"]))
 
 	def check(self, iteration: int, current_best: float) -> bool:
 		"""
