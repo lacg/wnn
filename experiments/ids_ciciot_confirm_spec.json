@@ -1,0 +1,146 @@
+[
+ {
+  "source": "IDSXD2-ciciot-quad-96b-B15-AC-r20406",
+  "name": "IDSXD3-ciciot-quad-96b-B15-AC-r20408",
+  "set": {
+   "seed": 20408
+  },
+  "why": "CIC-IoT confirmation (pre-registered: experiments/ids_ciciot_confirm_rule.json); fresh seed, never pooled with 20403-20407."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-B05-AC-r20406",
+  "name": "IDSXD3-ciciot-quad-96b-B05-AC-r20408",
+  "set": {
+   "seed": 20408
+  },
+  "why": "CIC-IoT confirmation (pre-registered: experiments/ids_ciciot_confirm_rule.json); fresh seed, never pooled with 20403-20407."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-Wc-CTRL-r20406",
+  "name": "IDSXD3-ciciot-quad-96b-Wc-CTRL-r20408",
+  "set": {
+   "seed": 20408
+  },
+  "why": "CIC-IoT confirmation (pre-registered: experiments/ids_ciciot_confirm_rule.json); fresh seed, never pooled with 20403-20407."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-B15-AC-r20406",
+  "name": "IDSXD3-ciciot-quad-96b-B15-AC-r20409",
+  "set": {
+   "seed": 20409
+  },
+  "why": "CIC-IoT confirmation (pre-registered: experiments/ids_ciciot_confirm_rule.json); fresh seed, never pooled with 20403-20407."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-B05-AC-r20406",
+  "name": "IDSXD3-ciciot-quad-96b-B05-AC-r20409",
+  "set": {
+   "seed": 20409
+  },
+  "why": "CIC-IoT confirmation (pre-registered: experiments/ids_ciciot_confirm_rule.json); fresh seed, never pooled with 20403-20407."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-Wc-CTRL-r20406",
+  "name": "IDSXD3-ciciot-quad-96b-Wc-CTRL-r20409",
+  "set": {
+   "seed": 20409
+  },
+  "why": "CIC-IoT confirmation (pre-registered: experiments/ids_ciciot_confirm_rule.json); fresh seed, never pooled with 20403-20407."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-B15-AC-r20406",
+  "name": "IDSXD3-ciciot-quad-96b-B15-AC-r20410",
+  "set": {
+   "seed": 20410
+  },
+  "why": "CIC-IoT confirmation (pre-registered: experiments/ids_ciciot_confirm_rule.json); fresh seed, never pooled with 20403-20407."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-B05-AC-r20406",
+  "name": "IDSXD3-ciciot-quad-96b-B05-AC-r20410",
+  "set": {
+   "seed": 20410
+  },
+  "why": "CIC-IoT confirmation (pre-registered: experiments/ids_ciciot_confirm_rule.json); fresh seed, never pooled with 20403-20407."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-Wc-CTRL-r20406",
+  "name": "IDSXD3-ciciot-quad-96b-Wc-CTRL-r20410",
+  "set": {
+   "seed": 20410
+  },
+  "why": "CIC-IoT confirmation (pre-registered: experiments/ids_ciciot_confirm_rule.json); fresh seed, never pooled with 20403-20407."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-B15-AC-r20406",
+  "name": "IDSXD3-ciciot-quad-96b-B15-AC-r20411",
+  "set": {
+   "seed": 20411
+  },
+  "why": "CIC-IoT confirmation (pre-registered: experiments/ids_ciciot_confirm_rule.json); fresh seed, never pooled with 20403-20407."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-B05-AC-r20406",
+  "name": "IDSXD3-ciciot-quad-96b-B05-AC-r20411",
+  "set": {
+   "seed": 20411
+  },
+  "why": "CIC-IoT confirmation (pre-registered: experiments/ids_ciciot_confirm_rule.json); fresh seed, never pooled with 20403-20407."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-Wc-CTRL-r20406",
+  "name": "IDSXD3-ciciot-quad-96b-Wc-CTRL-r20411",
+  "set": {
+   "seed": 20411
+  },
+  "why": "CIC-IoT confirmation (pre-registered: experiments/ids_ciciot_confirm_rule.json); fresh seed, never pooled with 20403-20407."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-B15-AC-r20406",
+  "name": "IDSXD3-ciciot-quad-96b-B15-AC-r20412",
+  "set": {
+   "seed": 20412
+  },
+  "why": "CIC-IoT confirmation (pre-registered: experiments/ids_ciciot_confirm_rule.json); fresh seed, never pooled with 20403-20407."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-B05-AC-r20406",
+  "name": "IDSXD3-ciciot-quad-96b-B05-AC-r20412",
+  "set": {
+   "seed": 20412
+  },
+  "why": "CIC-IoT confirmation (pre-registered: experiments/ids_ciciot_confirm_rule.json); fresh seed, never pooled with 20403-20407."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-Wc-CTRL-r20406",
+  "name": "IDSXD3-ciciot-quad-96b-Wc-CTRL-r20412",
+  "set": {
+   "seed": 20412
+  },
+  "why": "CIC-IoT confirmation (pre-registered: experiments/ids_ciciot_confirm_rule.json); fresh seed, never pooled with 20403-20407."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-B15-AC-r20406",
+  "name": "IDSXD3-ciciot-quad-96b-B15-AC-r20413",
+  "set": {
+   "seed": 20413
+  },
+  "why": "CIC-IoT confirmation (pre-registered: experiments/ids_ciciot_confirm_rule.json); fresh seed, never pooled with 20403-20407."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-B05-AC-r20406",
+  "name": "IDSXD3-ciciot-quad-96b-B05-AC-r20413",
+  "set": {
+   "seed": 20413
+  },
+  "why": "CIC-IoT confirmation (pre-registered: experiments/ids_ciciot_confirm_rule.json); fresh seed, never pooled with 20403-20407."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-Wc-CTRL-r20406",
+  "name": "IDSXD3-ciciot-quad-96b-Wc-CTRL-r20413",
+  "set": {
+   "seed": 20413
+  },
+  "why": "CIC-IoT confirmation (pre-registered: experiments/ids_ciciot_confirm_rule.json); fresh seed, never pooled with 20403-20407."
+ }
+]

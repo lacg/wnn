@@ -1,0 +1,26 @@
+[
+ {
+  "source": "IDSXD-unswr-quad-64b-B34-CTRL-r20401",
+  "name": "IDSXD-unswr-quad-64b-B34-CTRL-r20401-immfix",
+  "set": {},
+  "why": "Re-fly on post-immigrant-fix code (IDS-17): the original r20401 GA winners were 34/8-bit hybrids, invalid as a fixed-34b control."
+ },
+ {
+  "source": "IDSXD-unswr-quad-64b-B34-CTRL-r20402",
+  "name": "IDSXD-unswr-quad-64b-B34-CTRL-r20402-immfix",
+  "set": {},
+  "why": "Re-fly on post-immigrant-fix code (IDS-17): the original r20402 GA winners were 34/8-bit hybrids, invalid as a fixed-34b control."
+ },
+ {
+  "source": "IDSXD-unswr-quad-64b-B34-CTRL-r20403",
+  "name": "IDSXD-unswr-quad-64b-B34-CTRL-r20403-immfix",
+  "set": {},
+  "why": "Re-fly on post-immigrant-fix code (IDS-17): the original r20403 GA winners were 34/8-bit hybrids, invalid as a fixed-34b control."
+ },
+ {
+  "source": "IDSXD-unswr-quad-64b-B34-CTRL-r20404",
+  "name": "IDSXD-unswr-quad-64b-B34-CTRL-r20404-immfix",
+  "set": {},
+  "why": "Re-fly on post-immigrant-fix code (IDS-17): the original r20404 GA winners were 34/8-bit hybrids, invalid as a fixed-34b control."
+ }
+]

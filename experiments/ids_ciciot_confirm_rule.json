@@ -1,0 +1,15 @@
+{
+ "story": "IDS confirmation — CIC-IoT-2023 subsample: B15-AC (and co-leader B05-AC) vs Wc-CTRL on held-out FPR",
+ "registered": "2026-09-26 (EDT), BEFORE any IDSXD3 flow existed",
+ "registered_by": "Luiz: 'queue the CIC-IoT confirmation with B05-AC too'; design from the experiment-design agent's IDS-2 power analysis (26/09)",
+ "cohort": "IDSXD3-ciciot-quad-96b-{B15-AC,B05-AC,Wc-CTRL}-r{20408..20413}: byte-identical clones of the IDSXD2 r20406 flows, only `seed` changed; SEED-MAJOR interleaved; 18 flows",
+ "fresh_seeds": [20408, 20409, 20410, 20411, 20412, 20413],
+ "never_pool": "The screening seeds 20403-20407 (IDSXD/IDSXD2) are NOT pooled into this test.",
+ "metric": "held-out TEST val_cal, GA-neurons phase, genome_type best_f1 (validation_summaries final rows) — the cell the screening flagged",
+ "primary": "B15-AC minus Wc-CTRL on FPR, paired by seed. CONFIRMED iff Holm-adjusted two-sided paired-t p < 0.05 AND >= 5 of 6 seeds favour B15-AC.",
+ "secondary": "B05-AC minus Wc-CTRL on FPR, same test; Holm across the 2 contrasts.",
+ "descriptive_only": "F1 deltas (not powered: the screening F1 gap needs n=10-16); B15-AC vs B05-AC head-to-head; generations run per arm (a mediator under the IDSZ 24/08 ruling, disclosed not penalised).",
+ "decision": "If primary confirms: B15-AC is the IDS-5 (CIC-IoT n=100) config with 'lower FPR, confirmed; F1 indistinguishable'. If it fails: keep Wc-CTRL (production control) per the IDS-2 tie-break (equal F1 -> lower FPR -> fewer generations). If only the secondary confirms: B05-AC, same wording.",
+ "era_note": "Flies on worker ABI 14 (WNN-1 counter-RNG): unlike the screening runs, each flow is reproducible from its seed.",
+ "apply_with": "scripts/ids2/ (reuse load.py/anal.py pairing), restricted to IDSXD3 + fresh seeds"
+}
