@@ -13,8 +13,9 @@
 #   STEP 5  wait for the `_full30` chain; apply the pre-registered CTRL-16 rule (scripts/ctrl16_verdict.py).
 #           If `_full30` REPLACES `_pipeN30`, STOP: full-pipeline + obs-pwm is an untested combination.
 #   STEP 5b CTRL-21 CRN noise probe in the controller gap (~47 min, score-only; IDS never paused for it).
-#   STEP 6  LEVELS n=5 (CTRL-18) on the obs-pwm recipe: `_op30` s31337006 (64 levels), then 96 (n384) and
-#           128 (n512) `_Lop30` x5, each paired vs `_op30` n256 same seed.
+#   STEP 5c PARK until the ABI-31 stage-2 trainer fixes land (option B, Luiz 26/09): experiments/ABI31_LANDED.
+#   STEP 6a anchor re-fly `_op31` x5 (s2-s6) on the new trainer; s2-s5 paired vs `_op30` = trainer read.
+#   STEP 6  LEVELS n=5 (CTRL-18): 96 (n384) and 128 (n512) `_Lop31` x5, each paired vs `_op31` n256 same seed.
 #   STEP 7  STOP. Next, in this order: CTRL-17 audit → CTRL-8 stage 2 (horizontal) → multi-axis round 1.
 set -u
 cd "$(dirname "$0")/.." || exit 1
@@ -41,7 +42,7 @@ arm() {  # arm <suffix> <label> <seeds> <extra_args> <require_flags> <ctrl_suffi
 }
 RJ=",\"recipe\":\"${RECIPE_NAME}\",\"anchor\":\"${ANCHOR}\",\"obs_pwm\":true,\"adopted\":\"CTRL-15 gate bar 26/09\""
 
-log "########## ARMED (2009c) — wait _full30 x4 -> CTRL-16 verdict -> LEVELS n=5 on obs-pwm recipe -> STOP ##########"
+log "########## ARMED (2009c) — wait _full30 x4 -> CTRL-16 -> CTRL-21 probe -> PARK for ABI-31 landing -> _op31 x5 -> LEVELS _Lop31 -> STOP ##########"
 
 # ---- STEP 5: wait for the _full30 chain (launched by 2009b) and apply the CTRL-16 rule ------------
 beat=0
@@ -71,24 +72,50 @@ else
 	log "STEP 5b — CTRL-21 probe rc=$? (see /private/tmp/ctrl21_probe.out; JSON in experiments/crn_noise_probe/)"
 fi
 
-# ---- STEP 6: LEVELS n=5 on the obs-pwm recipe -----------------------------------------------------
-if have 31337006 "$ANCHOR"; then log "STEP 6a already banked (${ANCHOR} s31337006)"; else
-	log "STEP 6a — CTRL-18: ${ANCHOR} s31337006 (64 levels -> n=5)"
-	arm "_op30" "arm-b-obs-pwm-only" "31337006" "$RECIPE" "$REQ" "_pipeN30" \
-		",\"obs_pwm\":true,\"dagger_label_delta\":false,\"purpose\":\"5th seed of the 64-level rung (CTRL-18)\"${RJ}" 256 1
+# ---- STEP 5c: PARK for the ABI-31 landing (option B, Luiz 26/09) ---------------------------------
+# CTRL-17 stage-2 trainer fixes (G1-G4 incl. the ALTITUDE side of G3) change how every run trains, so
+# they land HERE — after _full30 (CTRL-16 stays single-trainer) and before the anchor re-fly. A human
+# lands (merge + controller wheel ABI 31 + python in one step), smokes ONE run, then:
+#   touch experiments/ABI31_LANDED
+LANDED="experiments/ABI31_LANDED"
+beat=0
+while [ ! -f "$LANDED" ]; do
+	[ $((beat % 30)) = 0 ] && log "PARKED — waiting for the ABI-31 stage-2 trainer landing (touch ${LANDED} after the smoke)"
+	sleep 60; beat=$((beat + 1))
+done
+ABI=$($VP -c "import ram_controller as c; print(c.ABI_VERSION)" 2>/dev/null)
+[ "$ABI" = "31" ] || { log "ABORT — ${LANDED} present but ram_controller ABI=${ABI:-?}, expected 31. Box left idle."; exit 1; }
+log "STEP 5c — ABI-31 landing confirmed (ram_controller ABI ${ABI})"
+
+# ---- STEP 6a: anchor re-fly on the ABI-31 trainer: _op31 x5 ----------------------------------------
+# s2-s5 pair vs _op30 (same seeds) = the old->new TRAINER read (descriptive); s6 has no ABI-30 twin.
+ANCHOR="_op31"
+RJ=",\"recipe\":\"${RECIPE_NAME}\",\"anchor\":\"${ANCHOR}\",\"obs_pwm\":true,\"trainer\":\"ABI31 stage-2 fixes (CTRL-17 G1-G4, altitude side incl.)\""
+if [ "$(count _op31)" -ge 4 ]; then log "STEP 6a s2-s5 already banked (_op31 4/4)"; else
+	log "STEP 6a — anchor re-fly: _op31 s2-s5 on the ABI-31 trainer, paired vs _op30 (trainer read)"
+	arm "_op31" "anchor-obs-pwm-abi31-trainer" "$SEEDS4" "$RECIPE" "$REQ" "_op30" \
+		",\"refly_of\":\"_op30\"${RJ}"
+	[ "$(count _op31)" -ge 4 ] || { log "ABORT — _op31 $(count _op31)/4. A run needs a human. Box left idle."; exit 1; }
+fi
+if have 31337006 "$ANCHOR"; then log "STEP 6a s6 already banked"; else
+	log "STEP 6a — _op31 s31337006 (5th seed of the 64-level rung, CTRL-18)"
+	arm "_op31" "anchor-obs-pwm-abi31-trainer" "31337006" "$RECIPE" "$REQ" "_op30" \
+		",\"purpose\":\"5th seed of the 64-level rung (CTRL-18)\"${RJ}" 256 1
 	have 31337006 "$ANCHOR" || { log "ABORT — ${ANCHOR} s31337006 missing. A run needs a human. Box left idle."; exit 1; }
 fi
+
+# ---- STEP 6: LEVELS n=5 on the obs-pwm recipe, ABI-31 trainer, paired vs _op31 -------------------
 for N in 384 512; do
 	LV=$((N / 4))
-	if [ "$(countn $N _Lop30)" -ge 5 ]; then log "STEP 6 ${LV} levels already complete (5/5)"; continue; fi
-	log "STEP 6 — CTRL-18: ${LV} levels (n${N}) x5 (s2-s6) on ${RECIPE_NAME}; off-chip tier allowed"
+	if [ "$(countn $N _Lop31)" -ge 5 ]; then log "STEP 6 ${LV} levels already complete (5/5)"; continue; fi
+	log "STEP 6 — CTRL-18: ${LV} levels (n${N}) x5 (s2-s6) on ${RECIPE_NAME}, ABI-31 trainer; off-chip tier allowed"
 	# --max-output-neurons must follow the rung, not the 512 cap: last-wins after RECIPE.
-	arm "_Lop30" "levels-${LV}-obs-pwm-abi30" "$SEEDS5" "--teacher-hover derived ${RECIPE} --max-output-neurons ${N}" \
+	arm "_Lop31" "levels-${LV}-obs-pwm-abi31" "$SEEDS5" "--teacher-hover derived ${RECIPE} --max-output-neurons ${N}" \
 		"--teacher-hover --motor-lag-s ${REQ}" "$ANCHOR" \
 		",\"levels_study\":true,\"levels\":${LV},\"control\":\"${ANCHOR} n256 same seed\",\"deploy_tier\":\"off-chip allowed\"${RJ}" "$N" 1
-	[ "$(countn $N _Lop30)" -ge 5 ] || { log "ABORT — ${LV} levels $(countn $N _Lop30)/5. A run needs a human. Box left idle."; exit 1; }
+	[ "$(countn $N _Lop31)" -ge 5 ] || { log "ABORT — ${LV} levels $(countn $N _Lop31)/5. A run needs a human. Box left idle."; exit 1; }
 	log "---------- CTRL-18 read: ${LV} levels − 64 levels (${ANCHOR}), same seeds, n=5 ----------"
-	PYTHONPATH=src/wnn $VP scripts/paired_power.py --arm "_Lop30" --base "SL_C_b24n${N}_cf21_brushless_L4C_g10_s{seed}" \
+	PYTHONPATH=src/wnn $VP scripts/paired_power.py --arm "_Lop31" --base "SL_C_b24n${N}_cf21_brushless_L4C_g10_s{seed}" \
 		$(for sd in $SEEDS5; do printf -- "--seed %s --control-override %s=${BASE}_s%s${ANCHOR} " "$sd" "$sd" "$sd"; done) 2>&1 | tee -a "$LOG"
 done
 
