@@ -306,7 +306,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 				tournament_size=cfg.tournament_size,
 				train_subset_idx=self._phase_train_idx,
 				eval_subset_idx=0,
-				seed=self._seed_offset + generation,
+				seed=self._offspring_seed,
 				logger=self._log,
 				generation=generation,
 				total_generations=cfg.generations,
@@ -336,6 +336,12 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		# Fallback to Python generation
 		return super()._generate_offspring(population, n_needed, threshold, generation)
 
+	def _on_reseed(self, generation):
+		"""Seed for this generation's Rust offspring generator (WNN-1). Was
+		`int(time.time()*1000) % 2**16 + generation` — wall-clock, so an IDS GA run
+		was not reproducible from its seed even straight-through."""
+		self._offspring_seed = self._derive_seed(generation, self.RNG_STREAM_OFFSPRING)
+
 	def _on_generation_start(self, generation, **ctx):
 		"""IDS-specific per-gen work (Baldwin generation tracking + Metal cleanup),
 		then the SHARED cooperative-cancel + adaptive crash-save
@@ -350,7 +356,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			self._cleanup_metal(generation, log_interval=10)
 
 		# Shared: adaptive crash-save (cadence-throttled) + cooperative shutdown.
-		self._checkpoint_and_maybe_stop(generation, ctx)
+		super()._on_generation_start(generation, **ctx)
 
 	def _build_checkpoint(self, generation, genomes, ctx, complete):
 		"""IDS GA loop state → PhaseCheckpoint. `genomes` are bare (already
@@ -389,7 +395,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 
 		# Checkpoint manager setup. Resume state (consumed by _run_optimization_loop):
 		# default to a fresh run; overwritten below if a checkpoint is loaded.
-		self.restore_resume_state(0, 0)
+		self.restore_resume_state(0)
 		self._checkpoint_mgr: Optional[PhasedCheckpointManager] = None
 		cfg_ck = self._checkpoint_config
 		if cfg_ck and cfg_ck.enabled and cfg_ck.checkpoint_dir:
@@ -404,7 +410,8 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			)
 			# Checkpoint resume
 			if self._checkpoint_mgr.has_checkpoint():
-				resume_state = _ids_resume_from_checkpoint(self._checkpoint_mgr.load())
+				_ckpt = self._checkpoint_mgr.load()
+				resume_state = _ids_resume_from_checkpoint(_ckpt)
 				_extra = resume_state.get('extra_state') or {}
 				_resume_pop = [g for g, _ in resume_state['population']]
 				# GUARD: a completion checkpoint is written with population=[] +
@@ -429,10 +436,9 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 					# +1, which would SKIP the in-progress gen and drop its patience tick.
 					# (threshold is a pure function of generation, so it follows start_gen;
 					#  best_fitness is recomputed from the restored population.)
-					self.restore_resume_state(
-						int(resume_state['current_iteration']),
-						int(_extra.get('patience_counter', 0)),
-					)
+					# Shared template entry point (WNN-1): generation + the FULL
+					# early-stopper / adaptive-scaler snapshot, same as the controller.
+					self.resume_state_from_checkpoint(_ckpt)
 
 		# Set up phase state for Rust acceleration
 		if self._cached_evaluator is not None:
@@ -444,7 +450,6 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 				self._ensure_rng()
 				self._phase_train_idx = self._cached_evaluator.random_train_idx(self._rng)
 			self._log.info(f"[{self.name}] Using train subset {self._phase_train_idx}")
-			self._seed_offset = int(time.time() * 1000) % (2**16)
 			cfg = self._config
 
 			# Ensure all seed genomes have connections

@@ -51,7 +51,12 @@ import os
 #   not comparable to one from ABI 13, so a stale wheel must fail loudly.
 #   Landed at the worker-idle swap in the SAME step as the wheel install (the live
 #   worker's flow_runner spawns import this file from the editable tree).
-EXPECTED_ABI = 13
+# 14 (26/09/2026, WNN-1): additive surface — counter_rng_draw_u64 / _uniform / _below
+#   (ram_core, same as the controller wheel). The shared GA template derives each
+#   generation's seeds from them; the IDS Rust offspring generator's WALL-CLOCK seed
+#   is gone, so IDS GA runs are reproducible from their seed from this ABI on.
+#   Must land at a worker-idle swap together with the template Python.
+EXPECTED_ABI = 14
 
 BUILD_HINT = (
 	"Rebuild the accelerator: cd src/wnn/ram/strategies/accelerator && "

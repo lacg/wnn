@@ -238,6 +238,30 @@ def _wire_cancel(strat, args, stage_num: int, stage_name: str) -> None:
 	strat._checkpoint_mgr = PhasedCheckpointManager(
 		Path(_stage_emergency_path(args, stage_num, stage_name)),
 		ControllerGenomeCodec(), SaveCadence(budget, max_int), async_save=False)
+	_resume_ga_state_if_targeted(strat, args, stage_num)
+
+
+def _resume_ga_state_if_targeted(strat, args, stage_num: int) -> None:
+	"""--resume-from-emergency with --resume-mode same CONTINUES the dumped stage.
+
+	The population still arrives through initial_population (main → _run_one);
+	the GA control state — generation, patience tracker, adaptive escalation — is
+	restored here through the SHARED template entry point the IDS path uses too
+	(OptimizationTemplate.resume_state_from_checkpoint, WNN-1). Until 26/09/2026 the
+	controller restored none of it: a resumed stage restarted at gen 0 with its
+	full generation budget, patience 0 and base pop/mutation. Reads the dump's
+	header only (skip_population), so the population is not decoded twice. Other
+	stages, and --resume-mode next, start fresh."""
+	path = getattr(args, "resume_from_emergency", None)
+	if not path or getattr(args, "resume_mode", "same") != "same":
+		return
+	from wnn.ram.strategies.phased import load_checkpoint, ControllerGenomeCodec
+	ckpt = load_checkpoint(Path(path), ControllerGenomeCodec(), skip_population=True)
+	if ckpt is None or str(ckpt.phase_key) != str(stage_num):
+		return
+	strat.resume_state_from_checkpoint(ckpt)
+	print(f"[resume] Stage {stage_num} ({strat.name}): continuing AT generation "
+	      f"{strat._resume_start_gen} with the dumped GA state", flush=True)
 
 from wnn.control.provenance import collect_provenance
 from wnn.control.evaluator import (

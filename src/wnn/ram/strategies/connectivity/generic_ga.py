@@ -190,15 +190,32 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			total_generations=cfg.generations,
 		)
 
+	def restore_resume_state(self, start_gen: int, ga_state: Optional[dict] = None) -> None:
+		"""Template resume contract + the escalated population/mutation, applied to
+		the config NOW — before optimize() seeds the population. seed_population()
+		keeps only the top-k when handed more genomes than population_size, so a
+		stage resumed after an escalation (e.g. 50 -> 57) would otherwise drop the
+		extra genomes and diverge from the uninterrupted run."""
+		super().restore_resume_state(start_gen, ga_state)
+		scaler = self._resume_ga_state.get("scaler") if self._resume_start_gen > 0 else None
+		if scaler:
+			self._config.population_size = int(scaler["population"])
+			self._config.mutation_rate = float(scaler["mutation_rate"])
+
 	def _on_generation_start(self, generation: int, **ctx) -> None:
-		"""Hook called at start of each generation.
+		"""Hook called at start of each generation: the SHARED adaptive crash-save
+		+ cooperative shutdown (_checkpoint_and_maybe_stop). Raises StopIteration
+		to stop the loop gracefully.
 
-		Override for Metal cleanup, checkpoint save, shutdown check, etc.
-		Raise StopIteration to stop the optimization loop gracefully.
+		Subclasses that add per-generation work (IDS Metal cleanup, Baldwin
+		generation tracking) do it and then call super() — the checkpoint call
+		lives HERE, once, so no substrate can forget it (WNN-1; it used to be
+		re-invoked by hand in each substrate's override).
 
-		ctx keys: population, best_genome, best_fitness, best_accuracy, threshold, early_stopper
+		ctx keys: population, best_genome, best_fitness, best_accuracy, threshold,
+		early_stopper, adaptive_scaler, total_generations
 		"""
-		pass
+		self._checkpoint_and_maybe_stop(generation, ctx)
 
 	# ---- shared cooperative-cancel + adaptive crash-save --------------------
 	# The ONE implementation of the per-generation checkpoint/shutdown logic both
@@ -234,16 +251,41 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			return
 		genomes = [t[0] for t in ctx.get("population", [])]
 		if generation > 0 and mgr is not None:
-			ckpt = self._build_checkpoint(generation, genomes, ctx, complete=False)
+			ckpt = self._stamped_checkpoint(generation, genomes, ctx)
 			if ckpt is not None:
 				mgr.maybe_save(generation, ckpt)
 		if shutdown and shutdown():
 			if mgr is not None:
-				ckpt = self._build_checkpoint(generation, genomes, ctx, complete=False)
+				ckpt = self._stamped_checkpoint(generation, genomes, ctx)
 				if ckpt is not None:
 					mgr.save(ckpt)
 			self._log_shutdown(generation)
 			raise StopIteration("Shutdown requested")
+
+	def _stamped_checkpoint(self, generation: int, genomes: list, ctx: dict):
+		"""The substrate's checkpoint + the SHARED GA control state (WNN-1).
+
+		_build_checkpoint is substrate-specific (IDS vs controller payload); the
+		GA control state is not, so the template stamps it here for both:
+		iterations_run = the generation to resume AT, and extra["ga_state"] =
+		the full early-stopper + adaptive-scaler snapshots. No RNG state is
+		needed — generators are rebuilt per generation from counter_rng."""
+		ckpt = self._build_checkpoint(generation, genomes, ctx, complete=False)
+		if ckpt is None:
+			return None
+		stopper, scaler = ctx.get("early_stopper"), ctx.get("adaptive_scaler")
+		ga_state = {}
+		if stopper is not None:
+			ga_state["stopper"] = stopper.state()
+			ckpt.patience = int(stopper._patience_counter)
+		if scaler is not None:
+			ga_state["scaler"] = scaler.state()
+		if ctx.get("incumbent") is not None:
+			ga_state["incumbent"] = {k: (None if v is None else float(v))
+			                         for k, v in ctx["incumbent"].items()}
+		ckpt.iterations_run = int(generation)
+		ckpt.extra["ga_state"] = ga_state
+		return ckpt
 
 	def _log_shutdown(self, generation: int) -> None:
 		"""Log the cooperative-stop line, tolerating either a logger or a plain
@@ -365,23 +407,35 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		best_f1_global = max(init_f1s) if init_f1s else None
 		best_fpr_global = min(init_fprs) if init_fprs else None
 
-		# Resume support: ArchitectureGAStrategy.optimize() sets _resume_start_gen
-		# (next generation to run) + _resume_patience when loading a checkpoint, so
-		# the loop CONTINUES instead of restarting at gen 0 with patience reset.
+		# Resume: the INCUMBENT is best-so-far across every earlier generation, not
+		# the best of the restored pool — restore it so the early-stopper and the
+		# (new)/(=) line compare against the same value the uninterrupted run held.
+		_inc = self._resume_ga_state.get("incumbent") if self._resume_start_gen > 0 else None
+		if _inc and self._resume_best_genome is not None:
+			best = self.clone_genome(self._resume_best_genome)
+			best_fitness, best_accuracy_val = _inc["fitness"], _inc["acc"]
+			best_err_deg, best_steady_deg, best_alt_m = _inc["err"], _inc["steady"], _inc["alt"]
+			best_f1_val, best_fpr_val = _inc["f1"], _inc["fpr"]
+			best_f1_global, best_fpr_global = _inc["f1_global"], _inc["fpr_global"]
+
+		# Resume support (WNN-1): every substrate calls
+		# resume_state_from_checkpoint(), which sets _resume_start_gen (the gen to
+		# run next) and _resume_ga_state (the tracker + scaler snapshot the shared
+		# checkpoint path stamped), so the loop CONTINUES the stage instead of
+		# restarting it at gen 0 with patience and escalation reset.
 		resume_start_gen = self._resume_start_gen  # formal field on OptimizationTemplate
+		resume_ga_state = self._resume_ga_state if resume_start_gen > 0 else {}
 
 		history = [(resume_start_gen, best_fitness)]
 
 		# Initialize early stopping tracker (uses base infrastructure)
 		early_stopper = self._setup_early_stopping(best_fitness)
-		if resume_start_gen > 0:
-			# Carry the checkpointed patience; baseline against the restored
-			# population's best so further improvement is measured correctly.
-			early_stopper.restore(self._resume_patience)
-			early_stopper._initial_fitness = best_fitness
-			self._log.info(
-				f"[{self.name}] Resume: continuing at generation {resume_start_gen} "
-				f"with patience {early_stopper._patience_counter}/{cfg.patience}")
+		if "stopper" in resume_ga_state:
+			early_stopper.restore_state(resume_ga_state["stopper"])
+			if early_stopper._initial_fitness is None:
+				# Counter-only (pre-WNN-1) checkpoint: baseline against the restored
+				# population's best so further improvement is measured correctly.
+				early_stopper._initial_fitness = best_fitness
 
 		# Initialize adaptive scaler for dynamic parameter adjustment
 		adaptive_scaler = AdaptiveScaler(
@@ -389,6 +443,16 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			base_mutation=cfg.mutation_rate,
 			name=self.name,
 		)
+		if "scaler" in resume_ga_state:
+			# cfg already carries the escalated values (restore_resume_state); the
+			# snapshot also restores the scaler's BASE, so later transitions scale
+			# from the true base, not from the escalated config it was built from.
+			adaptive_scaler.restore_state(resume_ga_state["scaler"])
+		if resume_start_gen > 0:
+			self._log.info(
+				f"[{self.name}] Resume: continuing at generation {resume_start_gen} "
+				f"with patience {early_stopper._patience_counter}/{cfg.patience}, "
+				f"pop={cfg.population_size}, mut={cfg.mutation_rate:.3f}")
 
 		# Track initial diversity (spread of the diagnostic scalar: CE on IDS/LM,
 		# -reward on the controller — _diag_label names which one this run holds)
@@ -434,6 +498,10 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		cumulative_offspring_secs = 0.0
 		for generation in range(resume_start_gen, cfg.generations):
 			gen_start_time = time.time()
+			# Every generator this generation uses is rebuilt from counter-derived
+			# seeds (WNN-1): the gen's draws are a pure function of (seed, gen,
+			# stage, stream), so a resume at this gen replays them exactly.
+			self._reseed_generation(generation)
 			# Progressive threshold: gets stricter as generations progress
 			current_threshold = self._compute_threshold(generation / cfg.threshold_reference)
 			# Only log if formatted values differ (avoid noise from tiny internal differences)
@@ -451,6 +519,11 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 					best_accuracy=best_accuracy_val,
 					threshold=current_threshold,
 					early_stopper=early_stopper,
+					adaptive_scaler=adaptive_scaler,
+					incumbent=dict(
+						fitness=best_fitness, acc=best_accuracy_val, err=best_err_deg,
+						steady=best_steady_deg, alt=best_alt_m, f1=best_f1_val, fpr=best_fpr_val,
+						f1_global=best_f1_global, fpr_global=best_fpr_global),
 					total_generations=cfg.generations,
 				)
 			except StopIteration:

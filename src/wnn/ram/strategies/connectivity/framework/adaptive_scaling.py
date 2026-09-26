@@ -122,6 +122,27 @@ class AdaptiveScaler:
 		"""Original base mutation rate."""
 		return self._base_mutation
 
+	def state(self) -> dict:
+		"""Checkpointable snapshot of the escalation (level + the pop/mutation it
+		set), so a resumed stage keeps e.g. pop 57 / mut 0.150 instead of falling
+		back to the base values (WNN-1)."""
+		return {"level": int(self._level), "prev_level": int(self._prev_level),
+		        "population": int(self._population), "mutation_rate": float(self._mutation_rate),
+		        "base_population": int(self._base_population),
+		        "base_mutation": float(self._base_mutation)}
+
+	def restore_state(self, snap: dict) -> None:
+		"""Restore a state() snapshot, BASE values included: on resume the GA
+		config already carries the escalated pop/mutation (it has to, so population
+		seeding keeps every restored genome), and a scaler built from that config
+		would otherwise treat the escalated values as its base."""
+		self._base_population = int(snap.get("base_population", self._base_population))
+		self._base_mutation = float(snap.get("base_mutation", self._base_mutation))
+		self._level = AdaptiveLevel(int(snap["level"]))
+		self._prev_level = AdaptiveLevel(int(snap.get("prev_level", snap["level"])))
+		self._population = int(snap["population"])
+		self._mutation_rate = float(snap["mutation_rate"])
+
 	def update(self, new_level: AdaptiveLevel) -> AdaptiveLevel:
 		"""
 		Update to new level and recalculate scaled parameters.

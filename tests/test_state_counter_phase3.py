@@ -213,7 +213,7 @@ def test_3b_type2_resolve():
 	g, a, tg, p, W = make_accumulator_episodes()
 
 	(before, after, mode, bit, levels_used, score, up, n_planted) = \
-		c.split_train(g, a, tg, p, 0.1, 0.999, 0.9)
+		c.split_train(g, a, tg, p, [], 0.1, 0.999, 0.9)
 	print(f"\n  conflicts: before={before}  after={after}  mode={mode} (2=Type-2 counter)")
 	print(f"  accumulator: bit={bit} (err={ERR_IDX})  levels={levels_used}  |corr|={score:.3f}  up={up}")
 	print(f"  state neurons planted (counter levels): {n_planted}")
@@ -448,7 +448,7 @@ def test_3d_trainer_bidir():
 	g, a, tg, p = make_bidir_episodes()
 
 	(before, after, mode, bit, levels_used, score, up, n_planted) = \
-		c.split_train(g, a, tg, p, 0.1, 0.999, 0.9)
+		c.split_train(g, a, tg, p, [], 0.1, 0.999, 0.9)
 	print(f"\n  conflicts: before={before}  after={after}  mode={mode} (3=bidirectional)")
 	print(f"  bidir accumulator: up_bit={bit} (ERR_UP={ERR_UP})  levels={levels_used}  |corr|={score:.3f}")
 	print(f"  counter neurons planted: {n_planted}")

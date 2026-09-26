@@ -215,6 +215,22 @@ class ControllerArchGAStrategy(ControllerCancelMixin, GenericGAStrategy):
 	def name(self) -> str:
 		return f"ControllerGA-{self._dimension.name.title()}"
 
+	# ---- shared-template RNG hooks (WNN-1) -----------------------------------
+
+	def _counter_rng(self):
+		"""The controller's own wheel. ram_controller and ram_accelerator export the
+		same ram_core counter_rng, so the derived seeds are identical to what the
+		template default would give — controller code just never reaches into the
+		worker wheel for them."""
+		from wnn.control import _accel
+		return _accel.require_accel()
+
+	def _on_reseed(self, generation: int) -> None:
+		"""Rebuild the numpy generator that feeds every operator's per-call seed
+		(the Rust arch_ops take ONE numpy-drawn seed each), so a generation's
+		mutations and crossovers are a pure function of (seed, gen, stage)."""
+		self._np_rng = np.random.default_rng(self._derive_seed(generation, self.RNG_STREAM_NUMPY))
+
 	# ---- the four genome operations the loop calls as black boxes -----------
 
 	def clone_genome(self, genome: RecurrentArchGenome) -> RecurrentArchGenome:

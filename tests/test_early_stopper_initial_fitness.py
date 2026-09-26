@@ -92,28 +92,28 @@ def test_check_iterations_do_not_touch_initial():
 
 
 def test_restore_only_touches_patience():
-	"""restore() is the explicit resume counterpart for patience — it must not
-	disturb the starting fitness (callers used to poke _patience_counter
-	directly, which is what it replaced)."""
+	"""A counter-only snapshot (what a pre-WNN-1 checkpoint carries) restores the
+	patience counter and nothing else — it must not disturb the starting fitness.
+	(restore(counter) became restore_state(snapshot) on 26/09/2026, WNN-1.)"""
 	t = _mk(patience=5)
 	t.reset(initial_fitness=7.25)
-	t.restore(patience_counter=3)
+	t.restore_state({"patience_counter": 3})
 	assert t._patience_counter == 3, "restore must set the patience counter"
 	assert t._initial_fitness == 7.25, "restore must not disturb _initial_fitness"
-	t.restore(patience_counter=-4)
+	t.restore_state({"patience_counter": -4})
 	assert t._patience_counter == 0, "restore must clamp negatives to 0"
 	assert t._initial_fitness == 7.25, "clamped restore must still leave initial alone"
 	print("✓ restore_only_touches_patience")
 
 
 def test_resume_path_can_rebaseline():
-	"""The resume path (generic_ga.py:339) deliberately reassigns
+	"""For a counter-only (pre-WNN-1) checkpoint the resume path reassigns
 	_initial_fitness to the restored population's best, so further improvement is
-	measured against where the resumed run actually starts — not the original
-	cold-start fitness. That write must stick."""
+	measured against where the resumed run actually starts. That write must stick.
+	(A full WNN-1 snapshot restores the true _initial_fitness instead.)"""
 	t = _mk()
 	t.reset(initial_fitness=12.5)
-	t.restore(patience_counter=2)
+	t.restore_state({"patience_counter": 2})
 	t._initial_fitness = 9.0                # what the resume branch does
 	assert _read_as_consumer(t) == 9.0, "resume re-baseline must be visible to consumers"
 	t.reset_trend([3.0, 5.0])

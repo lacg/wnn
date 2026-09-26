@@ -312,12 +312,21 @@ use pyapi::*;
 /// defaults. Every OI gate now asks `CellMode::uses_oi_counters` (QUAD_WEIGHTED /
 /// QUAD_BINARY / QSR). QUAD_WEIGHTED results are bit-identical; a QSR result
 /// from an ABI-12 wheel is not comparable to one from this wheel.
-pub const ABI_VERSION: u32 = 13;
+/// 14 (26/09/2026, WNN-1): exports counter_rng_draw_u64 / _uniform / _below (the
+/// same ram_core functions the controller wheel exports). The shared GA template
+/// now derives every generation's seeds from them, replacing the IDS offspring
+/// generator's WALL-CLOCK seed — IDS GA runs become reproducible from their seed.
+/// Offspring draws change, so an IDS GA run from this wheel is not bit-comparable
+/// to one from ABI 13 (none of those were seed-reproducible anyway).
+pub const ABI_VERSION: u32 = 14;
 
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()>
 {
 	m.add("ABI_VERSION", ABI_VERSION)?;
+	m.add_function(wrap_pyfunction!(counter_rng_draw_u64, m)?)?;
+	m.add_function(wrap_pyfunction!(counter_rng_uniform, m)?)?;
+	m.add_function(wrap_pyfunction!(counter_rng_below, m)?)?;
 	m.add_function(wrap_pyfunction!(metal_available, m)?)?;
 	m.add_function(wrap_pyfunction!(reset_metal_evaluators, m)?)?;
 	m.add_function(wrap_pyfunction!(cpu_cores, m)?)?;

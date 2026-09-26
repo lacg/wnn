@@ -212,7 +212,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				neurons_mutation_rate=neurons_mutation_rate,
 				train_subset_idx=self._phase_train_idx,
 				eval_subset_idx=0,
-				seed=self._seed_offset + iteration * 1000,
+				seed=self._derive_seed(iteration, self.RNG_STREAM_OFFSPRING),
 				logger=self._log,
 				generation=iteration,
 				total_generations=cfg.iterations,
@@ -329,7 +329,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				neurons_mutation_rate=neurons_mutation_rate,
 				train_subset_idx=self._phase_train_idx,
 				eval_subset_idx=0,
-				seed=self._seed_offset + iteration * 1000,
+				seed=self._derive_seed(iteration, self.RNG_STREAM_OFFSPRING),
 				return_best_n=True,
 				mutable_clusters=arch_cfg.mutable_clusters,
 				phase_type=int(self._phase_type),
@@ -447,7 +447,8 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				self._ensure_rng()
 				self._phase_train_idx = self._cached_evaluator.random_train_idx(self._rng)
 			self._log.info(f"[{self.name}] Using train subset {self._phase_train_idx}")
-			self._seed_offset = int(time.time() * 1000) % (2**16)
+			# Offspring seeds derive from counter_rng per iteration (WNN-1); the
+			# wall-clock _seed_offset made IDS TS runs unreproducible from their seed.
 
 			# Ensure initial genome has connections
 			if not initial_genome.has_connections():
