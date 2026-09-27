@@ -1,0 +1,10 @@
+{
+ "story": "Tilt coherence arm _tc31 — DAgger training tilt curriculum 5°->5° (= scorer --tilt 5) vs the implicit 8°->30° default",
+ "registered": "2026-09-27 (EDT), before any _tc31 run exists and before the ABI-31 landing",
+ "registered_by": "Luiz 27/09: 'maybe make them coherent' + arm approved, slot after the _op31 re-fly and before LEVELS",
+ "arm": "_tc31 = _op31 recipe + --rg-easy-tilt-deg 5 --rg-full-tilt-deg 5, seeds s31337002-05, paired vs _op31 same seeds (ABI-31 trainer both sides)",
+ "rule": "ADOPT the coherent curriculum (5/5) iff (a) the promotion-gate bar holds vs _op31 on the HEADLINE held-out rows (>=3/4 of stable up, err down, steady down, alt down on the n=4 mean paired delta, AND err delta <= +0.10 deg) AND (b) the stress read does not show a robustness loss: re-scoring every _tc31 and _op31 winner (scripts/rescore_winners.py, 'train' thresholds, same report seeds) at --tilt 15 and --tilt 30, _tc31's mean stable is not lower than _op31's by more than 2.5 pp and its mean err is not higher by more than 0.4 deg (pool noise), at EACH stress tilt. Otherwise the 8/30 curriculum stays. A tie goes to the incumbent (8/30).",
+ "why_stress": "The only argument for 8->30 is robustness beyond the scored envelope; (b) measures it instead of assuming it.",
+ "consequence": "Decision written to experiments/tilt_decision (one word: coherent | wide). queue_2009c then runs LEVELS on the chosen curriculum: coherent -> anchor _tc31 (+ s31337006), levels suffix _Ltc31; wide -> anchor _op31, levels suffix _Lop31.",
+ "caveats": ["n=4: a 3-of-4 column rule fires by chance ~31%; say 'the rule fired'.", "Stress tilts are outside BOTH arms' scored envelope; report them as a robustness read, not a headline."]
+}

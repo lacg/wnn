@@ -15,7 +15,9 @@
 #   STEP 5b CTRL-21 CRN noise probe in the controller gap (~47 min, score-only; IDS never paused for it).
 #   STEP 5c PARK until the ABI-31 stage-2 trainer fixes land (option B, Luiz 26/09): experiments/ABI31_LANDED.
 #   STEP 6a anchor re-fly `_op31` x5 (s2-s6) on the new trainer; s2-s5 paired vs `_op30` = trainer read.
-#   STEP 6  LEVELS n=5 (CTRL-18): 96 (n384) and 128 (n512) `_Lop31` x5, each paired vs `_op31` n256 same seed.
+#   STEP 6b tilt-coherence arm `_tc31` x4 (5°->5° training curriculum) paired vs `_op31` (rule: experiments/ctrl_tilt_rule.json).
+#   STEP 6c PARK for the tilt decision (experiments/tilt_decision = coherent|wide, after a 15°/30° stress re-score).
+#   STEP 6  LEVELS n=5 (CTRL-18) on the chosen curriculum: `_Ltc31` vs `_tc31` or `_Lop31` vs `_op31`, n384/n512 x5.
 #   STEP 7  STOP. Next, in this order: CTRL-17 audit → CTRL-8 stage 2 (horizontal) → multi-axis round 1.
 set -u
 cd "$(dirname "$0")/.." || exit 1
@@ -42,7 +44,7 @@ arm() {  # arm <suffix> <label> <seeds> <extra_args> <require_flags> <ctrl_suffi
 }
 RJ=",\"recipe\":\"${RECIPE_NAME}\",\"anchor\":\"${ANCHOR}\",\"obs_pwm\":true,\"adopted\":\"CTRL-15 gate bar 26/09\""
 
-log "########## ARMED (2009c) — wait _full30 x4 -> CTRL-16 -> CTRL-21 probe -> PARK for ABI-31 landing -> _op31 x5 -> LEVELS _Lop31 -> STOP ##########"
+log "########## ARMED (2009c) — wait _full30 x4 -> CTRL-16 -> CTRL-21 probe -> PARK for ABI-31 landing -> _op31 x5 -> _tc31 x4 -> PARK tilt decision -> LEVELS -> STOP ##########"
 
 # ---- STEP 5: wait for the _full30 chain (launched by 2009b) and apply the CTRL-16 rule ------------
 beat=0
@@ -104,18 +106,51 @@ if have 31337006 "$ANCHOR"; then log "STEP 6a s6 already banked"; else
 	have 31337006 "$ANCHOR" || { log "ABORT — ${ANCHOR} s31337006 missing. A run needs a human. Box left idle."; exit 1; }
 fi
 
-# ---- STEP 6: LEVELS n=5 on the obs-pwm recipe, ABI-31 trainer, paired vs _op31 -------------------
+# ---- STEP 6b: tilt-coherence arm _tc31 x4 (Luiz 27/09), paired vs _op31 ---------------------------
+# DAgger training curriculum 5°->5° (= scorer --tilt 5) instead of the implicit 8°->30°. Rule
+# pre-registered in experiments/ctrl_tilt_rule.json (gate bar vs _op31 + a 15°/30° stress re-score).
+TILT_FLAGS="--rg-easy-tilt-deg 5 --rg-full-tilt-deg 5"
+TILT_REQ="--rg-easy-tilt-deg --rg-full-tilt-deg"
+if [ "$(count _tc31)" -ge 4 ]; then log "STEP 6b already banked (_tc31 4/4)"; else
+	log "STEP 6b — tilt-coherence arm: _tc31 s2-s5 (${TILT_FLAGS}) paired vs _op31"
+	arm "_tc31" "tilt-coherent-5-5-abi31" "$SEEDS4" "${RECIPE} ${TILT_FLAGS}" "${REQ} ${TILT_REQ}" "_op31" \
+		",\"tilt_curriculum\":\"5->5 (coherent with scorer)\",\"control_curriculum\":\"8->30\",\"rule\":\"experiments/ctrl_tilt_rule.json\"${RJ}"
+	[ "$(count _tc31)" -ge 4 ] || { log "ABORT — _tc31 $(count _tc31)/4. A run needs a human. Box left idle."; exit 1; }
+fi
+
+# ---- STEP 6c: PARK for the tilt decision (stress re-score at 15°/30° + rule, applied by hand) ------
+DECISION="experiments/tilt_decision"
+beat=0
+while [ ! -f "$DECISION" ]; do
+	[ $((beat % 30)) = 0 ] && log "PARKED — waiting for the tilt decision (apply experiments/ctrl_tilt_rule.json incl. the 15°/30° stress re-score; write 'coherent' or 'wide' to ${DECISION})"
+	sleep 60; beat=$((beat + 1))
+done
+CHOICE=$(tr -d '[:space:]' < "$DECISION")
+case "$CHOICE" in
+	coherent) ANCHOR="_tc31"; LSUF="_Ltc31"; LEV_TILT="$TILT_FLAGS"; LEV_REQ="$TILT_REQ" ;;
+	wide)     ANCHOR="_op31"; LSUF="_Lop31"; LEV_TILT=""; LEV_REQ="" ;;
+	*) log "ABORT — ${DECISION} says '${CHOICE}', expected coherent|wide. Box left idle."; exit 1 ;;
+esac
+log "STEP 6c — tilt decision: ${CHOICE} -> LEVELS anchor ${ANCHOR}, suffix ${LSUF}"
+if [ "$CHOICE" = "coherent" ] && ! have 31337006 _tc31; then
+	log "STEP 6c — _tc31 s31337006 (5th seed of the 64-level rung on the coherent curriculum)"
+	arm "_tc31" "tilt-coherent-5-5-abi31" "31337006" "${RECIPE} ${TILT_FLAGS}" "${REQ} ${TILT_REQ}" "_op31" \
+		",\"purpose\":\"5th seed of the 64-level rung (CTRL-18)\",\"tilt_curriculum\":\"5->5\"${RJ}" 256 1
+	have 31337006 _tc31 || { log "ABORT — _tc31 s31337006 missing. A run needs a human. Box left idle."; exit 1; }
+fi
+
+# ---- STEP 6: LEVELS n=5 on the chosen recipe, ABI-31 trainer, paired vs ANCHOR --------------------
 for N in 384 512; do
 	LV=$((N / 4))
-	if [ "$(countn $N _Lop31)" -ge 5 ]; then log "STEP 6 ${LV} levels already complete (5/5)"; continue; fi
-	log "STEP 6 — CTRL-18: ${LV} levels (n${N}) x5 (s2-s6) on ${RECIPE_NAME}, ABI-31 trainer; off-chip tier allowed"
+	if [ "$(countn $N $LSUF)" -ge 5 ]; then log "STEP 6 ${LV} levels already complete (5/5)"; continue; fi
+	log "STEP 6 — CTRL-18: ${LV} levels (n${N}) x5 (s2-s6) on ${RECIPE_NAME} (${CHOICE} tilt), ABI-31 trainer; off-chip tier allowed"
 	# --max-output-neurons must follow the rung, not the 512 cap: last-wins after RECIPE.
-	arm "_Lop31" "levels-${LV}-obs-pwm-abi31" "$SEEDS5" "--teacher-hover derived ${RECIPE} --max-output-neurons ${N}" \
-		"--teacher-hover --motor-lag-s ${REQ}" "$ANCHOR" \
-		",\"levels_study\":true,\"levels\":${LV},\"control\":\"${ANCHOR} n256 same seed\",\"deploy_tier\":\"off-chip allowed\"${RJ}" "$N" 1
-	[ "$(countn $N _Lop31)" -ge 5 ] || { log "ABORT — ${LV} levels $(countn $N _Lop31)/5. A run needs a human. Box left idle."; exit 1; }
+	arm "$LSUF" "levels-${LV}-obs-pwm-${CHOICE}-abi31" "$SEEDS5" "--teacher-hover derived ${RECIPE} ${LEV_TILT} --max-output-neurons ${N}" \
+		"--teacher-hover --motor-lag-s ${REQ} ${LEV_REQ}" "$ANCHOR" \
+		",\"levels_study\":true,\"levels\":${LV},\"control\":\"${ANCHOR} n256 same seed\",\"tilt\":\"${CHOICE}\",\"deploy_tier\":\"off-chip allowed\"${RJ}" "$N" 1
+	[ "$(countn $N $LSUF)" -ge 5 ] || { log "ABORT — ${LV} levels $(countn $N $LSUF)/5. A run needs a human. Box left idle."; exit 1; }
 	log "---------- CTRL-18 read: ${LV} levels − 64 levels (${ANCHOR}), same seeds, n=5 ----------"
-	PYTHONPATH=src/wnn $VP scripts/paired_power.py --arm "_Lop31" --base "SL_C_b24n${N}_cf21_brushless_L4C_g10_s{seed}" \
+	PYTHONPATH=src/wnn $VP scripts/paired_power.py --arm "$LSUF" --base "SL_C_b24n${N}_cf21_brushless_L4C_g10_s{seed}" \
 		$(for sd in $SEEDS5; do printf -- "--seed %s --control-override %s=${BASE}_s%s${ANCHOR} " "$sd" "$sd" "$sd"; done) 2>&1 | tee -a "$LOG"
 done
 
