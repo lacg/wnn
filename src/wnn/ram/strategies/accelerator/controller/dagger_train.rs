@@ -1642,9 +1642,14 @@ pub fn rollout_and_label_rs(
 		// so trajectories follow the expert's state distribution exactly. The
 		// student forward still runs above (its pwm is recorded for C2/metrics).
 		// Exploration: perturb the applied PWM (C2 only).
+		// CTRL-17 G13 (27/09/2026): the sim flies the teacher's RAW pwm. Under D0
+		// (derived hover, translation, delta student) expert_pwm_f32 is the LABEL,
+		// re-based on the teacher's hover (≈ neutral), and flying it dropped cf21
+		// ~1.2 m in 2 s. With no re-base the two are the same f32 cast, so every
+		// other path is bit-identical.
 		let mut applied = if cfg.expert_drives
 		{
-			expert_pwm_f32
+			teacher_label_f32(expert_pwm, None)
 		}
 		else
 		{

@@ -60,10 +60,8 @@ fn seed_with_offset(cfg: &RewardGatedConfigPacked) -> (u64, TrajectoryRs, Attitu
 /// pitch torque opposes x0 (+pitch accelerates +x), the recorded horizontal
 /// observation is live, x ends well inside x0, and altitude holds.
 ///
-/// teacher_hover_mode = 0 (no D0 re-base) ON PURPOSE: under D0 + a delta student,
-/// expert_drives applies the RE-BASED LABEL (≈ neutral 0.5) to the sim instead of
-/// the teacher's pwm (hover 0.694 on cf21), and the vehicle falls ~1.2 m in 2 s —
-/// a pre-existing defect reported as CTRL-17 G13, not fixed here.
+/// teacher_hover_mode = 0 (no D0 re-base): the D0 variant of expert_drives is
+/// pinned separately by g13_expert_drives_flies_raw_teacher_pwm_under_d0.
 #[test]
 fn g11_trainer_lateral_teacher_flies_home()
 {
@@ -85,6 +83,30 @@ fn g11_trainer_lateral_teacher_flies_home()
 		"the lateral teacher must fly toward the origin: x0 {x0} -> x_end {x_end}"
 	);
 	assert!(sim.altitude_rs().abs() < 0.15, "the cascade must hold altitude ({})", sim.altitude_rs());
+}
+
+/// G13: expert_drives + D0 derived hover + translation + a delta student. The
+/// LABEL is re-based on the teacher's hover (≈ neutral 0.5), but the SIM must fly
+/// the teacher's raw pwm (hover 0.694 on cf21). Before the fix the sim flew the
+/// label and the vehicle fell ~1.2 m in 2 s.
+#[test]
+fn g13_expert_drives_flies_raw_teacher_pwm_under_d0()
+{
+	let mut cfg = quiet_stage2_cfg(2000);
+	cfg.expert_drives = true;
+	cfg.teacher_hover_mode = crate::dagger_train::TEACHER_HOVER_DERIVED;
+	let (_seed, t, sim) = seed_with_offset(&cfg);
+	assert_eq!(t.steps, 2000, "the teacher-driven episode must not diverge");
+	assert!(
+		sim.altitude_rs().abs() < 0.15,
+		"expert_drives must fly the teacher's pwm, not the re-based label (alt {})",
+		sim.altitude_rs()
+	);
+	// The label stays re-based (≈ neutral at hover) — only the APPLIED action changes.
+	let mean_label: f32 = t.pid_pwms[1999].iter().sum::<f32>() / 4.0;
+	let mean_applied: f32 = t.student_pwms[1999].iter().sum::<f32>() / 4.0;
+	assert!((mean_label - 0.5).abs() < 0.1, "label must stay re-based ({mean_label})");
+	assert!((mean_applied - 0.694).abs() < 0.1, "applied must be the teacher's hover ({mean_applied})");
 }
 
 /// G4: the rollout's gate score carries λ_alt·alt² and λ_pos·radial². The labels

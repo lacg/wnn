@@ -135,7 +135,51 @@ def test_env_override_is_a_fixed_width(monkeypatch):
 
 # ---- parity: any boundaries -> identical seeds and metrics -------------------
 
-def _recording_evaluator(bounds_fn, crn, seen):
+# ---- FFD packing (27/09/2026) ------------------------------------------------
+
+def _ffd(est, cap):
+	"""Run the evaluator's FFD packer on forced estimates and a forced cap."""
+	ev = _sizer()
+	ev.EVAL_BUDGET_BYTES = cap * ev.EVAL_BYTES_PER_CELL
+	ev._genome_cell_estimates = lambda gs: list(est)
+	return ev._eval_batch_ffd([_Genome(i) for i in range(len(est))])
+
+
+def test_ffd_packs_largest_first_into_first_fit():
+	assert _ffd([3, 6, 2, 5, 1, 4], cap=8) == [[1, 2], [0, 3], [4, 5]]
+
+
+def test_ffd_partition_fits_budget_and_covers_everyone():
+	est = [5, 1, 7, 1, 1, 9, 2, 1, 3, 1, 6, 1, 1, 8, 1, 4, 1, 1]
+	groups = _ffd(est, cap=10)
+	assert sorted(i for g in groups for i in g) == list(range(len(est)))
+	assert all(len(g) == 1 or sum(est[i] for i in g) <= 10 for g in groups)
+	assert all(g == sorted(g) for g in groups)
+
+
+def test_ffd_removes_the_contiguous_singletons():
+	"""The live BITS shape: contiguous packing strands small genomes between
+	big ones; FFD tucks them into the big genomes' spare room."""
+	est = [2, 1, 4, 1, 1, 1, 1, 1, 1, 6, 7, 4, 1, 9, 1, 6, 1, 1]
+	est = [e * 1_000_000 for e in est]
+	ev = _sizer()
+	gs = [_Genome(i, c) for i, c in enumerate(est)]
+	ev.EVAL_BUDGET_BYTES = 10_000_000 * ev.EVAL_BYTES_PER_CELL
+	contiguous = ev._eval_batch_bounds(gs)
+	ffd = ev._eval_batch_ffd(gs)
+	assert len(ffd) < len(contiguous)
+	assert sum(len(g) == 1 for g in ffd) < sum(e - s == 1 for s, e in contiguous)
+
+
+def test_groups_default_is_ffd_and_override_stays_contiguous(monkeypatch):
+	gs = [_Genome(i, c) for i, c in enumerate([9_000_000, 100_000, 9_000_000, 100_000])]
+	ev = _sizer()
+	assert ev._eval_batch_groups(gs) == ev._eval_batch_ffd(gs)
+	monkeypatch.setenv("WNN_CTRL_EVAL_BATCH", "3")
+	assert ev._eval_batch_groups(gs) == [[0, 1, 2], [3]]
+
+
+def _recording_evaluator(groups_fn, crn, seen):
 	"""Evaluator whose training records (genome, seed) and whose score is a pure
 	function of that record — so a changed seed changes the metric."""
 	ev = ControllerEvaluator.__new__(ControllerEvaluator)
@@ -148,7 +192,7 @@ def _recording_evaluator(bounds_fn, crn, seen):
 	ev._ensure_ga_ready = lambda: None
 	ev._advance_fold = lambda: None
 	ev._shape_key = lambda g: 0
-	ev._eval_batch_bounds = bounds_fn
+	ev._eval_batch_groups = groups_fn
 	ev._materialize = lambda g: (g, None, None)
 
 	def train(spec, sc, oc, init_s, init_o, seed):
@@ -183,10 +227,9 @@ def test_any_boundaries_give_identical_seeds_and_metrics(_python_train_path, crn
 	"""Position seeds (legacy) are the hard case: genome gi must train on the SAME
 	seed whether it runs in batch 0 or batch 3."""
 	gs = [_Genome(i, 100_000) for i in range(8)]
-	one = lambda sub: [(0, len(sub))]
+	one = lambda sub: [list(range(len(sub)))]
 	edges = [0] + cuts + [8]
-	split = lambda sub: ([(a, b) for a, b in zip(edges, edges[1:])]
-	                     if len(sub) == 8 else [(0, len(sub))])
+	split = lambda sub: [list(range(a, b)) for a, b in zip(edges, edges[1:])]
 
 	seen_whole, seen_split = [], []
 	whole = _recording_evaluator(one, crn, seen_whole).evaluate_batch(gs)
@@ -195,3 +238,16 @@ def test_any_boundaries_give_identical_seeds_and_metrics(_python_train_path, crn
 	assert sorted(seen_whole) == sorted(seen_split)
 	assert [m.reward for m in whole] == [m.reward for m in parts]
 	assert [m.mean_attitude_error_deg for m in whole] == [m.mean_attitude_error_deg for m in parts]
+
+
+@pytest.mark.parametrize("crn", [False, True])
+def test_non_contiguous_groups_give_identical_seeds_and_metrics(_python_train_path, crn):
+	"""FFD groups are NOT contiguous: each genome must still train on its GLOBAL
+	seed and come back in the ORIGINAL order."""
+	gs = [_Genome(i, 100_000) for i in range(8)]
+	seen_whole, seen_ffd = [], []
+	whole = _recording_evaluator(lambda sub: [list(range(len(sub)))], crn, seen_whole).evaluate_batch(gs)
+	scattered = lambda sub: [[1, 6], [0, 3, 7], [2], [4, 5]]
+	ffd = _recording_evaluator(scattered, crn, seen_ffd).evaluate_batch(gs)
+	assert sorted(seen_whole) == sorted(seen_ffd)
+	assert [m.reward for m in whole] == [m.reward for m in ffd]

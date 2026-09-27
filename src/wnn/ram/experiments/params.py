@@ -106,6 +106,9 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	"controller_conn_policy",         # connection-creation policy: spread | min2 | min3
 	"controller_output_full_window",  # arm D: output layer samples ALL k frames, not just t-0
 	"controller_frame_stride",        # K-window shifts every N pushes (spans N*K steps; 1 = legacy)
+	# Trainer tilt curriculum (27/09/2026): phased_ga --rg-easy-tilt-deg / --rg-full-tilt-deg.
+	"controller_rg_easy_tilt_deg",    # DAgger round-0 initial-tilt bound (deg; default 8)
+	"controller_rg_full_tilt_deg",    # DAgger last-round + checkpoint-eval tilt (deg; default 30)
 })
 
 

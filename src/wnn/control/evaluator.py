@@ -2104,17 +2104,22 @@ class ControllerEvaluator:
 		self._fold_counter += 1
 		return fold_idx
 
-	def _train_base_seeds(self, n: int, seed_offset: int) -> list[int]:
+	def _train_base_seeds(self, n: int, seed_offset: int,
+	                      global_idx: Optional[list[int]] = None) -> list[int]:
 		"""Per-genome training base seed (fold k trains on base + k).
 
 		Legacy: genome gi in the batch trains on seed*100 + offset + gi*K, so a
 		genome's episodes depend on its POSITION. CRN: everyone trains on the same
 		K fold seeds (seed*100 + k) — the held-out report's re-train of pop[0]
-		(gi=0, offset=0) lands on exactly these, so the report stays comparable."""
+		(gi=0, offset=0) lands on exactly these, so the report stays comparable.
+		`global_idx` (sorted sub-batch packing, 27/09/2026): the genome's index in
+		the WHOLE population, so a genome packed into any sub-batch trains on the
+		seed it would have had unbatched. None = positions 0..n-1."""
 		K = self.num_eval_folds
 		if self.score_crn:
 			return [self.seed * 100] * n
-		return [self.seed * 100 + seed_offset + gi * K for gi in range(n)]
+		idx = range(n) if global_idx is None else global_idx
+		return [self.seed * 100 + seed_offset + gi * K for gi in idx]
 
 	def _score_fitness(self, controllers: list, shape_keys: list) -> list:
 		"""During-search scoring: one pool (legacy rotation) or ALL K pools combined
@@ -2215,6 +2220,42 @@ class ControllerEvaluator:
 		bounds.append((start, N))
 		return bounds
 
+	# Sub-batch packing order (27/09/2026). "ffd" = first-fit-decreasing by summed
+	# peak cells (largest genome first into the first sub-batch it fits), which
+	# removes the singleton sub-batches contiguous packing leaves in growing BITS
+	# stages (live: 49 genomes -> 18 sub-batches, 11 singletons). "contiguous" =
+	# the 25/09 packing, kept for A/B and the parity test. Either way every genome
+	# trains on its GLOBAL-index seed, so results are bit-identical; only the
+	# grouping (hence peak memory and parallel width) moves.
+	EVAL_PACKING = "ffd"
+
+	def _eval_batch_groups(self, genomes: list) -> list[list[int]]:
+		"""Sub-batches as lists of GLOBAL genome indices (each list ascending).
+		WNN_CTRL_EVAL_BATCH keeps its fixed-width contiguous behaviour."""
+		N = len(genomes)
+		if self._eval_batch_override(N) or self.EVAL_PACKING == "contiguous":
+			return [list(range(s, e)) for s, e in self._eval_batch_bounds(genomes)]
+		return self._eval_batch_ffd(genomes)
+
+	def _eval_batch_ffd(self, genomes: list) -> list[list[int]]:
+		"""First-fit-decreasing into the same summed-cells budget. A genome bigger
+		than the whole budget still runs alone. Deterministic: ties keep index order."""
+		cap = self.EVAL_BUDGET_BYTES // self.EVAL_BYTES_PER_CELL
+		est = self._genome_cell_estimates(genomes)
+		order = sorted(range(len(genomes)), key=lambda i: (-est[i], i))
+		bins: list[list[int]] = []
+		loads: list[int] = []
+		for i in order:
+			slot = next((b for b, load in enumerate(loads)
+			             if load + est[i] <= cap), None)
+			if slot is None:
+				bins.append([i])
+				loads.append(est[i])
+			else:
+				bins[slot].append(i)
+				loads[slot] += est[i]
+		return [sorted(b) for b in bins]
+
 	@staticmethod
 	def _eval_batch_override(N: int) -> int:
 		"""Fixed sub-batch width from WNN_CTRL_EVAL_BATCH, or 0 when unset/invalid."""
@@ -2255,7 +2296,8 @@ class ControllerEvaluator:
 
 	def _evaluate_core(self, genomes: list, *, write_back: bool = False,
 	                   return_stats: bool = False, seed_offset: int = 0,
-	                   generation=None, _skip_advance: bool = False) -> list:
+	                   generation=None, _skip_advance: bool = False,
+	                   _global_idx: Optional[list[int]] = None) -> list:
 		"""Unified train+score core behind BOTH controller eval entry points.
 
 		Each genome trains by ACCUMULATING across K=num_eval_folds folds into ONE
@@ -2298,26 +2340,20 @@ class ControllerEvaluator:
 		N = len(genomes)
 		K = self.num_eval_folds
 		shape_keys = [self._shape_key(g) for g in genomes]
-		base_seeds = self._train_base_seeds(N, seed_offset)
+		base_seeds = self._train_base_seeds(N, seed_offset, _global_idx)
 
 		# Fix 3 (15/07): bound peak memory instead of letting it scale with the whole
 		# population. The train+score below holds EVERY genome's controller cells at once
 		# (pop=50 TERNARY ≈ 150GB — it accumulates ~30x QUAD's cells). So process the
 		# population in memory-sized sub-batches: each RE-ENTERS this same core with fewer
-		# genomes, so K-fold accumulate, per-genome seeds (base_seeds use the GLOBAL index
-		# via seed_offset), the cancel-guard and write-back are all bit-identical to the
-		# unbatched path. `_skip_advance` keeps the fold counter advancing exactly ONCE.
-		bounds = self._eval_batch_bounds(genomes)
-		if len(bounds) > 1:
-			print(f"[ControllerEvaluator] {N} genomes -> {len(bounds)} sub-batches "
-			      f"(widths {[e - s for s, e in bounds]})", flush=True)
-			out = []
-			for _bs, _be in bounds:
-				out.extend(self._evaluate_core(
-					genomes[_bs:_be], write_back=write_back,
-					return_stats=return_stats, seed_offset=seed_offset + _bs * K,
-					generation=generation, _skip_advance=True))
-			return out
+		# genomes, so K-fold accumulate, per-genome seeds (base_seeds use the GLOBAL index,
+		# passed as _global_idx), the cancel-guard and write-back are all bit-identical to
+		# the unbatched path. `_skip_advance` keeps the fold counter advancing exactly ONCE.
+		if _global_idx is None:
+			groups = self._eval_batch_groups(genomes)
+			if len(groups) > 1:
+				return self._evaluate_groups(genomes, groups, write_back, return_stats,
+				                             seed_offset, generation)
 
 		_CANCEL_RETRIES = 3
 		_cancel_attempt = 0
@@ -2448,6 +2484,25 @@ class ControllerEvaluator:
 						state_cell_counts=s_counts, output_cell_counts=o_counts)))
 					continue
 			out.append(metrics)
+		return out
+
+	def _evaluate_groups(self, genomes: list, groups: list[list[int]], write_back: bool,
+	                     return_stats: bool, seed_offset: int, generation) -> list:
+		"""Run each sub-batch through _evaluate_core with the genomes' GLOBAL indices;
+		return results in the ORIGINAL genome order."""
+		order = "contiguous" if (self._eval_batch_override(len(genomes))
+		                         or self.EVAL_PACKING == "contiguous") else "FFD"
+		widths = [len(g) for g in groups]
+		print(f"[ControllerEvaluator] {len(genomes)} genomes -> {len(groups)} sub-batches "
+		      f"(packing {order}; widths {widths}; singletons {widths.count(1)})", flush=True)
+		out: list = [None] * len(genomes)
+		for idx in groups:
+			res = self._evaluate_core(
+				[genomes[i] for i in idx], write_back=write_back,
+				return_stats=return_stats, seed_offset=seed_offset,
+				generation=generation, _skip_advance=True, _global_idx=idx)
+			for i, r in zip(idx, res):
+				out[i] = r
 		return out
 
 	def evaluate_batch(self, genomes: list, *, generation: Optional[int] = None,

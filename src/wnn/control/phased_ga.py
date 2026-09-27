@@ -220,6 +220,7 @@ def _wire_cancel(strat, args, stage_num: int, stage_name: str) -> None:
 	strat._checkpoint_meta = {
 		"levels":        args.levels,
 		"tilt_deg":      args.tilt,
+		"rg_tilt_deg":   list(_rg_tilts(args)),
 		"steps":         args.steps,
 		"eval_episodes": args.eval_episodes,
 	}
@@ -695,9 +696,22 @@ def _parse_teacher_list(spec: str, flag: str) -> list[str]:
 	return names
 
 
+def _rg_tilts(args) -> tuple[float, float]:
+	"""(easy, full) initial-tilt bounds of the DAgger trainer's curriculum (deg)."""
+	easy = float(getattr(args, "rg_easy_tilt_deg", 8.0))
+	full = float(getattr(args, "rg_full_tilt_deg", 30.0))
+	if not (0.0 <= easy and 0.0 <= full):
+		raise SystemExit(f"--rg-easy-tilt-deg/--rg-full-tilt-deg must be >= 0 (got {easy}/{full})")
+	return easy, full
+
+
 def _gate_lambda_header(args, ec: EpisodeConfig) -> str:
-	"""The [GATE-λ] provenance line, at the tilt the trainer's rollouts are drawn at."""
-	return gate_lambda_line(args, ec, math.radians(RewardGatedConfig(episode_config=ec).full_tilt_deg))
+	"""The [GATE-λ] provenance line, at the tilt the trainer's rollouts are drawn at,
+	plus the trainer's tilt curriculum next to the scorer's tilt."""
+	easy, full = _rg_tilts(args)
+	return (gate_lambda_line(args, ec, math.radians(full))
+	        + f"\n[RG-TILT] DAgger trainer tilt curriculum {easy:g}°→{full:g}° "
+	          f"(checkpoint eval at {full:g}°); scorer --tilt {getattr(args, 'tilt', float('nan')):g}°")
 
 
 def _rg_config(args, ec: EpisodeConfig, seed: int) -> RewardGatedConfig:
@@ -713,6 +727,8 @@ def _rg_config(args, ec: EpisodeConfig, seed: int) -> RewardGatedConfig:
 		getattr(args, "teacher_blend", ""), "--teacher-blend")
 	# D0: teacher hover anchoring under translation (default legacy = bit-identical).
 	rg.teacher_hover_mode = getattr(args, "teacher_hover", "derived")
+	# Trainer tilt curriculum (27/09/2026): set BEFORE the gate λ, which reads it.
+	rg.easy_tilt_deg, rg.full_tilt_deg = _rg_tilts(args)
 	# CTRL-17 G4: the λ the Rust gate + checkpoint rank on — the explicit reward λ,
 	# else derived from the rank weights at the trainer's own tilt (gate_lambdas.py).
 	rg.gate_lambda_alt, rg.gate_lambda_pos, _src = resolve_gate_lambdas(
@@ -2790,6 +2806,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                help="Episodes per reward-gated round (default: 24)")
 	ap.add_argument("--rg-eval-episodes", type=int, default=None,
 	                help="Eval episodes within reward-gated (default: 20)")
+	# Tilt curriculum of the DAgger TRAINER (27/09/2026). RewardGatedConfig ramps the
+	# initial-tilt bound easy→full across rounds (8°→30°), and the per-round checkpoint
+	# eval draws at full — while the scorer flies --tilt. These were never set from the
+	# CLI; the defaults ARE the historical 8/30, so every recipe is unchanged unless it
+	# passes them (a matched-regime arm sets 5/5).
+	ap.add_argument("--rg-easy-tilt-deg", type=float, default=8.0,
+	                help="DAgger trainer: round-0 initial-tilt bound (deg). Default 8 (historical).")
+	ap.add_argument("--rg-full-tilt-deg", type=float, default=30.0,
+	                help="DAgger trainer: last-round initial-tilt bound AND the per-round "
+	                     "checkpoint eval's tilt (deg). Default 30 (historical).")
 	ap.add_argument("--topk-per-neuron", type=int, default=None,
 	                help="Beam-search top-K candidate addresses per neuron in the "
 	                     "per-motor EDRA solve (default 4). ONLY bites at sn>0: a "

@@ -11,6 +11,7 @@ This pins what only Python can see:
   G4  gate λ resolution (explicit / derived / off) and its plumbing into BOTH
       trainer ctor sites (_gate_lambda_kwargs), plus the unset flag default.
   G11 the --reward-lambda-pos guard names --reward-lambda-pos.
+  RG-TILT --rg-easy/full-tilt-deg reach the packed Rust config (defaults 8/30).
 
 Run: PYTHONPATH=src python tests/controller_ctrl17_stage2.py
 """
@@ -131,6 +132,23 @@ def test_g4_g11_cli() -> None:
 	      bool(re.search(r'"--reward-lambda-pos requires --translation and --xy-offset', src)), True)
 
 
+def test_rg_tilt_flags_reach_rust() -> None:
+	"""--rg-easy/full-tilt-deg reach the packed Rust config (training rollout
+	curriculum + the checkpoint eval's full tilt); defaults stay the historical 8/30."""
+	from wnn.control import phased_ga as pg
+	ap = pg.build_arg_parser()
+	for argv, want in (([], (8.0, 30.0)),
+	                   (["--rg-easy-tilt-deg", "5", "--rg-full-tilt-deg", "5"], (5.0, 5.0))):
+		args = ap.parse_args(argv)
+		ec = pg.episode_config_from_args(args)
+		cfg = capture_trainer_cfg(pg._rg_config(args, ec, 0))
+		check(f"packed (easy, full) tilt for {argv or 'defaults'}",
+		      (cfg.easy_tilt_deg, cfg.full_tilt_deg), want)
+	src = open(ev_mod.__file__).read()
+	check("both trainer ctor sites pack rg.full_tilt_deg",
+	      len(re.findall(r"full_tilt_deg=rg\.full_tilt_deg", src)), 2)
+
+
 def span(xs) -> float:
 	return max(xs) - min(xs) if xs else 0.0
 
@@ -174,7 +192,7 @@ def test_g2_recorder() -> None:
 
 
 if __name__ == "__main__":
-	for t in (test_g4_resolution, test_g4_plumbing, test_g4_g11_cli,
+	for t in (test_g4_resolution, test_g4_plumbing, test_g4_g11_cli, test_rg_tilt_flags_reach_rust,
 	          test_g1_fitter_flies_the_cascade, test_g2_recorder):
 		print(t.__name__)
 		t()

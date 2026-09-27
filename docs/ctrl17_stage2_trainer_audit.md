@@ -17,9 +17,11 @@ episode definition (`controller/episode_regime.rs`) now feeds the training rollo
 per-round checkpoint eval (G3), the calibration sampler (`calib_sampler.rs`, G1) and the
 MEMORY recorder's cascade driver (G2); the gate and checkpoint rank on
 `episode_regime::step_reward` with λ_alt/λ_pos (G4; default rule in
-`wnn/control/gate_lambdas.py`). New finding G13: under `expert_drives` + D0 re-base +
-translation the sim flies the re-based LABEL, not the teacher's pwm (the vehicle falls);
-no current recipe uses it. G5-G10, G12, G13 stay open.
+`wnn/control/gate_lambdas.py`). G13 (found here, FIXED 27/09): under `expert_drives` + D0
+re-base + translation the sim flew the re-based LABEL, not the teacher's pwm (cf21 fell
+~1.2 m in 2 s); it now flies the raw teacher pwm. Same landing: FFD sub-batch packing in
+ControllerEvaluator (bit-identical to unbatched/contiguous) and `--rg-easy-tilt-deg` /
+`--rg-full-tilt-deg` (defaults 8/30 unchanged). G5-G10, G12 stay open.
 
 ## Verdict: GAPS
 
