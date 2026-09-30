@@ -31,8 +31,8 @@ The merge-tree dry run was clean against b03be615.
    - `[GATE-λ]` shows λ_alt=0 and λ_pos≈0.1097.
    - No guard fires.
    - MEMORY records a universe.
-   - The gen line carries the position metric.
-   - The fitter's xy threshold spans are non-zero.
+   - The fitness carries the position metric (`ZRank(… pos=0.1)` on the calculator lines). The gen line itself never prints `pos=` (generic_ga's formatter has no such field) — corrected 30/09 at landing.
+   - The fitter's xy threshold spans are non-zero. Not logged: verify with `_report_thresholds` on the smoke's spec (landing 30/09: pos_err_xy 0.48/0.52, vel_xy 0.22/0.23; features 6-8 = target_attitude, 0-span by design in attitude hold).
    - The header shows `[RG-TILT] DAgger trainer tilt curriculum 8°→30° (checkpoint eval at 30°); scorer --tilt 5°`
      (defaults unchanged).
    - The packing log reads `packing FFD` if the population splits. A tiny pop fits in one sub-batch and prints
@@ -52,3 +52,8 @@ The merge-tree dry run was clean against b03be615.
 - Tilt coherence: the flags land here; the `_tc31` arm (5°/5°, paired vs `_op31`, with a 15°/30° stress re-score) is
   approved but its queue slot is pending Luiz.
 - The recorder runs without weather.
+
+## LANDED 30/09/2026 17:55 EDT
+Merge 981ecbb8, wheel sha 5407561d verified, `31 31 True`, Rust 221 pass / 2 ignored, py parity+packing 26/26,
+smoke 1 (translation grid) PASS, smoke 2 (anchor recipe, --obs-pwm + PIPE_FLAGS) rc 0 (9 stage-select candidates).
+`experiments/ABI31_LANDED` touched 17:55 EDT; queue_2009c confirmed ABI 31 and launched STEP 6a `_op31`.
