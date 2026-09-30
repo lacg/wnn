@@ -59,6 +59,17 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_full30_winner.yaml.gz",
   "true_keys": 1701212
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_full30@headline": {
+  "bits": 31,
+  "bytes_packed": 6600133,
+  "bytes_uint32": 6812784,
+  "counted": "2026-09-30T11:04:32Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 256,
+  "populated": 1701212,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_full30/stage3_connections.yaml.gz",
+  "true_keys": 1701212
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_hd": {
   "bits": 24,
   "bytes_packed": 874944,
@@ -249,6 +260,17 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_full30_winner.yaml.gz",
   "true_keys": 1220457
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_full30@headline": {
+  "bits": 24,
+  "bytes_packed": 2322699,
+  "bytes_uint32": 3094884,
+  "counted": "2026-09-30T11:04:33Z",
+  "genome": "NEURONS#0",
+  "neurons": 256,
+  "populated": 772185,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_full30/stage1_neurons.yaml.gz",
+  "true_keys": 772185
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_hd": {
   "bits": 24,
   "bytes_packed": 770019,
@@ -369,6 +391,17 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_pipeN30_winner.yaml.gz",
   "true_keys": 694703
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_pipeN30@headline": {
+  "bits": 24,
+  "bytes_packed": 2322699,
+  "bytes_uint32": 3094884,
+  "counted": "2026-09-30T11:05:02Z",
+  "genome": "NEURONS#0",
+  "neurons": 256,
+  "populated": 772185,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_pipeN30/stage1_neurons.yaml.gz",
+  "true_keys": 772185
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337004": {
   "bits": 24,
   "bytes_packed": 992142,
@@ -408,6 +441,17 @@
   "populated": 5334485,
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_full30_winner.yaml.gz",
   "true_keys": 5334485
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_full30@headline": {
+  "bits": 42,
+  "bytes_packed": 23119541,
+  "bytes_uint32": 17617448,
+  "counted": "2026-09-30T11:04:39Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 256,
+  "populated": 4401674,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_full30/stage3_connections.yaml.gz",
+  "true_keys": 4401674
  },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_hd": {
   "bits": 24,
@@ -527,6 +571,17 @@
   "neurons": 376,
   "populated": 1169649,
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_pipeN30_winner.yaml.gz",
+  "true_keys": 1169649
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_pipeN30@headline": {
+  "bits": 24,
+  "bytes_packed": 3517971,
+  "bytes_uint32": 4687620,
+  "counted": "2026-09-30T11:05:03Z",
+  "genome": "NEURONS#1",
+  "neurons": 376,
+  "populated": 1169649,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_pipeN30/stage1_neurons.yaml.gz",
   "true_keys": 1169649
  },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337005": {
@@ -677,6 +732,17 @@
   "neurons": 256,
   "populated": 675789,
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_pipeN30_winner.yaml.gz",
+  "true_keys": 675789
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_pipeN30@headline": {
+  "bits": 24,
+  "bytes_packed": 2033511,
+  "bytes_uint32": 2709300,
+  "counted": "2026-09-30T11:05:04Z",
+  "genome": "NEURONS#0",
+  "neurons": 256,
+  "populated": 675789,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_pipeN30/stage1_neurons.yaml.gz",
   "true_keys": 675789
  },
  "SL_C_b28n256_cf21_brushless_L4C_g10_s31337002_crn": {

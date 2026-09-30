@@ -11,6 +11,7 @@ from wnn.ram.strategies.phased.checkpoint import (
 	save_checkpoint,
 	save_checkpoint_async,
 	load_checkpoint,
+	load_population_member,
 )
 from wnn.ram.strategies.phased.packing import (
 	pack_int_columns,
@@ -27,6 +28,7 @@ __all__ = [
 	'CarryState',
 	'GenomeCodec', 'ClusterGenomeCodec', 'ControllerGenomeCodec', 'PickleBase64Codec',
 	'CHECKPOINT_SCHEMA_VERSION', 'PhaseCheckpoint', 'save_checkpoint', 'save_checkpoint_async', 'load_checkpoint',
+	'load_population_member',
 	'pack_int_columns', 'unpack_int_columns', 'pack_int_array', 'unpack_int_array', 'is_packed',
 	'SaveCadence', 'PhasedCheckpointManager',
 	'PhasedOrchestrator', 'PhaseSpec', 'PhaseOutcome',

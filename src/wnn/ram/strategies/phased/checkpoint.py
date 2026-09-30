@@ -299,16 +299,9 @@ def _yaml_load_skipping(stream, skip_keys: "frozenset[str]"):
 	return yaml.load(yaml.emit(iter(kept), Dumper=_YamlDumper), Loader=_YamlLoader)
 
 
-def extract_checkpoint_head(src: "str | Path", dst: "str | Path",
-                            cut_key: str = "final_population") -> Path:
-	"""Copy a schema-2 yaml.gz checkpoint WITHOUT its final_population by
-	streaming the gz text only UP TO the cut key — which _build_payload dumps
-	LAST — and closing the top-level flow mapping. Seconds on multi-100 MB
-	full-population winners: the population bytes are never decompressed, let
-	alone parsed (the _yaml_load_skipping alternative still walks every event,
-	minutes-to-hours at that size). The reduced doc is VALIDATED (yaml.load +
-	schema + best_genome present) before the destination is written; raises
-	ValueError when the file is not the expected single-doc mapping."""
+def _read_checkpoint_head(src: "str | Path", cut_key: str = "final_population") -> "tuple[str, dict]":
+	"""Stream a schema-2 yaml.gz up to `cut_key` (dumped LAST by _build_payload),
+	close the top-level flow mapping, and return (text, validated dict)."""
 	marker = f"{cut_key}:"
 	head_parts: list[str] = []
 	carry = ""
@@ -316,7 +309,7 @@ def extract_checkpoint_head(src: "str | Path", dst: "str | Path",
 		while True:
 			chunk = f.read(1 << 20)
 			if not chunk:
-				raise ValueError(f"extract_checkpoint_head: '{cut_key}' not found in {src}")
+				raise ValueError(f"checkpoint head: '{cut_key}' not found in {src}")
 			buf = carry + chunk
 			i = buf.find(marker)
 			if i >= 0:
@@ -329,7 +322,107 @@ def extract_checkpoint_head(src: "str | Path", dst: "str | Path",
 	data = yaml.load(head, Loader=_YamlLoader)
 	if (not isinstance(data, dict) or data.get("schema") != CHECKPOINT_SCHEMA_VERSION
 			or data.get("best_genome") is None):
-		raise ValueError(f"extract_checkpoint_head: reduced doc failed validation for {src}")
+		raise ValueError(f"checkpoint head: reduced doc failed validation for {src}")
+	return head, data
+
+
+_POP_CHUNK = 1 << 24                 # 16 MB of text per bracket-scan step
+
+
+def _bracket_depths(buf: bytes, depth: int) -> "tuple[Any, Any]":
+	"""Per-byte bracket delta (+1 for [ {, -1 for ] }) and the running depth
+	AFTER each byte, starting from `depth`."""
+	import numpy as np
+	a = np.frombuffer(buf, dtype=np.uint8)
+	d = np.zeros(a.shape[0], dtype=np.int64)
+	d[(a == 0x5B) | (a == 0x7B)] = 1
+	d[(a == 0x5D) | (a == 0x7D)] = -1
+	return d, depth + np.cumsum(d)
+
+
+def _population_stream(f) -> bytes:
+	"""Advance a binary gz handle past `final_population: [`; return the bytes
+	that follow the list's opening bracket in the same read."""
+	marker, carry = b"final_population:", b""
+	while True:
+		chunk = f.read(_POP_CHUNK)
+		if not chunk:
+			raise ValueError("final_population not found")
+		buf = carry + chunk
+		i = buf.find(marker)
+		if i >= 0:
+			j = buf.find(b"[", i + len(marker))
+			if j < 0:
+				raise ValueError("final_population is not a flow sequence")
+			return buf[j + 1:]
+		carry = buf[-len(marker):]
+
+
+def _extract_population_member_text(src: "str | Path", index: int) -> str:
+	"""Return the raw flow-YAML text of final_population[index] WITHOUT parsing
+	the rest. The population is one flow sequence of flow mappings whose
+	scalars are numbers/identifiers (no quoted brackets), so a byte-level
+	bracket depth is exact: member k opens at a 0->1 rise and closes at the
+	next 1->0 fall. Bounded memory on multi-GB stage checkpoints — the
+	yaml-event alternative walks every scalar (hours at that size)."""
+	import numpy as np
+	parts: list[bytes] = []
+	depth, seen, capturing = 0, 0, False
+	with gzip.open(Path(src), "rb") as f:
+		buf = _population_stream(f)
+		while buf:
+			d, cum = _bracket_depths(buf, depth)
+			opens = np.flatnonzero((d == 1) & (cum == 1))
+			closes = np.flatnonzero((d == -1) & (cum == 0))
+			ends = np.flatnonzero(cum < 0)
+			start = 0
+			if not capturing:
+				k = index - seen
+				if k >= len(opens) or (len(ends) and opens[k] > ends[0]):
+					if len(ends):
+						n = seen + int(np.count_nonzero(opens < ends[0]))
+						raise IndexError(f"final_population has {n} members; "
+						                 f"asked for #{index} in {src}")
+					seen += len(opens)
+					depth = int(cum[-1])
+					buf = f.read(_POP_CHUNK)
+					continue
+				start, capturing = int(opens[k]), True
+			stop = closes[closes >= start]
+			if len(stop):
+				parts.append(buf[start:int(stop[0]) + 1])
+				return b"".join(parts).decode("utf-8")
+			parts.append(buf[start:])
+			depth = int(cum[-1])
+			buf = f.read(_POP_CHUNK)
+	raise ValueError(f"final_population[{index}] truncated in {src}")
+
+
+def load_population_member(path: "str | Path", codec: GenomeCodec,
+                           index: int) -> "tuple[Any, dict]":
+	"""Load ONE member of a schema-2 checkpoint's final_population plus the
+	checkpoint's `extra` (spec etc.), never materializing the other members.
+	For read-only tools that need a specific ranked genome (e.g. the
+	stage-select headline `STAGE#i`, which is `final_population[i]`)."""
+	p = find_checkpoint_file(path)
+	if p is None or p.suffix != ".gz":
+		raise ValueError(f"load_population_member: schema-2 yaml.gz required, got {path}")
+	_head, data = _read_checkpoint_head(p)
+	member = yaml.load(_extract_population_member_text(p, index), Loader=_YamlLoader)
+	return codec.decode(member), data.get("extra", {})
+
+
+def extract_checkpoint_head(src: "str | Path", dst: "str | Path",
+                            cut_key: str = "final_population") -> Path:
+	"""Copy a schema-2 yaml.gz checkpoint WITHOUT its final_population by
+	streaming the gz text only UP TO the cut key — which _build_payload dumps
+	LAST — and closing the top-level flow mapping. Seconds on multi-100 MB
+	full-population winners: the population bytes are never decompressed, let
+	alone parsed (the _yaml_load_skipping alternative still walks every event,
+	minutes-to-hours at that size). The reduced doc is VALIDATED (yaml.load +
+	schema + best_genome present) before the destination is written; raises
+	ValueError when the file is not the expected single-doc mapping."""
+	head, _data = _read_checkpoint_head(src, cut_key)
 	dstp = Path(dst)
 	dstp.parent.mkdir(parents=True, exist_ok=True)
 	tmp = Path(str(dstp) + f".tmp.{os.getpid()}")

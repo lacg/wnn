@@ -73,6 +73,15 @@ def checkpoint_to_payload(ckpt) -> dict:
 	return payload
 
 
+def load_controller_population_member(path: "str | Path", index: int) -> dict:
+	"""ONE ranked member (`final_population[index]`) of a controller stage
+	checkpoint, plus its spec — the other members are never materialized
+	(stage checkpoints reach GBs gzipped). The stage-select headline `STAGE#i`
+	is exactly this genome."""
+	from wnn.ram.strategies.phased import load_population_member
+	genome, extra = load_population_member(path, _codec(), index)
+	return {"genome": genome, "spec": _spec_from_plain(extra["spec"])}
+
 def save_controller_checkpoint(path: "str | Path", payload: dict) -> Path:
 	from wnn.ram.strategies.phased import save_checkpoint
 	return save_checkpoint(path, payload_to_checkpoint(payload), _codec())
