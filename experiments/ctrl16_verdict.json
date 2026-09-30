@@ -1,0 +1,61 @@
+{
+ "rule": "REPLACE the anchor iff >=3/4 columns favour _full30 (stable up, err down, steady down, alt down) on the mean paired HEADLINE delta vs _pipeN30 over seeds s31337002-s31337005, AND err delta <= +0.10 deg, AND the mean TRUE keys of the four _full30 winners <= the mean TRUE keys of the four _pipeN30 winners. Otherwise _pipeN30 stands; a tie goes to the simpler pipeline.",
+ "mean_delta": {
+  "stable_pp": 1.25,
+  "err_deg": -0.14,
+  "steady_deg": -0.152,
+  "alt_m": 0.0115
+ },
+ "per_seed": {
+  "31337002": [
+   0.2,
+   -0.05,
+   -0.12,
+   0.009
+  ],
+  "31337003": [
+   0.0,
+   0.0,
+   0.0,
+   0.0
+  ],
+  "31337004": [
+   3.8,
+   -0.34,
+   -0.39,
+   0.074
+  ],
+  "31337005": [
+   1.0,
+   -0.17,
+   -0.1,
+   -0.037
+  ]
+ },
+ "favourable": [
+  true,
+  true,
+  true,
+  false
+ ],
+ "gate_bar_passed": true,
+ "true_keys": {
+  "arm": {
+   "31337002": 1701212,
+   "31337003": 772185,
+   "31337004": 4401674,
+   "31337005": 668966
+  },
+  "anchor": {
+   "31337002": 580994,
+   "31337003": 772185,
+   "31337004": 1169649,
+   "31337005": 675789
+  },
+  "pending": [],
+  "arm_mean": 1886009.25,
+  "anchor_mean": 799654.25
+ },
+ "footprint_not_larger": false,
+ "replace_anchor": false
+}

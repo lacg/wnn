@@ -1,4 +1,587 @@
 {
+ "AW_C10_alt000_b18n32_s31337002@headline": {
+  "bits": 18,
+  "bytes_packed": 38556,
+  "bytes_uint32": 68096,
+  "counted": "2026-09-30T20:54:41Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 32,
+  "populated": 16880,
+  "source": "logs/controller/alt_weight_sweep/ckpt/AW_C10_alt000_b18n32_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 16880
+ },
+ "AW_C10_alt010_b18n32_s31337002@headline": {
+  "bits": 18,
+  "bytes_packed": 43884,
+  "bytes_uint32": 77568,
+  "counted": "2026-09-30T20:54:41Z",
+  "genome": "CONNECTIONS#2",
+  "neurons": 32,
+  "populated": 19248,
+  "source": "logs/controller/alt_weight_sweep/ckpt/AW_C10_alt010_b18n32_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 19248
+ },
+ "AW_C10_alt020_b18n32_s31337002@headline": {
+  "bits": 18,
+  "bytes_packed": 24748,
+  "bytes_uint32": 43548,
+  "counted": "2026-09-30T20:54:42Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 32,
+  "populated": 10743,
+  "source": "logs/controller/alt_weight_sweep/ckpt/AW_C10_alt020_b18n32_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 10743
+ },
+ "AW_C10_alt035_b18n32_s31337002@headline": {
+  "bits": 18,
+  "bytes_packed": 31467,
+  "bytes_uint32": 55492,
+  "counted": "2026-09-30T20:54:43Z",
+  "genome": "MEMORY#0",
+  "neurons": 32,
+  "populated": 15324,
+  "source": "logs/controller/alt_weight_sweep/ckpt/AW_C10_alt035_b18n32_s31337002/stage4_memory.yaml.gz",
+  "true_keys": 13729
+ },
+ "AW_REF_lam16_b18n32_s31337002@headline": {
+  "bits": 18,
+  "bytes_packed": 31125,
+  "bytes_uint32": 54884,
+  "counted": "2026-09-30T20:54:43Z",
+  "genome": "MEMORY#0",
+  "neurons": 32,
+  "populated": 15062,
+  "source": "logs/controller/alt_weight_sweep/ckpt/AW_REF_lam16_b18n32_s31337002/stage4_memory.yaml.gz",
+  "true_keys": 13577
+ },
+ "AW_S16_alt000_b18n32_s31337002@headline": {
+  "bits": 18,
+  "bytes_packed": 40521,
+  "bytes_uint32": 71588,
+  "counted": "2026-09-30T20:54:44Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 32,
+  "populated": 17753,
+  "source": "logs/controller/alt_weight_sweep/ckpt/AW_S16_alt000_b18n32_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 17753
+ },
+ "AW_S16_alt010_b18n32_s31337002@headline": {
+  "bits": 18,
+  "bytes_packed": 40080,
+  "bytes_uint32": 70804,
+  "counted": "2026-09-30T20:54:45Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 32,
+  "populated": 17557,
+  "source": "logs/controller/alt_weight_sweep/ckpt/AW_S16_alt010_b18n32_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 17557
+ },
+ "AW_S16_alt020_b18n32_s31337002@headline": {
+  "bits": 18,
+  "bytes_packed": 29046,
+  "bytes_uint32": 51188,
+  "counted": "2026-09-30T20:54:46Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 32,
+  "populated": 12653,
+  "source": "logs/controller/alt_weight_sweep/ckpt/AW_S16_alt020_b18n32_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 12653
+ },
+ "AW_S16_alt035_b18n32_s31337002@headline": {
+  "bits": 18,
+  "bytes_packed": 41153,
+  "bytes_uint32": 72712,
+  "counted": "2026-09-30T20:54:46Z",
+  "genome": "CONNECTIONS#2",
+  "neurons": 32,
+  "populated": 18034,
+  "source": "logs/controller/alt_weight_sweep/ckpt/AW_S16_alt035_b18n32_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 18034
+ },
+ "CAB_afcal_mpcof_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 30,
+  "bytes_packed": 633458,
+  "bytes_uint32": 675560,
+  "counted": "2026-09-30T20:54:47Z",
+  "genome": "MEMORY#0",
+  "neurons": 64,
+  "populated": 186865,
+  "source": "logs/controller/calibab/ckpt/CAB_afcal_mpcof_cf21_brushless_L4C_s31337002/stage4_memory.yaml.gz",
+  "true_keys": 168410
+ },
+ "CAB_afcal_mpcof_cf21_brushless_L4C_s31337003@headline": {
+  "bits": 30,
+  "bytes_packed": 1074694,
+  "bytes_uint32": 1146212,
+  "counted": "2026-09-30T20:54:48Z",
+  "genome": "NEURONS#0",
+  "neurons": 64,
+  "populated": 286073,
+  "source": "logs/controller/calibab/ckpt/CAB_afcal_mpcof_cf21_brushless_L4C_s31337003/stage1_neurons.yaml.gz",
+  "true_keys": 286073
+ },
+ "CAB_synth_mpcof_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 30,
+  "bytes_packed": 951094,
+  "bytes_uint32": 1014372,
+  "counted": "2026-09-30T20:54:49Z",
+  "genome": "NEURONS#0",
+  "neurons": 64,
+  "populated": 253113,
+  "source": "logs/controller/calibab/ckpt/CAB_synth_mpcof_cf21_brushless_L4C_s31337002/stage1_neurons.yaml.gz",
+  "true_keys": 253113
+ },
+ "CAB_synth_mpcof_cf21_brushless_L4C_s31337003@headline": {
+  "bits": 30,
+  "bytes_packed": 915409,
+  "bytes_uint32": 976308,
+  "counted": "2026-09-30T20:54:50Z",
+  "genome": "MEMORY#0",
+  "neurons": 64,
+  "populated": 270538,
+  "source": "logs/controller/calibab/ckpt/CAB_synth_mpcof_cf21_brushless_L4C_s31337003/stage4_memory.yaml.gz",
+  "true_keys": 243597
+ },
+ "FAB_harmonic_c10_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 30,
+  "bytes_packed": 1304880,
+  "bytes_uint32": 1391744,
+  "counted": "2026-09-30T20:54:51Z",
+  "genome": "NEURONS#0",
+  "neurons": 64,
+  "populated": 347456,
+  "source": "logs/controller/fitness_ab/ckpt/FAB_harmonic_c10_cf21_brushless_L4C_s31337002/stage1_neurons.yaml.gz",
+  "true_keys": 347456
+ },
+ "FAB_harmonic_c10_cf21_brushless_L4C_s31337003@headline": {
+  "bits": 30,
+  "bytes_packed": 1010224,
+  "bytes_uint32": 1077444,
+  "counted": "2026-09-30T20:54:52Z",
+  "genome": "MEMORY#1",
+  "neurons": 64,
+  "populated": 299956,
+  "source": "logs/controller/fitness_ab/ckpt/FAB_harmonic_c10_cf21_brushless_L4C_s31337003/stage4_memory.yaml.gz",
+  "true_keys": 268881
+ },
+ "FAB_harmonic_c10_cf21_brushless_L4C_s31337004@headline": {
+  "bits": 30,
+  "bytes_packed": 1095750,
+  "bytes_uint32": 1168672,
+  "counted": "2026-09-30T20:54:53Z",
+  "genome": "NEURONS#0",
+  "neurons": 64,
+  "populated": 291688,
+  "source": "logs/controller/fitness_ab/ckpt/FAB_harmonic_c10_cf21_brushless_L4C_s31337004/stage1_neurons.yaml.gz",
+  "true_keys": 291688
+ },
+ "FAB_harmonic_c10_cf21_brushless_L4C_s31337005@headline": {
+  "bits": 30,
+  "bytes_packed": 1298318,
+  "bytes_uint32": 1384744,
+  "counted": "2026-09-30T20:54:54Z",
+  "genome": "MEMORY#0",
+  "neurons": 64,
+  "populated": 387591,
+  "source": "logs/controller/fitness_ab/ckpt/FAB_harmonic_c10_cf21_brushless_L4C_s31337005/stage4_memory.yaml.gz",
+  "true_keys": 345706
+ },
+ "FAB_harmonic_c10_cf21_brushless_L4C_s31337006@headline": {
+  "bits": 30,
+  "bytes_packed": 1263462,
+  "bytes_uint32": 1347564,
+  "counted": "2026-09-30T20:54:55Z",
+  "genome": "NEURONS#2",
+  "neurons": 64,
+  "populated": 336411,
+  "source": "logs/controller/fitness_ab/ckpt/FAB_harmonic_c10_cf21_brushless_L4C_s31337006/stage1_neurons.yaml.gz",
+  "true_keys": 336411
+ },
+ "FAB_zscore_c10_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 30,
+  "bytes_packed": 1083949,
+  "bytes_uint32": 1155956,
+  "counted": "2026-09-30T20:54:56Z",
+  "genome": "MEMORY#0",
+  "neurons": 128,
+  "populated": 446723,
+  "source": "logs/controller/fitness_ab/ckpt/FAB_zscore_c10_cf21_brushless_L4C_s31337002/stage4_memory.yaml.gz",
+  "true_keys": 288029
+ },
+ "FAB_zscore_c10_cf21_brushless_L4C_s31337003@headline": {
+  "bits": 30,
+  "bytes_packed": 1379573,
+  "bytes_uint32": 1471416,
+  "counted": "2026-09-30T20:54:57Z",
+  "genome": "NEURONS#1",
+  "neurons": 64,
+  "populated": 367374,
+  "source": "logs/controller/fitness_ab/ckpt/FAB_zscore_c10_cf21_brushless_L4C_s31337003/stage1_neurons.yaml.gz",
+  "true_keys": 367374
+ },
+ "FAB_zscore_c10_cf21_brushless_L4C_s31337004@headline": {
+  "bits": 30,
+  "bytes_packed": 1109832,
+  "bytes_uint32": 1183692,
+  "counted": "2026-09-30T20:54:58Z",
+  "genome": "MEMORY#2",
+  "neurons": 64,
+  "populated": 391457,
+  "source": "logs/controller/fitness_ab/ckpt/FAB_zscore_c10_cf21_brushless_L4C_s31337004/stage4_memory.yaml.gz",
+  "true_keys": 295443
+ },
+ "FAB_zscore_c10_cf21_brushless_L4C_s31337005@headline": {
+  "bits": 30,
+  "bytes_packed": 1015943,
+  "bytes_uint32": 1083416,
+  "counted": "2026-09-30T20:55:00Z",
+  "genome": "MEMORY#0",
+  "neurons": 128,
+  "populated": 396902,
+  "source": "logs/controller/fitness_ab/ckpt/FAB_zscore_c10_cf21_brushless_L4C_s31337005/stage4_memory.yaml.gz",
+  "true_keys": 269894
+ },
+ "FAB_zscore_c10_cf21_brushless_L4C_s31337006@headline": {
+  "bits": 30,
+  "bytes_packed": 864023,
+  "bytes_uint32": 921496,
+  "counted": "2026-09-30T20:55:01Z",
+  "genome": "MEMORY#2",
+  "neurons": 64,
+  "populated": 357338,
+  "source": "logs/controller/fitness_ab/ckpt/FAB_zscore_c10_cf21_brushless_L4C_s31337006/stage4_memory.yaml.gz",
+  "true_keys": 229894
+ },
+ "GWS_C10_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 30,
+  "bytes_packed": 940729,
+  "bytes_uint32": 1003316,
+  "counted": "2026-09-30T20:55:02Z",
+  "genome": "MEMORY#2",
+  "neurons": 64,
+  "populated": 434086,
+  "source": "logs/controller/gated_wsweep/ckpt/GWS_C10_cf21_brushless_L4C_s31337002/stage4_memory.yaml.gz",
+  "true_keys": 250349
+ },
+ "GWS_C10_cf21_brushless_L4C_s31337003@headline": {
+  "bits": 30,
+  "bytes_packed": 1516958,
+  "bytes_uint32": 1617960,
+  "counted": "2026-09-30T20:55:03Z",
+  "genome": "MEMORY#2",
+  "neurons": 64,
+  "populated": 492495,
+  "source": "logs/controller/gated_wsweep/ckpt/GWS_C10_cf21_brushless_L4C_s31337003/stage4_memory.yaml.gz",
+  "true_keys": 404010
+ },
+ "GWS_C10_cf21_brushless_L4C_s31337004@headline": {
+  "bits": 30,
+  "bytes_packed": 800037,
+  "bytes_uint32": 853244,
+  "counted": "2026-09-30T20:55:04Z",
+  "genome": "MEMORY#0",
+  "neurons": 64,
+  "populated": 331079,
+  "source": "logs/controller/gated_wsweep/ckpt/GWS_C10_cf21_brushless_L4C_s31337004/stage4_memory.yaml.gz",
+  "true_keys": 212831
+ },
+ "GWS_C10_cf21_brushless_L4C_s31337005@headline": {
+  "bits": 30,
+  "bytes_packed": 987533,
+  "bytes_uint32": 1053240,
+  "counted": "2026-09-30T20:55:05Z",
+  "genome": "MEMORY#2",
+  "neurons": 64,
+  "populated": 336841,
+  "source": "logs/controller/gated_wsweep/ckpt/GWS_C10_cf21_brushless_L4C_s31337005/stage4_memory.yaml.gz",
+  "true_keys": 262830
+ },
+ "GWS_C10_cf21_brushless_L4C_s31337006@headline": {
+  "bits": 30,
+  "bytes_packed": 705559,
+  "bytes_uint32": 752468,
+  "counted": "2026-09-30T20:55:06Z",
+  "genome": "MEMORY#0",
+  "neurons": 64,
+  "populated": 259354,
+  "source": "logs/controller/gated_wsweep/ckpt/GWS_C10_cf21_brushless_L4C_s31337006/stage4_memory.yaml.gz",
+  "true_keys": 187637
+ },
+ "GWS_C10noJM_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 30,
+  "bytes_packed": 1963763,
+  "bytes_uint32": 2094424,
+  "counted": "2026-09-30T20:55:07Z",
+  "genome": "NEURONS#0",
+  "neurons": 128,
+  "populated": 522646,
+  "source": "logs/controller/gated_wsweep/ckpt/GWS_C10noJM_cf21_brushless_L4C_s31337002/stage1_neurons.yaml.gz",
+  "true_keys": 522646
+ },
+ "GWS_C10noJM_cf21_brushless_L4C_s31337003@headline": {
+  "bits": 30,
+  "bytes_packed": 918979,
+  "bytes_uint32": 980116,
+  "counted": "2026-09-30T20:55:08Z",
+  "genome": "MEMORY#1",
+  "neurons": 64,
+  "populated": 271612,
+  "source": "logs/controller/gated_wsweep/ckpt/GWS_C10noJM_cf21_brushless_L4C_s31337003/stage4_memory.yaml.gz",
+  "true_keys": 244549
+ },
+ "GWS_C10noJM_cf21_brushless_L4C_s31337004@headline": {
+  "bits": 30,
+  "bytes_packed": 1229142,
+  "bytes_uint32": 1310956,
+  "counted": "2026-09-30T20:55:09Z",
+  "genome": "NEURONS#1",
+  "neurons": 64,
+  "populated": 327259,
+  "source": "logs/controller/gated_wsweep/ckpt/GWS_C10noJM_cf21_brushless_L4C_s31337004/stage1_neurons.yaml.gz",
+  "true_keys": 327259
+ },
+ "GWS_C10noJM_cf21_brushless_L4C_s31337005@headline": {
+  "bits": 30,
+  "bytes_packed": 1669804,
+  "bytes_uint32": 1780868,
+  "counted": "2026-09-30T20:55:10Z",
+  "genome": "MEMORY#0",
+  "neurons": 128,
+  "populated": 493727,
+  "source": "logs/controller/gated_wsweep/ckpt/GWS_C10noJM_cf21_brushless_L4C_s31337005/stage4_memory.yaml.gz",
+  "true_keys": 444257
+ },
+ "GWS_C10noJM_cf21_brushless_L4C_s31337006@headline": {
+  "bits": 30,
+  "bytes_packed": 980344,
+  "bytes_uint32": 1045572,
+  "counted": "2026-09-30T20:55:11Z",
+  "genome": "NEURONS#2",
+  "neurons": 64,
+  "populated": 260913,
+  "source": "logs/controller/gated_wsweep/ckpt/GWS_C10noJM_cf21_brushless_L4C_s31337006/stage1_neurons.yaml.gz",
+  "true_keys": 260913
+ },
+ "GWS_E50S50_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 30,
+  "bytes_packed": 1492268,
+  "bytes_uint32": 1591496,
+  "counted": "2026-09-30T20:55:12Z",
+  "genome": "MEMORY#1",
+  "neurons": 128,
+  "populated": 484199,
+  "source": "logs/controller/gated_wsweep/ckpt/GWS_E50S50_cf21_brushless_L4C_s31337002/stage4_memory.yaml.gz",
+  "true_keys": 396914
+ },
+ "GWS_E50S50_cf21_brushless_L4C_s31337003@headline": {
+  "bits": 30,
+  "bytes_packed": 859542,
+  "bytes_uint32": 916716,
+  "counted": "2026-09-30T20:55:13Z",
+  "genome": "NEURONS#1",
+  "neurons": 64,
+  "populated": 228699,
+  "source": "logs/controller/gated_wsweep/ckpt/GWS_E50S50_cf21_brushless_L4C_s31337003/stage1_neurons.yaml.gz",
+  "true_keys": 228699
+ },
+ "GWS_E50S50_cf21_brushless_L4C_s31337004@headline": {
+  "bits": 30,
+  "bytes_packed": 1475682,
+  "bytes_uint32": 1573932,
+  "counted": "2026-09-30T20:55:14Z",
+  "genome": "NEURONS#0",
+  "neurons": 64,
+  "populated": 393003,
+  "source": "logs/controller/gated_wsweep/ckpt/GWS_E50S50_cf21_brushless_L4C_s31337004/stage1_neurons.yaml.gz",
+  "true_keys": 393003
+ },
+ "GWS_E50S50_cf21_brushless_L4C_s31337005@headline": {
+  "bits": 30,
+  "bytes_packed": 1466363,
+  "bytes_uint32": 1563880,
+  "counted": "2026-09-30T20:55:15Z",
+  "genome": "MEMORY#0",
+  "neurons": 120,
+  "populated": 503014,
+  "source": "logs/controller/gated_wsweep/ckpt/GWS_E50S50_cf21_brushless_L4C_s31337005/stage4_memory.yaml.gz",
+  "true_keys": 390070
+ },
+ "GWS_S16_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 30,
+  "bytes_packed": 2112225,
+  "bytes_uint32": 2252784,
+  "counted": "2026-09-30T20:55:17Z",
+  "genome": "NEURONS#0",
+  "neurons": 128,
+  "populated": 562236,
+  "source": "logs/controller/gated_wsweep/ckpt/GWS_S16_cf21_brushless_L4C_s31337002/stage1_neurons.yaml.gz",
+  "true_keys": 562236
+ },
+ "GWS_S16_cf21_brushless_L4C_s31337003@headline": {
+  "bits": 30,
+  "bytes_packed": 1203102,
+  "bytes_uint32": 1283180,
+  "counted": "2026-09-30T20:55:18Z",
+  "genome": "NEURONS#2",
+  "neurons": 64,
+  "populated": 320315,
+  "source": "logs/controller/gated_wsweep/ckpt/GWS_S16_cf21_brushless_L4C_s31337003/stage1_neurons.yaml.gz",
+  "true_keys": 320315
+ },
+ "GWS_S16_cf21_brushless_L4C_s31337004@headline": {
+  "bits": 30,
+  "bytes_packed": 1363238,
+  "bytes_uint32": 1453992,
+  "counted": "2026-09-30T20:55:19Z",
+  "genome": "NEURONS#2",
+  "neurons": 64,
+  "populated": 363018,
+  "source": "logs/controller/gated_wsweep/ckpt/GWS_S16_cf21_brushless_L4C_s31337004/stage1_neurons.yaml.gz",
+  "true_keys": 363018
+ },
+ "GWS_S16_cf21_brushless_L4C_s31337005@headline": {
+  "bits": 30,
+  "bytes_packed": 1535937,
+  "bytes_uint32": 1638204,
+  "counted": "2026-09-30T20:55:20Z",
+  "genome": "NEURONS#2",
+  "neurons": 64,
+  "populated": 409071,
+  "source": "logs/controller/gated_wsweep/ckpt/GWS_S16_cf21_brushless_L4C_s31337005/stage1_neurons.yaml.gz",
+  "true_keys": 409071
+ },
+ "GWS_S16_cf21_brushless_L4C_s31337006@headline": {
+  "bits": 30,
+  "bytes_packed": 1326424,
+  "bytes_uint32": 1414724,
+  "counted": "2026-09-30T20:55:21Z",
+  "genome": "NEURONS#0",
+  "neurons": 64,
+  "populated": 353201,
+  "source": "logs/controller/gated_wsweep/ckpt/GWS_S16_cf21_brushless_L4C_s31337006/stage1_neurons.yaml.gz",
+  "true_keys": 353201
+ },
+ "GWS_S16noJM_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 30,
+  "bytes_packed": 1624032,
+  "bytes_uint32": 1732044,
+  "counted": "2026-09-30T20:55:22Z",
+  "genome": "MEMORY#2",
+  "neurons": 128,
+  "populated": 480769,
+  "source": "logs/controller/gated_wsweep/ckpt/GWS_S16noJM_cf21_brushless_L4C_s31337002/stage4_memory.yaml.gz",
+  "true_keys": 432051
+ },
+ "GWS_S16noJM_cf21_brushless_L4C_s31337003@headline": {
+  "bits": 30,
+  "bytes_packed": 1121010,
+  "bytes_uint32": 1195616,
+  "counted": "2026-09-30T20:55:23Z",
+  "genome": "NEURONS#1",
+  "neurons": 64,
+  "populated": 298424,
+  "source": "logs/controller/gated_wsweep/ckpt/GWS_S16noJM_cf21_brushless_L4C_s31337003/stage1_neurons.yaml.gz",
+  "true_keys": 298424
+ },
+ "GWS_S16noJM_cf21_brushless_L4C_s31337004@headline": {
+  "bits": 30,
+  "bytes_packed": 1593803,
+  "bytes_uint32": 1699928,
+  "counted": "2026-09-30T20:55:24Z",
+  "genome": "NEURONS#1",
+  "neurons": 64,
+  "populated": 424502,
+  "source": "logs/controller/gated_wsweep/ckpt/GWS_S16noJM_cf21_brushless_L4C_s31337004/stage1_neurons.yaml.gz",
+  "true_keys": 424502
+ },
+ "GWS_S16noJM_cf21_brushless_L4C_s31337005@headline": {
+  "bits": 30,
+  "bytes_packed": 1839458,
+  "bytes_uint32": 1961832,
+  "counted": "2026-09-30T20:55:26Z",
+  "genome": "MEMORY#0",
+  "neurons": 128,
+  "populated": 627469,
+  "source": "logs/controller/gated_wsweep/ckpt/GWS_S16noJM_cf21_brushless_L4C_s31337005/stage4_memory.yaml.gz",
+  "true_keys": 489498
+ },
+ "GWS_S16noJM_cf21_brushless_L4C_s31337006@headline": {
+  "bits": 30,
+  "bytes_packed": 1361213,
+  "bytes_uint32": 1451832,
+  "counted": "2026-09-30T20:55:27Z",
+  "genome": "NEURONS#1",
+  "neurons": 64,
+  "populated": 362478,
+  "source": "logs/controller/gated_wsweep/ckpt/GWS_S16noJM_cf21_brushless_L4C_s31337006/stage1_neurons.yaml.gz",
+  "true_keys": 362478
+ },
+ "GWS_STEADY40_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 30,
+  "bytes_packed": 1899510,
+  "bytes_uint32": 2025888,
+  "counted": "2026-09-30T20:55:28Z",
+  "genome": "NEURONS#0",
+  "neurons": 128,
+  "populated": 505512,
+  "source": "logs/controller/gated_wsweep/ckpt/GWS_STEADY40_cf21_brushless_L4C_s31337002/stage1_neurons.yaml.gz",
+  "true_keys": 505512
+ },
+ "GWS_STEADY40_cf21_brushless_L4C_s31337003@headline": {
+  "bits": 30,
+  "bytes_packed": 1189943,
+  "bytes_uint32": 1269144,
+  "counted": "2026-09-30T20:55:29Z",
+  "genome": "NEURONS#0",
+  "neurons": 64,
+  "populated": 316806,
+  "source": "logs/controller/gated_wsweep/ckpt/GWS_STEADY40_cf21_brushless_L4C_s31337003/stage1_neurons.yaml.gz",
+  "true_keys": 316806
+ },
+ "GWS_STEADY40_cf21_brushless_L4C_s31337004@headline": {
+  "bits": 30,
+  "bytes_packed": 1645688,
+  "bytes_uint32": 1755272,
+  "counted": "2026-09-30T20:55:30Z",
+  "genome": "MEMORY#2",
+  "neurons": 64,
+  "populated": 438338,
+  "source": "logs/controller/gated_wsweep/ckpt/GWS_STEADY40_cf21_brushless_L4C_s31337004/stage4_memory.yaml.gz",
+  "true_keys": 438338
+ },
+ "GWS_STEADY40_cf21_brushless_L4C_s31337005@headline": {
+  "bits": 30,
+  "bytes_packed": 1447688,
+  "bytes_uint32": 1543944,
+  "counted": "2026-09-30T20:55:31Z",
+  "genome": "MEMORY#1",
+  "neurons": 128,
+  "populated": 594998,
+  "source": "logs/controller/gated_wsweep/ckpt/GWS_STEADY40_cf21_brushless_L4C_s31337005/stage4_memory.yaml.gz",
+  "true_keys": 385026
+ },
+ "GWS_STEADY40_cf21_brushless_L4C_s31337006@headline": {
+  "bits": 30,
+  "bytes_packed": 961954,
+  "bytes_uint32": 1025956,
+  "counted": "2026-09-30T20:55:32Z",
+  "genome": "MEMORY#0",
+  "neurons": 64,
+  "populated": 256009,
+  "source": "logs/controller/gated_wsweep/ckpt/GWS_STEADY40_cf21_brushless_L4C_s31337006/stage4_memory.yaml.gz",
+  "true_keys": 256009
+ },
+ "LKR_l080_b32n64_cf21_brushless_L4C_g10_s31337002@headline": {
+  "bits": 32,
+  "bytes_packed": 997476,
+  "bytes_uint32": 997476,
+  "counted": "2026-09-30T20:55:33Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 64,
+  "populated": 248857,
+  "source": "logs/controller/leak_revisit/ckpt/LKR_l080_b32n64_cf21_brushless_L4C_g10_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 248857
+ },
  "LKR_l090_b32n64_cf21_brushless_L4C_g10_s31337002": {
   "bits": 32,
   "bytes_packed": 1216396,
@@ -8,6 +591,424 @@
   "populated": 303587,
   "source": "logs/controller/leak_revisit/LKR_l090_b32n64_cf21_brushless_L4C_g10_s31337002_winner.yaml.gz",
   "true_keys": 303587
+ },
+ "LKR_l090_b32n64_cf21_brushless_L4C_g10_s31337002@headline": {
+  "bits": 32,
+  "bytes_packed": 1297824,
+  "bytes_uint32": 1297824,
+  "counted": "2026-09-30T20:55:34Z",
+  "genome": "CONNECTIONS#2",
+  "neurons": 64,
+  "populated": 323944,
+  "source": "logs/controller/leak_revisit/ckpt/LKR_l090_b32n64_cf21_brushless_L4C_g10_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 323944
+ },
+ "SCOPE0_tonly_mpcof_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 30,
+  "bytes_packed": 1453834,
+  "bytes_uint32": 1550612,
+  "counted": "2026-09-30T20:55:35Z",
+  "genome": "NEURONS#0",
+  "neurons": 72,
+  "populated": 387113,
+  "source": "logs/controller/scopecost/ckpt/SCOPE0_tonly_mpcof_cf21_brushless_L4C_s31337002/stage1_neurons.yaml.gz",
+  "true_keys": 387113
+ },
+ "SCOPE0_tonly_mpcof_cf21_brushless_L4C_s31337003@headline": {
+  "bits": 30,
+  "bytes_packed": 1596297,
+  "bytes_uint32": 1702588,
+  "counted": "2026-09-30T20:55:36Z",
+  "genome": "NEURONS#2",
+  "neurons": 64,
+  "populated": 425167,
+  "source": "logs/controller/scopecost/ckpt/SCOPE0_tonly_mpcof_cf21_brushless_L4C_s31337003/stage1_neurons.yaml.gz",
+  "true_keys": 425167
+ },
+ "SL_A_b10n32_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 10,
+  "bytes_packed": 1275,
+  "bytes_uint32": 3376,
+  "counted": "2026-09-30T20:55:42Z",
+  "genome": "MEMORY#0",
+  "neurons": 32,
+  "populated": 856,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b10n32_cf21_brushless_L4C_s31337002/stage4_memory.yaml.gz",
+  "true_keys": 764
+ },
+ "SL_A_b12n32_cf21_brushless_L4C_desir_s31337002@headline": {
+  "bits": 12,
+  "bytes_packed": 4217,
+  "bytes_uint32": 10604,
+  "counted": "2026-09-30T20:55:43Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 32,
+  "populated": 2555,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b12n32_cf21_brushless_L4C_desir_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 2555
+ },
+ "SL_A_b12n32_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 12,
+  "bytes_packed": 3393,
+  "bytes_uint32": 8408,
+  "counted": "2026-09-30T20:55:43Z",
+  "genome": "MEMORY#0",
+  "neurons": 32,
+  "populated": 2409,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b12n32_cf21_brushless_L4C_s31337002/stage4_memory.yaml.gz",
+  "true_keys": 2006
+ },
+ "SL_A_b14n32_cf21_brushless_L4C_desir_s31337002@headline": {
+  "bits": 14,
+  "bytes_packed": 9039,
+  "bytes_uint32": 20084,
+  "counted": "2026-09-30T20:55:44Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 32,
+  "populated": 4909,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b14n32_cf21_brushless_L4C_desir_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 4909
+ },
+ "SL_A_b14n32_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 14,
+  "bytes_packed": 6008,
+  "bytes_uint32": 13156,
+  "counted": "2026-09-30T20:55:45Z",
+  "genome": "MEMORY#1",
+  "neurons": 32,
+  "populated": 3869,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b14n32_cf21_brushless_L4C_s31337002/stage4_memory.yaml.gz",
+  "true_keys": 3177
+ },
+ "SL_A_b16n32_cf21_brushless_L4C_desir_s31337002@headline": {
+  "bits": 16,
+  "bytes_packed": 19656,
+  "bytes_uint32": 38800,
+  "counted": "2026-09-30T20:55:45Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 32,
+  "populated": 9572,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b16n32_cf21_brushless_L4C_desir_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 9572
+ },
+ "SL_A_b16n32_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 16,
+  "bytes_packed": 24402,
+  "bytes_uint32": 48292,
+  "counted": "2026-09-30T20:55:46Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 32,
+  "populated": 11945,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b16n32_cf21_brushless_L4C_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 11945
+ },
+ "SL_A_b18n32_cf21_brushless_L4C_desir_s31337002@headline": {
+  "bits": 18,
+  "bytes_packed": 33314,
+  "bytes_uint32": 58776,
+  "counted": "2026-09-30T20:55:47Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 32,
+  "populated": 14550,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b18n32_cf21_brushless_L4C_desir_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 14550
+ },
+ "SL_A_b18n32_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 18,
+  "bytes_packed": 35420,
+  "bytes_uint32": 62520,
+  "counted": "2026-09-30T20:55:47Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 32,
+  "populated": 15486,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b18n32_cf21_brushless_L4C_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 15486
+ },
+ "SL_A_b20n32_cf21_brushless_L4C_desir_s31337002@headline": {
+  "bits": 20,
+  "bytes_packed": 68750,
+  "bytes_uint32": 109616,
+  "counted": "2026-09-30T20:55:48Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 32,
+  "populated": 27244,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b20n32_cf21_brushless_L4C_desir_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 27244
+ },
+ "SL_A_b20n32_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 20,
+  "bytes_packed": 69970,
+  "bytes_uint32": 111568,
+  "counted": "2026-09-30T20:55:49Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 32,
+  "populated": 27732,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b20n32_cf21_brushless_L4C_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 27732
+ },
+ "SL_A_b22n32_cf21_brushless_L4C_desir_s31337002@headline": {
+  "bits": 22,
+  "bytes_packed": 112481,
+  "bytes_uint32": 163288,
+  "counted": "2026-09-30T20:55:49Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 32,
+  "populated": 40646,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b22n32_cf21_brushless_L4C_desir_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 40646
+ },
+ "SL_A_b22n32_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 22,
+  "bytes_packed": 110141,
+  "bytes_uint32": 159884,
+  "counted": "2026-09-30T20:55:50Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 32,
+  "populated": 39795,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b22n32_cf21_brushless_L4C_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 39795
+ },
+ "SL_A_b24n32_cf21_brushless_L4C_desir_s31337002@headline": {
+  "bits": 24,
+  "bytes_packed": 140880,
+  "bytes_uint32": 187584,
+  "counted": "2026-09-30T20:55:51Z",
+  "genome": "MEMORY#0",
+  "neurons": 32,
+  "populated": 46704,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b24n32_cf21_brushless_L4C_desir_s31337002/stage4_memory.yaml.gz",
+  "true_keys": 46704
+ },
+ "SL_A_b24n32_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 24,
+  "bytes_packed": 176313,
+  "bytes_uint32": 234828,
+  "counted": "2026-09-30T20:55:52Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 32,
+  "populated": 58515,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b24n32_cf21_brushless_L4C_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 58515
+ },
+ "SL_A_b26n32_cf21_brushless_L4C_desir_s31337002@headline": {
+  "bits": 26,
+  "bytes_packed": 260920,
+  "bytes_uint32": 320940,
+  "counted": "2026-09-30T20:55:53Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 32,
+  "populated": 80027,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b26n32_cf21_brushless_L4C_desir_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 80027
+ },
+ "SL_A_b26n32_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 26,
+  "bytes_packed": 252311,
+  "bytes_uint32": 310344,
+  "counted": "2026-09-30T20:55:54Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 32,
+  "populated": 77378,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b26n32_cf21_brushless_L4C_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 77378
+ },
+ "SL_A_b28n32_cf21_brushless_L4C_desir_s31337002@headline": {
+  "bits": 28,
+  "bytes_packed": 278779,
+  "bytes_uint32": 318476,
+  "counted": "2026-09-30T20:55:54Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 32,
+  "populated": 79395,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b28n32_cf21_brushless_L4C_desir_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 79395
+ },
+ "SL_A_b28n32_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 28,
+  "bytes_packed": 419318,
+  "bytes_uint32": 479092,
+  "counted": "2026-09-30T20:55:55Z",
+  "genome": "MEMORY#2",
+  "neurons": 32,
+  "populated": 132695,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b28n32_cf21_brushless_L4C_s31337002/stage4_memory.yaml.gz",
+  "true_keys": 119549
+ },
+ "SL_A_b30n32_cf21_brushless_L4C_desir_s31337002@headline": {
+  "bits": 30,
+  "bytes_packed": 470933,
+  "bytes_uint32": 502264,
+  "counted": "2026-09-30T20:55:56Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 32,
+  "populated": 125326,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b30n32_cf21_brushless_L4C_desir_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 125326
+ },
+ "SL_A_b30n32_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 30,
+  "bytes_packed": 534604,
+  "bytes_uint32": 570180,
+  "counted": "2026-09-30T20:55:57Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 32,
+  "populated": 142305,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b30n32_cf21_brushless_L4C_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 142305
+ },
+ "SL_A_b32n32_cf21_brushless_L4C_desir_s31337002@headline": {
+  "bits": 32,
+  "bytes_packed": 736772,
+  "bytes_uint32": 736772,
+  "counted": "2026-09-30T20:55:58Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 32,
+  "populated": 183937,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b32n32_cf21_brushless_L4C_desir_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 183937
+ },
+ "SL_A_b32n32_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 32,
+  "bytes_packed": 645704,
+  "bytes_uint32": 645704,
+  "counted": "2026-09-30T20:55:59Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 32,
+  "populated": 161170,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b32n32_cf21_brushless_L4C_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 161170
+ },
+ "SL_A_b34n32_cf21_brushless_L4C_desir_s31337002@headline": {
+  "bits": 34,
+  "bytes_packed": 824857,
+  "bytes_uint32": 776400,
+  "counted": "2026-09-30T20:56:00Z",
+  "genome": "MEMORY#2",
+  "neurons": 32,
+  "populated": 215058,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b34n32_cf21_brushless_L4C_desir_s31337002/stage4_memory.yaml.gz",
+  "true_keys": 193828
+ },
+ "SL_A_b34n32_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 34,
+  "bytes_packed": 1524437,
+  "bytes_uint32": 1434828,
+  "counted": "2026-09-30T20:56:01Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 32,
+  "populated": 358435,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b34n32_cf21_brushless_L4C_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 358435
+ },
+ "SL_A_b36n32_cf21_brushless_L4C_desir_s31337002@headline": {
+  "bits": 36,
+  "bytes_packed": 1456412,
+  "bytes_uint32": 1294716,
+  "counted": "2026-09-30T20:56:02Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 32,
+  "populated": 323391,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b36n32_cf21_brushless_L4C_desir_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 323391
+ },
+ "SL_A_b36n32_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 36,
+  "bytes_packed": 949865,
+  "bytes_uint32": 844452,
+  "counted": "2026-09-30T20:56:03Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 32,
+  "populated": 210825,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b36n32_cf21_brushless_L4C_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 210825
+ },
+ "SL_A_b40n32_cf21_brushless_L4C_desir_s31337002@headline": {
+  "bits": 40,
+  "bytes_packed": 1990535,
+  "bytes_uint32": 1592684,
+  "counted": "2026-09-30T20:56:04Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 32,
+  "populated": 397851,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b40n32_cf21_brushless_L4C_desir_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 397851
+ },
+ "SL_A_b40n32_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 40,
+  "bytes_packed": 2765645,
+  "bytes_uint32": 2212772,
+  "counted": "2026-09-30T20:56:05Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 32,
+  "populated": 552873,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b40n32_cf21_brushless_L4C_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 552873
+ },
+ "SL_A_b48n32_cf21_brushless_L4C_desir_s31337002@headline": {
+  "bits": 48,
+  "bytes_packed": 7165296,
+  "bytes_uint32": 4777376,
+  "counted": "2026-09-30T20:56:07Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 32,
+  "populated": 1193960,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b48n32_cf21_brushless_L4C_desir_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 1193960
+ },
+ "SL_A_b48n32_cf21_brushless_L4C_g20_s31337002@headline": {
+  "bits": 48,
+  "bytes_packed": 5037876,
+  "bytes_uint32": 3359096,
+  "counted": "2026-09-30T20:56:08Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 32,
+  "populated": 839390,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b48n32_cf21_brushless_L4C_g20_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 839390
+ },
+ "SL_A_b48n32_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 48,
+  "bytes_packed": 5037876,
+  "bytes_uint32": 3359096,
+  "counted": "2026-09-30T20:56:10Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 32,
+  "populated": 839390,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b48n32_cf21_brushless_L4C_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 839390
+ },
+ "SL_A_b64n32_cf21_brushless_L4C_desir_s31337002@headline": {
+  "bits": 64,
+  "bytes_packed": 17406648,
+  "bytes_uint32": 8704348,
+  "counted": "2026-09-30T20:56:14Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 32,
+  "populated": 2175575,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b64n32_cf21_brushless_L4C_desir_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 2175575
+ },
+ "SL_A_b64n32_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 64,
+  "bytes_packed": 12241312,
+  "bytes_uint32": 6121680,
+  "counted": "2026-09-30T20:56:17Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 32,
+  "populated": 1529908,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_A_b64n32_cf21_brushless_L4C_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 1529908
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002@headline": {
+  "bits": 24,
+  "bytes_packed": 1133178,
+  "bytes_uint32": 1508856,
+  "counted": "2026-09-30T20:56:18Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 256,
+  "populated": 375678,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 375678
  },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_bd": {
   "bits": 24,
@@ -19,6 +1020,17 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_bd_winner.yaml.gz",
   "true_keys": 1968888
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_bd@headline": {
+  "bits": 24,
+  "bytes_packed": 5713476,
+  "bytes_uint32": 7615920,
+  "counted": "2026-09-30T20:56:21Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 256,
+  "populated": 1902444,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_bd/stage3_connections.yaml.gz",
+  "true_keys": 1902444
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_crn": {
   "bits": 24,
   "bytes_packed": 1131270,
@@ -27,6 +1039,17 @@
   "neurons": 256,
   "populated": 416682,
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_crn_winner.yaml.gz",
+  "true_keys": 375042
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_crn@headline": {
+  "bits": 24,
+  "bytes_packed": 1131270,
+  "bytes_uint32": 1506312,
+  "counted": "2026-09-30T20:56:22Z",
+  "genome": "MEMORY#0",
+  "neurons": 256,
+  "populated": 416682,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_crn/stage4_memory.yaml.gz",
   "true_keys": 375042
  },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_dl": {
@@ -39,6 +1062,17 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_dl_winner.yaml.gz",
   "true_keys": 602444
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_dl@headline": {
+  "bits": 24,
+  "bytes_packed": 1966977,
+  "bytes_uint32": 2620588,
+  "counted": "2026-09-30T20:56:23Z",
+  "genome": "MEMORY#2",
+  "neurons": 256,
+  "populated": 796966,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_dl/stage4_memory.yaml.gz",
+  "true_keys": 653611
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_fix": {
   "bits": 24,
   "bytes_packed": 744027,
@@ -48,6 +1082,17 @@
   "populated": 299556,
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_fix_winner.yaml.gz",
   "true_keys": 245961
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_fix@headline": {
+  "bits": 24,
+  "bytes_packed": 845439,
+  "bytes_uint32": 1125204,
+  "counted": "2026-09-30T20:56:24Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 256,
+  "populated": 279765,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_fix/stage3_connections.yaml.gz",
+  "true_keys": 279765
  },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_full30": {
   "bits": 31,
@@ -90,6 +1135,17 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_hd29_winner.yaml.gz",
   "true_keys": 245961
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_hd29@headline": {
+  "bits": 24,
+  "bytes_packed": 845439,
+  "bytes_uint32": 1125204,
+  "counted": "2026-09-30T20:56:26Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 256,
+  "populated": 279765,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_hd29/stage3_connections.yaml.gz",
+  "true_keys": 279765
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_hd30": {
   "bits": 24,
   "bytes_packed": 2274615,
@@ -99,6 +1155,28 @@
   "populated": 756157,
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_hd30_winner.yaml.gz",
   "true_keys": 756157
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_hd30@headline": {
+  "bits": 24,
+  "bytes_packed": 2118285,
+  "bytes_uint32": 2822332,
+  "counted": "2026-09-30T20:56:28Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 256,
+  "populated": 704047,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_hd30/stage3_connections.yaml.gz",
+  "true_keys": 704047
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_hd@headline": {
+  "bits": 24,
+  "bytes_packed": 917964,
+  "bytes_uint32": 1221904,
+  "counted": "2026-09-30T20:56:25Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 256,
+  "populated": 303940,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_hd/stage3_connections.yaml.gz",
+  "true_keys": 303940
  },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_l090_ls2": {
   "bits": 24,
@@ -120,6 +1198,17 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_leak090_winner.yaml.gz",
   "true_keys": 318093
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_leak090@headline": {
+  "bits": 24,
+  "bytes_packed": 960423,
+  "bytes_uint32": 1278516,
+  "counted": "2026-09-30T20:56:29Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 256,
+  "populated": 318093,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_leak090/stage3_connections.yaml.gz",
+  "true_keys": 318093
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_ls2": {
   "bits": 24,
   "bytes_packed": 1572246,
@@ -129,6 +1218,17 @@
   "populated": 522034,
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_ls2_winner.yaml.gz",
   "true_keys": 522034
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_ls2@headline": {
+  "bits": 24,
+  "bytes_packed": 1815870,
+  "bytes_uint32": 2419112,
+  "counted": "2026-09-30T20:56:30Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 256,
+  "populated": 603242,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_ls2/stage3_connections.yaml.gz",
+  "true_keys": 603242
  },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_ls4": {
   "bits": 24,
@@ -140,6 +1240,17 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_ls4_winner.yaml.gz",
   "true_keys": 730226
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_ls4@headline": {
+  "bits": 24,
+  "bytes_packed": 1876350,
+  "bytes_uint32": 2499752,
+  "counted": "2026-09-30T20:56:31Z",
+  "genome": "MEMORY#1",
+  "neurons": 256,
+  "populated": 623402,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_ls4/stage4_memory.yaml.gz",
+  "true_keys": 623402
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_ls8": {
   "bits": 24,
   "bytes_packed": 2933733,
@@ -149,6 +1260,17 @@
   "populated": 975863,
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_ls8_winner.yaml.gz",
   "true_keys": 975863
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_ls8@headline": {
+  "bits": 24,
+  "bytes_packed": 2552127,
+  "bytes_uint32": 3400788,
+  "counted": "2026-09-30T20:58:02Z",
+  "genome": "GRID#0",
+  "neurons": 256,
+  "populated": 848661,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_ls8/stage0_grid.yaml.gz",
+  "true_keys": 848661
  },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_mut1tap": {
   "bits": 24,
@@ -160,6 +1282,17 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_mut1tap_winner.yaml.gz",
   "true_keys": 354496
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_mut1tap@headline": {
+  "bits": 24,
+  "bytes_packed": 1069632,
+  "bytes_uint32": 1424128,
+  "counted": "2026-09-30T20:56:33Z",
+  "genome": "MEMORY#0",
+  "neurons": 256,
+  "populated": 416682,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_mut1tap/stage4_memory.yaml.gz",
+  "true_keys": 354496
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_op30": {
   "bits": 24,
   "bytes_packed": 3663024,
@@ -169,6 +1302,17 @@
   "populated": 1354139,
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_op30_winner.yaml.gz",
   "true_keys": 1218960
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_op30@headline": {
+  "bits": 24,
+  "bytes_packed": 3355785,
+  "bytes_uint32": 4472332,
+  "counted": "2026-09-30T20:58:04Z",
+  "genome": "GRID#0",
+  "neurons": 256,
+  "populated": 1116547,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_op30/stage0_grid.yaml.gz",
+  "true_keys": 1116547
  },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_pipeN": {
   "bits": 24,
@@ -190,6 +1334,29 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_pipeN30_winner.yaml.gz",
   "true_keys": 692531
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_pipeN30@headline": {
+  "bits": 24,
+  "bytes_packed": 1749126,
+  "bytes_uint32": 2330120,
+  "counted": "2026-09-30T20:58:14Z",
+  "genome": "GRID#2",
+  "neurons": 256,
+  "populated": 580994,
+  "retrained_from_args": "experiments/ctrl16_args/ARGS_SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_pipeN30.txt",
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_pipeN30/stage0_grid.yaml.gz",
+  "true_keys": 580994
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_pipeN@headline": {
+  "bits": 24,
+  "bytes_packed": 1079880,
+  "bytes_uint32": 1437792,
+  "counted": "2026-09-30T20:56:34Z",
+  "genome": "NEURONS#2",
+  "neurons": 256,
+  "populated": 357912,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_pipeN/stage1_neurons.yaml.gz",
+  "true_keys": 357912
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_pon30": {
   "bits": 24,
   "bytes_packed": 1638957,
@@ -199,6 +1366,17 @@
   "populated": 544271,
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_pon30_winner.yaml.gz",
   "true_keys": 544271
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_pon30@headline": {
+  "bits": 24,
+  "bytes_packed": 1099092,
+  "bytes_uint32": 1463408,
+  "counted": "2026-09-30T20:56:35Z",
+  "genome": "MEMORY#0",
+  "neurons": 256,
+  "populated": 544271,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_pon30/stage4_memory.yaml.gz",
+  "true_keys": 364316
  },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_win2": {
   "bits": 24,
@@ -210,6 +1388,17 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_win2_winner.yaml.gz",
   "true_keys": 425802
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_win2@headline": {
+  "bits": 24,
+  "bytes_packed": 1161399,
+  "bytes_uint32": 1546484,
+  "counted": "2026-09-30T20:56:36Z",
+  "genome": "MEMORY#1",
+  "neurons": 256,
+  "populated": 719939,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_win2/stage4_memory.yaml.gz",
+  "true_keys": 385085
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_win3": {
   "bits": 24,
   "bytes_packed": 1100952,
@@ -220,6 +1409,28 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_win3_winner.yaml.gz",
   "true_keys": 364936
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_win3@headline": {
+  "bits": 24,
+  "bytes_packed": 1046742,
+  "bytes_uint32": 1393608,
+  "counted": "2026-09-30T20:56:38Z",
+  "genome": "MEMORY#2",
+  "neurons": 256,
+  "populated": 660666,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_win3/stage4_memory.yaml.gz",
+  "true_keys": 346866
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_win4@headline": {
+  "bits": 24,
+  "bytes_packed": 562947,
+  "bytes_uint32": 748548,
+  "counted": "2026-09-30T20:56:39Z",
+  "genome": "MEMORY#2",
+  "neurons": 256,
+  "populated": 342408,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_win4/stage4_memory.yaml.gz",
+  "true_keys": 185601
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003": {
   "bits": 24,
   "bytes_packed": 949293,
@@ -228,6 +1439,17 @@
   "neurons": 256,
   "populated": 314383,
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_winner.yaml.gz",
+  "true_keys": 314383
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003@headline": {
+  "bits": 24,
+  "bytes_packed": 949293,
+  "bytes_uint32": 1263676,
+  "counted": "2026-09-30T20:56:40Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 256,
+  "populated": 314383,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003/stage3_connections.yaml.gz",
   "true_keys": 314383
  },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_bd": {
@@ -240,6 +1462,17 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_bd_winner.yaml.gz",
   "true_keys": 1807948
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_bd@headline": {
+  "bits": 24,
+  "bytes_packed": 6113367,
+  "bytes_uint32": 8149108,
+  "counted": "2026-09-30T20:58:07Z",
+  "genome": "GRID#0",
+  "neurons": 256,
+  "populated": 2035741,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_bd/stage0_grid.yaml.gz",
+  "true_keys": 2035741
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_dl": {
   "bits": 24,
   "bytes_packed": 2720946,
@@ -249,6 +1482,17 @@
   "populated": 904934,
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_dl_winner.yaml.gz",
   "true_keys": 904934
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_dl@headline": {
+  "bits": 24,
+  "bytes_packed": 2312604,
+  "bytes_uint32": 3081424,
+  "counted": "2026-09-30T20:56:41Z",
+  "genome": "MEMORY#1",
+  "neurons": 256,
+  "populated": 904934,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_dl/stage4_memory.yaml.gz",
+  "true_keys": 768820
  },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_full30": {
   "bits": 24,
@@ -291,6 +1535,17 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_hd29_winner.yaml.gz",
   "true_keys": 193503
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_hd29@headline": {
+  "bits": 24,
+  "bytes_packed": 643716,
+  "bytes_uint32": 856240,
+  "counted": "2026-09-30T20:56:43Z",
+  "genome": "MEMORY#1",
+  "neurons": 256,
+  "populated": 236013,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_hd29/stage4_memory.yaml.gz",
+  "true_keys": 212524
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_hd30": {
   "bits": 24,
   "bytes_packed": 1725243,
@@ -301,6 +1556,28 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_hd30_winner.yaml.gz",
   "true_keys": 573033
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_hd30@headline": {
+  "bits": 24,
+  "bytes_packed": 1724988,
+  "bytes_uint32": 2297936,
+  "counted": "2026-09-30T20:56:45Z",
+  "genome": "MEMORY#2",
+  "neurons": 256,
+  "populated": 636751,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_hd30/stage4_memory.yaml.gz",
+  "true_keys": 572948
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_hd@headline": {
+  "bits": 24,
+  "bytes_packed": 704781,
+  "bytes_uint32": 937660,
+  "counted": "2026-09-30T20:56:42Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 256,
+  "populated": 232879,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_hd/stage3_connections.yaml.gz",
+  "true_keys": 232879
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_l090_ls2": {
   "bits": 24,
   "bytes_packed": 1523436,
@@ -309,6 +1586,17 @@
   "neurons": 256,
   "populated": 505764,
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_l090_ls2_winner.yaml.gz",
+  "true_keys": 505764
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_l090_ls2@headline": {
+  "bits": 24,
+  "bytes_packed": 1523436,
+  "bytes_uint32": 2029200,
+  "counted": "2026-09-30T20:56:46Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 256,
+  "populated": 505764,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_l090_ls2/stage3_connections.yaml.gz",
   "true_keys": 505764
  },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_leak090": {
@@ -321,6 +1609,17 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_leak090_winner.yaml.gz",
   "true_keys": 236966
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_leak090@headline": {
+  "bits": 24,
+  "bytes_packed": 1020981,
+  "bytes_uint32": 1359260,
+  "counted": "2026-09-30T20:58:08Z",
+  "genome": "GRID#0",
+  "neurons": 256,
+  "populated": 338279,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_leak090/stage0_grid.yaml.gz",
+  "true_keys": 338279
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_ls2": {
   "bits": 24,
   "bytes_packed": 1493382,
@@ -330,6 +1629,17 @@
   "populated": 550910,
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_ls2_winner.yaml.gz",
   "true_keys": 495746
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_ls2@headline": {
+  "bits": 24,
+  "bytes_packed": 1508844,
+  "bytes_uint32": 2009744,
+  "counted": "2026-09-30T20:56:47Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 256,
+  "populated": 500900,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_ls2/stage3_connections.yaml.gz",
+  "true_keys": 500900
  },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_ls4": {
   "bits": 24,
@@ -341,6 +1651,17 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_ls4_winner.yaml.gz",
   "true_keys": 752036
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_ls4@headline": {
+  "bits": 24,
+  "bytes_packed": 2010681,
+  "bytes_uint32": 2678860,
+  "counted": "2026-09-30T20:56:49Z",
+  "genome": "CONNECTIONS#2",
+  "neurons": 256,
+  "populated": 668179,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_ls4/stage3_connections.yaml.gz",
+  "true_keys": 668179
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_ls8": {
   "bits": 24,
   "bytes_packed": 2565918,
@@ -349,6 +1670,17 @@
   "neurons": 256,
   "populated": 853258,
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_ls8_winner.yaml.gz",
+  "true_keys": 853258
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_ls8@headline": {
+  "bits": 24,
+  "bytes_packed": 2565918,
+  "bytes_uint32": 3419176,
+  "counted": "2026-09-30T20:56:50Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 256,
+  "populated": 853258,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_ls8/stage3_connections.yaml.gz",
   "true_keys": 853258
  },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_mut1tap": {
@@ -361,6 +1693,17 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_mut1tap_winner.yaml.gz",
   "true_keys": 314383
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_mut1tap@headline": {
+  "bits": 24,
+  "bytes_packed": 949293,
+  "bytes_uint32": 1263676,
+  "counted": "2026-09-30T20:56:51Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 256,
+  "populated": 314383,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_mut1tap/stage3_connections.yaml.gz",
+  "true_keys": 314383
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_op30": {
   "bits": 24,
   "bytes_packed": 7367481,
@@ -369,6 +1712,17 @@
   "neurons": 456,
   "populated": 2452179,
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_op30_winner.yaml.gz",
+  "true_keys": 2452179
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_op30@headline": {
+  "bits": 24,
+  "bytes_packed": 7367481,
+  "bytes_uint32": 9819660,
+  "counted": "2026-09-30T20:56:54Z",
+  "genome": "NEURONS#1",
+  "neurons": 456,
+  "populated": 2452179,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_op30/stage1_neurons.yaml.gz",
   "true_keys": 2452179
  },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_pipeN": {
@@ -402,6 +1756,17 @@
   "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_pipeN30/stage1_neurons.yaml.gz",
   "true_keys": 772185
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_pipeN@headline": {
+  "bits": 24,
+  "bytes_packed": 1059030,
+  "bytes_uint32": 1409992,
+  "counted": "2026-09-30T20:56:55Z",
+  "genome": "NEURONS#0",
+  "neurons": 256,
+  "populated": 350962,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_pipeN/stage1_neurons.yaml.gz",
+  "true_keys": 350962
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337004": {
   "bits": 24,
   "bytes_packed": 992142,
@@ -411,6 +1776,17 @@
   "populated": 364832,
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_winner.yaml.gz",
   "true_keys": 328666
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337004@headline": {
+  "bits": 24,
+  "bytes_packed": 1416135,
+  "bytes_uint32": 1886132,
+  "counted": "2026-09-30T20:56:56Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 256,
+  "populated": 469997,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337004/stage3_connections.yaml.gz",
+  "true_keys": 469997
  },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_bd": {
   "bits": 24,
@@ -431,6 +1807,17 @@
   "populated": 811545,
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_dl_winner.yaml.gz",
   "true_keys": 811545
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_dl@headline": {
+  "bits": 24,
+  "bytes_packed": 2440917,
+  "bytes_uint32": 3252508,
+  "counted": "2026-09-30T20:56:58Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 256,
+  "populated": 811591,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_dl/stage3_connections.yaml.gz",
+  "true_keys": 811591
  },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_full30": {
   "bits": 42,
@@ -473,6 +1860,17 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_hd29_winner.yaml.gz",
   "true_keys": 252724
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_hd29@headline": {
+  "bits": 24,
+  "bytes_packed": 940044,
+  "bytes_uint32": 1251344,
+  "counted": "2026-09-30T20:57:00Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 256,
+  "populated": 311300,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_hd29/stage3_connections.yaml.gz",
+  "true_keys": 311300
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_hd30": {
   "bits": 24,
   "bytes_packed": 2335332,
@@ -482,6 +1880,28 @@
   "populated": 776396,
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_hd30_winner.yaml.gz",
   "true_keys": 776396
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_hd30@headline": {
+  "bits": 24,
+  "bytes_packed": 2335332,
+  "bytes_uint32": 3111728,
+  "counted": "2026-09-30T20:57:01Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 256,
+  "populated": 776396,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_hd30/stage3_connections.yaml.gz",
+  "true_keys": 776396
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_hd@headline": {
+  "bits": 24,
+  "bytes_packed": 884808,
+  "bytes_uint32": 1177696,
+  "counted": "2026-09-30T20:56:59Z",
+  "genome": "MEMORY#0",
+  "neurons": 256,
+  "populated": 325160,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_hd/stage4_memory.yaml.gz",
+  "true_keys": 292888
  },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_l090_ls2": {
   "bits": 24,
@@ -493,6 +1913,17 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_l090_ls2_winner.yaml.gz",
   "true_keys": 475693
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_l090_ls2@headline": {
+  "bits": 24,
+  "bytes_packed": 1099431,
+  "bytes_uint32": 1463860,
+  "counted": "2026-09-30T20:58:11Z",
+  "genome": "GRID#1",
+  "neurons": 256,
+  "populated": 364429,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_l090_ls2/stage0_grid.yaml.gz",
+  "true_keys": 364429
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_leak090": {
   "bits": 24,
   "bytes_packed": 917973,
@@ -503,6 +1934,17 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_leak090_winner.yaml.gz",
   "true_keys": 303943
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_leak090@headline": {
+  "bits": 24,
+  "bytes_packed": 1055910,
+  "bytes_uint32": 1405832,
+  "counted": "2026-09-30T20:57:02Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 256,
+  "populated": 349922,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_leak090/stage3_connections.yaml.gz",
+  "true_keys": 349922
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_ls2": {
   "bits": 24,
   "bytes_packed": 1481388,
@@ -512,6 +1954,17 @@
   "populated": 547430,
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_ls2_winner.yaml.gz",
   "true_keys": 491748
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_ls2@headline": {
+  "bits": 24,
+  "bytes_packed": 2018787,
+  "bytes_uint32": 2689668,
+  "counted": "2026-09-30T20:57:04Z",
+  "genome": "CONNECTIONS#2",
+  "neurons": 256,
+  "populated": 670881,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_ls2/stage3_connections.yaml.gz",
+  "true_keys": 670881
  },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_ls4": {
   "bits": 24,
@@ -533,6 +1986,17 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_ls8_winner.yaml.gz",
   "true_keys": 952314
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_ls8@headline": {
+  "bits": 24,
+  "bytes_packed": 2162541,
+  "bytes_uint32": 2881340,
+  "counted": "2026-09-30T20:58:13Z",
+  "genome": "GRID#0",
+  "neurons": 256,
+  "populated": 718799,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_ls8/stage0_grid.yaml.gz",
+  "true_keys": 718799
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_mut1tap": {
   "bits": 24,
   "bytes_packed": 727188,
@@ -543,6 +2007,17 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_mut1tap_winner.yaml.gz",
   "true_keys": 240348
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_mut1tap@headline": {
+  "bits": 24,
+  "bytes_packed": 941406,
+  "bytes_uint32": 1253160,
+  "counted": "2026-09-30T20:57:05Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 256,
+  "populated": 311754,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_mut1tap/stage3_connections.yaml.gz",
+  "true_keys": 311754
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_op30": {
   "bits": 24,
   "bytes_packed": 4146255,
@@ -552,6 +2027,17 @@
   "populated": 1380037,
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_op30_winner.yaml.gz",
   "true_keys": 1380037
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_op30@headline": {
+  "bits": 24,
+  "bytes_packed": 3887832,
+  "bytes_uint32": 5181728,
+  "counted": "2026-09-30T20:58:15Z",
+  "genome": "GRID#0",
+  "neurons": 256,
+  "populated": 1293896,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_op30/stage0_grid.yaml.gz",
+  "true_keys": 1293896
  },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_pipeN": {
   "bits": 24,
@@ -584,6 +2070,17 @@
   "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_pipeN30/stage1_neurons.yaml.gz",
   "true_keys": 1169649
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_pipeN@headline": {
+  "bits": 24,
+  "bytes_packed": 982062,
+  "bytes_uint32": 1307368,
+  "counted": "2026-09-30T20:57:06Z",
+  "genome": "NEURONS#1",
+  "neurons": 256,
+  "populated": 325306,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_pipeN/stage1_neurons.yaml.gz",
+  "true_keys": 325306
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337005": {
   "bits": 24,
   "bytes_packed": 1183539,
@@ -592,6 +2089,17 @@
   "neurons": 256,
   "populated": 392465,
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_winner.yaml.gz",
+  "true_keys": 392465
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337005@headline": {
+  "bits": 24,
+  "bytes_packed": 1183539,
+  "bytes_uint32": 1576004,
+  "counted": "2026-09-30T20:57:07Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 256,
+  "populated": 392465,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337005/stage3_connections.yaml.gz",
   "true_keys": 392465
  },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_bd": {
@@ -604,6 +2112,17 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_bd_winner.yaml.gz",
   "true_keys": 1792373
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_bd@headline": {
+  "bits": 24,
+  "bytes_packed": 5383263,
+  "bytes_uint32": 7175636,
+  "counted": "2026-09-30T20:57:09Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 256,
+  "populated": 1792373,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_bd/stage3_connections.yaml.gz",
+  "true_keys": 1792373
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_dl": {
   "bits": 24,
   "bytes_packed": 1638741,
@@ -613,6 +2132,17 @@
   "populated": 751153,
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_dl_winner.yaml.gz",
   "true_keys": 544199
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_dl@headline": {
+  "bits": 24,
+  "bytes_packed": 2259603,
+  "bytes_uint32": 3010756,
+  "counted": "2026-09-30T20:57:10Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 256,
+  "populated": 751153,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_dl/stage3_connections.yaml.gz",
+  "true_keys": 751153
  },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_full30": {
   "bits": 23,
@@ -655,6 +2185,17 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_hd29_winner.yaml.gz",
   "true_keys": 216589
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_hd29@headline": {
+  "bits": 24,
+  "bytes_packed": 903687,
+  "bytes_uint32": 1202868,
+  "counted": "2026-09-30T20:57:13Z",
+  "genome": "CONNECTIONS#2",
+  "neurons": 256,
+  "populated": 299181,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_hd29/stage3_connections.yaml.gz",
+  "true_keys": 299181
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_hd30": {
   "bits": 24,
   "bytes_packed": 2070501,
@@ -664,6 +2205,28 @@
   "populated": 688119,
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_hd30_winner.yaml.gz",
   "true_keys": 688119
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_hd30@headline": {
+  "bits": 24,
+  "bytes_packed": 2054637,
+  "bytes_uint32": 2737468,
+  "counted": "2026-09-30T20:57:14Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 256,
+  "populated": 682831,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_hd30/stage3_connections.yaml.gz",
+  "true_keys": 682831
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_hd@headline": {
+  "bits": 24,
+  "bytes_packed": 916227,
+  "bytes_uint32": 1219588,
+  "counted": "2026-09-30T20:57:11Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 256,
+  "populated": 303361,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_hd/stage3_connections.yaml.gz",
+  "true_keys": 303361
  },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_l090_ls2": {
   "bits": 24,
@@ -675,6 +2238,17 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_l090_ls2_winner.yaml.gz",
   "true_keys": 540328
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_l090_ls2@headline": {
+  "bits": 24,
+  "bytes_packed": 1405161,
+  "bytes_uint32": 1871500,
+  "counted": "2026-09-30T20:57:15Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 256,
+  "populated": 466339,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_l090_ls2/stage3_connections.yaml.gz",
+  "true_keys": 466339
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_leak090": {
   "bits": 24,
   "bytes_packed": 910305,
@@ -685,6 +2259,17 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_leak090_winner.yaml.gz",
   "true_keys": 301387
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_leak090@headline": {
+  "bits": 24,
+  "bytes_packed": 1010562,
+  "bytes_uint32": 1345368,
+  "counted": "2026-09-30T20:57:16Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 256,
+  "populated": 334806,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_leak090/stage3_connections.yaml.gz",
+  "true_keys": 334806
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_ls2": {
   "bits": 24,
   "bytes_packed": 1588611,
@@ -693,6 +2278,17 @@
   "neurons": 256,
   "populated": 527489,
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_ls2_winner.yaml.gz",
+  "true_keys": 527489
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_ls2@headline": {
+  "bits": 24,
+  "bytes_packed": 1588611,
+  "bytes_uint32": 2116100,
+  "counted": "2026-09-30T20:57:18Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 256,
+  "populated": 527489,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_ls2/stage3_connections.yaml.gz",
   "true_keys": 527489
  },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_ls4": {
@@ -705,6 +2301,17 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_ls4_winner.yaml.gz",
   "true_keys": 670835
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_ls4@headline": {
+  "bits": 24,
+  "bytes_packed": 2310573,
+  "bytes_uint32": 3078716,
+  "counted": "2026-09-30T20:57:19Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 256,
+  "populated": 768143,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_ls4/stage3_connections.yaml.gz",
+  "true_keys": 768143
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_ls8": {
   "bits": 24,
   "bytes_packed": 2787072,
@@ -714,6 +2321,17 @@
   "populated": 926976,
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_ls8_winner.yaml.gz",
   "true_keys": 926976
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_ls8@headline": {
+  "bits": 24,
+  "bytes_packed": 2601993,
+  "bytes_uint32": 3467276,
+  "counted": "2026-09-30T20:58:16Z",
+  "genome": "GRID#1",
+  "neurons": 256,
+  "populated": 865283,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_ls8/stage0_grid.yaml.gz",
+  "true_keys": 865283
  },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_mut1tap": {
   "bits": 24,
@@ -725,6 +2343,17 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_mut1tap_winner.yaml.gz",
   "true_keys": 329923
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_mut1tap@headline": {
+  "bits": 24,
+  "bytes_packed": 995913,
+  "bytes_uint32": 1325836,
+  "counted": "2026-09-30T20:57:20Z",
+  "genome": "MEMORY#0",
+  "neurons": 256,
+  "populated": 366751,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_mut1tap/stage4_memory.yaml.gz",
+  "true_keys": 329923
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_op30": {
   "bits": 24,
   "bytes_packed": 4283601,
@@ -734,6 +2363,17 @@
   "populated": 1425819,
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_op30_winner.yaml.gz",
   "true_keys": 1425819
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_op30@headline": {
+  "bits": 24,
+  "bytes_packed": 4451703,
+  "bytes_uint32": 5933556,
+  "counted": "2026-09-30T20:57:22Z",
+  "genome": "NEURONS#0",
+  "neurons": 256,
+  "populated": 1481853,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_op30/stage1_neurons.yaml.gz",
+  "true_keys": 1481853
  },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_pipeN": {
   "bits": 24,
@@ -766,6 +2406,61 @@
   "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_pipeN30/stage1_neurons.yaml.gz",
   "true_keys": 675789
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_pipeN@headline": {
+  "bits": 24,
+  "bytes_packed": 981651,
+  "bytes_uint32": 1306820,
+  "counted": "2026-09-30T20:57:23Z",
+  "genome": "NEURONS#0",
+  "neurons": 256,
+  "populated": 325169,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_pipeN/stage1_neurons.yaml.gz",
+  "true_keys": 325169
+ },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337006_hd29@headline": {
+  "bits": 24,
+  "bytes_packed": 746688,
+  "bytes_uint32": 993536,
+  "counted": "2026-09-30T20:57:24Z",
+  "genome": "MEMORY#2",
+  "neurons": 256,
+  "populated": 274232,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337006_hd29/stage4_memory.yaml.gz",
+  "true_keys": 246848
+ },
+ "SL_C_b24n384_cf21_brushless_L4C_g10_s31337002@headline": {
+  "bits": 24,
+  "bytes_packed": 1234545,
+  "bytes_uint32": 1642988,
+  "counted": "2026-09-30T20:57:25Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 384,
+  "populated": 408443,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n384_cf21_brushless_L4C_g10_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 408443
+ },
+ "SL_C_b24n384_cf21_brushless_L4C_g10_s31337002_win2@headline": {
+  "bits": 24,
+  "bytes_packed": 1629999,
+  "bytes_uint32": 2170260,
+  "counted": "2026-09-30T20:57:27Z",
+  "genome": "MEMORY#1",
+  "neurons": 384,
+  "populated": 739473,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n384_cf21_brushless_L4C_g10_s31337002_win2/stage4_memory.yaml.gz",
+  "true_keys": 540261
+ },
+ "SL_C_b28n256_cf21_brushless_L4C_g10_s31337002@headline": {
+  "bits": 28,
+  "bytes_packed": 1610606,
+  "bytes_uint32": 1839668,
+  "counted": "2026-09-30T20:57:28Z",
+  "genome": "MEMORY#1",
+  "neurons": 256,
+  "populated": 633307,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b28n256_cf21_brushless_L4C_g10_s31337002/stage4_memory.yaml.gz",
+  "true_keys": 458125
+ },
  "SL_C_b28n256_cf21_brushless_L4C_g10_s31337002_crn": {
   "bits": 28,
   "bytes_packed": 2279533,
@@ -775,6 +2470,17 @@
   "populated": 791425,
   "source": "logs/controller/sweep_ladder/SL_C_b28n256_cf21_brushless_L4C_g10_s31337002_crn_winner.yaml.gz",
   "true_keys": 649247
+ },
+ "SL_C_b28n256_cf21_brushless_L4C_g10_s31337002_crn@headline": {
+  "bits": 28,
+  "bytes_packed": 2276911,
+  "bytes_uint32": 2601160,
+  "counted": "2026-09-30T20:57:30Z",
+  "genome": "MEMORY#1",
+  "neurons": 256,
+  "populated": 791425,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b28n256_cf21_brushless_L4C_g10_s31337002_crn/stage4_memory.yaml.gz",
+  "true_keys": 648498
  },
  "SL_C_b28n256_cf21_brushless_L4C_g10_s31337003": {
   "bits": 28,
@@ -786,6 +2492,17 @@
   "source": "logs/controller/sweep_ladder/SL_C_b28n256_cf21_brushless_L4C_g10_s31337003_winner.yaml.gz",
   "true_keys": 620600
  },
+ "SL_C_b28n256_cf21_brushless_L4C_g10_s31337003@headline": {
+  "bits": 28,
+  "bytes_packed": 1787545,
+  "bytes_uint32": 2041884,
+  "counted": "2026-09-30T20:57:31Z",
+  "genome": "MEMORY#2",
+  "neurons": 256,
+  "populated": 620600,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b28n256_cf21_brushless_L4C_g10_s31337003/stage4_memory.yaml.gz",
+  "true_keys": 508679
+ },
  "SL_C_b32n256_cf21_brushless_L4C_g10_s31337002": {
   "bits": 32,
   "bytes_packed": 3586400,
@@ -795,6 +2512,50 @@
   "populated": 1091330,
   "source": "logs/controller/sweep_ladder/SL_C_b32n256_cf21_brushless_L4C_g10_s31337002_winner.yaml.gz",
   "true_keys": 894552
+ },
+ "SL_C_b32n256_cf21_brushless_L4C_g10_s31337002@headline": {
+  "bits": 32,
+  "bytes_packed": 3586400,
+  "bytes_uint32": 3586400,
+  "counted": "2026-09-30T20:57:33Z",
+  "genome": "MEMORY#0",
+  "neurons": 256,
+  "populated": 1091330,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b32n256_cf21_brushless_L4C_g10_s31337002/stage4_memory.yaml.gz",
+  "true_keys": 894552
+ },
+ "SL_C_b32n256_cf21_brushless_L4C_g10_s31337003@headline": {
+  "bits": 32,
+  "bytes_packed": 3095844,
+  "bytes_uint32": 3095844,
+  "counted": "2026-09-30T20:57:35Z",
+  "genome": "CONNECTIONS#2",
+  "neurons": 256,
+  "populated": 771913,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b32n256_cf21_brushless_L4C_g10_s31337003/stage3_connections.yaml.gz",
+  "true_keys": 771913
+ },
+ "SL_C_b32n32_cf21_brushless_L4C_g20_s31337002@headline": {
+  "bits": 32,
+  "bytes_packed": 513920,
+  "bytes_uint32": 513920,
+  "counted": "2026-09-30T20:57:35Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 32,
+  "populated": 128224,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b32n32_cf21_brushless_L4C_g20_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 128224
+ },
+ "SL_C_b32n64_cf21_brushless_L4C_g10_s31337002@headline": {
+  "bits": 32,
+  "bytes_packed": 1385724,
+  "bytes_uint32": 1385724,
+  "counted": "2026-09-30T20:57:36Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 64,
+  "populated": 345919,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b32n64_cf21_brushless_L4C_g10_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 345919
  },
  "SL_C_b32n64_cf21_brushless_L4C_g10_s31337002_crn": {
   "bits": 32,
@@ -806,6 +2567,182 @@
   "source": "logs/controller/sweep_ladder/SL_C_b32n64_cf21_brushless_L4C_g10_s31337002_crn_winner.yaml.gz",
   "true_keys": 362623
  },
+ "SL_C_b32n64_cf21_brushless_L4C_g10_s31337002_crn@headline": {
+  "bits": 32,
+  "bytes_packed": 1192844,
+  "bytes_uint32": 1192844,
+  "counted": "2026-09-30T20:57:37Z",
+  "genome": "MEMORY#0",
+  "neurons": 64,
+  "populated": 362623,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b32n64_cf21_brushless_L4C_g10_s31337002_crn/stage4_memory.yaml.gz",
+  "true_keys": 297699
+ },
+ "SL_C_b32n96_cf21_brushless_L4C_g10_s31337002@headline": {
+  "bits": 32,
+  "bytes_packed": 1859808,
+  "bytes_uint32": 1859808,
+  "counted": "2026-09-30T20:57:39Z",
+  "genome": "CONNECTIONS#2",
+  "neurons": 96,
+  "populated": 464184,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b32n96_cf21_brushless_L4C_g10_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 464184
+ },
+ "SL_C_b32n96_cf21_brushless_L4C_g20_s31337002@headline": {
+  "bits": 32,
+  "bytes_packed": 1680100,
+  "bytes_uint32": 1680100,
+  "counted": "2026-09-30T20:57:40Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 96,
+  "populated": 419257,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b32n96_cf21_brushless_L4C_g20_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 419257
+ },
+ "SL_C_b36n256_cf21_brushless_L4C_g10_s31337002@headline": {
+  "bits": 36,
+  "bytes_packed": 7382970,
+  "bytes_uint32": 6563664,
+  "counted": "2026-09-30T20:57:42Z",
+  "genome": "MEMORY#1",
+  "neurons": 256,
+  "populated": 1998900,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b36n256_cf21_brushless_L4C_g10_s31337002/stage4_memory.yaml.gz",
+  "true_keys": 1638612
+ },
+ "SL_C_b36n32_cf21_brushless_L4C_g20_s31337002@headline": {
+  "bits": 36,
+  "bytes_packed": 729765,
+  "bytes_uint32": 648808,
+  "counted": "2026-09-30T20:57:43Z",
+  "genome": "MEMORY#0",
+  "neurons": 32,
+  "populated": 179971,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b36n32_cf21_brushless_L4C_g20_s31337002/stage4_memory.yaml.gz",
+  "true_keys": 161914
+ },
+ "SL_C_b36n64_cf21_brushless_L4C_g10_s31337002@headline": {
+  "bits": 36,
+  "bytes_packed": 2335941,
+  "bytes_uint32": 2076648,
+  "counted": "2026-09-30T20:57:44Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 64,
+  "populated": 518586,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b36n64_cf21_brushless_L4C_g10_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 518586
+ },
+ "SL_C_b36n64_cf21_brushless_L4C_g20_s31337002@headline": {
+  "bits": 36,
+  "bytes_packed": 1852443,
+  "bytes_uint32": 1646872,
+  "counted": "2026-09-30T20:57:45Z",
+  "genome": "MEMORY#0",
+  "neurons": 64,
+  "populated": 457263,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b36n64_cf21_brushless_L4C_g20_s31337002/stage4_memory.yaml.gz",
+  "true_keys": 411142
+ },
+ "SL_C_b36n96_cf21_brushless_L4C_g10_s31337002@headline": {
+  "bits": 36,
+  "bytes_packed": 2690757,
+  "bytes_uint32": 2392168,
+  "counted": "2026-09-30T20:57:47Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 96,
+  "populated": 597178,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b36n96_cf21_brushless_L4C_g10_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 597178
+ },
+ "SL_C_b36n96_cf21_brushless_L4C_g20_s31337002@headline": {
+  "bits": 36,
+  "bytes_packed": 2964209,
+  "bytes_uint32": 2635236,
+  "counted": "2026-09-30T20:57:48Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 96,
+  "populated": 657945,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b36n96_cf21_brushless_L4C_g20_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 657945
+ },
+ "SL_C_b40n256_cf21_brushless_L4C_g10_s31337002@headline": {
+  "bits": 40,
+  "bytes_packed": 13648045,
+  "bytes_uint32": 10920484,
+  "counted": "2026-09-30T20:57:52Z",
+  "genome": "CONNECTIONS#0",
+  "neurons": 256,
+  "populated": 2727561,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b40n256_cf21_brushless_L4C_g10_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 2727561
+ },
+ "SP1_B_b15spread_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 15,
+  "bytes_packed": 95794,
+  "bytes_uint32": 200008,
+  "counted": "2026-09-30T20:55:37Z",
+  "genome": "MEMORY#1",
+  "neurons": 256,
+  "populated": 64994,
+  "source": "logs/controller/specialist1/ckpt/SP1_B_b15spread_cf21_brushless_L4C_s31337002/stage4_memory.yaml.gz",
+  "true_keys": 49042
+ },
+ "SP1_C2_b15min2_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 15,
+  "bytes_packed": 50121,
+  "bytes_uint32": 102572,
+  "counted": "2026-09-30T20:55:38Z",
+  "genome": "MEMORY#0",
+  "neurons": 256,
+  "populated": 37438,
+  "source": "logs/controller/specialist1/ckpt/SP1_C2_b15min2_cf21_brushless_L4C_s31337002/stage4_memory.yaml.gz",
+  "true_keys": 24683
+ },
+ "SP1_C3_b15min3_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 15,
+  "bytes_packed": 5505,
+  "bytes_uint32": 10656,
+  "counted": "2026-09-30T20:55:38Z",
+  "genome": "MEMORY#0",
+  "neurons": 64,
+  "populated": 3880,
+  "source": "logs/controller/specialist1/ckpt/SP1_C3_b15min3_cf21_brushless_L4C_s31337002/stage4_memory.yaml.gz",
+  "true_keys": 2424
+ },
+ "SP1_D40_b30fullwin_stride10_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 30,
+  "bytes_packed": 1946179,
+  "bytes_uint32": 2075796,
+  "counted": "2026-09-30T20:55:40Z",
+  "genome": "MEMORY#2",
+  "neurons": 64,
+  "populated": 738742,
+  "source": "logs/controller/specialist1/ckpt/SP1_D40_b30fullwin_stride10_cf21_brushless_L4C_s31337002/stage4_memory.yaml.gz",
+  "true_keys": 518469
+ },
+ "SP1_D_b30fullwin_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 30,
+  "bytes_packed": 2787390,
+  "bytes_uint32": 2973088,
+  "counted": "2026-09-30T20:55:41Z",
+  "genome": "MEMORY#0",
+  "neurons": 64,
+  "populated": 824844,
+  "source": "logs/controller/specialist1/ckpt/SP1_D_b30fullwin_cf21_brushless_L4C_s31337002/stage4_memory.yaml.gz",
+  "true_keys": 742792
+ },
+ "TAB_off_b32n256_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 32,
+  "bytes_packed": 4630408,
+  "bytes_uint32": 4630408,
+  "counted": "2026-09-30T20:57:54Z",
+  "genome": "CONNECTIONS#2",
+  "neurons": 256,
+  "populated": 1155554,
+  "source": "logs/controller/translation_ab/ckpt/TAB_off_b32n256_cf21_brushless_L4C_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 1155554
+ },
  "TAB_on_b32n256_cf21_brushless_L4C_s31337002": {
   "bits": 32,
   "bytes_packed": 5192876,
@@ -815,6 +2752,39 @@
   "populated": 1296171,
   "source": "logs/controller/translation_ab/TAB_on_b32n256_cf21_brushless_L4C_s31337002_winner.yaml.gz",
   "true_keys": 1296171
+ },
+ "TAB_on_b32n256_cf21_brushless_L4C_s31337002@headline": {
+  "bits": 32,
+  "bytes_packed": 4379268,
+  "bytes_uint32": 4379268,
+  "counted": "2026-09-30T20:57:56Z",
+  "genome": "CONNECTIONS#2",
+  "neurons": 256,
+  "populated": 1092769,
+  "source": "logs/controller/translation_ab/ckpt/TAB_on_b32n256_cf21_brushless_L4C_s31337002/stage3_connections.yaml.gz",
+  "true_keys": 1092769
+ },
+ "TAB_on_b32n256_cf21_brushless_L4C_s31337003@headline": {
+  "bits": 32,
+  "bytes_packed": 5397928,
+  "bytes_uint32": 5397928,
+  "counted": "2026-09-30T20:57:58Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 256,
+  "populated": 1347434,
+  "source": "logs/controller/translation_ab/ckpt/TAB_on_b32n256_cf21_brushless_L4C_s31337003/stage3_connections.yaml.gz",
+  "true_keys": 1347434
+ },
+ "TAB_on_b32n256_cf21_brushless_L4C_s31337004@headline": {
+  "bits": 32,
+  "bytes_packed": 4532392,
+  "bytes_uint32": 4532392,
+  "counted": "2026-09-30T20:58:00Z",
+  "genome": "CONNECTIONS#1",
+  "neurons": 256,
+  "populated": 1131050,
+  "source": "logs/controller/translation_ab/ckpt/TAB_on_b32n256_cf21_brushless_L4C_s31337004/stage3_connections.yaml.gz",
+  "true_keys": 1131050
  },
  "TAB_on_b32n256_cf21_brushless_L4C_s31337005": {
   "bits": 32,

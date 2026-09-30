@@ -146,6 +146,9 @@ def retrain_like_scorer(genome, spec, argv_path: str, label: str) -> None:
 
 
 def record(cache: dict, path: str, key: str, e: dict) -> None:
+	# Re-read before writing: a concurrent count (another process) may have added
+	# entries since this one loaded the cache, and a whole-dict write would drop them.
+	cache.update(load_cache(path))
 	cache[key] = e
 	save_cache(path, cache)  # after EVERY entry: a crash mid-list loses nothing
 	print(f"{key}: TRUE keys={e['true_keys']} (populated {e['populated']}, "
