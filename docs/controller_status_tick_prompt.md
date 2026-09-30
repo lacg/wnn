@@ -160,6 +160,11 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
+AS OF 30/09/2026 13:45 EDT — CTRL-16 SIZE CLAUSE AMENDED (Luiz 30/09): it now counts the stage-select HEADLINE genome's TRUE keys (<tag>@headline, count_true_keys.py --headline), not the saved MEMORY best_genome. ctrl16_verdict.py prints PENDING + replace_anchor null while any headline is uncounted; the queue treats null as not-replace and proceeds to 5b/PARK (nothing irreversible before the PARK). ONE count is pending by design: _pipeN30 s2 headline GRID#2 is arch-only. DO IN THE CONTROLLER GAP (after STEP 5b's probe finishes, while PARKED, before landing ABI-31):
+  PYTHONPATH=src/wnn nice -n 10 /Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/bin/python scripts/count_true_keys.py --headline experiments/sweepladder_markers/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_pipeN30.json --retrain-args experiments/ctrl16_args/ARGS_SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_pipeN30.txt
+  VERIFY its RESULT row on 99990101 == 98.0% / 1.75° / 1.00° / 0.301 m (log line 981); if not, the argv reconstruction is wrong — do NOT cache-trust it. Then re-run scripts/ctrl16_verdict.py and report the final CTRL-16 verdict (if REPLACE: do not touch ABI31_LANDED, escalate to Luiz).
+Headline keys so far: _full30 s2 1,701,212 · s3 772,185 · s4 4,401,674 | _pipeN30 s3 772,185 · s4 1,169,649 · s5 675,789.
+
 AS OF 26/09/2026 16:45 EDT — LEVER HANDED OVER (Luiz: adopt --obs-pwm). queue_2009b supervisor 67249 TERMed alone;
 the _full30 chain (seed_arm_chain 14691, now PPID 1) keeps flying s3-s5. NEW LEVER = scripts/queue_2009c_obs_pwm_recipe.sh
 (pid 10056, PPID 1, same log /private/tmp/queue_2009.log, tag [q2009c]): waits for the chain -> CTRL-16 verdict (STOPs if

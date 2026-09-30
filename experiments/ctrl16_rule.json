@@ -1,5 +1,5 @@
 {
- "story": "CTRL-16 \u2014 FULL phased pipeline GRID->NEURONS->BITS->CONNECTIONS->MEMORY (_full30 x4)",
+ "story": "CTRL-16 — FULL phased pipeline GRID->NEURONS->BITS->CONNECTIONS->MEMORY (_full30 x4)",
  "registered": "2026-09-25 (EDT), before any _full30 marker existed; s31337002 was in BITS gen 2/5",
  "registered_by": "Luiz: 'gate bar plus no larger TRUE keys'",
  "rule": "REPLACE the anchor iff >=3/4 columns favour _full30 (stable up, err down, steady down, alt down) on the mean paired HEADLINE delta vs _pipeN30 over seeds s31337002-s31337005, AND err delta <= +0.10 deg, AND the mean TRUE keys of the four _full30 winners <= the mean TRUE keys of the four _pipeN30 winners. Otherwise _pipeN30 stands; a tie goes to the simpler pipeline.",
@@ -17,5 +17,26 @@
   "n=4: every CI in the gate's own verdict straddled 0; a 3-of-4 column rule fires by chance ~31%. Say 'the rule fired', not 'the pipeline is better'.",
   "_full30 s31337002 runs on the pre-fix evaluator batching (width 2); s3-s5 may run on branch eval-batch-pack. Parity tests show per-genome seeds and metrics are bit-identical across batch boundaries, so this does not break the pairing."
  ],
- "apply_with": "python scripts/ctrl16_verdict.py  ->  experiments/ctrl16_verdict.json"
+ "apply_with": "python scripts/ctrl16_verdict.py  ->  experiments/ctrl16_verdict.json",
+ "amendments": [
+  {
+   "date": "2026-09-30 (EDT)",
+   "by": "Luiz: 'yes' to counting headline genomes (30/09)",
+   "registered_before": "_full30 s5 banked (s2-s4 banked; the arm/anchor size gap was already visible — recorded here, not hidden)",
+   "change": "The size clause counts the TRUE keys of the stage-select HEADLINE genome (the controller that is published and would be flashed), cached as <tag>@headline in experiments/h743_keys.json via scripts/count_true_keys.py --headline. It previously counted --save-winner = the MEMORY stage's best_genome, a different genome from the one the HEADLINE metrics describe.",
+   "why": "phased_ga.py saves res4.best_genome (MEMORY) as the winner while stage-select publishes STAGE#i = final_population[i] of any stage; metrics and footprint were measured on different genomes on both arms (e.g. _full30 s4: headline CONNECTIONS#1 4,401,674 keys vs saved MEMORY genome 5,334,485).",
+   "anchor_true_keys_headline": {
+    "31337002": "pending — GRID#2 is arch-only (no stored cells); re-trained exactly as the scorer does and counted in the controller gap",
+    "31337003": 772185,
+    "31337004": 1169649,
+    "31337005": 675789
+   },
+   "arm_true_keys_headline_so_far": {
+    "31337002": 1701212,
+    "31337003": 772185,
+    "31337004": 4401674
+   },
+   "unchanged": "the gate bar (HEADLINE rows, 4 columns, n=4 mean, err ceiling +0.10°) and the tie rule"
+  }
+ ]
 }

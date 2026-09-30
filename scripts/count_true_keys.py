@@ -41,6 +41,11 @@ def parse_args():
 	ap.add_argument('--headline', action='append', default=[],
 	                help='sweep-ladder marker json; counts the stage-select HEADLINE genome '
 	                     '(STAGE#i = final_population[i] of that stage checkpoint), cached as <tag>@headline')
+	ap.add_argument('--retrain-args', default=None,
+	                help="the run's exact phased_ga argv file ('#' lines ignored). With --headline, an arch-only "
+	                     "(GRID) headline is trained EXACTLY as the scorer does (phased_ga._holdout_report: train "
+	                     "seed, write_back) and scored on the first report seed; compare that RESULT row with the "
+	                     "run's logged HEADLINE row before trusting the count")
 	ap.add_argument('--ckpt-root', default=os.path.join(ROOT, 'logs', 'controller', 'sweep_ladder', 'ckpt'))
 	ap.add_argument('--cache', default=DEFAULT_CACHE)
 	return ap.parse_args()
@@ -99,7 +104,7 @@ def headline_label(marker: dict) -> "tuple[str, int]":
 	return m.group(1).lower(), int(m.group(2) or 0)
 
 
-def count_headline(marker_path: str, ckpt_root: str) -> "tuple[str, dict]":
+def count_headline(marker_path: str, ckpt_root: str, retrain_args: "str | None") -> "tuple[str, dict]":
 	from wnn.control.checkpoint_io import load_controller_population_member
 	with open(marker_path) as f:
 		marker = json.load(f)
@@ -109,9 +114,35 @@ def count_headline(marker_path: str, ckpt_root: str) -> "tuple[str, dict]":
 	if len(hits) != 1:
 		raise SystemExit(f"{tag}: expected one stage*_{stage}.yaml.gz, found {hits}")
 	got = load_controller_population_member(hits[0], idx)
+	label = f"{stage.upper()}#{idx}"
+	if got['genome'].cells is None:
+		if retrain_args is None:
+			raise SystemExit(f"{tag}: headline {label} is arch-only (no stored cells) — its memory exists "
+			                 f"only when the scorer trains it; pass --retrain-args <run argv file>")
+		retrain_like_scorer(got['genome'], got['spec'], retrain_args, label)
 	e = entry_from_onset(true_onset_genome(got['genome'], got['spec']), hits[0])
-	e['genome'] = f"{stage.upper()}#{idx}"
+	e['genome'] = label
+	if retrain_args is not None:
+		e['retrained_from_args'] = os.path.relpath(retrain_args, ROOT)
 	return tag + HEADLINE_SUFFIX, e
+
+
+def retrain_like_scorer(genome, spec, argv_path: str, label: str) -> None:
+	"""Stamp the cells the stage-select scorer gave an arch-only headline: the SAME
+	_holdout_report call (train on the train seed, write_back), scored on the first
+	report seed so its RESULT row can be diffed against the run's log."""
+	import shlex
+	from wnn.control.phased_ga import build_arg_parser, episode_config_from_args, _holdout_report
+	from wnn.seeds import resolve_seed_set
+	with open(argv_path) as f:
+		argv = shlex.split(" ".join(l for l in f.read().splitlines() if not l.lstrip().startswith("#")))
+	args = build_arg_parser().parse_args(argv)
+	ec = episode_config_from_args(args)
+	train = resolve_seed_set(base=args.base_seed, run_index=0).train
+	_holdout_report(args, ec, spec, genome, None, int(args.report_seeds[0]), train,
+	                stage_label=f"HEADLINE-{label} (re-count)")
+	if genome.cells is None:
+		raise SystemExit(f"{label}: scorer left no cells after training")
 
 
 def record(cache: dict, path: str, key: str, e: dict) -> None:
@@ -130,7 +161,7 @@ def main():
 	for w in args.winner:
 		record(cache, args.cache, tag_of(w), count_one(w))
 	for mk in args.headline:
-		key, e = count_headline(mk, args.ckpt_root)
+		key, e = count_headline(mk, args.ckpt_root, args.retrain_args)
 		record(cache, args.cache, key, e)
 	print(f"cache: {args.cache} ({len(cache)} entries)")
 

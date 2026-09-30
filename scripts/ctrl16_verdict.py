@@ -10,8 +10,13 @@ same four columns, same n=4 paired mean) plus one parsimony clause:
           AND mean TRUE keys of the _full30 winners <= that of the _pipeN30 winners
   otherwise the simpler pipeline stands (a tie goes to _pipeN30).
 
-The TRUE-key count is the deployable footprint (experiments/h743_keys.json,
-via scripts/count_true_keys.py). Usage: python scripts/ctrl16_verdict.py
+The TRUE-key count is the deployable footprint of the HEADLINE genome — the
+controller the row describes (amended 30/09/2026, see the rule's "amendments";
+it was the saved MEMORY best_genome before). Cached as <tag>@headline in
+experiments/h743_keys.json via scripts/count_true_keys.py --headline. A GRID
+headline is arch-only (no stored cells) and cannot be counted that way: it is
+reported PENDING and replace_anchor is null until its re-train count lands.
+Usage: python scripts/ctrl16_verdict.py
 Writes experiments/ctrl16_verdict.json; exits 1 if any marker is missing.
 """
 import json
@@ -30,6 +35,7 @@ BASE = "SL_C_b24n256_cf21_brushless_L4C_g10"
 SEEDS = ["31337002", "31337003", "31337004", "31337005"]
 ARM, ANCHOR = "_full30", "_pipeN30"
 ERR_CEILING_DEG = 0.10
+HEADLINE = "@headline"
 
 
 def tag(seed: str, suffix: str) -> str:
@@ -44,15 +50,20 @@ def headline(t: str) -> list[float]:
 	return [float(x) for x in m.groups()]
 
 
-def true_keys(t: str) -> int:
-	"""Winner TRUE keys from the cache; counts (and caches) it on a miss."""
+def true_keys(t: str) -> "int | None":
+	"""HEADLINE-genome TRUE keys from the cache; counts (and caches) on a miss.
+	None = not countable from the checkpoint yet (arch-only GRID headline)."""
+	key = t + HEADLINE
 	cache = json.load(open(KEYS)) if os.path.exists(KEYS) else {}
-	if t not in cache:
-		winner = os.path.join(LOGS, f"{t}_winner.yaml.gz")
-		subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "count_true_keys.py"),
-		                "--winner", winner], check=True, stdout=subprocess.DEVNULL)
+	if key not in cache:
+		r = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "count_true_keys.py"),
+		                    "--headline", os.path.join(MARK, f"{t}.json")],
+		                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+		if r.returncode != 0:
+			print(f"PENDING {key}: {r.stderr.strip().splitlines()[-1]}", file=sys.stderr)
+			return None
 		cache = json.load(open(KEYS))
-	return int(cache[t]["true_keys"])
+	return int(cache[key]["true_keys"])
 
 
 def missing_markers() -> list[str]:
@@ -68,8 +79,11 @@ def paired_deltas() -> list[list[float]]:
 def footprint() -> dict:
 	arm = {s: true_keys(tag(s, ARM)) for s in SEEDS}
 	anchor = {s: true_keys(tag(s, ANCHOR)) for s in SEEDS}
-	return dict(arm=arm, anchor=anchor,
-	            arm_mean=st.mean(arm.values()), anchor_mean=st.mean(anchor.values()))
+	pending = [f"{s}{x}" for x, side in ((ARM, arm), (ANCHOR, anchor))
+	           for s, v in side.items() if v is None]
+	mean = lambda side: None if pending else st.mean(side.values())
+	return dict(arm=arm, anchor=anchor, pending=pending,
+	            arm_mean=mean(arm), anchor_mean=mean(anchor))
 
 
 def verdict() -> dict:
@@ -78,7 +92,7 @@ def verdict() -> dict:
 	fav = [mean[0] > 0, mean[1] < 0, mean[2] < 0, mean[3] < 0]
 	gate = sum(fav) >= 3 and mean[1] <= ERR_CEILING_DEG
 	fp = footprint()
-	smaller = fp["arm_mean"] <= fp["anchor_mean"]
+	smaller = None if fp["pending"] else fp["arm_mean"] <= fp["anchor_mean"]
 	return dict(
 		rule=json.load(open(os.path.join(ROOT, "experiments", "ctrl16_rule.json")))["rule"],
 		mean_delta=dict(stable_pp=round(mean[0], 3), err_deg=round(mean[1], 3),
@@ -86,7 +100,8 @@ def verdict() -> dict:
 		per_seed=dict(zip(SEEDS, [[round(x, 3) for x in row] for row in d])),
 		favourable=fav, gate_bar_passed=gate,
 		true_keys=fp, footprint_not_larger=smaller,
-		replace_anchor=gate and smaller)
+		# A failed gate decides alone; otherwise the size clause must be counted.
+		replace_anchor=False if not gate else smaller)
 
 
 def main() -> int:
@@ -97,8 +112,9 @@ def main() -> int:
 	res = verdict()
 	json.dump(res, open(OUT, "w"), indent=1)
 	print(json.dumps(res, indent=1))
-	print("REPLACE — _full30 becomes the recipe" if res["replace_anchor"]
-	      else "KEEP — _pipeN30 stands", file=sys.stderr)
+	msg = {True: "REPLACE — _full30 becomes the recipe", False: "KEEP — _pipeN30 stands",
+	       None: f"PENDING — gate passed, size clause waits on {res['true_keys']['pending']}"}
+	print(msg[res["replace_anchor"]], file=sys.stderr)
 	return 0
 
 
