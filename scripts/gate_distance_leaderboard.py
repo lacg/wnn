@@ -217,7 +217,7 @@ def load_keys_cache():
 H743_QSPI_BYTES = 16 * 1024 * 1024   # the 16 MB QSPI flash H743 flight controllers ship (off-chip tier)
 
 
-def h743_column(r, cache):
+def h743_column(r, cache, key_suffix=''):
 	"""'fits' / 'qspi' / '17.0x' exactly from the cache; '*'/'?' suffix = populated bound.
 
 	Two deployment TIERS (Luiz 19/09/2026, docs/chip_selection.md "Off-chip tier"):
@@ -233,9 +233,13 @@ def h743_column(r, cache):
 		if nbytes <= H743_QSPI_BYTES:
 			return 'qspi' if exact else 'qspi?'
 		return ('%.1fx' if exact else '%.1fx?') % ratio
-	e = cache.get(r['tag'])
+	e = cache.get(r['tag'] + key_suffix)
 	if e is not None:
 		return tier(e['bytes_uint32'], True)
+	if key_suffix:
+		# Headline genome not counted yet: fall back to the saved MEMORY winner,
+		# marked `~` because that is a DIFFERENT genome from the headline row.
+		return h743_column(r, cache) + '~'
 	if r['populated'] is None or r['bits'] is None or r['neurons'] is None:
 		return '—'
 	return tier(r['populated'] * 4 + r['neurons'] * r['bits'], False)
@@ -258,10 +262,14 @@ LEGEND = """  COLUMNS
     sn          state neurons the run flew (0 = single-layer).
     stage       which stage produced the published headline.
     h743        the deployability constraint: TRUE-only uint32 keys + connectivity vs
-                the STM32H743's 2 MB internal flash. `fits` / `1.7x` are EXACT (winner
-                counted into experiments/h743_keys.json); `fits*` / `1.7x?` are bounds
-                from the marker's populated count, which includes FALSE cells — a
-                `?` row needs `scripts/count_true_keys.py --winner <tag>_winner.yaml.gz`.
+                the STM32H743's 2 MB internal flash, of the genome the ROW describes —
+                the stage-select HEADLINE genome in the headline tables (30/09/2026;
+                `count_true_keys.py --headline <marker>`, cached as <tag>@headline), the
+                saved MEMORY winner in the same-rule table. `fits` / `1.7x` are EXACT;
+                a `~` suffix = headline not counted yet, value is the MEMORY winner's (a
+                different genome); `fits*` / `1.7x?` are bounds from the marker's
+                populated count, which includes FALSE cells — a `?` row needs
+                `scripts/count_true_keys.py --winner <tag>_winner.yaml.gz`.
                 A winner that does not fit is reported, never headlined."""
 
 
@@ -292,7 +300,7 @@ def same_rule_table(rows, n):
 		d = order_hd[r['tag']] - i
 		w.append('  %4d  %9.4f  %-3s  %5.1f%%  %6.2f  %6.2f%s  %-5s  %9.4f  %+5d  %s'
 		         % (i, r['hd_mem'], r['fit'], m['stable'], m['err'], m['steady'],
-		            alt, r['h743'], r['hd'], d, r['tag'][:52]))
+		            alt, r['h743_mem'], r['hd'], d, r['tag'][:52]))
 	return '\n'.join(w)
 
 
@@ -359,7 +367,8 @@ def main():
 	        if r]
 	cache = load_keys_cache()
 	for r in rows:
-		r['h743'] = h743_column(r, cache)
+		r['h743'] = h743_column(r, cache, '@headline')   # the published (headline) genome
+		r['h743_mem'] = h743_column(r, cache)            # the saved MEMORY-stage winner
 	alt = [r for r in rows if r['altitude']]
 	att = [r for r in rows if not r['altitude']]
 	cells = {(a, b): 0 for a in (0, 1) for b in (0, 1)}
