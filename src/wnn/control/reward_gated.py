@@ -144,6 +144,13 @@ class RewardGatedConfig:
 	# (label = neutral + (p − hover_teacher)). Rust DAgger trainer only; inert
 	# without translation. Default legacy = bit-identical to every banked run.
 	teacher_hover_mode: str = "derived"   # "legacy" | "derived" — derived is the DEFAULT since 11/09/2026 (D0); legacy = the pre-fix 0.5 anchor, kept for bit-identical reproduction
+	# CTRL-17 G4 (26/09/2026): the λ_alt / λ_pos the Rust DAgger GATE and per-round
+	# CHECKPOINT rank on (episode_regime::step_reward). None ⇒ the episode config's
+	# reward-shaping λ (ec.lambda_alt / ec.lambda_pos). phased_ga resolves them with
+	# wnn.control.gate_lambdas.resolve_gate_lambdas (explicit flag, else derived from
+	# the rank weights). Only read under translation.
+	gate_lambda_alt: Optional[float] = None
+	gate_lambda_pos: Optional[float] = None
 
 	# Pure behavior cloning (19/07/2026, single-layer promotion): the TEACHER's
 	# pwm drives the sim (labels unchanged — C1 teacher targets), so training

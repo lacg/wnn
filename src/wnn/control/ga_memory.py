@@ -57,7 +57,8 @@ def _recorder_lag_kwargs(ec) -> dict:
 	return {"motor_lag_s": lag} if lag > 0.0 else {}
 
 
-def _recorder_plant_kwargs(ec, num_episodes: int, seed: int) -> dict:
+def _recorder_plant_kwargs(ec, num_episodes: int, seed: int, teacher: str = "pid",
+                           teacher_hover_mode: str = "derived") -> dict:
 	"""The aircraft the reference rollout flies, as recorder kwargs.
 
 	DEFAULT-INERT BY DESIGN. With translation off this returns {} — the recorder
@@ -98,16 +99,14 @@ def _recorder_plant_kwargs(ec, num_episodes: int, seed: int) -> dict:
 		x0, y0 = sample_horizontal_ics_flat(seed, num_episodes, ec)
 		plant.update(s2_init_x=[float(v) for v in x0],
 		             s2_init_y=[float(v) for v in y0])
-	if af is not None:
-		# REUSE EpisodeConfig.airframe_kwargs — the single source of these values.
-		# Hand-rolling them is what produced `AttributeError: 'Airframe' object has
-		# no attribute 'dt'` (dt lives on the EpisodeConfig, not the Airframe) and
-		# cost a 3h run. The recorder takes the PLANT fields only, not the
-		# af_pid_* cascade, so select the keys rather than splat the dict.
-		af_kw = ec.airframe_kwargs()
-		plant.update({k: af_kw[k] for k in (
-			"af_dt", "af_arm_length", "af_k_thrust", "af_k_drag",
-			"af_inertia", "af_gravity") if k in af_kw})
+	# CTRL-17 G2 (26/09/2026): the translating recorder flies the TRAINING regime.
+	# reference_cfg carries the plant (airframe + firmware cascade + motor lag) AND
+	# the teacher inside the training outer loops, so the reference driver is no
+	# longer the legacy 0.5-hover attitude PID (which does not hover the airframe —
+	# the universe was recorded on a climbing/falling vehicle). The plant has ONE
+	# owner: no af_* / motor_lag_s kwargs alongside it (Rust refuses both).
+	from .evaluator import reference_packed_config
+	plant["reference_cfg"] = reference_packed_config(ec, teacher, teacher_hover_mode)
 	return plant
 
 
@@ -123,6 +122,8 @@ def record_address_universe(
 	geometry=None,        # Optional[GeometryConfig] — N-rotor TRUE table (sim side)
 	alloc=None,           # Optional[AllocResidualConfig] — baseline driver gains
 	episode_config=None,  # Optional[EpisodeConfig] — airframe + stage-1 vertical draws
+	teacher: str = "pid",  # the run's DAgger teacher — the translating recorder's driver (G2)
+	teacher_hover_mode: str = "derived",
 ) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
 	"""Record the (neuron, address) cells the controller visits along
 	reference-driven rollouts. Returns (state_universe, output_universe),
@@ -176,11 +177,13 @@ def record_address_universe(
 	# quad path, allocator-LQR on the TRUE rotor table for the overactuated one.
 	# Only the episode ICs are drawn in Python and injected — the established
 	# parity convention — so this is a bit-exact port of the loop.
-	plant = _recorder_plant_kwargs(episode_config, num_episodes, seed)
+	plant = _recorder_plant_kwargs(episode_config, num_episodes, seed, teacher, teacher_hover_mode)
 	# AXIS F: the universe is recorded on the run's lagged plant, translation or
 	# not — the lag is a plant property every rollout shares, not a stage-1 draw.
 	# {} when the axis is off, so every banked universe reproduces bit-for-bit.
-	plant.update(_recorder_lag_kwargs(episode_config))
+	# Under translation the lag rides in reference_cfg (one owner per plant field).
+	if "reference_cfg" not in plant:
+		plant.update(_recorder_lag_kwargs(episode_config))
 	# REFUSE a silently-degenerate universe. If the controller carries stage-1
 	# features but no vertical plant reached us, the rollout would fly a
 	# NON-TRANSLATING aircraft: the three vertical features would sit frozen and

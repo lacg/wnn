@@ -314,8 +314,17 @@ pub struct RewardGatedConfigPacked
 	#[pyo3(get, set)]
 	pub xy_offset: f32,
 	/// Reward weight on the RADIAL horizontal position error (0 ⇒ stage-1 reward).
+	/// CTRL-17 G4 (26/09/2026): READ by the DAgger gate and the per-round
+	/// checkpoint (episode_regime::step_reward). It was plumbed but never read, so
+	/// the gate and the checkpoint ranked on attitude only.
 	#[pyo3(get, set)]
 	pub lambda_pos: f32,
+	/// CTRL-17 G4: reward weight on altitude error, -λ_alt·alt_err², read by the
+	/// same two consumers. 0.0 ⇒ the attitude-only gate, bit-identically. Python
+	/// resolves it (wnn.control.gate_lambdas): the explicit --reward-lambda-alt when
+	/// given, else DERIVED from the run's rank weights.
+	#[pyo3(get, set)]
+	pub lambda_alt: f32,
 	/// Outer position-loop shape (gains DERIVED inside PositionLoop; b_xy = g).
 	#[pyo3(get, set)]
 	pub pos_omega: f32,
@@ -382,7 +391,7 @@ impl RewardGatedConfigPacked
 		alt_offset = 0.0, init_vz = 0.0, collective_jitter = 0.0,
 		target_altitude = 0.0,
 		alt_pd_omega = 2.0, alt_pd_zeta = 1.0, alt_pd_max_delta = 0.25,
-			xy_offset = 0.0, lambda_pos = 0.0,
+			xy_offset = 0.0, lambda_pos = 0.0, lambda_alt = 0.0,
 		pos_omega = 1.0, pos_zeta = 1.0, pos_max_tilt_rad = 0.5236,
 		teacher_hover_mode = 0,
 		motor_lag_s = 0.0,
@@ -463,6 +472,7 @@ impl RewardGatedConfigPacked
 		alt_pd_max_delta: f32,
 		xy_offset: f32,
 		lambda_pos: f32,
+		lambda_alt: f32,
 		pos_omega: f32,
 		pos_zeta: f32,
 		pos_max_tilt_rad: f32,
@@ -545,6 +555,7 @@ impl RewardGatedConfigPacked
 			write_err_floor_deg,
 			xy_offset,
 			lambda_pos,
+			lambda_alt,
 			pos_omega,
 			pos_zeta,
 			pos_max_tilt_rad,
@@ -764,8 +775,12 @@ pub struct TrainStats
 // ============================================================================
 
 use crate::controller::{
-	compute_reward, monotonicity_violations, yaw_from_quat_rs, AttitudeSim, ReplayObs,
-	WnnController,
+	monotonicity_violations, yaw_from_quat_rs, AttitudeSim, ReplayObs, WnnController,
+};
+#[cfg(test)]
+use crate::episode_regime::alt_pd_for;
+use crate::episode_regime::{
+	anchor_controller, draw_translation_episode, feed_live_obs, step_reward, OuterLoops,
 };
 use crate::optimal::Teacher;
 use rand::rngs::SmallRng;
@@ -955,7 +970,7 @@ impl AirframeRs
 		teacher_hover: None,
 		motor_lag_s: 0.0,
 	};
-	fn from_cfg(cfg: &RewardGatedConfigPacked) -> Self
+	pub(crate) fn from_cfg(cfg: &RewardGatedConfigPacked) -> Self
 	{
 		AirframeRs {
 			dt: cfg.dt as f32,
@@ -1248,7 +1263,7 @@ fn sim_default(cfg: &RewardGatedConfigPacked) -> AttitudeSim
 /// Disabled ⇒ strict no-op — the SmallRng sequence is untouched, so
 /// disturbance-off runs stay bit-identical to pre-W2 (the parity anchor).
 /// Enabled ⇒ one extra u64 draw per episode = that episode's weather seed.
-fn apply_cfg_disturbance(sim: &mut AttitudeSim, cfg: &RewardGatedConfigPacked, rng: &mut SmallRng)
+pub(crate) fn apply_cfg_disturbance(sim: &mut AttitudeSim, cfg: &RewardGatedConfigPacked, rng: &mut SmallRng)
 {
 	if !cfg.dist_enabled
 	{
@@ -1302,15 +1317,15 @@ fn teacher_default(id: u8, cfg: &RewardGatedConfigPacked) -> Teacher
 /// The length is now tied to TEACHER_IDS so widening from_id without widening
 /// the bank is a compile error rather than a silent demotion to PID.
 const TEACHER_IDS: usize = 5;
-struct TeacherBank([Option<Teacher>; TEACHER_IDS], AirframeRs);
+pub(crate) struct TeacherBank([Option<Teacher>; TEACHER_IDS], AirframeRs);
 
 impl TeacherBank
 {
-	fn new(af: AirframeRs) -> Self
+	pub(crate) fn new(af: AirframeRs) -> Self
 	{
 		TeacherBank([None, None, None, None, None], af)
 	}
-	fn get_mut(&mut self, id: u8) -> &mut Teacher
+	pub(crate) fn get_mut(&mut self, id: u8) -> &mut Teacher
 	{
 		// Only ids Teacher::from_id cannot build collapse to PID — that is its
 		// `_` arm, and the bound MUST track TEACHER_IDS. Getting this wrong does
@@ -1379,7 +1394,7 @@ fn sym_f64(rng: &mut SmallRng, mag: f64) -> f64
 	rng.gen_range(-mag..mag)
 }
 
-fn sample_initial_state(
+pub(crate) fn sample_initial_state(
 	rng: &mut SmallRng,
 	max_tilt: f64,
 	max_yaw: f64,
@@ -1481,56 +1496,8 @@ pub fn episode_passes_gate_rs(
 	}
 }
 
-/// SCOPE C STAGE 1: a symmetric jitter draw, U(-mag, +mag). mag == 0 draws
-/// NOTHING from the rng — that is what keeps a translation-off run's random
-/// sequence bit-identical to every pre-stage-1 result.
-#[inline]
-fn jitter_sym(rng: &mut SmallRng, mag: f32) -> f32
-{
-	if mag == 0.0
-	{
-		return 0.0;
-	}
-	rng.gen_range(-mag..mag)
-}
-
-/// SCOPE C STAGE 1: the outer altitude PD the teacher rides on, derived from the
-/// config's own plant (never guessed). None when translation is off.
-/// STAGE 2: the teacher's outer position loop. None unless the config arms the
-/// horizontal channel (xy_offset > 0), keeping every stage-1 teacher identical.
-fn pos_loop_for(cfg: &RewardGatedConfigPacked) -> Option<crate::position_loop::PositionLoop>
-{
-	if !cfg.translation || cfg.xy_offset <= 0.0
-	{
-		return None;
-	}
-	Some(
-		crate::position_loop::PositionLoop::from_plant(
-			cfg.af_gravity as f64,
-			cfg.pos_omega as f64,
-			cfg.pos_zeta as f64,
-			cfg.pos_max_tilt_rad as f64,
-		)
-		.expect("stage-2 position loop must derive from the config's plant"),
-	)
-}
-
-fn alt_pd_for(cfg: &RewardGatedConfigPacked) -> Option<crate::altitude_pd::AltitudePd>
-{
-	if !cfg.translation
-	{
-		return None;
-	}
-	crate::altitude_pd::AltitudePd::from_plant(
-		cfg.af_mass as f64,
-		cfg.af_gravity as f64,
-		cfg.af_k_thrust as f64,
-		cfg.alt_pd_omega as f64,
-		cfg.alt_pd_zeta as f64,
-		cfg.alt_pd_max_delta as f64,
-	)
-	.ok()
-}
+// jitter_sym / pos_loop_for / alt_pd_for moved to episode_regime.rs (CTRL-17):
+// every trainer-side rollout now shares ONE definition of a training episode.
 
 // ----- Rollout + label -----------------------------------------------------
 
@@ -1556,39 +1523,11 @@ pub fn rollout_and_label_rs(
 		[cfg.active_roll, cfg.active_pitch, cfg.active_yaw],
 	);
 	sim.reset(Some(init_q), Some(init_omega));
-	// SCOPE C STAGE 1: per-episode PLANT draw + vertical ICs, drawn from the SAME
-	// loop rng as the attitude IC so a stage-1 run is reproducible from its seed.
-	// Gated: translation=false draws NOTHING, keeping every pre-stage-1 run
-	// bit-identical to the banked sequence (the disturbance-off parity anchor).
-	// STAGE 1: this episode's plant draw, vertical ICs, and the commanded
-	// collective in ABSOLUTE pwm — the operating point the student rides on.
-	let ep_collective_pwm: f32 = if cfg.translation
-	{
-		let m = cfg.af_mass * (1.0 + jitter_sym(rng, cfg.mass_jitter));
-		sim
-			.set_translation_core(m)
-			.expect("stage-1 mass must be positive");
-		sim.set_vertical_state(
-			jitter_sym(rng, cfg.alt_offset),
-			jitter_sym(rng, cfg.init_vz),
-		);
-		// STAGE 2: horizontal start, displaced at rest. GATED on xy_offset > 0
-		// so a stage-1 config draws NOTHING here and its whole rng sequence —
-		// mass, weather, decode coins — is untouched (the lambda_alt sweep was
-		// FLYING when this landed; an unconditional draw would have re-based it).
-		if cfg.xy_offset > 0.0
-		{
-			let x0 = jitter_sym(rng, cfg.xy_offset);
-			let y0 = jitter_sym(rng, cfg.xy_offset);
-			sim.set_horizontal_state(x0, y0, 0.0, 0.0);
-		}
-		let hover = (m * cfg.af_gravity / (4.0 * cfg.af_k_thrust)).sqrt();
-		(hover * (1.0 + jitter_sym(rng, cfg.collective_jitter))).clamp(0.0, 1.0)
-	}
-	else
-	{
-		0.0
-	};
+	// SCOPE C STAGE 1+2: per-episode PLANT draw, vertical + horizontal starts and
+	// the commanded collective in ABSOLUTE pwm, drawn from the SAME loop rng as the
+	// attitude IC (episode_regime::draw_translation_episode — shared with the
+	// checkpoint eval and the calibration sampler). translation=false draws NOTHING.
+	let ep_collective_pwm: f32 = draw_translation_episode(sim, cfg, rng);
 	// W2: per-episode weather (no-op when cfg.dist_enabled is false).
 	apply_cfg_disturbance(sim, cfg, rng);
 	teacher.reset();
@@ -1599,10 +1538,7 @@ pub fn rollout_and_label_rs(
 	// STAGE 1: anchor the delta accumulator at the commanded collective AFTER
 	// reset (reset seeds from whatever anchor is current), so the episode opens
 	// at hover rather than free-falling from the legacy 0.5 neutral.
-	if cfg.translation
-	{
-		controller.set_collective_anchor(ep_collective_pwm);
-	}
+	anchor_controller(controller, cfg, ep_collective_pwm);
 	// QSR/PLN decode coin: a fresh per-episode seed from the SAME RNG stream (this
 	// is a CPU-only collection rollout — no GPU twin to match; it just needs
 	// reproducible per-episode stochasticity). GATED on is_stochastic so
@@ -1613,11 +1549,9 @@ pub fn rollout_and_label_rs(
 		controller.set_decode_seed(rng.gen());
 	}
 
-	// STAGE 1: the teacher's outer altitude loop (None ⇒ attitude-only teacher,
-	// the bit-identical legacy path).
-	let alt_pd = alt_pd_for(cfg);
-	// STAGE 2: the teacher's outer position loop (None ⇒ the stage-1 cascade).
-	let pos_loop = pos_loop_for(cfg);
+	// STAGE 1+2: the teacher's outer altitude + position loops (both None ⇒ the
+	// attitude-only teacher, the bit-identical legacy path).
+	let loops = OuterLoops::for_cfg(cfg);
 	// D0: the coordinates this episode's labels are recorded in (None ⇒ the
 	// legacy raw pwm, byte-identical).
 	let rebase = label_rebase_for(cfg, controller, teacher);
@@ -1671,23 +1605,10 @@ pub fn rollout_and_label_rs(
 			],
 		);
 
-		// SCOPE C STAGE 1: the vertical observation for THIS step, read at the
-		// same start-of-step snapshot the IMU is — the exact twin of what the
-		// scorer's rollout does. Without this the features would be constant
-		// zeros here and real at scoring (the DOB train/deploy divergence).
-		if cfg.translation
-		{
-			controller.set_vertical_obs(
-				ep_collective_pwm,
-				cfg.target_altitude - sim.altitude_rs(),
-				sim.vertical_velocity_rs(),
-			);
-			// STAGE 2: target is the ORIGIN ⇒ err = −pos. Zeros when the channel
-			// is unarmed (x/y never leave the origin), so stage-1 is unchanged.
-			let [hx, hy] = sim.position_xy_rs();
-			let [hvx, hvy] = sim.velocity_xy_rs();
-			controller.set_horizontal_obs(-hx, -hy, hvx, hvy);
-		}
+		// SCOPE C STAGE 1+2: the live vertical + horizontal observation for THIS
+		// step, at the same start-of-step snapshot as the IMU — the exact twin of
+		// the scorer's rollout (episode_regime::feed_live_obs).
+		feed_live_obs(controller, sim, cfg, ep_collective_pwm);
 		// obs_pwm replay fix: the pwm FEATURE this step's compute_features will
 		// produce (accumulator − anchor; step() decodes afterwards), recorded so
 		// the replay applies the identical value.
@@ -1702,40 +1623,7 @@ pub fn rollout_and_label_rs(
 		// on top of the attitude law, the DISCLOSED CASCADE the classical rivals
 		// already are. Without it the student is asked to learn altitude from a
 		// teacher that never commands it.
-		let expert_pwm = match (pos_loop.as_ref(), alt_pd.as_ref())
-		{
-			// STAGE 2: the full disclosed cascade — position → tilt ref →
-			// attitude teacher, with the collective riding on top. yaw_ref stays
-			// the episode's commanded yaw (a symmetric quad holds a point at any
-			// heading).
-			(Some(pl), Some(pd)) =>
-			{
-				let [hx, hy] = sim.position_xy_rs();
-				let [hvx, hvy] = sim.velocity_xy_rs();
-				teacher.step_full_state(
-					q,
-					gyro,
-					target_64[2],
-					pl,
-					pd,
-					(-hx) as f64,
-					hvx as f64,
-					(-hy) as f64,
-					hvy as f64,
-					(cfg.target_altitude - sim.altitude_rs()) as f64,
-					sim.vertical_velocity_rs() as f64,
-				)
-			}
-			(None, Some(pd)) => teacher.step_with_collective(
-				q,
-				gyro,
-				target_64,
-				pd,
-				(cfg.target_altitude - sim.altitude_rs()) as f64,
-				sim.vertical_velocity_rs() as f64,
-			),
-			_ => teacher.step_rs(q, gyro, target_64),
-		};
+		let expert_pwm = loops.expert(teacher, sim, q, gyro, target_64, cfg.target_altitude);
 		// D0: the LABEL — the teacher's pwm re-based on its own hover when the
 		// switch is on, the raw pwm otherwise (teacher_label_f32).
 		let expert_pwm_f32 = teacher_label_f32(expert_pwm, rebase);
@@ -1754,9 +1642,14 @@ pub fn rollout_and_label_rs(
 		// so trajectories follow the expert's state distribution exactly. The
 		// student forward still runs above (its pwm is recorded for C2/metrics).
 		// Exploration: perturb the applied PWM (C2 only).
+		// CTRL-17 G13 (27/09/2026): the sim flies the teacher's RAW pwm. Under D0
+		// (derived hover, translation, delta student) expert_pwm_f32 is the LABEL,
+		// re-based on the teacher's hover (≈ neutral), and flying it dropped cf21
+		// ~1.2 m in 2 s. With no re-base the two are the same f32 cast, so every
+		// other path is bit-identical.
 		let mut applied = if cfg.expert_drives
 		{
-			expert_pwm_f32
+			teacher_label_f32(expert_pwm, None)
 		}
 		else
 		{
@@ -1808,7 +1701,9 @@ pub fn rollout_and_label_rs(
 		sim.step(applied);
 		last_applied = applied; // offset-free MPC observer: what the sim saw
 		let attitude_err = sim.attitude_error(None);
-		cumulative += compute_reward(attitude_err, 0.0, 0, 0.0, 0.0) as f64;
+		// G4: the gate's score carries the run's altitude/position terms (both λ 0
+		// ⇒ the attitude-only reward, bit-identical).
+		cumulative += step_reward(sim, cfg, attitude_err);
 		sum_err += attitude_err as f64;
 		steps = _t + 1;
 	}
@@ -1938,7 +1833,7 @@ pub fn train_on_trajectory_rs(
 /// monotonicity violations on the output cells. Both metrics flow into
 /// TrainStats.iter_motor_jerk_mean / iter_mono_violations and from there into
 /// Metrics.motor_jerk_mean / mono_violations_total for the harmonic-rank
-/// fitness calculator. compute_reward still uses lambda_smooth=0/lambda_mono=0
+/// fitness calculator. step_reward still uses lambda_smooth=0/lambda_mono=0
 /// (these metrics are RANKED in fitness, not added to reward) so the underlying
 /// reward signal is unchanged.
 pub fn eval_closed_loop_rs(
@@ -1995,13 +1890,23 @@ pub fn eval_closed_loop_rs(
 			cfg.max_initial_yaw_rate,
 			[cfg.active_roll, cfg.active_pitch, cfg.active_yaw],
 		);
-		// Yaw-anchor: seed the eval rollout's heading from this episode's true initial yaw.
-		controller.reset(yaw_from_quat_rs(init_q));
 		sim.reset(Some(init_q), Some(init_omega));
+		// CTRL-17 G3: the eval episode is a TRAINING episode — same mass draw,
+		// vertical + horizontal starts and commanded collective, from the same loop
+		// rng in the same order (episode_regime). Before this the eval started every
+		// episode at the origin and addressed on the previous rollout's LAST-step
+		// (e, v, alt_err, vz), held constant — a phantom offset a round that learned
+		// lateral control would tilt toward and be discarded for. translation=false
+		// draws nothing, so attitude-only evals are byte-identical.
+		let ep_collective_pwm = draw_translation_episode(sim, cfg, rng);
 		// W2: per-episode weather in the per-round eval too (train-under-weather
 		// must be SCORED under weather or the gate/checkpoint ranks on the wrong
 		// regime). No-op when disabled.
 		apply_cfg_disturbance(sim, cfg, rng);
+		// Yaw-anchor: seed the eval rollout's heading from this episode's true initial yaw.
+		controller.reset(yaw_from_quat_rs(init_q));
+		// STAGE 1: the episode opens at its commanded collective (after reset).
+		anchor_controller(controller, cfg, ep_collective_pwm);
 
 		let mut ep_reward = 0.0_f64;
 		let mut ep_sum_err = 0.0_f64;
@@ -2017,6 +1922,8 @@ pub fn eval_closed_loop_rs(
 				break;
 			}
 			let (gyro, accel) = sim.read_imu();
+			// G3: LIVE vertical + horizontal features, never the frozen last value.
+			feed_live_obs(controller, sim, cfg, ep_collective_pwm);
 			let pwm = controller_step_4(controller, gyro, accel, target);
 
 			// Jerk: Σ_m (pwm[m] - prev_pwm[m])². First step uses hover as prev
@@ -2058,7 +1965,9 @@ pub fn eval_closed_loop_rs(
 				let _ = writeln!(w, "{ep_idx},{_t},{},{},{}", d[0], d[1], d[2]);
 			}
 			let err = sim.attitude_error(None);
-			ep_reward += compute_reward(err, 0.0, 0, 0.0, 0.0) as f64;
+			// G3: the checkpoint ranks on the SAME weighted terms as the gate
+			// (attitude + λ_alt·alt² + λ_pos·radial², step_reward).
+			ep_reward += step_reward(sim, cfg, err);
 			ep_sum_err += err as f64;
 			steps += 1;
 		}
@@ -2246,6 +2155,62 @@ fn try_gpu_split(
 
 // ----- Outer loop ----------------------------------------------------------
 
+/// The refusals every rollout of a training config shares (the trainer panics on
+/// them; the calibration sampler returns them as a Python error). Features that
+/// read a channel the config does not fly would be constant zeros in training and
+/// real at scoring — the DOB train/deploy divergence.
+pub(crate) fn validate_train_regime(
+	controller: &WnnController,
+	cfg: &RewardGatedConfigPacked,
+) -> Result<(), String>
+{
+	let (cc, ae, vz) = controller.vert_params();
+	let (pe, vxy) = controller.horizontal_obs_flags();
+	if (pe || vxy) && !(cfg.translation && cfg.xy_offset > 0.0)
+	{
+		return Err(format!(
+			"the controller has stage-2 horizontal features enabled (pos_err_xy={pe}, \
+			 vel_xy={vxy}) but the config's horizontal channel is unarmed (translation={}, \
+			 xy_offset={}) — they would be constant zeros in training and real at scoring. \
+			 Set translation AND xy_offset > 0.",
+			cfg.translation, cfg.xy_offset
+		));
+	}
+	if (cc || ae || vz) && !cfg.translation
+	{
+		return Err(format!(
+			"the controller has stage-1 vertical features enabled (collective_cmd={cc}, \
+			 alt_err={ae}, vz={vz}) but cfg.translation is OFF — they would be constant \
+			 zeros in training and real at scoring. Set translation (and af_mass) on the \
+			 training config."
+		));
+	}
+	if cfg.translation && !(cfg.af_mass > 0.0)
+	{
+		return Err(format!(
+			"cfg.translation is ON but af_mass = {} — mass is a PLANT parameter and the \
+			 vertical dynamics divide by it.",
+			cfg.af_mass
+		));
+	}
+	if cfg.teacher_hover_mode > TEACHER_HOVER_DERIVED
+	{
+		return Err(format!(
+			"teacher_hover_mode = {} is not a mode (0 = legacy 0.5, 1 = derived nominal hover).",
+			cfg.teacher_hover_mode
+		));
+	}
+	// G4: the gate/checkpoint reward terms. A negative λ would REWARD error.
+	for (name, v) in [("lambda_alt", cfg.lambda_alt), ("lambda_pos", cfg.lambda_pos)]
+	{
+		if !v.is_finite() || v < 0.0
+		{
+			return Err(format!("{name} = {v} must be finite and >= 0."));
+		}
+	}
+	Ok(())
+}
+
 /// Reward-gated DAGGER-style training in place. ONE Python↔Rust crossing per
 /// genome. Mirrors `reward_gated_train` in reward_gated.py.
 ///
@@ -2259,42 +2224,13 @@ pub fn dagger_train_inplace_rs(
 	seed: u64,
 ) -> TrainStats
 {
-	// SCOPE C STAGE 1 (13/08/2026) — the trainer now DOES roll out with vertical
-	// dynamics and a collective teacher, so the features are live here. What must
-	// still be refused is the MISMATCH: vertical features with cfg.translation
-	// off would train on constant zeros while the scorer feeds real values (the
-	// DOB train/deploy divergence). Keep it an assert, not a silent skip.
+	// SCOPE C STAGE 1 (13/08/2026) — the trainer DOES roll out with vertical (and,
+	// armed, horizontal) dynamics, so the features are live here. What must still
+	// be refused is the MISMATCH (see validate_train_regime). Keep it a panic, not a
+	// silent skip.
+	if let Err(e) = validate_train_regime(controller, cfg)
 	{
-		let (cc, ae, vz) = controller.vert_params();
-		let (pe, vxy) = controller.horizontal_obs_flags();
-		assert!(
-			!((pe || vxy) && !(cfg.translation && cfg.xy_offset > 0.0)),
-			"dagger_train: the controller has stage-2 horizontal features enabled \
-			 (pos_err_xy={pe}, vel_xy={vxy}) but the config's horizontal channel is \
-			 unarmed (translation={}, xy_offset={}) — they would be constant zeros in \
-			 training and real at scoring. Set translation AND xy_offset > 0.",
-			cfg.translation,
-			cfg.xy_offset
-		);
-		assert!(
-			!((cc || ae || vz) && !cfg.translation),
-			"dagger_train: the controller has stage-1 vertical features enabled \
-			 (collective_cmd={cc}, alt_err={ae}, vz={vz}) but cfg.translation is OFF — \
-			 they would be constant zeros in training and real at scoring. Set \
-			 translation (and af_mass) on the training config."
-		);
-		assert!(
-			!(cfg.translation && !(cfg.af_mass > 0.0)),
-			"dagger_train: cfg.translation is ON but af_mass = {} — mass is a PLANT \
-			 parameter and the vertical dynamics divide by it.",
-			cfg.af_mass
-		);
-		assert!(
-			cfg.teacher_hover_mode <= TEACHER_HOVER_DERIVED,
-			"dagger_train: teacher_hover_mode = {} is not a mode (0 = legacy 0.5, \
-			 1 = derived nominal hover).",
-			cfg.teacher_hover_mode
-		);
+		panic!("dagger_train: {e}");
 	}
 	let mut rng = SmallRng::seed_from_u64(seed);
 	let af = AirframeRs::from_cfg(cfg);
@@ -4000,7 +3936,7 @@ mod d0_hover_anchor_tests
 			alt_offset: 0.0, init_vz: 0.0, collective_jitter: 0.0,
 			target_altitude: 0.0,
 			alt_pd_omega: 2.0, alt_pd_zeta: 1.0, alt_pd_max_delta: 0.25,
-			xy_offset: 0.0, lambda_pos: 0.0,
+			xy_offset: 0.0, lambda_pos: 0.0, lambda_alt: 0.0,
 			pos_omega: 1.0, pos_zeta: 1.0, pos_max_tilt_rad: 0.5236,
 			teacher_hover_mode,
 			motor_lag_s: 0.0,
@@ -4526,7 +4462,7 @@ mod motor_lag_axis_f_tests
 			alt_offset: 0.0, init_vz: 0.0, collective_jitter: 0.0,
 			target_altitude: 0.0,
 			alt_pd_omega: 2.0, alt_pd_zeta: 1.0, alt_pd_max_delta: 0.25,
-			xy_offset: 0.0, lambda_pos: 0.0,
+			xy_offset: 0.0, lambda_pos: 0.0, lambda_alt: 0.0,
 			pos_omega: 1.0, pos_zeta: 1.0, pos_max_tilt_rad: 0.5236,
 			teacher_hover_mode: 0,
 			motor_lag_s,

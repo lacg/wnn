@@ -9,6 +9,20 @@ checkpoint eval) see and command the lateral channel that the scorer flies? Stag
 Paths below are relative to `src/wnn/ram/strategies/accelerator/controller/` unless prefixed `control/`
 (= `src/wnn/control/`).
 
+## Status (26/09/2026, branch `stage2-trainer-fixes`, controller ABI 31)
+
+G1-G4 and G11 are FIXED, vertical half included (Luiz 26/09: new lineage for every
+translation run; attitude-only runs are byte-identical, pinned by `ctrl17_pins`). One shared
+episode definition (`controller/episode_regime.rs`) now feeds the training rollout, the
+per-round checkpoint eval (G3), the calibration sampler (`calib_sampler.rs`, G1) and the
+MEMORY recorder's cascade driver (G2); the gate and checkpoint rank on
+`episode_regime::step_reward` with λ_alt/λ_pos (G4; default rule in
+`wnn/control/gate_lambdas.py`). G13 (found here, FIXED 27/09): under `expert_drives` + D0
+re-base + translation the sim flew the re-based LABEL, not the teacher's pwm (cf21 fell
+~1.2 m in 2 s); it now flies the raw teacher pwm. Same landing: FFD sub-batch packing in
+ControllerEvaluator (bit-identical to unbatched/contiguous) and `--rg-easy-tilt-deg` /
+`--rg-full-tilt-deg` (defaults 8/30 unchanged). G5-G10, G12 stay open.
+
 ## Verdict: GAPS
 
 The trainer's **core DAgger loop is wired for lateral motion**: teacher, plant, features, replay (CPU and Metal) and

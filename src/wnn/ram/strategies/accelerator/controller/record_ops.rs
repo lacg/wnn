@@ -17,8 +17,10 @@
 //! episodes, drawn once, not 10^9 per-cell draws. So these two ports are
 //! BIT-EXACT: same ICs, same sim, same controller, same accumulation.
 
-use crate::controller::{AttitudePidRs, AttitudeSim, WnnController};
-use crate::optimal::AllocLqrRs;
+use crate::controller::{yaw_from_quat_rs, AttitudePidRs, AttitudeSim, WnnController};
+use crate::dagger_train::RewardGatedConfigPacked;
+use crate::episode_regime::OuterLoops;
+use crate::optimal::{AllocLqrRs, Teacher};
 use crate::stage1::Stage1Cfg;
 
 /// SCOPE C STAGE 1: what the recorder needs to fly the VERTICAL channel.
@@ -70,16 +72,68 @@ pub enum Driver<'a>
 {
 	Pid(&'a mut AttitudePidRs),
 	Alloc(&'a mut AllocLqrRs),
+	/// CTRL-17 G2 (26/09/2026): the TRAINING teacher inside the training outer
+	/// loops (altitude PD, and the position loop when xy is armed), built from the
+	/// run's own packed config. The translating recorder used to drive the legacy
+	/// 0.5-hover attitude PID with no outer loop — on a real airframe that does not
+	/// even hover, so the universe was recorded on a climbing/falling vehicle.
+	Cascade(CascadeDriver<'a>),
+}
+
+/// The training cascade as a reference driver (see Driver::Cascade).
+pub struct CascadeDriver<'a>
+{
+	pub teacher: &'a mut Teacher,
+	pub loops: OuterLoops,
+	pub cfg: &'a RewardGatedConfigPacked,
+	/// The action applied last step, for the mpcof observer (rollout twin).
+	pub last_applied: [f32; 4],
+}
+
+impl<'a> CascadeDriver<'a>
+{
+	pub fn new(teacher: &'a mut Teacher, cfg: &'a RewardGatedConfigPacked) -> Self
+	{
+		CascadeDriver {
+			teacher,
+			loops: OuterLoops::for_cfg(cfg),
+			cfg,
+			last_applied: [0.5; 4],
+		}
+	}
+
+	fn drive(&mut self, sim: &mut AttitudeSim, q: [f32; 4], gyro: [f32; 3], target: [f32; 3])
+	{
+		self.teacher.observe(gyro, self.last_applied.map(|v| v as f64));
+		let pwm = self
+			.loops
+			.expert(self.teacher, sim, q, gyro, target, self.cfg.target_altitude)
+			.map(|v| v as f32);
+		sim.step(pwm);
+		self.last_applied = pwm;
+	}
 }
 
 impl Driver<'_>
 {
 	fn reset(&mut self)
 	{
-		if let Driver::Pid(p) = self
+		match self
 		{
-			p.reset();
+			Driver::Pid(p) => p.reset(),
+			Driver::Cascade(c) =>
+			{
+				c.teacher.reset();
+				c.last_applied = [0.5; 4];
+			}
+			Driver::Alloc(_) => {}
 		}
+	}
+	/// Whether this driver is the training cascade (it seeds the yaw anchor from
+	/// the episode's true yaw, as the trainer and scorer do).
+	fn is_cascade(&self) -> bool
+	{
+		matches!(self, Driver::Cascade(_))
 	}
 	/// Advance the sim one step with the driver's action.
 	fn drive(&mut self, sim: &mut AttitudeSim, q: [f32; 4], gyro: [f32; 3], target: [f32; 3])
@@ -96,6 +150,7 @@ impl Driver<'_>
 					.collect();
 				let _ = sim.step_n_core(&pwm);
 			}
+			Driver::Cascade(c) => c.drive(sim, q, gyro, target),
 		}
 	}
 }
@@ -115,7 +170,9 @@ fn run_episode<F: FnMut(&WnnController)>(
 {
 	sim.reset(Some(q0), Some(om0));
 	driver.reset();
-	c.reset(0.0);
+	// The cascade (translating) recorder seeds the heading from the episode's true
+	// yaw like the trainer and scorer; the legacy drivers keep the 0.0 seed.
+	c.reset(if driver.is_cascade() { yaw_from_quat_rs(q0) } else { 0.0 });
 	// STAGE 1: per-episode PLANT draw + vertical ICs, in cpu_score::score_one's
 	// EXACT order — set_translation AFTER reset (reset zeroes z/vz), then the
 	// anchor AFTER c.reset (which seeds the accumulators from the current
@@ -126,6 +183,12 @@ fn run_episode<F: FnMut(&WnnController)>(
 			.set_translation_core(s.cfg.mass[ep])
 			.expect("validated stage1 mass");
 		sim.set_vertical_state(s.cfg.init_z[ep], s.cfg.init_vz[ep]);
+		// CTRL-17 G2: the horizontal start (displaced at rest), which the recorder
+		// was handed but never applied — x/y stayed 0 and the guard said green.
+		if s.cfg.has_horizontal()
+		{
+			sim.set_horizontal_state(s.cfg.init_x[ep], s.cfg.init_y[ep], 0.0, 0.0);
+		}
 		c.set_collective_anchor(s.cfg.collective_pwm(ep, s.gravity, s.k_thrust));
 	}
 	let mut n = 0usize;
@@ -146,6 +209,11 @@ fn run_episode<F: FnMut(&WnnController)>(
 				s.cfg.target_altitude - sim.altitude_rs(),
 				sim.vertical_velocity_rs(),
 			);
+			// G2: the live horizontal observation (zeros while xy is unarmed —
+			// the sim never leaves the origin), the scorer's exact expression.
+			let [hx, hy] = sim.position_xy_rs();
+			let [hvx, hvy] = sim.velocity_xy_rs();
+			c.set_horizontal_obs(-hx, -hy, hvx, hvy);
 		}
 		let q = sim.quaternion();
 		c.step(gyro, accel, target);

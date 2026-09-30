@@ -18,6 +18,12 @@ mod controller_split;
 mod controller_training;
 mod cpu_score; // CPU (rayon) batch scorer — twin of score_controllers_metal
 mod dagger_train;
+mod episode_regime; // CTRL-17: ONE definition of a training episode (rollout, eval, calib, recorder)
+mod calib_sampler; // CTRL-17 G1: threshold-calibration feature sampler on the training cascade
+#[cfg(test)]
+mod ctrl17_pins; // CTRL-17 byte-identity pins (attitude-only trainer, translation rollout)
+#[cfg(test)]
+mod ctrl17_tests; // CTRL-17 G1-G4 + G11 behaviour tests
 mod estimator; // Mahony attitude estimator — Rust twin of wnn/control/estimator.py
 mod genome_cells; // opaque Rust-side cell store (Stage B: cells never cross FFI hot paths)
 mod memory_ops; // GA-Memory cell-value operators (counter_rng, Rust-first)
@@ -180,7 +186,17 @@ mod metal_controller;
 /// Every default is 0.0 and the 0.0 path never calls set_motor_lag, so ABI 29
 /// results reproduce bit-for-bit (pinned by the motor_lag_zero_* tests). The
 /// bump exists so the Python facade can ASSERT the ctor accepts the key.
-pub const ABI_VERSION: u32 = 30;
+/// ABI 31 (26/09/2026): CTRL-17 stage-2 trainer fixes — RESULTS-CHANGING for
+/// every translation run (a new lineage; attitude-only runs are byte-identical).
+///   G1 new export `sample_calibration_features` (the thermometer fitter flies
+///      the training cascade under translation);
+///   G2 `record_address_universe(reference_cfg=)` REQUIRED with stage-1 draws
+///      (recorder drives the training teacher + outer loops, applies xy starts);
+///   G3 per-round checkpoint eval flies training episodes with live features and
+///      ranks on the gate's weighted reward;
+///   G4 RewardGatedConfigPacked.lambda_alt (new) and lambda_pos are READ by the
+///      DAgger gate and the checkpoint (episode_regime::step_reward).
+pub const ABI_VERSION: u32 = 31;
 
 /// Mode-aware untrained-cell decode anchor (ABI 12): QUAD→0.75, TERNARY→0.5
 /// (the fixed PLN empty_value), BINARY→0.5 (antagonist-pair effective neutral).
@@ -584,6 +600,14 @@ fn arch_pick_mask(n: usize, seed: u64, generation: u64, genome: u64, layer: u64)
 /// vertical features never move, and the recorded universe covers exactly one
 /// degenerate slice of the space the controller will actually visit — the
 /// defect that made the MEMORY phase meaningless for stage 1.
+/// CTRL-17 G2 (26/09/2026): `reference_cfg` is the run's RewardGatedConfigPacked
+/// and is REQUIRED whenever the stage-1 draws are passed. The recorder then flies
+/// the TRAINING regime — the plant (airframe, motor lag) from that config, the
+/// run's teacher inside the same outer altitude/position loops the DAgger labels
+/// come from, the horizontal starts applied, live horizontal observations — rather
+/// than the legacy 0.5-hover attitude PID (which does not hover a real airframe).
+/// With reference_cfg the plant comes from it ALONE: af_*/motor_lag_s must be left
+/// at their defaults (one owner per plant parameter).
 #[pyfunction]
 #[pyo3(signature = (controller, init_q, init_om, target, steps,
                     geometry_rows = None, nominal_rows = None, rotor_asym = None,
@@ -596,7 +620,8 @@ fn arch_pick_mask(n: usize, seed: u64, generation: u64, genome: u64, layer: u64)
                     s1_target_altitude = None, s1_init_z = None, s1_init_vz = None,
                     s1_mass = None, s1_collective_frac = None,
                     s2_init_x = None, s2_init_y = None,
-                    motor_lag_s = 0.0))]
+                    motor_lag_s = 0.0,
+                    reference_cfg = None))]
 #[allow(clippy::too_many_arguments)]
 fn record_address_universe(
 	mut controller: PyRefMut<'_, controller::WnnController>,
@@ -630,8 +655,58 @@ fn record_address_universe(
 	// AXIS F (19/09/2026): the MEMORY-phase address universe is recorded on the
 	// same lagged plant the run trains and scores on. 0.0 = OFF, bit-identical.
 	motor_lag_s: f32,
+	reference_cfg: Option<dagger_train::RewardGatedConfigPacked>,
 ) -> PyResult<(Vec<(usize, u64)>, Vec<(usize, u64)>)>
 {
+	let n_eps = init_q.len().min(init_om.len());
+	let s1_cfg = recorder_stage1_cfg(
+		n_eps,
+		s1_target_altitude,
+		s1_init_z,
+		s1_init_vz,
+		s1_mass,
+		s1_collective_frac,
+		s2_init_x,
+		s2_init_y,
+	)?;
+	if let Some(cfg) = reference_cfg.as_ref()
+	{
+		let legacy_plant = RecorderLegacyPlant {
+			af_dt,
+			af_arm_length,
+			af_k_thrust,
+			af_k_drag,
+			af_inertia,
+			af_gravity,
+			motor_lag_s,
+		};
+		check_reference_regime(
+			&controller,
+			cfg,
+			s1_cfg.as_ref(),
+			&legacy_plant,
+			geometry_rows.is_some(),
+		)?;
+		let s1_cfg = s1_cfg.expect("checked: reference_cfg requires the stage-1 draws");
+		return Ok(record_on_training_cascade(
+			&mut controller,
+			cfg,
+			&s1_cfg,
+			&init_q,
+			&init_om,
+			target,
+			steps,
+		));
+	}
+	if s1_cfg.is_some()
+	{
+		return Err(pyo3::exceptions::PyValueError::new_err(
+			"record_address_universe: stage-1 draws require reference_cfg (CTRL-17 G2) — the \
+			 legacy 0.5-hover attitude PID does not hover a translating airframe, so the universe \
+			 would be recorded on a climbing/falling vehicle. Pass the run's \
+			 RewardGatedConfigPacked.",
+		));
+	}
 	let mut sim = controller::AttitudeSim::new(
 		af_dt,
 		af_arm_length,
@@ -644,51 +719,6 @@ fn record_address_universe(
 	{
 		sim.set_motor_lag(motor_lag_s);
 	}
-	// Stage 1 is all-or-nothing: a partial config would silently record a
-	// half-vertical universe, which is the failure this parameter exists to end.
-	let s1_cfg = match (
-		s1_target_altitude,
-		s1_init_z,
-		s1_init_vz,
-		s1_mass,
-		s1_collective_frac,
-	)
-	{
-		(None, None, None, None, None) => None,
-		(Some(t), Some(z), Some(vz), Some(m), Some(cf)) =>
-		{
-			let cfg = stage1::Stage1Cfg {
-				target_altitude: t,
-				lambda_alt: 0.0, // reward weight is unused when recording
-				init_z: z,
-				init_vz: vz,
-				mass: m,
-				collective_frac: cf,
-				// Stage-2 horizontal draws: not yet threaded to the recorder —
-				// s2 runs must extend this BEFORE their MEMORY stage or the
-				// horizontal universe is degenerate (the exact stage-1 lesson).
-				lambda_pos: 0.0,
-				init_x: s2_init_x.unwrap_or_default(),
-				init_y: s2_init_y.unwrap_or_default(),
-			};
-			cfg
-				.validate(init_q.len().min(init_om.len()))
-				.map_err(pyo3::exceptions::PyValueError::new_err)?;
-			Some(cfg)
-		}
-		_ =>
-		{
-			return Err(pyo3::exceptions::PyValueError::new_err(
-				"record_address_universe: stage-1 args are all-or-nothing — pass every one of \
-             s1_target_altitude/s1_init_z/s1_init_vz/s1_mass/s1_collective_frac, or none",
-			))
-		}
-	};
-	let s1 = s1_cfg.as_ref().map(|cfg| record_ops::RecorderStage1 {
-		cfg,
-		gravity: af_gravity,
-		k_thrust: af_k_thrust,
-	});
 	match geometry_rows
 	{
 		None =>
@@ -703,7 +733,7 @@ fn record_address_universe(
 				&init_om,
 				target,
 				steps,
-				s1.as_ref(),
+				None,
 			))
 		}
 		Some(rows) =>
@@ -738,10 +768,201 @@ fn record_address_universe(
 				&init_om,
 				target,
 				steps,
-				s1.as_ref(),
+				None,
 			))
 		}
 	}
+}
+
+/// Stage-1/2 recorder draws, all-or-nothing: a partial config would silently record
+/// a half-vertical universe, which is the failure these parameters exist to end.
+#[allow(clippy::too_many_arguments)]
+fn recorder_stage1_cfg(
+	n_eps: usize,
+	target_altitude: Option<f32>,
+	init_z: Option<Vec<f32>>,
+	init_vz: Option<Vec<f32>>,
+	mass: Option<Vec<f32>>,
+	collective_frac: Option<Vec<f32>>,
+	init_x: Option<Vec<f32>>,
+	init_y: Option<Vec<f32>>,
+) -> PyResult<Option<stage1::Stage1Cfg>>
+{
+	match (target_altitude, init_z, init_vz, mass, collective_frac)
+	{
+		(None, None, None, None, None) => Ok(None),
+		(Some(t), Some(z), Some(vz), Some(m), Some(cf)) =>
+		{
+			let cfg = stage1::Stage1Cfg {
+				target_altitude: t,
+				lambda_alt: 0.0, // reward weight is unused when recording
+				init_z: z,
+				init_vz: vz,
+				mass: m,
+				collective_frac: cf,
+				lambda_pos: 0.0,
+				init_x: init_x.unwrap_or_default(),
+				init_y: init_y.unwrap_or_default(),
+			};
+			cfg
+				.validate(n_eps)
+				.map_err(pyo3::exceptions::PyValueError::new_err)?;
+			Ok(Some(cfg))
+		}
+		_ => Err(pyo3::exceptions::PyValueError::new_err(
+			"record_address_universe: stage-1 args are all-or-nothing — pass every one of \
+			 s1_target_altitude/s1_init_z/s1_init_vz/s1_mass/s1_collective_frac, or none",
+		)),
+	}
+}
+
+/// The recorder's legacy plant arguments — refused alongside reference_cfg.
+struct RecorderLegacyPlant
+{
+	af_dt: f32,
+	af_arm_length: f32,
+	af_k_thrust: f32,
+	af_k_drag: f32,
+	af_inertia: [f32; 3],
+	af_gravity: f32,
+	motor_lag_s: f32,
+}
+
+impl RecorderLegacyPlant
+{
+	/// True when every field is at its signature default (i.e. nothing was passed).
+	fn is_default(&self) -> bool
+	{
+		self.af_dt == 0.001
+			&& self.af_arm_length == 0.075
+			&& self.af_k_thrust == 2.4
+			&& self.af_k_drag == 0.05
+			&& self.af_inertia == [0.0023, 0.0023, 0.0046]
+			&& self.af_gravity == 9.81
+			&& self.motor_lag_s == 0.0
+	}
+}
+
+/// Refusals for the training-cascade recorder: the plant has ONE owner, the draws
+/// must match the armed channels, and features must not read an unflown channel.
+fn check_reference_regime(
+	controller: &controller::WnnController,
+	cfg: &dagger_train::RewardGatedConfigPacked,
+	s1: Option<&stage1::Stage1Cfg>,
+	legacy: &RecorderLegacyPlant,
+	has_geometry: bool,
+) -> PyResult<()>
+{
+	let refuse = |m: String| {
+		Err(pyo3::exceptions::PyValueError::new_err(format!(
+			"record_address_universe: {m}"
+		)))
+	};
+	if !cfg.translation
+	{
+		return refuse("reference_cfg must have translation on (it drives the translating recorder)".into());
+	}
+	if has_geometry
+	{
+		return refuse("reference_cfg (quad training cascade) cannot be combined with geometry_rows".into());
+	}
+	if !legacy.is_default()
+	{
+		return refuse(
+			"pass the plant ONCE: with reference_cfg the airframe and motor lag come from it; \
+			 leave af_*/motor_lag_s at their defaults"
+				.into(),
+		);
+	}
+	let Some(s1) = s1
+	else
+	{
+		return refuse("reference_cfg requires the stage-1 draws (s1_*)".into());
+	};
+	if s1.target_altitude != cfg.target_altitude
+	{
+		return refuse(format!(
+			"s1_target_altitude {} != reference_cfg.target_altitude {}",
+			s1.target_altitude, cfg.target_altitude
+		));
+	}
+	if s1.has_horizontal() != (cfg.xy_offset > 0.0)
+	{
+		return refuse(format!(
+			"horizontal draws present={} but reference_cfg.xy_offset={} — the recorder's \
+			 horizontal channel must be armed exactly when the training config's is",
+			s1.has_horizontal(),
+			cfg.xy_offset
+		));
+	}
+	dagger_train::validate_train_regime(controller, cfg)
+		.map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("record_address_universe: {e}")))
+}
+
+/// Record on the training cascade: the config's plant and teacher (episode 0's
+/// schedule slot), the injected ICs and draws.
+fn record_on_training_cascade(
+	controller: &mut controller::WnnController,
+	cfg: &dagger_train::RewardGatedConfigPacked,
+	s1_cfg: &stage1::Stage1Cfg,
+	init_q: &[[f32; 4]],
+	init_om: &[[f32; 3]],
+	target: [f32; 3],
+	steps: usize,
+) -> (Vec<(usize, u64)>, Vec<(usize, u64)>)
+{
+	let af = dagger_train::AirframeRs::from_cfg(cfg);
+	let mut sim = af.sim();
+	let mut teacher = af.teacher(cfg.teacher_id_for(0, 0));
+	let mut d = record_ops::Driver::Cascade(record_ops::CascadeDriver::new(&mut teacher, cfg));
+	let s1 = record_ops::RecorderStage1 {
+		cfg: s1_cfg,
+		gravity: cfg.af_gravity,
+		k_thrust: cfg.af_k_thrust,
+	};
+	record_ops::record_address_universe(
+		controller,
+		&mut sim,
+		&mut d,
+		init_q,
+		init_om,
+		target,
+		steps,
+		Some(&s1),
+	)
+}
+
+/// CTRL-17 G1 (26/09/2026): per-feature calibration samples from teacher-driven
+/// TRAINING episodes of `cfg` (episode_regime: mass/vertical/horizontal draws,
+/// collective, weather; the teacher inside the altitude + position loops). The
+/// thermometer fitter consumes this under translation instead of flying the
+/// attitude-only PID, whose ladders were degenerate on the xy features and fitted
+/// an uncontrolled drift on the vertical ones. `controller` is the (untrained)
+/// feature controller; its compute_features output is what is sampled.
+#[pyfunction]
+#[pyo3(signature = (controller, cfg, num_episodes, seed))]
+fn sample_calibration_features(
+	mut controller: PyRefMut<'_, controller::WnnController>,
+	cfg: dagger_train::RewardGatedConfigPacked,
+	num_episodes: usize,
+	seed: u64,
+) -> PyResult<Vec<Vec<f32>>>
+{
+	dagger_train::validate_train_regime(&controller, &cfg).map_err(|e| {
+		pyo3::exceptions::PyValueError::new_err(format!("sample_calibration_features: {e}"))
+	})?;
+	if cfg.steps_per_episode == 0 || num_episodes == 0
+	{
+		return Err(pyo3::exceptions::PyValueError::new_err(
+			"sample_calibration_features: steps_per_episode and num_episodes must be > 0",
+		));
+	}
+	Ok(calib_sampler::sample_calibration_features_rs(
+		&mut controller,
+		&cfg,
+		num_episodes,
+		seed,
+	))
 }
 
 #[pyfunction]
@@ -870,6 +1091,7 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()>
 	m.add_function(wrap_pyfunction!(arch_pick_mask, m)?)?;
 	m.add_function(wrap_pyfunction!(record_address_universe, m)?)?;
 	m.add_function(wrap_pyfunction!(record_input_entropy, m)?)?;
+	m.add_function(wrap_pyfunction!(sample_calibration_features, m)?)?;
 	m.add("LAYER_STATE", memory_ops::LAYER_STATE)?;
 	m.add("LAYER_OUTPUT", memory_ops::LAYER_OUTPUT)?;
 	// Untrained-cell decode anchor (delta-control + residual neutral point),

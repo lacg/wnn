@@ -76,7 +76,15 @@ import os
 # since 12/08 while nothing else did (a lagged cohort would have TRAINED lag-free
 # and SCORED lagged). 0.0 is bit-identical to 29. Python source: EpisodeConfig.
 # motor_lag_s (phased_ga --motor-lag-s). STAGE THIS FILE WITH THE WHEEL.
-EXPECTED_ABI = 30
+# 31 (26/09/2026): CTRL-17 stage-2 trainer fixes — RESULTS-CHANGING for every
+# TRANSLATION run (new lineage; attitude-only runs byte-identical, pinned by
+# ctrl17_pins). New export sample_calibration_features (G1 fitter on the training
+# cascade); record_address_universe(reference_cfg=) REQUIRED with stage-1 draws
+# (G2); per-round checkpoint eval on live features + weighted reward (G3);
+# RewardGatedConfigPacked.lambda_alt + lambda_pos READ by gate/checkpoint (G4).
+# Python side: evaluator.reference_packed_config / _gate_lambda_kwargs,
+# gate_lambdas.py, ga_memory reference_cfg. STAGE THIS FILE WITH THE WHEEL.
+EXPECTED_ABI = 31
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

@@ -133,9 +133,29 @@ def test_no_airframe_is_rust_defaults() -> None:
 	check("no airframe: implied hover at cf21 mass would be 0.200", implied_hover(cfg, 0.0393), 0.200, tol=1e-3)
 
 
+def _trainer_ctor_sites(src: str) -> list[int]:
+	"""Offsets of the TRAINER's packed-config ctor calls. CTRL-17 added a third
+	RewardGatedConfigPacked( call in reference_packed_config (the calibration
+	sampler / MEMORY recorder's reference rollout) — a different consumer, pinned
+	separately below."""
+	ref = src.index("def reference_packed_config(")
+	ref_end = src.index("\n\t)\n", ref)
+	return [m.start() for m in re.finditer(r"ra\.RewardGatedConfigPacked\(", src)
+	        if not (ref <= m.start() <= ref_end)]
+
+
+def test_reference_ctor_uses_the_plant_helpers() -> None:
+	src = open(ev_mod.__file__).read()
+	ref = src.index("def reference_packed_config(")
+	body = src[ref:src.index("\n\t)\n", ref)]
+	check("reference site splats _plant_train_kwargs(ec)", "**_plant_train_kwargs(ec)" in body, True)
+	check("reference site splats ec.motor_lag_kwargs()", "**ec.motor_lag_kwargs()" in body, True)
+	check("reference site reads the disturbance via _dist_packed_fields_ec", "_dist_packed_fields_ec(ec)" in body, True)
+
+
 def test_both_ctor_sites_use_the_plant_helper() -> None:
 	src = open(ev_mod.__file__).read()
-	sites = [m.start() for m in re.finditer(r"ra\.RewardGatedConfigPacked\(", src)]
+	sites = _trainer_ctor_sites(src)
 	check("evaluator has exactly two trainer ctor sites", len(sites), 2)
 	for i, pos in enumerate(sites):
 		body = src[pos:src.index("\n\t\t)\n", pos)]
@@ -159,7 +179,7 @@ def test_cf21_with_motor_lag_packs_both() -> None:
 
 def test_both_ctor_sites_splat_motor_lag() -> None:
 	src = open(ev_mod.__file__).read()
-	sites = [m.start() for m in re.finditer(r"ra\.RewardGatedConfigPacked\(", src)]
+	sites = _trainer_ctor_sites(src)
 	for i, pos in enumerate(sites):
 		body = src[pos:src.index("\n\t\t)\n", pos)]
 		check(f"site {i} splats episode_config.motor_lag_kwargs()", "**rg.episode_config.motor_lag_kwargs()" in body, True)
@@ -168,7 +188,8 @@ def test_both_ctor_sites_splat_motor_lag() -> None:
 if __name__ == "__main__":
 	for t in (test_cf21_trainer_matches_scorer, test_cf21_attitude_only_still_flies_cf21,
 	          test_no_airframe_is_rust_defaults, test_both_ctor_sites_use_the_plant_helper,
-	          test_cf21_with_motor_lag_packs_both, test_both_ctor_sites_splat_motor_lag):
+	          test_cf21_with_motor_lag_packs_both, test_both_ctor_sites_splat_motor_lag,
+	          test_reference_ctor_uses_the_plant_helpers):
 		print(t.__name__)
 		t()
 	print(f"\n{'PASS' if FAILS == 0 else f'FAIL ({FAILS})'}: controller_trainer_airframe")

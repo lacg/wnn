@@ -69,9 +69,9 @@ def build_episode_config(args):
 		collective_cmd_jitter=float(getattr(args, "collective_jitter", 0.1)),
 		mass_jitter=float(getattr(args, "mass_jitter", 0.15)),
 		target_altitude=float(getattr(args, "target_altitude", 0.0)),
-		lambda_alt=float(getattr(args, "reward_lambda_alt", 0.0)),
+		lambda_alt=float(getattr(args, "reward_lambda_alt", None) or 0.0),  # CTRL-17: unset (None) ⇒ 0
 		max_initial_xy_offset_m=float(getattr(args, "xy_offset", 0.0)),
-		lambda_pos=float(getattr(args, "reward_lambda_pos", 0.0)),
+		lambda_pos=float(getattr(args, "reward_lambda_pos", None) or 0.0),
 		calib_airframe=bool(getattr(args, "calib_airframe", False)),
 	)
 
