@@ -1,0 +1,12 @@
+{
+ "story": "b20 + obs-pwm: does the anchor recipe keep its quality at a smaller address width (footprint/runtime)?",
+ "registered": "2026-10-01 (EDT), before any b20 marker existed; _op31 s2 banked, s3 flying",
+ "registered_by": "Luiz 01/10: 'create the story and slot it before LEVELS'",
+ "arm": "SL_C_b20n256_cf21_brushless_L4C_g10_s<seed>_op31 — _op31's exact recipe (--obs-pwm + PIPE_FLAGS, ABI-31 trainer) at --grid-bits 20 (ARM_BITS=20)",
+ "comparator": "SL_C_b24n256_..._s<seed>_op31 (same seeds s31337002-005, same ABI-31 trainer, same recipe). NEVER _op30 (ABI-30).",
+ "rule": "ADOPT b20 into the recipe (LEVELS and later arms fly at b20) iff, on the mean paired HEADLINE delta b20 - b24 over the 4 seeds: err <= +0.10 deg AND stable >= -1.0 pp AND steady <= +0.10 deg AND alt <= +0.05 m (non-inferiority on every column), AND mean headline TRUE keys of b20 <= 0.6 x that of b24 _op31. Otherwise b24 stays. A tie goes to b24 (the incumbent).",
+ "why_noninferiority": "The question is not 'is b20 better' but 'is it as good at a much smaller footprint/runtime'; margins = the CTRL-16 err ceiling (+0.10 deg) and roughly half the n=4 seed SD on the other columns.",
+ "rows": "HEADLINE held-out (stage-select genome), as CTRL-16; stage rows reported alongside, do not decide. Keys = count_true_keys.py --headline (<tag>@headline).",
+ "caveats": ["n=4 paired; a non-inferiority call at n=4 is a direction, carry the CI.", "Prior b20 evidence (SL_A_b20n32, n=32, no pwm) and the pre-ABI-29 pwm bit sweep (void) do not inform this arm."],
+ "slot": "after _tc31 x4, at queue_2009c's STEP 6c tilt PARK, BEFORE experiments/tilt_decision is written (LEVELS starts the moment that file exists). Supervisor: scripts/queue_b20_before_levels.sh."
+}
