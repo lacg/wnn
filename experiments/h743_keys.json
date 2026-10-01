@@ -1314,6 +1314,17 @@
   "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_op30/stage0_grid.yaml.gz",
   "true_keys": 1116547
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_op31@headline": {
+  "bits": 24,
+  "bytes_packed": 5295255,
+  "bytes_uint32": 7058356,
+  "counted": "2026-10-01T13:23:19Z",
+  "genome": "NEURONS#1",
+  "neurons": 248,
+  "populated": 1763101,
+  "source": "logs/controller/sweep_ladder/ckpt/SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_op31/stage1_neurons.yaml.gz",
+  "true_keys": 1763101
+ },
  "SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_pipeN": {
   "bits": 24,
   "bytes_packed": 997974,
