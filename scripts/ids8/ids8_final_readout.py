@@ -263,3 +263,40 @@ def arm_delta_table(gt):
 
 if __name__ == "__main__" and sys.argv[1] == "armtable":
 	arm_delta_table(sys.argv[2])
+
+
+def best_rows(mode="val_cal", f1_floor=90.0):
+	"""Best SINGLE genome per arm (no mean/SD): highest F1, highest Acc, lowest FPR with F1 >= floor.
+	One row = one (flow, phase, genome_type) held-out TEST result at threshold `mode` (VAL-calibrated).
+	Best-of-N over 3 seeds x 2 phases x 5 genome types — report as 'best found', never as the expected result."""
+	rows = []
+	for (arm, ph, gt), cell in D.items():
+		for seed, rec in cell.items():
+			v = rec["vals"].get(mode)
+			if v:
+				rows.append(dict(arm=arm, ph=ph, gt=gt, seed=seed, fid=rec["fid"], f1=v[0], fpr=v[1], acc=v[2], rec=rec))
+
+	def line(tag, r):
+		if r is None:
+			return f"  {tag:<13} —"
+		n, mb, lo, hi = shape(r["rec"])
+		return (f"  {tag:<13} F1 {r['f1']:6.2f} | FPR {r['fpr']:5.2f} | Acc {r['acc']:6.2f} | {r['ph']} {r['gt']:<12} "
+			f"r{r['seed']} flow {r['fid']} | {n}n x {mb:.1f}b")
+
+	def pick(rs):
+		hi_f1 = [r for r in rs if r["f1"] >= f1_floor]
+		return (max(rs, key=lambda r: (r["f1"], -r["fpr"])), max(rs, key=lambda r: (r["acc"], -r["fpr"])),
+			min(hi_f1, key=lambda r: (r["fpr"], -r["f1"])) if hi_f1 else None)
+
+	print(f"BEST SINGLE GENOMES — mode={mode}, held-out TEST; low-FPR row requires F1 >= {f1_floor}")
+	for arm in arms_of(D) + ["ALL"]:
+		rs = rows if arm == "ALL" else [r for r in rows if r["arm"] == arm]
+		bf, ba, bl = pick(rs)
+		print(f"{arm}  ({len(rs)} rows)")
+		print(line("best F1", bf))
+		print(line("best Acc", ba))
+		print(line(f"min FPR@F1>={f1_floor:g}", bl))
+
+
+if __name__ == "__main__" and sys.argv[1] == "best":
+	best_rows(sys.argv[2] if len(sys.argv) > 2 else "val_cal", float(sys.argv[3]) if len(sys.argv) > 3 else 90.0)
