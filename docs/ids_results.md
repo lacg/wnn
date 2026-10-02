@@ -493,6 +493,449 @@ val_cal              |  90.29±0.24 |  93.05±0.20 |  15.35±1.29 |   7.78±0.53
   over ~70 columns per arm (best-of-N), and it labels every cicids seed "pre" (harmless, since cicids is fold-immune but
   the label is misleading). Use it for the per-arm max view only, not for the call.
 
+## IDS-8 FINAL (02/10/2026) — UNSW temporal_3way quad-16b sweep
+
+Read-only DB readout of `IDSXD-unswt-quad-16b-*` (flows 6237-6263). Every number is HELD-OUT TEST
+(`validation_summaries.threshold_metadata`, `validation_point='final'`, temporal_3way, Protocol v2:
+thresholds fit on the 10% VAL, reported on the 10% TEST). No `iterations.best_f1` anywhere.
+Producer: `scripts/ids8/ids8_final_readout.py {audit|arms|paired|stats|seeds|pareto|rule7|refs}`.
+
+```
+Header (02/10/2026)
+  IDSXD unswt quad-16b  9 arms x {20403,20404,20405}  27/27 completed, 0 failed | 54/54 experiments (GS + GA per flow)
+  total 10.8 h | 24.1 min/run | first start 26/09/2026 12:07 UTC | last done 26/09/2026 23:00 UTC | ETA: complete
+Constant params (verified from flows.config_json): unsw-nb15, temporal_3way, ids_n_bits=16 (thermometer), top20, binary,
+  memory QUAD_WEIGHTED (worker default; no memory_mode key), fitness_aggregation=desirability, ce_anchor_normalized=0.2128,
+  harmonic_rank, ids_k_folds=5 / kfold_per_gen=5, ga_generations=250, patience=5, population 50, neurons 5-500,
+  neuron_sample_rate=0.25, OI training. Varying: weights, min_bits (B34-CTRL 34, all others 4; max_bits 34 everywhere), seed.
+Weights (f1/fpr/ce/acc): B05-AC .05/.05/.225/.675  B05-CE .05/.05/.675/.225  B10-AC .10/.10/.20/.60  B10-CE .10/.10/.60/.20
+  B15-AC .15/.15/.175/.525  B15-CE .15/.15/.525/.175  CE20 .30/.40/.20/.10  Wb-CTRL .35/.35/.10/.20
+  B34-CTRL .35/.35/.10/.20 with bits pinned 34-34 (the production 500n x 34b control)
+```
+
+### Verdict — NO supported winner; CHOSEN config for IDS-3 = CE20 (desirability)
+
+No arm separates from either control beyond seed noise. Two-way (arm x seed) residual sigma = 0.26 pp F1 /
+0.71 pp FPR (df 16), so the paired n=3 MDD is ~0.45 pp F1 / ~1.23 pp FPR. After Holm over the 8 contrasts per
+control, the ONLY Holm-significant contrast in the sweep is a HARM (B05-CE FPR +1.30 pp vs Wb-CTRL, best_fitness, Holm p 0.01).
+No F1 contrast survives (best: B15-CE +0.59 vs Wb-CTRL, 3/3 seeds, raw p 0.095).
+
+```
+CHOSEN (UNSW temporal_3way, for IDS-3 n=100):
+  weights f1/fpr/ce/acc = .30/.40/.20/.10 (CE20) | aggregation desirability (anchor_normalized 0.2128) | harmonic_rank
+  bits/neuron band 4-34 (GA winners 33.5±0.9 mean b/neuron) | neuron cap 500 (GA winners 395±153) | min_neurons 5
+  memory QUAD_WEIGHTED | ids_n_bits 16 thermometer | top20 | binary | k-fold 5x5 | gens 250 | patience 5
+  held-out val_cal, GA best_fitness (pre-declared column) : F1 89.10±0.28 / FPR 7.84±0.24 / Acc 89.14±0.28  (n=3)
+  held-out val_cal, GA best_f1                            : F1 89.16±0.31 / FPR 8.14±0.29 / Acc 89.21±0.32  (n=3)
+  low-FPR operating point, GA best_f1 empirical_cumulative: F1 87.10±0.48 / FPR 3.44±1.18 / Acc 87.10±0.48  (VAL-fit, legit)
+```
+Why CE20 (a decision, not a claim):
+1. It is the only arm whose direction holds 3/3 seeds against BOTH controls on the deployment axis, on both
+   genome types: FPR −1.62 / −1.29 pp (best_fitness, vs B34 / Wb), −1.25 / −1.66 pp (best_f1). Magnitude is at
+   or above the 1.23 pp MDD; raw p 0.010-0.031, Holm 0.08-0.25, so NOT significant.
+2. Its F1 cost is inside noise: −0.24 / −0.05 pp (best_fitness), −0.15 / −0.02 pp (best_f1); MDD 0.45 pp.
+3. Independent prior on this exact dataset/bits: CE20 was the ONLY supported winner of IDSZ (zscore, n=5,
+   +0.95 pp F1 vs Wb-CTRL, p 0.0006, survived budget matching) with FPR also lower (−0.70 pp). Here, under
+   desirability, the F1 half did NOT replicate (−0.05 pp) and the FPR half did, larger.
+4. Same weight vector as the IDS-2 cicids pick, so the S&P cohorts carry one fewer config.
+Alternatives (both legitimate, neither supported):
+- **B10-CE** (.10/.10/.60/.20) is the only arm better than BOTH controls on BOTH axes in 3/3 seeds, on both genome
+  types (best_fitness: F1 +0.30 / +0.48, FPR −0.64 / −0.31 vs B34 / Wb). Every magnitude is below the MDD. In IDSZ,
+  its F1 lead over Wb-CTRL (+0.73, 5/5) collapsed under budget matching, and here it again ran the longest GA
+  (127 gens mean vs 90-93 for the controls, 113 for CE20).
+- **B15-CE** (.15/.15/.525/.175) has the highest F1 in the sweep, 89.74±0.22 / 8.84±0.59 (best_fitness): +0.59 vs Wb (3/3),
+  +0.40 vs B34 (2/3). Its FPR is not better than the controls'. Pick it only if IDS-3 is meant to maximise F1.
+The aggregation half of the config (desirability vs zscore) is IDS-20's call. If IDSAGG flips it, re-read this choice.
+IDSZ zscore CE20 at 89.83±0.24 / 8.64±0.77 is UNPAIRED (different seeds, pre-WNN-1 / pre-immigrant-fix code era), so it
+cannot be attributed to the aggregation.
+
+### Per-arm table — headline GA val_cal, paired by seed vs B34-CTRL and Wb-CTRL (n=3 each)
+```
+GA best_fitness val_cal, n=3 seeds each; delta = arm − control, paired by seed (pp); [k/3] = seeds where the arm is better
+arm      | F1           | FPR          | Acc          | dF1 vs B34       | dFPR vs B34      | dF1 vs Wb        | dFPR vs Wb       | GA shape
+---------+--------------+--------------+--------------+------------------+------------------+------------------+------------------+---------------
+B05-AC   |  89.01±0.24 |   8.61±0.62 |  89.07±0.25 | -0.32±0.35 [0/3] | -0.86±0.98 [3/3] | -0.14±0.23 [1/3] | -0.53±1.04 [2/3] | 312n x 33.6b
+B05-CE   |  89.38±0.26 |  10.43±0.45 |  89.46±0.25 | +0.04±0.15 [2/3] | +0.97±0.34 [0/3] | +0.23±0.13 [3/3] | +1.30±0.10 [0/3] | 343n x 33.3b
+B10-AC   |  88.95±0.22 |   9.09±1.60 |  89.02±0.22 | -0.38±0.06 [0/3] | -0.37±1.68 [1/3] | -0.20±0.10 [0/3] | -0.04±1.43 [1/3] | 300n x 33.7b
+B10-CE   |  89.63±0.21 |   8.82±0.57 |  89.70±0.21 | +0.30±0.28 [3/3] | -0.64±0.28 [3/3] | +0.48±0.25 [3/3] | -0.31±0.12 [3/3] | 397n x 34.0b
+B15-AC   |  89.34±0.44 |  10.28±0.58 |  89.42±0.44 | +0.01±0.53 [2/3] | +0.82±0.99 [0/3] | +0.19±0.43 [2/3] | +1.15±0.83 [0/3] | 369n x 34.0b
+B15-CE   |  89.74±0.22 |   8.84±0.59 |  89.80±0.22 | +0.40±0.48 [2/3] | -0.63±1.07 [2/3] | +0.59±0.34 [3/3] | -0.30±1.04 [1/3] | 270n x 33.0b
+B34-CTRL |  89.34±0.27 |   9.46±0.49 |  89.40±0.26 |        —         |        —         | +0.18±0.14 [3/3] | +0.33±0.24 [0/3] | 445n x 34.0b
+CE20     |  89.10±0.28 |   7.84±0.24 |  89.14±0.28 | -0.24±0.54 [1/3] | -1.62±0.50 [3/3] | -0.05±0.41 [1/3] | -1.29±0.35 [3/3] | 396n x 33.5b
+Wb-CTRL  |  89.15±0.14 |   9.14±0.45 |  89.21±0.14 | -0.18±0.14 [0/3] | -0.33±0.24 [3/3] |        —         |        —         | 318n x 33.6b
+
+GA best_f1 val_cal, n=3 seeds each; delta = arm − control, paired by seed (pp); [k/3] = seeds where the arm is better
+arm      | F1           | FPR          | Acc          | dF1 vs B34       | dFPR vs B34      | dF1 vs Wb        | dFPR vs Wb       | GA shape
+---------+--------------+--------------+--------------+------------------+------------------+------------------+------------------+---------------
+B05-AC   |  89.02±0.24 |   8.59±0.64 |  89.07±0.25 | -0.30±0.34 [0/3] | -0.79±0.84 [3/3] | -0.17±0.21 [1/3] | -1.21±0.74 [3/3] | 311n x 33.6b
+B05-CE   |  89.37±0.29 |   9.94±1.14 |  89.45±0.28 | +0.06±0.18 [2/3] | +0.56±0.78 [1/3] | +0.19±0.12 [3/3] | +0.14±1.19 [1/3] | 350n x 33.3b
+B10-AC   |  88.93±0.22 |   8.90±1.31 |  88.99±0.21 | -0.39±0.09 [0/3] | -0.48±1.35 [1/3] | -0.25±0.15 [0/3] | -0.90±1.20 [2/3] | 301n x 33.7b
+B10-CE   |  89.61±0.25 |   8.89±0.59 |  89.68±0.26 | +0.30±0.33 [3/3] | -0.49±0.49 [3/3] | +0.43±0.35 [3/3] | -0.91±0.56 [3/3] | 398n x 34.0b
+B15-AC   |  89.33±0.45 |  10.36±0.55 |  89.42±0.44 | +0.02±0.52 [2/3] | +0.98±0.88 [0/3] | +0.15±0.40 [2/3] | +0.56±0.40 [0/3] | 368n x 34.0b
+B15-CE   |  89.74±0.20 |   8.76±0.52 |  89.80±0.20 | +0.42±0.46 [2/3] | -0.62±0.87 [2/3] | +0.56±0.34 [3/3] | -1.04±0.54 [3/3] | 268n x 33.0b
+B34-CTRL |  89.32±0.27 |   9.38±0.40 |  89.38±0.27 |        —         |        —         | +0.13±0.14 [3/3] | -0.42±0.50 [3/3] | 457n x 34.0b
+CE20     |  89.16±0.31 |   8.14±0.29 |  89.21±0.32 | -0.15±0.57 [2/3] | -1.25±0.22 [3/3] | -0.02±0.44 [2/3] | -1.66±0.43 [3/3] | 396n x 33.5b
+Wb-CTRL  |  89.18±0.18 |   9.80±0.15 |  89.25±0.18 | -0.13±0.14 [0/3] | +0.42±0.50 [0/3] |        —         |        —         | 319n x 33.6b
+
+Seed noise (two-way arm x seed residual, df 16): best_fitness 0.259 pp F1 / 0.711 pp FPR; best_f1 0.270 / 0.726.
+Paired n=3 MDD (alpha .05): ~0.45 pp F1 / ~1.23 pp FPR. Paired t, df 2, Holm over 8 arms per control:
+  F1  : nothing below raw p 0.07 except B10-AC −0.38 vs B34 (p 0.007, Holm 0.06, WORSE).
+  FPR : CE20 vs B34 p 0.031 / vs Wb p 0.023 (best_fitness), 0.010 / 0.021 (best_f1); Holm 0.08-0.25.
+        B05-CE vs Wb +1.30 (WORSE) p 0.002, Holm 0.01: the one Holm-significant contrast, and it is a harm.
+GA generations used (patience 5): B05-AC 83, B10-AC 93, Wb-CTRL 93, B34-CTRL 90, CE20 113, B05-CE 120, B15-CE 120,
+  B15-AC 123, B10-CE 127 (mean of 3). Gens are a MEDIATOR (§8.3), not adjusted for.
+GA gain over grid (best_fitness val_cal): F1 +0.40..+1.05 pp on every arm; FPR −1.37 (CE20), −0.75 (Wb), −0.12 (B10-CE),
+  +0.06..+1.91 elsewhere — CE20 is the only arm whose GA phase buys FPR as well as F1.
+```
+
+### Validity checks
+1. **27/27 completed, 0 failed, 2 experiments each** (grid_search + ga_neurons), 270 final + 135 init validation rows.
+2. **Immigrant min_bits (IDS-17): NO hybrids.** Every flow was created 16/09 21:47 UTC but started 26/09 12:07-22:48 UTC,
+   all after the 17/09 01:57 UTC fix (129f8533). Census over all 7,729 tracked genomes in the 54 experiments (both
+   formats, expanded per neuron): 0 neurons outside [min_bits, max_bits]. B34-CTRL min = max = 34 on every
+   neuron of all 3 seeds (42,132 / 39,428 / 44,907 neurons), so it IS a clean fixed-34b control here, unlike
+   IDSXD-unswr-quad B34-CTRL r20401-04.
+3. **WNN-1 era (counter-RNG offspring seeds, worker ABI 14; swap at ~19:09 UTC 26/09).** Wall-clock-seeded: 17 flows
+   (all of s20403, all of s20404 except Wb-CTRL). Counter-RNG: 10 flows (all of s20405, plus Wb-CTRL s20404 6254,
+   which was re-queued after the swap race (WNN-2) and ran 19:31 UTC). The seed block is therefore nearly the era.
+   There is no visible shift: arm-mean GA best_fitness val_cal per seed block is 89.20 / 89.39 / 89.29 F1 and
+   9.39 / 8.88 / 9.23 FPR. Wb-CTRL s20404 is the one cross-era pair in the paired table. The pre-swap 17 flows are not
+   seed-reproducible (wall-clock offspring), but they are valid samples.
+4. **Leak hygiene:** GA fitness = 5-fold CV on the 80% train. Thresholds fit on VAL, numbers on TEST. `empirical`
+   and `empirical_cumulative` are VAL-fit, so they are legitimate operating points. Plain `empirical` collapses
+   (F1 81-84), so use `empirical_cumulative` for the low-FPR point.
+5. **Aggregation is not an arm.** All 27 runs use desirability, so "CE20" here means CE20 weights under desirability.
+
+### Reference comparison (UNSW temporal_3way, 16b, held-out TEST; pair modes like-for-like)
+```
+source                                         | n   | mode     | F1           | FPR          | Acc          | note
+-----------------------------------------------+-----+----------+--------------+--------------+--------------+------------------------------
+IDS-8 CE20 (CHOSEN) GA best_fitness            |   3 | val_cal  | 89.10±0.28   |  7.84±0.24   | 89.14±0.28   | desirability, this readout
+IDS-8 CE20 GA best_f1                          |   3 | emp_cum  | 87.10±0.48   |  3.44±1.18   | 87.10±0.48   | low-FPR operating point
+IDS-8 B15-CE GA best_fitness (F1 max)          |   3 | val_cal  | 89.74±0.22   |  8.84±0.59   | 89.80±0.22   |
+IDS-8 B34-CTRL GA best_fitness (prod. 34b)     |   3 | val_cal  | 89.34±0.27   |  9.46±0.49   | 89.40±0.26   |
+IDS-8 Wb-CTRL GA best_fitness                  |   3 | val_cal  | 89.15±0.14   |  9.14±0.45   | 89.21±0.14   |
+IDSZ CE20 GA best_fitness (zscore)             |   5 | val_cal  | 89.83±0.24   |  8.64±0.77   | 89.89±0.23   | UNPAIRED, Aug code era
+IDSZ Wb-CTRL GA best_fitness (zscore)          |   5 | val_cal  | 88.84±0.15   |  9.29±1.05   | 88.91±0.15   | UNPAIRED, Aug code era
+IDSZ CE20 best_fpr (zscore, banked)            |   5 | emp_cum  | 87.59±0.45   |  2.87±0.10   |      —       | memory project_idsz_n5_complete
+SP100-unswt-quad-16bWb GA best_fitness         |  29 | val_cal  | 86.41±1.98   | 14.17±7.22   | 86.59±1.85   | pre-19/08 code era, NOT a control
+XGBoost 16b thermo (IDS-9, measured 13/09)     |   — | val_cal  | 92.09        |  3.64        | 92.11        | 0.27 MB
+RF 16b thermo (IDS-9, measured 13/09)          |   — | val_cal  | 90.66        |  7.61        | 90.71        | 138 MB
+XGBoost / RF 16b                               |   — | fixed_05 | 84.96 / 86.12| 28.42 / 25.35| 85.64 / 86.65|
+IDS-8 CE20 GA best_fitness                     |   3 | fixed_05 | 85.27±0.08   | 24.94±0.20   | 85.77±0.07   |
+```
+Where CE20 sits: under equal val-calibration it TRAILS XGBoost by −2.99 pp F1 and +4.20 pp FPR, and RF by −1.56 pp F1
+at equal FPR (+0.23). Even CE20's low-FPR point (87.10 / 3.44) is dominated by XGBoost val_cal (92.09 / 3.64).
+The fixed_05 rows favour the WNN over XGBoost (+0.31 F1 / −3.48 FPR), but that is not the deployment mode. **On UNSW temporal,
+the trees lead under equal calibration. This sweep did not change the IDS-9 conclusion.** The surviving argument is size,
+but IDS-9's "~1 KB WNN" figure was for small genomes. The chosen GA winners are ~400 neurons x ~34 b (sparse), so the
+footprint must be MEASURED for these genomes before it is set against XGB's 0.27 MB. Against the prior WNN rows, this sweep
+is a clear step up from SP100 (+2.69 F1, −6.33 FPR; different code era, not a control) and sits inside the IDSZ arm range
+(88.7-89.8 F1, unpaired).
+
+### Pareto scan (9 arms x GS/GA x 5 genome types x 7 modes = 630 columns; non-dominated on mean F1 vs mean FPR)
+```
+B15-CE    GA best_ce      val_cal              n=3 F1  89.75±0.21 FPR   8.89±0.47 Acc  89.82±0.20
+B15-CE    GA best_f1      val_cal              n=3 F1  89.74±0.20 FPR   8.76±0.52 Acc  89.80±0.20
+B15-CE    GA best_acc     val_cal              n=3 F1  89.74±0.20 FPR   8.76±0.52 Acc  89.80±0.20
+B15-AC    GA best_fpr     empirical_cumulative n=3 F1  89.23±0.58 FPR   8.74±0.64 Acc  89.28±0.60
+B05-CE    GA best_f1      empirical_cumulative n=3 F1  89.18±0.51 FPR   7.59±0.89 Acc  89.22±0.52
+B05-CE    GA best_acc     empirical_cumulative n=3 F1  89.18±0.51 FPR   7.59±0.89 Acc  89.22±0.52
+B05-CE    GA best_ce      empirical_cumulative n=3 F1  89.01±0.39 FPR   6.90±0.55 Acc  89.04±0.40
+B10-CE    GA best_ce      empirical_cumulative n=3 F1  88.98±0.24 FPR   5.78±0.83 Acc  89.00±0.25
+B10-CE    GA best_fitness empirical_cumulative n=3 F1  88.92±0.08 FPR   5.60±0.35 Acc  88.94±0.08
+B10-CE    GA best_f1      empirical_cumulative n=3 F1  88.86±0.06 FPR   5.52±0.36 Acc  88.88±0.06
+B10-CE    GA best_acc     empirical_cumulative n=3 F1  88.86±0.06 FPR   5.52±0.36 Acc  88.88±0.06
+B15-CE    GA best_ce      empirical_cumulative n=3 F1  88.51±0.45 FPR   4.37±0.49 Acc  88.51±0.45
+Wb-CTRL   GA best_f1      empirical_cumulative n=3 F1  87.26±0.65 FPR   4.22±0.32 Acc  87.26±0.65
+Wb-CTRL   GA best_acc     empirical_cumulative n=3 F1  87.26±0.65 FPR   4.22±0.32 Acc  87.26±0.65
+CE20      GA best_f1      empirical_cumulative n=3 F1  87.10±0.48 FPR   3.44±1.18 Acc  87.10±0.48
+CE20      GA best_acc     empirical_cumulative n=3 F1  87.10±0.48 FPR   3.44±1.18 Acc  87.10±0.48
+CE20      GA best_fpr     empirical_cumulative n=3 F1  86.92±0.41 FPR   3.33±1.02 Acc  86.93±0.41
+CE20      GA best_ce      empirical_cumulative n=3 F1  86.86±0.47 FPR   3.26±0.93 Acc  86.86±0.47
+(val_cal front = B15-CE alone at the F1 end. Below 9% FPR the front is all empirical_cumulative: B05-CE → B10-CE
+ (88.92/5.60) → B15-CE best_ce (88.51/4.37) → Wb-CTRL (87.26/4.22) → CE20 (87.10/3.44, ~3.3 for best_fpr/best_ce).
+ The SDs on these emp_cum points are 0.4-1.2 pp FPR, so the ordering below 6% FPR is not resolved at n=3.)
+```
+
+### Rule-7 5-tables (Grid vs GA, all 7 modes, mean±SD %, held-out TEST) — CE20 (chosen), B15-CE, B34-CTRL, Wb-CTRL
+```
+
+##### RULE-7 5-tables: IDSXD-unswt-quad-16b-CE20 (Grid vs GA, held-out TEST, mean±SD %) #####
+
+best_f1  (runs: GS 3 | GA 3)
+Grid Search : 167±58 neurons | 34.0±0.0 bits (mean per-neuron)
+GA Neurons  : 396±154 neurons | 33.5±0.9 bits (mean per-neuron)
+mode                 | F1 Grid      | F1 GA        | FPR Grid     | FPR GA       | Acc Grid     | Acc GA
+---------------------+--------------+--------------+--------------+--------------+--------------+-------------
+train_cal            |  84.17±0.20 |  84.27±0.15 |  28.16±0.81 |  28.17±0.67 |  84.82±0.16 |  84.92±0.12
+fixed_05             |  85.36±0.25 |  85.25±0.13 |  24.39±0.63 |  25.01±0.26 |  85.83±0.23 |  85.74±0.12
+platt                |  87.19±0.16 |  87.38±0.32 |  17.52±0.38 |  17.55±0.51 |  87.42±0.15 |  87.61±0.31
+beta                 |  88.12±0.31 |  88.49±0.31 |  13.57±1.66 |  12.27±0.78 |  88.25±0.28 |  88.60±0.30
+empirical            |  83.34±1.47 |  81.57±2.31 |   3.11±1.02 |   1.21±0.73 |  83.37±1.45 |  81.68±2.23
+empirical_cumulative |  87.26±1.58 |  87.10±0.48 |   6.09±1.95 |   3.44±1.18 |  87.28±1.60 |  87.10±0.48
+val_cal              |  88.62±0.05 |  89.16±0.31 |   9.27±0.74 |   8.14±0.29 |  88.68±0.04 |  89.21±0.32
+
+best_fpr  (runs: GS 3 | GA 3)
+Grid Search : 400±0 neurons | 31.3±3.1 bits (mean per-neuron)
+GA Neurons  : 395±153 neurons | 33.5±0.9 bits (mean per-neuron)
+mode                 | F1 Grid      | F1 GA        | FPR Grid     | FPR GA       | Acc Grid     | Acc GA
+---------------------+--------------+--------------+--------------+--------------+--------------+-------------
+train_cal            |  83.93±0.14 |  84.22±0.20 |  28.73±0.40 |  28.35±0.59 |  84.61±0.12 |  84.88±0.17
+fixed_05             |  85.02±0.07 |  85.28±0.08 |  25.40±0.24 |  24.90±0.17 |  85.53±0.06 |  85.77±0.08
+platt                |  86.85±0.02 |  87.40±0.32 |  18.49±0.08 |  17.51±0.49 |  87.10±0.02 |  87.63±0.31
+beta                 |  87.77±0.08 |  88.47±0.31 |  13.99±0.24 |  12.30±0.74 |  87.91±0.08 |  88.58±0.30
+empirical            |  78.77±0.48 |  81.72±2.49 |   1.20±0.33 |   1.25±0.77 |  78.97±0.45 |  81.82±2.40
+empirical_cumulative |  87.08±0.85 |  86.92±0.41 |   5.54±0.91 |   3.33±1.02 |  87.09±0.85 |  86.93±0.41
+val_cal              |  88.47±0.02 |  89.10±0.28 |   9.30±0.82 |   7.84±0.24 |  88.53±0.01 |  89.14±0.28
+
+best_acc  (runs: GS 3 | GA 3)
+Grid Search : 167±58 neurons | 34.0±0.0 bits (mean per-neuron)
+GA Neurons  : 396±154 neurons | 33.5±0.9 bits (mean per-neuron)
+mode                 | F1 Grid      | F1 GA        | FPR Grid     | FPR GA       | Acc Grid     | Acc GA
+---------------------+--------------+--------------+--------------+--------------+--------------+-------------
+train_cal            |  84.17±0.20 |  84.27±0.15 |  28.16±0.81 |  28.17±0.67 |  84.82±0.16 |  84.92±0.12
+fixed_05             |  85.36±0.25 |  85.25±0.13 |  24.39±0.63 |  25.01±0.26 |  85.83±0.23 |  85.74±0.12
+platt                |  87.19±0.16 |  87.38±0.32 |  17.52±0.38 |  17.55±0.51 |  87.42±0.15 |  87.61±0.31
+beta                 |  88.12±0.31 |  88.49±0.31 |  13.57±1.66 |  12.27±0.78 |  88.25±0.28 |  88.60±0.30
+empirical            |  83.34±1.47 |  81.57±2.31 |   3.11±1.02 |   1.21±0.73 |  83.37±1.45 |  81.68±2.23
+empirical_cumulative |  87.26±1.58 |  87.10±0.48 |   6.09±1.95 |   3.44±1.18 |  87.28±1.60 |  87.10±0.48
+val_cal              |  88.62±0.05 |  89.16±0.31 |   9.27±0.74 |   8.14±0.29 |  88.68±0.04 |  89.21±0.32
+
+best_ce  (runs: GS 3 | GA 3)
+Grid Search : 367±231 neurons | 33.3±1.2 bits (mean per-neuron)
+GA Neurons  : 398±155 neurons | 33.5±0.9 bits (mean per-neuron)
+mode                 | F1 Grid      | F1 GA        | FPR Grid     | FPR GA       | Acc Grid     | Acc GA
+---------------------+--------------+--------------+--------------+--------------+--------------+-------------
+train_cal            |  84.30±0.55 |  84.21±0.20 |  27.72±1.60 |  28.36±0.68 |  84.93±0.47 |  84.87±0.17
+fixed_05             |  85.14±0.22 |  85.24±0.12 |  25.12±0.75 |  25.05±0.24 |  85.64±0.19 |  85.73±0.11
+platt                |  87.06±0.08 |  87.39±0.31 |  18.15±0.30 |  17.54±0.47 |  87.30±0.07 |  87.62±0.30
+beta                 |  87.96±0.12 |  88.48±0.30 |  13.38±0.36 |  12.30±0.75 |  88.09±0.12 |  88.59±0.29
+empirical            |  81.70±4.77 |  81.71±2.25 |   2.37±2.18 |   1.25±0.75 |  81.84±4.66 |  81.81±2.17
+empirical_cumulative |  87.36±0.86 |  86.86±0.47 |   5.21±0.84 |   3.26±0.93 |  87.37±0.87 |  86.86±0.47
+val_cal              |  88.60±0.10 |  89.16±0.32 |   8.34±0.75 |   8.36±0.27 |  88.64±0.09 |  89.21±0.32
+
+best_fitness  (runs: GS 3 | GA 3)
+Grid Search : 367±153 neurons | 34.0±0.0 bits (mean per-neuron)
+GA Neurons  : 396±154 neurons | 33.5±0.9 bits (mean per-neuron)
+mode                 | F1 Grid      | F1 GA        | FPR Grid     | FPR GA       | Acc Grid     | Acc GA
+---------------------+--------------+--------------+--------------+--------------+--------------+-------------
+train_cal            |  83.76±0.41 |  84.22±0.20 |  29.28±1.29 |  28.35±0.59 |  84.47±0.34 |  84.88±0.17
+fixed_05             |  85.27±0.25 |  85.27±0.08 |  24.59±0.85 |  24.94±0.20 |  85.74±0.21 |  85.77±0.07
+platt                |  87.05±0.21 |  87.40±0.31 |  18.02±0.57 |  17.55±0.46 |  87.29±0.19 |  87.63±0.30
+beta                 |  88.02±0.17 |  88.47±0.30 |  13.30±0.54 |  12.32±0.71 |  88.14±0.16 |  88.58±0.29
+empirical            |  79.56±1.31 |  81.71±2.49 |   1.27±0.37 |   1.26±0.76 |  79.73±1.25 |  81.82±2.41
+empirical_cumulative |  87.19±0.20 |  86.91±0.43 |   5.11±0.23 |   3.33±1.01 |  87.20±0.20 |  86.91±0.43
+val_cal              |  88.62±0.17 |  89.10±0.28 |   9.21±0.92 |   7.84±0.24 |  88.68±0.16 |  89.14±0.28
+
+##### RULE-7 5-tables: IDSXD-unswt-quad-16b-B15-CE (Grid vs GA, held-out TEST, mean±SD %) #####
+
+best_f1  (runs: GS 3 | GA 3)
+Grid Search : 167±115 neurons | 34.0±0.0 bits (mean per-neuron)
+GA Neurons  : 268±56 neurons | 33.0±1.0 bits (mean per-neuron)
+mode                 | F1 Grid      | F1 GA        | FPR Grid     | FPR GA       | Acc Grid     | Acc GA
+---------------------+--------------+--------------+--------------+--------------+--------------+-------------
+train_cal            |  83.90±0.36 |  84.74±0.33 |  28.76±0.86 |  27.04±0.94 |  84.58±0.31 |  85.33±0.28
+fixed_05             |  85.30±0.24 |  84.91±0.40 |  24.41±0.62 |  26.52±1.11 |  85.76±0.22 |  85.48±0.35
+platt                |  87.11±0.29 |  88.12±0.32 |  17.66±0.65 |  16.15±0.90 |  87.34±0.28 |  88.32±0.30
+beta                 |  87.82±0.53 |  89.56±0.26 |  14.19±2.05 |  10.59±0.34 |  87.97±0.49 |  89.65±0.26
+empirical            |  84.39±2.54 |  83.85±2.38 |   3.11±1.52 |   1.27±0.49 |  84.42±2.49 |  83.90±2.32
+empirical_cumulative |  87.83±0.12 |  88.50±0.46 |   5.99±0.42 |   4.51±0.58 |  87.84±0.13 |  88.50±0.47
+val_cal              |  88.47±0.33 |  89.74±0.20 |   8.86±0.43 |   8.76±0.52 |  88.52±0.34 |  89.80±0.20
+
+best_fpr  (runs: GS 3 | GA 3)
+Grid Search : 300±100 neurons | 32.7±1.2 bits (mean per-neuron)
+GA Neurons  : 269±60 neurons | 33.0±1.0 bits (mean per-neuron)
+mode                 | F1 Grid      | F1 GA        | FPR Grid     | FPR GA       | Acc Grid     | Acc GA
+---------------------+--------------+--------------+--------------+--------------+--------------+-------------
+train_cal            |  84.00±0.34 |  84.74±0.42 |  28.68±0.91 |  27.05±1.24 |  84.68±0.30 |  85.33±0.36
+fixed_05             |  85.15±0.43 |  84.84±0.22 |  25.02±1.23 |  26.70±0.64 |  85.65±0.38 |  85.42±0.19
+platt                |  86.85±0.32 |  88.07±0.26 |  18.41±0.77 |  16.27±0.72 |  87.09±0.30 |  88.28±0.24
+beta                 |  87.91±0.27 |  89.55±0.24 |  13.88±0.67 |  10.64±0.37 |  88.05±0.26 |  89.64±0.25
+empirical            |  80.83±1.03 |  83.82±1.90 |   1.76±0.33 |   1.25±0.44 |  80.94±0.99 |  83.86±1.87
+empirical_cumulative |  88.17±0.56 |  88.49±0.45 |   6.87±0.86 |   4.45±0.53 |  88.20±0.58 |  88.50±0.45
+val_cal              |  88.60±0.08 |  89.74±0.22 |   8.75±0.27 |   8.94±0.54 |  88.65±0.09 |  89.81±0.22
+
+best_acc  (runs: GS 3 | GA 3)
+Grid Search : 167±115 neurons | 34.0±0.0 bits (mean per-neuron)
+GA Neurons  : 268±56 neurons | 33.0±1.0 bits (mean per-neuron)
+mode                 | F1 Grid      | F1 GA        | FPR Grid     | FPR GA       | Acc Grid     | Acc GA
+---------------------+--------------+--------------+--------------+--------------+--------------+-------------
+train_cal            |  83.90±0.36 |  84.74±0.33 |  28.76±0.86 |  27.04±0.94 |  84.58±0.31 |  85.33±0.28
+fixed_05             |  85.30±0.24 |  84.91±0.40 |  24.41±0.62 |  26.52±1.11 |  85.76±0.22 |  85.48±0.35
+platt                |  87.11±0.29 |  88.12±0.32 |  17.66±0.65 |  16.15±0.90 |  87.34±0.28 |  88.32±0.30
+beta                 |  87.82±0.53 |  89.56±0.26 |  14.19±2.05 |  10.59±0.34 |  87.97±0.49 |  89.65±0.26
+empirical            |  84.39±2.54 |  83.85±2.38 |   3.11±1.52 |   1.27±0.49 |  84.42±2.49 |  83.90±2.32
+empirical_cumulative |  87.83±0.12 |  88.50±0.46 |   5.99±0.42 |   4.51±0.58 |  87.84±0.13 |  88.50±0.47
+val_cal              |  88.47±0.33 |  89.74±0.20 |   8.86±0.43 |   8.76±0.52 |  88.52±0.34 |  89.80±0.20
+
+best_ce  (runs: GS 3 | GA 3)
+Grid Search : 433±58 neurons | 33.3±1.2 bits (mean per-neuron)
+GA Neurons  : 268±57 neurons | 33.0±1.0 bits (mean per-neuron)
+mode                 | F1 Grid      | F1 GA        | FPR Grid     | FPR GA       | Acc Grid     | Acc GA
+---------------------+--------------+--------------+--------------+--------------+--------------+-------------
+train_cal            |  84.21±0.36 |  84.76±0.39 |  28.05±1.01 |  26.95±1.12 |  84.85±0.31 |  85.36±0.33
+fixed_05             |  85.45±0.05 |  84.83±0.23 |  24.29±0.13 |  26.73±0.66 |  85.91±0.04 |  85.41±0.20
+platt                |  87.16±0.16 |  88.08±0.24 |  17.72±0.33 |  16.25±0.68 |  87.39±0.15 |  88.28±0.22
+beta                 |  88.23±0.07 |  89.56±0.23 |  12.75±0.40 |  10.60±0.39 |  88.35±0.06 |  89.65±0.23
+empirical            |  79.25±0.75 |  83.87±1.87 |   1.14±0.15 |   1.25±0.44 |  79.44±0.71 |  83.92±1.84
+empirical_cumulative |  87.68±0.95 |  88.51±0.45 |   5.74±1.63 |   4.37±0.49 |  87.70±0.97 |  88.51±0.45
+val_cal              |  88.74±0.04 |  89.75±0.21 |   8.55±1.06 |   8.89±0.47 |  88.79±0.03 |  89.82±0.20
+
+best_fitness  (runs: GS 3 | GA 3)
+Grid Search : 333±115 neurons | 32.7±1.2 bits (mean per-neuron)
+GA Neurons  : 270±57 neurons | 33.0±1.0 bits (mean per-neuron)
+mode                 | F1 Grid      | F1 GA        | FPR Grid     | FPR GA       | Acc Grid     | Acc GA
+---------------------+--------------+--------------+--------------+--------------+--------------+-------------
+train_cal            |  84.19±0.37 |  84.74±0.29 |  28.12±1.06 |  26.98±0.75 |  84.84±0.32 |  85.33±0.25
+fixed_05             |  85.44±0.05 |  84.89±0.37 |  24.27±0.15 |  26.57±1.01 |  85.90±0.04 |  85.47±0.32
+platt                |  87.17±0.18 |  88.12±0.32 |  17.64±0.45 |  16.14±0.89 |  87.40±0.17 |  88.32±0.30
+beta                 |  88.32±0.16 |  89.55±0.24 |  12.52±0.28 |  10.62±0.26 |  88.44±0.16 |  89.64±0.24
+empirical            |  80.47±1.83 |  84.14±1.97 |   1.50±0.59 |   1.31±0.45 |  80.60±1.75 |  84.18±1.93
+empirical_cumulative |  87.68±0.95 |  88.49±0.44 |   5.76±1.62 |   4.47±0.60 |  87.70±0.97 |  88.50±0.45
+val_cal              |  88.85±0.15 |  89.74±0.22 |   8.33±0.70 |   8.84±0.59 |  88.89±0.16 |  89.80±0.22
+
+##### RULE-7 5-tables: IDSXD-unswt-quad-16b-B34-CTRL (Grid vs GA, held-out TEST, mean±SD %) #####
+
+best_f1  (runs: GS 3 | GA 3)
+Grid Search : 70±113 neurons | 34.0±0.0 bits (mean per-neuron)
+GA Neurons  : 457±31 neurons | 34.0±0.0 bits (mean per-neuron)
+mode                 | F1 Grid      | F1 GA        | FPR Grid     | FPR GA       | Acc Grid     | Acc GA
+---------------------+--------------+--------------+--------------+--------------+--------------+-------------
+train_cal            |  84.53±0.55 |  84.02±0.31 |  27.19±1.65 |  29.03±0.81 |  85.13±0.47 |  84.73±0.27
+fixed_05             |  86.22±1.50 |  85.92±0.20 |  21.64±4.31 |  23.16±0.70 |  86.60±1.35 |  86.34±0.17
+platt                |  87.70±0.19 |  87.91±0.15 |  16.03±0.83 |  16.33±0.44 |  87.89±0.17 |  88.11±0.14
+beta                 |  86.42±1.50 |  89.01±0.12 |   7.39±5.21 |  11.39±0.23 |  86.46±1.56 |  89.11±0.12
+empirical            |  86.11±3.29 |  79.57±2.28 |   9.50±6.66 |   0.99±0.61 |  86.21±3.33 |  79.76±2.16
+empirical_cumulative |  87.13±0.65 |  88.30±0.55 |   4.78±0.21 |   6.19±0.85 |  87.13±0.65 |  88.32±0.56
+val_cal              |  88.16±0.42 |  89.32±0.27 |   8.26±3.22 |   9.38±0.40 |  88.21±0.45 |  89.38±0.27
+
+best_fpr  (runs: GS 3 | GA 3)
+Grid Search : 233±153 neurons | 34.0±0.0 bits (mean per-neuron)
+GA Neurons  : 444±42 neurons | 34.0±0.0 bits (mean per-neuron)
+mode                 | F1 Grid      | F1 GA        | FPR Grid     | FPR GA       | Acc Grid     | Acc GA
+---------------------+--------------+--------------+--------------+--------------+--------------+-------------
+train_cal            |  84.16±0.22 |  84.14±0.36 |  28.12±0.74 |  28.80±0.97 |  84.80±0.19 |  84.83±0.31
+fixed_05             |  85.33±0.09 |  85.85±0.20 |  24.49±0.23 |  23.32±0.54 |  85.80±0.09 |  86.28±0.18
+platt                |  86.98±0.39 |  87.95±0.11 |  18.05±0.85 |  16.30±0.25 |  87.22±0.37 |  88.15±0.11
+beta                 |  87.85±0.17 |  88.90±0.19 |  14.21±1.20 |  11.79±0.22 |  88.00±0.15 |  89.00±0.19
+empirical            |  83.44±2.83 |  80.03±2.30 |   2.89±1.39 |   1.23±0.46 |  83.49±2.76 |  80.19±2.19
+empirical_cumulative |  87.57±0.27 |  87.86±0.84 |   5.61±0.46 |   5.45±0.97 |  87.58±0.27 |  87.87±0.85
+val_cal              |  88.69±0.06 |  89.35±0.30 |   8.31±0.70 |   9.44±0.58 |  88.74±0.07 |  89.42±0.30
+
+best_acc  (runs: GS 3 | GA 3)
+Grid Search : 70±113 neurons | 34.0±0.0 bits (mean per-neuron)
+GA Neurons  : 457±31 neurons | 34.0±0.0 bits (mean per-neuron)
+mode                 | F1 Grid      | F1 GA        | FPR Grid     | FPR GA       | Acc Grid     | Acc GA
+---------------------+--------------+--------------+--------------+--------------+--------------+-------------
+train_cal            |  84.53±0.55 |  84.02±0.31 |  27.19±1.65 |  29.03±0.81 |  85.13±0.47 |  84.73±0.27
+fixed_05             |  86.22±1.50 |  85.92±0.20 |  21.64±4.31 |  23.16±0.70 |  86.60±1.35 |  86.34±0.17
+platt                |  87.70±0.19 |  87.91±0.15 |  16.03±0.83 |  16.33±0.44 |  87.89±0.17 |  88.11±0.14
+beta                 |  86.42±1.50 |  89.01±0.12 |   7.39±5.21 |  11.39±0.23 |  86.46±1.56 |  89.11±0.12
+empirical            |  86.11±3.29 |  79.57±2.28 |   9.50±6.66 |   0.99±0.61 |  86.21±3.33 |  79.76±2.16
+empirical_cumulative |  87.13±0.65 |  88.30±0.55 |   4.78±0.21 |   6.19±0.85 |  87.13±0.65 |  88.32±0.56
+val_cal              |  88.16±0.42 |  89.32±0.27 |   8.26±3.22 |   9.38±0.40 |  88.21±0.45 |  89.38±0.27
+
+best_ce  (runs: GS 3 | GA 3)
+Grid Search : 367±58 neurons | 34.0±0.0 bits (mean per-neuron)
+GA Neurons  : 449±39 neurons | 34.0±0.0 bits (mean per-neuron)
+mode                 | F1 Grid      | F1 GA        | FPR Grid     | FPR GA       | Acc Grid     | Acc GA
+---------------------+--------------+--------------+--------------+--------------+--------------+-------------
+train_cal            |  84.01±0.26 |  83.77±0.34 |  28.61±0.89 |  29.90±1.15 |  84.68±0.21 |  84.52±0.27
+fixed_05             |  85.19±0.43 |  85.81±0.27 |  24.99±1.14 |  23.44±0.88 |  85.68±0.38 |  86.24±0.23
+platt                |  87.05±0.34 |  87.95±0.13 |  18.06±0.90 |  16.26±0.40 |  87.29±0.32 |  88.15±0.12
+beta                 |  88.09±0.36 |  89.01±0.14 |  13.07±0.97 |  11.44±0.28 |  88.21±0.34 |  89.11±0.14
+empirical            |  78.93±1.93 |  79.54±2.31 |   0.85±0.36 |   1.01±0.61 |  79.15±1.82 |  79.73±2.19
+empirical_cumulative |  87.15±0.50 |  88.20±0.84 |   4.64±0.29 |   5.90±1.42 |  87.15±0.51 |  88.22±0.85
+val_cal              |  88.61±0.21 |  89.31±0.23 |   8.94±0.31 |   9.34±0.73 |  88.66±0.21 |  89.37±0.22
+
+best_fitness  (runs: GS 3 | GA 3)
+Grid Search : 367±153 neurons | 34.0±0.0 bits (mean per-neuron)
+GA Neurons  : 445±39 neurons | 34.0±0.0 bits (mean per-neuron)
+mode                 | F1 Grid      | F1 GA        | FPR Grid     | FPR GA       | Acc Grid     | Acc GA
+---------------------+--------------+--------------+--------------+--------------+--------------+-------------
+train_cal            |  83.91±0.05 |  83.67±0.49 |  29.01±0.15 |  30.16±1.58 |  84.61±0.05 |  84.44±0.39
+fixed_05             |  85.39±0.14 |  85.80±0.27 |  24.37±0.33 |  23.48±0.89 |  85.86±0.13 |  86.23±0.24
+platt                |  87.13±0.43 |  87.95±0.14 |  17.82±0.75 |  16.27±0.43 |  87.36±0.42 |  88.15±0.13
+beta                 |  88.09±0.27 |  89.00±0.13 |  13.16±0.56 |  11.53±0.25 |  88.21±0.26 |  89.10±0.13
+empirical            |  81.00±2.95 |  79.36±2.04 |   1.74±1.27 |   0.95±0.48 |  81.12±2.84 |  79.56±1.94
+empirical_cumulative |  87.46±0.23 |  88.21±0.85 |   5.38±0.17 |   5.88±1.40 |  87.46±0.23 |  88.23±0.86
+val_cal              |  88.71±0.08 |  89.34±0.27 |   8.26±0.55 |   9.46±0.49 |  88.75±0.08 |  89.40±0.26
+
+##### RULE-7 5-tables: IDSXD-unswt-quad-16b-Wb-CTRL (Grid vs GA, held-out TEST, mean±SD %) #####
+
+best_f1  (runs: GS 3 | GA 3)
+Grid Search : 300±173 neurons | 32.0±0.0 bits (mean per-neuron)
+GA Neurons  : 319±157 neurons | 33.6±0.7 bits (mean per-neuron)
+mode                 | F1 Grid      | F1 GA        | FPR Grid     | FPR GA       | Acc Grid     | Acc GA
+---------------------+--------------+--------------+--------------+--------------+--------------+-------------
+train_cal            |  84.34±0.44 |  84.04±0.24 |  27.65±1.39 |  28.76±0.61 |  84.96±0.37 |  84.73±0.21
+fixed_05             |  85.17±0.09 |  85.58±0.25 |  25.01±0.26 |  24.10±0.70 |  85.66±0.08 |  86.04±0.22
+platt                |  87.10±0.04 |  87.98±0.19 |  18.14±0.08 |  16.18±0.33 |  87.34±0.04 |  88.18±0.18
+beta                 |  87.87±0.05 |  88.87±0.14 |  14.01±0.49 |  11.75±0.25 |  88.01±0.05 |  88.98±0.14
+empirical            |  80.72±0.53 |  81.32±1.75 |   1.71±0.16 |   1.68±0.76 |  80.83±0.50 |  81.42±1.68
+empirical_cumulative |  87.62±0.83 |  87.26±0.65 |   6.36±0.99 |   4.22±0.32 |  87.64±0.84 |  87.26±0.65
+val_cal              |  88.47±0.15 |  89.18±0.18 |   9.10±0.91 |   9.80±0.15 |  88.52±0.14 |  89.25±0.18
+
+best_fpr  (runs: GS 3 | GA 3)
+Grid Search : 367±58 neurons | 33.3±1.2 bits (mean per-neuron)
+GA Neurons  : 316±157 neurons | 33.6±0.7 bits (mean per-neuron)
+mode                 | F1 Grid      | F1 GA        | FPR Grid     | FPR GA       | Acc Grid     | Acc GA
+---------------------+--------------+--------------+--------------+--------------+--------------+-------------
+train_cal            |  83.84±0.28 |  84.15±0.53 |  28.98±0.82 |  28.41±1.73 |  84.54±0.24 |  84.82±0.44
+fixed_05             |  85.32±0.21 |  85.45±0.17 |  24.44±0.57 |  24.40±0.51 |  85.79±0.19 |  85.92±0.15
+platt                |  87.01±0.22 |  87.88±0.21 |  18.13±0.35 |  16.34±0.56 |  87.25±0.21 |  88.09±0.20
+beta                 |  87.95±0.23 |  88.68±0.03 |  13.48±0.56 |  12.04±0.30 |  88.08±0.22 |  88.79±0.03
+empirical            |  78.48±1.90 |  80.92±1.29 |   0.95±0.54 |   1.55±0.66 |  78.73±1.79 |  81.03±1.24
+empirical_cumulative |  87.31±0.16 |  87.75±0.58 |   5.32±0.20 |   5.04±0.91 |  87.32±0.16 |  87.76±0.59
+val_cal              |  88.65±0.23 |  89.16±0.13 |   8.87±0.52 |   9.05±0.18 |  88.70±0.23 |  89.22±0.13
+
+best_acc  (runs: GS 3 | GA 3)
+Grid Search : 300±173 neurons | 32.0±0.0 bits (mean per-neuron)
+GA Neurons  : 319±157 neurons | 33.6±0.7 bits (mean per-neuron)
+mode                 | F1 Grid      | F1 GA        | FPR Grid     | FPR GA       | Acc Grid     | Acc GA
+---------------------+--------------+--------------+--------------+--------------+--------------+-------------
+train_cal            |  84.34±0.44 |  84.04±0.24 |  27.65±1.39 |  28.76±0.61 |  84.96±0.37 |  84.73±0.21
+fixed_05             |  85.17±0.09 |  85.58±0.25 |  25.01±0.26 |  24.10±0.70 |  85.66±0.08 |  86.04±0.22
+platt                |  87.10±0.04 |  87.98±0.19 |  18.14±0.08 |  16.18±0.33 |  87.34±0.04 |  88.18±0.18
+beta                 |  87.87±0.05 |  88.87±0.14 |  14.01±0.49 |  11.75±0.25 |  88.01±0.05 |  88.98±0.14
+empirical            |  80.72±0.53 |  81.32±1.75 |   1.71±0.16 |   1.68±0.76 |  80.83±0.50 |  81.42±1.68
+empirical_cumulative |  87.62±0.83 |  87.26±0.65 |   6.36±0.99 |   4.22±0.32 |  87.64±0.84 |  87.26±0.65
+val_cal              |  88.47±0.15 |  89.18±0.18 |   9.10±0.91 |   9.80±0.15 |  88.52±0.14 |  89.25±0.18
+
+best_ce  (runs: GS 3 | GA 3)
+Grid Search : 500±0 neurons | 32.7±1.2 bits (mean per-neuron)
+GA Neurons  : 320±155 neurons | 33.6±0.7 bits (mean per-neuron)
+mode                 | F1 Grid      | F1 GA        | FPR Grid     | FPR GA       | Acc Grid     | Acc GA
+---------------------+--------------+--------------+--------------+--------------+--------------+-------------
+train_cal            |  84.25±0.30 |  84.07±0.13 |  27.94±0.98 |  28.72±0.38 |  84.89±0.25 |  84.75±0.11
+fixed_05             |  85.28±0.18 |  85.53±0.20 |  24.81±0.52 |  24.22±0.61 |  85.77±0.16 |  85.99±0.17
+platt                |  87.14±0.16 |  87.94±0.20 |  17.87±0.39 |  16.27±0.45 |  87.37±0.15 |  88.14±0.20
+beta                 |  88.08±0.19 |  88.82±0.10 |  13.15±0.36 |  11.83±0.14 |  88.21±0.18 |  88.92±0.10
+empirical            |  79.39±0.73 |  81.09±1.84 |   1.15±0.38 |   1.62±0.84 |  79.57±0.69 |  81.20±1.77
+empirical_cumulative |  88.00±0.73 |  87.50±0.36 |   6.35±1.34 |   4.47±0.14 |  88.02±0.74 |  87.50±0.36
+val_cal              |  88.64±0.11 |  89.16±0.15 |   8.91±0.72 |   9.48±0.37 |  88.70±0.11 |  89.23±0.16
+
+best_fitness  (runs: GS 3 | GA 3)
+Grid Search : 367±115 neurons | 33.3±1.2 bits (mean per-neuron)
+GA Neurons  : 318±158 neurons | 33.6±0.7 bits (mean per-neuron)
+mode                 | F1 Grid      | F1 GA        | FPR Grid     | FPR GA       | Acc Grid     | Acc GA
+---------------------+--------------+--------------+--------------+--------------+--------------+-------------
+train_cal            |  84.17±0.13 |  84.15±0.49 |  28.27±0.32 |  28.39±1.60 |  84.82±0.11 |  84.82±0.40
+fixed_05             |  85.38±0.37 |  85.49±0.17 |  24.37±1.09 |  24.28±0.51 |  85.85±0.33 |  85.95±0.14
+platt                |  87.26±0.25 |  87.87±0.19 |  17.54±0.38 |  16.37±0.52 |  87.49±0.25 |  88.07±0.18
+beta                 |  88.21±0.17 |  88.69±0.04 |  12.76±0.25 |  12.02±0.24 |  88.33±0.17 |  88.80±0.04
+empirical            |  80.59±0.95 |  80.92±1.29 |   1.52±0.47 |   1.54±0.64 |  80.71±0.91 |  81.03±1.24
+empirical_cumulative |  87.75±0.69 |  87.49±0.39 |   5.97±1.58 |   4.71±0.28 |  87.76±0.71 |  87.50±0.40
+val_cal              |  88.62±0.08 |  89.15±0.14 |   9.89±1.21 |   9.14±0.45 |  88.68±0.08 |  89.21±0.14
+```
+
+### Reproduce
+`python scripts/ids8/ids8_final_readout.py audit | armtable <gt> | stats <gt> | seeds <arm> <gt> | pareto [fmin] | rule7 <arm> | refs`
+(read-only `?mode=ro`). Core query: `validation_summaries` JOIN `flows`/`experiments` WHERE `f.id BETWEEN 6237 AND 6263`
+AND `validation_point='final'`; GA = `phase_type='ga_neurons'`. Metrics = `json(threshold_metadata)[mode].{f1,fpr,acc}` x 100,
+mean±sample SD over seeds 20403-20405. Genome shape is from `genomes.tiers_json` for the validated hash.
+
 ## 0B. Best individual genome (CEILING, not the claim)
 
 Mined across every genome_type × all 7 threshold modes. **Best-of-N inflates** — a maximum
