@@ -513,7 +513,29 @@ Weights (f1/fpr/ce/acc): B05-AC .05/.05/.225/.675  B05-CE .05/.05/.675/.225  B10
   B34-CTRL .35/.35/.10/.20 with bits pinned 34-34 (the production 500n x 34b control)
 ```
 
-### Verdict — NO supported winner; CHOSEN config for IDS-3 = CE20 (desirability)
+### DECISION (Luiz, 02/10/2026) — CHOSEN config for IDS-3 = **B15-CE** (supersedes the CE20 pick below)
+
+Still NO statistically supported winner; this is a config decision. B15-CE = weights f1/fpr/ce/acc
+.15/.15/.525/.175, desirability (anchor 0.2128), QUAD_WEIGHTED, 16b thermometer, bits 4-34, neuron cap 500.
+
+```
+GA best_fitness val_cal (n=3)   F1 89.74±0.22 | FPR  8.84±0.59 | Acc 89.80±0.22 | 270±57n x 33.0b
+  vs B34-CTRL (paired)          dF1 +0.40±0.48 [2/3] | dFPR -0.63±1.07 [2/3]
+  vs Wb-CTRL  (paired)          dF1 +0.59±0.34 [3/3] | dFPR -0.30±1.04 [1/3]
+  low-FPR (empirical_cumulative) 88.49±0.44 / 4.47±0.60
+Best found (single genome, anywhere — best-of-210, report beside the mean):
+  top F1      89.87 / 8.18 / 89.93  GA best_fitness val_cal              r20403 flow 6242  205n x 32.0b
+  low FPR     88.07 / 3.80 / 88.07  GA best_fitness empirical_cumulative r20404 flow 6251  289n x 33.2b
+```
+Why B15-CE over CE20 / B15-AC: highest mean F1 and Acc of the sweep, with a mean FPR below both controls
+and B15-AC (10.28); its best single genome (89.87) ties the sweep top (B15-AC 89.90) at 1.3 pp lower FPR; and
+it reaches that with the SMALLEST genomes of the top arms (~270n vs CE20 ~396n, B10-CE ~397n, B34-CTRL ~445n),
+which matters for the footprint claim. What it gives up: CE20's mean FPR is ~1.0 pp lower (7.84) and CE20 was the
+only arm 3/3 better on FPR vs both controls; B15-CE's FPR edge over Wb-CTRL is 1/3 seeds. Every gap is under
+the n=3 MDD (~0.45 pp F1 / ~1.23 pp FPR). Desirability-only — re-read if IDS-20 favours zscore.
+Best-anywhere scan: `python3 scripts/ids8/ids8_final_readout.py best any <f1_floor>`.
+
+### Verdict (original, 02/10/2026 agent readout) — NO supported winner; CHOSEN config for IDS-3 = CE20 (desirability)
 
 No arm separates from either control beyond seed noise. Two-way (arm x seed) residual sigma = 0.26 pp F1 /
 0.71 pp FPR (df 16), so the paired n=3 MDD is ~0.45 pp F1 / ~1.23 pp FPR. After Holm over the 8 contrasts per
