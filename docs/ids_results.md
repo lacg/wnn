@@ -197,7 +197,35 @@ Weights (f1/fpr/ce/acc): B05-AC .05/.05/.225/.675  B05-CE .05/.05/.675/.225  B10
   B15-AC .15/.15/.175/.525  B15-CE .15/.15/.525/.175  CE20 .3/.4/.2/.1  Wa-CTRL .3/.05/.35/.3  Wc-CTRL .15/.05/.7/.1
 ```
 
-### Winner calls
+### DECISION (Luiz, 02/10/2026) — CICIDS2017 = **CE20**, CIC-IoT-2023 subsample = **B05-AC**
+
+Config decisions, NOT statistically supported wins (n=3/5 sweep; IDS-18 confirmation Holm p=0.109). Both arms are
+desirability-only, so re-read if IDS-20 (IDSAGG, zscore vs desirability, ETA ~06/10) favours zscore. These feed
+IDS-4 (CICIDS n=100) and IDS-5 (CIC-IoT n=100). Means are GA val_cal held-out TEST; best-found is the best SINGLE
+genome anywhere (5 genome types x 7 modes x GS/GA; `python3 scripts/ids2/best_anywhere.py <ds>`), always quoted
+beside the mean.
+
+```
+CICIDS2017 -> CE20   weights f1/fpr/ce/acc .30/.40/.20/.10, desirability, QUAD, 96b, bits 4-34, cap 500
+  mean (n=3)  best_f1      99.52±0.03 / 0.12±0.01 / 99.70±0.02   best on F1, FPR and Acc; tightest SD
+              best_fitness 99.51±0.03 / 0.12±0.00 / 99.69±0.02
+  control     Wa-CTRL      99.48±0.09 / 0.18±0.07 / 99.67±0.06   (gap +0.04 F1, -0.06 FPR: stable, not large)
+  best found  99.56 / 0.11 / 99.72  GA best_f1 train_cal r20403 flow 5880 (top of the sweep)
+
+CIC-IoT-2023 -> B05-AC   weights .05/.05/.225/.675, desirability, QUAD, 96b, bits 4-100, cap 250
+  mean (n=5)  best_f1      93.09±0.21 / 7.52±0.64 / 96.54±0.10   best mean F1 and Acc
+  runner-up   B15-AC       93.04±0.11 / 6.53±0.66 / 96.48±0.07   ~1 pp lower sweep FPR for -0.05 F1
+  control     Wc-CTRL      92.97±0.18 / 7.63±0.46 / 96.48±0.09
+  IDS-18 (6 fresh seeds)   B05-AC vs Wc-CTRL FPR -1.51 pp, F1 +0.26 | B15-AC -1.39 pp, +0.21 (Holm .109, NOT confirmed)
+  best found  93.30 / 6.92 / 96.64  GA best_f1 val_cal IDSXD2 r20406 flow 6117 (top F1)
+              93.27 / 8.12 / 96.66  GA best_f1 train_cal IDSXD3 r20408 flow 6359 (top Acc)
+              93.00 / 5.36 / 96.43  GA best_ce emp_cumulative r20405 flow 6050 (lowest FPR at F1 >= 93)
+```
+Why B05-AC over B15-AC: best mean F1/Acc and both top single genomes; B15-AC's sweep FPR edge did not
+replicate in IDS-18, where B05-AC had the (slightly) larger FPR reduction. Paper wording: "direction replicated,
+not significant" — never "significantly lower FPR". Supersedes the 26/09 provisional ciciot call (B15-AC) below.
+
+### Winner calls (original, 26/09/2026)
 
 ```
 dataset | call                     | weights f1/fpr/ce/acc | aggr.        | per-neuron bits (band) | neurons (cap) | mem  | genome / thr        | n | held-out F1 / FPR / Acc (mean±SD)
