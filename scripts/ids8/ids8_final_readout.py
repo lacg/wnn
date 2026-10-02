@@ -266,21 +266,23 @@ if __name__ == "__main__" and sys.argv[1] == "armtable":
 
 
 def best_rows(mode="val_cal", f1_floor=90.0):
-	"""Best SINGLE genome per arm (no mean/SD): highest F1, highest Acc, lowest FPR with F1 >= floor.
+	"""mode='any' scans every genome type x all 7 threshold modes x Grid/GA (the paper's 'best found').
+	Best SINGLE genome per arm (no mean/SD): highest F1, highest Acc, lowest FPR with F1 >= floor.
 	One row = one (flow, phase, genome_type) held-out TEST result at threshold `mode` (VAL-calibrated).
 	Best-of-N over 3 seeds x 2 phases x 5 genome types — report as 'best found', never as the expected result."""
 	rows = []
 	for (arm, ph, gt), cell in D.items():
 		for seed, rec in cell.items():
-			v = rec["vals"].get(mode)
-			if v:
-				rows.append(dict(arm=arm, ph=ph, gt=gt, seed=seed, fid=rec["fid"], f1=v[0], fpr=v[1], acc=v[2], rec=rec))
+			for md in (MODES if mode == "any" else [mode]):
+				v = rec["vals"].get(md)
+				if v:
+					rows.append(dict(arm=arm, ph=ph, gt=gt, md=md, seed=seed, fid=rec["fid"], f1=v[0], fpr=v[1], acc=v[2], rec=rec))
 
 	def line(tag, r):
 		if r is None:
 			return f"  {tag:<13} —"
 		n, mb, lo, hi = shape(r["rec"])
-		return (f"  {tag:<13} F1 {r['f1']:6.2f} | FPR {r['fpr']:5.2f} | Acc {r['acc']:6.2f} | {r['ph']} {r['gt']:<12} "
+		return (f"  {tag:<13} F1 {r['f1']:6.2f} | FPR {r['fpr']:5.2f} | Acc {r['acc']:6.2f} | {r['ph']} {r['gt']:<12} {r['md']:<20} "
 			f"r{r['seed']} flow {r['fid']} | {n}n x {mb:.1f}b")
 
 	def pick(rs):
@@ -296,6 +298,7 @@ def best_rows(mode="val_cal", f1_floor=90.0):
 		print(line("best F1", bf))
 		print(line("best Acc", ba))
 		print(line(f"min FPR@F1>={f1_floor:g}", bl))
+		print(line("min FPR (any)", min(rs, key=lambda r: (r["fpr"], -r["f1"]))))
 
 
 if __name__ == "__main__" and sys.argv[1] == "best":
