@@ -160,6 +160,14 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
+AS OF 03/10/2026 12:30 EDT — ON THE s6 `_op31` MARKER (SL_C_b24n256_..._s31337006_op31.json), Luiz asked: after the
+NEW-MARKER block, REPORT AGAINST THE GOAL and CLOSE the Plane story. Story = CTRL-17 (id 6bcc988b-75a8-47f3-af5e-126e68e396eb,
+project e94243a7-...; Done state 7d571be7-2615-4b27-9975-32ca570019f9). Goal: land the stage-2 trainer fixes (G1-G4 + G13, ABI-31)
+and establish the ABI-31 anchor baseline (`_op31`) so later arms pair within one trainer. Outcome to post: ABI-31 landed 30/09;
+trainer read s2-s5 vs _op30 n=4 (stable -0.45pp ±1.57, err +0.147° ±0.153 4/4, steady +0.058° ±0.149, alt -0.040 m ±0.084) = the
+expected small attitude trade from full-state checkpoint ranking; s6 = 5th anchor seed. Internal baseline only — NOT a paper
+disclosure (feedback memory). Comment + PATCH state Done. CTRL-18 (LEVELS) stays OPEN — s6 is only its 64-level 5th seed.
+
 AS OF 01/10/2026 11:30 EDT — CTRL-24 (b20 + obs-pwm, Luiz 01/10) SLOTTED BEFORE LEVELS: scripts/queue_b20_before_levels.sh waits for queue_2009c's tilt PARK, then flies SL_C_b20n256_..._s2-5_op31 (ARM_BITS=20, ARM_NO_CONTROL=1), paired by hand vs b24 _op31 per experiments/ctrl_b20_rule.json (non-inferiority every column + keys <= 0.6x). At the tilt PARK: do the stress re-score, but DO NOT write experiments/tilt_decision until /private/tmp/queue_b20.log says "b20 DONE 4/4" — LEVELS starts the moment that file exists. If b20 is adopted, LEVELS needs the b20 recipe (Luiz). Supervisor must be (re)launched detached after any reboot, alongside queue_2009c.
 
 AS OF 30/09/2026 17:55 EDT — CTRL-16 VERDICT KEEP (gate 3/4 passed, size fails: headline keys 1,886,009 vs 799,654; _pipeN30 s2 GRID#2 re-count reproduced log line 981 exactly, 580,994 keys). ABI-31 LANDED (merge 981ecbb8, smokes PASS, ABI31_LANDED touched). queue_2009c now in STEP 6a: `_op31` s2-s5 (anchor recipe --obs-pwm + PIPE_FLAGS on the ABI-31 trainer, paired vs `_op30` = the TRAINER read, NEVER pair across ABI 30/31 otherwise), then s6 (5th seed of the 64-level rung, CTRL-18), then STEP 6b `_tc31` x4 (CTRL-23), then PARK for the tilt decision. Line 2 names `_op31` sN and "trainer read vs _op30". The 13:45 block's gap task is DONE. Leaderboard h743 now = headline genome (`~` = not yet counted); 178 headlines counted 30/09.
