@@ -160,13 +160,7 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
-AS OF 03/10/2026 12:30 EDT — ON THE s6 `_op31` MARKER (SL_C_b24n256_..._s31337006_op31.json), Luiz asked: after the
-NEW-MARKER block, REPORT AGAINST THE GOAL and CLOSE the Plane story. Story = CTRL-17 (id 6bcc988b-75a8-47f3-af5e-126e68e396eb,
-project e94243a7-...; Done state 7d571be7-2615-4b27-9975-32ca570019f9). Goal: land the stage-2 trainer fixes (G1-G4 + G13, ABI-31)
-and establish the ABI-31 anchor baseline (`_op31`) so later arms pair within one trainer. Outcome to post: ABI-31 landed 30/09;
-trainer read s2-s5 vs _op30 n=4 (stable -0.45pp ±1.57, err +0.147° ±0.153 4/4, steady +0.058° ±0.149, alt -0.040 m ±0.084) = the
-expected small attitude trade from full-state checkpoint ranking; s6 = 5th anchor seed. Internal baseline only — NOT a paper
-disclosure (feedback memory). Comment + PATCH state Done. CTRL-18 (LEVELS) stays OPEN — s6 is only its 64-level 5th seed.
+AS OF 03/10/2026 14:30 EDT — CTRL-17 CLOSED (s6 banked 13:43 EDT; _op31 n=5 anchor 99.16/1.42°/0.79°/0.185 m). Queue on STEP 6b `_tc31` s2-s5 (CTRL-23, tilt 5->5) paired vs `_op31`; line 2 names `_tc31` sN and "tilt-coherence vs _op31". CTRL-18 stays open.
 
 AS OF 01/10/2026 11:30 EDT — CTRL-24 (b20 + obs-pwm, Luiz 01/10) SLOTTED BEFORE LEVELS: scripts/queue_b20_before_levels.sh waits for queue_2009c's tilt PARK, then flies SL_C_b20n256_..._s2-5_op31 (ARM_BITS=20, ARM_NO_CONTROL=1), paired by hand vs b24 _op31 per experiments/ctrl_b20_rule.json (non-inferiority every column + keys <= 0.6x). At the tilt PARK: do the stress re-score, but DO NOT write experiments/tilt_decision until /private/tmp/queue_b20.log says "b20 DONE 4/4" — LEVELS starts the moment that file exists. If b20 is adopted, LEVELS needs the b20 recipe (Luiz). Supervisor must be (re)launched detached after any reboot, alongside queue_2009c.
 
