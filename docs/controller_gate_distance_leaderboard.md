@@ -63,8 +63,8 @@ selection ran on) and never the during-search gen lines (anti-predictive, repeat
 ## Coverage
 
 ```
-markers with a headline held-out : 275
-  altitude regimen (alt= present) : 191
+markers with a headline held-out : 276
+  altitude regimen (alt= present) : 192
   attitude-only                   : 84
   state-neuron count unreadable   : 0  (no .out on disk)
   h743 keys counted exactly       : 75  (experiments/h743_keys.json)
@@ -78,7 +78,7 @@ markers with a headline held-out : 275
 
 ```
                  attitude-only   altitude
-  sn = 0                78          191
+  sn = 0                78          192
   sn > 0                 6            0
 ```
 
