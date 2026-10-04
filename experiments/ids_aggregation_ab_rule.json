@@ -4,12 +4,24 @@
  "registered_by": "Luiz: 'option 1 with CIC-IoT too' (paired test on today's code at fresh seeds)",
  "why": "The only PAIRED aggregation test (IDSD, 26/08) is on UNSW-temporal (desirability won F1 5-0, +0.281pp). On CICIDS/CIC-IoT the IDSX (zscore) vs IDSXD (desirability) comparison shares zero seeds; unpaired, zscore Wa-CTRL leads on CICIDS by 0.11pp. Weight effects did not transfer across datasets, so the aggregation effect is not assumed to either.",
  "cohort": "IDSAGG-{cicids,ciciot}-quad-96b-<arm>-{zs,desir}-r{20414..20418}. zscore arms cloned from IDSX r20401, desirability arms from IDSXD r20403 (cicids) / IDSXD2 r20406 (ciciot); ONLY `seed` changed. The zs/desir sources differ only in fitness_aggregation and fitness_ce_anchor_normalized (verified 26/09). Arms: CICIDS Wa-CTRL (production) + CE20 (sweep choice); CIC-IoT Wc-CTRL (production) + B15-AC (sweep choice). SEED-MAJOR interleaved across datasets, arms and aggregations; 40 flows; all on worker ABI 14 (same code era, reproducible from seed).",
- "fresh_seeds": [20414, 20415, 20416, 20417, 20418],
+ "fresh_seeds": [
+  20414,
+  20415,
+  20416,
+  20417,
+  20418
+ ],
  "metric": "held-out TEST val_cal, GA-neurons phase, genome_type best_f1 (validation_summaries final rows)",
  "primary": "Per dataset, the AGGREGATION effect: for each seed, the mean over the 2 arms of (desirability - zscore) F1; two-sided paired t over the 5 seeds; Holm across the 2 datasets. Significant iff Holm p < 0.05 AND >= 4 of 5 seeds share the sign.",
  "secondary": "Same on FPR (Holm across datasets). Per-arm desir-zscore contrasts and the arm x aggregation interaction: descriptive.",
  "descriptive_only": "genome size (desirability picked ~21% smaller genomes on unswt), generations run (a mediator under the IDSZ 24/08 ruling, disclosed not penalised), wall time.",
  "decision": "Per dataset: F1 significantly favours desirability -> the n=100 cohort uses desirability; significantly favours zscore -> zscore (and the IDS-2 weight choice made under desirability must be re-checked under zscore); not significant -> desirability stands (the IDS-2 weight choices were made under it) unless the FPR secondary significantly favours zscore.",
  "power_note": "unswt paired SD was 0.041pp; if CICIDS/CIC-IoT are similar, n=5 detects ~0.08pp. CICIDS F1 is at ceiling (99.4-99.6), so a null there is plausible and is itself an answer.",
- "apply_with": "scripts/ids2/ (load.py/anal.py pairing pattern), restricted to IDSAGG"
+ "apply_with": "scripts/ids2/ (load.py/anal.py pairing pattern), restricted to IDSAGG",
+ "addendum_b05ac_2026_10_04": {
+  "added": "2026-10-04 ~11:30 EDT (Luiz), AFTER 29/40 IDSAGG flows completed; no IDSAGG metric was read before adding it",
+  "flows": "IDSAGGX-ciciot-quad-96b-B05-AC-{zs,desir}-r{20414..20418} = ids 6420-6429 (spec experiments/ids_aggregation_b05ac_ext_spec.json); zs cloned from IDSX r20401, desir from IDSXD2 r20406, ONLY seed changed",
+  "why": "IDS-5 picked B05-AC (desirability) on 02/10; B05-AC had never flown under zscore, so a zscore win in the primary could not be applied to the chosen arm without it",
+  "status": "NOT part of the primary or secondary test above; the primary stays restricted to the 4 pre-registered arms (prefix 'IDSAGG-'). Report B05-AC desir-zscore as a DESCRIPTIVE per-arm contrast (same metric, same pairing), plus B05-AC vs B15-AC under each aggregation"
+ }
 }

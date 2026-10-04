@@ -1,0 +1,82 @@
+[
+ {
+  "source": "IDSX-ciciot-quad-96b-B05-AC-r20401",
+  "name": "IDSAGGX-ciciot-quad-96b-B05-AC-zs-r20414",
+  "set": {
+   "seed": 20414
+  },
+  "why": "B05-AC extension of IDS-20 (Luiz 04/10): the IDS-5 CIC-IoT pick B05-AC was never flown under zscore. NOT part of the pre-registered IDSAGG primary; ONLY seed changed vs source."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-B05-AC-r20406",
+  "name": "IDSAGGX-ciciot-quad-96b-B05-AC-desir-r20414",
+  "set": {
+   "seed": 20414
+  },
+  "why": "B05-AC extension of IDS-20 (Luiz 04/10): the IDS-5 CIC-IoT pick B05-AC was never flown under zscore. NOT part of the pre-registered IDSAGG primary; ONLY seed changed vs source."
+ },
+ {
+  "source": "IDSX-ciciot-quad-96b-B05-AC-r20401",
+  "name": "IDSAGGX-ciciot-quad-96b-B05-AC-zs-r20415",
+  "set": {
+   "seed": 20415
+  },
+  "why": "B05-AC extension of IDS-20 (Luiz 04/10): the IDS-5 CIC-IoT pick B05-AC was never flown under zscore. NOT part of the pre-registered IDSAGG primary; ONLY seed changed vs source."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-B05-AC-r20406",
+  "name": "IDSAGGX-ciciot-quad-96b-B05-AC-desir-r20415",
+  "set": {
+   "seed": 20415
+  },
+  "why": "B05-AC extension of IDS-20 (Luiz 04/10): the IDS-5 CIC-IoT pick B05-AC was never flown under zscore. NOT part of the pre-registered IDSAGG primary; ONLY seed changed vs source."
+ },
+ {
+  "source": "IDSX-ciciot-quad-96b-B05-AC-r20401",
+  "name": "IDSAGGX-ciciot-quad-96b-B05-AC-zs-r20416",
+  "set": {
+   "seed": 20416
+  },
+  "why": "B05-AC extension of IDS-20 (Luiz 04/10): the IDS-5 CIC-IoT pick B05-AC was never flown under zscore. NOT part of the pre-registered IDSAGG primary; ONLY seed changed vs source."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-B05-AC-r20406",
+  "name": "IDSAGGX-ciciot-quad-96b-B05-AC-desir-r20416",
+  "set": {
+   "seed": 20416
+  },
+  "why": "B05-AC extension of IDS-20 (Luiz 04/10): the IDS-5 CIC-IoT pick B05-AC was never flown under zscore. NOT part of the pre-registered IDSAGG primary; ONLY seed changed vs source."
+ },
+ {
+  "source": "IDSX-ciciot-quad-96b-B05-AC-r20401",
+  "name": "IDSAGGX-ciciot-quad-96b-B05-AC-zs-r20417",
+  "set": {
+   "seed": 20417
+  },
+  "why": "B05-AC extension of IDS-20 (Luiz 04/10): the IDS-5 CIC-IoT pick B05-AC was never flown under zscore. NOT part of the pre-registered IDSAGG primary; ONLY seed changed vs source."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-B05-AC-r20406",
+  "name": "IDSAGGX-ciciot-quad-96b-B05-AC-desir-r20417",
+  "set": {
+   "seed": 20417
+  },
+  "why": "B05-AC extension of IDS-20 (Luiz 04/10): the IDS-5 CIC-IoT pick B05-AC was never flown under zscore. NOT part of the pre-registered IDSAGG primary; ONLY seed changed vs source."
+ },
+ {
+  "source": "IDSX-ciciot-quad-96b-B05-AC-r20401",
+  "name": "IDSAGGX-ciciot-quad-96b-B05-AC-zs-r20418",
+  "set": {
+   "seed": 20418
+  },
+  "why": "B05-AC extension of IDS-20 (Luiz 04/10): the IDS-5 CIC-IoT pick B05-AC was never flown under zscore. NOT part of the pre-registered IDSAGG primary; ONLY seed changed vs source."
+ },
+ {
+  "source": "IDSXD2-ciciot-quad-96b-B05-AC-r20406",
+  "name": "IDSAGGX-ciciot-quad-96b-B05-AC-desir-r20418",
+  "set": {
+   "seed": 20418
+  },
+  "why": "B05-AC extension of IDS-20 (Luiz 04/10): the IDS-5 CIC-IoT pick B05-AC was never flown under zscore. NOT part of the pre-registered IDSAGG primary; ONLY seed changed vs source."
+ }
+]
