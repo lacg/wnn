@@ -1,0 +1,19 @@
+{
+ "story": "Tilt-width ladder — DAgger training curriculum width below 30°: 3->7 (_tw7), 5->10 (_tw10), 8->15 (_tw15), with 5->5 (_tc31) and 8->30 (_op31) as the flown baselines",
+ "registered": "2026-10-05 (EDT), before any _tw run exists; _tc31 s2-s4 and _op31 s2-s5 banked, _tc31 s5 flying",
+ "registered_by": "Luiz 05/10: 'not higher than 30 at first... 3->7, 5->10, 8->15, with 5->5 and 8->30 as baselines'; interleaved seed by seed; 3->7 chosen over 2->8 (2° start sits in the 1/16 label dead zone)",
+ "hypothesis": "A wider training curriculum shows the neurons states outside the scorer's 5° neighbourhood, which _tc31 (5->5) suggests helps (3/3 seeds worse than 8->30 on stable/err/steady). The ladder asks where the benefit saturates below 30°.",
+ "arms": {
+  "_tw7":  "--rg-easy-tilt-deg 3 --rg-full-tilt-deg 7",
+  "_tw10": "--rg-easy-tilt-deg 5 --rg-full-tilt-deg 10",
+  "_tw15": "--rg-easy-tilt-deg 8 --rg-full-tilt-deg 15"
+ },
+ "recipe": "_op31 recipe (--obs-pwm --skip-stages connections,bits --max-output-neurons 512 --max-cells 1000000000, --teacher-hover derived), ABI-31 trainer, b24 n256, seeds s31337002-05",
+ "order": "SEED-MAJOR interleaved: s2 {_tw7,_tw10,_tw15}, then s3, s4, s5 — every seed completes the ladder before the next starts",
+ "metric": "HEADLINE held-out rows (stable, err, steady, alt) on the report seeds, plus the MEMORY stage rows (selection-draw check)",
+ "rule": "Each arm vs _op31 (8->30) on the SAME seeds, n=4, mean paired delta: an arm BEATS 8->30 iff the promotion-gate bar holds (>=3/4 of stable up, err down, steady down, alt down AND err delta <= +0.10°) AND the stress read holds (re-score every _tw and _op31 winner at --tilt 15 and --tilt 30 via scripts/rescore_winners.py, 'train' thresholds, same report seeds: mean stable not lower than _op31 by > 2.5 pp and mean err not higher by > 0.4° at EACH stress tilt). If several arms beat 8->30, the one with the lowest mean headline hd wins. If none does, 8->30 stays. A tie goes to the incumbent (8->30). _tc31 is judged by its own rule (experiments/ctrl_tilt_rule.json), unchanged.",
+ "confound": "Each arm moves three things together: the training-state coverage, the tilt at which the trainer's best-round checkpoint is scored (= full), and the gate λ (computed at full). Report the verdict as 'curriculum X wins', never attribute it to coverage alone.",
+ "descriptive_only": "Teacher (mpcof) stable/err at each full tilt (7/10/15/30) — tells a collapse from teacher saturation apart from a width effect; per-seed ladder curves; TRUE keys per winner.",
+ "consequence": "queue_2009c's tilt_decision accepts only coherent|wide. If 8->30 or 5->5 wins, write that word. If a _tw arm wins, LEVELS needs that curriculum: stop the queue_2009c supervisor ONLY (never a run) at the PARK and relaunch LEVELS with the winning flags (Luiz's call).",
+ "caveats": ["n=4: a 3-of-4 column rule fires by chance ~31%; say 'the rule fired'.", "Three arms vs one control = three looks; the lowest-hd tie-break is a selection, not a test.", "Stress tilts are outside every arm's scored envelope: a robustness read, not a headline."]
+}
