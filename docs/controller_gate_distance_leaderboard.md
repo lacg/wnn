@@ -63,8 +63,8 @@ selection ran on) and never the during-search gen lines (anti-predictive, repeat
 ## Coverage
 
 ```
-markers with a headline held-out : 276
-  altitude regimen (alt= present) : 192
+markers with a headline held-out : 277
+  altitude regimen (alt= present) : 193
   attitude-only                   : 84
   state-neuron count unreadable   : 0  (no .out on disk)
   h743 keys counted exactly       : 75  (experiments/h743_keys.json)
@@ -78,7 +78,7 @@ markers with a headline held-out : 276
 
 ```
                  attitude-only   altitude
-  sn = 0                78          192
+  sn = 0                78          193
   sn > 0                 6            0
 ```
 
@@ -232,7 +232,7 @@ same-rule rank: a large value means that row owes its placing to the draw.
      8     0.1000  CRN  100.0%    1.44    1.00  0.473  fits      0.1000     +2  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_l090_l
      9     0.1000  CRN   99.0%    1.26    0.69  0.174  qspi?     0.1000     +2  SL_C_b24n256_cf21_brushless_L4C_g10_s31337006_op31
     10     0.1001  CRN   99.6%    1.37    0.86  0.401  qspi      0.1001     +2  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_ls2
-    11     0.1002  CRN   98.6%    1.19    0.76  0.440  qspi      0.1870    +69  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_bd
+    11     0.1002  CRN   98.6%    1.19    0.76  0.440  qspi      0.1870    +70  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_bd
     12     0.1006  CRN   99.4%    1.34    0.70  0.197  qspi      0.1021     +3  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_pipeN3
     13     0.1029  CRN   99.6%    1.41    0.85  0.300  fits      0.1029     +4  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_crn
     14     0.1036  CRN   99.6%    1.42    0.96  0.195  qspi      0.1096     +8  TAB_on_b32n256_cf21_brushless_L4C_s31337005
