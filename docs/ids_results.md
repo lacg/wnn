@@ -837,7 +837,7 @@ best_fitness  (runs: 5/5)
 
 Reproduce: read-only script (session scratchpad `agg.py`, NOT committed — task was read-only/no code, subcommands diff/hdr/primary/arms/seeds/b05vb15/pareto/rule7), same SQL pattern as scripts/ids2/load.py restricted to `IDSAGG%`.
 
-### IDS-20 design check (06/10/2026, experiment-design agent) — interaction, mechanism, zscore stopping defect
+### IDS-20 design check (06/10/2026, experiment-design agent) — interaction, mechanism (stopping-'defect' note superseded by Luiz 06/10)
 
 All POST-HOC except where marked. Same metric (held-out TEST val_cal, GA best_f1), IDSAGG- prefix only, n=5 paired seeds.
 
@@ -885,43 +885,28 @@ hint against bits-as-cause is Wc-CTRL: desirability moved it to 80b on 4/5 seeds
 zscore run at 80b (r20416, FPR 8.03) is not low. That is n=1, so it is not evidence. Within-arm ρ(ΔFPR, Δbits) is
 +0.58 (Wc) and −0.15 (B15). The pooled −0.66 is driven by the arm difference.
 
-**ZSCORE STOPPING DEFECT (found here, applies to every zscore IDS run).** On the IDS path `check_magnitude_ids` is
-fed the frozen `best`'s F1/FPR (`generic_ga.py`). `best` is replaced only when the pool-relative z-score beats the
-frozen z-score. The 20/09 `patience_tracks_pool0` fix exists only for the controller path. Logs: across all 20
-zscore IDSAGG GA phases, the watched reference NEVER changed in 18 and changed once in 2. All 20 desirability
-phases had 3-11 distinct references. Example: B15-AC zs r20416 logs `f1=91.50%→best 91.50%, fpr=10.15%→best 10.15%`
-at every check, from gen 20 to the stop at gen 60. 13/20 zscore GA phases stop at the 60-generation floor (zero
-patience credit), against 1/20 for desirability. The zscore `best_fitness` genome is that frozen early `best`, so
-the zscore best_fitness companion column is contaminated. The primary (best_f1) genome comes from the final
-population but was truncated. IDS-20 therefore compares desirability against zscore with a stopper that cannot
-see improvement.
-- CICIDS: the bias runs AGAINST zscore, and zscore still leads F1 on 4/5 seeds. "Desirability does not improve
-  CICIDS" is robust in direction.
-- CIC-IoT: the bias runs FOR desirability. The matched-generation table above suggests truncation does not
-  explain the B15-AC gap (zscore pool[0] FPR barely moves from gen 1 to gen 60). That evidence is during-search
-  only, so the held-out FPR claim is PROVISIONAL until a zscore arm runs with a working stopper.
-- Scope beyond IDS-20 (not audited here): IDSZ (115 flows, 87/115 at the 60-gen floor), IDSX (170) and MCS (15)
-  are zscore too. Their within-zscore weight rankings share the defect across all arms. The 24/08 ruling "generations
-  is a mediator: runs longer BECAUSE the arm improves" assumed a stopper that can see improvement. Re-examine it.
-- Smallest settling experiment (no code change): re-fly the 10 CIC-IoT zscore IDSAGG flows (Wc-CTRL, B15-AC x
-  r20414-18) with `patience` large enough never to fire and `ga_generations` = the paired desirability run's count
-  (B15: 150/140/160/150/130; Wc: 110/100/140/120/110). That gives a budget-matched paired contrast. Add the 5 B05-AC
-  zscore flows for IDS-5. Cost ~15 flows. The fix-the-stopper alternative is a code change (route IDS through
-  pool[0], like controller CTRL-19) and needs Luiz's approval.
+**zscore stopping — NOT a defect (Luiz ruling 06/10/2026; supersedes the "stopping defect" text first written here).**
+Observed: under zscore the IDS magnitude-patience watches the incumbent `best`, which zscore rarely replaces (18/20
+zscore GA phases never changed it; 13/20 stopped at the 60-gen floor vs 1/20 desirability). Patience is BY DESIGN:
+it stops a search that is not improving its incumbent. The root cause is zscore's scoring, which does not separate
+the population enough to produce improvements, NOT the stopper. So the early stop is part of the zscore treatment,
+exactly as the 24/08 ruling says (generations is a MEDIATOR of the aggregation, not a confounder). Patience-off /
+budget-matched re-flies are NOT warranted: patience-off was tested when patience was built (~2025-12/2026-02), and
+the cost/benefit does not justify it. No cohort audit (IDSZ/IDSX/MCS) is warranted on this ground.
+- IDS-20 stands as the pre-registered rule read it: desirability stays on both datasets.
+- The CIC-IoT FPR secondary is real AND arm-specific (interaction above, post-hoc): report it with that caveat.
 
 **3. B05-AC extension criterion** pre-registered in `experiments/ids_aggregation_b05ac_ext_criterion.json`
-(commit 4d5f8105, BEFORE flows 6425-6429 were read). Its 06/10 amendment adds the stopping defect and leaves the
-thresholds unchanged.
+(commit 4d5f8105, BEFORE flows 6425-6429 were read). Its 06/10 amendment (stopping 'defect') is superseded by Luiz's 06/10 ruling; thresholds unchanged.
 
 **4. Paper-safe wording.**
 - CICIDS2017: "Replacing z-score with desirability aggregation did not improve detection on CICIDS2017 (paired
   desirability − z-score F1 −0.08 pp, 95% CI [−0.18, +0.01], FPR +0.05 pp, n = 5 seeds x 2 weight settings;
   F1 is at ceiling, ~99.5%)."
-- CIC-IoT-2023, ONLY after the budget-matched zscore re-fly confirms it: "On CIC-IoT-2023 the aggregation effect
+- CIC-IoT-2023 (the arm-dependence is post-hoc; say so): "On CIC-IoT-2023 the aggregation effect
   depended on the weight setting. Desirability lowered held-out FPR by 2.1 pp (5/5 seeds) under the weights
   selected for it, and had no detectable effect under the default weights (−0.05 pp, 95% CI ±1.1 pp). We do not
-  claim a general FPR benefit." Until then the CIC-IoT result is internal-only. Never "desirability lowers FPR on
-  CIC-IoT".
+  claim a general FPR benefit." Never "desirability lowers FPR on CIC-IoT" unqualified.
 
 ## IDS-2 FINAL (26/09/2026) — IDSXD / IDSXD2 weight-sweep winners (cicids, ciciot; unswr quad PROVISIONAL)
 
