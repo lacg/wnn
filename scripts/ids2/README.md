@@ -18,3 +18,4 @@ Era-restricted best-row readout (26/09, Luiz: no SP/SP100 era, best rows WITH th
 - `era_cicids.py` — relaxed CICIDS set (IDSX+IDSXD from 22/08; the fix cannot touch <=34-bit cicids).
 - `era_cicids_d.py` — IDSXD (desirability) only.
 - `topf1.py` / `top2.py` — the all-era top-F1 extractor/ranker (includes SP/SP100; kept for reference).
+- `ids20_idsagg_readout.py` — IDS-20 (IDSAGG) zscore-vs-desirability readout per experiments/ids_aggregation_ab_rule.json; subcommands primary/arms/seeds/b05vb15/rule7/pareto (IDSAGGX = B05-AC extension, descriptive).
