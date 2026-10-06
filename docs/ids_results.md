@@ -203,6 +203,13 @@ FPR (pp)   | cicids  | +0.005 | +0.076 | -0.010 | +0.150 | +0.024 | +0.049      
 FPR (pp)   | ciciot  | -1.165 | -0.870 | -1.845 | -0.983 | -0.445 | -1.061        | 0.512 | [-1.697, -0.426] | -4.64 | 0.0097 | 0.0195 | +0/-5  | FIRED (desirability lower FPR)
 ```
 
+**DECISION (Luiz, 06/10/2026) — supersedes the rule's default for IDS-4:**
+- **IDS-4 (CICIDS2017 n=100) = CE20 under ZSCORE.** CE20-zs 99.52±0.07 F1 / 0.11±0.04 FPR vs CE20-desir 99.45±0.08 /
+  0.10±0.04 (zs F1 ahead 4/5, FPR tied); best single genome 99.602/0.072/99.749 is CE20-zs (flow 6414); every Pareto
+  point with F1>=99.4 is CE20-zs; 2.2 vs 4.7 h/run (~222 vs ~472 h at n=100). Weights f1/fpr/ce/acc .30/.40/.20/.10.
+- **IDS-5 (CIC-IoT n=100) stays DESIRABILITY.** Arm (B05-AC vs B15-AC) decided at the B05-AC extension 10/10.
+- Both cohorts queue AFTER the 94 QSR -abi13 reruns.
+
 **Decision the rule dictates:**
 - **CICIDS2017: desirability stands.** Primary did not fire (Holm 0.138); FPR secondary did not fire (Holm 0.168), so
   the "unless FPR favours zscore" clause is not triggered. F1 DIRECTION favoured zscore on 4/5 seeds (−0.08 pp, at the
