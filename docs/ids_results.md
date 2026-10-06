@@ -837,6 +837,92 @@ best_fitness  (runs: 5/5)
 
 Reproduce: read-only script (session scratchpad `agg.py`, NOT committed — task was read-only/no code, subcommands diff/hdr/primary/arms/seeds/b05vb15/pareto/rule7), same SQL pattern as scripts/ids2/load.py restricted to `IDSAGG%`.
 
+### IDS-20 design check (06/10/2026, experiment-design agent) — interaction, mechanism, zscore stopping defect
+
+All POST-HOC except where marked. Same metric (held-out TEST val_cal, GA best_f1), IDSAGG- prefix only, n=5 paired seeds.
+
+**1. CIC-IoT arm x aggregation interaction** (per seed: (B15-AC desir−zs) − (Wc-CTRL desir−zs)):
+```
+metric | r20414 | r20415 | r20416 | r20417 | r20418 | mean   | SD    | CI95             | t     | p raw  | signs
+-------+--------+--------+--------+--------+--------+--------+-------+------------------+-------+--------+-------
+FPR pp | -1.600 | -2.060 | -0.950 | -3.775 | -1.740 | -2.025 | 1.058 | [-3.339, -0.711] | -4.28 | 0.0129 | +0/-5
+F1  pp | +0.710 | +0.241 | +0.266 | +0.533 | +0.231 | +0.396 | 0.215 | [+0.128, +0.664] | +4.11 | 0.0147 | +5/-0
+```
+Per-arm paired desir−zs, post-hoc family = 2 datasets x 2 arms x {F1,FPR} = 8 tests, Holm over the 8
+(exact sign test at n=5 floors at p=0.0625 two-sided, so 5/5 alone never reaches 0.05):
+```
+dataset | arm     | metric | mean   | SD    | CI95             | p raw  | Holm(8) | signs
+--------+---------+--------+--------+-------+------------------+--------+---------+------
+cicids  | Wa-CTRL | F1     | -0.101 | 0.064 | [-0.181, -0.021] | 0.0245 | 0.160   | +0/-5
+cicids  | Wa-CTRL | FPR    | +0.101 | 0.080 | [+0.002, +0.200] | 0.0472 | 0.236   | +5/-0
+cicids  | CE20    | F1     | -0.063 | 0.100 | [-0.187, +0.060] | 0.2271 | 0.681   | +1/-4
+cicids  | CE20    | FPR    | -0.003 | 0.073 | [-0.093, +0.087] | 0.9331 | 1.000   | +3/-2
+ciciot  | Wc-CTRL | F1     | -0.136 | 0.126 | [-0.293, +0.020] | 0.0728 | 0.291   | +1/-4
+ciciot  | Wc-CTRL | FPR    | -0.049 | 0.869 | [-1.128, +1.030] | 0.9058 | 1.000   | +3/-2
+ciciot  | B15-AC  | F1     | +0.260 | 0.161 | [+0.059, +0.460] | 0.0228 | 0.160   | +5/-0
+ciciot  | B15-AC  | FPR    | -2.074 | 0.573 | [-2.785, -1.363] | 0.0013 | 0.010   | +0/-5
+```
+Verdict: the CIC-IoT FPR firing is B15-AC-specific. Only B15-AC FPR survives Holm(8). On the production control
+(Wc-CTRL) the effect is −0.05 pp with CI ±1.1 pp: we cannot detect an effect there, and that is not evidence that
+none exists. Selection asymmetry: B15-AC was picked in the DESIRABILITY
+sweep (IDSXD), partly for its low FPR, so its weights were tuned in desirability's fitness geometry. Fresh seeds
+remove seed-level winner's curse but not that. The pooled "mean over arms" secondary hid an interaction this size.
+
+**2. Mechanism (descriptive).** Matched-generation check uses the during-search pool[0] FPR at GA generation 60
+(`iterations.best_fpr`, k-fold on train — mechanism evidence only, NOT a result):
+```
+arm     | gen-60 FPR desir (5 seeds)      | gen-60 FPR zs (5 seeds)         | gap desir-zs (per seed)              | desir gen60->last
+--------+---------------------------------+---------------------------------+--------------------------------------+------------------
+B15-AC  | 4.12 4.26 4.02 4.21 3.62 (4.05) | 6.31 6.09 6.76 7.10 5.37 (6.33) | -2.19 -1.83 -2.74 -2.89 -1.75 (-2.28) | -0.26 mean
+Wc-CTRL | 4.77 5.78 4.96 4.99 4.94 (5.09) | 5.10 5.76 4.36 4.63 4.98 (4.97) | -0.33 +0.02 +0.60 +0.36 -0.04 (+0.12) | -0.23 mean
+```
+The B15-AC FPR gap is already there at EQUAL generations. The extra 70-100 desirability generations add only
+~0.26 pp more, so the extra GENERATIONS do not explain the gap. Across the 10 ciciot pairs, held-out ΔFPR vs Δgens
+has Spearman −0.95 (−0.90 in Wc, −0.87 in B15). That is a post-treatment correlation (runs that keep improving keep
+running), not a mechanism. BITS: on B15-AC every desirability run lands at 80b and no zscore run does
+(48-55b), so within that arm bits and aggregation are perfectly collinear and cannot be separated. The one partial
+hint against bits-as-cause is Wc-CTRL: desirability moved it to 80b on 4/5 seeds with no FPR gain, and the single
+zscore run at 80b (r20416, FPR 8.03) is not low. That is n=1, so it is not evidence. Within-arm ρ(ΔFPR, Δbits) is
++0.58 (Wc) and −0.15 (B15). The pooled −0.66 is driven by the arm difference.
+
+**ZSCORE STOPPING DEFECT (found here, applies to every zscore IDS run).** On the IDS path `check_magnitude_ids` is
+fed the frozen `best`'s F1/FPR (`generic_ga.py`). `best` is replaced only when the pool-relative z-score beats the
+frozen z-score. The 20/09 `patience_tracks_pool0` fix exists only for the controller path. Logs: across all 20
+zscore IDSAGG GA phases, the watched reference NEVER changed in 18 and changed once in 2. All 20 desirability
+phases had 3-11 distinct references. Example: B15-AC zs r20416 logs `f1=91.50%→best 91.50%, fpr=10.15%→best 10.15%`
+at every check, from gen 20 to the stop at gen 60. 13/20 zscore GA phases stop at the 60-generation floor (zero
+patience credit), against 1/20 for desirability. The zscore `best_fitness` genome is that frozen early `best`, so
+the zscore best_fitness companion column is contaminated. The primary (best_f1) genome comes from the final
+population but was truncated. IDS-20 therefore compares desirability against zscore with a stopper that cannot
+see improvement.
+- CICIDS: the bias runs AGAINST zscore, and zscore still leads F1 on 4/5 seeds. "Desirability does not improve
+  CICIDS" is robust in direction.
+- CIC-IoT: the bias runs FOR desirability. The matched-generation table above suggests truncation does not
+  explain the B15-AC gap (zscore pool[0] FPR barely moves from gen 1 to gen 60). That evidence is during-search
+  only, so the held-out FPR claim is PROVISIONAL until a zscore arm runs with a working stopper.
+- Scope beyond IDS-20 (not audited here): IDSZ (115 flows, 87/115 at the 60-gen floor), IDSX (170) and MCS (15)
+  are zscore too. Their within-zscore weight rankings share the defect across all arms. The 24/08 ruling "generations
+  is a mediator: runs longer BECAUSE the arm improves" assumed a stopper that can see improvement. Re-examine it.
+- Smallest settling experiment (no code change): re-fly the 10 CIC-IoT zscore IDSAGG flows (Wc-CTRL, B15-AC x
+  r20414-18) with `patience` large enough never to fire and `ga_generations` = the paired desirability run's count
+  (B15: 150/140/160/150/130; Wc: 110/100/140/120/110). That gives a budget-matched paired contrast. Add the 5 B05-AC
+  zscore flows for IDS-5. Cost ~15 flows. The fix-the-stopper alternative is a code change (route IDS through
+  pool[0], like controller CTRL-19) and needs Luiz's approval.
+
+**3. B05-AC extension criterion** pre-registered in `experiments/ids_aggregation_b05ac_ext_criterion.json`
+(commit 4d5f8105, BEFORE flows 6425-6429 were read). Its 06/10 amendment adds the stopping defect and leaves the
+thresholds unchanged.
+
+**4. Paper-safe wording.**
+- CICIDS2017: "Replacing z-score with desirability aggregation did not improve detection on CICIDS2017 (paired
+  desirability − z-score F1 −0.08 pp, 95% CI [−0.18, +0.01], FPR +0.05 pp, n = 5 seeds x 2 weight settings;
+  F1 is at ceiling, ~99.5%)."
+- CIC-IoT-2023, ONLY after the budget-matched zscore re-fly confirms it: "On CIC-IoT-2023 the aggregation effect
+  depended on the weight setting. Desirability lowered held-out FPR by 2.1 pp (5/5 seeds) under the weights
+  selected for it, and had no detectable effect under the default weights (−0.05 pp, 95% CI ±1.1 pp). We do not
+  claim a general FPR benefit." Until then the CIC-IoT result is internal-only. Never "desirability lowers FPR on
+  CIC-IoT".
+
 ## IDS-2 FINAL (26/09/2026) — IDSXD / IDSXD2 weight-sweep winners (cicids, ciciot; unswr quad PROVISIONAL)
 
 Supersedes the 13/09 interim bullet in §0A for cicids and ciciot. Read-only DB readout; every

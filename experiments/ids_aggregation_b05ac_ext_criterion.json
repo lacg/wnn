@@ -18,5 +18,10 @@
  },
  "arm_choice_side_read": "B05-AC vs B15-AC under desirability (same seed): descriptive. Flag to Luiz (no automatic change) iff B15-AC desir beats B05-AC desir on BOTH mean F1 (by >= 0.10 pp) and mean FPR (by >= 0.50 pp) with >= 4/5 seeds agreeing on each. The extension was not designed to re-adjudicate the IDS-5 arm choice; this read can only raise a question.",
  "threshold_rationale": "0.10 pp F1 ~ one paired-delta SD on CIC-IoT (B15-AC d_F1 SD ~0.16, Wc-CTRL ~0.12) and the size of the CICIDS zscore lean; 0.50 pp FPR ~ the Wc-CTRL paired-delta mean magnitude scale below which the control arm's mixed-sign deltas (SD ~0.85 pp) cannot be distinguished; the 4/5 sign rule matches the IDS-20 primary.",
+ "amendment_2026_10_06_known_confound": {
+  "added": "2026-10-06 ~10:15 EDT, still BEFORE any metric of 6425-6429 was read (6425 running, 6426-6429 queued); thresholds above UNCHANGED",
+  "what": "Found from the 40 IDSAGG- logs (not from IDSAGGX): under fitness_aggregation='zscore' the IDS magnitude-patience tracker watches the frozen `best` (generic_ga.py: best replaced only when the pool-relative z beats the frozen z; check_magnitude_ids is fed best_f1_val/best_fpr_val, the 20/09 track_pool0 fix is not on the IDS path). Across all 20 zscore IDSAGG logs the watched F1/FPR reference NEVER changed in 18 and changed once in 2 (all 20 desirability logs: 3-11 distinct references); 13/20 zscore runs stopped at the 60-generation floor vs 1/20 desirability.",
+  "consequence_for_this_criterion": "The B05-AC zs flows inherit the same truncated stopping. S/N outcomes are interpreted as 'desirability vs zscore-with-truncated-search'. An R outcome (zscore ahead) is therefore robust in direction (the defect handicaps zscore); an S outcome that rests on FPR is NOT evidence about aggregation per se until a zscore arm with a working stopper (or a budget-matched zscore arm) exists."
+ },
  "forbidden": "Changing these thresholds after reading any of 6425-6429; reading 6425-6429 metrics before all 10 complete; pooling B05-AC into the IDS-20 primary/secondary."
 }
