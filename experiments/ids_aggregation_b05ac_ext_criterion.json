@@ -1,0 +1,22 @@
+{
+ "story": "IDS-20 addendum: pre-specified DESCRIPTIVE criterion for the B05-AC aggregation extension (IDSAGGX-ciciot-quad-96b-B05-AC-{zs,desir}-r{20414..20418}, flows 6420-6429): does the B05-AC result support keeping B05-AC + desirability for IDS-5 (CIC-IoT n=100)?",
+ "registered": "2026-10-06 ~09:25 EDT (13:25 UTC), experiment-design agent, Luiz-approved design check",
+ "blinding_state_at_registration": {
+  "already_read_before_registration": "zs r20414/r20415/r20416 (6420, 6422, 6424) and desir r20414/r20415 (6421, 6423) — published in docs/ids_results.md 'IDS-20 FINAL' (commit 25819b71). Paired deltas already known: r20414 F1 +0.414 / FPR -3.535 pp; r20415 F1 -0.003 / FPR -0.340 pp.",
+  "NOT read at registration": "desir r20416 (6425, status running), zs+desir r20417 (6426, 6427, queued), zs+desir r20418 (6428, 6429, queued). Only flows.status was queried for these; no metric.",
+  "consequence": "Thresholds below were set with 2 of 5 pairs known, so the full-n=5 read is only partially blind. The FRESH-PAIRS check (r20416-r20418 only) is the blind part and is reported beside it."
+ },
+ "metric": "Same as the IDS-20 primary: held-out TEST val_cal, GA-neurons phase, genome_type best_f1, validation_summaries validation_point='final'. Paired by seed: d = desir - zs. Also report best_fitness as the pre-declared companion, descriptive.",
+ "when_to_read": "Only after all 10 flows are status='completed'. If a flow fails/cancels, read the remaining complete pairs and label the result n=k PARTIAL; no rerun decision is implied by this file.",
+ "status": "DESCRIPTIVE. Not a hypothesis test, not part of the IDS-20 primary/secondary; no p-value gates anything. A paired t and CI may be printed for information only.",
+ "criteria": {
+  "S_support_keep": "Keep B05-AC + desirability for IDS-5 is SUPPORTED iff BOTH: (S1, F1 non-inferiority) mean d_F1 >= -0.10 pp AND at most 3/5 seeds have d_F1 < 0; (S2, FPR not worse) mean d_FPR <= +0.50 pp AND at most 3/5 seeds have d_FPR > 0.",
+  "R_reopen": "The result does NOT support desirability for B05-AC — escalate to Luiz to reopen IDS-5's aggregation (zscore B05-AC becomes a candidate) — iff EITHER: (R1) mean d_F1 <= -0.15 pp AND >= 4/5 seeds d_F1 < 0; OR (R2) mean d_FPR >= +0.50 pp AND >= 4/5 seeds d_FPR > 0.",
+  "N_neutral": "Anything else (neither S nor R): NEUTRAL — desirability stands by the IDS-20 rule's default ('not significant -> desirability stands'), reported as 'no evidence either way on B05-AC'.",
+  "B15_pattern_replicates": "Separately, say 'B05-AC shares the B15-AC FPR benefit' only if mean d_FPR <= -1.0 pp AND >= 4/5 seeds d_FPR < 0. Otherwise the CIC-IoT FPR benefit remains documented for B15-AC only and must not be attributed to the IDS-5 arm.",
+  "fresh_pairs_check": "Report r20416-r20418 (the 3 pairs unread at registration) separately: sign counts and mean d_F1 / d_FPR. If the fresh pairs disagree in sign with the full-n=5 mean on FPR (>= 2/3 opposite), label the B05-AC FPR finding 'carried by the pre-registration-known pairs' and do not use it in the paper."
+ },
+ "arm_choice_side_read": "B05-AC vs B15-AC under desirability (same seed): descriptive. Flag to Luiz (no automatic change) iff B15-AC desir beats B05-AC desir on BOTH mean F1 (by >= 0.10 pp) and mean FPR (by >= 0.50 pp) with >= 4/5 seeds agreeing on each. The extension was not designed to re-adjudicate the IDS-5 arm choice; this read can only raise a question.",
+ "threshold_rationale": "0.10 pp F1 ~ one paired-delta SD on CIC-IoT (B15-AC d_F1 SD ~0.16, Wc-CTRL ~0.12) and the size of the CICIDS zscore lean; 0.50 pp FPR ~ the Wc-CTRL paired-delta mean magnitude scale below which the control arm's mixed-sign deltas (SD ~0.85 pp) cannot be distinguished; the 4/5 sign rule matches the IDS-20 primary.",
+ "forbidden": "Changing these thresholds after reading any of 6425-6429; reading 6425-6429 metrics before all 10 complete; pooling B05-AC into the IDS-20 primary/secondary."
+}
