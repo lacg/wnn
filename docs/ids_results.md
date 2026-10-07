@@ -1070,6 +1070,10 @@ Runner-ups within one seed-SD of the winner (GA val_cal, same genome type):
    winning weights under desirability, not "desirability wins".
 7. **cicids is a ceiling dataset.** The whole top group spans 99.42-99.52 F1 (per-arm GA best_f1 val_cal). Measured RF raw on the same TEST split
    (§0A 13/09) is 99.85 / 0.10 val_cal. This is efficiency parity at best, never superiority.
+8b. **ciciot MLP comparator (measured 07/10/2026, `verify_ids_baselines.py --models mlp`, scaler + 128-64 ReLU, early
+   stopping; same random_3way TEST split, top-20; logs/baselines_ciciot/mlp_random_3way_{raw,8b}.log):** raw val_cal
+   90.91 / 13.41 / 95.53 (0.14 MB); 8b thermo val_cal 89.57 / 14.63 / 94.82 (0.71 MB). The WNN (B15-AC desir 93.00 / 6.92 /
+   96.47) beats the MLP on F1, FPR and Acc on both inputs.
 8. **ciciot comparators (measured, §0A 13/09):** RF raw 95.53 / 7.38 / 97.84 (the WNN trails by 2.5pp F1 at equal FPR),
    thermo XGB8b 88.85 / 15.10 (the WNN leads on the same input). Pair modes: val_cal against val_cal.
 9. **empirical / empirical_cumulative** are VAL-fit (Protocol v2), so they are legitimate held-out operating points.

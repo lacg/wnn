@@ -1,0 +1,33 @@
+==============================================================================
+  ciciot random_3way binary — models mlp (8-bit thermo)
+==============================================================================
+
+Loading ciciot random_3way split (top-20 features, 8-bit thermo)...
+  Loading from HuggingFace: lacg030175/CIC-IoT-2023-neto-subsample (random_3way)...
+  Random_3way split: 1,143,802 train, 142,975 test, 142,976 val
+  Using 46 features
+  Encoder: 173 total bits (distributive, 8 bits/feature, feature_selection=top20, 20 features)
+  Train: 160,000 normal, 983,802 attack
+  Test:  20,000 normal, 122,975 attack
+  Val:   20,000 normal, 122,976 attack
+  Loaded in 5.1s
+  Train (1143802, 173)  Normal=14.0% Attack=86.0%
+  Test  (142975, 173)  Normal=14.0% Attack=86.0%
+  Val   (142976, 173)  Normal=14.0% Attack=86.0%
+
+------------------------------------------------------------------------------
+  MLP (scaler + 128-64 ReLU, adam, early stopping)
+------------------------------------------------------------------------------
+  Train time:  74.7s
+  Infer time:  0.111s  (0.8 µs/sample)
+  Model size:  746,891 bytes (0.71 MB)
+  [fixed_05 thr=0.50]  TN=16,254 FP=3,746 FN=3,633 TP=119,342  F1 89.25%  FPR 18.73%  Acc 94.84%
+  [val_cal  thr=0.58]  TN=17,074 FP=2,926 FN=4,479 TP=118,496  F1 89.57%  FPR 14.63%  Acc 94.82%
+
+==============================================================================
+  ciciot random_3way (8-bit thermo) — scored on the TEST partition
+==============================================================================
+  Method   mode        thr        F1       FPR       Acc        Size
+  ------------------------------------------------------------------
+  MLP      fixed_05   0.50    89.25%    18.73%    94.84%     0.71 MB
+  MLP      val_cal    0.58    89.57%    14.63%    94.82%     0.71 MB

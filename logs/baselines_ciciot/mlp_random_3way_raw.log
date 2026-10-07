@@ -1,0 +1,26 @@
+==============================================================================
+  ciciot random_3way binary — models mlp (raw numeric)
+==============================================================================
+
+Loading ciciot random_3way split (top-20 features, RAW numeric) from lacg030175/CIC-IoT-2023-neto-subsample...
+  Loaded in 1.6s; 20/20 top-20 features present
+  Train (1143802, 20)  Normal=14.0% Attack=86.0%
+  Test  (142975, 20)  Normal=14.0% Attack=86.0%
+  Val   (142976, 20)  Normal=14.0% Attack=86.0%
+
+------------------------------------------------------------------------------
+  MLP (scaler + 128-64 ReLU, adam, early stopping)
+------------------------------------------------------------------------------
+  Train time:  133.7s
+  Infer time:  0.024s  (0.2 µs/sample)
+  Model size:  142,719 bytes (0.14 MB)
+  [fixed_05 thr=0.50]  TN=16,891 FP=3,109 FN=3,206 TP=119,769  F1 90.84%  FPR 15.54%  Acc 95.58%
+  [val_cal  thr=0.56]  TN=17,318 FP=2,682 FN=3,709 TP=119,266  F1 90.91%  FPR 13.41%  Acc 95.53%
+
+==============================================================================
+  ciciot random_3way (raw numeric) — scored on the TEST partition
+==============================================================================
+  Method   mode        thr        F1       FPR       Acc        Size
+  ------------------------------------------------------------------
+  MLP      fixed_05   0.50    90.84%    15.54%    95.58%     0.14 MB
+  MLP      val_cal    0.56    90.91%    13.41%    95.53%     0.14 MB
