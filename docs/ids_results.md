@@ -212,6 +212,11 @@ FPR (pp)   | ciciot  | -1.165 | -0.870 | -1.845 | -0.983 | -0.445 | -1.061      
   pre-registered flag, so the pick is Luiz's call, not the rule's), Acc 96.47 vs 96.51 (tie); best genome 93.225/6.71/96.59
   (B15); FPR<5% at F1>=92.5 on 4/5 runs vs 0/5; only WNN mean FPR below raw RF's 7.38. Cost ~5.35 vs 3.47 h/run.
 - Both cohorts queue AFTER the 94 QSR -abi13 reruns.
+- **COHORT SPEC (Luiz 07/10/2026): HOLD until the SP-*-ablqsr memory-mode ablation reads out** (cicids/ciciot QUAD vs
+  QSR could reopen IDS-4/5's memory mode). **100 FRESH seeds** 20419-20518 per cohort, seed-major interleaved,
+  `IDS4-cicids-CE20-zs-r<seed>` / `IDS5-ciciot-B15AC-desir-r<seed>`; spec `experiments/ids45_n100_cohort_spec.json`
+  (dry-run 200 clean, NOT created). The IDS-20 seeds 20414-20418 are NOT pooled: they selected the config, so they
+  stay the selection evidence (the aggregation ablation), never part of the confirmatory n=100.
 
 **Decision the rule dictates:**
 - **CICIDS2017: desirability stands.** Primary did not fire (Holm 0.138); FPR secondary did not fire (Holm 0.168), so
