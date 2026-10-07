@@ -915,6 +915,48 @@ the cost/benefit does not justify it. No cohort audit (IDSZ/IDSX/MCS) is warrant
   selected for it, and had no detectable effect under the default weights (−0.05 pp, 95% CI ±1.1 pp). We do not
   claim a general FPR benefit." Never "desirability lowers FPR on CIC-IoT" unqualified.
 
+### B05-AC extension 10/10 (final read 06/10/2026, all 10 IDSAGGX flows 6420-6429 completed; last done 07/10/2026 00:26 UTC)
+
+Criterion applied exactly as pre-registered in `experiments/ids_aggregation_b05ac_ext_criterion.json` (thresholds
+unchanged; Luiz's 06/10 ruling supersedes the stopping amendment, so this is read as plain desirability vs zscore).
+Metric: held-out TEST val_cal, GA phase, `validation_summaries` final. DESCRIPTIVE; the t/CI are for information only.
+Disclosure: 6425 (desir r20416) and 6426 (zs r20417) were read early. Blind at this read: r20417 desir, r20418 zs+desir.
+
+- **S (keep B05-AC + desirability): SUPPORTED.** S1 mean dF1 +0.215 >= -0.10, 1/5 seeds < 0. S2 mean dFPR -2.122 <= +0.50, 0/5 seeds > 0.
+- **R (reopen): not fired.** R1: dF1 is positive. R2: dFPR is negative on all 5 seeds.
+- **Shares the B15-AC FPR benefit: YES** (mean dFPR -2.12 <= -1.0, 5/5 < 0). B15-AC's IDSAGG value was -2.07, 5/5.
+- **Fresh pairs r20416-18:** dF1 +0.220 (+3/-0), dFPR -2.245 (0/3 opposite to the n=5 mean), so the FPR result is NOT carried by the pairs known at registration.
+- **Blind seeds:** r20418 (fully blind) dF1 +0.263 / dFPR -1.395. r20417 (desir blind) dF1 +0.382 / dFPR -2.775. Same sign as the n=5 mean.
+- **Arm-choice side read (B15-AC desir vs B05-AC desir): flag NOT fired.** B15 does not beat B05 on mean F1 (B05-B15 = +0.041). B15 is ahead on FPR by 0.43 pp, 4/5 seeds, which is below the 0.50 pp bar.
+
+```
+B05-AC, desir - zs | seed  | F1 zs / desir / d        | FPR zs / desir / d        | Acc zs / desir / d       | flows     | read
+-------------------+-------+--------------------------+---------------------------+--------------------------+-----------+------------------
+GA best_f1         | 20414 | 92.581 / 92.995 / +0.414 | 10.005 / 6.470 / -3.535   | 96.338 / 96.456 / +0.118 | 6420,6421 | known at reg
+GA best_f1         | 20415 | 93.037 / 93.035 / -0.003 |  8.290 / 7.950 / -0.340   | 96.535 / 96.523 / -0.012 | 6422,6423 | known at reg
+GA best_f1         | 20416 | 93.062 / 93.078 / +0.016 |  9.400 / 6.835 / -2.565   | 96.583 / 96.513 / -0.069 | 6424,6425 | fresh (6425 early)
+GA best_f1         | 20417 | 92.680 / 93.062 / +0.382 | 10.130 / 7.355 / -2.775   | 96.397 / 96.520 / +0.124 | 6426,6427 | fresh (desir blind)
+GA best_f1         | 20418 | 92.785 / 93.048 / +0.263 |  9.535 / 8.140 / -1.395   | 96.435 / 96.536 / +0.101 | 6428,6429 | fresh, blind
+n=5   d mean±SD    |       | +0.215±0.198 CI[-0.031,+0.460] +4/-1 | -2.122±1.257 CI[-3.683,-0.561] +0/-5 | +0.052±0.088 +3/-2
+fresh d mean±SD    |       | +0.220±0.187 +3/-0       | -2.245±0.744 +0/-3        | +0.052±0.106 +2/-1
+GA best_fitness n=5|       | +0.227±0.156 CI[+0.034,+0.420] +5/-0 | -2.485±0.937 CI[-3.648,-1.322] +0/-5 | +0.048±0.072 +4/-1
+
+arm-choice side read (desir) | F1 %         | FPR %       | Acc %        | GA best_f1 genome    | GA gens      | wall h
+-----------------------------+--------------+-------------+--------------+----------------------+--------------+-----------
+B05-AC (IDSAGGX 6421..6429)  | 93.04±0.03   | 7.35±0.71   | 96.51±0.03   | 149±51 n x 80 b      | 128.0±26.8   | 3.47±1.44
+B15-AC (IDSAGG  6387..6419)  | 93.00±0.11   | 6.92±0.74   | 96.47±0.06   | 216±29 n x 80 b      | 146.0±11.4   | 5.35±0.55
+d B05-B15 (paired, n=5)      | +0.041±0.117 +3/-2 | +0.425±1.082 +4/-1 | +0.036±0.091 +4/-1 |               |              |
+```
+Best-of-best (B05-AC desir vs B15-AC desir, 700 single-genome cells = 5 gt x 7 modes x GS/GA x 10 flows; this is SELECTION, not a claim):
+best F1 anywhere: B15 6403 r20416 GA best_fpr val_cal 93.225/6.710/96.592 (183n x 80b) vs B05 6425 r20416 GA best_fpr val_cal
+93.105/7.210/96.540 (217n x 80b); top-10 F1 is 10/10 B15. Lowest FPR at F1>=92.5: B15 6411 r20417 GA best_fitness empirical_cumulative
+92.527/4.090 (228n x 80b) vs B05 6427 r20417 GA best_acc empirical_cumulative 92.970/5.725 (162n x 80b). Per-run lowest FPR@92.5: B05
+6.08±0.28 (0/5 sub-5%) vs B15 4.92±1.08 (4/5 sub-5%). Seed-mean GA best_f1 empirical_cumulative: B05 93.01±0.04/6.39±0.38 vs B15
+92.62±0.26/4.38±0.39. That is a trade along the curve, not dominance. The Pareto front over 700 cells holds 32 B15 and 14 B05 points.
+
+Note for experiment-design (not ruled here): B05-AC was also selected in the desirability sweep (IDSXD/IDSXD2, IDS-2). So the selection-asymmetry
+caveat attached to B15-AC applies to B05-AC too. The "no detectable effect under default weights (Wc-CTRL)" wording stays as written.
+
 ## IDS-2 FINAL (26/09/2026) — IDSXD / IDSXD2 weight-sweep winners (cicids, ciciot; unswr quad PROVISIONAL)
 
 Supersedes the 13/09 interim bullet in §0A for cicids and ciciot. Read-only DB readout; every
