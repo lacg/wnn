@@ -1,0 +1,16 @@
+{
+ "rule": "experiments/ctrl_b20_rule.json",
+ "decided": "2026-10-07 14:30 EDT (b20 s5 banked 13:47 EDT; [qb20] 'b20 DONE 4/4' 17:47Z)",
+ "verdict": "NOT ADOPTED — b24 stays (LEVELS and later arms fly at b24)",
+ "paired_headline_delta_b20_minus_b24_n4": {
+  "stable_pp": {"mean": -1.45, "ci95": [-2.55, -0.35], "favourable": "0/4", "margin": ">= -1.0", "pass": false},
+  "err_deg":   {"mean": 0.17,  "ci95": [-0.19, 0.53],  "favourable": "1/4", "margin": "<= +0.10", "pass": false},
+  "steady_deg":{"mean": 0.225, "ci95": [-0.11, 0.56],  "favourable": "0/4", "margin": "<= +0.10", "pass": false},
+  "alt_m":     {"mean": 0.158, "ci95": [0.01, 0.30],   "favourable": "0/4", "margin": "<= +0.05", "pass": false}
+ },
+ "per_seed": {"s2": [-0.8, -0.10, 0.08, 0.131], "s3": [-1.8, 0.04, 0.10, 0.144], "s4": [-2.4, 0.49, 0.58, 0.055], "s5": [-0.8, 0.25, 0.14, 0.303]},
+ "keys_clause": "MOOT — the rule is an AND and every non-inferiority column already fails. Headline TRUE keys not counted (only b24 s2 cached, 1,763,101). Descriptive: marker populated ratio b20/b24 = 0.62/0.47/0.49/0.37, mean 0.49.",
+ "hd_rank_altitude_regimen_198_rows": {"b24": {"s2": [0.1223, 38], "s3": [0.0958, 5], "s4": [0.1010, 13], "s5": [0.1259, 45]}, "b20": {"s2": [0.1254, 44], "s3": [0.1213, 37], "s4": [0.1655, 79], "s5": [0.1534, 75]}},
+ "reading": "b20 halves the footprint but loses on every column 4/4 seeds bar one err seed; stable and alt CIs exclude 0. n=4 paired.",
+ "next": "tilt-width ladder (_tw7/_tw10/_tw15 x s2-s5) flying since 13:47 EDT; experiments/tilt_decision waits for [qtw] 'TILT-WIDTH DONE 12/12'."
+}
