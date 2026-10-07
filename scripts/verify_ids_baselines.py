@@ -32,6 +32,9 @@ from xgboost import XGBClassifier
 
 from sklearn.ensemble import AdaBoostClassifier
 from sklearn.impute import SimpleImputer
+from sklearn.neural_network import MLPClassifier
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 
 from wnn.ids import cicids2017, ciciot2023, dataset as unsw_dataset
 from wnn.ids.cicids2017 import load_cicids2017
@@ -174,6 +177,22 @@ def _load_raw(dataset: str, split: str):
 	return X_train, y_train, X_test, y_test, X_val, y_val
 
 
+# key -> () -> (display name, unfitted model, needs NaN-imputed input). sklearn models refuse NaN;
+# XGBoost handles it natively. The MLP standardises inside its pipeline (raw features span orders
+# of magnitude; thermo bits are already 0/1, the scaler is then a near-no-op).
+MODELS = {
+	"rf": lambda: ("RF (100 estimators, max_depth=None)",
+	               RandomForestClassifier(n_estimators=100, max_depth=None, n_jobs=-1, random_state=42), True),
+	"xgb": lambda: ("XGBoost (100 estimators, max_depth=6, lr=0.1)",
+	                XGBClassifier(n_estimators=100, max_depth=6, learning_rate=0.1, n_jobs=-1,
+	                              random_state=42, eval_metric="logloss", verbosity=0), False),
+	"ada": lambda: ("AdaBoost (100 depth-1 stumps)", AdaBoostClassifier(n_estimators=100, random_state=42), True),
+	"mlp": lambda: ("MLP (scaler + 128-64 ReLU, adam, early stopping)",
+	                make_pipeline(StandardScaler(), MLPClassifier(hidden_layer_sizes=(128, 64), early_stopping=True,
+	                                                              max_iter=200, random_state=42)), True),
+}
+
+
 def main():
 	ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 	ap.add_argument("--n-bits", type=int, default=8,
@@ -181,11 +200,16 @@ def main():
 	ap.add_argument("--dataset", default="unsw", choices=sorted(HF_REPOS))
 	ap.add_argument("--split", default="temporal", help="temporal (legacy 2-way) | temporal_3way | random | random_3way")
 	ap.add_argument("--raw", action="store_true", help="RAW numeric top-20 instead of the thermometer encoding")
+	ap.add_argument("--models", default="rf,xgb,ada",
+	                help=f"comma list from {sorted(MODELS)} (default rf,xgb,ada — the banked comparator set)")
 	args = ap.parse_args()
+	bad = [m for m in args.models.split(",") if m not in MODELS]
+	if bad:
+		raise SystemExit(f"--models: unknown {bad} (choices {sorted(MODELS)})")
 	encoding = "raw numeric" if args.raw else f"{args.n_bits}-bit thermo"
 
 	print("=" * 78)
-	print(f"  {args.dataset} {args.split} binary — RF + XGBoost + AdaBoost ({encoding})")
+	print(f"  {args.dataset} {args.split} binary — models {args.models} ({encoding})")
 	print("=" * 78)
 	if args.dataset not in LOADERS and not args.raw:
 		raise SystemExit(f"{args.dataset} is raw-only (pass --raw)")
@@ -194,18 +218,16 @@ def main():
 	# sklearn trees refuse NaN/Inf (46M has a few); XGBoost handles them natively
 	X_train_sk, X_test_sk, X_val_sk = _impute(X_train, X_test, X_val) if args.raw else (X_train, X_test, X_val)
 
+	sk = (X_train_sk, y_train, X_test_sk, y_test, X_val_sk, y_val)
+	native = (X_train, y_train, X_test, y_test, X_val, y_val)
 	rows = []
-	rows += _evaluate("RF (100 estimators, max_depth=None)",
-	                  RandomForestClassifier(n_estimators=100, max_depth=None, n_jobs=-1, random_state=42),
-	                  X_train_sk, y_train, X_test_sk, y_test, X_val_sk, y_val)
-	rows += _evaluate("XGBoost (100 estimators, max_depth=6, lr=0.1)",
-	                  XGBClassifier(n_estimators=100, max_depth=6, learning_rate=0.1, n_jobs=-1,
-	                                random_state=42, eval_metric="logloss", verbosity=0),
-	                  X_train, y_train, X_test, y_test, X_val, y_val)
-	rows += _evaluate("AdaBoost (100 depth-1 stumps)",
-	                  AdaBoostClassifier(n_estimators=100, random_state=42),
-	                  X_train_sk, y_train, X_test_sk, y_test, X_val_sk, y_val)
+	for key in args.models.split(","):
+		name, model, needs_imputed = MODELS[key]()
+		rows += _evaluate(name, model, *(sk if needs_imputed else native))
+	_print_table(args, encoding, rows)
 
+
+def _print_table(args, encoding: str, rows: list[Row]) -> None:
 	print("\n" + "=" * 78)
 	print(f"  {args.dataset} {args.split} ({encoding}) — scored on the TEST partition")
 	print("=" * 78)

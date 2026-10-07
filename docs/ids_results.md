@@ -207,7 +207,10 @@ FPR (pp)   | ciciot  | -1.165 | -0.870 | -1.845 | -0.983 | -0.445 | -1.061      
 - **IDS-4 (CICIDS2017 n=100) = CE20 under ZSCORE.** CE20-zs 99.52±0.07 F1 / 0.11±0.04 FPR vs CE20-desir 99.45±0.08 /
   0.10±0.04 (zs F1 ahead 4/5, FPR tied); best single genome 99.602/0.072/99.749 is CE20-zs (flow 6414); every Pareto
   point with F1>=99.4 is CE20-zs; 2.2 vs 4.7 h/run (~222 vs ~472 h at n=100). Weights f1/fpr/ce/acc .30/.40/.20/.10.
-- **IDS-5 (CIC-IoT n=100) stays DESIRABILITY.** Arm (B05-AC vs B15-AC) decided at the B05-AC extension 10/10.
+- **IDS-5 (CIC-IoT n=100) = B15-AC under DESIRABILITY (Luiz 07/10/2026).** Weights f1/fpr/ce/acc .15/.15/.175/.525.
+  vs B05-AC-desir (same seeds): mean F1 93.00 vs 93.04 (tie), FPR 6.92 vs 7.35 (B15 lower 4/5; under the 0.50 pp
+  pre-registered flag, so the pick is Luiz's call, not the rule's), Acc 96.47 vs 96.51 (tie); best genome 93.225/6.71/96.59
+  (B15); FPR<5% at F1>=92.5 on 4/5 runs vs 0/5; only WNN mean FPR below raw RF's 7.38. Cost ~5.35 vs 3.47 h/run.
 - Both cohorts queue AFTER the 94 QSR -abi13 reruns.
 
 **Decision the rule dictates:**
