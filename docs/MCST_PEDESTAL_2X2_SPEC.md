@@ -2,6 +2,11 @@
 
 Status: **SPEC ONLY — nothing armed.** Requires Luiz's go before any flow is created.
 
+**07/10/2026 (Luiz, option b):** the 24 pending seeds s20402-s20405 (6016-6044) were CANCELLED. The 6 completed s20401
+smokes (6015-6040) ran pre-worker-ABI-14 (wall-clock GA offspring seed), so finishing would mix ABIs within an arm.
+When this cohort flies again, it RE-FLIES ALL 5 SEEDS clean on the current worker ABI; the s20401 smokes stay
+smoke-only, never pooled.
+
 ## 1. What is being tested
 
 One defect, two independent routes to it.
