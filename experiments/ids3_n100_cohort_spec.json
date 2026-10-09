@@ -1,0 +1,802 @@
+[
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20419",
+  "set": {
+   "seed": 20419
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20420",
+  "set": {
+   "seed": 20420
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20421",
+  "set": {
+   "seed": 20421
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20422",
+  "set": {
+   "seed": 20422
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20423",
+  "set": {
+   "seed": 20423
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20424",
+  "set": {
+   "seed": 20424
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20425",
+  "set": {
+   "seed": 20425
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20426",
+  "set": {
+   "seed": 20426
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20427",
+  "set": {
+   "seed": 20427
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20428",
+  "set": {
+   "seed": 20428
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20429",
+  "set": {
+   "seed": 20429
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20430",
+  "set": {
+   "seed": 20430
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20431",
+  "set": {
+   "seed": 20431
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20432",
+  "set": {
+   "seed": 20432
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20433",
+  "set": {
+   "seed": 20433
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20434",
+  "set": {
+   "seed": 20434
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20435",
+  "set": {
+   "seed": 20435
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20436",
+  "set": {
+   "seed": 20436
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20437",
+  "set": {
+   "seed": 20437
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20438",
+  "set": {
+   "seed": 20438
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20439",
+  "set": {
+   "seed": 20439
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20440",
+  "set": {
+   "seed": 20440
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20441",
+  "set": {
+   "seed": 20441
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20442",
+  "set": {
+   "seed": 20442
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20443",
+  "set": {
+   "seed": 20443
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20444",
+  "set": {
+   "seed": 20444
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20445",
+  "set": {
+   "seed": 20445
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20446",
+  "set": {
+   "seed": 20446
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20447",
+  "set": {
+   "seed": 20447
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20448",
+  "set": {
+   "seed": 20448
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20449",
+  "set": {
+   "seed": 20449
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20450",
+  "set": {
+   "seed": 20450
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20451",
+  "set": {
+   "seed": 20451
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20452",
+  "set": {
+   "seed": 20452
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20453",
+  "set": {
+   "seed": 20453
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20454",
+  "set": {
+   "seed": 20454
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20455",
+  "set": {
+   "seed": 20455
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20456",
+  "set": {
+   "seed": 20456
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20457",
+  "set": {
+   "seed": 20457
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20458",
+  "set": {
+   "seed": 20458
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20459",
+  "set": {
+   "seed": 20459
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20460",
+  "set": {
+   "seed": 20460
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20461",
+  "set": {
+   "seed": 20461
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20462",
+  "set": {
+   "seed": 20462
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20463",
+  "set": {
+   "seed": 20463
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20464",
+  "set": {
+   "seed": 20464
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20465",
+  "set": {
+   "seed": 20465
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20466",
+  "set": {
+   "seed": 20466
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20467",
+  "set": {
+   "seed": 20467
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20468",
+  "set": {
+   "seed": 20468
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20469",
+  "set": {
+   "seed": 20469
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20470",
+  "set": {
+   "seed": 20470
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20471",
+  "set": {
+   "seed": 20471
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20472",
+  "set": {
+   "seed": 20472
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20473",
+  "set": {
+   "seed": 20473
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20474",
+  "set": {
+   "seed": 20474
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20475",
+  "set": {
+   "seed": 20475
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20476",
+  "set": {
+   "seed": 20476
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20477",
+  "set": {
+   "seed": 20477
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20478",
+  "set": {
+   "seed": 20478
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20479",
+  "set": {
+   "seed": 20479
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20480",
+  "set": {
+   "seed": 20480
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20481",
+  "set": {
+   "seed": 20481
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20482",
+  "set": {
+   "seed": 20482
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20483",
+  "set": {
+   "seed": 20483
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20484",
+  "set": {
+   "seed": 20484
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20485",
+  "set": {
+   "seed": 20485
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20486",
+  "set": {
+   "seed": 20486
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20487",
+  "set": {
+   "seed": 20487
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20488",
+  "set": {
+   "seed": 20488
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20489",
+  "set": {
+   "seed": 20489
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20490",
+  "set": {
+   "seed": 20490
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20491",
+  "set": {
+   "seed": 20491
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20492",
+  "set": {
+   "seed": 20492
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20493",
+  "set": {
+   "seed": 20493
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20494",
+  "set": {
+   "seed": 20494
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20495",
+  "set": {
+   "seed": 20495
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20496",
+  "set": {
+   "seed": 20496
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20497",
+  "set": {
+   "seed": 20497
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20498",
+  "set": {
+   "seed": 20498
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20499",
+  "set": {
+   "seed": 20499
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20500",
+  "set": {
+   "seed": 20500
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20501",
+  "set": {
+   "seed": 20501
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20502",
+  "set": {
+   "seed": 20502
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20503",
+  "set": {
+   "seed": 20503
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20504",
+  "set": {
+   "seed": 20504
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20505",
+  "set": {
+   "seed": 20505
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20506",
+  "set": {
+   "seed": 20506
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20507",
+  "set": {
+   "seed": 20507
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20508",
+  "set": {
+   "seed": 20508
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20509",
+  "set": {
+   "seed": 20509
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20510",
+  "set": {
+   "seed": 20510
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20511",
+  "set": {
+   "seed": 20511
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20512",
+  "set": {
+   "seed": 20512
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20513",
+  "set": {
+   "seed": 20513
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20514",
+  "set": {
+   "seed": 20514
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20515",
+  "set": {
+   "seed": 20515
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20516",
+  "set": {
+   "seed": 20516
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20517",
+  "set": {
+   "seed": 20517
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ },
+ {
+  "source": "IDSXD-unswt-quad-16b-B15-CE-r20403",
+  "name": "IDS3-unswt-B15CE-desir-r20518",
+  "set": {
+   "seed": 20518
+  },
+  "why": "IDS-3 UNSW-NB15 temporal_3way n=100 cohort (B15-CE desirability QUAD 16b, Luiz 02/10; no QSR arm per IDS-16 readout 09/10)."
+ }
+]

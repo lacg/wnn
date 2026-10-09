@@ -170,6 +170,25 @@ WHAT CHANGED
   inert on UNSW-random/CICIDS (thr 0.43-0.56, ≤0.3pp) = prior correction, not VAL overfit.
   Every CIC-IoT row in the next paper comes from the Kaggle/Neto copies; every table pairs modes.
 
+## IDS-16 READOUT + CLOSED (09/10/2026) — SP-*-ablqsr memory-mode ablation on the fixed OI trainer (worker ABI 13)
+QSR-abi13 (n=10/dataset) vs two QUAD arms (SP-*-bin-n30, SP100-*-quad; config diff = memory_mode only, verified
+key-by-key; ciciot bin with 4 -w64fix substitutes). GA best_f1 val_cal, held-out TEST. Pre-fix QSR rows are VOID.
+```
+dataset (shape)   QSR F1/FPR      QUAD bin        QUAD SP100      paired delta (QSR-QUAD)                    h/run QSR|QUAD
+unswt 16bWb       85.46 / 17.59   86.54 / 13.58   86.86 / 13.79   dF1 -1.08 / -1.40 (n.s.), dFPR +4.0 (n.s.)  0.10 | 0.06
+unswr 64bWb       93.50 /  1.12   93.54 /  1.08   93.56 /  1.05   tie; QSR ON the FP floor 10/10              0.51 | 0.36
+cicids 96bWa      99.54 /  0.14   99.59 /  0.09   99.52 /  0.14   tie (QUAD-vs-QUAD era drift 10/10, p=0.002)  2.34 | 1.15
+ciciot 96bWc      92.69 /  9.50   92.84 /  8.53   92.89 /  8.56   dFPR +0.97 / +0.93, 8/10, p<=0.03 (QSR worse) 3.07 | 1.3
+```
+- "QSR = the only tunable decode (+0.87 pp F1 / -0.5 pp FPR)" is REFUTED: it was the legacy trainer, not the decode.
+- Cost after the fix: QSR 1.4-2.1x QUAD per run (was 7-15x).
+- No pre-registered rule existed for this ablation — these are descriptive readings, not a rule firing.
+- Decisions: IDS-3 gets NO QSR arm (the "only if competitive on unswt-16b" condition fails); IDS-4/5 memory mode
+  stays QUAD (HOLD released). Caveats: n=10; cross-era (QUAD Jul/Aug vs QSR Oct); ablation at Wa/Wc/Wb with default
+  aggregation, not CE20-zs / B15-AC-desir; cicids era drift as large as the QSR delta (no cicids memory-mode claim).
+- The 36 remaining UNSW-random QSR reruns (IDSXD-unswr-qsr 9-arm sweep + SP100-unswr-qsr) continue under IDS-2.
+- Readout: ids-security agent; scripts in the session scratchpad (abl.py / run2.py / stats.py).
+
 ## IDS-20 FINAL (06/10/2026) — IDSAGG paired aggregation A/B (zscore vs desirability), CICIDS2017 + CIC-IoT-2023 subsample
 
 Pre-registered rule: `experiments/ids_aggregation_ab_rule.json` (registered 26/09, before any IDSAGG flow existed;
@@ -212,11 +231,21 @@ FPR (pp)   | ciciot  | -1.165 | -0.870 | -1.845 | -0.983 | -0.445 | -1.061      
   pre-registered flag, so the pick is Luiz's call, not the rule's), Acc 96.47 vs 96.51 (tie); best genome 93.225/6.71/96.59
   (B15); FPR<5% at F1>=92.5 on 4/5 runs vs 0/5; only WNN mean FPR below raw RF's 7.38. Cost ~5.35 vs 3.47 h/run.
 - Both cohorts queue AFTER the 94 QSR -abi13 reruns.
-- **COHORT SPEC (Luiz 07/10/2026): HOLD until the SP-*-ablqsr memory-mode ablation reads out** (cicids/ciciot QUAD vs
-  QSR could reopen IDS-4/5's memory mode). **100 FRESH seeds** 20419-20518 per cohort, seed-major interleaved,
+- **COHORT SPEC (Luiz 07/10/2026)**: **100 FRESH seeds** 20419-20518 per cohort, seed-major,
   `IDS4-cicids-CE20-zs-r<seed>` / `IDS5-ciciot-B15AC-desir-r<seed>`; spec `experiments/ids45_n100_cohort_spec.json`
   (dry-run 200 clean, NOT created). The IDS-20 seeds 20414-20418 are NOT pooled: they selected the config, so they
   stay the selection evidence (the aggregation ablation), never part of the confirmatory n=100.
+- **HOLD — 4-COHORT TANDEM (Luiz 09/10/2026).** The memory-mode HOLD is RELEASED (IDS-16 readout above: no reason
+  to reopen QUAD). The cohorts now wait for IDS-2 (UNSW-random winner) so IDS-7 can be specified, then ALL FOUR
+  n=100 cohorts (IDS-3 unswt, IDS-4 cicids, IDS-5 ciciot, IDS-7 unswr) are queued in ONE seed-major interleave on the
+  same seeds 20419-20518 (seed s: IDS3, IDS4, IDS5, IDS7, then s+1 ...), so every cohort walks to n=100 in tandem and
+  any partial readout is a complete 4-dataset set at equal n.
+- **IDS-3 SPEC DRAFTED (09/10/2026):** clones of `IDSXD-unswt-quad-16b-B15-CE-r20403` (flow 6242) with only `seed`
+  changed, `IDS3-unswt-B15CE-desir-r<seed>`, seeds 20419-20518; spec `experiments/ids3_n100_cohort_spec.json` (dry-run
+  100 clean, NOT created). Config: B15-CE .15/.15/.525/.175, desirability (anchor 0.2128), QUAD_WEIGHTED, 16b
+  thermometer top20, bits 4-34, neurons <=500, temporal_3way, k-fold 5x5, patience 5. NO QSR arm (IDS-16).
+  The final combined 4-way queue file is built from the three spec files + IDS-7's once IDS-2 names its winner.
+
 
 **Decision the rule dictates:**
 - **CICIDS2017: desirability stands.** Primary did not fire (Holm 0.138); FPR secondary did not fire (Holm 0.168), so
