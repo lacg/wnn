@@ -148,8 +148,9 @@ BLANK LINE, then:
 
 followed by TWO fenced tables, never prose (BOTH STICKS, Luiz 09/10/2026):
   1. STAGE-SELECT + REPORT table — the two sticks side by side, each labelled:
-       VAL    = the 5 val seeds 1029590071-75: the RANKING stick stage-select used on the 9 candidates
-                (top-3 of every stage). Source: marker `stage_select_candidates` ('val' fields + fit).
+       VAL    = the run's 5 val seeds — the RANKING stick stage-select used on the 9 candidates (top-3 of
+                every stage). They DIFFER PER RUN (derived from the run seed): read them from the .out line
+                "'val' = mean over 5 disjoint val seeds A..B" and print the range in the table header. Source: marker `stage_select_candidates` ('val' fields + fit).
        REPORT = the 5 report seeds 99990101-05: fresh held-out, the PUBLISHED stick. Source: marker
                 `held_stage_multiseed` (each stage's pool[0]) and the .out line
                 `[report-seeds] HEADLINE-<GENOME> MULTI-SEED` (the headline, mean±SD).
@@ -159,7 +160,7 @@ followed by TWO fenced tables, never prose (BOTH STICKS, Luiz 09/10/2026):
      Mark `<- HEADLINE`; mark duplicates `(= NEURONS#0)` (MEMORY#0 often IS NEURONS#0).
      The val column is why the headline won; the report column is what it costs on fresh seeds.
      NEVER compare a val number to a report number, never re-pick on report (see the rule above).
-     Template (_tw15 s2):
+     Template (_tw15 s2; its val seeds were 1029590071-75):
        candidate   VAL stable err   steady alt    fit     | REPORT stable  err        steady     alt
        NEURONS#2       99.2   1.30  0.64   0.164  -0.847  |   96.4±3.4  1.73±0.44  1.18±0.58  0.224±0.054  <- HEADLINE
        NEURONS#0       99.2   1.33  0.68   0.155  -0.675  |   99.2±0.7  1.45±0.24  0.87±0.10  0.196±0.037
