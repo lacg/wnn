@@ -131,6 +131,14 @@ RULE: whenever two runs share a seed and shape, print the PER-STAGE rows and nam
 headline's stage-select genome. NEVER report a same-seed rank gap as a difference in
 performance when the MEMORY rows agree — say "selection draw" and show both.
 
+NEVER SECOND-GUESS THE HEADLINE WITH REPORT SEEDS (08/10/2026, Luiz). Stage rows (`[report-seeds] <STAGE> MULTI-SEED`)
+and the HEADLINE row are BOTH report-seed numbers; stage-select picked the headline on the VAL seeds
+(`stage_select_candidates`, 'val ...'). Saying another stage's genome 'should have won' or calling the headline a
+'selection draw' BECAUSE its report row is worse = selecting on the test seeds (the leak stage-select exists to
+prevent). WORKED CASE _tw15 s2: NEURONS#2 val 99.2/1.30/0.64 (fit −0.847) beat NEURONS#0 val 99.2/1.33/0.68
+(−0.675); on report seeds #2 = 96.4±3.4, #0 = 99.2±0.7. The published row is 96.4. Allowed reading: 'near-tied on
+val, split ~3 pp on report = val→report noise at n=1'. Never substitute the stage row for the headline.
+
 NEW-MARKER FORMAT (05/09/2026, Luiz: "the new marker is difficult to find").
 A banked marker is the POINT of the programme — it must not read as a run-on
 sentence appended to a tick. When a marker lands, print the six lines, then a
