@@ -1,8 +1,8 @@
 {
  "story": "IDS-2 (UNSW-NB15 random_3way): name the winner config (weight vector x memory mode) that IDS-7 (n=100) flies.",
  "registered": "2026-10-09 ~17:40 EDT, BEFORE any IDSXD-unswr-qsr-abi13 or SP100-unswr-qsr-abi13 metric was read (72/94 QSR reruns done, results unread by design)",
- "registered_by": "Luiz 09/10: '(a) falling back to (b); (a) must be the best EVERYWHERE, not one genome/mode'",
- "why": "On UNSW-random every QUAD arm sits on the val_cal FP floor (93.41-93.49 F1 / FPR 1.12), so val_cal cannot rank arms. The criterion looks for the best low-FPR operating point anywhere a run produced one.",
+ "registered_by": "Luiz 09/10: '(a) falling back to (b); best EVERYWHERE'; AMENDED same day before any result was read: (a) is THREE metrics \u2014 best F1, best FPR (at F1>=93), best Acc \u2014 and if they come from different configs, Luiz decides",
+ "why": "On UNSW-random every QUAD arm sits on the val_cal FP floor (93.41-93.49 F1 / FPR 1.12), so val_cal cannot rank arms. The criterion looks for each run's best operating point ANYWHERE it produced one, on each of F1, FPR and Acc.",
  "arms": {
   "definition": "18 arms = 9 weight vectors {B05-AC,B05-CE,B10-AC,B10-CE,B15-AC,B15-CE,B34-CTRL,CE20,Wb-CTRL} x memory mode {QUAD, QSR}",
   "QUAD": "IDSXD-unswr-quad-64b-<arm>-r<seed>; for B34-CTRL use the -immfix rerun where one exists (r20401-04, IDS-17: pre-fix rows are 34/8 immigrant hybrids), else the original",
@@ -10,20 +10,29 @@
   "SP100": "SP100-unswr-quad-64bWb vs SP100-unswr-qsr-64bWb-abi13 are reported alongside (memory-mode contrast at Wb, larger n) but do NOT enter the arm ranking"
  },
  "metric_source": "held-out TEST only: validation_summaries.threshold_metadata, validation_point='final'. NEVER iterations.best_f1, never k-fold.",
- "criterion_a": {
-  "per_run_score": "Over EVERY cell the run produced — both phases (Grid Search, GA Neurons) x all 5 genome types (best_f1, best_fpr, best_acc, best_ce, best_fitness) x all 7 threshold modes (train_cal, fixed_05, platt, beta, empirical, empirical_cumulative, val_cal) = up to 70 cells — take the MINIMUM FPR among cells with F1 >= 93.0. Ties on FPR -> higher F1.",
-  "f1_floor": 93.0,
-  "f1_floor_why": "fixed before results: ~0.4-0.5 pp under the saturated QUAD val_cal band (93.41-93.49), so a low-FPR point must keep F1 near the floor band; prevents trading F1 away for a trivial FPR.",
-  "missing": "a run with no cell at F1 >= 93.0 scores FPR = 100 (counts against its arm; reported).",
-  "arm_score": "MEAN of per-run scores over the arm's seeds (per-run first, so arms with more seeds gain no best-of-N advantage); report mean +/- SD and n.",
-  "winner_a": "arm with the lowest mean per-run score."
- },
- "fallback_b": "If the criterion-(a) winner's mean is not better than Wb-CTRL QUAD's mean by at least ONE pooled seed-SD of the per-run scores (pooled over all 18 arms), the winner is Wb-CTRL QUAD (the incumbent production control, cheapest). Same if the (a) winner IS Wb-CTRL QUAD.",
- "report_alongside": ["val_cal GA best_f1 and best_fitness means (the usual table)", "the per-run best cell's location (phase / genome type / mode) for every run", "h/run per arm"],
+ "fallback_b": "Applied PER METRIC: if that metric's winner does not beat Wb-CTRL QUAD's mean by at least ONE pooled seed-SD of that metric's per-run scores (pooled over all 18 arms), that metric's winner is Wb-CTRL QUAD (incumbent production control, cheapest).",
+ "report_alongside": [
+  "val_cal GA best_f1 and best_fitness means (the usual table)",
+  "for every run, the location (phase / genome type / mode) of each of its three best cells",
+  "h/run per arm"
+ ],
  "caveats": [
   "Per-run best-of-70 on TEST is selection on the test partition: the numbers are optimistic ('best found') and are NEVER reported as an arm's performance; the arm RANKING is fair because every run gets the same 70 cells. The n=100 IDS-7 cohort is the confirmatory measurement.",
   "Cross-era: QUAD half ran 15-30/09 (worker ABI 12-14), QSR half Oct (ABI 13/14).",
   "n=3 per arm (B34-CTRL n=5): a direction, not a significance claim."
  ],
- "applied_by": "IDS-2 completion watcher (session cron) -> ids-security readout; flows created only on Luiz's go."
+ "applied_by": "IDS-2 completion watcher (session cron) -> ids-security readout; flows created only on Luiz's go.",
+ "criterion_a": {
+  "cells": "EVERY cell a run produced: both phases (Grid Search, GA Neurons) x all 5 genome types (best_f1, best_fpr, best_acc, best_ce, best_fitness) x all 7 threshold modes (train_cal, fixed_05, platt, beta, empirical, empirical_cumulative, val_cal) = up to 70 cells, held-out TEST.",
+  "per_run_scores": {
+   "F1": "MAX F1 over all cells (tie -> lower FPR)",
+   "FPR": "MIN FPR over cells with F1 >= 93.0 (tie -> higher F1); a run with no such cell scores FPR = 100 (reported)",
+   "Acc": "MAX Acc over all cells (tie -> lower FPR)"
+  },
+  "f1_floor": 93.0,
+  "f1_floor_why": "FPR metric only. Fixed before results: ~0.4-0.5 pp under the saturated QUAD val_cal band (93.41-93.49), so a low-FPR point cannot trade F1 away for a trivial FPR.",
+  "arm_score": "per metric, MEAN of per-run scores over the arm's seeds (per-run first, so arms with more seeds gain no best-of-N advantage); report mean +/- SD and n.",
+  "metric_winner": "per metric, the arm with the best mean (highest F1, lowest FPR, highest Acc)."
+ },
+ "decision": "If the three metric winners (after fallback b) are the SAME arm -> that arm is the IDS-2 winner and IDS-7's config. If they DIFFER -> NO automatic winner: report the three winners side by side (with each one's other two metrics) and escalate to Luiz to decide ('we will need to talk')."
 }
