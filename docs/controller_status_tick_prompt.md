@@ -146,15 +146,31 @@ BLANK LINE, then:
 
   >>> NEW MARKER n/T — <tag>   (banked HH:MM EDT, rc R, DDDDD s)
 
-followed by TWO fenced tables, never prose:
-  1. PER-STAGE held-out, one row per stage (GRID / CONNECTIONS / MEMORY /
-     HEADLINE), columns: stable % · err ° · steady ° · alt m, each as mean±SD
-     over the report seeds (HEADLINE is a single draw, no SD). Name the
-     stage-select genome next to HEADLINE.
-  2. The PAIR / REPLICATION table: one row per comparable run (this marker, its
-     paired arm or same-seed comparator, the relevant leaderboard rows), columns:
-     stable % · err ° · steady ° · hd · rank, with a one-clause note per row
-     saying what it is (rotation-era, CRN-era same seed, other arm, ...).
+followed by TWO fenced tables, never prose (BOTH STICKS, Luiz 09/10/2026):
+  1. STAGE-SELECT + REPORT table — the two sticks side by side, each labelled:
+       VAL    = the 5 val seeds 1029590071-75: the RANKING stick stage-select used on the 9 candidates
+                (top-3 of every stage). Source: marker `stage_select_candidates` ('val' fields + fit).
+       REPORT = the 5 report seeds 99990101-05: fresh held-out, the PUBLISHED stick. Source: marker
+                `held_stage_multiseed` (each stage's pool[0]) and the .out line
+                `[report-seeds] HEADLINE-<GENOME> MULTI-SEED` (the headline, mean±SD).
+     One row per candidate, ALL 9, ordered by val fit (lower = better), columns:
+       candidate | VAL stable % · err ° · steady ° · alt m · fit | REPORT stable % · err ° · steady ° · alt m
+     REPORT cells exist only for each stage's pool[0] (= STAGE#0) and the HEADLINE; print — elsewhere.
+     Mark `<- HEADLINE`; mark duplicates `(= NEURONS#0)` (MEMORY#0 often IS NEURONS#0).
+     The val column is why the headline won; the report column is what it costs on fresh seeds.
+     NEVER compare a val number to a report number, never re-pick on report (see the rule above).
+     Template (_tw15 s2):
+       candidate   VAL stable err   steady alt    fit     | REPORT stable  err        steady     alt
+       NEURONS#2       99.2   1.30  0.64   0.164  -0.847  |   96.4±3.4  1.73±0.44  1.18±0.58  0.224±0.054  <- HEADLINE
+       NEURONS#0       99.2   1.33  0.68   0.155  -0.675  |   99.2±0.7  1.45±0.24  0.87±0.10  0.196±0.037
+       MEMORY#0        99.2   1.33  0.68   0.155  -0.675  |   (= NEURONS#0)
+       GRID#2          98.4   1.38  0.76   0.148  -0.259  |   —
+       ...
+  2. The PAIR / REPLICATION table (and the per-seed LADDER table for `_tw` markers): one row per
+     comparable run, columns: VAL headline stable % · err ° | REPORT headline stable % · err ° ·
+     steady ° · alt m · hd · rank, with a one-clause note per row. The REPORT row is the published
+     result; the VAL pair is the headline's own selection score (from that run's
+     `stage_select_candidates` `<- HEADLINE` entry). hd/rank are REPORT-stick.
 Then at most two sentences of reading, and the commit hash. Column alignment is
 the requirement — a reader must be able to scan down one metric.
 ALWAYS carry the caveat the study needs (the A/B's 4-flag bundle; the 90.8-98.0%
