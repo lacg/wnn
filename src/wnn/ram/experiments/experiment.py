@@ -1261,6 +1261,486 @@ class Experiment:
 			(genomes[best_acc_idx], GenomeType.BEST_ACC, metrics_list[best_acc_idx]),
 		]
 
+	def revalidate_genome(self, genome: ClusterGenome, genome_type: GenomeType, flow_id: Optional[int]) -> dict:
+		"""Re-score ONE stored genome as a fresh FINAL validation: cache bypassed,
+		row upserted under this experiment's scope, no leaderboard submit. Used to
+		replace rows the pre-fix cross-flow cache inherited (10/10/2026)."""
+		results: dict = {}
+		self._validate_one_genome(genome, genome_type, 'final', flow_id, results,
+			use_cache=False, submit_leaderboard=False)
+		return results[genome_type.value]
+
+	def _validate_one_genome(
+		self,
+		genome: ClusterGenome,
+		genome_type: GenomeType,
+		validation_point: str,
+		flow_id: Optional[int],
+		results: dict,
+		use_cache: bool = True,
+		submit_leaderboard: bool = True,
+	) -> None:
+		"""Validate one selected genome (cache lookup or full scoring), store its
+		summary row and (final only) its leaderboard entries; fills results[type]."""
+		genome_hash = self._compute_genome_hash(genome)
+
+		# Check if already validated under the SAME scope (every param that changes
+		# this genome's validation + the worker ABI; validation_cache_key.py)
+		cached = None
+		if self.dashboard_client and use_cache:
+			try:
+				cached = self.dashboard_client.check_cached_validation(genome_hash, self.validation_scope)
+			except Exception:
+				pass
+
+		val_evaluator = self.full_evaluator or self.evaluator
+
+		# Initialize IDS metrics
+		f1 = None
+		fpr_val = None
+		cached_threshold_metadata = None
+		if cached is not None:
+			result = cached
+			ce, acc = result[0], result[1]
+			# Extract cached IDS metrics (f1_macro, fpr) if available
+			f1 = result[2] if len(result) > 2 else None
+			fpr_val = result[3] if len(result) > 3 else None
+			cached_threshold_metadata = result[4] if len(result) > 4 else None
+			# Option B: invalidate cache if per_class is missing — re-run for completeness
+			_needs_per_class = (val_evaluator is not None
+				and getattr(val_evaluator, "_y_test_multi", None) is not None)
+			if _needs_per_class and cached_threshold_metadata is not None:
+				try:
+					_cached_tm = cached_threshold_metadata if isinstance(cached_threshold_metadata, dict) else json.loads(cached_threshold_metadata)
+					if "per_class" not in _cached_tm:
+						self.log(f"  {genome_type.value}: cached but missing per_class — re-validating")
+						cached = None
+						cached_threshold_metadata = None
+				except Exception:
+					pass
+			# Multiclass: invalidate caches written before the K-class
+			# metrics stage (plain CE/acc path — no decode modes).
+			_is_mc_cached = (
+				getattr(val_evaluator, '_classification', None) == 'multi'
+				and not getattr(val_evaluator, '_single_cluster', False)
+			)
+			if _is_mc_cached and cached is not None:
+				_mc_cached_ok = False
+				if cached_threshold_metadata is not None:
+					try:
+						_cached_tm = cached_threshold_metadata if isinstance(cached_threshold_metadata, dict) else json.loads(cached_threshold_metadata)
+						_mc_cached_ok = "argmax" in _cached_tm
+					except Exception:
+						pass
+				if not _mc_cached_ok:
+					self.log(f"  {genome_type.value}: cached but missing multiclass decode modes — re-validating")
+					cached = None
+					cached_threshold_metadata = None
+			if f1 is not None:
+				self.log(f"  {genome_type.value}: CE={ce:.4f}, Acc={acc:.4%}, F1={f1:.4%}, FPR={fpr_val:.4%} (cached)")
+			else:
+				self.log(f"  {genome_type.value}: CE={ce:.4f}, Acc={acc:.4%} (cached)")
+		else:
+			# Run full validation (use full_evaluator if available — validates against held-out set)
+			val_evaluator = self.full_evaluator or self.evaluator
+			self.log(f"  {genome_type.value}: Running full validation...")
+			_is_sc = hasattr(val_evaluator, '_single_cluster') and val_evaluator._single_cluster
+			_is_mc = (
+				getattr(val_evaluator, '_classification', None) == 'multi'
+				and not getattr(val_evaluator, '_single_cluster', False)
+			)
+			if _is_sc or _is_mc:
+				# IDS single-cluster: defer the headline f1/fpr_val/acc to the
+				# threshold-sweep block below so that train_cal metrics, the
+				# per-class breakdown, and all six other thresholds all come
+				# from a SINGLE training pass. Avoids the train_cal-vs-per-class
+				# mismatch we saw on 8b runs (e.g. r112: threshold-table FPR
+				# 3.68% vs per-class Benign 4.84% — same threshold, different
+				# trainings, ~1pp drift from neuron-sample stochasticity).
+				# Multiclass (K clusters): same reasoning — the headline argmax
+				# metrics come from the decode-mode block's single pass.
+				ce, acc, f1, fpr_val = None, None, None, None
+			else:
+				full_results = val_evaluator.evaluate_batch_full([genome])
+				result = full_results[0]  # Metrics object
+				ce, acc = result.ce, result.acc
+				f1 = result.f1
+				fpr_val = result.fpr
+				if f1 is not None:
+					self.log(f"  {genome_type.value}: CE={ce:.4f}, Acc={acc:.4%}, F1={f1:.4%}, FPR={fpr_val:.4%} (validated)")
+				else:
+					self.log(f"  {genome_type.value}: CE={ce:.4f}, Acc={acc:.4%} (validated)")
+
+		# Three-threshold validation for single-cluster IDS
+		threshold_metadata = None
+		val_evaluator = self.full_evaluator or self.evaluator
+		is_single_cluster = (
+			hasattr(val_evaluator, '_single_cluster') and val_evaluator._single_cluster
+		)
+		is_multiclass = (
+			getattr(val_evaluator, '_classification', None) == 'multi'
+			and not getattr(val_evaluator, '_single_cluster', False)
+		)
+
+		# Use cached threshold_metadata if available (avoids re-running expensive 4-threshold eval)
+		if cached_threshold_metadata is not None and (is_single_cluster or is_multiclass):
+			threshold_metadata = cached_threshold_metadata
+			self.log(f"    Thresholds: (cached from prior validation)")
+
+		elif is_multiclass and cached is None:
+			# Multiclass (K clusters): argmax + benign-margin decode modes
+			# from a SINGLE training pass (mirrors the single-cluster
+			# 7-mode block below). Metrics are ALWAYS computed on the
+			# EVAL set; taus are calibrated Rust-side on train margins
+			# (margin_train_cal) / val margins (margin_val_cal —
+			# Protocol v2, only when a val partition exists). Each mode
+			# entry carries macro_f1/benign_fpr/acc/ce (+ f1/fpr
+			# aliases), the K×K confusion matrix, and the per-class
+			# precision/recall/F1/support breakdown.
+			try:
+				import time as _time
+				_t0 = _time.time()
+				_mc = val_evaluator.evaluate_multiclass_at_thresholds(genome)
+				threshold_metadata = _mc['modes']
+				if 'margin_val_cal' in threshold_metadata:
+					self.log(f"    [PROTOCOL-V2] margin_val_cal tau calibrated on val partition; "
+							 f"test partition is report-only")
+				# Headline metrics = argmax decode (the same rule the
+				# GA-search fitness used).
+				_am = threshold_metadata['argmax']
+				ce, acc, f1, fpr_val = _am['ce'], _am['acc'], _am['macro_f1'], _am['benign_fpr']
+				_tc_tau = threshold_metadata.get('margin_train_cal', {}).get('tau')
+				if _tc_tau is not None:
+					genome.threshold = _tc_tau
+				self.log(f"  {genome_type.value}: CE={ce:.4f}, Acc={acc:.4%}, MacroF1={f1:.4%}, BenignFPR={fpr_val:.4%} (validated, argmax)")
+				for _mode in ('argmax', 'margin_fixed0', 'margin_train_cal', 'margin_val_cal',
+				              'argmax_platt', 'argmax_beta',
+				              'argmax_classnorm', 'margin_classnorm'):
+					_md = threshold_metadata.get(_mode)
+					if not isinstance(_md, dict):
+						continue
+					_tau_str = f", tau={_md['tau']:.4f}" if 'tau' in _md else ""
+					self.log(f"    {_mode + ':':<17}MacroF1={_md['macro_f1']:.4%}, BenignFPR={_md['benign_fpr']:.4%}, "
+							 f"Acc={_md['acc']:.4%}, wF1={_md['weighted_f1']:.4%}{_tau_str}")
+				self.log(f"    Scoring:     {len(threshold_metadata)} decode modes from one training pass "
+						 f"({_time.time() - _t0:.1f}s)")
+			except Exception as e:
+				self.log(f"    Multiclass decode sweep failed ({e}) — falling back to evaluate_batch_full")
+				threshold_metadata = None
+				# Fallback: argmax headline metrics from evaluate_batch_full so
+				# downstream code (results dict, summary writer) has valid numbers.
+				_fb_results = val_evaluator.evaluate_batch_full([genome])
+				_fb = _fb_results[0]
+				ce, acc = _fb.ce, _fb.acc
+				f1 = _fb.f1
+				fpr_val = _fb.fpr
+
+		elif is_single_cluster and cached is None:
+			# All 7 threshold modes from a SINGLE training pass. Old path
+			# trained 9× per genome (7 evaluate_batch_full + score_examples
+			# + score_train_examples). The Rust-side evaluate_at_thresholds
+			# trains once, returns eval+train scores, and computes metrics
+			# at the thresholds we hand it. Calibrations (Platt/Beta/
+			# Empirical/Emp-cumul/train_cal) are derived in Python from
+			# train_scores, then per-mode metrics come from the Rust helper
+			# compute_binary_metrics_at_threshold_py. Per-class breakdown
+			# reuses the same eval_scores (no extra forward pass).
+			threshold_metadata = {}
+			try:
+				import ram_accelerator
+				import time as _time
+				_t0 = _time.time()
+				# Single training pass: returns eval/train scores + metrics
+				# at the requested thresholds (-1.0 oracle, 0.5 fixed).
+				eval_scores, train_scores, val_scores, anchor_metrics = val_evaluator.evaluate_at_thresholds(
+					genome, [-1.0, 0.5],
+				)
+				oracle_metrics, fixed_metrics = anchor_metrics
+				train_labels_list = val_evaluator._y_train
+				eval_labels_list = val_evaluator._y_test
+				val_labels_list = getattr(val_evaluator, "_y_val", None)
+				normal_class = getattr(val_evaluator, "_normal_class", 0)
+				# Protocol v2 (3-way splits): calibrate thresholds on the VAL
+				# partition, report on TEST. Active only when the cache scored
+				# a val partition AND the evaluator carries matching val labels.
+				_protocol_v2 = (
+					val_scores is not None
+					and val_labels_list is not None
+					and len(val_scores) == len(val_labels_list)
+				)
+				if _protocol_v2:
+					self.log(f"    [PROTOCOL-V2] threshold calibrations on val partition "
+							 f"(n={len(val_scores)}); test partition is report-only")
+				_score_secs = _time.time() - _t0
+				self.log(f"    Scoring:     train+eval scored in {_score_secs:.1f}s "
+						 f"(was {_score_secs * 10:.0f}s with 10× train passes incl. headline call)")
+			except Exception as e:
+				self.log(f"    Threshold sweep failed ({e}) — falling back to evaluate_batch_full")
+				threshold_metadata = None
+				eval_scores = None
+				train_scores = None
+				val_scores = None
+				_protocol_v2 = False
+				# Fallback: get headline metrics from evaluate_batch_full so downstream
+				# code (results dict, dashboard summary writer) still has valid numbers.
+				_fb_results = val_evaluator.evaluate_batch_full([genome])
+				_fb = _fb_results[0]
+				ce, acc = _fb.ce, _fb.acc
+				f1 = _fb.f1
+				fpr_val = _fb.fpr
+
+			if threshold_metadata is not None and eval_scores is not None and train_scores is not None:
+				def _metrics_at(t):
+					ce_t, acc_t, f1_t, fpr_t = ram_accelerator.compute_binary_metrics_at_threshold_py(
+						eval_scores, eval_labels_list, float(t), normal_class,
+					)
+					return ce_t, acc_t, f1_t, fpr_t
+
+				# 1. Train-calibrated — primary metric. Sweep F1-optimal threshold on
+				# TRAIN scores (from this same training pass), apply to eval scores.
+				# This replaces the old line-1007 evaluate_batch_full call so train_cal
+				# F1/FPR/Acc and the per-class Benign rate now come from identical
+				# scores (same training, same threshold, same predictions).
+				train_threshold, _train_f1_unused, _train_fpr_unused = (
+					ram_accelerator.find_optimal_threshold_f1_py(
+						train_scores, train_labels_list,
+					)
+				)
+				genome.threshold = train_threshold  # keep this for downstream code that reads genome.threshold
+				_tc_ce, _tc_acc, _tc_f1, _tc_fpr = _metrics_at(train_threshold)
+				# Promote train_cal as the headline metrics for this genome (matches the
+				# pre-fix semantics where line 1007 produced these numbers).
+				ce, acc, f1, fpr_val = _tc_ce, _tc_acc, _tc_f1, _tc_fpr
+				threshold_metadata['train_cal'] = {
+					'f1': _tc_f1, 'fpr': _tc_fpr, 'acc': _tc_acc, 'threshold': train_threshold,
+				}
+				self.log(f"  {genome_type.value}: CE={_tc_ce:.4f}, Acc={_tc_acc:.4%}, F1={_tc_f1:.4%}, FPR={_tc_fpr:.4%} (validated)")
+				self.log(f"    Train-cal:   F1={_tc_f1:.4%}, FPR={_tc_fpr:.4%}, Acc={_tc_acc:.4%}, t={train_threshold:.4f}")
+
+				# 2. Fixed 0.5 — distribution-agnostic baseline
+				threshold_metadata['fixed_05'] = {
+					'f1': fixed_metrics.f1, 'fpr': fixed_metrics.fpr, 'acc': fixed_metrics.acc,
+				}
+				self.log(f"    Fixed 0.5:   F1={fixed_metrics.f1:.4%}, FPR={fixed_metrics.fpr:.4%}, Acc={fixed_metrics.acc:.4%}")
+
+				# 3. Validation-calibrated. Protocol v2: F1-optimal threshold on the
+				# VAL partition scores, applied to TEST scores (the oracle anchor from
+				# the -1.0 sentinel is unused in v2 mode). Legacy 2-way: oracle
+				# threshold on the report-set scores themselves (unchanged).
+				if _protocol_v2:
+					val_cal_threshold, _vc_f1_unused, _vc_fpr_unused = (
+						ram_accelerator.find_optimal_threshold_f1_py(
+							val_scores, val_labels_list,
+						)
+					)
+					_vc_ce, _vc_acc, _vc_f1, _vc_fpr = _metrics_at(val_cal_threshold)
+					threshold_metadata['val_cal'] = {
+						'f1': _vc_f1, 'fpr': _vc_fpr, 'acc': _vc_acc,
+						'threshold': val_cal_threshold,
+					}
+					self.log(f"    Val-cal:     F1={_vc_f1:.4%}, FPR={_vc_fpr:.4%}, Acc={_vc_acc:.4%}, t={val_cal_threshold:.4f} (val partition)")
+				else:
+					threshold_metadata['val_cal'] = {
+						'f1': oracle_metrics.f1, 'fpr': oracle_metrics.fpr, 'acc': oracle_metrics.acc,
+						'threshold': oracle_metrics.threshold,
+					}
+					self.log(f"    Val-cal:     F1={oracle_metrics.f1:.4%}, FPR={oracle_metrics.fpr:.4%}, Acc={oracle_metrics.acc:.4%}, t={oracle_metrics.threshold:.4f} (oracle)")
+
+				# 4-7. Calibrations fit on VAL scores under Protocol v2 (3-way splits),
+				# on TRAINING scores for legacy 2-way flows → applied to the report
+				# set via the cheap metric helper.
+				if _protocol_v2:
+					cal_scores = val_scores
+					cal_labels_list = val_labels_list
+				else:
+					cal_scores = train_scores
+					cal_labels_list = train_labels_list
+				try:
+					if cal_scores and cal_labels_list and len(cal_scores) == len(cal_labels_list):
+						# 4. Platt scaling
+						platt_threshold, a, b = ram_accelerator.fit_platt_scaling_py(cal_scores, cal_labels_list)
+						_, p_acc, p_f1, p_fpr = _metrics_at(platt_threshold)
+						threshold_metadata['platt'] = {
+							'f1': p_f1, 'fpr': p_fpr, 'acc': p_acc,
+							'threshold': platt_threshold, 'a': a, 'b': b,
+						}
+						self.log(f"    Platt:       F1={p_f1:.4%}, FPR={p_fpr:.4%}, Acc={p_acc:.4%}, t={platt_threshold:.4f} (a={a:.4f}, b={b:.4f})")
+
+						# 5. Beta calibration
+						beta_threshold, ba, bb, bc = ram_accelerator.fit_beta_calibration_py(cal_scores, cal_labels_list)
+						_, b_acc, b_f1, b_fpr = _metrics_at(beta_threshold)
+						threshold_metadata['beta'] = {
+							'f1': b_f1, 'fpr': b_fpr, 'acc': b_acc,
+							'threshold': beta_threshold, 'a': ba, 'b': bb, 'c': bc,
+						}
+						self.log(f"    Beta:        F1={b_f1:.4%}, FPR={b_fpr:.4%}, Acc={b_acc:.4%}, t={beta_threshold:.4f} (a={ba:.3f}, b={bb:.3f}, c={bc:.3f})")
+
+						# 6. Empirical table
+						empirical_threshold, n_bins = ram_accelerator.fit_empirical_threshold_py(cal_scores, cal_labels_list)
+						_, e_acc, e_f1, e_fpr = _metrics_at(empirical_threshold)
+						threshold_metadata['empirical'] = {
+							'f1': e_f1, 'fpr': e_fpr, 'acc': e_acc,
+							'threshold': empirical_threshold, 'n_bins': n_bins,
+						}
+						self.log(f"    Empirical:   F1={e_f1:.4%}, FPR={e_fpr:.4%}, Acc={e_acc:.4%}, t={empirical_threshold:.4f} ({n_bins} bins)")
+
+						# 7. Empirical-cumulative: GA-fitness-optimal sweep on calibration scores.
+						# Distinct from train_cal (pure F1) because it uses the flow's actual
+						# fitness weights — so this column reports the threshold the optimizer
+						# was implicitly targeting, while train_cal reports the F1-only ideal.
+						w_ce = float(self.config.fitness_weight_ce)
+						w_f1 = float(self.config.fitness_weight_f1)
+						w_fpr = float(self.config.fitness_weight_fpr)
+						w_acc = float(self.config.fitness_weight_acc)
+						emp_cum_result = ram_accelerator.find_optimal_threshold_fitness_py(
+							cal_scores, cal_labels_list, w_ce, w_f1, w_fpr, w_acc,
+						)
+						emp_cum_threshold = emp_cum_result[0]
+						_, c_acc, c_f1, c_fpr = _metrics_at(emp_cum_threshold)
+						threshold_metadata['empirical_cumulative'] = {
+							'f1': c_f1, 'fpr': c_fpr, 'acc': c_acc,
+							'threshold': emp_cum_threshold,
+							'w_ce': w_ce, 'w_f1': w_f1, 'w_fpr': w_fpr, 'w_acc': w_acc,
+						}
+						self.log(f"    Emp-cumul:   F1={c_f1:.4%}, FPR={c_fpr:.4%}, Acc={c_acc:.4%}, t={emp_cum_threshold:.4f} (weights ce={w_ce:.2f} f1={w_f1:.2f} fpr={w_fpr:.2f} acc={w_acc:.2f})")
+				except Exception as e:
+					self.log(f"    Calibration: skipped ({e})")
+
+				# Per-class breakdown at ALL threshold modes — same eval_scores
+				# already in memory, threshold-and-bucket per mode.
+				if (val_evaluator is not None
+					and getattr(val_evaluator, "_y_test_multi", None) is not None
+					and getattr(val_evaluator, "_class_names", None) is not None):
+					try:
+						import numpy as _np
+						_pc_t0 = _time.time()
+						scores_arr = _np.asarray(eval_scores, dtype=_np.float64)
+						n_modes_done = 0
+						for mode_key, mode_data in list(threshold_metadata.items()):
+							if not isinstance(mode_data, dict):
+								continue
+							thr = mode_data.get("threshold")
+							if thr is None:
+								thr = 0.5 if mode_key == "fixed_05" else train_threshold
+							preds = (scores_arr >= float(thr)).astype(int).tolist()
+							pc = _compute_per_class_breakdown(
+								preds,
+								val_evaluator._y_test_multi,
+								val_evaluator._class_names,
+							)
+							mode_data["per_class"] = pc
+							n_modes_done += 1
+						# Back-compat: top-level per_class mirrors train_cal's
+						if "train_cal" in threshold_metadata and isinstance(threshold_metadata["train_cal"], dict):
+							if "per_class" in threshold_metadata["train_cal"]:
+								threshold_metadata["per_class"] = threshold_metadata["train_cal"]["per_class"]
+						self.log(f"    Per-class:   computed at {n_modes_done} thresholds "
+								 f"({_time.time()-_pc_t0:.1f}s)")
+					except Exception as _e:
+						self.log(f"    Per-class:   skipped ({_e})")
+
+			# Use train-calibrated as primary metric (threshold from training, eval on val)
+			# f1, fpr_val, acc already set from train_cal above
+
+		# Collect results keyed by genome_type (use .value for dict key)
+		results[genome_type.value] = {'ce': ce, 'acc': acc, 'f1': f1, 'fpr': fpr_val}
+
+		# Always store summary via dashboard API (even if cached)
+		# This ensures each (experiment_id, validation_point, genome_type) has a record
+		if self.dashboard_client and self.experiment_id:
+			try:
+				self.dashboard_client.create_validation_summary(
+					experiment_id=self.experiment_id,
+					validation_point=validation_point,
+					genome_type=genome_type.value,
+					genome_hash=genome_hash,
+					ce=ce,
+					accuracy=acc,
+					flow_id=flow_id,
+					f1_macro=f1,
+					fpr=fpr_val,
+					threshold_metadata=json.dumps(threshold_metadata) if threshold_metadata else None,
+					scope=self.validation_scope,
+				)
+			except Exception as e:
+				self.log(f"  Warning: Failed to save {genome_type.value} summary: {e}")
+
+		# Submit to best genomes leaderboard (final validation only)
+		if self.dashboard_client and validation_point == 'final' and submit_leaderboard:
+			try:
+				task_type = "ids" if f1 is not None else "lm"
+				exp_name = self.config.name if self.config else ""
+				if exp_name.startswith("S1:") or exp_name.startswith("S1 "):
+					stage = "stage_1"
+				elif exp_name.startswith("S2:") or exp_name.startswith("S2 "):
+					stage = "stage_2"
+				else:
+					stage = "stage_0"
+				metric_map = {
+					GenomeType.BEST_CE: "ce",
+					GenomeType.BEST_ACC: "accuracy",
+					GenomeType.BEST_F1: "f1_macro",
+					GenomeType.BEST_FPR: "fpr",
+					GenomeType.BEST_FITNESS: "fitness",
+				}
+				metric = metric_map.get(genome_type, "ce")
+				# Use proper JSON for tiers_json (replaces legacy str(genome) repr).
+				# Allows downstream tools to reconstruct the genome without gzipped
+				# checkpoints, and stores full per-neuron bits.
+				if hasattr(genome, "to_json_dict"):
+					_tiers_json = json.dumps(genome.to_json_dict())
+				else:
+					_tiers_json = str(genome)  # back-compat for non-ClusterGenome types
+				base_genome_data = {
+					"config_hash": genome_hash[:16],
+					"tiers_json": _tiers_json,
+					"total_clusters": len(genome.neurons_per_cluster),
+					"total_neurons": sum(genome.neurons_per_cluster),
+					"architecture_type": task_type,
+				}
+				if genome.connections is not None:
+					base_genome_data["connections_json"] = ",".join(str(c) for c in genome.connections)
+
+				# Submit one leaderboard entry per threshold mode
+				submissions = []
+				# If threshold_metadata is available, submit from it (has all modes including train_cal)
+				# Otherwise fall back to the main validation values as train_cal
+				if threshold_metadata:
+					for mode_key, mode_data in threshold_metadata.items():
+						if isinstance(mode_data, dict) and 'f1' in mode_data:
+							submissions.append({
+								"task_type": task_type, "stage": stage, "metric": metric,
+								"genome_hash": genome_hash,
+								"ce": ce,  # CE is threshold-independent
+								"accuracy": mode_data.get('acc', acc),
+								"f1_macro": mode_data.get('f1'),
+								"fpr": mode_data.get('fpr'),
+								"flow_id": flow_id, "experiment_id": self.experiment_id,
+								"genome_data": {**base_genome_data, "threshold_mode": mode_key},
+							})
+				else:
+					# No threshold modes — submit with default train_cal
+					submissions.append({
+						"task_type": task_type, "stage": stage, "metric": metric,
+						"genome_hash": genome_hash,
+						"ce": ce, "accuracy": acc, "f1_macro": f1, "fpr": fpr_val,
+						"flow_id": flow_id, "experiment_id": self.experiment_id,
+						"genome_data": {**base_genome_data, "threshold_mode": "train_cal"},
+					})
+				# Quality gate: only submit genomes meeting IDS goals
+				# (at least one of: F1 >= 87%, Acc >= 87%, FPR <= 12%)
+				if task_type == "ids":
+					submissions = [
+						s for s in submissions
+						if (s.get("f1_macro") is not None and s["f1_macro"] >= 0.87)
+						or (s.get("accuracy") is not None and s["accuracy"] >= 0.87)
+						or (s.get("fpr") is not None and s["fpr"] <= 0.12)
+					]
+				if submissions:
+					self.dashboard_client.submit_best_genomes(submissions)
+			except Exception as e:
+				self.log(f"  Warning: leaderboard submit failed: {e}")
+
 	def _run_validation(
 		self,
 		population: list[ClusterGenome],
@@ -1314,464 +1794,7 @@ class Experiment:
 
 			# Process each selected genome
 			for genome, genome_type, train_metrics in selected:
-				genome_hash = self._compute_genome_hash(genome)
-
-				# Check if already validated under the SAME scope (every param that changes
-				# this genome's validation + the worker ABI; validation_cache_key.py)
-				cached = None
-				if self.dashboard_client:
-					try:
-						cached = self.dashboard_client.check_cached_validation(genome_hash, self.validation_scope)
-					except Exception:
-						pass
-
-				val_evaluator = self.full_evaluator or self.evaluator
-
-				# Initialize IDS metrics
-				f1 = None
-				fpr_val = None
-				cached_threshold_metadata = None
-				if cached is not None:
-					result = cached
-					ce, acc = result[0], result[1]
-					# Extract cached IDS metrics (f1_macro, fpr) if available
-					f1 = result[2] if len(result) > 2 else None
-					fpr_val = result[3] if len(result) > 3 else None
-					cached_threshold_metadata = result[4] if len(result) > 4 else None
-					# Option B: invalidate cache if per_class is missing — re-run for completeness
-					_needs_per_class = (val_evaluator is not None
-						and getattr(val_evaluator, "_y_test_multi", None) is not None)
-					if _needs_per_class and cached_threshold_metadata is not None:
-						try:
-							_cached_tm = cached_threshold_metadata if isinstance(cached_threshold_metadata, dict) else json.loads(cached_threshold_metadata)
-							if "per_class" not in _cached_tm:
-								self.log(f"  {genome_type.value}: cached but missing per_class — re-validating")
-								cached = None
-								cached_threshold_metadata = None
-						except Exception:
-							pass
-					# Multiclass: invalidate caches written before the K-class
-					# metrics stage (plain CE/acc path — no decode modes).
-					_is_mc_cached = (
-						getattr(val_evaluator, '_classification', None) == 'multi'
-						and not getattr(val_evaluator, '_single_cluster', False)
-					)
-					if _is_mc_cached and cached is not None:
-						_mc_cached_ok = False
-						if cached_threshold_metadata is not None:
-							try:
-								_cached_tm = cached_threshold_metadata if isinstance(cached_threshold_metadata, dict) else json.loads(cached_threshold_metadata)
-								_mc_cached_ok = "argmax" in _cached_tm
-							except Exception:
-								pass
-						if not _mc_cached_ok:
-							self.log(f"  {genome_type.value}: cached but missing multiclass decode modes — re-validating")
-							cached = None
-							cached_threshold_metadata = None
-					if f1 is not None:
-						self.log(f"  {genome_type.value}: CE={ce:.4f}, Acc={acc:.4%}, F1={f1:.4%}, FPR={fpr_val:.4%} (cached)")
-					else:
-						self.log(f"  {genome_type.value}: CE={ce:.4f}, Acc={acc:.4%} (cached)")
-				else:
-					# Run full validation (use full_evaluator if available — validates against held-out set)
-					val_evaluator = self.full_evaluator or self.evaluator
-					self.log(f"  {genome_type.value}: Running full validation...")
-					_is_sc = hasattr(val_evaluator, '_single_cluster') and val_evaluator._single_cluster
-					_is_mc = (
-						getattr(val_evaluator, '_classification', None) == 'multi'
-						and not getattr(val_evaluator, '_single_cluster', False)
-					)
-					if _is_sc or _is_mc:
-						# IDS single-cluster: defer the headline f1/fpr_val/acc to the
-						# threshold-sweep block below so that train_cal metrics, the
-						# per-class breakdown, and all six other thresholds all come
-						# from a SINGLE training pass. Avoids the train_cal-vs-per-class
-						# mismatch we saw on 8b runs (e.g. r112: threshold-table FPR
-						# 3.68% vs per-class Benign 4.84% — same threshold, different
-						# trainings, ~1pp drift from neuron-sample stochasticity).
-						# Multiclass (K clusters): same reasoning — the headline argmax
-						# metrics come from the decode-mode block's single pass.
-						ce, acc, f1, fpr_val = None, None, None, None
-					else:
-						full_results = val_evaluator.evaluate_batch_full([genome])
-						result = full_results[0]  # Metrics object
-						ce, acc = result.ce, result.acc
-						f1 = result.f1
-						fpr_val = result.fpr
-						if f1 is not None:
-							self.log(f"  {genome_type.value}: CE={ce:.4f}, Acc={acc:.4%}, F1={f1:.4%}, FPR={fpr_val:.4%} (validated)")
-						else:
-							self.log(f"  {genome_type.value}: CE={ce:.4f}, Acc={acc:.4%} (validated)")
-
-				# Three-threshold validation for single-cluster IDS
-				threshold_metadata = None
-				val_evaluator = self.full_evaluator or self.evaluator
-				is_single_cluster = (
-					hasattr(val_evaluator, '_single_cluster') and val_evaluator._single_cluster
-				)
-				is_multiclass = (
-					getattr(val_evaluator, '_classification', None) == 'multi'
-					and not getattr(val_evaluator, '_single_cluster', False)
-				)
-
-				# Use cached threshold_metadata if available (avoids re-running expensive 4-threshold eval)
-				if cached_threshold_metadata is not None and (is_single_cluster or is_multiclass):
-					threshold_metadata = cached_threshold_metadata
-					self.log(f"    Thresholds: (cached from prior validation)")
-
-				elif is_multiclass and cached is None:
-					# Multiclass (K clusters): argmax + benign-margin decode modes
-					# from a SINGLE training pass (mirrors the single-cluster
-					# 7-mode block below). Metrics are ALWAYS computed on the
-					# EVAL set; taus are calibrated Rust-side on train margins
-					# (margin_train_cal) / val margins (margin_val_cal —
-					# Protocol v2, only when a val partition exists). Each mode
-					# entry carries macro_f1/benign_fpr/acc/ce (+ f1/fpr
-					# aliases), the K×K confusion matrix, and the per-class
-					# precision/recall/F1/support breakdown.
-					try:
-						import time as _time
-						_t0 = _time.time()
-						_mc = val_evaluator.evaluate_multiclass_at_thresholds(genome)
-						threshold_metadata = _mc['modes']
-						if 'margin_val_cal' in threshold_metadata:
-							self.log(f"    [PROTOCOL-V2] margin_val_cal tau calibrated on val partition; "
-									 f"test partition is report-only")
-						# Headline metrics = argmax decode (the same rule the
-						# GA-search fitness used).
-						_am = threshold_metadata['argmax']
-						ce, acc, f1, fpr_val = _am['ce'], _am['acc'], _am['macro_f1'], _am['benign_fpr']
-						_tc_tau = threshold_metadata.get('margin_train_cal', {}).get('tau')
-						if _tc_tau is not None:
-							genome.threshold = _tc_tau
-						self.log(f"  {genome_type.value}: CE={ce:.4f}, Acc={acc:.4%}, MacroF1={f1:.4%}, BenignFPR={fpr_val:.4%} (validated, argmax)")
-						for _mode in ('argmax', 'margin_fixed0', 'margin_train_cal', 'margin_val_cal',
-						              'argmax_platt', 'argmax_beta',
-						              'argmax_classnorm', 'margin_classnorm'):
-							_md = threshold_metadata.get(_mode)
-							if not isinstance(_md, dict):
-								continue
-							_tau_str = f", tau={_md['tau']:.4f}" if 'tau' in _md else ""
-							self.log(f"    {_mode + ':':<17}MacroF1={_md['macro_f1']:.4%}, BenignFPR={_md['benign_fpr']:.4%}, "
-									 f"Acc={_md['acc']:.4%}, wF1={_md['weighted_f1']:.4%}{_tau_str}")
-						self.log(f"    Scoring:     {len(threshold_metadata)} decode modes from one training pass "
-								 f"({_time.time() - _t0:.1f}s)")
-					except Exception as e:
-						self.log(f"    Multiclass decode sweep failed ({e}) — falling back to evaluate_batch_full")
-						threshold_metadata = None
-						# Fallback: argmax headline metrics from evaluate_batch_full so
-						# downstream code (results dict, summary writer) has valid numbers.
-						_fb_results = val_evaluator.evaluate_batch_full([genome])
-						_fb = _fb_results[0]
-						ce, acc = _fb.ce, _fb.acc
-						f1 = _fb.f1
-						fpr_val = _fb.fpr
-
-				elif is_single_cluster and cached is None:
-					# All 7 threshold modes from a SINGLE training pass. Old path
-					# trained 9× per genome (7 evaluate_batch_full + score_examples
-					# + score_train_examples). The Rust-side evaluate_at_thresholds
-					# trains once, returns eval+train scores, and computes metrics
-					# at the thresholds we hand it. Calibrations (Platt/Beta/
-					# Empirical/Emp-cumul/train_cal) are derived in Python from
-					# train_scores, then per-mode metrics come from the Rust helper
-					# compute_binary_metrics_at_threshold_py. Per-class breakdown
-					# reuses the same eval_scores (no extra forward pass).
-					threshold_metadata = {}
-					try:
-						import ram_accelerator
-						import time as _time
-						_t0 = _time.time()
-						# Single training pass: returns eval/train scores + metrics
-						# at the requested thresholds (-1.0 oracle, 0.5 fixed).
-						eval_scores, train_scores, val_scores, anchor_metrics = val_evaluator.evaluate_at_thresholds(
-							genome, [-1.0, 0.5],
-						)
-						oracle_metrics, fixed_metrics = anchor_metrics
-						train_labels_list = val_evaluator._y_train
-						eval_labels_list = val_evaluator._y_test
-						val_labels_list = getattr(val_evaluator, "_y_val", None)
-						normal_class = getattr(val_evaluator, "_normal_class", 0)
-						# Protocol v2 (3-way splits): calibrate thresholds on the VAL
-						# partition, report on TEST. Active only when the cache scored
-						# a val partition AND the evaluator carries matching val labels.
-						_protocol_v2 = (
-							val_scores is not None
-							and val_labels_list is not None
-							and len(val_scores) == len(val_labels_list)
-						)
-						if _protocol_v2:
-							self.log(f"    [PROTOCOL-V2] threshold calibrations on val partition "
-									 f"(n={len(val_scores)}); test partition is report-only")
-						_score_secs = _time.time() - _t0
-						self.log(f"    Scoring:     train+eval scored in {_score_secs:.1f}s "
-								 f"(was {_score_secs * 10:.0f}s with 10× train passes incl. headline call)")
-					except Exception as e:
-						self.log(f"    Threshold sweep failed ({e}) — falling back to evaluate_batch_full")
-						threshold_metadata = None
-						eval_scores = None
-						train_scores = None
-						val_scores = None
-						_protocol_v2 = False
-						# Fallback: get headline metrics from evaluate_batch_full so downstream
-						# code (results dict, dashboard summary writer) still has valid numbers.
-						_fb_results = val_evaluator.evaluate_batch_full([genome])
-						_fb = _fb_results[0]
-						ce, acc = _fb.ce, _fb.acc
-						f1 = _fb.f1
-						fpr_val = _fb.fpr
-
-					if threshold_metadata is not None and eval_scores is not None and train_scores is not None:
-						def _metrics_at(t):
-							ce_t, acc_t, f1_t, fpr_t = ram_accelerator.compute_binary_metrics_at_threshold_py(
-								eval_scores, eval_labels_list, float(t), normal_class,
-							)
-							return ce_t, acc_t, f1_t, fpr_t
-
-						# 1. Train-calibrated — primary metric. Sweep F1-optimal threshold on
-						# TRAIN scores (from this same training pass), apply to eval scores.
-						# This replaces the old line-1007 evaluate_batch_full call so train_cal
-						# F1/FPR/Acc and the per-class Benign rate now come from identical
-						# scores (same training, same threshold, same predictions).
-						train_threshold, _train_f1_unused, _train_fpr_unused = (
-							ram_accelerator.find_optimal_threshold_f1_py(
-								train_scores, train_labels_list,
-							)
-						)
-						genome.threshold = train_threshold  # keep this for downstream code that reads genome.threshold
-						_tc_ce, _tc_acc, _tc_f1, _tc_fpr = _metrics_at(train_threshold)
-						# Promote train_cal as the headline metrics for this genome (matches the
-						# pre-fix semantics where line 1007 produced these numbers).
-						ce, acc, f1, fpr_val = _tc_ce, _tc_acc, _tc_f1, _tc_fpr
-						threshold_metadata['train_cal'] = {
-							'f1': _tc_f1, 'fpr': _tc_fpr, 'acc': _tc_acc, 'threshold': train_threshold,
-						}
-						self.log(f"  {genome_type.value}: CE={_tc_ce:.4f}, Acc={_tc_acc:.4%}, F1={_tc_f1:.4%}, FPR={_tc_fpr:.4%} (validated)")
-						self.log(f"    Train-cal:   F1={_tc_f1:.4%}, FPR={_tc_fpr:.4%}, Acc={_tc_acc:.4%}, t={train_threshold:.4f}")
-
-						# 2. Fixed 0.5 — distribution-agnostic baseline
-						threshold_metadata['fixed_05'] = {
-							'f1': fixed_metrics.f1, 'fpr': fixed_metrics.fpr, 'acc': fixed_metrics.acc,
-						}
-						self.log(f"    Fixed 0.5:   F1={fixed_metrics.f1:.4%}, FPR={fixed_metrics.fpr:.4%}, Acc={fixed_metrics.acc:.4%}")
-
-						# 3. Validation-calibrated. Protocol v2: F1-optimal threshold on the
-						# VAL partition scores, applied to TEST scores (the oracle anchor from
-						# the -1.0 sentinel is unused in v2 mode). Legacy 2-way: oracle
-						# threshold on the report-set scores themselves (unchanged).
-						if _protocol_v2:
-							val_cal_threshold, _vc_f1_unused, _vc_fpr_unused = (
-								ram_accelerator.find_optimal_threshold_f1_py(
-									val_scores, val_labels_list,
-								)
-							)
-							_vc_ce, _vc_acc, _vc_f1, _vc_fpr = _metrics_at(val_cal_threshold)
-							threshold_metadata['val_cal'] = {
-								'f1': _vc_f1, 'fpr': _vc_fpr, 'acc': _vc_acc,
-								'threshold': val_cal_threshold,
-							}
-							self.log(f"    Val-cal:     F1={_vc_f1:.4%}, FPR={_vc_fpr:.4%}, Acc={_vc_acc:.4%}, t={val_cal_threshold:.4f} (val partition)")
-						else:
-							threshold_metadata['val_cal'] = {
-								'f1': oracle_metrics.f1, 'fpr': oracle_metrics.fpr, 'acc': oracle_metrics.acc,
-								'threshold': oracle_metrics.threshold,
-							}
-							self.log(f"    Val-cal:     F1={oracle_metrics.f1:.4%}, FPR={oracle_metrics.fpr:.4%}, Acc={oracle_metrics.acc:.4%}, t={oracle_metrics.threshold:.4f} (oracle)")
-
-						# 4-7. Calibrations fit on VAL scores under Protocol v2 (3-way splits),
-						# on TRAINING scores for legacy 2-way flows → applied to the report
-						# set via the cheap metric helper.
-						if _protocol_v2:
-							cal_scores = val_scores
-							cal_labels_list = val_labels_list
-						else:
-							cal_scores = train_scores
-							cal_labels_list = train_labels_list
-						try:
-							if cal_scores and cal_labels_list and len(cal_scores) == len(cal_labels_list):
-								# 4. Platt scaling
-								platt_threshold, a, b = ram_accelerator.fit_platt_scaling_py(cal_scores, cal_labels_list)
-								_, p_acc, p_f1, p_fpr = _metrics_at(platt_threshold)
-								threshold_metadata['platt'] = {
-									'f1': p_f1, 'fpr': p_fpr, 'acc': p_acc,
-									'threshold': platt_threshold, 'a': a, 'b': b,
-								}
-								self.log(f"    Platt:       F1={p_f1:.4%}, FPR={p_fpr:.4%}, Acc={p_acc:.4%}, t={platt_threshold:.4f} (a={a:.4f}, b={b:.4f})")
-
-								# 5. Beta calibration
-								beta_threshold, ba, bb, bc = ram_accelerator.fit_beta_calibration_py(cal_scores, cal_labels_list)
-								_, b_acc, b_f1, b_fpr = _metrics_at(beta_threshold)
-								threshold_metadata['beta'] = {
-									'f1': b_f1, 'fpr': b_fpr, 'acc': b_acc,
-									'threshold': beta_threshold, 'a': ba, 'b': bb, 'c': bc,
-								}
-								self.log(f"    Beta:        F1={b_f1:.4%}, FPR={b_fpr:.4%}, Acc={b_acc:.4%}, t={beta_threshold:.4f} (a={ba:.3f}, b={bb:.3f}, c={bc:.3f})")
-
-								# 6. Empirical table
-								empirical_threshold, n_bins = ram_accelerator.fit_empirical_threshold_py(cal_scores, cal_labels_list)
-								_, e_acc, e_f1, e_fpr = _metrics_at(empirical_threshold)
-								threshold_metadata['empirical'] = {
-									'f1': e_f1, 'fpr': e_fpr, 'acc': e_acc,
-									'threshold': empirical_threshold, 'n_bins': n_bins,
-								}
-								self.log(f"    Empirical:   F1={e_f1:.4%}, FPR={e_fpr:.4%}, Acc={e_acc:.4%}, t={empirical_threshold:.4f} ({n_bins} bins)")
-
-								# 7. Empirical-cumulative: GA-fitness-optimal sweep on calibration scores.
-								# Distinct from train_cal (pure F1) because it uses the flow's actual
-								# fitness weights — so this column reports the threshold the optimizer
-								# was implicitly targeting, while train_cal reports the F1-only ideal.
-								w_ce = float(self.config.fitness_weight_ce)
-								w_f1 = float(self.config.fitness_weight_f1)
-								w_fpr = float(self.config.fitness_weight_fpr)
-								w_acc = float(self.config.fitness_weight_acc)
-								emp_cum_result = ram_accelerator.find_optimal_threshold_fitness_py(
-									cal_scores, cal_labels_list, w_ce, w_f1, w_fpr, w_acc,
-								)
-								emp_cum_threshold = emp_cum_result[0]
-								_, c_acc, c_f1, c_fpr = _metrics_at(emp_cum_threshold)
-								threshold_metadata['empirical_cumulative'] = {
-									'f1': c_f1, 'fpr': c_fpr, 'acc': c_acc,
-									'threshold': emp_cum_threshold,
-									'w_ce': w_ce, 'w_f1': w_f1, 'w_fpr': w_fpr, 'w_acc': w_acc,
-								}
-								self.log(f"    Emp-cumul:   F1={c_f1:.4%}, FPR={c_fpr:.4%}, Acc={c_acc:.4%}, t={emp_cum_threshold:.4f} (weights ce={w_ce:.2f} f1={w_f1:.2f} fpr={w_fpr:.2f} acc={w_acc:.2f})")
-						except Exception as e:
-							self.log(f"    Calibration: skipped ({e})")
-
-						# Per-class breakdown at ALL threshold modes — same eval_scores
-						# already in memory, threshold-and-bucket per mode.
-						if (val_evaluator is not None
-							and getattr(val_evaluator, "_y_test_multi", None) is not None
-							and getattr(val_evaluator, "_class_names", None) is not None):
-							try:
-								import numpy as _np
-								_pc_t0 = _time.time()
-								scores_arr = _np.asarray(eval_scores, dtype=_np.float64)
-								n_modes_done = 0
-								for mode_key, mode_data in list(threshold_metadata.items()):
-									if not isinstance(mode_data, dict):
-										continue
-									thr = mode_data.get("threshold")
-									if thr is None:
-										thr = 0.5 if mode_key == "fixed_05" else train_threshold
-									preds = (scores_arr >= float(thr)).astype(int).tolist()
-									pc = _compute_per_class_breakdown(
-										preds,
-										val_evaluator._y_test_multi,
-										val_evaluator._class_names,
-									)
-									mode_data["per_class"] = pc
-									n_modes_done += 1
-								# Back-compat: top-level per_class mirrors train_cal's
-								if "train_cal" in threshold_metadata and isinstance(threshold_metadata["train_cal"], dict):
-									if "per_class" in threshold_metadata["train_cal"]:
-										threshold_metadata["per_class"] = threshold_metadata["train_cal"]["per_class"]
-								self.log(f"    Per-class:   computed at {n_modes_done} thresholds "
-										 f"({_time.time()-_pc_t0:.1f}s)")
-							except Exception as _e:
-								self.log(f"    Per-class:   skipped ({_e})")
-
-					# Use train-calibrated as primary metric (threshold from training, eval on val)
-					# f1, fpr_val, acc already set from train_cal above
-
-				# Collect results keyed by genome_type (use .value for dict key)
-				results[genome_type.value] = {'ce': ce, 'acc': acc, 'f1': f1, 'fpr': fpr_val}
-
-				# Always store summary via dashboard API (even if cached)
-				# This ensures each (experiment_id, validation_point, genome_type) has a record
-				if self.dashboard_client and self.experiment_id:
-					try:
-						self.dashboard_client.create_validation_summary(
-							experiment_id=self.experiment_id,
-							validation_point=validation_point,
-							genome_type=genome_type.value,
-							genome_hash=genome_hash,
-							ce=ce,
-							accuracy=acc,
-							flow_id=flow_id,
-							f1_macro=f1,
-							fpr=fpr_val,
-							threshold_metadata=json.dumps(threshold_metadata) if threshold_metadata else None,
-							scope=self.validation_scope,
-						)
-					except Exception as e:
-						self.log(f"  Warning: Failed to save {genome_type.value} summary: {e}")
-
-				# Submit to best genomes leaderboard (final validation only)
-				if self.dashboard_client and validation_point == 'final':
-					try:
-						task_type = "ids" if f1 is not None else "lm"
-						exp_name = self.config.name if self.config else ""
-						if exp_name.startswith("S1:") or exp_name.startswith("S1 "):
-							stage = "stage_1"
-						elif exp_name.startswith("S2:") or exp_name.startswith("S2 "):
-							stage = "stage_2"
-						else:
-							stage = "stage_0"
-						metric_map = {
-							GenomeType.BEST_CE: "ce",
-							GenomeType.BEST_ACC: "accuracy",
-							GenomeType.BEST_F1: "f1_macro",
-							GenomeType.BEST_FPR: "fpr",
-							GenomeType.BEST_FITNESS: "fitness",
-						}
-						metric = metric_map.get(genome_type, "ce")
-						# Use proper JSON for tiers_json (replaces legacy str(genome) repr).
-						# Allows downstream tools to reconstruct the genome without gzipped
-						# checkpoints, and stores full per-neuron bits.
-						if hasattr(genome, "to_json_dict"):
-							_tiers_json = json.dumps(genome.to_json_dict())
-						else:
-							_tiers_json = str(genome)  # back-compat for non-ClusterGenome types
-						base_genome_data = {
-							"config_hash": genome_hash[:16],
-							"tiers_json": _tiers_json,
-							"total_clusters": len(genome.neurons_per_cluster),
-							"total_neurons": sum(genome.neurons_per_cluster),
-							"architecture_type": task_type,
-						}
-						if genome.connections is not None:
-							base_genome_data["connections_json"] = ",".join(str(c) for c in genome.connections)
-
-						# Submit one leaderboard entry per threshold mode
-						submissions = []
-						# If threshold_metadata is available, submit from it (has all modes including train_cal)
-						# Otherwise fall back to the main validation values as train_cal
-						if threshold_metadata:
-							for mode_key, mode_data in threshold_metadata.items():
-								if isinstance(mode_data, dict) and 'f1' in mode_data:
-									submissions.append({
-										"task_type": task_type, "stage": stage, "metric": metric,
-										"genome_hash": genome_hash,
-										"ce": ce,  # CE is threshold-independent
-										"accuracy": mode_data.get('acc', acc),
-										"f1_macro": mode_data.get('f1'),
-										"fpr": mode_data.get('fpr'),
-										"flow_id": flow_id, "experiment_id": self.experiment_id,
-										"genome_data": {**base_genome_data, "threshold_mode": mode_key},
-									})
-						else:
-							# No threshold modes — submit with default train_cal
-							submissions.append({
-								"task_type": task_type, "stage": stage, "metric": metric,
-								"genome_hash": genome_hash,
-								"ce": ce, "accuracy": acc, "f1_macro": f1, "fpr": fpr_val,
-								"flow_id": flow_id, "experiment_id": self.experiment_id,
-								"genome_data": {**base_genome_data, "threshold_mode": "train_cal"},
-							})
-						# Quality gate: only submit genomes meeting IDS goals
-						# (at least one of: F1 >= 87%, Acc >= 87%, FPR <= 12%)
-						if task_type == "ids":
-							submissions = [
-								s for s in submissions
-								if (s.get("f1_macro") is not None and s["f1_macro"] >= 0.87)
-								or (s.get("accuracy") is not None and s["accuracy"] >= 0.87)
-								or (s.get("fpr") is not None and s["fpr"] <= 0.12)
-							]
-						if submissions:
-							self.dashboard_client.submit_best_genomes(submissions)
-					except Exception as e:
-						self.log(f"  Warning: leaderboard submit failed: {e}")
+				self._validate_one_genome(genome, genome_type, validation_point, flow_id, results)
 
 			self.log("=" * 60)
 			self.log("")

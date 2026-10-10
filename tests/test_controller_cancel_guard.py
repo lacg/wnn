@@ -40,7 +40,9 @@ def _make_evaluator(scored_reward=2.5, scored_stable=0.8, scored_err=3.0):
 	ev._ensure_ga_ready = lambda: None
 	ev._advance_fold = lambda: None
 	ev._shape_key = lambda g: 0
-	ev._eval_batch_bounds = lambda gs: [(0, len(gs))]
+	# Sub-batches are packed by summed cells since 34d71ad4 (26/09): the guard path
+	# asks _eval_batch_groups for index lists — one group, no cell estimate needed.
+	ev._eval_batch_groups = lambda gs: [list(range(len(gs)))]
 	# Fallback (non-Rust-batch) train path: materialize -> _train_core per fold.
 	ev._materialize = lambda g: (None, None, None)
 	ev._train_core = lambda spec, sc, oc, init_s, init_o, seed: (object(), {})
