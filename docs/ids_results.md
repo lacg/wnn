@@ -271,6 +271,12 @@ FPR (pp)   | ciciot  | -1.165 | -0.870 | -1.845 | -0.983 | -0.445 | -1.061      
   of transient allocations — the 03/07 OOM loop; memmap bounds it to one chunk). Names `IDS6-ciciot46m-B15AC-desir-r<seed>`,
   spec `experiments/ids6_46m_cohort_spec.json` (dry-run 5 clean, NOT created). Total tandem = 405 flows. Each 46M run
   is >1 day, so rounds 1-5 are ~2 days each. The 5 legacy paused 46M Wc flows (4534-4538) were CANCELLED 10/10.
+- **OLDER ABLATIONS RE-SCORED (10/10/2026):** all 320 cache-inherited rows in `SP-*-abl*` (123 flows) re-validated on
+  their own model (`experiments/ablations_inherited_rows.json`; parts in `experiments/ablations_reval_parts/`; old values in
+  `db/wnn.db.pre-valcache-20261010`). Conventional cell (GA best_f1 val_cal) UNCHANGED in every cohort (max |dF1| 0.005).
+  Best-everywhere moved only DOWN, only for the weak modes that had been borrowing QUAD rows: ciciot 2s −3.92 / 3s −3.66,
+  unswt 3s −1.86 / 2s −0.97 / PLN −0.94, cicids 2s −0.08 / 3s −0.05 pp. The memory-mode ablation's ordering (QUAD ≥ QSR >
+  PLN > ternary/binary) is unchanged and the gaps widen. Pre-ABI-13 `ablqsr` rows remain VOID (IDS-16).
 - **405-FLOW TANDEM QUEUED (Luiz go, 10/10/2026 16:39 EDT): flows 6430-6834**, seed-major IDS3/IDS4/IDS5/[IDS6 rounds 1-5]/IDS7, 2 experiments each, verify failures 0; first flow 6430 started on the fixed cache (`[VALCACHE] abi=14 ... mm=QUAD_WEIGHTED seed=20419`). 46M memory: Luiz chose to let the controller mem-watchdog (v7, pause-first) handle contention. Readout rule DRAFT `experiments/ids_n100_readout_rule.json` — criterion A/B still open (does not gate the runs). Next: re-score the older summer ablations (abl3s/2s/2big/pln).
 - **IDS-7 SPEC DRAFTED (Luiz 10/10/2026): Wb-CTRL QUAD** (IDS-2 winner) — clones of `IDSXD-unswr-quad-64b-Wb-CTRL-r20403`
   (flow 5965; the 3 sources differ only in seed) with only `seed` changed, `IDS7-unswr-WbCTRL-desir-r<seed>`, seeds

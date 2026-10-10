@@ -1,0 +1,1579 @@
+{
+ "worker_abi": 14,
+ "rows": [
+  {
+   "row": 39605,
+   "flow": 4783,
+   "name": "SP-ciciot-abl3s-96bWc-n10-r56462",
+   "exp": 10936,
+   "gt": "best_ce",
+   "gh": "b5c3580183d0ba63",
+   "drift_pp": 22.150000000000002,
+   "old": {
+    "beta": {
+     "a": -0.8379832040135279,
+     "acc": 0.860108410561287,
+     "b": 0.5887157545315624,
+     "c": -0.5657584568088118,
+     "f1": 0.46239692572636104,
+     "fpr": 1.0,
+     "per_class": {
+      "Benign": {
+       "count": 20000,
+       "predicted_attack": 20000,
+       "rate": 1.0
+      },
+      "BruteForce": {
+       "count": 1307,
+       "predicted_attack": 1307,
+       "rate": 1.0
+      },
+      "DDoS": {
+       "count": 55140,
+       "predicted_attack": 55140,
+       "rate": 1.0
+      },
+      "DoS": {
+       "count": 20121,
+       "predicted_attack": 20121,
+       "rate": 1.0
+      },
+      "Mirai": {
+       "count": 15014,
+       "predicted_attack": 15014,
+       "rate": 1.0
+      },
+      "Recon": {
+       "count": 18999,
+       "predicted_attack": 18998,
+       "rate": 0.9999473656508238
+      },
+      "Spoofing": {
+       "count": 9937,
+       "predicted_attack": 9937,
+       "rate": 1.0
+      },
+      "Web-based": {
+       "count": 2457,
+       "predicted_attack": 2457,
+       "rate": 1.0
+      }
+     },
+     "threshold": 0.001
+    },
+    "empirical": {
+     "acc": 0.846154922189194,
+     "f1": 0.5321965232323846,
+     "fpr": 0.90375,
+     "n_bins": 197,
+     "per_class": {
+      "Benign": {
+       "count": 20000,
+       "predicted_attack": 18075,
+       "rate": 0.90375
+      },
+      "BruteForce": {
+       "count": 1307,
+       "predicted_attack": 1217,
+       "rate": 0.9311400153022188
+      },
+      "DDoS": {
+       "count": 55140,
+       "predicted_attack": 54526,
+       "rate": 0.9888647080159594
+      },
+      "DoS": {
+       "count": 20121,
+       "predicted_attack": 19740,
+       "rate": 0.981064559415536
+      },
+      "Mirai": {
+       "count": 15014,
+       "predicted_attack": 14829,
+       "rate": 0.9876781670440922
+      },
+      "Recon": {
+       "count": 18999,
+       "predicted_attack": 17849,
+       "rate": 0.9394704984472868
+      },
+      "Spoofing": {
+       "count": 9937,
+       "predicted_attack": 8683,
+       "rate": 0.8738049713193117
+      },
+      "Web-based": {
+       "count": 2457,
+       "predicted_attack": 2210,
+       "rate": 0.8994708994708994
+      }
+     },
+     "threshold": 0.649999
+    },
+    "empirical_cumulative": {
+     "acc": 0.7696030774610946,
+     "f1": 0.676219065864589,
+     "fpr": 0.16875,
+     "per_class": {
+      "Benign": {
+       "count": 20000,
+       "predicted_attack": 3375,
+       "rate": 0.16875
+      },
+      "BruteForce": {
+       "count": 1307,
+       "predicted_attack": 408,
+       "rate": 0.31216526396327465
+      },
+      "DDoS": {
+       "count": 55140,
+       "predicted_attack": 48862,
+       "rate": 0.8861443598113892
+      },
+      "DoS": {
+       "count": 20121,
+       "predicted_attack": 16279,
+       "rate": 0.8090552159435416
+      },
+      "Mirai": {
+       "count": 15014,
+       "predicted_attack": 13393,
+       "rate": 0.8920341015052617
+      },
+      "Recon": {
+       "count": 18999,
+       "predicted_attack": 10124,
+       "rate": 0.5328701510605821
+      },
+      "Spoofing": {
+       "count": 9937,
+       "predicted_attack": 3414,
+       "rate": 0.3435644560732615
+      },
+      "Web-based": {
+       "count": 2457,
+       "predicted_attack": 929,
+       "rate": 0.3781033781033782
+      }
+     },
+     "threshold": 0.9474999904632568,
+     "w_acc": 0.1,
+     "w_ce": 0.7,
+     "w_f1": 0.15,
+     "w_fpr": 0.05
+    },
+    "fixed_05": {
+     "acc": 0.8536667249519146,
+     "f1": 0.4868764124967956,
+     "fpr": 0.9707,
+     "per_class": {
+      "Benign": {
+       "count": 20000,
+       "predicted_attack": 19414,
+       "rate": 0.9707
+      },
+      "BruteForce": {
+       "count": 1307,
+       "predicted_attack": 1275,
+       "rate": 0.9755164498852332
+      },
+      "DDoS": {
+       "count": 55140,
+       "predicted_attack": 54910,
+       "rate": 0.9958287994196592
+      },
+      "DoS": {
+       "count": 20121,
+       "predicted_attack": 19993,
+       "rate": 0.993638487152726
+      },
+      "Mirai": {
+       "count": 15014,
+       "predicted_attack": 14942,
+       "rate": 0.9952044758225655
+      },
+      "Recon": {
+       "count": 18999,
+       "predicted_attack": 18556,
+       "rate": 0.9766829833149112
+      },
+      "Spoofing": {
+       "count": 9937,
+       "predicted_attack": 9429,
+       "rate": 0.94887793096508
+      },
+      "Web-based": {
+       "count": 2457,
+       "predicted_attack": 2362,
+       "rate": 0.9613349613349612
+      }
+     }
+    },
+    "per_class": {
+     "Benign": {
+      "count": 20000,
+      "predicted_attack": 6039,
+      "rate": 0.30195
+     },
+     "BruteForce": {
+      "count": 1307,
+      "predicted_attack": 607,
+      "rate": 0.4644223412394798
+     },
+     "DDoS": {
+      "count": 55140,
+      "predicted_attack": 50644,
+      "rate": 0.918462096481683
+     },
+     "DoS": {
+      "count": 20121,
+      "predicted_attack": 17367,
+      "rate": 0.8631280751453705
+     },
+     "Mirai": {
+      "count": 15014,
+      "predicted_attack": 13823,
+      "rate": 0.9206740375649394
+     },
+     "Recon": {
+      "count": 18999,
+      "predicted_attack": 12025,
+      "rate": 0.632928048844676
+     },
+     "Spoofing": {
+      "count": 9937,
+      "predicted_attack": 4378,
+      "rate": 0.4405756264466137
+     },
+     "Web-based": {
+      "count": 2457,
+      "predicted_attack": 1239,
+      "rate": 0.5042735042735043
+     }
+    },
+    "platt": {
+     "a": 5.9338786093747755,
+     "acc": 0.8491834236754677,
+     "b": -3.5577762257631234,
+     "f1": 0.5127268469326219,
+     "fpr": 0.93485,
+     "per_class": {
+      "Benign": {
+       "count": 20000,
+       "predicted_attack": 18697,
+       "rate": 0.93485
+      },
+      "BruteForce": {
+       "count": 1307,
+       "predicted_attack": 1250,
+       "rate": 0.956388676358072
+      },
+      "DDoS": {
+       "count": 55140,
+       "predicted_attack": 54700,
+       "rate": 0.9920203119332608
+      },
+      "DoS": {
+       "count": 20121,
+       "predicted_attack": 19850,
+       "rate": 0.986531484518662
+      },
+      "Mirai": {
+       "count": 15014,
+       "predicted_attack": 14871,
+       "rate": 0.9904755561475956
+      },
+      "Recon": {
+       "count": 18999,
+       "predicted_attack": 18170,
+       "rate": 0.9563661245328702
+      },
+      "Spoofing": {
+       "count": 9937,
+       "predicted_attack": 8993,
+       "rate": 0.9050015095099124
+      },
+      "Web-based": {
+       "count": 2457,
+       "predicted_attack": 2275,
+       "rate": 0.925925925925926
+      }
+     },
+     "threshold": 0.5995701058229078
+    },
+    "train_cal": {
+     "acc": 0.7976499388004896,
+     "f1": 0.6824217421239973,
+     "fpr": 0.30195,
+     "per_class": {
+      "Benign": {
+       "count": 20000,
+       "predicted_attack": 6039,
+       "rate": 0.30195
+      },
+      "BruteForce": {
+       "count": 1307,
+       "predicted_attack": 607,
+       "rate": 0.4644223412394798
+      },
+      "DDoS": {
+       "count": 55140,
+       "predicted_attack": 50644,
+       "rate": 0.918462096481683
+      },
+      "DoS": {
+       "count": 20121,
+       "predicted_attack": 17367,
+       "rate": 0.8631280751453705
+      },
+      "Mirai": {
+       "count": 15014,
+       "predicted_attack": 13823,
+       "rate": 0.9206740375649394
+      },
+      "Recon": {
+       "count": 18999,
+       "predicted_attack": 12025,
+       "rate": 0.632928048844676
+      },
+      "Spoofing": {
+       "count": 9937,
+       "predicted_attack": 4378,
+       "rate": 0.4405756264466137
+      },
+      "Web-based": {
+       "count": 2457,
+       "predicted_attack": 1239,
+       "rate": 0.5042735042735043
+      }
+     },
+     "threshold": 0.9174999594688416
+    },
+    "val_cal": {
+     "acc": 0.794124847001224,
+     "f1": 0.6825859505331352,
+     "fpr": 0.28035,
+     "per_class": {
+      "Benign": {
+       "count": 20000,
+       "predicted_attack": 5607,
+       "rate": 0.28035
+      },
+      "BruteForce": {
+       "count": 1307,
+       "predicted_attack": 578,
+       "rate": 0.44223412394797246
+      },
+      "DDoS": {
+       "count": 55140,
+       "predicted_attack": 50404,
+       "rate": 0.9141095393543708
+      },
+      "DoS": {
+       "count": 20121,
+       "predicted_attack": 17220,
+       "rate": 0.8558222752348292
+      },
+      "Mirai": {
+       "count": 15014,
+       "predicted_attack": 13762,
+       "rate": 0.916611162914613
+      },
+      "Recon": {
+       "count": 18999,
+       "predicted_attack": 11770,
+       "rate": 0.6195062898047266
+      },
+      "Spoofing": {
+       "count": 9937,
+       "predicted_attack": 4213,
+       "rate": 0.423971017409681
+      },
+      "Web-based": {
+       "count": 2457,
+       "predicted_attack": 1200,
+       "rate": 0.4884004884004884
+      }
+     },
+     "threshold": 0.92249995470047
+    }
+   },
+   "new": {
+    "train_cal": {
+     "f1": 0.7285625258000147,
+     "fpr": 0.2957,
+     "acc": 0.8411890190592761,
+     "threshold": 0.9312500059604645,
+     "per_class": {
+      "Benign": {
+       "count": 20000,
+       "predicted_attack": 5914,
+       "rate": 0.2957
+      },
+      "BruteForce": {
+       "count": 1307,
+       "predicted_attack": 722,
+       "rate": 0.5524100994644223
+      },
+      "DDoS": {
+       "count": 55140,
+       "predicted_attack": 52398,
+       "rate": 0.950272034820457
+      },
+      "DoS": {
+       "count": 20121,
+       "predicted_attack": 18434,
+       "rate": 0.9161572486456936
+      },
+      "Mirai": {
+       "count": 15014,
+       "predicted_attack": 14248,
+       "rate": 0.9489809511122952
+      },
+      "Recon": {
+       "count": 18999,
+       "predicted_attack": 13592,
+       "rate": 0.7154060740038949
+      },
+      "Spoofing": {
+       "count": 9937,
+       "predicted_attack": 5287,
+       "rate": 0.5320519271409883
+      },
+      "Web-based": {
+       "count": 2457,
+       "predicted_attack": 1502,
+       "rate": 0.6113146113146113
+      }
+     }
+    },
+    "fixed_05": {
+     "f1": 0.4663592476348196,
+     "fpr": 0.99615,
+     "acc": 0.86062598356356,
+     "per_class": {
+      "Benign": {
+       "count": 20000,
+       "predicted_attack": 19923,
+       "rate": 0.99615
+      },
+      "BruteForce": {
+       "count": 1307,
+       "predicted_attack": 1307,
+       "rate": 1.0
+      },
+      "DDoS": {
+       "count": 55140,
+       "predicted_attack": 55140,
+       "rate": 1.0
+      },
+      "DoS": {
+       "count": 20121,
+       "predicted_attack": 20121,
+       "rate": 1.0
+      },
+      "Mirai": {
+       "count": 15014,
+       "predicted_attack": 15014,
+       "rate": 1.0
+      },
+      "Recon": {
+       "count": 18999,
+       "predicted_attack": 18995,
+       "rate": 0.9997894626032949
+      },
+      "Spoofing": {
+       "count": 9937,
+       "predicted_attack": 9937,
+       "rate": 1.0
+      },
+      "Web-based": {
+       "count": 2457,
+       "predicted_attack": 2457,
+       "rate": 1.0
+      }
+     }
+    },
+    "val_cal": {
+     "f1": 0.7285625258000147,
+     "fpr": 0.2957,
+     "acc": 0.8411890190592761,
+     "threshold": 0.9312500059604645,
+     "per_class": {
+      "Benign": {
+       "count": 20000,
+       "predicted_attack": 5914,
+       "rate": 0.2957
+      },
+      "BruteForce": {
+       "count": 1307,
+       "predicted_attack": 722,
+       "rate": 0.5524100994644223
+      },
+      "DDoS": {
+       "count": 55140,
+       "predicted_attack": 52398,
+       "rate": 0.950272034820457
+      },
+      "DoS": {
+       "count": 20121,
+       "predicted_attack": 18434,
+       "rate": 0.9161572486456936
+      },
+      "Mirai": {
+       "count": 15014,
+       "predicted_attack": 14248,
+       "rate": 0.9489809511122952
+      },
+      "Recon": {
+       "count": 18999,
+       "predicted_attack": 13592,
+       "rate": 0.7154060740038949
+      },
+      "Spoofing": {
+       "count": 9937,
+       "predicted_attack": 5287,
+       "rate": 0.5320519271409883
+      },
+      "Web-based": {
+       "count": 2457,
+       "predicted_attack": 1502,
+       "rate": 0.6113146113146113
+      }
+     }
+    },
+    "platt": {
+     "f1": 0.6315239277449913,
+     "fpr": 0.7563,
+     "acc": 0.8661584193040741,
+     "threshold": 0.807939799057184,
+     "a": 14.455265641577396,
+     "b": -11.678984417774258,
+     "per_class": {
+      "Benign": {
+       "count": 20000,
+       "predicted_attack": 15126,
+       "rate": 0.7563
+      },
+      "BruteForce": {
+       "count": 1307,
+       "predicted_attack": 1198,
+       "rate": 0.9166029074215761
+      },
+      "DDoS": {
+       "count": 55140,
+       "predicted_attack": 54630,
+       "rate": 0.9907508161044614
+      },
+      "DoS": {
+       "count": 20121,
+       "predicted_attack": 19805,
+       "rate": 0.9842950151582923
+      },
+      "Mirai": {
+       "count": 15014,
+       "predicted_attack": 14858,
+       "rate": 0.9896096976155588
+      },
+      "Recon": {
+       "count": 18999,
+       "predicted_attack": 17745,
+       "rate": 0.9339965261329544
+      },
+      "Spoofing": {
+       "count": 9937,
+       "predicted_attack": 8544,
+       "rate": 0.8598168461306229
+      },
+      "Web-based": {
+       "count": 2457,
+       "predicted_attack": 2185,
+       "rate": 0.8892958892958893
+      }
+     }
+    },
+    "beta": {
+     "f1": 0.6211914188501078,
+     "fpr": 0.7785,
+     "acc": 0.8662003846826368,
+     "threshold": 0.7993599241560627,
+     "a": 1.7091789349971267,
+     "b": 0.6445737136594789,
+     "c": -0.6525814758446555,
+     "per_class": {
+      "Benign": {
+       "count": 20000,
+       "predicted_attack": 15570,
+       "rate": 0.7785
+      },
+      "BruteForce": {
+       "count": 1307,
+       "predicted_attack": 1215,
+       "rate": 0.9296097934200459
+      },
+      "DDoS": {
+       "count": 55140,
+       "predicted_attack": 54698,
+       "rate": 0.9919840406238665
+      },
+      "DoS": {
+       "count": 20121,
+       "predicted_attack": 19848,
+       "rate": 0.9864320858804234
+      },
+      "Mirai": {
+       "count": 15014,
+       "predicted_attack": 14871,
+       "rate": 0.9904755561475955
+      },
+      "Recon": {
+       "count": 18999,
+       "predicted_attack": 17874,
+       "rate": 0.9407863571766935
+      },
+      "Spoofing": {
+       "count": 9937,
+       "predicted_attack": 8688,
+       "rate": 0.8743081412901278
+      },
+      "Web-based": {
+       "count": 2457,
+       "predicted_attack": 2221,
+       "rate": 0.9039479039479039
+      }
+     }
+    },
+    "empirical": {
+     "f1": 0.6161243755038865,
+     "fpr": 0.78875,
+     "acc": 0.8661584193040741,
+     "threshold": 0.794999,
+     "n_bins": 241,
+     "per_class": {
+      "Benign": {
+       "count": 20000,
+       "predicted_attack": 15775,
+       "rate": 0.78875
+      },
+      "BruteForce": {
+       "count": 1307,
+       "predicted_attack": 1222,
+       "rate": 0.9349655700076511
+      },
+      "DDoS": {
+       "count": 55140,
+       "predicted_attack": 54724,
+       "rate": 0.992455567645992
+      },
+      "DoS": {
+       "count": 20121,
+       "predicted_attack": 19864,
+       "rate": 0.9872272749863327
+      },
+      "Mirai": {
+       "count": 15014,
+       "predicted_attack": 14878,
+       "rate": 0.9909417876648462
+      },
+      "Recon": {
+       "count": 18999,
+       "predicted_attack": 17943,
+       "rate": 0.9444181272698563
+      },
+      "Spoofing": {
+       "count": 9937,
+       "predicted_attack": 8745,
+       "rate": 0.8800442789574319
+      },
+      "Web-based": {
+       "count": 2457,
+       "predicted_attack": 2238,
+       "rate": 0.9108669108669109
+      }
+     }
+    },
+    "empirical_cumulative": {
+     "f1": 0.722312101649373,
+     "fpr": 0.191,
+     "acc": 0.8202692778457772,
+     "threshold": 0.9512499868869781,
+     "w_ce": 0.7,
+     "w_f1": 0.15,
+     "w_fpr": 0.05,
+     "w_acc": 0.1,
+     "per_class": {
+      "Benign": {
+       "count": 20000,
+       "predicted_attack": 3820,
+       "rate": 0.191
+      },
+      "BruteForce": {
+       "count": 1307,
+       "predicted_attack": 575,
+       "rate": 0.43993879112471307
+      },
+      "DDoS": {
+       "count": 55140,
+       "predicted_attack": 51235,
+       "rate": 0.9291802684076895
+      },
+      "DoS": {
+       "count": 20121,
+       "predicted_attack": 17730,
+       "rate": 0.8811689279856866
+      },
+      "Mirai": {
+       "count": 15014,
+       "predicted_attack": 13953,
+       "rate": 0.929332622885307
+      },
+      "Recon": {
+       "count": 18999,
+       "predicted_attack": 11987,
+       "rate": 0.6309279435759777
+      },
+      "Spoofing": {
+       "count": 9937,
+       "predicted_attack": 4359,
+       "rate": 0.4386635805575123
+      },
+      "Web-based": {
+       "count": 2457,
+       "predicted_attack": 1259,
+       "rate": 0.5124135124135124
+      }
+     }
+    },
+    "per_class": {
+     "Benign": {
+      "count": 20000,
+      "predicted_attack": 5914,
+      "rate": 0.2957
+     },
+     "BruteForce": {
+      "count": 1307,
+      "predicted_attack": 722,
+      "rate": 0.5524100994644223
+     },
+     "DDoS": {
+      "count": 55140,
+      "predicted_attack": 52398,
+      "rate": 0.950272034820457
+     },
+     "DoS": {
+      "count": 20121,
+      "predicted_attack": 18434,
+      "rate": 0.9161572486456936
+     },
+     "Mirai": {
+      "count": 15014,
+      "predicted_attack": 14248,
+      "rate": 0.9489809511122952
+     },
+     "Recon": {
+      "count": 18999,
+      "predicted_attack": 13592,
+      "rate": 0.7154060740038949
+     },
+     "Spoofing": {
+      "count": 9937,
+      "predicted_attack": 5287,
+      "rate": 0.5320519271409883
+     },
+     "Web-based": {
+      "count": 2457,
+      "predicted_attack": 1502,
+      "rate": 0.6113146113146113
+     }
+    }
+   }
+  },
+  {
+   "row": 39609,
+   "flow": 4783,
+   "name": "SP-ciciot-abl3s-96bWc-n10-r56462",
+   "exp": 10936,
+   "gt": "best_fitness",
+   "gh": "b5c3580183d0ba63",
+   "drift_pp": 22.150000000000002,
+   "old": {
+    "beta": {
+     "a": -0.8379832040135279,
+     "acc": 0.860108410561287,
+     "b": 0.5887157545315624,
+     "c": -0.5657584568088118,
+     "f1": 0.46239692572636104,
+     "fpr": 1.0,
+     "per_class": {
+      "Benign": {
+       "count": 20000,
+       "predicted_attack": 20000,
+       "rate": 1.0
+      },
+      "BruteForce": {
+       "count": 1307,
+       "predicted_attack": 1307,
+       "rate": 1.0
+      },
+      "DDoS": {
+       "count": 55140,
+       "predicted_attack": 55140,
+       "rate": 1.0
+      },
+      "DoS": {
+       "count": 20121,
+       "predicted_attack": 20121,
+       "rate": 1.0
+      },
+      "Mirai": {
+       "count": 15014,
+       "predicted_attack": 15014,
+       "rate": 1.0
+      },
+      "Recon": {
+       "count": 18999,
+       "predicted_attack": 18998,
+       "rate": 0.9999473656508238
+      },
+      "Spoofing": {
+       "count": 9937,
+       "predicted_attack": 9937,
+       "rate": 1.0
+      },
+      "Web-based": {
+       "count": 2457,
+       "predicted_attack": 2457,
+       "rate": 1.0
+      }
+     },
+     "threshold": 0.001
+    },
+    "empirical": {
+     "acc": 0.846154922189194,
+     "f1": 0.5321965232323846,
+     "fpr": 0.90375,
+     "n_bins": 197,
+     "per_class": {
+      "Benign": {
+       "count": 20000,
+       "predicted_attack": 18075,
+       "rate": 0.90375
+      },
+      "BruteForce": {
+       "count": 1307,
+       "predicted_attack": 1217,
+       "rate": 0.9311400153022188
+      },
+      "DDoS": {
+       "count": 55140,
+       "predicted_attack": 54526,
+       "rate": 0.9888647080159594
+      },
+      "DoS": {
+       "count": 20121,
+       "predicted_attack": 19740,
+       "rate": 0.981064559415536
+      },
+      "Mirai": {
+       "count": 15014,
+       "predicted_attack": 14829,
+       "rate": 0.9876781670440922
+      },
+      "Recon": {
+       "count": 18999,
+       "predicted_attack": 17849,
+       "rate": 0.9394704984472868
+      },
+      "Spoofing": {
+       "count": 9937,
+       "predicted_attack": 8683,
+       "rate": 0.8738049713193117
+      },
+      "Web-based": {
+       "count": 2457,
+       "predicted_attack": 2210,
+       "rate": 0.8994708994708994
+      }
+     },
+     "threshold": 0.649999
+    },
+    "empirical_cumulative": {
+     "acc": 0.7696030774610946,
+     "f1": 0.676219065864589,
+     "fpr": 0.16875,
+     "per_class": {
+      "Benign": {
+       "count": 20000,
+       "predicted_attack": 3375,
+       "rate": 0.16875
+      },
+      "BruteForce": {
+       "count": 1307,
+       "predicted_attack": 408,
+       "rate": 0.31216526396327465
+      },
+      "DDoS": {
+       "count": 55140,
+       "predicted_attack": 48862,
+       "rate": 0.8861443598113892
+      },
+      "DoS": {
+       "count": 20121,
+       "predicted_attack": 16279,
+       "rate": 0.8090552159435416
+      },
+      "Mirai": {
+       "count": 15014,
+       "predicted_attack": 13393,
+       "rate": 0.8920341015052617
+      },
+      "Recon": {
+       "count": 18999,
+       "predicted_attack": 10124,
+       "rate": 0.5328701510605821
+      },
+      "Spoofing": {
+       "count": 9937,
+       "predicted_attack": 3414,
+       "rate": 0.3435644560732615
+      },
+      "Web-based": {
+       "count": 2457,
+       "predicted_attack": 929,
+       "rate": 0.3781033781033782
+      }
+     },
+     "threshold": 0.9474999904632568,
+     "w_acc": 0.1,
+     "w_ce": 0.7,
+     "w_f1": 0.15,
+     "w_fpr": 0.05
+    },
+    "fixed_05": {
+     "acc": 0.8536667249519146,
+     "f1": 0.4868764124967956,
+     "fpr": 0.9707,
+     "per_class": {
+      "Benign": {
+       "count": 20000,
+       "predicted_attack": 19414,
+       "rate": 0.9707
+      },
+      "BruteForce": {
+       "count": 1307,
+       "predicted_attack": 1275,
+       "rate": 0.9755164498852332
+      },
+      "DDoS": {
+       "count": 55140,
+       "predicted_attack": 54910,
+       "rate": 0.9958287994196592
+      },
+      "DoS": {
+       "count": 20121,
+       "predicted_attack": 19993,
+       "rate": 0.993638487152726
+      },
+      "Mirai": {
+       "count": 15014,
+       "predicted_attack": 14942,
+       "rate": 0.9952044758225655
+      },
+      "Recon": {
+       "count": 18999,
+       "predicted_attack": 18556,
+       "rate": 0.9766829833149112
+      },
+      "Spoofing": {
+       "count": 9937,
+       "predicted_attack": 9429,
+       "rate": 0.94887793096508
+      },
+      "Web-based": {
+       "count": 2457,
+       "predicted_attack": 2362,
+       "rate": 0.9613349613349612
+      }
+     }
+    },
+    "per_class": {
+     "Benign": {
+      "count": 20000,
+      "predicted_attack": 6039,
+      "rate": 0.30195
+     },
+     "BruteForce": {
+      "count": 1307,
+      "predicted_attack": 607,
+      "rate": 0.4644223412394798
+     },
+     "DDoS": {
+      "count": 55140,
+      "predicted_attack": 50644,
+      "rate": 0.918462096481683
+     },
+     "DoS": {
+      "count": 20121,
+      "predicted_attack": 17367,
+      "rate": 0.8631280751453705
+     },
+     "Mirai": {
+      "count": 15014,
+      "predicted_attack": 13823,
+      "rate": 0.9206740375649394
+     },
+     "Recon": {
+      "count": 18999,
+      "predicted_attack": 12025,
+      "rate": 0.632928048844676
+     },
+     "Spoofing": {
+      "count": 9937,
+      "predicted_attack": 4378,
+      "rate": 0.4405756264466137
+     },
+     "Web-based": {
+      "count": 2457,
+      "predicted_attack": 1239,
+      "rate": 0.5042735042735043
+     }
+    },
+    "platt": {
+     "a": 5.9338786093747755,
+     "acc": 0.8491834236754677,
+     "b": -3.5577762257631234,
+     "f1": 0.5127268469326219,
+     "fpr": 0.93485,
+     "per_class": {
+      "Benign": {
+       "count": 20000,
+       "predicted_attack": 18697,
+       "rate": 0.93485
+      },
+      "BruteForce": {
+       "count": 1307,
+       "predicted_attack": 1250,
+       "rate": 0.956388676358072
+      },
+      "DDoS": {
+       "count": 55140,
+       "predicted_attack": 54700,
+       "rate": 0.9920203119332608
+      },
+      "DoS": {
+       "count": 20121,
+       "predicted_attack": 19850,
+       "rate": 0.986531484518662
+      },
+      "Mirai": {
+       "count": 15014,
+       "predicted_attack": 14871,
+       "rate": 0.9904755561475956
+      },
+      "Recon": {
+       "count": 18999,
+       "predicted_attack": 18170,
+       "rate": 0.9563661245328702
+      },
+      "Spoofing": {
+       "count": 9937,
+       "predicted_attack": 8993,
+       "rate": 0.9050015095099124
+      },
+      "Web-based": {
+       "count": 2457,
+       "predicted_attack": 2275,
+       "rate": 0.925925925925926
+      }
+     },
+     "threshold": 0.5995701058229078
+    },
+    "train_cal": {
+     "acc": 0.7976499388004896,
+     "f1": 0.6824217421239973,
+     "fpr": 0.30195,
+     "per_class": {
+      "Benign": {
+       "count": 20000,
+       "predicted_attack": 6039,
+       "rate": 0.30195
+      },
+      "BruteForce": {
+       "count": 1307,
+       "predicted_attack": 607,
+       "rate": 0.4644223412394798
+      },
+      "DDoS": {
+       "count": 55140,
+       "predicted_attack": 50644,
+       "rate": 0.918462096481683
+      },
+      "DoS": {
+       "count": 20121,
+       "predicted_attack": 17367,
+       "rate": 0.8631280751453705
+      },
+      "Mirai": {
+       "count": 15014,
+       "predicted_attack": 13823,
+       "rate": 0.9206740375649394
+      },
+      "Recon": {
+       "count": 18999,
+       "predicted_attack": 12025,
+       "rate": 0.632928048844676
+      },
+      "Spoofing": {
+       "count": 9937,
+       "predicted_attack": 4378,
+       "rate": 0.4405756264466137
+      },
+      "Web-based": {
+       "count": 2457,
+       "predicted_attack": 1239,
+       "rate": 0.5042735042735043
+      }
+     },
+     "threshold": 0.9174999594688416
+    },
+    "val_cal": {
+     "acc": 0.794124847001224,
+     "f1": 0.6825859505331352,
+     "fpr": 0.28035,
+     "per_class": {
+      "Benign": {
+       "count": 20000,
+       "predicted_attack": 5607,
+       "rate": 0.28035
+      },
+      "BruteForce": {
+       "count": 1307,
+       "predicted_attack": 578,
+       "rate": 0.44223412394797246
+      },
+      "DDoS": {
+       "count": 55140,
+       "predicted_attack": 50404,
+       "rate": 0.9141095393543708
+      },
+      "DoS": {
+       "count": 20121,
+       "predicted_attack": 17220,
+       "rate": 0.8558222752348292
+      },
+      "Mirai": {
+       "count": 15014,
+       "predicted_attack": 13762,
+       "rate": 0.916611162914613
+      },
+      "Recon": {
+       "count": 18999,
+       "predicted_attack": 11770,
+       "rate": 0.6195062898047266
+      },
+      "Spoofing": {
+       "count": 9937,
+       "predicted_attack": 4213,
+       "rate": 0.423971017409681
+      },
+      "Web-based": {
+       "count": 2457,
+       "predicted_attack": 1200,
+       "rate": 0.4884004884004884
+      }
+     },
+     "threshold": 0.92249995470047
+    }
+   },
+   "new": {
+    "train_cal": {
+     "f1": 0.7285625258000147,
+     "fpr": 0.2957,
+     "acc": 0.8411890190592761,
+     "threshold": 0.9312500059604645,
+     "per_class": {
+      "Benign": {
+       "count": 20000,
+       "predicted_attack": 5914,
+       "rate": 0.2957
+      },
+      "BruteForce": {
+       "count": 1307,
+       "predicted_attack": 722,
+       "rate": 0.5524100994644223
+      },
+      "DDoS": {
+       "count": 55140,
+       "predicted_attack": 52398,
+       "rate": 0.950272034820457
+      },
+      "DoS": {
+       "count": 20121,
+       "predicted_attack": 18434,
+       "rate": 0.9161572486456936
+      },
+      "Mirai": {
+       "count": 15014,
+       "predicted_attack": 14248,
+       "rate": 0.9489809511122952
+      },
+      "Recon": {
+       "count": 18999,
+       "predicted_attack": 13592,
+       "rate": 0.7154060740038949
+      },
+      "Spoofing": {
+       "count": 9937,
+       "predicted_attack": 5287,
+       "rate": 0.5320519271409883
+      },
+      "Web-based": {
+       "count": 2457,
+       "predicted_attack": 1502,
+       "rate": 0.6113146113146113
+      }
+     }
+    },
+    "fixed_05": {
+     "f1": 0.4663592476348196,
+     "fpr": 0.99615,
+     "acc": 0.86062598356356,
+     "per_class": {
+      "Benign": {
+       "count": 20000,
+       "predicted_attack": 19923,
+       "rate": 0.99615
+      },
+      "BruteForce": {
+       "count": 1307,
+       "predicted_attack": 1307,
+       "rate": 1.0
+      },
+      "DDoS": {
+       "count": 55140,
+       "predicted_attack": 55140,
+       "rate": 1.0
+      },
+      "DoS": {
+       "count": 20121,
+       "predicted_attack": 20121,
+       "rate": 1.0
+      },
+      "Mirai": {
+       "count": 15014,
+       "predicted_attack": 15014,
+       "rate": 1.0
+      },
+      "Recon": {
+       "count": 18999,
+       "predicted_attack": 18995,
+       "rate": 0.9997894626032949
+      },
+      "Spoofing": {
+       "count": 9937,
+       "predicted_attack": 9937,
+       "rate": 1.0
+      },
+      "Web-based": {
+       "count": 2457,
+       "predicted_attack": 2457,
+       "rate": 1.0
+      }
+     }
+    },
+    "val_cal": {
+     "f1": 0.7285625258000147,
+     "fpr": 0.2957,
+     "acc": 0.8411890190592761,
+     "threshold": 0.9312500059604645,
+     "per_class": {
+      "Benign": {
+       "count": 20000,
+       "predicted_attack": 5914,
+       "rate": 0.2957
+      },
+      "BruteForce": {
+       "count": 1307,
+       "predicted_attack": 722,
+       "rate": 0.5524100994644223
+      },
+      "DDoS": {
+       "count": 55140,
+       "predicted_attack": 52398,
+       "rate": 0.950272034820457
+      },
+      "DoS": {
+       "count": 20121,
+       "predicted_attack": 18434,
+       "rate": 0.9161572486456936
+      },
+      "Mirai": {
+       "count": 15014,
+       "predicted_attack": 14248,
+       "rate": 0.9489809511122952
+      },
+      "Recon": {
+       "count": 18999,
+       "predicted_attack": 13592,
+       "rate": 0.7154060740038949
+      },
+      "Spoofing": {
+       "count": 9937,
+       "predicted_attack": 5287,
+       "rate": 0.5320519271409883
+      },
+      "Web-based": {
+       "count": 2457,
+       "predicted_attack": 1502,
+       "rate": 0.6113146113146113
+      }
+     }
+    },
+    "platt": {
+     "f1": 0.6315239277449913,
+     "fpr": 0.7563,
+     "acc": 0.8661584193040741,
+     "threshold": 0.807939799057184,
+     "a": 14.455265641577396,
+     "b": -11.678984417774258,
+     "per_class": {
+      "Benign": {
+       "count": 20000,
+       "predicted_attack": 15126,
+       "rate": 0.7563
+      },
+      "BruteForce": {
+       "count": 1307,
+       "predicted_attack": 1198,
+       "rate": 0.9166029074215761
+      },
+      "DDoS": {
+       "count": 55140,
+       "predicted_attack": 54630,
+       "rate": 0.9907508161044614
+      },
+      "DoS": {
+       "count": 20121,
+       "predicted_attack": 19805,
+       "rate": 0.9842950151582923
+      },
+      "Mirai": {
+       "count": 15014,
+       "predicted_attack": 14858,
+       "rate": 0.9896096976155588
+      },
+      "Recon": {
+       "count": 18999,
+       "predicted_attack": 17745,
+       "rate": 0.9339965261329544
+      },
+      "Spoofing": {
+       "count": 9937,
+       "predicted_attack": 8544,
+       "rate": 0.8598168461306229
+      },
+      "Web-based": {
+       "count": 2457,
+       "predicted_attack": 2185,
+       "rate": 0.8892958892958893
+      }
+     }
+    },
+    "beta": {
+     "f1": 0.6211914188501078,
+     "fpr": 0.7785,
+     "acc": 0.8662003846826368,
+     "threshold": 0.7993599241560627,
+     "a": 1.7091789349971267,
+     "b": 0.6445737136594789,
+     "c": -0.6525814758446555,
+     "per_class": {
+      "Benign": {
+       "count": 20000,
+       "predicted_attack": 15570,
+       "rate": 0.7785
+      },
+      "BruteForce": {
+       "count": 1307,
+       "predicted_attack": 1215,
+       "rate": 0.9296097934200459
+      },
+      "DDoS": {
+       "count": 55140,
+       "predicted_attack": 54698,
+       "rate": 0.9919840406238665
+      },
+      "DoS": {
+       "count": 20121,
+       "predicted_attack": 19848,
+       "rate": 0.9864320858804234
+      },
+      "Mirai": {
+       "count": 15014,
+       "predicted_attack": 14871,
+       "rate": 0.9904755561475955
+      },
+      "Recon": {
+       "count": 18999,
+       "predicted_attack": 17874,
+       "rate": 0.9407863571766935
+      },
+      "Spoofing": {
+       "count": 9937,
+       "predicted_attack": 8688,
+       "rate": 0.8743081412901278
+      },
+      "Web-based": {
+       "count": 2457,
+       "predicted_attack": 2221,
+       "rate": 0.9039479039479039
+      }
+     }
+    },
+    "empirical": {
+     "f1": 0.6161243755038865,
+     "fpr": 0.78875,
+     "acc": 0.8661584193040741,
+     "threshold": 0.794999,
+     "n_bins": 241,
+     "per_class": {
+      "Benign": {
+       "count": 20000,
+       "predicted_attack": 15775,
+       "rate": 0.78875
+      },
+      "BruteForce": {
+       "count": 1307,
+       "predicted_attack": 1222,
+       "rate": 0.9349655700076511
+      },
+      "DDoS": {
+       "count": 55140,
+       "predicted_attack": 54724,
+       "rate": 0.992455567645992
+      },
+      "DoS": {
+       "count": 20121,
+       "predicted_attack": 19864,
+       "rate": 0.9872272749863327
+      },
+      "Mirai": {
+       "count": 15014,
+       "predicted_attack": 14878,
+       "rate": 0.9909417876648462
+      },
+      "Recon": {
+       "count": 18999,
+       "predicted_attack": 17943,
+       "rate": 0.9444181272698563
+      },
+      "Spoofing": {
+       "count": 9937,
+       "predicted_attack": 8745,
+       "rate": 0.8800442789574319
+      },
+      "Web-based": {
+       "count": 2457,
+       "predicted_attack": 2238,
+       "rate": 0.9108669108669109
+      }
+     }
+    },
+    "empirical_cumulative": {
+     "f1": 0.722312101649373,
+     "fpr": 0.191,
+     "acc": 0.8202692778457772,
+     "threshold": 0.9512499868869781,
+     "w_ce": 0.7,
+     "w_f1": 0.15,
+     "w_fpr": 0.05,
+     "w_acc": 0.1,
+     "per_class": {
+      "Benign": {
+       "count": 20000,
+       "predicted_attack": 3820,
+       "rate": 0.191
+      },
+      "BruteForce": {
+       "count": 1307,
+       "predicted_attack": 575,
+       "rate": 0.43993879112471307
+      },
+      "DDoS": {
+       "count": 55140,
+       "predicted_attack": 51235,
+       "rate": 0.9291802684076895
+      },
+      "DoS": {
+       "count": 20121,
+       "predicted_attack": 17730,
+       "rate": 0.8811689279856866
+      },
+      "Mirai": {
+       "count": 15014,
+       "predicted_attack": 13953,
+       "rate": 0.929332622885307
+      },
+      "Recon": {
+       "count": 18999,
+       "predicted_attack": 11987,
+       "rate": 0.6309279435759777
+      },
+      "Spoofing": {
+       "count": 9937,
+       "predicted_attack": 4359,
+       "rate": 0.4386635805575123
+      },
+      "Web-based": {
+       "count": 2457,
+       "predicted_attack": 1259,
+       "rate": 0.5124135124135124
+      }
+     }
+    },
+    "per_class": {
+     "Benign": {
+      "count": 20000,
+      "predicted_attack": 5914,
+      "rate": 0.2957
+     },
+     "BruteForce": {
+      "count": 1307,
+      "predicted_attack": 722,
+      "rate": 0.5524100994644223
+     },
+     "DDoS": {
+      "count": 55140,
+      "predicted_attack": 52398,
+      "rate": 0.950272034820457
+     },
+     "DoS": {
+      "count": 20121,
+      "predicted_attack": 18434,
+      "rate": 0.9161572486456936
+     },
+     "Mirai": {
+      "count": 15014,
+      "predicted_attack": 14248,
+      "rate": 0.9489809511122952
+     },
+     "Recon": {
+      "count": 18999,
+      "predicted_attack": 13592,
+      "rate": 0.7154060740038949
+     },
+     "Spoofing": {
+      "count": 9937,
+      "predicted_attack": 5287,
+      "rate": 0.5320519271409883
+     },
+     "Web-based": {
+      "count": 2457,
+      "predicted_attack": 1502,
+      "rate": 0.6113146113146113
+     }
+    }
+   }
+  }
+ ]
+}

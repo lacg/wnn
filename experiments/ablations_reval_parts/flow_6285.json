@@ -1,0 +1,1899 @@
+{
+ "worker_abi": 14,
+ "rows": [
+  {
+   "row": 50663,
+   "flow": 6285,
+   "name": "SP-unswr-ablqsr-64bWb-n10-r22224-abi13",
+   "exp": 14446,
+   "gt": "best_ce",
+   "gh": "8c151f059fc707c0",
+   "drift_pp": 0.6935414666415785,
+   "old": {
+    "beta": {
+     "a": 4.546559432269729,
+     "acc": 0.9883478721926956,
+     "b": 0.30843227832076137,
+     "c": -0.2526114255982757,
+     "f1": 0.9287985865165196,
+     "fpr": 0.0108799790012468,
+     "per_class": {
+      "Analysis": {
+       "count": 171,
+       "predicted_attack": 167,
+       "rate": 0.9766081871345028
+      },
+      "Backdoor": {
+       "count": 117,
+       "predicted_attack": 114,
+       "rate": 0.9743589743589745
+      },
+      "DoS": {
+       "count": 351,
+       "predicted_attack": 330,
+       "rate": 0.9401709401709402
+      },
+      "Exploits": {
+       "count": 1705,
+       "predicted_attack": 1666,
+       "rate": 0.9771260997067448
+      },
+      "Fuzzers": {
+       "count": 1344,
+       "predicted_attack": 1275,
+       "rate": 0.9486607142857144
+      },
+      "Generic": {
+       "count": 1435,
+       "predicted_attack": 1420,
+       "rate": 0.989547038327526
+      },
+      "Normal": {
+       "count": 152390,
+       "predicted_attack": 1658,
+       "rate": 0.0108799790012468
+      },
+      "Reconnaissance": {
+       "count": 808,
+       "predicted_attack": 774,
+       "rate": 0.957920792079208
+      },
+      "Shellcode": {
+       "count": 94,
+       "predicted_attack": 91,
+       "rate": 0.9680851063829788
+      },
+      "Worms": {
+       "count": 11,
+       "predicted_attack": 11,
+       "rate": 1.0
+      }
+     },
+     "threshold": 0.902625207142002
+    },
+    "empirical": {
+     "acc": 0.9799464734323912,
+     "f1": 0.8517608539059731,
+     "fpr": 0.0072511319640396355,
+     "n_bins": 933,
+     "per_class": {
+      "Analysis": {
+       "count": 171,
+       "predicted_attack": 116,
+       "rate": 0.6783625730994152
+      },
+      "Backdoor": {
+       "count": 117,
+       "predicted_attack": 86,
+       "rate": 0.7350427350427351
+      },
+      "DoS": {
+       "count": 351,
+       "predicted_attack": 213,
+       "rate": 0.6068376068376068
+      },
+      "Exploits": {
+       "count": 1705,
+       "predicted_attack": 1050,
+       "rate": 0.6158357771260997
+      },
+      "Fuzzers": {
+       "count": 1344,
+       "predicted_attack": 787,
+       "rate": 0.5855654761904762
+      },
+      "Generic": {
+       "count": 1435,
+       "predicted_attack": 1167,
+       "rate": 0.8132404181184669
+      },
+      "Normal": {
+       "count": 152390,
+       "predicted_attack": 1105,
+       "rate": 0.0072511319640396355
+      },
+      "Reconnaissance": {
+       "count": 808,
+       "predicted_attack": 490,
+       "rate": 0.6064356435643564
+      },
+      "Shellcode": {
+       "count": 94,
+       "predicted_attack": 49,
+       "rate": 0.5212765957446809
+      },
+      "Worms": {
+       "count": 11,
+       "predicted_attack": 6,
+       "rate": 0.5454545454545454
+      }
+     },
+     "threshold": 0.982
+    },
+    "empirical_cumulative": {
+     "acc": 0.9891621324782548,
+     "f1": 0.9348081963644002,
+     "fpr": 0.011194960299232231,
+     "per_class": {
+      "Analysis": {
+       "count": 171,
+       "predicted_attack": 171,
+       "rate": 1.0
+      },
+      "Backdoor": {
+       "count": 117,
+       "predicted_attack": 117,
+       "rate": 1.0
+      },
+      "DoS": {
+       "count": 351,
+       "predicted_attack": 348,
+       "rate": 0.9914529914529916
+      },
+      "Exploits": {
+       "count": 1705,
+       "predicted_attack": 1700,
+       "rate": 0.997067448680352
+      },
+      "Fuzzers": {
+       "count": 1344,
+       "predicted_attack": 1342,
+       "rate": 0.9985119047619048
+      },
+      "Generic": {
+       "count": 1435,
+       "predicted_attack": 1435,
+       "rate": 1.0
+      },
+      "Normal": {
+       "count": 152390,
+       "predicted_attack": 1706,
+       "rate": 0.011194960299232231
+      },
+      "Reconnaissance": {
+       "count": 808,
+       "predicted_attack": 807,
+       "rate": 0.9987623762376238
+      },
+      "Shellcode": {
+       "count": 94,
+       "predicted_attack": 94,
+       "rate": 1.0
+      },
+      "Worms": {
+       "count": 11,
+       "predicted_attack": 11,
+       "rate": 1.0
+      }
+     },
+     "threshold": 0.7200000286102295,
+     "w_acc": 0.2,
+     "w_ce": 0.1,
+     "w_f1": 0.35,
+     "w_fpr": 0.35
+    },
+    "fixed_05": {
+     "acc": 0.9870097080024745,
+     "f1": 0.923777062503136,
+     "fpr": 0.0135048231511254,
+     "per_class": {
+      "Analysis": {
+       "count": 171,
+       "predicted_attack": 171,
+       "rate": 1.0
+      },
+      "Backdoor": {
+       "count": 117,
+       "predicted_attack": 117,
+       "rate": 1.0
+      },
+      "DoS": {
+       "count": 351,
+       "predicted_attack": 351,
+       "rate": 1.0
+      },
+      "Exploits": {
+       "count": 1705,
+       "predicted_attack": 1705,
+       "rate": 1.0
+      },
+      "Fuzzers": {
+       "count": 1344,
+       "predicted_attack": 1344,
+       "rate": 1.0
+      },
+      "Generic": {
+       "count": 1435,
+       "predicted_attack": 1435,
+       "rate": 1.0
+      },
+      "Normal": {
+       "count": 152390,
+       "predicted_attack": 2058,
+       "rate": 0.0135048231511254
+      },
+      "Reconnaissance": {
+       "count": 808,
+       "predicted_attack": 808,
+       "rate": 1.0
+      },
+      "Shellcode": {
+       "count": 94,
+       "predicted_attack": 94,
+       "rate": 1.0
+      },
+      "Worms": {
+       "count": 11,
+       "predicted_attack": 11,
+       "rate": 1.0
+      }
+     }
+    },
+    "per_class": {
+     "Analysis": {
+      "count": 171,
+      "predicted_attack": 171,
+      "rate": 1.0
+     },
+     "Backdoor": {
+      "count": 117,
+      "predicted_attack": 117,
+      "rate": 1.0
+     },
+     "DoS": {
+      "count": 351,
+      "predicted_attack": 349,
+      "rate": 0.9943019943019944
+     },
+     "Exploits": {
+      "count": 1705,
+      "predicted_attack": 1700,
+      "rate": 0.997067448680352
+     },
+     "Fuzzers": {
+      "count": 1344,
+      "predicted_attack": 1342,
+      "rate": 0.9985119047619048
+     },
+     "Generic": {
+      "count": 1435,
+      "predicted_attack": 1435,
+      "rate": 1.0
+     },
+     "Normal": {
+      "count": 152390,
+      "predicted_attack": 1706,
+      "rate": 0.011194960299232231
+     },
+     "Reconnaissance": {
+      "count": 808,
+      "predicted_attack": 807,
+      "rate": 0.9987623762376238
+     },
+     "Shellcode": {
+      "count": 94,
+      "predicted_attack": 94,
+      "rate": 1.0
+     },
+     "Worms": {
+      "count": 11,
+      "predicted_attack": 11,
+      "rate": 1.0
+     }
+    },
+    "platt": {
+     "a": 12.049912545985212,
+     "acc": 0.9888844002878316,
+     "b": -10.500454428355246,
+     "f1": 0.9328955914578728,
+     "fpr": 0.011168711857733446,
+     "per_class": {
+      "Analysis": {
+       "count": 171,
+       "predicted_attack": 170,
+       "rate": 0.9941520467836256
+      },
+      "Backdoor": {
+       "count": 117,
+       "predicted_attack": 115,
+       "rate": 0.9829059829059827
+      },
+      "DoS": {
+       "count": 351,
+       "predicted_attack": 338,
+       "rate": 0.9629629629629628
+      },
+      "Exploits": {
+       "count": 1705,
+       "predicted_attack": 1676,
+       "rate": 0.9829912023460412
+      },
+      "Fuzzers": {
+       "count": 1344,
+       "predicted_attack": 1334,
+       "rate": 0.9925595238095238
+      },
+      "Generic": {
+       "count": 1435,
+       "predicted_attack": 1432,
+       "rate": 0.9979094076655052
+      },
+      "Normal": {
+       "count": 152390,
+       "predicted_attack": 1702,
+       "rate": 0.011168711857733446
+      },
+      "Reconnaissance": {
+       "count": 808,
+       "predicted_attack": 807,
+       "rate": 0.9987623762376238
+      },
+      "Shellcode": {
+       "count": 94,
+       "predicted_attack": 94,
+       "rate": 1.0
+      },
+      "Worms": {
+       "count": 11,
+       "predicted_attack": 11,
+       "rate": 1.0
+      }
+     },
+     "threshold": 0.8714133308671843
+    },
+    "train_cal": {
+     "acc": 0.9891684445734916,
+     "f1": 0.9348506821116572,
+     "fpr": 0.011194960299232231,
+     "per_class": {
+      "Analysis": {
+       "count": 171,
+       "predicted_attack": 171,
+       "rate": 1.0
+      },
+      "Backdoor": {
+       "count": 117,
+       "predicted_attack": 117,
+       "rate": 1.0
+      },
+      "DoS": {
+       "count": 351,
+       "predicted_attack": 349,
+       "rate": 0.9943019943019944
+      },
+      "Exploits": {
+       "count": 1705,
+       "predicted_attack": 1700,
+       "rate": 0.997067448680352
+      },
+      "Fuzzers": {
+       "count": 1344,
+       "predicted_attack": 1342,
+       "rate": 0.9985119047619048
+      },
+      "Generic": {
+       "count": 1435,
+       "predicted_attack": 1435,
+       "rate": 1.0
+      },
+      "Normal": {
+       "count": 152390,
+       "predicted_attack": 1706,
+       "rate": 0.011194960299232231
+      },
+      "Reconnaissance": {
+       "count": 808,
+       "predicted_attack": 807,
+       "rate": 0.9987623762376238
+      },
+      "Shellcode": {
+       "count": 94,
+       "predicted_attack": 94,
+       "rate": 1.0
+      },
+      "Worms": {
+       "count": 11,
+       "predicted_attack": 11,
+       "rate": 1.0
+      }
+     },
+     "threshold": 0.705750048160553
+    },
+    "val_cal": {
+     "acc": 0.9891621324782548,
+     "f1": 0.9348081963644002,
+     "fpr": 0.011194960299232231,
+     "per_class": {
+      "Analysis": {
+       "count": 171,
+       "predicted_attack": 171,
+       "rate": 1.0
+      },
+      "Backdoor": {
+       "count": 117,
+       "predicted_attack": 117,
+       "rate": 1.0
+      },
+      "DoS": {
+       "count": 351,
+       "predicted_attack": 348,
+       "rate": 0.9914529914529916
+      },
+      "Exploits": {
+       "count": 1705,
+       "predicted_attack": 1700,
+       "rate": 0.997067448680352
+      },
+      "Fuzzers": {
+       "count": 1344,
+       "predicted_attack": 1342,
+       "rate": 0.9985119047619048
+      },
+      "Generic": {
+       "count": 1435,
+       "predicted_attack": 1435,
+       "rate": 1.0
+      },
+      "Normal": {
+       "count": 152390,
+       "predicted_attack": 1706,
+       "rate": 0.011194960299232231
+      },
+      "Reconnaissance": {
+       "count": 808,
+       "predicted_attack": 807,
+       "rate": 0.9987623762376238
+      },
+      "Shellcode": {
+       "count": 94,
+       "predicted_attack": 94,
+       "rate": 1.0
+      },
+      "Worms": {
+       "count": 11,
+       "predicted_attack": 11,
+       "rate": 1.0
+      }
+     },
+     "threshold": 0.7200000286102295
+    }
+   },
+   "new": {
+    "train_cal": {
+     "f1": 0.9348506821116573,
+     "fpr": 0.011194960299232233,
+     "acc": 0.9891684445734917,
+     "threshold": 0.7070000171661377,
+     "per_class": {
+      "Normal": {
+       "count": 152390,
+       "predicted_attack": 1706,
+       "rate": 0.011194960299232233
+      },
+      "Analysis": {
+       "count": 171,
+       "predicted_attack": 171,
+       "rate": 1.0
+      },
+      "Backdoor": {
+       "count": 117,
+       "predicted_attack": 117,
+       "rate": 1.0
+      },
+      "DoS": {
+       "count": 351,
+       "predicted_attack": 349,
+       "rate": 0.9943019943019943
+      },
+      "Exploits": {
+       "count": 1705,
+       "predicted_attack": 1700,
+       "rate": 0.9970674486803519
+      },
+      "Fuzzers": {
+       "count": 1344,
+       "predicted_attack": 1342,
+       "rate": 0.9985119047619048
+      },
+      "Generic": {
+       "count": 1435,
+       "predicted_attack": 1435,
+       "rate": 1.0
+      },
+      "Reconnaissance": {
+       "count": 808,
+       "predicted_attack": 807,
+       "rate": 0.9987623762376238
+      },
+      "Shellcode": {
+       "count": 94,
+       "predicted_attack": 94,
+       "rate": 1.0
+      },
+      "Worms": {
+       "count": 11,
+       "predicted_attack": 11,
+       "rate": 1.0
+      }
+     }
+    },
+    "fixed_05": {
+     "f1": 0.9237451698652162,
+     "fpr": 0.013511385261500098,
+     "acc": 0.9870033959072374,
+     "per_class": {
+      "Normal": {
+       "count": 152390,
+       "predicted_attack": 2059,
+       "rate": 0.013511385261500098
+      },
+      "Analysis": {
+       "count": 171,
+       "predicted_attack": 171,
+       "rate": 1.0
+      },
+      "Backdoor": {
+       "count": 117,
+       "predicted_attack": 117,
+       "rate": 1.0
+      },
+      "DoS": {
+       "count": 351,
+       "predicted_attack": 351,
+       "rate": 1.0
+      },
+      "Exploits": {
+       "count": 1705,
+       "predicted_attack": 1705,
+       "rate": 1.0
+      },
+      "Fuzzers": {
+       "count": 1344,
+       "predicted_attack": 1344,
+       "rate": 1.0
+      },
+      "Generic": {
+       "count": 1435,
+       "predicted_attack": 1435,
+       "rate": 1.0
+      },
+      "Reconnaissance": {
+       "count": 808,
+       "predicted_attack": 808,
+       "rate": 1.0
+      },
+      "Shellcode": {
+       "count": 94,
+       "predicted_attack": 94,
+       "rate": 1.0
+      },
+      "Worms": {
+       "count": 11,
+       "predicted_attack": 11,
+       "rate": 1.0
+      }
+     }
+    },
+    "val_cal": {
+     "f1": 0.9348506821116573,
+     "fpr": 0.011194960299232233,
+     "acc": 0.9891684445734917,
+     "threshold": 0.7130000591278076,
+     "per_class": {
+      "Normal": {
+       "count": 152390,
+       "predicted_attack": 1706,
+       "rate": 0.011194960299232233
+      },
+      "Analysis": {
+       "count": 171,
+       "predicted_attack": 171,
+       "rate": 1.0
+      },
+      "Backdoor": {
+       "count": 117,
+       "predicted_attack": 117,
+       "rate": 1.0
+      },
+      "DoS": {
+       "count": 351,
+       "predicted_attack": 349,
+       "rate": 0.9943019943019943
+      },
+      "Exploits": {
+       "count": 1705,
+       "predicted_attack": 1700,
+       "rate": 0.9970674486803519
+      },
+      "Fuzzers": {
+       "count": 1344,
+       "predicted_attack": 1342,
+       "rate": 0.9985119047619048
+      },
+      "Generic": {
+       "count": 1435,
+       "predicted_attack": 1435,
+       "rate": 1.0
+      },
+      "Reconnaissance": {
+       "count": 808,
+       "predicted_attack": 807,
+       "rate": 0.9987623762376238
+      },
+      "Shellcode": {
+       "count": 94,
+       "predicted_attack": 94,
+       "rate": 1.0
+      },
+      "Worms": {
+       "count": 11,
+       "predicted_attack": 11,
+       "rate": 1.0
+      }
+     }
+    },
+    "platt": {
+     "f1": 0.9329383657262063,
+     "fpr": 0.011168711857733446,
+     "acc": 0.9888907123830685,
+     "threshold": 0.8714086093740894,
+     "a": 12.049103441712385,
+     "b": -10.499692474347142,
+     "per_class": {
+      "Normal": {
+       "count": 152390,
+       "predicted_attack": 1702,
+       "rate": 0.011168711857733446
+      },
+      "Analysis": {
+       "count": 171,
+       "predicted_attack": 170,
+       "rate": 0.9941520467836257
+      },
+      "Backdoor": {
+       "count": 117,
+       "predicted_attack": 115,
+       "rate": 0.9829059829059829
+      },
+      "DoS": {
+       "count": 351,
+       "predicted_attack": 337,
+       "rate": 0.9601139601139601
+      },
+      "Exploits": {
+       "count": 1705,
+       "predicted_attack": 1677,
+       "rate": 0.9835777126099706
+      },
+      "Fuzzers": {
+       "count": 1344,
+       "predicted_attack": 1335,
+       "rate": 0.9933035714285714
+      },
+      "Generic": {
+       "count": 1435,
+       "predicted_attack": 1432,
+       "rate": 0.9979094076655052
+      },
+      "Reconnaissance": {
+       "count": 808,
+       "predicted_attack": 807,
+       "rate": 0.9987623762376238
+      },
+      "Shellcode": {
+       "count": 94,
+       "predicted_attack": 94,
+       "rate": 1.0
+      },
+      "Worms": {
+       "count": 11,
+       "predicted_attack": 11,
+       "rate": 1.0
+      }
+     }
+    },
+    "beta": {
+     "f1": 0.9288421771436336,
+     "fpr": 0.010879979001246801,
+     "acc": 0.9883541842879325,
+     "threshold": 0.902624054417239,
+     "a": 4.544951280062103,
+     "b": 0.3083230674663813,
+     "c": -0.2525123505732989,
+     "per_class": {
+      "Normal": {
+       "count": 152390,
+       "predicted_attack": 1658,
+       "rate": 0.010879979001246801
+      },
+      "Analysis": {
+       "count": 171,
+       "predicted_attack": 167,
+       "rate": 0.9766081871345029
+      },
+      "Backdoor": {
+       "count": 117,
+       "predicted_attack": 114,
+       "rate": 0.9743589743589743
+      },
+      "DoS": {
+       "count": 351,
+       "predicted_attack": 330,
+       "rate": 0.9401709401709402
+      },
+      "Exploits": {
+       "count": 1705,
+       "predicted_attack": 1667,
+       "rate": 0.9777126099706744
+      },
+      "Fuzzers": {
+       "count": 1344,
+       "predicted_attack": 1275,
+       "rate": 0.9486607142857143
+      },
+      "Generic": {
+       "count": 1435,
+       "predicted_attack": 1420,
+       "rate": 0.9895470383275261
+      },
+      "Reconnaissance": {
+       "count": 808,
+       "predicted_attack": 774,
+       "rate": 0.9579207920792079
+      },
+      "Shellcode": {
+       "count": 94,
+       "predicted_attack": 91,
+       "rate": 0.9680851063829787
+      },
+      "Worms": {
+       "count": 11,
+       "predicted_attack": 11,
+       "rate": 1.0
+      }
+     }
+    },
+    "empirical": {
+     "f1": 0.8586962685723889,
+     "fpr": 0.007546426930900978,
+     "acc": 0.9805713708608436,
+     "threshold": 0.98,
+     "n_bins": 384,
+     "per_class": {
+      "Normal": {
+       "count": 152390,
+       "predicted_attack": 1150,
+       "rate": 0.007546426930900978
+      },
+      "Analysis": {
+       "count": 171,
+       "predicted_attack": 117,
+       "rate": 0.6842105263157895
+      },
+      "Backdoor": {
+       "count": 117,
+       "predicted_attack": 87,
+       "rate": 0.7435897435897436
+      },
+      "DoS": {
+       "count": 351,
+       "predicted_attack": 228,
+       "rate": 0.6495726495726496
+      },
+      "Exploits": {
+       "count": 1705,
+       "predicted_attack": 1131,
+       "rate": 0.6633431085043988
+      },
+      "Fuzzers": {
+       "count": 1344,
+       "predicted_attack": 822,
+       "rate": 0.6116071428571429
+      },
+      "Generic": {
+       "count": 1435,
+       "predicted_attack": 1178,
+       "rate": 0.8209059233449477
+      },
+      "Reconnaissance": {
+       "count": 808,
+       "predicted_attack": 490,
+       "rate": 0.6064356435643564
+      },
+      "Shellcode": {
+       "count": 94,
+       "predicted_attack": 49,
+       "rate": 0.5212765957446809
+      },
+      "Worms": {
+       "count": 11,
+       "predicted_attack": 6,
+       "rate": 0.5454545454545454
+      }
+     }
+    },
+    "empirical_cumulative": {
+     "f1": 0.9348506821116573,
+     "fpr": 0.011194960299232233,
+     "acc": 0.9891684445734917,
+     "threshold": 0.7130000591278076,
+     "w_ce": 0.1,
+     "w_f1": 0.35,
+     "w_fpr": 0.35,
+     "w_acc": 0.2,
+     "per_class": {
+      "Normal": {
+       "count": 152390,
+       "predicted_attack": 1706,
+       "rate": 0.011194960299232233
+      },
+      "Analysis": {
+       "count": 171,
+       "predicted_attack": 171,
+       "rate": 1.0
+      },
+      "Backdoor": {
+       "count": 117,
+       "predicted_attack": 117,
+       "rate": 1.0
+      },
+      "DoS": {
+       "count": 351,
+       "predicted_attack": 349,
+       "rate": 0.9943019943019943
+      },
+      "Exploits": {
+       "count": 1705,
+       "predicted_attack": 1700,
+       "rate": 0.9970674486803519
+      },
+      "Fuzzers": {
+       "count": 1344,
+       "predicted_attack": 1342,
+       "rate": 0.9985119047619048
+      },
+      "Generic": {
+       "count": 1435,
+       "predicted_attack": 1435,
+       "rate": 1.0
+      },
+      "Reconnaissance": {
+       "count": 808,
+       "predicted_attack": 807,
+       "rate": 0.9987623762376238
+      },
+      "Shellcode": {
+       "count": 94,
+       "predicted_attack": 94,
+       "rate": 1.0
+      },
+      "Worms": {
+       "count": 11,
+       "predicted_attack": 11,
+       "rate": 1.0
+      }
+     }
+    },
+    "per_class": {
+     "Normal": {
+      "count": 152390,
+      "predicted_attack": 1706,
+      "rate": 0.011194960299232233
+     },
+     "Analysis": {
+      "count": 171,
+      "predicted_attack": 171,
+      "rate": 1.0
+     },
+     "Backdoor": {
+      "count": 117,
+      "predicted_attack": 117,
+      "rate": 1.0
+     },
+     "DoS": {
+      "count": 351,
+      "predicted_attack": 349,
+      "rate": 0.9943019943019943
+     },
+     "Exploits": {
+      "count": 1705,
+      "predicted_attack": 1700,
+      "rate": 0.9970674486803519
+     },
+     "Fuzzers": {
+      "count": 1344,
+      "predicted_attack": 1342,
+      "rate": 0.9985119047619048
+     },
+     "Generic": {
+      "count": 1435,
+      "predicted_attack": 1435,
+      "rate": 1.0
+     },
+     "Reconnaissance": {
+      "count": 808,
+      "predicted_attack": 807,
+      "rate": 0.9987623762376238
+     },
+     "Shellcode": {
+      "count": 94,
+      "predicted_attack": 94,
+      "rate": 1.0
+     },
+     "Worms": {
+      "count": 11,
+      "predicted_attack": 11,
+      "rate": 1.0
+     }
+    }
+   }
+  },
+  {
+   "row": 50666,
+   "flow": 6285,
+   "name": "SP-unswr-ablqsr-64bWb-n10-r22224-abi13",
+   "exp": 14446,
+   "gt": "best_fpr",
+   "gh": "1f86d952ae080eec",
+   "drift_pp": 0.03502153219172577,
+   "old": {
+    "beta": {
+     "a": 261636481538.77585,
+     "acc": 0.984857283526694,
+     "b": 11377144335.271955,
+     "c": -4946873411.136289,
+     "f1": 0.8988802835764163,
+     "fpr": 0.00876041735021983,
+     "per_class": {
+      "Analysis": {
+       "count": 171,
+       "predicted_attack": 132,
+       "rate": 0.7719298245614035
+      },
+      "Backdoor": {
+       "count": 117,
+       "predicted_attack": 92,
+       "rate": 0.7863247863247863
+      },
+      "DoS": {
+       "count": 351,
+       "predicted_attack": 292,
+       "rate": 0.8319088319088319
+      },
+      "Exploits": {
+       "count": 1705,
+       "predicted_attack": 1625,
+       "rate": 0.9530791788856304
+      },
+      "Fuzzers": {
+       "count": 1344,
+       "predicted_attack": 974,
+       "rate": 0.7247023809523809
+      },
+      "Generic": {
+       "count": 1435,
+       "predicted_attack": 1300,
+       "rate": 0.9059233449477352
+      },
+      "Normal": {
+       "count": 152390,
+       "predicted_attack": 1335,
+       "rate": 0.00876041735021983
+      },
+      "Reconnaissance": {
+       "count": 808,
+       "predicted_attack": 498,
+       "rate": 0.6163366336633663
+      },
+      "Shellcode": {
+       "count": 94,
+       "predicted_attack": 49,
+       "rate": 0.5212765957446809
+      },
+      "Worms": {
+       "count": 11,
+       "predicted_attack": 10,
+       "rate": 0.9090909090909092
+      }
+     },
+     "threshold": 0.9153393181157076
+    },
+    "empirical": {
+     "acc": 0.9848194109552724,
+     "f1": 0.8985800755185218,
+     "fpr": 0.00876041735021983,
+     "n_bins": 18,
+     "per_class": {
+      "Analysis": {
+       "count": 171,
+       "predicted_attack": 132,
+       "rate": 0.7719298245614035
+      },
+      "Backdoor": {
+       "count": 117,
+       "predicted_attack": 92,
+       "rate": 0.7863247863247863
+      },
+      "DoS": {
+       "count": 351,
+       "predicted_attack": 291,
+       "rate": 0.8290598290598291
+      },
+      "Exploits": {
+       "count": 1705,
+       "predicted_attack": 1622,
+       "rate": 0.9513196480938416
+      },
+      "Fuzzers": {
+       "count": 1344,
+       "predicted_attack": 974,
+       "rate": 0.7247023809523809
+      },
+      "Generic": {
+       "count": 1435,
+       "predicted_attack": 1298,
+       "rate": 0.9045296167247386
+      },
+      "Normal": {
+       "count": 152390,
+       "predicted_attack": 1335,
+       "rate": 0.00876041735021983
+      },
+      "Reconnaissance": {
+       "count": 808,
+       "predicted_attack": 498,
+       "rate": 0.6163366336633663
+      },
+      "Shellcode": {
+       "count": 94,
+       "predicted_attack": 49,
+       "rate": 0.5212765957446809
+      },
+      "Worms": {
+       "count": 11,
+       "predicted_attack": 10,
+       "rate": 0.9090909090909092
+      }
+     },
+     "threshold": 1.0
+    },
+    "empirical_cumulative": {
+     "acc": 0.984914092383826,
+     "f1": 0.8993300673404971,
+     "fpr": 0.00876041735021983,
+     "per_class": {
+      "Analysis": {
+       "count": 171,
+       "predicted_attack": 132,
+       "rate": 0.7719298245614035
+      },
+      "Backdoor": {
+       "count": 117,
+       "predicted_attack": 92,
+       "rate": 0.7863247863247863
+      },
+      "DoS": {
+       "count": 351,
+       "predicted_attack": 293,
+       "rate": 0.8347578347578347
+      },
+      "Exploits": {
+       "count": 1705,
+       "predicted_attack": 1632,
+       "rate": 0.9571847507331378
+      },
+      "Fuzzers": {
+       "count": 1344,
+       "predicted_attack": 975,
+       "rate": 0.7254464285714286
+      },
+      "Generic": {
+       "count": 1435,
+       "predicted_attack": 1300,
+       "rate": 0.9059233449477352
+      },
+      "Normal": {
+       "count": 152390,
+       "predicted_attack": 1335,
+       "rate": 0.00876041735021983
+      },
+      "Reconnaissance": {
+       "count": 808,
+       "predicted_attack": 498,
+       "rate": 0.6163366336633663
+      },
+      "Shellcode": {
+       "count": 94,
+       "predicted_attack": 49,
+       "rate": 0.5212765957446809
+      },
+      "Worms": {
+       "count": 11,
+       "predicted_attack": 10,
+       "rate": 0.9090909090909092
+      }
+     },
+     "threshold": 0.8250000178813934,
+     "w_acc": 0.2,
+     "w_ce": 0.1,
+     "w_f1": 0.35,
+     "w_fpr": 0.35
+    },
+    "fixed_05": {
+     "acc": 0.979952785527628,
+     "f1": 0.8905491201940046,
+     "fpr": 0.020821576218912,
+     "per_class": {
+      "Analysis": {
+       "count": 171,
+       "predicted_attack": 171,
+       "rate": 1.0
+      },
+      "Backdoor": {
+       "count": 117,
+       "predicted_attack": 117,
+       "rate": 1.0
+      },
+      "DoS": {
+       "count": 351,
+       "predicted_attack": 351,
+       "rate": 1.0
+      },
+      "Exploits": {
+       "count": 1705,
+       "predicted_attack": 1703,
+       "rate": 0.9988269794721408
+      },
+      "Fuzzers": {
+       "count": 1344,
+       "predicted_attack": 1344,
+       "rate": 1.0
+      },
+      "Generic": {
+       "count": 1435,
+       "predicted_attack": 1435,
+       "rate": 1.0
+      },
+      "Normal": {
+       "count": 152390,
+       "predicted_attack": 3173,
+       "rate": 0.020821576218912
+      },
+      "Reconnaissance": {
+       "count": 808,
+       "predicted_attack": 807,
+       "rate": 0.9987623762376238
+      },
+      "Shellcode": {
+       "count": 94,
+       "predicted_attack": 94,
+       "rate": 1.0
+      },
+      "Worms": {
+       "count": 11,
+       "predicted_attack": 11,
+       "rate": 1.0
+      }
+     }
+    },
+    "per_class": {
+     "Analysis": {
+      "count": 171,
+      "predicted_attack": 171,
+      "rate": 1.0
+     },
+     "Backdoor": {
+      "count": 117,
+      "predicted_attack": 116,
+      "rate": 0.9914529914529916
+     },
+     "DoS": {
+      "count": 351,
+      "predicted_attack": 351,
+      "rate": 1.0
+     },
+     "Exploits": {
+      "count": 1705,
+      "predicted_attack": 1700,
+      "rate": 0.997067448680352
+     },
+     "Fuzzers": {
+      "count": 1344,
+      "predicted_attack": 1337,
+      "rate": 0.9947916666666666
+     },
+     "Generic": {
+      "count": 1435,
+      "predicted_attack": 1434,
+      "rate": 0.9993031358885016
+     },
+     "Normal": {
+      "count": 152390,
+      "predicted_attack": 2861,
+      "rate": 0.018774197782006695
+     },
+     "Reconnaissance": {
+      "count": 808,
+      "predicted_attack": 807,
+      "rate": 0.9987623762376238
+     },
+     "Shellcode": {
+      "count": 94,
+      "predicted_attack": 94,
+      "rate": 1.0
+     },
+     "Worms": {
+      "count": 11,
+      "predicted_attack": 11,
+      "rate": 1.0
+     }
+    },
+    "platt": {
+     "a": 10.688833880281445,
+     "acc": 0.984857283526694,
+     "b": -9.23005237142331,
+     "f1": 0.8988802835764163,
+     "fpr": 0.00876041735021983,
+     "per_class": {
+      "Analysis": {
+       "count": 171,
+       "predicted_attack": 132,
+       "rate": 0.7719298245614035
+      },
+      "Backdoor": {
+       "count": 117,
+       "predicted_attack": 92,
+       "rate": 0.7863247863247863
+      },
+      "DoS": {
+       "count": 351,
+       "predicted_attack": 292,
+       "rate": 0.8319088319088319
+      },
+      "Exploits": {
+       "count": 1705,
+       "predicted_attack": 1625,
+       "rate": 0.9530791788856304
+      },
+      "Fuzzers": {
+       "count": 1344,
+       "predicted_attack": 974,
+       "rate": 0.7247023809523809
+      },
+      "Generic": {
+       "count": 1435,
+       "predicted_attack": 1300,
+       "rate": 0.9059233449477352
+      },
+      "Normal": {
+       "count": 152390,
+       "predicted_attack": 1335,
+       "rate": 0.00876041735021983
+      },
+      "Reconnaissance": {
+       "count": 808,
+       "predicted_attack": 498,
+       "rate": 0.6163366336633663
+      },
+      "Shellcode": {
+       "count": 94,
+       "predicted_attack": 49,
+       "rate": 0.5212765957446809
+      },
+      "Worms": {
+       "count": 11,
+       "predicted_attack": 10,
+       "rate": 0.9090909090909092
+      }
+     },
+     "threshold": 0.863522857105183
+    },
+    "train_cal": {
+     "acc": 0.981846414098696,
+     "f1": 0.8988437513087913,
+     "fpr": 0.018774197782006695,
+     "per_class": {
+      "Analysis": {
+       "count": 171,
+       "predicted_attack": 171,
+       "rate": 1.0
+      },
+      "Backdoor": {
+       "count": 117,
+       "predicted_attack": 116,
+       "rate": 0.9914529914529916
+      },
+      "DoS": {
+       "count": 351,
+       "predicted_attack": 351,
+       "rate": 1.0
+      },
+      "Exploits": {
+       "count": 1705,
+       "predicted_attack": 1700,
+       "rate": 0.997067448680352
+      },
+      "Fuzzers": {
+       "count": 1344,
+       "predicted_attack": 1337,
+       "rate": 0.9947916666666666
+      },
+      "Generic": {
+       "count": 1435,
+       "predicted_attack": 1434,
+       "rate": 0.9993031358885016
+      },
+      "Normal": {
+       "count": 152390,
+       "predicted_attack": 2861,
+       "rate": 0.018774197782006695
+      },
+      "Reconnaissance": {
+       "count": 808,
+       "predicted_attack": 807,
+       "rate": 0.9987623762376238
+      },
+      "Shellcode": {
+       "count": 94,
+       "predicted_attack": 94,
+       "rate": 1.0
+      },
+      "Worms": {
+       "count": 11,
+       "predicted_attack": 11,
+       "rate": 1.0
+      }
+     },
+     "threshold": 0.7249999940395355
+    },
+    "val_cal": {
+     "acc": 0.981846414098696,
+     "f1": 0.8988437513087913,
+     "fpr": 0.018774197782006695,
+     "per_class": {
+      "Analysis": {
+       "count": 171,
+       "predicted_attack": 171,
+       "rate": 1.0
+      },
+      "Backdoor": {
+       "count": 117,
+       "predicted_attack": 116,
+       "rate": 0.9914529914529916
+      },
+      "DoS": {
+       "count": 351,
+       "predicted_attack": 351,
+       "rate": 1.0
+      },
+      "Exploits": {
+       "count": 1705,
+       "predicted_attack": 1700,
+       "rate": 0.997067448680352
+      },
+      "Fuzzers": {
+       "count": 1344,
+       "predicted_attack": 1337,
+       "rate": 0.9947916666666666
+      },
+      "Generic": {
+       "count": 1435,
+       "predicted_attack": 1434,
+       "rate": 0.9993031358885016
+      },
+      "Normal": {
+       "count": 152390,
+       "predicted_attack": 2861,
+       "rate": 0.018774197782006695
+      },
+      "Reconnaissance": {
+       "count": 808,
+       "predicted_attack": 807,
+       "rate": 0.9987623762376238
+      },
+      "Shellcode": {
+       "count": 94,
+       "predicted_attack": 94,
+       "rate": 1.0
+      },
+      "Worms": {
+       "count": 11,
+       "predicted_attack": 11,
+       "rate": 1.0
+      }
+     },
+     "threshold": 0.7000000178813934
+    }
+   },
+   "new": {
+    "train_cal": {
+     "f1": 0.898773406212344,
+     "fpr": 0.01878075989238139,
+     "acc": 0.9818337899082221,
+     "threshold": 0.7000000178813934,
+     "per_class": {
+      "Normal": {
+       "count": 152390,
+       "predicted_attack": 2862,
+       "rate": 0.01878075989238139
+      },
+      "Analysis": {
+       "count": 171,
+       "predicted_attack": 171,
+       "rate": 1.0
+      },
+      "Backdoor": {
+       "count": 117,
+       "predicted_attack": 116,
+       "rate": 0.9914529914529915
+      },
+      "DoS": {
+       "count": 351,
+       "predicted_attack": 351,
+       "rate": 1.0
+      },
+      "Exploits": {
+       "count": 1705,
+       "predicted_attack": 1700,
+       "rate": 0.9970674486803519
+      },
+      "Fuzzers": {
+       "count": 1344,
+       "predicted_attack": 1336,
+       "rate": 0.9940476190476191
+      },
+      "Generic": {
+       "count": 1435,
+       "predicted_attack": 1434,
+       "rate": 0.9993031358885017
+      },
+      "Reconnaissance": {
+       "count": 808,
+       "predicted_attack": 807,
+       "rate": 0.9987623762376238
+      },
+      "Shellcode": {
+       "count": 94,
+       "predicted_attack": 94,
+       "rate": 1.0
+      },
+      "Worms": {
+       "count": 11,
+       "predicted_attack": 11,
+       "rate": 1.0
+      }
+     }
+    },
+    "fixed_05": {
+     "f1": 0.8904662038384237,
+     "fpr": 0.020841262550036092,
+     "acc": 0.9799338492419174,
+     "per_class": {
+      "Normal": {
+       "count": 152390,
+       "predicted_attack": 3176,
+       "rate": 0.020841262550036092
+      },
+      "Analysis": {
+       "count": 171,
+       "predicted_attack": 171,
+       "rate": 1.0
+      },
+      "Backdoor": {
+       "count": 117,
+       "predicted_attack": 117,
+       "rate": 1.0
+      },
+      "DoS": {
+       "count": 351,
+       "predicted_attack": 351,
+       "rate": 1.0
+      },
+      "Exploits": {
+       "count": 1705,
+       "predicted_attack": 1703,
+       "rate": 0.9988269794721407
+      },
+      "Fuzzers": {
+       "count": 1344,
+       "predicted_attack": 1344,
+       "rate": 1.0
+      },
+      "Generic": {
+       "count": 1435,
+       "predicted_attack": 1435,
+       "rate": 1.0
+      },
+      "Reconnaissance": {
+       "count": 808,
+       "predicted_attack": 807,
+       "rate": 0.9987623762376238
+      },
+      "Shellcode": {
+       "count": 94,
+       "predicted_attack": 94,
+       "rate": 1.0
+      },
+      "Worms": {
+       "count": 11,
+       "predicted_attack": 11,
+       "rate": 1.0
+      }
+     }
+    },
+    "val_cal": {
+     "f1": 0.898773406212344,
+     "fpr": 0.01878075989238139,
+     "acc": 0.9818337899082221,
+     "threshold": 0.7000000178813934,
+     "per_class": {
+      "Normal": {
+       "count": 152390,
+       "predicted_attack": 2862,
+       "rate": 0.01878075989238139
+      },
+      "Analysis": {
+       "count": 171,
+       "predicted_attack": 171,
+       "rate": 1.0
+      },
+      "Backdoor": {
+       "count": 117,
+       "predicted_attack": 116,
+       "rate": 0.9914529914529915
+      },
+      "DoS": {
+       "count": 351,
+       "predicted_attack": 351,
+       "rate": 1.0
+      },
+      "Exploits": {
+       "count": 1705,
+       "predicted_attack": 1700,
+       "rate": 0.9970674486803519
+      },
+      "Fuzzers": {
+       "count": 1344,
+       "predicted_attack": 1336,
+       "rate": 0.9940476190476191
+      },
+      "Generic": {
+       "count": 1435,
+       "predicted_attack": 1434,
+       "rate": 0.9993031358885017
+      },
+      "Reconnaissance": {
+       "count": 808,
+       "predicted_attack": 807,
+       "rate": 0.9987623762376238
+      },
+      "Shellcode": {
+       "count": 94,
+       "predicted_attack": 94,
+       "rate": 1.0
+      },
+      "Worms": {
+       "count": 11,
+       "predicted_attack": 11,
+       "rate": 1.0
+      }
+     }
+    },
+    "platt": {
+     "f1": 0.8989302908404391,
+     "fpr": 0.00876041735021983,
+     "acc": 0.9848635956219307,
+     "threshold": 0.863427097248309,
+     "a": 10.678954864805881,
+     "b": -9.22049900056505,
+     "per_class": {
+      "Normal": {
+       "count": 152390,
+       "predicted_attack": 1335,
+       "rate": 0.00876041735021983
+      },
+      "Analysis": {
+       "count": 171,
+       "predicted_attack": 132,
+       "rate": 0.7719298245614035
+      },
+      "Backdoor": {
+       "count": 117,
+       "predicted_attack": 92,
+       "rate": 0.7863247863247863
+      },
+      "DoS": {
+       "count": 351,
+       "predicted_attack": 293,
+       "rate": 0.8347578347578347
+      },
+      "Exploits": {
+       "count": 1705,
+       "predicted_attack": 1625,
+       "rate": 0.9530791788856305
+      },
+      "Fuzzers": {
+       "count": 1344,
+       "predicted_attack": 974,
+       "rate": 0.7247023809523809
+      },
+      "Generic": {
+       "count": 1435,
+       "predicted_attack": 1300,
+       "rate": 0.9059233449477352
+      },
+      "Reconnaissance": {
+       "count": 808,
+       "predicted_attack": 498,
+       "rate": 0.6163366336633663
+      },
+      "Shellcode": {
+       "count": 94,
+       "predicted_attack": 49,
+       "rate": 0.5212765957446809
+      },
+      "Worms": {
+       "count": 11,
+       "predicted_attack": 10,
+       "rate": 0.9090909090909091
+      }
+     }
+    },
+    "beta": {
+     "f1": 0.8989302908404391,
+     "fpr": 0.00876041735021983,
+     "acc": 0.9848635956219307,
+     "threshold": 0.8712505647492743,
+     "a": 5257444601.292128,
+     "b": 3659242659.0884604,
+     "c": -6776423599.390713,
+     "per_class": {
+      "Normal": {
+       "count": 152390,
+       "predicted_attack": 1335,
+       "rate": 0.00876041735021983
+      },
+      "Analysis": {
+       "count": 171,
+       "predicted_attack": 132,
+       "rate": 0.7719298245614035
+      },
+      "Backdoor": {
+       "count": 117,
+       "predicted_attack": 92,
+       "rate": 0.7863247863247863
+      },
+      "DoS": {
+       "count": 351,
+       "predicted_attack": 293,
+       "rate": 0.8347578347578347
+      },
+      "Exploits": {
+       "count": 1705,
+       "predicted_attack": 1625,
+       "rate": 0.9530791788856305
+      },
+      "Fuzzers": {
+       "count": 1344,
+       "predicted_attack": 974,
+       "rate": 0.7247023809523809
+      },
+      "Generic": {
+       "count": 1435,
+       "predicted_attack": 1300,
+       "rate": 0.9059233449477352
+      },
+      "Reconnaissance": {
+       "count": 808,
+       "predicted_attack": 498,
+       "rate": 0.6163366336633663
+      },
+      "Shellcode": {
+       "count": 94,
+       "predicted_attack": 49,
+       "rate": 0.5212765957446809
+      },
+      "Worms": {
+       "count": 11,
+       "predicted_attack": 10,
+       "rate": 0.9090909090909091
+      }
+     }
+    },
+    "empirical": {
+     "f1": 0.8989302908404391,
+     "fpr": 0.00876041735021983,
+     "acc": 0.9848635956219307,
+     "threshold": 1.0,
+     "n_bins": 6,
+     "per_class": {
+      "Normal": {
+       "count": 152390,
+       "predicted_attack": 1335,
+       "rate": 0.00876041735021983
+      },
+      "Analysis": {
+       "count": 171,
+       "predicted_attack": 132,
+       "rate": 0.7719298245614035
+      },
+      "Backdoor": {
+       "count": 117,
+       "predicted_attack": 92,
+       "rate": 0.7863247863247863
+      },
+      "DoS": {
+       "count": 351,
+       "predicted_attack": 293,
+       "rate": 0.8347578347578347
+      },
+      "Exploits": {
+       "count": 1705,
+       "predicted_attack": 1625,
+       "rate": 0.9530791788856305
+      },
+      "Fuzzers": {
+       "count": 1344,
+       "predicted_attack": 974,
+       "rate": 0.7247023809523809
+      },
+      "Generic": {
+       "count": 1435,
+       "predicted_attack": 1300,
+       "rate": 0.9059233449477352
+      },
+      "Reconnaissance": {
+       "count": 808,
+       "predicted_attack": 498,
+       "rate": 0.6163366336633663
+      },
+      "Shellcode": {
+       "count": 94,
+       "predicted_attack": 49,
+       "rate": 0.5212765957446809
+      },
+      "Worms": {
+       "count": 11,
+       "predicted_attack": 10,
+       "rate": 0.9090909090909091
+      }
+     }
+    },
+    "empirical_cumulative": {
+     "f1": 0.8989302908404391,
+     "fpr": 0.00876041735021983,
+     "acc": 0.9848635956219307,
+     "threshold": 0.9000000059604645,
+     "w_ce": 0.1,
+     "w_f1": 0.35,
+     "w_fpr": 0.35,
+     "w_acc": 0.2,
+     "per_class": {
+      "Normal": {
+       "count": 152390,
+       "predicted_attack": 1335,
+       "rate": 0.00876041735021983
+      },
+      "Analysis": {
+       "count": 171,
+       "predicted_attack": 132,
+       "rate": 0.7719298245614035
+      },
+      "Backdoor": {
+       "count": 117,
+       "predicted_attack": 92,
+       "rate": 0.7863247863247863
+      },
+      "DoS": {
+       "count": 351,
+       "predicted_attack": 293,
+       "rate": 0.8347578347578347
+      },
+      "Exploits": {
+       "count": 1705,
+       "predicted_attack": 1625,
+       "rate": 0.9530791788856305
+      },
+      "Fuzzers": {
+       "count": 1344,
+       "predicted_attack": 974,
+       "rate": 0.7247023809523809
+      },
+      "Generic": {
+       "count": 1435,
+       "predicted_attack": 1300,
+       "rate": 0.9059233449477352
+      },
+      "Reconnaissance": {
+       "count": 808,
+       "predicted_attack": 498,
+       "rate": 0.6163366336633663
+      },
+      "Shellcode": {
+       "count": 94,
+       "predicted_attack": 49,
+       "rate": 0.5212765957446809
+      },
+      "Worms": {
+       "count": 11,
+       "predicted_attack": 10,
+       "rate": 0.9090909090909091
+      }
+     }
+    },
+    "per_class": {
+     "Normal": {
+      "count": 152390,
+      "predicted_attack": 2862,
+      "rate": 0.01878075989238139
+     },
+     "Analysis": {
+      "count": 171,
+      "predicted_attack": 171,
+      "rate": 1.0
+     },
+     "Backdoor": {
+      "count": 117,
+      "predicted_attack": 116,
+      "rate": 0.9914529914529915
+     },
+     "DoS": {
+      "count": 351,
+      "predicted_attack": 351,
+      "rate": 1.0
+     },
+     "Exploits": {
+      "count": 1705,
+      "predicted_attack": 1700,
+      "rate": 0.9970674486803519
+     },
+     "Fuzzers": {
+      "count": 1344,
+      "predicted_attack": 1336,
+      "rate": 0.9940476190476191
+     },
+     "Generic": {
+      "count": 1435,
+      "predicted_attack": 1434,
+      "rate": 0.9993031358885017
+     },
+     "Reconnaissance": {
+      "count": 808,
+      "predicted_attack": 807,
+      "rate": 0.9987623762376238
+     },
+     "Shellcode": {
+      "count": 94,
+      "predicted_attack": 94,
+      "rate": 1.0
+     },
+     "Worms": {
+      "count": 11,
+      "predicted_attack": 11,
+      "rate": 1.0
+     }
+    }
+   }
+  }
+ ]
+}
