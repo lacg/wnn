@@ -245,6 +245,13 @@ FPR (pp)   | ciciot  | -1.165 | -0.870 | -1.845 | -0.983 | -0.445 | -1.061      
   100 clean, NOT created). Config: B15-CE .15/.15/.525/.175, desirability (anchor 0.2128), QUAD_WEIGHTED, 16b
   thermometer top20, bits 4-34, neurons <=500, temporal_3way, k-fold 5x5, patience 5. NO QSR arm (IDS-16).
   The final combined 4-way queue file is built from the three spec files + IDS-7's once IDS-2 names its winner.
+- **IDS-6 JOINS THE TANDEM (Luiz 10/10/2026): CIC-IoT-2023 46M (neto_full), n=5 (was n=2 in the story),**
+  interleaved in the FIRST 5 seed rounds only (seeds 20419-20423): round order IDS3, IDS4, IDS5, IDS6, IDS7; rounds
+  6-100 are IDS3/4/5/7. Config = IDS-5 (B15-AC desirability, `IDSAGG-ciciot-quad-96b-B15-AC-desir-r20414`) with ONLY
+  `ids_dataset=ciciot2023_neto_full` and `ids_encoded_storage=memmap` (required at 46M: the in-memory encode is ~150 GB
+  of transient allocations — the 03/07 OOM loop; memmap bounds it to one chunk). Names `IDS6-ciciot46m-B15AC-desir-r<seed>`,
+  spec `experiments/ids6_46m_cohort_spec.json` (dry-run 5 clean, NOT created). Total tandem = 405 flows. Each 46M run
+  is >1 day, so rounds 1-5 are ~2 days each. The 5 legacy paused 46M Wc flows (4534-4538) were CANCELLED 10/10.
 
 
 **Decision the rule dictates:**

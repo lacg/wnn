@@ -1,0 +1,52 @@
+[
+ {
+  "source": "IDSAGG-ciciot-quad-96b-B15-AC-desir-r20414",
+  "name": "IDS6-ciciot46m-B15AC-desir-r20419",
+  "set": {
+   "seed": 20419,
+   "ids_dataset": "ciciot2023_neto_full",
+   "ids_encoded_storage": "memmap"
+  },
+  "why": "IDS-6 CIC-IoT-2023 46M (neto_full) n=5 at the IDS-5 config (B15-AC desirability), interleaved in the first 5 tandem rounds (Luiz 10/10); memmap required at 46M (in-memory encode = ~150 GB transient, 03/07 OOM)."
+ },
+ {
+  "source": "IDSAGG-ciciot-quad-96b-B15-AC-desir-r20414",
+  "name": "IDS6-ciciot46m-B15AC-desir-r20420",
+  "set": {
+   "seed": 20420,
+   "ids_dataset": "ciciot2023_neto_full",
+   "ids_encoded_storage": "memmap"
+  },
+  "why": "IDS-6 CIC-IoT-2023 46M (neto_full) n=5 at the IDS-5 config (B15-AC desirability), interleaved in the first 5 tandem rounds (Luiz 10/10); memmap required at 46M (in-memory encode = ~150 GB transient, 03/07 OOM)."
+ },
+ {
+  "source": "IDSAGG-ciciot-quad-96b-B15-AC-desir-r20414",
+  "name": "IDS6-ciciot46m-B15AC-desir-r20421",
+  "set": {
+   "seed": 20421,
+   "ids_dataset": "ciciot2023_neto_full",
+   "ids_encoded_storage": "memmap"
+  },
+  "why": "IDS-6 CIC-IoT-2023 46M (neto_full) n=5 at the IDS-5 config (B15-AC desirability), interleaved in the first 5 tandem rounds (Luiz 10/10); memmap required at 46M (in-memory encode = ~150 GB transient, 03/07 OOM)."
+ },
+ {
+  "source": "IDSAGG-ciciot-quad-96b-B15-AC-desir-r20414",
+  "name": "IDS6-ciciot46m-B15AC-desir-r20422",
+  "set": {
+   "seed": 20422,
+   "ids_dataset": "ciciot2023_neto_full",
+   "ids_encoded_storage": "memmap"
+  },
+  "why": "IDS-6 CIC-IoT-2023 46M (neto_full) n=5 at the IDS-5 config (B15-AC desirability), interleaved in the first 5 tandem rounds (Luiz 10/10); memmap required at 46M (in-memory encode = ~150 GB transient, 03/07 OOM)."
+ },
+ {
+  "source": "IDSAGG-ciciot-quad-96b-B15-AC-desir-r20414",
+  "name": "IDS6-ciciot46m-B15AC-desir-r20423",
+  "set": {
+   "seed": 20423,
+   "ids_dataset": "ciciot2023_neto_full",
+   "ids_encoded_storage": "memmap"
+  },
+  "why": "IDS-6 CIC-IoT-2023 46M (neto_full) n=5 at the IDS-5 config (B15-AC desirability), interleaved in the first 5 tandem rounds (Luiz 10/10); memmap required at 46M (in-memory encode = ~150 GB transient, 03/07 OOM)."
+ }
+]
