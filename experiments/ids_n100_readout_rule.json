@@ -1,11 +1,11 @@
 {
- "status": "DRAFT 10/10/2026 — awaiting Luiz sign-off; must be signed BEFORE any n=100 result is read",
+ "status": "SIGNED by Luiz 10/10/2026 ~17:30 EDT (criterion A), before any n=100 result was read",
  "cohorts": {
   "IDS-3": "UNSW-NB15 temporal_3way, B15-CE desirability QUAD 16b, n=100",
   "IDS-4": "CICIDS2017 random_3way, CE20 zscore QUAD 96b, n=100",
   "IDS-5": "CIC-IoT-2023 neto_subsample random_3way, B15-AC desirability QUAD 96b, n=100",
   "IDS-7": "UNSW-NB15 random_3way, Wb-CTRL desirability QUAD 64b, n=100",
-  "IDS-6": "CIC-IoT-2023 46M neto_full, IDS-5 config + memmap, n=5 — descriptive only",
+  "IDS-6": "CIC-IoT-2023 46M neto_full, IDS-5 config + memmap, n=5 \u2014 descriptive only",
   "seeds": "20419-20518 (IDS-6: 20419-20423); spec experiments/ids_tandem_405_spec.json"
  },
  "metric_source": "held-out TEST, validation_summaries validation_point='final'. Never iterations.best_*, never during-search k-fold.",
@@ -13,13 +13,13 @@
  "headline_cell": {
   "candidates": "10 = phase {Grid Search, GA Neurons} x genome {best_f1, best_fpr, best_acc, best_ce, best_fitness}, all at val_cal",
   "when": "chosen ONCE after the cohorts finish (Luiz 10/10: 'wait for the results to decide')",
-  "uniformity": "the SAME (phase, genome) cell for ALL datasets — no per-dataset pick",
-  "criterion": "OPEN — pick one before reading: (A) highest mean val_cal F1 averaged over the 4 datasets (equal weight per dataset), tie -> lower mean FPR; all 10 cells disclosed in the appendix (as RAID did). (B) same criterion computed on the first 20 seeds (20419-20438) only, headline reported on the other 80 — removes the 1-of-10 selection from the reported numbers."
+  "uniformity": "the SAME (phase, genome) cell for ALL datasets \u2014 no per-dataset pick",
+  "criterion": "A (Luiz 10/10): the ONE (phase, genome) val_cal cell with the highest mean val_cal F1 averaged over the 4 n=100 datasets (equal weight per dataset), tie -> lower mean FPR; the same cell for every dataset; all 10 candidate cells disclosed in the appendix (as RAID 2026 did)."
  },
  "per_cohort_report": [
-  "headline cell: mean ± SD, median, 95% CI over n=100 — F1, FPR, Acc",
+  "headline cell: mean \u00b1 SD, median, 95% CI over n=100 \u2014 F1, FPR, Acc",
   "genome size behind the headline cell (neurons, mean bits/neuron), h/run",
-  "best-everywhere (best of 70 cells per run) shown ALONGSIDE, labelled 'best found on TEST' — never the result",
+  "best-everywhere (best of 70 cells per run) shown ALONGSIDE, labelled 'best found on TEST' \u2014 never the result",
   "single-genome Pareto operating points (best F1, low-FPR, small/edge) labelled 'best found', as in RAID tab:unsw",
   "appendix: full 2 phases x 5 genomes x 7 threshold modes"
  ],
