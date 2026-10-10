@@ -109,7 +109,7 @@ pub async fn get_cached_validation(
 		r#"SELECT ce, accuracy, f1_macro, fpr, threshold_metadata
            FROM validation_summaries
            WHERE genome_hash = ? AND cache_key = ? AND worker_abi = ?
-           ORDER BY threshold_metadata IS NOT NULL DESC
+           ORDER BY threshold_metadata IS NOT NULL DESC, id DESC
            LIMIT 1"#,
 	)
 	.bind(genome_hash)
@@ -384,6 +384,17 @@ mod cache_scope_tests
 		assert!(get_cached_validation(&pool, "g1", scope(&quad, 14)).await.unwrap().is_none());
 		let hit = get_cached_validation(&pool, "g1", scope(&qsr, 14)).await.unwrap();
 		assert_eq!(hit.expect("same scope must hit").2, Some(0.94274));
+	}
+
+	#[tokio::test]
+	async fn equal_scope_rows_resolve_to_the_most_recent()
+	{
+		let pool = test_pool("tie").await;
+		let quad = fixture_key("quad_default");
+		write_row(&pool, scope(&quad, 14), 0.80).await;
+		write_row(&pool, scope(&quad, 14), 0.85).await;
+		let hit = get_cached_validation(&pool, "g1", scope(&quad, 14)).await.unwrap();
+		assert_eq!(hit.expect("hit").2, Some(0.85));
 	}
 
 	#[tokio::test]
