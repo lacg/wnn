@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""IDS-2 UNSW-random decision readout, applied literally from experiments/ids2_unswr_rule.json.
+"""IDS-2 UNSW-random decision readout (view A = rule mean±SD; view B = best-of-best cell, n=1), applied literally from experiments/ids2_unswr_rule.json.
 
 READ-ONLY (sqlite mode=ro). No completion assumptions: every arm uses whatever
 COMPLETED flows exist; flows still queued/running for an arm are listed and get a
@@ -87,6 +87,66 @@ def run_scores(cells, floor):
 		cF1=bf1, cFPR=bfpr, cAcc=bacc, ncells=len(cells))
 
 
+def best_of_best(runs, floor):
+	"""View (B): single best cell over ALL runs x all cells of an arm (n=1, no SD)."""
+	cells = [z for r in runs for z in r["cells"]]
+	if not cells:
+		return None
+	return run_scores(cells, floor)
+
+
+def bloc(z):
+	return "-" if z is None else f"r{z['seed']}/{z['phase']}/{z['gt']}/{z['mode']}"
+
+
+def triple(z):
+	return "      -             " if z is None else f"{z['f1']:6.3f}/{z['fpr']:5.3f}/{z['acc']:6.3f}"
+
+
+BB_CELL = {"F1": "cF1", "FPR": "cFPR", "Acc": "cAcc"}
+
+
+def side_by_side(title, contender, defender, floor, metrics, L):
+	"""Each side at ITS OWN best: mean vs mean, best-of-best vs best-of-best."""
+	print(f"\n-- {title} {L}")
+	print("   (best-of-best = n=1 selection on TEST, 'best found', never an arm's performance; shown NEXT TO the mean)")
+	for m in metrics:
+		print(f"   [{m}]  {'side':26s} | {'MEAN±SD':>12s} {'n':>3s} | {'BEST-OF-BEST':>12s} | {'location (seed/phase/genome/mode)':44s} | cell F1/FPR/Acc")
+		rows = []
+		for lbl, runs in (contender, defender):
+			v = [r[m] for r in runs]
+			bb = best_of_best(runs, floor)
+			z = bb[BB_CELL[m]] if bb else None
+			rows.append((v, bb[m] if bb else float("nan"), z))
+			print(f"   {'':5s} {lbl:26s} | {ms(v):>12s} {len(v):3d} | {(bb[m] if bb else float('nan')):12.3f} | {bloc(z):44s} | {triple(z)}")
+		(vc, bc, zc), (vd, bd, zd) = rows
+		dm = (st.mean(vc) - st.mean(vd)) if vc and vd else float("nan")
+		dz = "" if not (zc and zd) else f"{zc['f1']-zd['f1']:+6.3f}/{zc['fpr']-zd['fpr']:+5.3f}/{zc['acc']-zd['acc']:+6.3f}"
+		print(f"   {'':5s} {'delta contender-defender':26s} | {dm:+12.3f} {'':3s} | {bc-bd:+12.3f} | {'':44s} | {dz}")
+
+
+def view_b_table(arms, floor, L):
+	"""Full 18-arm view (B) with per-metric ranks."""
+	bb = {k: best_of_best(v["runs"], floor) for k, v in arms.items()}
+	bb = {k: v for k, v in bb.items() if v}
+	rk = {}
+	for m in ("F1", "FPR", "Acc"):
+		# competition ranking on values rounded to 3 dp: exact ties share a rank (marked '=')
+		for k in bb:
+			x = round(bb[k][m], 3)
+			better = [j for j in bb if (round(bb[j][m], 3) < x if m == "FPR" else round(bb[j][m], 3) > x)]
+			rk[(k, m)] = 1 + len(better)
+	print(f"\n-- 8. View (B) BEST OF THE BEST EVERYWHERE, all arms (n=1 cell per arm per metric, NO SD; 'best found' on TEST) {L}")
+	print("   triple = that SAME cell's F1/FPR/Acc; loc = seed/phase/genome/mode")
+	for m in ("F1", "FPR", "Acc"):
+		print(f"   [{m}{'@F1>=93' if m == 'FPR' else ''}]")
+		print(f"   {'rk':>3s} {'arm':9s} {'mode':4s} n | {m:>7s} | {'F1/FPR/Acc':20s} | loc")
+		for k in sorted(bb, key=lambda k: rk[(k, m)]):
+			z = bb[k][BB_CELL[m]]
+			tie = "=" if sum(1 for j in bb if rk[(j, m)] == rk[(k, m)]) > 1 else " "
+			print(f"   {rk[(k, m)]:2d}{tie} {k[0]:9s} {k[1]:4s} {len(arms[k]['runs'])} | {bb[k][m]:7.3f} | {triple(z)} | {bloc(z)}")
+
+
 def loc(z):
 	return "-" if z is None else f"{z['phase']}/{z['gt']}/{z['mode']}"
 
@@ -150,8 +210,10 @@ def main():
 				cells = flow_cells(c, fid)
 				if not cells:
 					continue
+				for z in cells:
+					z["seed"] = seed_of(name)
 				r = run_scores(cells, floor)
-				r.update(fid=fid, name=name, seed=seed_of(name), h=hours(s0, s1))
+				r.update(fid=fid, name=name, seed=seed_of(name), h=hours(s0, s1), cells=cells)
 				runs.append(r)
 			n_runs += len(runs)
 			arms[(w, mm)] = dict(runs=runs, scores={m: [r[m] for r in runs] for m in ("F1", "FPR", "Acc")})
@@ -258,6 +320,13 @@ def main():
 		print(f"{w:9s} {mm:4s} {len(v['runs']):2d} | {ms(acc['best_f1']['f1']):>12s} {ms(acc['best_f1']['fpr']):>12s} {ms(acc['best_f1']['acc']):>12s} | "
 			f"{ms(acc['best_fitness']['f1']):>15s} {ms(acc['best_fitness']['fpr']):>12s} {ms(acc['best_fitness']['acc']):>12s}")
 
+	# 7. contender vs defender, both views
+	print(f"\n-- 7. CONTENDER vs DEFENDER (Wb-CTRL QUAD), each at its OWN best {L}")
+	for m in ("F1", "FPR", "Acc"):
+		k = dec[m]["raw"]
+		side_by_side(f"7.{m} contender = rule's raw {m} winner {k[0]} {k[1]} (final after (b): {dec[m]['final'][0]} {dec[m]['final'][1]})",
+			(f"C {k[0]} {k[1]}", arms[k]["runs"]), (f"D {INCUMBENT[0]} {INCUMBENT[1]}", arms[INCUMBENT]["runs"]), floor, (m,), L)
+	view_b_table(arms, floor, L)
 	sp100(c, floor, L)
 
 
@@ -272,7 +341,10 @@ def sp100(c, floor, L):
 			cells = flow_cells(c, fid)
 			if not cells:
 				continue
+			for z in cells:
+				z["seed"] = seed_of(name)
 			r = run_scores(cells, floor)
+			r["cells"] = cells
 			vc = [z for z in cells if z["phase"] == "GA" and z["gt"] == "best_f1" and z["mode"] == "val_cal"]
 			r["vc"] = vc[0] if vc else None
 			res[seed_of(name)] = r
@@ -281,6 +353,8 @@ def sp100(c, floor, L):
 	s, sp = grab("SP100-unswr-qsr-64bWb-r%-abi13", r"SP100-unswr-qsr-64bWb-r\d+-abi13")
 	print(f"\n-- 6. SP100 Wb: QUAD vs QSR-abi13 (alongside, NOT ranked) {L}")
 	print(f"   QUAD completed n={len(q)} (pending {len(qp)}); QSR-abi13 completed n={len(s)} (pending {len(sp)}: {', '.join(p[1]+'['+p[2]+']' for p in sp)})")
+	side_by_side("6a. SP100 Wb: D = QUAD vs C = QSR-abi13, each at its OWN best (all completed runs; NOT ranked)",
+		(f"C SP100 QSR-abi13", list(s.values())), (f"D SP100 QUAD", list(q.values())), floor, ("F1", "FPR", "Acc"), L)
 	paired = sorted(set(q) & set(s))
 	def row(lbl, sel_q, sel_s):
 		vq = [x for x in sel_q if x is not None]
