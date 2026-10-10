@@ -63,8 +63,8 @@ selection ran on) and never the during-search gen lines (anti-predictive, repeat
 ## Coverage
 
 ```
-markers with a headline held-out : 289
-  altitude regimen (alt= present) : 205
+markers with a headline held-out : 290
+  altitude regimen (alt= present) : 206
   attitude-only                   : 84
   state-neuron count unreadable   : 0  (no .out on disk)
   h743 keys counted exactly       : 75  (experiments/h743_keys.json)
@@ -78,7 +78,7 @@ markers with a headline held-out : 289
 
 ```
                  attitude-only   altitude
-  sn = 0                78          205
+  sn = 0                78          206
   sn > 0                 6            0
 ```
 
@@ -233,7 +233,7 @@ same-rule rank: a large value means that row owes its placing to the draw.
      9     0.1000  CRN  100.0%    1.44    1.00  0.473  fits      0.1000     +2  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_l090_l
     10     0.1000  CRN   99.0%    1.26    0.69  0.174  qspi?     0.1000     +2  SL_C_b24n256_cf21_brushless_L4C_g10_s31337006_op31
     11     0.1001  CRN   99.6%    1.37    0.86  0.401  qspi      0.1001     +2  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_ls2
-    12     0.1002  CRN   98.6%    1.19    0.76  0.440  qspi      0.1870    +80  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_bd
+    12     0.1002  CRN   98.6%    1.19    0.76  0.440  qspi      0.1870    +81  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_bd
     13     0.1006  CRN   99.4%    1.34    0.70  0.197  qspi      0.1021     +3  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_pipeN3
     14     0.1029  CRN   99.6%    1.41    0.85  0.300  fits      0.1029     +4  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_crn
     15     0.1036  CRN   99.6%    1.42    0.96  0.195  qspi      0.1096     +8  TAB_on_b32n256_cf21_brushless_L4C_s31337005
@@ -246,7 +246,7 @@ same-rule rank: a large value means that row owes its placing to the draw.
     22     0.1099  CRN   99.6%    1.51    0.95  0.463  fits      0.1099     +3  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_leak09
     23     0.1104  CRN  100.0%    1.59    1.22  0.626  fits      0.1104     +3  LKR_l090_b32n64_cf21_brushless_L4C_g10_s31337002
     24     0.1106  CRN   99.6%    1.52    0.79  0.238  qspi      0.1106     +3  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_full30
-    25     0.1107  CRN   99.2%    1.45    0.87  0.196  qspi?     0.1658    +60  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_tw15
+    25     0.1107  CRN   99.2%    1.45    0.87  0.196  qspi?     0.1658    +61  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_tw15
 ```
 
 ## CRN vs rotation on the same rule
