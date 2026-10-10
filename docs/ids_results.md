@@ -171,6 +171,11 @@ WHAT CHANGED
   Every CIC-IoT row in the next paper comes from the Kaggle/Neto copies; every table pairs modes.
 
 ## IDS-16 READOUT + CLOSED (09/10/2026) — SP-*-ablqsr memory-mode ablation on the fixed OI trainer (worker ABI 13)
+> **⚠️ UNDER RE-AUDIT (10/10/2026): the cross-flow validation cache leaks rows across memory modes / trainer ABIs**
+> (key = dataset+bits+split, genome_hash = connections only). 115/360 SP-*-ablqsr final rows were inherited from other
+> flows, so the QSR-vs-QUAD tables below read partly through the cache. IDS-2 decision HELD for the same reason.
+> See memory project_validation_cache_cross_flow_leak; fix + re-validation pending Luiz.
+
 QSR-abi13 (n=10/dataset) vs two QUAD arms (SP-*-bin-n30, SP100-*-quad; config diff = memory_mode only, verified
 key-by-key; ciciot bin with 4 -w64fix substitutes). GA best_f1 val_cal, held-out TEST. Pre-fix QSR rows are VOID.
 ```
