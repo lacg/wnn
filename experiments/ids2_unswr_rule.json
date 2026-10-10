@@ -36,5 +36,16 @@
  },
  "decision": "If the three metric winners (after fallback b) are the SAME arm -> that arm is the IDS-2 winner and IDS-7's config. If they DIFFER -> NO automatic winner: report the three winners side by side (with each one's other two metrics) and escalate to Luiz to decide ('we will need to talk').",
  "early_read_disclosure": "10/10/2026 ~09:40 EDT (Luiz): a DISCLOSED early look at 91/94 (missing: IDSXD-unswr-qsr-64b-Wb-CTRL-r20405-abi13 = 3rd seed of Wb-CTRL QSR, plus 2 SP100 runs outside the ranking) so Luiz can validate the final readout. The rule text is NOT changed after this read; the DECISION is taken only on the complete 94/94 set by the watcher readout.",
- "hold": "10/10/2026: DECISION HELD \u2014 the cross-flow validation cache (key omits memory mode/cell type/ABI) leaked final rows into this sweep (QSR-abi13 114/280, QUAD 102/330 inherited); the B34-CTRL QSR r20402 best-of-best (94.274) is a cached copy of void pre-ABI-13 flow 5929. Re-read only after the inherited rows are re-validated."
+ "hold": "10/10/2026: DECISION HELD \u2014 the cross-flow validation cache (key omits memory mode/cell type/ABI) leaked final rows into this sweep (QSR-abi13 114/280, QUAD 102/330 inherited); the B34-CTRL QSR r20402 best-of-best (94.274) is a cached copy of void pre-ABI-13 flow 5929. Re-read only after the inherited rows are re-validated.",
+ "hold_released": "10/10/2026 ~14:10 EDT: all 260 cache-inherited IDS-2 rows re-validated on their own model (249 + 11 kept rows re-checked bit-identical; driver scripts/ids2/revalidate_inherited.py, commit b66c0eb7). Every ranked run now has 70/70 own cells.",
+ "outcome": {
+  "applied": "10/10/2026, full 70 cells, rule unchanged (experiments/ids2_readout_post_revalidation.txt)",
+  "raw_winners": {
+   "F1": "B15-AC QSR 93.504 (+0.007 vs Wb-CTRL QUAD, pooled SD 0.008)",
+   "FPR": "Wb-CTRL QSR 0.834 (+0.012, SD 0.116)",
+   "Acc": "CE20 QUAD 98.960 (+0.007, SD 0.015)"
+  },
+  "after_fallback_b": "Wb-CTRL QUAD on all three",
+  "decision": "SINGLE WINNER: Wb-CTRL QUAD -> IDS-7 config (pending Luiz ack)"
+ }
 }

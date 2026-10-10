@@ -1,0 +1,305 @@
+== IDS-2 UNSW-random best-everywhere readout [POST-REVALIDATION 10/10 — full 70 cells]
+   ranked runs used: 58; pending (queued/running) ranked runs: 0
+
+-- 1. Per-arm best-everywhere (held-out TEST, final; mean±SD %) [POST-REVALIDATION 10/10 — full 70 cells]
+arm       mode  n |     F1 (max) |   FPR@F1>=93 |    Acc (max) | h/run | cells/run
+B05-AC    QUAD  3 |   93.50±0.01 |    1.10±0.01 |   98.92±0.00 |  0.74 | 70,70,70
+B05-AC    QSR   3 |   93.50±0.01 |    1.04±0.09 |   98.92±0.00 |  0.85 | 70,70,70
+B05-CE    QUAD  3 |   93.50±0.01 |    1.05±0.06 |   98.92±0.00 |  0.67 | 70,70,70
+B05-CE    QSR   3 |   93.50±0.01 |    1.04±0.05 |   98.92±0.00 |  0.59 | 70,70,70
+B10-AC    QUAD  3 |   93.50±0.01 |    1.01±0.17 |   98.94±0.03 |  0.72 | 70,70,70
+B10-AC    QSR   3 |   93.50±0.01 |    1.10±0.02 |   98.92±0.00 |  0.55 | 70,70,70
+B10-CE    QUAD  3 |   93.50±0.01 |    1.04±0.12 |   98.93±0.01 |  0.52 | 70,70,70
+B10-CE    QSR   3 |   93.50±0.01 |    1.09±0.02 |   98.92±0.00 |  0.50 | 70,70,70
+B15-AC    QUAD  3 |   93.50±0.01 |    1.06±0.07 |   98.92±0.00 |  0.65 | 70,70,70
+B15-AC    QSR   3 |   93.50±0.01 |    1.01±0.18 |   98.93±0.02 |  0.82 | 70,70,70
+B15-CE    QUAD  3 |   93.50±0.01 |    1.10±0.01 |   98.92±0.00 |  0.64 | 70,70,70
+B15-CE    QSR   3 |   93.50±0.01 |    1.07±0.05 |   98.92±0.00 |  0.47 | 70,70,70
+B34-CTRL  QUAD  5 |   93.49±0.01 |    1.10±0.01 |   98.92±0.00 |  1.56 | 70,70,70,70,70
+B34-CTRL  QSR   5 |   93.50±0.00 |    1.11±0.00 |   98.92±0.00 |  1.48 | 70,70,70,70,70
+CE20      QUAD  3 |   93.50±0.01 |    0.97±0.23 |   98.96±0.02 |  0.96 | 70,70,70
+CE20      QSR   3 |   93.50±0.01 |    1.10±0.01 |   98.92±0.00 |  0.83 | 70,70,70
+Wb-CTRL   QUAD  3 |   93.50±0.01 |    0.85±0.23 |   98.95±0.03 |  1.07 | 70,70,70
+Wb-CTRL   QSR   3 |   93.50±0.01 |    0.83±0.25 |   98.96±0.03 |  0.78 | 70,70,70
+
+-- Ranking F1 [POST-REVALIDATION 10/10 — full 70 cells]
+ 1. B15-AC    QSR  n=3   93.50±0.01  gap-to-#1 +0.000  runs: 93.497 93.505 93.510
+ 2. B15-CE    QUAD n=3   93.50±0.01  gap-to-#1 -0.000  runs: 93.500 93.501 93.510
+ 3. B10-AC    QSR  n=3   93.50±0.01  gap-to-#1 -0.001  runs: 93.497 93.502 93.510
+ 4. Wb-CTRL   QSR  n=3   93.50±0.01  gap-to-#1 -0.001  runs: 93.497 93.502 93.510
+ 5. B05-AC    QUAD n=3   93.50±0.01  gap-to-#1 -0.001  runs: 93.497 93.500 93.510
+ 6. B05-AC    QSR  n=3   93.50±0.01  gap-to-#1 -0.004  runs: 93.497 93.494 93.510
+ 7. B15-AC    QUAD n=3   93.50±0.01  gap-to-#1 -0.004  runs: 93.497 93.494 93.510
+ 8. CE20      QSR  n=3   93.50±0.01  gap-to-#1 -0.004  runs: 93.497 93.494 93.510
+ 9. B10-AC    QUAD n=3   93.50±0.01  gap-to-#1 -0.004  runs: 93.497 93.493 93.510
+10. B10-CE    QUAD n=3   93.50±0.01  gap-to-#1 -0.004  runs: 93.497 93.493 93.510
+11. B05-CE    QSR  n=3   93.50±0.01  gap-to-#1 -0.004  runs: 93.497 93.492 93.510
+12. B10-CE    QSR  n=3   93.50±0.01  gap-to-#1 -0.005  runs: 93.497 93.491 93.510
+13. CE20      QUAD n=3   93.50±0.01  gap-to-#1 -0.005  runs: 93.497 93.490 93.510
+14. B15-CE    QSR  n=3   93.50±0.01  gap-to-#1 -0.006  runs: 93.497 93.485 93.510
+15. B34-CTRL  QSR  n=5   93.50±0.00  gap-to-#1 -0.007  runs: 93.500 93.495 93.500 93.497 93.491
+16. B05-CE    QUAD n=3   93.50±0.01  gap-to-#1 -0.007  runs: 93.489 93.491 93.510
+17. Wb-CTRL   QUAD n=3   93.50±0.01  gap-to-#1 -0.007  runs: 93.489 93.490 93.510
+18. B34-CTRL  QUAD n=5   93.49±0.01  gap-to-#1 -0.009  runs: 93.505 93.496 93.487 93.488 93.496
+
+-- Ranking FPR [POST-REVALIDATION 10/10 — full 70 cells]
+ 1. Wb-CTRL   QSR  n=3    0.83±0.25  gap-to-#1 +0.000  runs: 0.755 0.634 1.112
+ 2. Wb-CTRL   QUAD n=3    0.85±0.23  gap-to-#1 +0.012  runs: 0.705 1.107 0.725
+ 3. CE20      QUAD n=3    0.97±0.23  gap-to-#1 +0.138  runs: 0.710 1.102 1.102
+ 4. B15-AC    QSR  n=3    1.01±0.18  gap-to-#1 +0.173  runs: 0.794 1.110 1.116
+ 5. B10-AC    QUAD n=3    1.01±0.17  gap-to-#1 +0.181  runs: 0.816 1.116 1.114
+ 6. B05-CE    QSR  n=3    1.04±0.05  gap-to-#1 +0.206  runs: 1.011 1.007 1.102
+ 7. B05-AC    QSR  n=3    1.04±0.09  gap-to-#1 +0.210  runs: 0.938 1.097 1.096
+ 8. B10-CE    QUAD n=3    1.04±0.12  gap-to-#1 +0.210  runs: 1.110 0.906 1.115
+ 9. B05-CE    QUAD n=3    1.05±0.06  gap-to-#1 +0.218  runs: 1.108 1.066 0.981
+10. B15-AC    QUAD n=3    1.06±0.07  gap-to-#1 +0.229  runs: 1.109 0.979 1.098
+11. B15-CE    QSR  n=3    1.07±0.05  gap-to-#1 +0.236  runs: 1.007 1.102 1.100
+12. B10-CE    QSR  n=3    1.09±0.02  gap-to-#1 +0.257  runs: 1.093 1.108 1.072
+13. B10-AC    QSR  n=3    1.10±0.02  gap-to-#1 +0.265  runs: 1.113 1.106 1.078
+14. B15-CE    QUAD n=3    1.10±0.01  gap-to-#1 +0.266  runs: 1.095 1.097 1.106
+15. CE20      QSR  n=3    1.10±0.01  gap-to-#1 +0.269  runs: 1.110 1.097 1.102
+16. B05-AC    QUAD n=3    1.10±0.01  gap-to-#1 +0.270  runs: 1.095 1.106 1.110
+17. B34-CTRL  QUAD n=5    1.10±0.01  gap-to-#1 +0.271  runs: 1.091 1.108 1.109 1.109 1.108
+18. B34-CTRL  QSR  n=5    1.11±0.00  gap-to-#1 +0.274  runs: 1.109 1.107 1.108 1.109 1.106
+
+-- Ranking Acc [POST-REVALIDATION 10/10 — full 70 cells]
+ 1. CE20      QUAD n=3   98.96±0.02  gap-to-#1 +0.000  runs: 98.979 98.937 98.964
+ 2. Wb-CTRL   QSR  n=3   98.96±0.03  gap-to-#1 -0.003  runs: 98.977 98.974 98.921
+ 3. Wb-CTRL   QUAD n=3   98.95±0.03  gap-to-#1 -0.007  runs: 98.987 98.917 98.955
+ 4. B10-AC    QUAD n=3   98.94±0.03  gap-to-#1 -0.021  runs: 98.977 98.918 98.921
+ 5. B15-AC    QSR  n=3   98.93±0.02  gap-to-#1 -0.028  runs: 98.955 98.920 98.921
+ 6. B10-CE    QUAD n=3   98.93±0.01  gap-to-#1 -0.033  runs: 98.919 98.941 98.921
+ 7. B05-AC    QSR  n=3   98.92±0.00  gap-to-#1 -0.039  runs: 98.921 98.923 98.921
+ 8. B15-CE    QUAD n=3   98.92±0.00  gap-to-#1 -0.040  runs: 98.919 98.919 98.921
+ 9. B05-AC    QUAD n=3   98.92±0.00  gap-to-#1 -0.041  runs: 98.919 98.919 98.921
+10. B10-AC    QSR  n=3   98.92±0.00  gap-to-#1 -0.041  runs: 98.919 98.919 98.921
+11. B05-CE    QSR  n=3   98.92±0.00  gap-to-#1 -0.041  runs: 98.919 98.918 98.921
+12. B10-CE    QSR  n=3   98.92±0.00  gap-to-#1 -0.041  runs: 98.919 98.918 98.921
+13. B15-AC    QUAD n=3   98.92±0.00  gap-to-#1 -0.041  runs: 98.919 98.918 98.921
+14. CE20      QSR  n=3   98.92±0.00  gap-to-#1 -0.041  runs: 98.919 98.918 98.921
+15. B34-CTRL  QSR  n=5   98.92±0.00  gap-to-#1 -0.041  runs: 98.919 98.919 98.919 98.919 98.918
+16. B05-CE    QUAD n=3   98.92±0.00  gap-to-#1 -0.041  runs: 98.917 98.918 98.921
+17. B15-CE    QSR  n=3   98.92±0.00  gap-to-#1 -0.041  runs: 98.919 98.917 98.921
+18. B34-CTRL  QUAD n=5   98.92±0.00  gap-to-#1 -0.042  runs: 98.920 98.919 98.917 98.917 98.919
+
+-- 2. Fallback (b) per metric [POST-REVALIDATION 10/10 — full 70 cells]
+metric | pooled SD | Wb-CTRL QUAD |      raw winner    mean |  margin | >=1 SD? | final
+F1     |     0.008 |       93.496 |      B15-AC QSR  93.504 |  +0.007 |      NO | Wb-CTRL QUAD
+FPR    |     0.116 |        0.846 |     Wb-CTRL QSR   0.834 |  +0.012 |      NO | Wb-CTRL QUAD
+Acc    |     0.015 |       98.953 |       CE20 QUAD  98.960 |  +0.007 |      NO | Wb-CTRL QUAD
+
+-- 3. Decision [POST-REVALIDATION 10/10 — full 70 cells]
+   SINGLE WINNER: ('Wb-CTRL', 'QUAD')
+   F1: #1-#2 margin 0.000 pp (B15-CE QUAD); pooled SD 0.008
+   FPR: #1-#2 margin 0.012 pp (Wb-CTRL QUAD); pooled SD 0.116
+   Acc: #1-#2 margin 0.003 pp (Wb-CTRL QSR); pooled SD 0.015
+
+-- 4. Winning-cell location per run (phase/genome/mode) [POST-REVALIDATION 10/10 — full 70 cells]
+arm       mode  seed |     F1 @                                      |    FPR    (F1) @                                      |    Acc @
+B05-AC    QUAD 20403 | 93.497 Grid/best_f1/train_cal                 |  1.095  93.056 GA/best_acc/empirical                  | 98.919 Grid/best_acc/train_cal
+B05-AC    QUAD 20404 | 93.500 GA/best_acc/empirical_cumulative       |  1.106  93.183 GA/best_fpr/empirical                  | 98.919 GA/best_acc/empirical_cumulative
+B05-AC    QUAD 20405 | 93.510 Grid/best_acc/train_cal                |  1.110  93.074 Grid/best_fpr/beta                     | 98.921 Grid/best_acc/train_cal
+B05-AC    QSR  20403 | 93.497 Grid/best_acc/empirical_cumulative     |  0.938  93.251 GA/best_acc/empirical                  | 98.921 GA/best_acc/empirical
+B05-AC    QSR  20404 | 93.494 Grid/best_acc/train_cal                |  1.097  93.076 Grid/best_acc/platt                    | 98.923 GA/best_ce/empirical_cumulative
+B05-AC    QSR  20405 | 93.510 Grid/best_acc/train_cal                |  1.096  93.104 GA/best_fpr/empirical                  | 98.921 Grid/best_acc/train_cal
+B05-CE    QUAD 20403 | 93.489 Grid/best_f1/empirical_cumulative      |  1.108  93.035 GA/best_f1/empirical                   | 98.917 Grid/best_f1/empirical_cumulative
+B05-CE    QUAD 20404 | 93.491 Grid/best_fpr/train_cal                |  1.066  93.012 GA/best_fpr/empirical                  | 98.918 Grid/best_fpr/train_cal
+B05-CE    QUAD 20405 | 93.510 Grid/best_acc/train_cal                |  0.981  93.002 GA/best_fitness/empirical              | 98.921 Grid/best_acc/train_cal
+B05-CE    QSR  20403 | 93.497 Grid/best_acc/empirical_cumulative     |  1.011  93.065 GA/best_ce/empirical                   | 98.919 Grid/best_acc/empirical_cumulative
+B05-CE    QSR  20404 | 93.492 GA/best_acc/train_cal                  |  1.007  93.002 GA/best_fpr/empirical                  | 98.918 GA/best_f1/train_cal
+B05-CE    QSR  20405 | 93.510 Grid/best_acc/train_cal                |  1.102  93.044 GA/best_ce/empirical                   | 98.921 Grid/best_acc/train_cal
+B10-AC    QUAD 20403 | 93.497 Grid/best_acc/train_cal                |  0.816  93.473 GA/best_ce/train_cal                   | 98.977 GA/best_ce/train_cal
+B10-AC    QUAD 20404 | 93.493 Grid/best_acc/train_cal                |  1.116  93.283 Grid/best_fpr/platt                    | 98.918 Grid/best_acc/train_cal
+B10-AC    QUAD 20405 | 93.510 Grid/best_acc/train_cal                |  1.114  93.203 Grid/best_fpr/beta                     | 98.921 Grid/best_acc/train_cal
+B10-AC    QSR  20403 | 93.497 Grid/best_acc/empirical_cumulative     |  1.113  93.301 GA/best_f1/empirical                   | 98.919 Grid/best_acc/empirical_cumulative
+B10-AC    QSR  20404 | 93.502 Grid/best_f1/train_cal                 |  1.106  93.127 GA/best_acc/platt                      | 98.919 Grid/best_acc/train_cal
+B10-AC    QSR  20405 | 93.510 Grid/best_acc/train_cal                |  1.078  93.030 GA/best_ce/empirical                   | 98.921 Grid/best_acc/train_cal
+B10-CE    QUAD 20403 | 93.497 Grid/best_acc/train_cal                |  1.110  93.129 GA/best_fpr/platt                      | 98.919 Grid/best_acc/train_cal
+B10-CE    QUAD 20404 | 93.493 Grid/best_acc/train_cal                |  0.906  93.011 GA/best_ce/empirical                   | 98.941 GA/best_ce/empirical_cumulative
+B10-CE    QUAD 20405 | 93.510 Grid/best_acc/train_cal                |  1.115  93.059 GA/best_acc/empirical                  | 98.921 Grid/best_acc/train_cal
+B10-CE    QSR  20403 | 93.497 Grid/best_acc/empirical_cumulative     |  1.093  93.092 GA/best_fpr/platt                      | 98.919 Grid/best_acc/empirical_cumulative
+B10-CE    QSR  20404 | 93.491 Grid/best_fpr/empirical_cumulative     |  1.108  93.221 GA/best_fitness/platt                  | 98.918 Grid/best_fpr/empirical_cumulative
+B10-CE    QSR  20405 | 93.510 Grid/best_acc/train_cal                |  1.072  93.021 GA/best_fpr/beta                       | 98.921 Grid/best_acc/train_cal
+B15-AC    QUAD 20403 | 93.497 Grid/best_acc/train_cal                |  1.109  93.093 Grid/best_fpr/beta                     | 98.919 Grid/best_acc/train_cal
+B15-AC    QUAD 20404 | 93.494 GA/best_acc/train_cal                  |  0.979  93.052 GA/best_fpr/empirical                  | 98.918 GA/best_f1/train_cal
+B15-AC    QUAD 20405 | 93.510 Grid/best_acc/train_cal                |  1.098  93.030 GA/best_fitness/empirical              | 98.921 Grid/best_acc/train_cal
+B15-AC    QSR  20403 | 93.497 Grid/best_acc/empirical_cumulative     |  0.794  93.250 GA/best_fpr/empirical                  | 98.955 GA/best_acc/empirical
+B15-AC    QSR  20404 | 93.505 GA/best_ce/empirical_cumulative        |  1.110  93.250 GA/best_ce/empirical                   | 98.920 GA/best_ce/empirical_cumulative
+B15-AC    QSR  20405 | 93.510 Grid/best_acc/train_cal                |  1.116  93.236 GA/best_acc/beta                       | 98.921 Grid/best_acc/train_cal
+B15-CE    QUAD 20403 | 93.500 GA/best_acc/train_cal                  |  1.095  93.073 GA/best_ce/platt                       | 98.919 GA/best_ce/train_cal
+B15-CE    QUAD 20404 | 93.501 GA/best_f1/train_cal                   |  1.097  93.066 Grid/best_acc/platt                    | 98.919 GA/best_f1/train_cal
+B15-CE    QUAD 20405 | 93.510 Grid/best_acc/train_cal                |  1.106  93.180 GA/best_ce/empirical                   | 98.921 Grid/best_acc/train_cal
+B15-CE    QSR  20403 | 93.497 Grid/best_acc/empirical_cumulative     |  1.007  93.165 GA/best_f1/empirical                   | 98.919 Grid/best_acc/empirical_cumulative
+B15-CE    QSR  20404 | 93.485 Grid/best_acc/empirical_cumulative     |  1.102  93.149 GA/best_ce/empirical                   | 98.917 Grid/best_acc/empirical_cumulative
+B15-CE    QSR  20405 | 93.510 Grid/best_acc/train_cal                |  1.100  93.123 GA/best_fpr/empirical                  | 98.921 Grid/best_acc/train_cal
+B34-CTRL  QUAD 20401 | 93.505 Grid/best_acc/train_cal                |  1.091  93.106 Grid/best_fpr/train_cal                | 98.920 Grid/best_acc/train_cal
+B34-CTRL  QUAD 20402 | 93.496 GA/best_f1/train_cal                   |  1.108  93.160 Grid/best_fpr/platt                    | 98.919 GA/best_acc/train_cal
+B34-CTRL  QUAD 20403 | 93.487 Grid/best_ce/train_cal                 |  1.109  93.141 Grid/best_fitness/platt                | 98.917 Grid/best_fitness/train_cal
+B34-CTRL  QUAD 20404 | 93.488 Grid/best_acc/train_cal                |  1.109  93.102 GA/best_acc/platt                      | 98.917 Grid/best_acc/train_cal
+B34-CTRL  QUAD 20405 | 93.496 GA/best_f1/empirical_cumulative        |  1.108  93.079 Grid/best_acc/platt                    | 98.919 GA/best_acc/empirical_cumulative
+B34-CTRL  QSR  20401 | 93.500 Grid/best_acc/empirical_cumulative     |  1.109  93.111 GA/best_acc/platt                      | 98.919 Grid/best_acc/empirical_cumulative
+B34-CTRL  QSR  20402 | 93.495 Grid/best_f1/train_cal                 |  1.107  93.168 Grid/best_fpr/platt                    | 98.919 Grid/best_f1/train_cal
+B34-CTRL  QSR  20403 | 93.500 Grid/best_f1/train_cal                 |  1.108  93.319 Grid/best_fpr/train_cal                | 98.919 Grid/best_f1/train_cal
+B34-CTRL  QSR  20404 | 93.497 Grid/best_acc/train_cal                |  1.109  93.111 GA/best_acc/platt                      | 98.919 Grid/best_acc/train_cal
+B34-CTRL  QSR  20405 | 93.491 Grid/best_f1/train_cal                 |  1.106  93.063 GA/best_acc/platt                      | 98.918 Grid/best_f1/train_cal
+CE20      QUAD 20403 | 93.497 Grid/best_acc/train_cal                |  0.710  93.151 GA/best_fitness/empirical_cumulative   | 98.979 GA/best_acc/empirical_cumulative
+CE20      QUAD 20404 | 93.490 Grid/best_acc/train_cal                |  1.102  93.131 GA/best_acc/empirical                  | 98.937 GA/best_f1/empirical_cumulative
+CE20      QUAD 20405 | 93.510 Grid/best_acc/train_cal                |  1.102  93.170 GA/best_fitness/platt                  | 98.964 GA/best_f1/empirical_cumulative
+CE20      QSR  20403 | 93.497 GA/best_f1/train_cal                   |  1.110  93.215 GA/best_f1/platt                       | 98.919 Grid/best_acc/empirical_cumulative
+CE20      QSR  20404 | 93.494 Grid/best_acc/train_cal                |  1.097  93.076 Grid/best_acc/platt                    | 98.918 Grid/best_acc/train_cal
+CE20      QSR  20405 | 93.510 Grid/best_acc/train_cal                |  1.102  93.153 GA/best_ce/empirical                   | 98.921 Grid/best_acc/train_cal
+Wb-CTRL   QUAD 20403 | 93.489 Grid/best_acc/train_cal                |  0.705  93.292 GA/best_ce/empirical                   | 98.987 GA/best_acc/train_cal
+Wb-CTRL   QUAD 20404 | 93.490 Grid/best_acc/train_cal                |  1.107  93.095 GA/best_acc/platt                      | 98.917 GA/best_f1/empirical_cumulative
+Wb-CTRL   QUAD 20405 | 93.510 Grid/best_acc/train_cal                |  0.725  93.156 GA/best_acc/empirical                  | 98.955 GA/best_acc/empirical_cumulative
+Wb-CTRL   QSR  20403 | 93.497 Grid/best_acc/empirical_cumulative     |  0.755  93.331 GA/best_fpr/empirical_cumulative       | 98.977 GA/best_ce/empirical_cumulative
+Wb-CTRL   QSR  20404 | 93.502 Grid/best_acc/train_cal                |  0.634  93.103 GA/best_ce/empirical                   | 98.974 GA/best_acc/empirical_cumulative
+Wb-CTRL   QSR  20405 | 93.510 Grid/best_acc/train_cal                |  1.112  93.210 GA/best_ce/platt                       | 98.921 Grid/best_acc/train_cal
+   provenance tally over all ranked runs:
+   F1  : best_acc=44  best_f1=10  best_fpr=2  best_ce=2  train_cal=44  empirical_cumulative=14  Grid=49  GA=9
+   FPR : best_fpr=19  best_acc=16  best_ce=13  best_fitness=6  best_f1=4  empirical=27  platt=21  beta=5  train_cal=3  empirical_cumulative=2  GA=45  Grid=13
+   Acc : best_acc=39  best_f1=10  best_ce=6  best_fpr=2  best_fitness=1  train_cal=35  empirical_cumulative=21  empirical=2  Grid=37  GA=21
+
+-- 5. Conventional: GA Neurons final, val_cal, best_f1 and best_fitness (mean±SD %) [POST-REVALIDATION 10/10 — full 70 cells]
+arm       mode  n |   best_f1 F1          FPR          Acc | best_fitness F1          FPR          Acc
+B05-AC    QUAD  3 |   93.45±0.05    1.12±0.00   98.91±0.01 |      93.45±0.04    1.12±0.00   98.91±0.01
+B05-AC    QSR   3 |   93.45±0.04    1.12±0.00   98.91±0.01 |      93.44±0.03    1.12±0.00   98.91±0.01
+B05-CE    QUAD  3 |   93.47±0.02    1.12±0.00   98.92±0.00 |      93.49±0.00    1.12±0.00   98.92±0.00
+B05-CE    QSR   3 |   93.44±0.07    1.12±0.00   98.91±0.01 |      93.43±0.07    1.12±0.01   98.91±0.01
+B10-AC    QUAD  3 |   93.47±0.02    1.02±0.16   98.93±0.03 |      93.47±0.02    1.02±0.18   98.93±0.04
+B10-AC    QSR   3 |   93.46±0.03    1.12±0.00   98.91±0.00 |      93.45±0.03    1.12±0.00   98.91±0.00
+B10-CE    QUAD  3 |   93.48±0.02    1.12±0.00   98.92±0.00 |      93.48±0.01    1.12±0.00   98.92±0.00
+B10-CE    QSR   3 |   93.48±0.01    1.12±0.00   98.92±0.00 |      93.47±0.01    1.12±0.00   98.91±0.00
+B15-AC    QUAD  3 |   93.48±0.02    1.12±0.00   98.92±0.00 |      93.48±0.01    1.12±0.00   98.92±0.00
+B15-AC    QSR   3 |   93.48±0.03    1.12±0.00   98.92±0.01 |      93.48±0.03    1.12±0.00   98.92±0.01
+B15-CE    QUAD  3 |   93.49±0.01    1.12±0.00   98.92±0.00 |      93.49±0.01    1.12±0.00   98.92±0.00
+B15-CE    QSR   3 |   93.49±0.01    1.12±0.00   98.92±0.00 |      93.47±0.03    1.12±0.00   98.92±0.01
+B34-CTRL  QUAD  5 |   93.48±0.01    1.12±0.00   98.92±0.00 |      93.47±0.01    1.12±0.00   98.91±0.00
+B34-CTRL  QSR   5 |   93.48±0.01    1.12±0.00   98.92±0.00 |      93.47±0.01    1.12±0.00   98.91±0.00
+CE20      QUAD  3 |   93.41±0.07    0.98±0.23   98.93±0.04 |      93.45±0.03    1.12±0.00   98.91±0.01
+CE20      QSR   3 |   93.48±0.01    1.12±0.00   98.92±0.00 |      93.45±0.02    1.12±0.01   98.91±0.00
+Wb-CTRL   QUAD  3 |   93.44±0.04    0.99±0.23   98.94±0.04 |      93.44±0.04    0.99±0.23   98.94±0.04
+Wb-CTRL   QSR   3 |   93.47±0.01    1.12±0.00   98.91±0.00 |      93.47±0.02    1.12±0.00   98.92±0.00
+
+-- 7. CONTENDER vs DEFENDER (Wb-CTRL QUAD), each at its OWN best [POST-REVALIDATION 10/10 — full 70 cells]
+
+-- 7.F1 contender = rule's raw F1 winner B15-AC QSR (final after (b): Wb-CTRL QUAD) [POST-REVALIDATION 10/10 — full 70 cells]
+   (best-of-best = n=1 selection on TEST, 'best found', never an arm's performance; shown NEXT TO the mean)
+   [F1]  side                       |      MEAN±SD   n | BEST-OF-BEST | location (seed/phase/genome/mode)            | cell F1/FPR/Acc
+         C B15-AC QSR               |   93.50±0.01   3 |       93.510 | r20405/Grid/best_acc/train_cal               | 93.510/1.119/98.921
+         D Wb-CTRL QUAD             |   93.50±0.01   3 |       93.510 | r20405/Grid/best_acc/train_cal               | 93.510/1.119/98.921
+         delta contender-defender   |       +0.007     |       +0.000 |                                              | +0.000/+0.000/+0.000
+
+-- 7.FPR contender = rule's raw FPR winner Wb-CTRL QSR (final after (b): Wb-CTRL QUAD) [POST-REVALIDATION 10/10 — full 70 cells]
+   (best-of-best = n=1 selection on TEST, 'best found', never an arm's performance; shown NEXT TO the mean)
+   [FPR]  side                       |      MEAN±SD   n | BEST-OF-BEST | location (seed/phase/genome/mode)            | cell F1/FPR/Acc
+         C Wb-CTRL QSR              |    0.83±0.25   3 |        0.634 | r20404/GA/best_ce/empirical                  | 93.103/0.634/98.965
+         D Wb-CTRL QUAD             |    0.85±0.23   3 |        0.705 | r20403/GA/best_ce/empirical                  | 93.292/0.705/98.976
+         delta contender-defender   |       -0.012     |       -0.072 |                                              | -0.189/-0.072/-0.010
+
+-- 7.Acc contender = rule's raw Acc winner CE20 QUAD (final after (b): Wb-CTRL QUAD) [POST-REVALIDATION 10/10 — full 70 cells]
+   (best-of-best = n=1 selection on TEST, 'best found', never an arm's performance; shown NEXT TO the mean)
+   [Acc]  side                       |      MEAN±SD   n | BEST-OF-BEST | location (seed/phase/genome/mode)            | cell F1/FPR/Acc
+         C CE20 QUAD                |   98.96±0.02   3 |       98.979 | r20403/GA/best_acc/empirical_cumulative      | 93.338/0.717/98.979
+         D Wb-CTRL QUAD             |   98.95±0.03   3 |       98.987 | r20403/GA/best_acc/train_cal                 | 93.406/0.725/98.987
+         delta contender-defender   |       +0.007     |       -0.008 |                                              | -0.067/-0.008/-0.008
+
+-- 8. View (B) BEST OF THE BEST EVERYWHERE, all arms (n=1 cell per arm per metric, NO SD; 'best found' on TEST) [POST-REVALIDATION 10/10 — full 70 cells]
+   triple = that SAME cell's F1/FPR/Acc; loc = seed/phase/genome/mode
+   [F1]
+    rk arm       mode n |      F1 | F1/FPR/Acc           | loc
+    1= B05-AC    QUAD 3 |  93.510 | 93.510/1.119/98.921 | r20405/Grid/best_acc/train_cal
+    1= B05-AC    QSR  3 |  93.510 | 93.510/1.119/98.921 | r20405/Grid/best_acc/train_cal
+    1= B05-CE    QUAD 3 |  93.510 | 93.510/1.119/98.921 | r20405/Grid/best_acc/train_cal
+    1= B05-CE    QSR  3 |  93.510 | 93.510/1.119/98.921 | r20405/Grid/best_acc/train_cal
+    1= B10-AC    QUAD 3 |  93.510 | 93.510/1.119/98.921 | r20405/Grid/best_acc/train_cal
+    1= B10-AC    QSR  3 |  93.510 | 93.510/1.119/98.921 | r20405/Grid/best_acc/train_cal
+    1= B10-CE    QUAD 3 |  93.510 | 93.510/1.119/98.921 | r20405/Grid/best_acc/train_cal
+    1= B10-CE    QSR  3 |  93.510 | 93.510/1.119/98.921 | r20405/Grid/best_acc/train_cal
+    1= B15-AC    QUAD 3 |  93.510 | 93.510/1.119/98.921 | r20405/Grid/best_acc/train_cal
+    1= B15-AC    QSR  3 |  93.510 | 93.510/1.119/98.921 | r20405/Grid/best_acc/train_cal
+    1= B15-CE    QUAD 3 |  93.510 | 93.510/1.119/98.921 | r20405/Grid/best_acc/train_cal
+    1= B15-CE    QSR  3 |  93.510 | 93.510/1.119/98.921 | r20405/Grid/best_acc/train_cal
+    1= CE20      QUAD 3 |  93.510 | 93.510/1.119/98.921 | r20405/Grid/best_acc/train_cal
+    1= CE20      QSR  3 |  93.510 | 93.510/1.119/98.921 | r20405/Grid/best_acc/train_cal
+    1= Wb-CTRL   QUAD 3 |  93.510 | 93.510/1.119/98.921 | r20405/Grid/best_acc/train_cal
+    1= Wb-CTRL   QSR  3 |  93.510 | 93.510/1.119/98.921 | r20405/Grid/best_acc/train_cal
+   17  B34-CTRL  QUAD 5 |  93.505 | 93.505/1.118/98.920 | r20401/Grid/best_acc/train_cal
+   18  B34-CTRL  QSR  5 |  93.500 | 93.500/1.118/98.919 | r20401/Grid/best_acc/empirical_cumulative
+   [FPR@F1>=93]
+    rk arm       mode n |     FPR | F1/FPR/Acc           | loc
+    1  Wb-CTRL   QSR  3 |   0.634 | 93.103/0.634/98.965 | r20404/GA/best_ce/empirical
+    2  Wb-CTRL   QUAD 3 |   0.705 | 93.292/0.705/98.976 | r20403/GA/best_ce/empirical
+    3  CE20      QUAD 3 |   0.710 | 93.151/0.710/98.955 | r20403/GA/best_fitness/empirical_cumulative
+    4  B15-AC    QSR  3 |   0.794 | 93.250/0.794/98.951 | r20403/GA/best_fpr/empirical
+    5  B10-AC    QUAD 3 |   0.816 | 93.473/0.816/98.977 | r20403/GA/best_ce/train_cal
+    6  B10-CE    QUAD 3 |   0.906 | 93.011/0.906/98.893 | r20404/GA/best_ce/empirical
+    7  B05-AC    QSR  3 |   0.938 | 93.251/0.938/98.921 | r20403/GA/best_acc/empirical
+    8  B15-AC    QUAD 3 |   0.979 | 93.052/0.979/98.883 | r20404/GA/best_fpr/empirical
+    9  B05-CE    QUAD 3 |   0.981 | 93.002/0.981/98.876 | r20405/GA/best_fitness/empirical
+   10= B05-CE    QSR  3 |   1.007 | 93.002/1.007/98.870 | r20404/GA/best_fpr/empirical
+   10= B15-CE    QSR  3 |   1.007 | 93.165/1.007/98.893 | r20403/GA/best_f1/empirical
+   12  B10-CE    QSR  3 |   1.072 | 93.021/1.072/98.859 | r20405/GA/best_fpr/beta
+   13  B10-AC    QSR  3 |   1.078 | 93.030/1.078/98.859 | r20405/GA/best_ce/empirical
+   14  B34-CTRL  QUAD 5 |   1.091 | 93.106/1.091/98.867 | r20401/Grid/best_fpr/train_cal
+   15= B05-AC    QUAD 3 |   1.095 | 93.056/1.095/98.859 | r20403/GA/best_acc/empirical
+   15= B15-CE    QUAD 3 |   1.095 | 93.073/1.095/98.861 | r20403/GA/best_ce/platt
+   17  CE20      QSR  3 |   1.097 | 93.076/1.097/98.861 | r20404/Grid/best_acc/platt
+   18  B34-CTRL  QSR  5 |   1.106 | 93.063/1.106/98.858 | r20405/GA/best_acc/platt
+   [Acc]
+    rk arm       mode n |     Acc | F1/FPR/Acc           | loc
+    1  Wb-CTRL   QUAD 3 |  98.987 | 93.406/0.725/98.987 | r20403/GA/best_acc/train_cal
+    2  CE20      QUAD 3 |  98.979 | 93.338/0.717/98.979 | r20403/GA/best_acc/empirical_cumulative
+    3= B10-AC    QUAD 3 |  98.977 | 93.473/0.816/98.977 | r20403/GA/best_ce/train_cal
+    3= Wb-CTRL   QSR  3 |  98.977 | 93.393/0.762/98.977 | r20403/GA/best_ce/empirical_cumulative
+    5  B15-AC    QSR  3 |  98.955 | 93.281/0.797/98.955 | r20403/GA/best_acc/empirical
+    6  B10-CE    QUAD 3 |  98.941 | 93.406/0.944/98.941 | r20404/GA/best_ce/empirical_cumulative
+    7  B05-AC    QSR  3 |  98.923 | 92.861/0.682/98.923 | r20404/GA/best_ce/empirical_cumulative
+    8= B05-AC    QUAD 3 |  98.921 | 93.510/1.119/98.921 | r20405/Grid/best_acc/train_cal
+    8= B05-CE    QUAD 3 |  98.921 | 93.510/1.119/98.921 | r20405/Grid/best_acc/train_cal
+    8= B05-CE    QSR  3 |  98.921 | 93.510/1.119/98.921 | r20405/Grid/best_acc/train_cal
+    8= B10-AC    QSR  3 |  98.921 | 93.510/1.119/98.921 | r20405/Grid/best_acc/train_cal
+    8= B10-CE    QSR  3 |  98.921 | 93.510/1.119/98.921 | r20405/Grid/best_acc/train_cal
+    8= B15-AC    QUAD 3 |  98.921 | 93.510/1.119/98.921 | r20405/Grid/best_acc/train_cal
+    8= B15-CE    QUAD 3 |  98.921 | 93.510/1.119/98.921 | r20405/Grid/best_acc/train_cal
+    8= B15-CE    QSR  3 |  98.921 | 93.510/1.119/98.921 | r20405/Grid/best_acc/train_cal
+    8= CE20      QSR  3 |  98.921 | 93.510/1.119/98.921 | r20405/Grid/best_acc/train_cal
+   17  B34-CTRL  QUAD 5 |  98.920 | 93.505/1.118/98.920 | r20401/Grid/best_acc/train_cal
+   18  B34-CTRL  QSR  5 |  98.919 | 93.500/1.118/98.919 | r20401/Grid/best_acc/empirical_cumulative
+
+-- 6. SP100 Wb: QUAD vs QSR-abi13 (alongside, NOT ranked) [POST-REVALIDATION 10/10 — full 70 cells]
+   QUAD completed n=29 (pending 0); QSR-abi13 completed n=29 (pending 0: )
+
+-- 6a. SP100 Wb: D = QUAD vs C = QSR-abi13, each at its OWN best (all completed runs; NOT ranked) [POST-REVALIDATION 10/10 — full 70 cells]
+   (best-of-best = n=1 selection on TEST, 'best found', never an arm's performance; shown NEXT TO the mean)
+   [F1]  side                       |      MEAN±SD   n | BEST-OF-BEST | location (seed/phase/genome/mode)            | cell F1/FPR/Acc
+         C SP100 QSR-abi13          |   93.50±0.01  29 |       93.524 | r49648/GA/best_f1/train_cal                  | 93.524/1.005/98.946
+         D SP100 QUAD               |   93.52±0.09  29 |       93.933 | r32732/GA/best_f1/train_cal                  | 93.933/0.723/99.060
+         delta contender-defender   |       -0.022     |       -0.409 |                                              | -0.409/+0.282/-0.114
+   [FPR]  side                       |      MEAN±SD   n | BEST-OF-BEST | location (seed/phase/genome/mode)            | cell F1/FPR/Acc
+         C SP100 QSR-abi13          |    1.08±0.08  29 |        0.711 | r10596/GA/best_acc/train_cal                 | 93.490/0.711/99.001
+         D SP100 QUAD               |    0.97±0.24  29 |        0.404 | r46247/GA/best_acc/platt                     | 93.052/0.404/99.009
+         delta contender-defender   |       +0.110     |       +0.307 |                                              | +0.438/+0.307/-0.008
+   [Acc]  side                       |      MEAN±SD   n | BEST-OF-BEST | location (seed/phase/genome/mode)            | cell F1/FPR/Acc
+         C SP100 QSR-abi13          |   98.93±0.02  29 |       99.001 | r10596/GA/best_acc/train_cal                 | 93.490/0.711/99.001
+         D SP100 QUAD               |   98.94±0.04  29 |       99.060 | r32732/GA/best_f1/train_cal                  | 93.933/0.723/99.060
+         delta contender-defender   |       -0.017     |       -0.059 |                                              | -0.443/-0.012/-0.059
+   [ALL]
+   val_cal GA best_f1  F1       QUAD  93.52±0.09 (n=29) | QSR  93.50±0.01 (n=29)
+   val_cal GA best_f1  FPR      QUAD   1.10±0.08 (n=29) | QSR   1.12±0.02 (n=29)
+   val_cal GA best_f1  Acc      QUAD  98.93±0.03 (n=29) | QSR  98.92±0.01 (n=29)
+   best-everywhere F1           QUAD  93.52±0.09 (n=29) | QSR  93.50±0.01 (n=29)
+   best-everywhere FPR@F1>=93   QUAD   0.97±0.24 (n=29) | QSR   1.08±0.08 (n=29)
+   best-everywhere Acc          QUAD  98.94±0.04 (n=29) | QSR  98.93±0.02 (n=29)
+   [PAIRED (n=10)]
+   val_cal GA best_f1  F1       QUAD  93.56±0.14 (n=10) | QSR  93.50±0.01 (n=10)
+   val_cal GA best_f1  FPR      QUAD   1.05±0.13 (n=10) | QSR   1.11±0.04 (n=10)
+   val_cal GA best_f1  Acc      QUAD  98.94±0.04 (n=10) | QSR  98.92±0.01 (n=10)
+   best-everywhere F1           QUAD  93.57±0.14 (n=10) | QSR  93.50±0.01 (n=10)
+   best-everywhere FPR@F1>=93   QUAD   0.83±0.31 (n=10) | QSR   1.05±0.13 (n=10)
+   best-everywhere Acc          QUAD  98.97±0.05 (n=10) | QSR  98.93±0.03 (n=10)
+   paired delta QSR-QUAD best-everywhere F1  : -0.065 ± 0.138  (QSR better 2/10)
+   paired delta QSR-QUAD best-everywhere FPR : +0.214 ± 0.354  (QSR better 2/10)
+   paired delta QSR-QUAD best-everywhere Acc : -0.035 ± 0.062  (QSR better 1/10)
+   paired delta QSR-QUAD val_cal GA best_f1 F1  : -0.065 ± 0.137  (QSR better 1/10)
+   paired delta QSR-QUAD val_cal GA best_f1 FPR : +0.054 ± 0.140  (QSR better 3/10)
+   paired delta QSR-QUAD val_cal GA best_f1 Acc : -0.020 ± 0.047  (QSR better 1/10)

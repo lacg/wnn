@@ -171,10 +171,9 @@ WHAT CHANGED
   Every CIC-IoT row in the next paper comes from the Kaggle/Neto copies; every table pairs modes.
 
 ## IDS-16 READOUT + CLOSED (09/10/2026) — SP-*-ablqsr memory-mode ablation on the fixed OI trainer (worker ABI 13)
-> **⚠️ UNDER RE-AUDIT (10/10/2026): the cross-flow validation cache leaks rows across memory modes / trainer ABIs**
-> (key = dataset+bits+split, genome_hash = connections only). 115/360 SP-*-ablqsr final rows were inherited from other
-> flows, so the QSR-vs-QUAD tables below read partly through the cache. IDS-2 decision HELD for the same reason.
-> See memory project_validation_cache_cross_flow_leak; fix + re-validation pending Luiz.
+> **Re-audit 10/10/2026: STANDS.** The cross-flow cache leak touched 1 of the 40 QSR cells this readout uses
+> (flow 6313, unswr r46247, GA best_f1 = a copied QUAD row); the other 9 unswr runs sit at 93.48-93.51 / 1.12, so the
+> unswr column (a tie) and every decision above are unchanged.
 
 QSR-abi13 (n=10/dataset) vs two QUAD arms (SP-*-bin-n30, SP100-*-quad; config diff = memory_mode only, verified
 key-by-key; ciciot bin with 4 -w64fix substitutes). GA best_f1 val_cal, held-out TEST. Pre-fix QSR rows are VOID.
@@ -193,6 +192,14 @@ ciciot 96bWc      92.69 /  9.50   92.84 /  8.53   92.89 /  8.56   dFPR +0.97 / +
   aggregation, not CE20-zs / B15-AC-desir; cicids era drift as large as the QSR delta (no cicids memory-mode claim).
 - The 36 remaining UNSW-random QSR reruns (IDSXD-unswr-qsr 9-arm sweep + SP100-unswr-qsr) continue under IDS-2.
 - Readout: ids-security agent; scripts in the session scratchpad (abl.py / run2.py / stats.py).
+
+### IDS-2 DECIDED (10/10/2026) — Wb-CTRL QUAD (rule applied on full 70 own cells after re-validation)
+260 cache-inherited rows re-validated on each run's own model (`scripts/ids2/revalidate_inherited.py`, b66c0eb7; 546 s).
+The 94.274 B34-CTRL QSR outlier re-scores to 93.466. Raw per-metric winners all fall inside 1 pooled seed-SD of
+Wb-CTRL QUAD (F1 B15-AC QSR +0.007/SD 0.008; FPR Wb-CTRL QSR −0.012/SD 0.116; Acc CE20 QUAD +0.007/SD 0.015) →
+fallback (b) on all three → **single winner Wb-CTRL QUAD** = IDS-7 config. Every arm sits on the same FP floor
+(F1 93.49-93.50 mean, 18/18 arms share the r20405 grid best cell 93.510/1.119/98.921); QSR ≈ QUAD on UNSW-random.
+Readout: `experiments/ids2_readout_post_revalidation.txt`.
 
 ### CACHE-LEAK RE-VALIDATION SCOPE (10/10/2026, Luiz)
 Fix (a) DEPLOYED 10/10 12:32 EDT (f4e14295; dashboard + worker restarted; DB backup `db/wnn.db.pre-valcache-20261010`).
