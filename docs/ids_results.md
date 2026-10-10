@@ -194,6 +194,13 @@ ciciot 96bWc      92.69 /  9.50   92.84 /  8.53   92.89 /  8.56   dFPR +0.97 / +
 - The 36 remaining UNSW-random QSR reruns (IDSXD-unswr-qsr 9-arm sweep + SP100-unswr-qsr) continue under IDS-2.
 - Readout: ids-security agent; scripts in the session scratchpad (abl.py / run2.py / stats.py).
 
+### CACHE-LEAK RE-VALIDATION SCOPE (10/10/2026, Luiz)
+Fix (a) DEPLOYED 10/10 12:32 EDT (f4e14295; dashboard + worker restarted; DB backup `db/wnn.db.pre-valcache-20261010`).
+Re-score ONLY: **A — IDS-2** (`IDSXD-unswr-*`, 68 genomes / 121 grid rows / 30 flows; gates IDS-7 and the 405-flow tandem) and
+**B — IDS-16** (`SP-*-abl*`, 167 genomes / 296 rows / 114 flows; the closed ablation readout is under re-audit).
+SKIPPED, annotate only: SP100 (old n=100, superseded by the IDS-3..7 tandem), MC ablations (multiclass is post-paper),
+XDS, legacy CIC-IoT 8b explorations, zINVALID. Retrain-and-score stored genomes; no search re-runs.
+
 ## IDS-20 FINAL (06/10/2026) — IDSAGG paired aggregation A/B (zscore vs desirability), CICIDS2017 + CIC-IoT-2023 subsample
 
 Pre-registered rule: `experiments/ids_aggregation_ab_rule.json` (registered 26/09, before any IDSAGG flow existed;
