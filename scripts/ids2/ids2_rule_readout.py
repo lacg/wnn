@@ -59,16 +59,28 @@ def arm_flows(c, weight, mode):
 
 
 # ---------------------------------------------------------------- cells
-def flow_cells(c, fid):
-	"""All held-out TEST cells: validation_point='final', both phases x genome types x 7 modes."""
+def load_exclusions(path):
+	"""Cache-inherited cells to drop: (row ids dropped whole, row ids dropping empirical_cumulative only)."""
+	if not path:
+		return set(), set()
+	d = json.load(open(path))
+	return set(d["drop_all_modes"]["row_ids"]), set(d["drop_empirical_cumulative_only"]["row_ids"])
+
+
+def flow_cells(c, fid, excl=(set(), set())):
+	"""All held-out TEST cells: validation_point='final', both phases x genome types x 7 modes,
+	minus cache-inherited cells (--exclude)."""
+	drop_all, drop_ec = excl
 	out = []
-	q = """select e.phase_type, v.genome_type, v.threshold_metadata from validation_summaries v
+	q = """select v.id, e.phase_type, v.genome_type, v.threshold_metadata from validation_summaries v
 		join experiments e on e.id=v.experiment_id where v.flow_id=? and v.validation_point='final'"""
-	for ph, gt, tm in c.execute(q, (fid,)):
-		if ph not in PHASE_ABBR or gt not in GTYPES or not tm:
+	for vid, ph, gt, tm in c.execute(q, (fid,)):
+		if ph not in PHASE_ABBR or gt not in GTYPES or not tm or vid in drop_all:
 			continue
 		d = json.loads(tm)
 		for m in MODES:
+			if m == "empirical_cumulative" and vid in drop_ec:
+				continue
 			x = d.get(m)
 			if not isinstance(x, dict) or x.get("f1") is None:
 				continue
@@ -196,7 +208,9 @@ def what_if(arms, key, metric, grid):
 def main():
 	ap = argparse.ArgumentParser()
 	ap.add_argument("--label", default="")
+	ap.add_argument("--exclude", default="", help="JSON of cache-inherited row ids to drop (experiments/ids2_inherited_cells.json)")
 	a = ap.parse_args()
+	excl = load_exclusions(a.exclude)
 	rule = json.load(open(RULE))
 	floor = rule["criterion_a"]["f1_floor"]
 	c = conn()
@@ -207,7 +221,7 @@ def main():
 			done, pend = arm_flows(c, w, mm)
 			runs = []
 			for fid, name, _, s0, s1 in done:
-				cells = flow_cells(c, fid)
+				cells = flow_cells(c, fid, excl)
 				if not cells:
 					continue
 				for z in cells:
