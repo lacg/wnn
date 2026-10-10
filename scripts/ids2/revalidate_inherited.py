@@ -36,10 +36,12 @@ def load_targets(rows_path: str, only_flow: int | None) -> dict[int, list[dict]]
 	spec = json.load(open(rows_path))
 	ids = set(spec["drop_all_modes"]["row_ids"]) | set(spec["drop_empirical_cumulative_only"]["row_ids"])
 	c = ro()
-	q = f"""select v.id, v.flow_id, v.experiment_id, v.genome_type, v.genome_hash, v.threshold_metadata
+	q = f"""select v.id, v.flow_id, v.experiment_id, v.genome_type, v.genome_hash, v.threshold_metadata, v.cache_key
 		from validation_summaries v where v.validation_point='final' and v.id in ({','.join('?' * len(ids))})"""
 	by_flow: dict[int, list[dict]] = defaultdict(list)
-	for vid, fid, eid, gt, gh, tm in c.execute(q, sorted(ids)):
+	for vid, fid, eid, gt, gh, tm, key in c.execute(q, sorted(ids)):
+		if key is not None:
+			continue  # already re-validated (stamped with the scoped key) — resume-safe
 		if only_flow is None or fid == only_flow:
 			by_flow[fid].append(dict(id=vid, flow=fid, exp=eid, gt=gt, gh=gh, old=json.loads(tm) if tm else None))
 	return by_flow
@@ -172,9 +174,13 @@ def main() -> int:
 	ap.add_argument("--flow", type=int, default=None)
 	ap.add_argument("--out", default="experiments/ids2_revalidation.json")
 	ap.add_argument("--dry-run", action="store_true")
+	ap.add_argument("--list-flows", action="store_true", help="print the flow ids still pending and exit")
 	ap.add_argument("--url", default="https://localhost:3000")
 	a = ap.parse_args()
 	by_flow = load_targets(a.rows, a.flow)
+	if a.list_flows:
+		print(" ".join(str(f) for f in sorted(by_flow)))
+		return 0
 	if a.dry_run:
 		dry_run(by_flow)
 		return 0
