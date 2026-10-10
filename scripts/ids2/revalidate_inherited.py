@@ -45,17 +45,44 @@ def load_targets(rows_path: str, only_flow: int | None) -> dict[int, list[dict]]
 	return by_flow
 
 
-def load_genome(gh: str):
-	"""Rebuild the stored genome (bits, neurons, connections) from the genomes table."""
+def load_genome(gh: str, exp_id: int):
+	"""Rebuild the stored genome (bits, neurons, connections): the genomes table first,
+	else the experiment's checkpoint (genomes below the leaderboard gate are only there)."""
 	from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 	row = ro().execute("""select tiers_json, connections_json from genomes
 		where genome_hash=? and connections_json is not null order by id limit 1""", (gh,)).fetchone()
-	if row is None:
-		return None
-	tiers = json.loads(row[0])
-	conns = [int(x) for x in row[1].split(",")]
-	return ClusterGenome(bits_per_neuron=tiers["bits_per_neuron"],
-		neurons_per_cluster=tiers["neurons_per_cluster"], connections=conns)
+	if row is not None:
+		tiers = json.loads(row[0])
+		return ClusterGenome(bits_per_neuron=tiers["bits_per_neuron"],
+			neurons_per_cluster=tiers["neurons_per_cluster"], connections=[int(x) for x in row[1].split(",")])
+	return genome_from_checkpoint(gh, exp_id)
+
+
+def checkpoint_genome_dicts(ckpt: dict):
+	"""Every genome dict a phase checkpoint holds: best_<type>_genome, best_genome, final_population."""
+	pr = ckpt.get("phase_result", {})
+	yield from (v for k, v in ckpt.items() if k.startswith("best_") and k.endswith("_genome") and isinstance(v, dict))
+	if isinstance(pr.get("best_genome"), dict):
+		yield pr["best_genome"]
+	yield from (g for g in pr.get("final_population") or [] if isinstance(g, dict))
+
+
+def genome_from_checkpoint(gh: str, exp_id: int):
+	import gzip
+	from wnn.ram.experiments.experiment import Experiment
+	from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
+	for (path,) in ro().execute("select file_path from checkpoints where experiment_id=? order by id desc", (exp_id,)):
+		full = path if path.startswith("/") else f"/Users/lacg/wnn/{path}"
+		try:
+			ckpt = json.load(gzip.open(full))
+		except OSError:
+			continue
+		for d in checkpoint_genome_dicts(ckpt):
+			g = ClusterGenome(bits_per_neuron=d["bits_per_neuron"], neurons_per_cluster=d["neurons_per_cluster"],
+				connections=d.get("connections"))
+			if Experiment._compute_genome_hash(None, g) == gh:
+				return g
+	return None
 
 
 def build_flow(worker, fid: int):
@@ -112,7 +139,7 @@ def revalidate_flow(worker, fid: int, targets: list[dict], expect_abi: int) -> l
 	out = []
 	try:
 		for t in targets:
-			genome = load_genome(t["gh"])
+			genome = load_genome(t["gh"], t["exp"])
 			exp = make_experiment(worker, flow, exp_ids, t["exp"], fid)
 			if genome is None or exp._compute_genome_hash(genome) != t["gh"]:
 				raise RuntimeError(f"row {t['id']}: stored genome missing or hash mismatch")
@@ -130,7 +157,7 @@ def dry_run(by_flow: dict[int, list[dict]]) -> None:
 	n = bad = 0
 	for fid, ts in sorted(by_flow.items()):
 		for t in ts:
-			g = load_genome(t["gh"])
+			g = load_genome(t["gh"], t["exp"])
 			ok = g is not None and Experiment._compute_genome_hash(None, g) == t["gh"]
 			n += 1
 			bad += not ok
