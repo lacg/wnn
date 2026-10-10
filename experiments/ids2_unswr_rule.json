@@ -34,5 +34,6 @@
   "arm_score": "per metric, MEAN of per-run scores over the arm's seeds (per-run first, so arms with more seeds gain no best-of-N advantage); report mean +/- SD and n.",
   "metric_winner": "per metric, the arm with the best mean (highest F1, lowest FPR, highest Acc)."
  },
- "decision": "If the three metric winners (after fallback b) are the SAME arm -> that arm is the IDS-2 winner and IDS-7's config. If they DIFFER -> NO automatic winner: report the three winners side by side (with each one's other two metrics) and escalate to Luiz to decide ('we will need to talk')."
+ "decision": "If the three metric winners (after fallback b) are the SAME arm -> that arm is the IDS-2 winner and IDS-7's config. If they DIFFER -> NO automatic winner: report the three winners side by side (with each one's other two metrics) and escalate to Luiz to decide ('we will need to talk').",
+ "early_read_disclosure": "10/10/2026 ~09:40 EDT (Luiz): a DISCLOSED early look at 91/94 (missing: IDSXD-unswr-qsr-64b-Wb-CTRL-r20405-abi13 = 3rd seed of Wb-CTRL QSR, plus 2 SP100 runs outside the ranking) so Luiz can validate the final readout. The rule text is NOT changed after this read; the DECISION is taken only on the complete 94/94 set by the watcher readout."
 }
