@@ -271,6 +271,12 @@ FPR (pp)   | ciciot  | -1.165 | -0.870 | -1.845 | -0.983 | -0.445 | -1.061      
   of transient allocations — the 03/07 OOM loop; memmap bounds it to one chunk). Names `IDS6-ciciot46m-B15AC-desir-r<seed>`,
   spec `experiments/ids6_46m_cohort_spec.json` (dry-run 5 clean, NOT created). Total tandem = 405 flows. Each 46M run
   is >1 day, so rounds 1-5 are ~2 days each. The 5 legacy paused 46M Wc flows (4534-4538) were CANCELLED 10/10.
+- **IDS-7 SPEC DRAFTED (Luiz 10/10/2026): Wb-CTRL QUAD** (IDS-2 winner) — clones of `IDSXD-unswr-quad-64b-Wb-CTRL-r20403`
+  (flow 5965; the 3 sources differ only in seed) with only `seed` changed, `IDS7-unswr-WbCTRL-desir-r<seed>`, seeds
+  20419-20518; Wb .10/.35/.35/.20 desirability, QUAD, 64b top20 random_3way, bits 4-34, neurons <=500, OI, k-fold 5x5,
+  patience 5. Spec `experiments/ids7_n100_cohort_spec.json` (dry-run 100 clean). **TANDEM FILE BUILT:**
+  `experiments/ids_tandem_405_spec.json` = seed-major IDS3, IDS4, IDS5, [IDS6 rounds 1-5], IDS7 (dry-run 405 clean,
+  NOT created).
 
 
 **Decision the rule dictates:**
