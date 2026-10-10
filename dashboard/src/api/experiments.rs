@@ -243,6 +243,10 @@ pub struct CreateValidationSummaryRequest
 	pub f1_macro: Option<f64>,
 	pub fpr: Option<f64>,
 	pub threshold_metadata: Option<String>,
+	/// Validation-cache scope stamp (worker validation_cache_key.py); absent from
+	/// pre-fix workers -> NULL -> the row is never served from cache.
+	pub cache_key: Option<String>,
+	pub worker_abi: Option<i64>,
 }
 
 pub(crate) async fn create_validation_summary(
@@ -263,6 +267,7 @@ pub(crate) async fn create_validation_summary(
 		req.f1_macro,
 		req.fpr,
 		req.threshold_metadata.as_deref(),
+		crate::db::queries::CacheScope::from_parts(req.cache_key.as_deref(), req.worker_abi),
 	)
 	.await
 	{
@@ -279,7 +284,10 @@ pub(crate) async fn create_validation_summary(
 pub struct CheckCachedValidationQuery
 {
 	pub genome_hash: String,
-	pub dataset_key: Option<String>,
+	/// Both required for a hit. A pre-fix worker sends only the legacy
+	/// `dataset_key` (ignored here) and so always re-validates.
+	pub cache_key: Option<String>,
+	pub worker_abi: Option<i64>,
 }
 
 pub(crate) async fn check_cached_validation(
@@ -290,7 +298,7 @@ pub(crate) async fn check_cached_validation(
 	match crate::db::queries::get_cached_validation(
 		&state.db,
 		&query.genome_hash,
-		query.dataset_key.as_deref(),
+		crate::db::queries::CacheScope::from_parts(query.cache_key.as_deref(), query.worker_abi),
 	)
 	.await
 	{

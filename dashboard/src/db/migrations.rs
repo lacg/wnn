@@ -161,6 +161,17 @@ pub(crate) async fn run_migrations(pool: &DbPool) -> Result<()>
 		.execute(pool)
 		.await;
 
+	// Migration (10/10/2026, PAPER-CRITICAL): validation-cache scope stamps.
+	// cache_key = the worker's full validation scope key (validation_cache_key.py),
+	// worker_abi = the accelerator ABI (trainer version) that produced the row.
+	// Legacy rows keep NULL in both and are therefore NEVER served from cache.
+	let _ = sqlx::query("ALTER TABLE validation_summaries ADD COLUMN cache_key TEXT")
+		.execute(pool)
+		.await;
+	let _ = sqlx::query("ALTER TABLE validation_summaries ADD COLUMN worker_abi INTEGER")
+		.execute(pool)
+		.await;
+
 	// Migration: Add IDS metrics to genome_evaluations (per-genome F1-macro and FPR)
 	let _ = sqlx::query("ALTER TABLE genome_evaluations ADD COLUMN f1_macro REAL")
 		.execute(pool)

@@ -19,6 +19,7 @@ from typing import Any, Callable, Literal, Optional
 from wnn.ram.fitness import FitnessCalculatorType
 from wnn.ram.experiments.experiment import Experiment, ClusterType, ExperimentConfig, ExperimentResult, ExperimentType, StageMode
 from wnn.ram.experiments.dashboard_client import DashboardClient, FlowConfig as APIFlowConfig
+from wnn.ram.experiments.validation_cache_scope import ValidationCacheScope
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 
 
@@ -237,7 +238,7 @@ class FlowConfig:
 	balance_classes: bool = False  # Class-balanced training (upweight minority class)
 	ids_single_cluster: bool = False  # Single-cluster discriminator (1 cluster, threshold 0.5)
 	ids_feature_selection: str = "all"  # Feature selection mode for leaderboard filtering
-	dataset_key: Optional[str] = None  # e.g. "ciciot2023_8b_random" — scopes validation cache
+	validation_scope: Optional[ValidationCacheScope] = None  # cross-flow validation-cache scope (key + worker ABI)
 
 	@classmethod
 	def bitwise_7_phase(
@@ -1681,7 +1682,7 @@ class Flow:
 			flow_id=self._flow_id,
 			shutdown_check=self.shutdown_check,
 			full_evaluator=self.full_evaluator,
-			dataset_key=self.config.dataset_key,
+			validation_scope=self.config.validation_scope,
 		)
 
 		result = experiment.run(

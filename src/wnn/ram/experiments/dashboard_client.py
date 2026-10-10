@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 from urllib.parse import urljoin
 
+from wnn.ram.experiments.validation_cache_scope import ValidationCacheScope
+
 try:
 	import requests
 	import urllib3
@@ -636,28 +638,40 @@ class DashboardClient:
 	# Validation Summary methods
 	# =========================================================================
 
-	def check_cached_validation(self, genome_hash: str, dataset_key: Optional[str] = None) -> Optional[tuple[float, float, Optional[float], Optional[float], Optional[dict]]]:
+	def check_cached_validation(self, genome_hash: str, scope: Optional[ValidationCacheScope]) -> Optional[tuple[float, float, Optional[float], Optional[float], Optional[dict]]]:
 		"""
-		Check if a genome has already been validated.
+		Check if a genome has already been validated under the SAME scope.
 
 		Args:
 			genome_hash: The genome's config hash
-			dataset_key: Optional dataset scope key (e.g. "ciciot2023_8b_random")
-				to prevent cross-dataset cache poisoning
+			scope: Cache scope (key + worker ABI). None -> no lookup (always re-validate).
 
 		Returns:
 			Tuple of (ce, accuracy, f1_macro, fpr, threshold_metadata) if found, None if not validated yet
 		"""
+		if scope is None:
+			return None
 		try:
-			params = {"genome_hash": genome_hash}
-			if dataset_key:
-				params["dataset_key"] = dataset_key
-			result = self._request("GET", "/api/validations/check", params=params)
+			result = self._request("GET", "/api/validations/check", params=self._cache_check_params(genome_hash, scope))
 			if result.get("found"):
 				return (result["ce"], result["accuracy"], result.get("f1_macro"), result.get("fpr"), result.get("threshold_metadata"))
 			return None
 		except Exception:
 			return None
+
+	@staticmethod
+	def _cache_check_params(genome_hash: str, scope: ValidationCacheScope) -> dict:
+		"""Query params for /api/validations/check. `dataset_key` repeats the key
+		under the PRE-FIX parameter name on purpose: a not-yet-upgraded dashboard
+		compares it against its SQL-built legacy key, which a v2 key can never
+		equal — so a new worker against an old dashboard gets NO hits, never the
+		unscoped genome_hash-only lookup. The upgraded dashboard ignores it."""
+		return {
+			"genome_hash": genome_hash,
+			"cache_key": scope.key,
+			"worker_abi": scope.worker_abi,
+			"dataset_key": scope.key,
+		}
 
 	def create_validation_summary(
 		self,
@@ -671,6 +685,7 @@ class DashboardClient:
 		f1_macro: Optional[float] = None,
 		fpr: Optional[float] = None,
 		threshold_metadata: Optional[str] = None,
+		scope: Optional[ValidationCacheScope] = None,
 	) -> dict:
 		"""
 		Create a validation summary record for a genome at a checkpoint.
@@ -686,6 +701,8 @@ class DashboardClient:
 			f1_macro: IDS F1-macro score (None for LM experiments)
 			fpr: IDS false positive rate (None for LM experiments)
 			threshold_metadata: JSON string with three-threshold results (IDS single-cluster only)
+			scope: Cache scope stamped on the row (cache_key + worker_abi); None leaves
+				both NULL, and a NULL-stamped row is never served from the cache
 
 		Returns:
 			Dict with 'id' of the created/updated summary
@@ -700,6 +717,8 @@ class DashboardClient:
 			"f1_macro": f1_macro,
 			"fpr": fpr,
 			"threshold_metadata": threshold_metadata,
+			"cache_key": scope.key if scope is not None else None,
+			"worker_abi": scope.worker_abi if scope is not None else None,
 		}
 		result = self._request("POST", f"/api/experiments/{experiment_id}/summaries", json_data=data)
 		self._logger(f"Created {validation_point}/{genome_type} validation for experiment {experiment_id}")

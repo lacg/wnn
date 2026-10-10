@@ -28,6 +28,13 @@ from wnn.ram.experiments.flow import Flow, FlowConfig
 from wnn.ram.experiments.experiment import ExperimentConfig, ExperimentType, GridSource
 from wnn.ram.experiments.tracker import create_tracker, ExperimentTracker
 from wnn.ram.experiments import scheduler
+from wnn.ram.experiments.ids_param_resolution import (
+    RAW_BY_CONSTRUCTION_DATASETS,
+    empty_value_for,
+    memory_mode_code,
+    resolve_invalid_encoding,
+    resolve_memory_mode,
+)
 
 # How often to send heartbeats (seconds)
 HEARTBEAT_INTERVAL = 30
@@ -858,17 +865,26 @@ class FlowWorker:
         flow_config.stage_max_neurons_list = params.get("stage_max_neurons")
         flow_config.max_bit_delta = params.get("max_bit_delta", 0)
 
-        # Build dataset_key for validation cache scoping (prevents cross-dataset cache poisoning).
-        # Includes _raw, _inv-<mode>, and _oi<0|1> suffixes so canonical/raw flows and
-        # different training algorithms don't share cache when other params match.
-        ds = params.get("ids_dataset", "unsw-nb15")
-        nb = params.get("ids_n_bits", 8)
-        sp = params.get("ids_split", "standard")
-        raw_suffix = "_raw" if params.get("ids_raw", False) else ""
-        inv_mode = params.get("ids_invalid_encoding")
-        inv_suffix = f"_inv-{inv_mode}" if inv_mode and inv_mode != "none" else ""
-        oi_suffix = "_oi1" if params.get("wnn_order_independent_train") else "_oi0"
-        flow_config.dataset_key = f"{ds}_{nb}b_{sp}{raw_suffix}{inv_suffix}{oi_suffix}"
+        flow_config.validation_scope = self._build_validation_scope(params)
+
+    def _build_validation_scope(self, params: dict):
+        """Cross-flow validation-cache scope (PAPER-CRITICAL, 10/10/2026): the
+        key pins every param that changes a fixed genome's validation, and the
+        worker ABI pins the trainer. OI is read from the env AFTER
+        _apply_env_overrides, i.e. the value the accelerator will see. No ABI
+        (Python fallback) -> None: nothing is served from or stamped into cache."""
+        from wnn.accel import installed_abi
+        from wnn.ram.experiments.ids_param_resolution import oi_env_enabled
+        from wnn.ram.experiments.validation_cache_key import build_validation_cache_key
+        from wnn.ram.experiments.validation_cache_scope import ValidationCacheScope
+        abi = installed_abi()
+        if abi is None:
+            self._log("[VALCACHE] accelerator ABI unavailable — validation cache disabled for this flow")
+            return None
+        oi = oi_env_enabled(os.environ.get("WNN_ORDER_INDEPENDENT_TRAIN"))
+        scope = ValidationCacheScope(build_validation_cache_key(params, oi), int(abi))
+        self._log(f"[VALCACHE] abi={scope.worker_abi} key={scope.key}")
+        return scope
 
     def _apply_seed_config(self, flow_config: FlowConfig, flow_data: dict, params: dict, is_ids: bool):
         """Handle leaderboard seeding + seed checkpoint."""
@@ -1268,15 +1284,16 @@ class FlowWorker:
         # BINARY/QSR/PLN flows silently trained+scored as QUAD — only empty_value
         # differed, which the QUAD branch ignores. QSR (stochastic QUAD) + PLN
         # (stochastic TERNARY) added 14/07/2026.
-        memory_mode_map = {"TERNARY": 0, "QUAD_BINARY": 1, "QUAD_WEIGHTED": 2, "BINARY": 3, "QSR": 4, "PLN": 5}
-        mode_str = params.get("memory_mode", "QUAD_WEIGHTED")
-        memory_mode = memory_mode_map.get(mode_str, 2)
+        # Resolution lives in ids_param_resolution (shared with the validation-
+        # cache key): absent / unrecognised modes fall back to QUAD_WEIGHTED.
+        mode_str = resolve_memory_mode(params)
+        memory_mode = memory_mode_code(mode_str)
         # TERNARY / PLN use the 3-state cells; their u-state (EMPTY) decodes to
         # 0.5 (TERNARY deterministic; PLN = the fair coin's expected value) —
         # otherwise EMPTY collapses to FALSE and it degenerates to a WiSARD.
         # QUAD-family ignores empty_value (WEAK_FALSE=0.25 baseline), BINARY is
         # 1-bit; so gate 0.5 on TERNARY/PLN only, every other mode stays 0.0.
-        empty_value = 0.5 if mode_str in ("TERNARY", "PLN") else 0.0
+        empty_value = empty_value_for(mode_str)
         # QSR/PLN stochastic-coin seed: the flow's seed, so an n-run cohort varies
         # run-to-run while each run stays reproducible (parity). Det. modes ignore it.
         run_seed = int(seed)
@@ -1328,10 +1345,8 @@ class FlowWorker:
         # Default to "single_bit" when data is raw — i.e., either ids_raw=True or
         # the dataset is one of the raw-by-construction variants. Otherwise default
         # to "none" for back-compat with pre-Phase-C flows (incl. r98).
-        raw_by_dataset = dataset_name in ("ciciot2023_canonical", "ciciot2023_neto_full", "ciciot2023_neto_subsample")
-        is_raw_data = ids_raw or raw_by_dataset
-        ids_invalid_encoding = params.get("ids_invalid_encoding",
-                                          "single_bit" if is_raw_data else "none")
+        is_raw_data = ids_raw or dataset_name in RAW_BY_CONSTRUCTION_DATASETS
+        ids_invalid_encoding = resolve_invalid_encoding(params)
 
         raw_label = " RAW" if is_raw_data else ""
         streaming_label = " (streaming)" if ids_streaming else ""
@@ -1488,10 +1503,11 @@ class FlowWorker:
         neuron_sample_rate = params.get("neuron_sample_rate", 0.25)
         balance_classes = params.get("balance_classes", False)
         # Memory-mode threading (see _create_ids_evaluators for the full rationale).
-        memory_mode_map = {"TERNARY": 0, "QUAD_BINARY": 1, "QUAD_WEIGHTED": 2, "BINARY": 3, "QSR": 4, "PLN": 5}
-        mode_str = params.get("memory_mode", "QUAD_WEIGHTED")
-        memory_mode = memory_mode_map.get(mode_str, 2)
-        empty_value = 0.5 if mode_str in ("TERNARY", "PLN") else 0.0
+        # Resolution lives in ids_param_resolution (shared with the validation-
+        # cache key): absent / unrecognised modes fall back to QUAD_WEIGHTED.
+        mode_str = resolve_memory_mode(params)
+        memory_mode = memory_mode_code(mode_str)
+        empty_value = empty_value_for(mode_str)
         run_seed = int(seed)
         # Coverage-aware scoring (see _create_ids_evaluators for the rationale).
         coverage_aware = bool(params.get("ids_coverage_aware", False))

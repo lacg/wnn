@@ -58,85 +58,73 @@ pub async fn get_flow_validation_summaries(
 	Ok(summaries)
 }
 
-/// Check if a genome has already been validated (by genome_hash)
+/// Validation-cache scope stamped on every new validation_summaries row and
+/// required for every cache hit (PAPER-CRITICAL fix, 10/10/2026).
+///
+/// `key` is built in ONE place — the worker's `validation_cache_key.py` — and
+/// stored verbatim, so the dashboard never re-derives it from config_json (the
+/// old SQL mirror drifted: it omitted memory_mode, feature selection,
+/// classification and the trainer ABI, so a QUAD flow inherited a QSR flow's
+/// TEST row). `worker_abi` pins the trainer version.
+#[derive(Debug, Clone, Copy)]
+pub struct CacheScope<'a>
+{
+	pub key: &'a str,
+	pub worker_abi: i64,
+}
+
+impl<'a> CacheScope<'a>
+{
+	/// Both halves or nothing: a request missing either can never hit.
+	pub fn from_parts(key: Option<&'a str>, worker_abi: Option<i64>) -> Option<Self>
+	{
+		match (key, worker_abi)
+		{
+			(Some(key), Some(worker_abi)) if !key.is_empty() => Some(Self { key, worker_abi }),
+			_ => None,
+		}
+	}
+}
+
+type CachedValidation = (f64, f64, Option<f64>, Option<f64>, Option<serde_json::Value>);
+
+/// Check if a genome has already been validated UNDER THE SAME SCOPE.
 /// Returns the cached CE, accuracy, f1_macro, fpr, and threshold_metadata if found.
-/// When dataset_key is provided, only matches validations from flows with the same
-/// dataset+encoding config to prevent cross-dataset cache poisoning.
+///
+/// A hit requires genome_hash, cache_key AND worker_abi to match a row stamped
+/// with them. No scope -> no hit; rows with a NULL key or ABI (every row written
+/// before the fix, and every row from a pre-fix worker) are never served.
 pub async fn get_cached_validation(
 	pool: &DbPool,
 	genome_hash: &str,
-	dataset_key: Option<&str>,
-) -> Result<
-	Option<(
-		f64,
-		f64,
-		Option<f64>,
-		Option<f64>,
-		Option<serde_json::Value>,
-	)>,
->
+	scope: Option<CacheScope<'_>>,
+) -> Result<Option<CachedValidation>>
 {
-	let row = if let Some(dk) = dataset_key
-	{
-		// Mirror the Python construction in worker.py (build_dataset_key):
-		//   "{ds}_{nb}b_{sp}{_raw?}{_inv-<mode>?}{_oi0|_oi1}"
-		// Each suffix is appended only when the corresponding flag is set, so cache
-		// entries are scoped to dataset + bits + split + raw-mode + invalid-encoding +
-		// training-algo. Without this, paired flows that differ only in training algo
-		// (e.g. WNN_ORDER_INDEPENDENT_TRAIN) collide in cache.
-		sqlx::query(
-            r#"SELECT vs.ce, vs.accuracy, vs.f1_macro, vs.fpr, vs.threshold_metadata
-               FROM validation_summaries vs
-               JOIN flows f ON vs.flow_id = f.id
-               WHERE vs.genome_hash = ?
-                 AND (json_extract(f.config_json, '$.params.ids_dataset') || '_' ||
-                      json_extract(f.config_json, '$.params.ids_n_bits') || 'b_' ||
-                      json_extract(f.config_json, '$.params.ids_split') ||
-                      CASE WHEN json_extract(f.config_json, '$.params.ids_raw') = 1
-                           THEN '_raw' ELSE '' END ||
-                      CASE WHEN json_extract(f.config_json, '$.params.ids_invalid_encoding') IS NOT NULL
-                            AND json_extract(f.config_json, '$.params.ids_invalid_encoding') != 'none'
-                           THEN '_inv-' || json_extract(f.config_json, '$.params.ids_invalid_encoding')
-                           ELSE '' END ||
-                      CASE WHEN json_extract(f.config_json, '$.params.wnn_order_independent_train') = 1
-                           THEN '_oi1' ELSE '_oi0' END) = ?
-               ORDER BY vs.threshold_metadata IS NOT NULL DESC
-               LIMIT 1"#,
-        )
-        .bind(genome_hash)
-        .bind(dk)
-        .fetch_optional(pool)
-        .await?
-	}
+	let Some(scope) = scope
 	else
 	{
-		sqlx::query(
-			r#"SELECT ce, accuracy, f1_macro, fpr, threshold_metadata
-               FROM validation_summaries WHERE genome_hash = ?
-               ORDER BY threshold_metadata IS NOT NULL DESC
-               LIMIT 1"#,
-		)
-		.bind(genome_hash)
-		.fetch_optional(pool)
-		.await?
+		return Ok(None);
 	};
+	let row = sqlx::query(
+		r#"SELECT ce, accuracy, f1_macro, fpr, threshold_metadata
+           FROM validation_summaries
+           WHERE genome_hash = ? AND cache_key = ? AND worker_abi = ?
+           ORDER BY threshold_metadata IS NOT NULL DESC
+           LIMIT 1"#,
+	)
+	.bind(genome_hash)
+	.bind(scope.key)
+	.bind(scope.worker_abi)
+	.fetch_optional(pool)
+	.await?;
+	Ok(row.map(|r| cached_validation_from_row(&r)))
+}
 
-	match row
-	{
-		Some(r) =>
-		{
-			let tm_str: Option<String> = r.get("threshold_metadata");
-			let tm = tm_str.and_then(|s| serde_json::from_str(&s).ok());
-			Ok(Some((
-				r.get("ce"),
-				r.get("accuracy"),
-				r.get("f1_macro"),
-				r.get("fpr"),
-				tm,
-			)))
-		}
-		None => Ok(None),
-	}
+fn cached_validation_from_row(r: &sqlx::sqlite::SqliteRow) -> CachedValidation
+{
+	let tm_str: Option<String> = r.get("threshold_metadata");
+	let tm = tm_str.and_then(|s| serde_json::from_str(&s).ok());
+	(r.get("ce"), r.get("accuracy"), r.get("f1_macro"), r.get("fpr"), tm)
 }
 
 /// Create a validation summary (upsert by experiment_id + validation_point + genome_type)
@@ -152,14 +140,15 @@ pub async fn upsert_validation_summary(
 	f1_macro: Option<f64>,
 	fpr: Option<f64>,
 	threshold_metadata: Option<&str>,
+	scope: Option<CacheScope<'_>>,
 ) -> Result<i64>
 {
 	let now = Utc::now().to_rfc3339();
 
 	let result = sqlx::query(
         r#"INSERT INTO validation_summaries
-           (flow_id, experiment_id, validation_point, genome_type, genome_hash, ce, accuracy, f1_macro, fpr, threshold_metadata, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           (flow_id, experiment_id, validation_point, genome_type, genome_hash, ce, accuracy, f1_macro, fpr, threshold_metadata, cache_key, worker_abi, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(experiment_id, validation_point, genome_type) DO UPDATE SET
              flow_id = excluded.flow_id,
              genome_hash = excluded.genome_hash,
@@ -168,6 +157,8 @@ pub async fn upsert_validation_summary(
              f1_macro = excluded.f1_macro,
              fpr = excluded.fpr,
              threshold_metadata = excluded.threshold_metadata,
+             cache_key = excluded.cache_key,
+             worker_abi = excluded.worker_abi,
              created_at = excluded.created_at"#,
     )
     .bind(flow_id)
@@ -180,6 +171,8 @@ pub async fn upsert_validation_summary(
     .bind(f1_macro)
     .bind(fpr)
     .bind(threshold_metadata)
+    .bind(scope.map(|sc| sc.key))
+    .bind(scope.map(|sc| sc.worker_abi))
     .bind(&now)
     .execute(pool)
     .await?;
@@ -327,4 +320,119 @@ fn row_to_combined_validation(row: &sqlx::sqlite::SqliteRow) -> Result<CombinedV
 		unigram_lambda,
 		created_at: parse_datetime(row.get("created_at"))?,
 	})
+}
+
+#[cfg(test)]
+mod cache_scope_tests
+{
+	//! PAPER-CRITICAL regression cover (10/10/2026): the cross-flow validation
+	//! cache must never serve a row across memory modes, trainer ABIs, or from
+	//! a legacy (unstamped) row. Keys come from the SAME fixture the Python
+	//! builder is tested against (tests/test_validation_cache_key.py).
+	use super::*;
+
+	const FIXTURE: &str = include_str!("../../../tests/fixtures/validation_cache_keys.json");
+
+	fn fixture_key(name: &str) -> String
+	{
+		let v: serde_json::Value = serde_json::from_str(FIXTURE).expect("fixture json");
+		let cases = v["cases"].as_array().expect("cases").clone();
+		let case = cases.into_iter().find(|c| c["name"] == name).expect("fixture case");
+		case["key"].as_str().expect("key").to_string()
+	}
+
+	async fn test_pool(tag: &str) -> DbPool
+	{
+		let path = std::env::temp_dir().join(format!("wnn_valcache_{}_{}.db", tag, std::process::id()));
+		let _ = std::fs::remove_file(&path);
+		crate::db::init_db(&format!("sqlite://{}?mode=rwc", path.display()))
+			.await
+			.expect("init_db")
+	}
+
+	async fn new_experiment(pool: &DbPool) -> i64
+	{
+		let flow = sqlx::query("INSERT INTO flows (name) VALUES ('t')").execute(pool).await.unwrap();
+		sqlx::query("INSERT INTO experiments (flow_id, name) VALUES (?, 'e')")
+			.bind(flow.last_insert_rowid())
+			.execute(pool)
+			.await
+			.unwrap()
+			.last_insert_rowid()
+	}
+
+	/// One final validation row for genome "g1" in a fresh experiment.
+	async fn write_row(pool: &DbPool, scope: Option<CacheScope<'_>>, f1: f64)
+	{
+		let exp = new_experiment(pool).await;
+		upsert_validation_summary(pool, None, exp, "final", "best_f1", "g1", 0.1, 0.9, Some(f1), Some(0.05), None, scope)
+			.await
+			.unwrap();
+	}
+
+	fn scope(key: &str, worker_abi: i64) -> Option<CacheScope<'_>>
+	{
+		Some(CacheScope { key, worker_abi })
+	}
+
+	#[tokio::test]
+	async fn quad_flow_never_inherits_a_qsr_row()
+	{
+		let pool = test_pool("qsr").await;
+		let (quad, qsr) = (fixture_key("quad_default"), fixture_key("qsr"));
+		write_row(&pool, scope(&qsr, 14), 0.94274).await;
+		assert!(get_cached_validation(&pool, "g1", scope(&quad, 14)).await.unwrap().is_none());
+		let hit = get_cached_validation(&pool, "g1", scope(&qsr, 14)).await.unwrap();
+		assert_eq!(hit.expect("same scope must hit").2, Some(0.94274));
+	}
+
+	#[tokio::test]
+	async fn absent_and_explicit_quad_share_the_cache()
+	{
+		let pool = test_pool("alias").await;
+		let (absent, explicit) = (fixture_key("quad_default"), fixture_key("quad_explicit"));
+		write_row(&pool, scope(&absent, 14), 0.9).await;
+		assert!(get_cached_validation(&pool, "g1", scope(&explicit, 14)).await.unwrap().is_some());
+	}
+
+	#[tokio::test]
+	async fn other_trainer_abi_never_hits()
+	{
+		let pool = test_pool("abi").await;
+		let quad = fixture_key("quad_default");
+		write_row(&pool, scope(&quad, 12), 0.9).await;
+		assert!(get_cached_validation(&pool, "g1", scope(&quad, 14)).await.unwrap().is_none());
+	}
+
+	#[tokio::test]
+	async fn legacy_unstamped_rows_are_never_served()
+	{
+		let pool = test_pool("legacy").await;
+		write_row(&pool, None, 0.9).await;
+		let quad = fixture_key("quad_default");
+		assert!(get_cached_validation(&pool, "g1", scope(&quad, 14)).await.unwrap().is_none());
+		assert!(get_cached_validation(&pool, "g1", None).await.unwrap().is_none());
+	}
+
+	#[tokio::test]
+	async fn other_encoding_training_or_classification_never_hits()
+	{
+		let pool = test_pool("enc").await;
+		write_row(&pool, scope(&fixture_key("quad_default"), 14), 0.9).await;
+		for name in ["raw", "inv", "oi_off", "feature_top20", "multiclass"]
+		{
+			let key = fixture_key(name);
+			let hit = get_cached_validation(&pool, "g1", scope(&key, 14)).await.unwrap();
+			assert!(hit.is_none(), "{name} must not hit a quad_default row");
+		}
+	}
+
+	#[test]
+	fn scope_requires_both_halves()
+	{
+		assert!(CacheScope::from_parts(Some("k"), Some(14)).is_some());
+		assert!(CacheScope::from_parts(Some("k"), None).is_none());
+		assert!(CacheScope::from_parts(None, Some(14)).is_none());
+		assert!(CacheScope::from_parts(Some(""), Some(14)).is_none());
+	}
 }

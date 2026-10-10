@@ -20,6 +20,7 @@ from wnn.ram.strategies.factory import OptimizerStrategyFactory, OptimizerStrate
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 from wnn.ram.genome import mode_or_midpoint
 from wnn.ram.experiments.phased_search import PhaseResult
+from wnn.ram.experiments.validation_cache_scope import ValidationCacheScope
 
 
 
@@ -395,7 +396,7 @@ class Experiment:
 		flow_id: Optional[int] = None,
 		shutdown_check: Optional[Callable[[], bool]] = None,  # Callable returning True if shutdown requested
 		full_evaluator: Optional[Any] = None,  # Separate evaluator for validation (uses validation set)
-		dataset_key: Optional[str] = None,  # e.g. "ciciot2023_8b_random" — scopes cache lookups
+		validation_scope: Optional[ValidationCacheScope] = None,  # cross-flow validation-cache scope (key + worker ABI)
 	):
 		"""
 		Initialize experiment.
@@ -411,6 +412,7 @@ class Experiment:
 			flow_id: Optional flow ID for V2 tracking
 			shutdown_check: Optional callable that returns True if shutdown requested
 			full_evaluator: Separate evaluator for validation (trains on full train, evals on validation set)
+			validation_scope: Flow-level cache scope; None disables the validation cache
 		"""
 		self.config = config
 		self.evaluator = evaluator
@@ -422,7 +424,7 @@ class Experiment:
 		self.tracker = tracker
 		self.flow_id = flow_id
 		self.shutdown_check = shutdown_check
-		self.dataset_key = dataset_key
+		self.validation_scope = self._experiment_validation_scope(validation_scope, config)
 
 		# Derived properties
 		self.vocab_size = evaluator.vocab_size
@@ -1152,6 +1154,21 @@ class Experiment:
 
 		return str(filepath)
 
+	@staticmethod
+	def _experiment_validation_scope(
+		scope: Optional[ValidationCacheScope],
+		config: Optional[ExperimentConfig],
+	) -> Optional[ValidationCacheScope]:
+		"""Append this experiment's fitness weights: the empirical_cumulative
+		threshold mode is fitted with them, so two experiments that differ only
+		in weights must not share a cached validation row."""
+		if scope is None or config is None:
+			return None
+		return scope.with_threshold_weights(
+			config.fitness_weight_ce, config.fitness_weight_f1,
+			config.fitness_weight_fpr, config.fitness_weight_acc,
+		)
+
 	def _compute_genome_hash(self, genome: ClusterGenome) -> str:
 		"""
 		Compute a unique hash for a genome based on its configuration.
@@ -1299,11 +1316,12 @@ class Experiment:
 			for genome, genome_type, train_metrics in selected:
 				genome_hash = self._compute_genome_hash(genome)
 
-				# Check if already validated (scoped by dataset to prevent cross-dataset cache poisoning)
+				# Check if already validated under the SAME scope (every param that changes
+				# this genome's validation + the worker ABI; validation_cache_key.py)
 				cached = None
 				if self.dashboard_client:
 					try:
-						cached = self.dashboard_client.check_cached_validation(genome_hash, self.dataset_key)
+						cached = self.dashboard_client.check_cached_validation(genome_hash, self.validation_scope)
 					except Exception:
 						pass
 
@@ -1674,6 +1692,7 @@ class Experiment:
 							f1_macro=f1,
 							fpr=fpr_val,
 							threshold_metadata=json.dumps(threshold_metadata) if threshold_metadata else None,
+							scope=self.validation_scope,
 						)
 					except Exception as e:
 						self.log(f"  Warning: Failed to save {genome_type.value} summary: {e}")

@@ -124,6 +124,12 @@ def accel_or_none():
 	return require_accel()
 
 
+def installed_abi() -> int | None:
+	"""ABI of the loaded accelerator (the trainer version), or None when it is
+	unavailable/stale (Python fallback — such results must never be cached)."""
+	return getattr(_accel, "ABI_VERSION", None) if _accel is not None else None
+
+
 def fitness_combine(
 	flat:         list[float],
 	n:            int,

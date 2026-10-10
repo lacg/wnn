@@ -1,0 +1,132 @@
+{
+ "_comment": "Shared fixture: tests/test_validation_cache_key.py asserts the Python builder produces each key; dashboard/src/db/validations.rs tests replay the keys through the cache query. Regenerate ONLY with a deliberate VALIDATION_CACHE_VERSION bump.",
+ "cases": [
+  {
+   "name": "quad_default",
+   "params": {
+    "ids_dataset": "unsw-nb15",
+    "ids_n_bits": 8,
+    "ids_split": "random_3way",
+    "seed": 20401,
+    "ids_single_cluster": true
+   },
+   "oi_enabled": true,
+   "key": "v2|ds=unsw-nb15|nb=8|sp=random_3way|fs=all|rest=-|amb=32|raw=0|inv=none|strm=-|cls=binary|sc=1|mm=QUAD_WEIGHTED|seed=20401|nsr=0.25|cov=0|negs=0|bal=0|us=0|flip=0|cwm=1.0|hvf=-|thw=-|oi=1"
+  },
+  {
+   "name": "quad_explicit",
+   "params": {
+    "ids_dataset": "unsw-nb15",
+    "ids_n_bits": 8,
+    "ids_split": "random_3way",
+    "seed": 20401,
+    "ids_single_cluster": true,
+    "memory_mode": "QUAD_WEIGHTED"
+   },
+   "oi_enabled": true,
+   "key": "v2|ds=unsw-nb15|nb=8|sp=random_3way|fs=all|rest=-|amb=32|raw=0|inv=none|strm=-|cls=binary|sc=1|mm=QUAD_WEIGHTED|seed=20401|nsr=0.25|cov=0|negs=0|bal=0|us=0|flip=0|cwm=1.0|hvf=-|thw=-|oi=1"
+  },
+  {
+   "name": "qsr",
+   "params": {
+    "ids_dataset": "unsw-nb15",
+    "ids_n_bits": 8,
+    "ids_split": "random_3way",
+    "seed": 20401,
+    "ids_single_cluster": true,
+    "memory_mode": "QSR"
+   },
+   "oi_enabled": true,
+   "key": "v2|ds=unsw-nb15|nb=8|sp=random_3way|fs=all|rest=-|amb=32|raw=0|inv=none|strm=-|cls=binary|sc=1|mm=QSR|seed=20401|nsr=0.25|cov=0|negs=0|bal=0|us=0|flip=0|cwm=1.0|hvf=-|thw=-|oi=1"
+  },
+  {
+   "name": "raw",
+   "params": {
+    "ids_dataset": "unsw-nb15",
+    "ids_n_bits": 8,
+    "ids_split": "random_3way",
+    "seed": 20401,
+    "ids_single_cluster": true,
+    "ids_raw": true
+   },
+   "oi_enabled": true,
+   "key": "v2|ds=unsw-nb15|nb=8|sp=random_3way|fs=all|rest=-|amb=32|raw=1|inv=single_bit|strm=-|cls=binary|sc=1|mm=QUAD_WEIGHTED|seed=20401|nsr=0.25|cov=0|negs=0|bal=0|us=0|flip=0|cwm=1.0|hvf=-|thw=-|oi=1"
+  },
+  {
+   "name": "inv",
+   "params": {
+    "ids_dataset": "unsw-nb15",
+    "ids_n_bits": 8,
+    "ids_split": "random_3way",
+    "seed": 20401,
+    "ids_single_cluster": true,
+    "ids_invalid_encoding": "single_bit"
+   },
+   "oi_enabled": true,
+   "key": "v2|ds=unsw-nb15|nb=8|sp=random_3way|fs=all|rest=-|amb=32|raw=0|inv=single_bit|strm=-|cls=binary|sc=1|mm=QUAD_WEIGHTED|seed=20401|nsr=0.25|cov=0|negs=0|bal=0|us=0|flip=0|cwm=1.0|hvf=-|thw=-|oi=1"
+  },
+  {
+   "name": "oi_off",
+   "params": {
+    "ids_dataset": "unsw-nb15",
+    "ids_n_bits": 8,
+    "ids_split": "random_3way",
+    "seed": 20401,
+    "ids_single_cluster": true
+   },
+   "oi_enabled": false,
+   "key": "v2|ds=unsw-nb15|nb=8|sp=random_3way|fs=all|rest=-|amb=32|raw=0|inv=none|strm=-|cls=binary|sc=1|mm=QUAD_WEIGHTED|seed=20401|nsr=0.25|cov=0|negs=0|bal=0|us=0|flip=0|cwm=1.0|hvf=-|thw=-|oi=0"
+  },
+  {
+   "name": "feature_top20",
+   "params": {
+    "ids_dataset": "unsw-nb15",
+    "ids_n_bits": 8,
+    "ids_split": "random_3way",
+    "seed": 20401,
+    "ids_single_cluster": true,
+    "ids_feature_selection": "top20"
+   },
+   "oi_enabled": true,
+   "key": "v2|ds=unsw-nb15|nb=8|sp=random_3way|fs=top20|rest=-|amb=32|raw=0|inv=none|strm=-|cls=binary|sc=1|mm=QUAD_WEIGHTED|seed=20401|nsr=0.25|cov=0|negs=0|bal=0|us=0|flip=0|cwm=1.0|hvf=-|thw=-|oi=1"
+  },
+  {
+   "name": "neto_default_inv",
+   "params": {
+    "ids_dataset": "ciciot2023_neto_subsample",
+    "ids_n_bits": 8,
+    "ids_split": "random_3way",
+    "seed": 20401,
+    "ids_single_cluster": true
+   },
+   "oi_enabled": true,
+   "key": "v2|ds=ciciot2023_neto_subsample|nb=8|sp=random_3way|fs=all|rest=-|amb=32|raw=0|inv=single_bit|strm=-|cls=binary|sc=1|mm=QUAD_WEIGHTED|seed=20401|nsr=0.25|cov=0|negs=0|bal=0|us=0|flip=0|cwm=1.0|hvf=-|thw=-|oi=1"
+  },
+  {
+   "name": "neto_explicit_inv",
+   "params": {
+    "ids_dataset": "ciciot2023_neto_subsample",
+    "ids_n_bits": 8,
+    "ids_split": "random_3way",
+    "seed": 20401,
+    "ids_single_cluster": true,
+    "ids_invalid_encoding": "single_bit"
+   },
+   "oi_enabled": true,
+   "key": "v2|ds=ciciot2023_neto_subsample|nb=8|sp=random_3way|fs=all|rest=-|amb=32|raw=0|inv=single_bit|strm=-|cls=binary|sc=1|mm=QUAD_WEIGHTED|seed=20401|nsr=0.25|cov=0|negs=0|bal=0|us=0|flip=0|cwm=1.0|hvf=-|thw=-|oi=1"
+  },
+  {
+   "name": "multiclass",
+   "params": {
+    "ids_dataset": "unsw-nb15",
+    "ids_n_bits": 8,
+    "ids_split": "random_3way",
+    "seed": 20401,
+    "ids_single_cluster": false,
+    "ids_classification": "multi"
+   },
+   "oi_enabled": true,
+   "key": "v2|ds=unsw-nb15|nb=8|sp=random_3way|fs=all|rest=-|amb=32|raw=0|inv=none|strm=-|cls=multi|sc=0|mm=QUAD_WEIGHTED|seed=20401|nsr=0.25|cov=0|negs=0|bal=0|us=0|flip=0|cwm=1.0|hvf=-|thw=-|oi=1"
+  }
+ ]
+}
