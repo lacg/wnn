@@ -2623,3 +2623,7 @@ mod tests
 		}
 	}
 }
+
+#[cfg(test)]
+#[path = "neighbor_search_golden.rs"]
+mod golden;
