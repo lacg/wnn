@@ -17,6 +17,7 @@ Subclasses implement the actual evaluation logic:
 import os
 import random
 import time
+import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional, Callable, NamedTuple
@@ -143,7 +144,11 @@ class BaseEvaluator(ABC):
 		self._experiment_id: Optional[int] = None
 
 		if seed is None:
+			# Wall-clock fallback = a different K-fold partition every run (IDS-32:
+			# the worker omitted seed= from 10/03 to 11/10/2026). Loud, never silent.
 			seed = int(time.time() * 1000) % (2**32)
+			warnings.warn(f"[SEED] evaluator built with seed=None -> wall-clock seed {seed}; "
+				"K-fold partition is NOT reproducible", stacklevel=2)
 		self._seed = seed
 
 		self._train_tokens = train_tokens
