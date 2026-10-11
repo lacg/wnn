@@ -61,7 +61,11 @@ import os
 #   bit-identical to ABI 14 (ram_core golden digests). The Python GA always passes
 #   the new kwarg, so the template Python and this wheel land together at idle.
 #   NOTE: the validation cache pins worker_abi, so this bump re-validates.
-EXPECTED_ABI = 15
+# 16 (11/10/2026): additive — search_offspring takes dedupe_fill (default True =
+#   ABI-15 behaviour; False = deduped children keep only distinct neurons). The GA
+#   always passes it, so wheel + Python land together at idle. The validation
+#   cache pins worker_abi, so this bump re-validates (training is unchanged).
+EXPECTED_ABI = 16
 
 BUILD_HINT = (
 	"Rebuild the accelerator: cd src/wnn/ram/strategies/accelerator && "

@@ -220,12 +220,18 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			connections = generate_connections(bits_per_neuron, cfg.total_input_bits, self._rng.randint(0, 2**63))
 		return ClusterGenome(bits_per_neuron=bits_per_neuron, neurons_per_cluster=neurons, connections=connections)
 
+	def _phase_optimizes(self, flag: bool) -> bool:
+		"""Whether this phase optimizes a dimension: its optimize_* flag, or JOINT
+		(ga_joint_mutation mutates neurons AND bits, so its immigrants sample both
+		inside the band instead of inheriting the population's mode)."""
+		return flag or getattr(self, '_phase_type', None) == PhaseType.JOINT
+
 	def _new_cluster_neurons(self, c: int, ref: list[tuple['ClusterGenome', list[int]]], freq: float | None) -> int:
 		"""Neuron count for cluster c: sampled/scaled when optimizing neurons,
 		else inherited from the reference population (mode_or_midpoint)."""
 		cfg = self._arch_config
 		lo, hi = _cluster_band(cfg.neuron_bounds_per_cluster, c, cfg.min_neurons, cfg.max_neurons)
-		if not cfg.optimize_neurons:
+		if not self._phase_optimizes(cfg.optimize_neurons):
 			return mode_or_midpoint([g.neurons_per_cluster[c] for g, _ in ref], lo, hi)
 		if freq is not None:
 			return max(lo, min(hi, int(lo + freq * (hi - lo))))
@@ -237,7 +243,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		population's mode for that cluster (mode_or_midpoint)."""
 		cfg = self._arch_config
 		lo, hi = _cluster_band(cfg.bits_bounds_per_cluster, c, cfg.min_bits, cfg.max_bits)
-		if not cfg.optimize_bits:
+		if not self._phase_optimizes(cfg.optimize_bits):
 			pooled = [b for g, off in ref for b in g.bits_per_neuron[off[c]:off[c + 1]]]
 			return [mode_or_midpoint(pooled, lo, hi)] * n
 		if freq is not None:
@@ -257,7 +263,14 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		# Random-search baseline: bypass the Rust breeding path (it tournaments/
 		# crosses/mutates) — the base implementation samples fresh random genomes
 		# and still evaluates through the Rust batch evaluator.
-		if getattr(self._config, 'random_search', False) or self._cached_evaluator is None:
+		if getattr(self._config, 'random_search', False):
+			return super()._generate_offspring(population, n_needed, threshold, generation)
+		if self._cached_evaluator is None:
+			# The Python breeding fallback has no dedupe operator (Rust-only):
+			# refuse rather than silently run a different GA. JOINT and
+			# immigrant_fraction both work on this path.
+			if self._arch_config.dedupe_neurons:
+				raise NotImplementedError("ga_dedupe_neurons needs the Rust offspring path (a cached IDS evaluator)")
 			return super()._generate_offspring(population, n_needed, threshold, generation)
 		n_immigrants = round(self._config.immigrant_fraction * n_needed)
 		offspring = self._rust_offspring(population, n_needed - n_immigrants, threshold, generation)
@@ -329,6 +342,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			pool_shuffle_ratio=arch_cfg.pool_shuffle_ratio,
 			assortative_mating_ratio=arch_cfg.assortative_mating_ratio,
 			dedupe_neurons=arch_cfg.dedupe_neurons,
+			dedupe_fill=arch_cfg.dedupe_fill,
 		)
 
 		# Convert to (genome, Metrics) tuples, rank by fitness, return best n_needed

@@ -224,6 +224,9 @@ class ExperimentConfig:
 	# IDS-26 GA knobs (docs/ids_ga_plateau_ids26.md "Proposals"). All default OFF.
 	# Distinct neurons per crossover child (P1); shortfall = fresh mode-bits neurons.
 	ga_dedupe_neurons: bool = False
+	# With ga_dedupe_neurons: True = refill to the full count (default); False =
+	# keep only the distinct neurons (child may shrink, floored at max(min_neurons, 1)).
+	ga_dedupe_fill: bool = True
 	# Fraction of each generation's offspring slots given to fresh immigrants (P2).
 	immigrant_fraction: float = 0.0
 	# PhaseType.JOINT: neurons crossover + neurons → bits → connections mutation.
@@ -718,6 +721,7 @@ class Experiment:
 			pool_shuffle_ratio=cfg.pool_shuffle_ratio,
 			assortative_mating_ratio=cfg.assortative_mating_ratio,
 			dedupe_neurons=cfg.ga_dedupe_neurons,
+			dedupe_fill=cfg.ga_dedupe_fill,
 			joint_mutation=cfg.ga_joint_mutation,
 			neuron_bounds_per_cluster=(
 				[(max(1, int(c * 0.5 + 0.5)), max(1, int(c * 1.5 + 0.5))) for c in tier[0]]

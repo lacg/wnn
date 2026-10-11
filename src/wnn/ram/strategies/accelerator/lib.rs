@@ -323,7 +323,11 @@ use pyapi::*;
 /// the defaults the offspring are bit-identical to ABI 14 (golden digests in
 /// ram_core neighbor_search_golden.rs). Bumped so a Python tree that passes the
 /// new kwarg can never load a wheel that rejects it.
-pub const ABI_VERSION: u32 = 15;
+/// 16 (11/10/2026, IDS-26 follow-up): IDSCacheWrapper.search_offspring gains
+/// `dedupe_fill` (default true = ABI-15 dedupe). false = a deduped child keeps
+/// only its distinct neurons (may shrink; floored at max(min_neurons, 1)).
+/// Defaults bit-identical to ABI 15 (all golden digests incl. GOLDEN_TIES).
+pub const ABI_VERSION: u32 = 16;
 
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()>

@@ -109,13 +109,14 @@ pub(super) fn ga_config(pop: &[Genome], phase: PhaseType, tib: usize, ratios: (f
 		pool_shuffle_ratio: ratios.1,
 		assortative_mating_ratio: ratios.2,
 		dedupe_neurons: false,
+		dedupe_fill: true,
 	}
 }
 
 /// The new knob at its default: original operators.
 fn xo_off(total_input_bits: usize) -> NeuronXo
 {
-	NeuronXo { dedupe: false, total_input_bits }
+	NeuronXo { dedupe: false, total_input_bits, fill: true, min_neurons: 0 }
 }
 
 /// Deterministic stand-in for the IDS evaluator: metrics are a hash of the genome.

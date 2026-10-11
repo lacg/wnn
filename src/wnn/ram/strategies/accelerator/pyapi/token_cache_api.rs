@@ -658,6 +658,7 @@ impl TokenCacheWrapper
 			pool_shuffle_ratio,
 			assortative_mating_ratio,
 			dedupe_neurons: false,
+			dedupe_fill: true,
 		};
 
 		// Set up live progress for observer thread

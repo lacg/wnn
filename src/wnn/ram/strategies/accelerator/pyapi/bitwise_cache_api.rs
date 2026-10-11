@@ -504,6 +504,7 @@ impl BitwiseCacheWrapper
 			pool_shuffle_ratio,
 			assortative_mating_ratio,
 			dedupe_neurons: false,
+			dedupe_fill: true,
 		};
 
 		let override_val = self.sparse_threshold_override;

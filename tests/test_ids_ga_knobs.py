@@ -33,10 +33,11 @@ class RecordingEvaluator:
 	                     min_neurons, max_neurons, bits_mutation_rate, neurons_mutation_rate, crossover_rate,
 	                     tournament_size, train_subset_idx, eval_subset_idx, seed, logger, generation,
 	                     total_generations, return_best_n, mutable_clusters, phase_type, fitness_scores,
-	                     cluster_crossover_ratio, pool_shuffle_ratio, assortative_mating_ratio, dedupe_neurons):
+	                     cluster_crossover_ratio, pool_shuffle_ratio, assortative_mating_ratio, dedupe_neurons,
+	                     dedupe_fill):
 		self.search_calls.append(dict(target_count=target_count, phase_type=phase_type,
 		                              bits_rate=bits_mutation_rate, neurons_rate=neurons_mutation_rate,
-		                              dedupe=dedupe_neurons, train_idx=train_subset_idx))
+		                              dedupe=dedupe_neurons, fill=dedupe_fill, train_idx=train_subset_idx))
 		genomes = [_with_metrics(self._strategy.create_random_genome()) for _ in range(target_count)]
 		return type("R", (), {"genomes": genomes})()
 
@@ -50,12 +51,12 @@ def _with_metrics(genome):
 	return genome
 
 
-def _strategy(immigrant_fraction=0.0, dedupe=False, joint=False, opt=(True, True, False)):
+def _strategy(immigrant_fraction=0.0, dedupe=False, joint=False, opt=(True, True, False), fill=True):
 	arch = ArchitectureConfig(
 		num_clusters=1, min_bits=4, max_bits=34, min_neurons=5, max_neurons=500,
 		default_bits=10, default_neurons=20, total_input_bits=32,
 		optimize_neurons=opt[0], optimize_bits=opt[1], optimize_connections=opt[2],
-		dedupe_neurons=dedupe, joint_mutation=joint,
+		dedupe_neurons=dedupe, dedupe_fill=fill, joint_mutation=joint,
 	)
 	cfg = GAConfig(population_size=10, generations=3, immigrant_fraction=immigrant_fraction, mutation_rate=0.1)
 	s = ArchitectureGAStrategy(arch_config=arch, ga_config=cfg, seed=42)
@@ -74,14 +75,14 @@ def _population(s, n=6):
 # ---- registry / config defaults ----------------------------------------------
 
 def test_params_registered():
-	assert {"ga_dedupe_neurons", "immigrant_fraction", "ga_joint_mutation"} <= KNOWN_PARAMS
+	assert {"ga_dedupe_neurons", "ga_dedupe_fill", "immigrant_fraction", "ga_joint_mutation"} <= KNOWN_PARAMS
 
 
 def test_defaults_are_off():
 	e = ExperimentConfig(name="t", experiment_type=ExperimentType.GA)
-	assert (e.ga_dedupe_neurons, e.immigrant_fraction, e.ga_joint_mutation) == (False, 0.0, False)
+	assert (e.ga_dedupe_neurons, e.ga_dedupe_fill, e.immigrant_fraction, e.ga_joint_mutation) == (False, True, 0.0, False)
 	a = ArchitectureConfig(num_clusters=1)
-	assert (a.dedupe_neurons, a.joint_mutation) == (False, False)
+	assert (a.dedupe_neurons, a.dedupe_fill, a.joint_mutation) == (False, True, False)
 	assert GAConfig().immigrant_fraction == 0.0
 
 
@@ -170,3 +171,28 @@ def test_immigrants_follow_the_phase_bands():
 def test_immigrant_fraction_validated():
 	with pytest.raises(ValueError):
 		_strategy(immigrant_fraction=1.5)
+
+
+@pytest.mark.parametrize("fill", [True, False])
+def test_dedupe_fill_reaches_rust(fill):
+	s = _strategy(dedupe=True, fill=fill)
+	s._generate_offspring(_population(s), n_needed=8, threshold=0.0, generation=0)
+	assert s._cached_evaluator.search_calls[0]["fill"] is fill
+
+
+def test_dedupe_refused_on_python_fallback():
+	"""No cached evaluator → Python breeding, which has no dedupe operator."""
+	s = _strategy(dedupe=True)
+	s._cached_evaluator = None
+	with pytest.raises(NotImplementedError):
+		s._generate_offspring(_population(s), n_needed=4, threshold=0.0, generation=0)
+
+
+def test_joint_immigrants_sample_bits_in_band():
+	"""Under JOINT the phase evolves bits too, so immigrants sample bits in the
+	band rather than inheriting the population mode (GA-Neurons flags)."""
+	s = _strategy(immigrant_fraction=1.0, joint=True, opt=(True, False, False))
+	pop = _population(s)
+	s._generate_offspring(pop, n_needed=8, threshold=0.0, generation=0)
+	immigrant_bits = {b for g in s._cached_evaluator.immigrant_calls[0][0] for b in g.bits_per_neuron}
+	assert len(immigrant_bits) > 1 and all(4 <= b <= 34 for b in immigrant_bits)

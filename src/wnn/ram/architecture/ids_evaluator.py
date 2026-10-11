@@ -1296,6 +1296,7 @@ class IDSEvaluator(BaseEvaluator):
 		pool_shuffle_ratio: float = 0.0,
 		assortative_mating_ratio: float = 0.0,
 		dedupe_neurons: bool = False,
+		dedupe_fill: bool = True,
 	) -> OffspringSearchResult:
 		if not population:
 			return OffspringSearchResult(genomes=[], evaluated=0, viable=0)
@@ -1357,6 +1358,7 @@ class IDSEvaluator(BaseEvaluator):
 			assortative_mating_ratio=assortative_mating_ratio,
 			# IDS-26 P1: distinct neurons per child (default False = ABI-14 operators).
 			dedupe_neurons=dedupe_neurons,
+			dedupe_fill=dedupe_fill,
 		)
 
 		genomes = []

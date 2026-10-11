@@ -36,6 +36,9 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	# IDS-26 GA knobs (11/10/2026), all default OFF (absent = bit-identical GA):
 	# ga_dedupe_neurons (bool), immigrant_fraction (float), ga_joint_mutation (bool).
 	"ga_dedupe_neurons", "immigrant_fraction", "ga_joint_mutation",
+	# ga_dedupe_fill (bool, default True): False = deduped children keep only their
+	# distinct neurons (may shrink, floored at max(min_neurons, 1)). Needs ga_dedupe_neurons.
+	"ga_dedupe_fill",
 	"adaptation_iterations", "genesis_mode", "start_from_experiment",
 	# Fitness
 	"fitness_calculator", "fitness_percentile", "min_accuracy_floor",

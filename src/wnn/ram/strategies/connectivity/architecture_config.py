@@ -92,6 +92,10 @@ class ArchitectureConfig:
 	# cluster's neurons distinct by (bits, connections); shortfall = fresh random
 	# neurons at the parents' mode bits. Rust offspring path (IDS) only.
 	dedupe_neurons: bool = False
+	# With dedupe_neurons (flow param ga_dedupe_fill): True = top a deduped cluster
+	# back up to its count with fresh neurons; False = keep only its distinct
+	# neurons — the child may SHRINK — refilling only up to max(min_neurons, 1).
+	dedupe_fill: bool = True
 	# IDS-26 (flow param ga_joint_mutation): the GA runs PhaseType.JOINT —
 	# NEURONS crossover + neurons → bits → connections mutation on every child.
 	# Chosen ONLY by this flag; _derive_phase_type's mapping is untouched.
