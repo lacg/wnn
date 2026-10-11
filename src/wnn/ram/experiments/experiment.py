@@ -221,6 +221,14 @@ class ExperimentConfig:
 	# Assortative mating ratio: 0.0 = random p2, 1.0 = always pick most similar p2 (NEAT-style)
 	assortative_mating_ratio: float = 0.85
 
+	# IDS-26 GA knobs (docs/ids_ga_plateau_ids26.md "Proposals"). All default OFF.
+	# Distinct neurons per crossover child (P1); shortfall = fresh mode-bits neurons.
+	ga_dedupe_neurons: bool = False
+	# Fraction of each generation's offspring slots given to fresh immigrants (P2).
+	immigrant_fraction: float = 0.0
+	# PhaseType.JOINT: neurons crossover + neurons → bits → connections mutation.
+	ga_joint_mutation: bool = False
+
 	# Grid search configuration (only used when experiment_type=GRID_SEARCH)
 	neurons_grid: Optional[list[int]] = None   # e.g. [50, 100, 150, 200]
 	bits_grid: Optional[list[int]] = None       # e.g. [14, 16, 18, 20]
@@ -709,6 +717,8 @@ class Experiment:
 			cluster_crossover_ratio=cfg.cluster_crossover_ratio,
 			pool_shuffle_ratio=cfg.pool_shuffle_ratio,
 			assortative_mating_ratio=cfg.assortative_mating_ratio,
+			dedupe_neurons=cfg.ga_dedupe_neurons,
+			joint_mutation=cfg.ga_joint_mutation,
 			neuron_bounds_per_cluster=(
 				[(max(1, int(c * 0.5 + 0.5)), max(1, int(c * 1.5 + 0.5))) for c in tier[0]]
 				if tier else None),
@@ -797,6 +807,7 @@ class Experiment:
 				patience=cfg.patience,
 				magnitude_aware_patience=cfg.magnitude_aware_patience,
 				random_search=cfg.random_search,
+				immigrant_fraction=cfg.immigrant_fraction,
 				check_interval=cfg.check_interval,
 				min_improvement_pct=0.05,
 				initial_threshold=resolved_initial_threshold,

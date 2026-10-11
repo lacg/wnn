@@ -540,6 +540,7 @@ class TieredEvaluator(BaseEvaluator):
         cluster_crossover_ratio: float = 0.0,
         pool_shuffle_ratio: float = 0.0,
         assortative_mating_ratio: float = 0.0,
+        dedupe_neurons: bool = False,
     ) -> OffspringSearchResult:
         """
         Search for GA offspring above accuracy threshold, entirely in Rust.
@@ -574,6 +575,10 @@ class TieredEvaluator(BaseEvaluator):
         """
         import time
 
+        # The LM token cache has no dedupe operator and maps phase 5 (JOINT) to
+        # NEURONS silently — refuse both rather than run a different GA.
+        if dedupe_neurons or phase_type == 5:
+            raise NotImplementedError("ga_dedupe_neurons / ga_joint_mutation are IDS-only (IDSEvaluator)")
         if not population:
             return []
 

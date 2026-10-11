@@ -1295,6 +1295,7 @@ class IDSEvaluator(BaseEvaluator):
 		cluster_crossover_ratio: float = 0.0,
 		pool_shuffle_ratio: float = 0.0,
 		assortative_mating_ratio: float = 0.0,
+		dedupe_neurons: bool = False,
 	) -> OffspringSearchResult:
 		if not population:
 			return OffspringSearchResult(genomes=[], evaluated=0, viable=0)
@@ -1354,6 +1355,8 @@ class IDSEvaluator(BaseEvaluator):
 			cluster_crossover_ratio=cluster_crossover_ratio,
 			pool_shuffle_ratio=pool_shuffle_ratio,
 			assortative_mating_ratio=assortative_mating_ratio,
+			# IDS-26 P1: distinct neurons per child (default False = ABI-14 operators).
+			dedupe_neurons=dedupe_neurons,
 		)
 
 		genomes = []
@@ -1367,6 +1370,24 @@ class IDSEvaluator(BaseEvaluator):
 			genomes.append(g)
 
 		return OffspringSearchResult(genomes=genomes, evaluated=evaluated, viable=viable)
+
+	def evaluate_offspring_batch(self, genomes: list[ClusterGenome], train_subset_idx: int) -> list[Metrics]:
+		"""Score genomes EXACTLY as Rust search_offspring scores its offspring:
+		evaluate_genomes_kfold_hybrid on the ONE fold `train_subset_idx`, the
+		cache's neuron_sample_rate, rng_seed 0 (pyapi/ids_cache_api.rs eval_fn).
+		Used for GA immigrants so they compete with bred offspring on the same
+		footing. Not evaluate_batch: that averages kfold_per_gen folds and
+		advances the fold rotation."""
+		if self._cache is None:
+			raise RuntimeError("evaluate_offspring_batch needs the in-memory IDS cache (not the streaming path)")
+		bits_flat, neurons_flat, connections_flat = self._flatten_genomes(genomes)
+		raw = self._cache.evaluate_genomes_kfold_hybrid(
+			bits_flat, neurons_flat, connections_flat, len(genomes),
+			train_subset_idx, self._empty_value, self._neuron_sample_rate, 0,
+		)
+		for genome, (ce, acc, f1, fpr, _threshold, _ms) in zip(genomes, raw):
+			genome.metrics = IDSMetrics(ce=ce, acc=acc, f1=f1, fpr=fpr)
+		return [g.metrics for g in genomes]
 
 	def predict(
 		self,

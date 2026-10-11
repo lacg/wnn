@@ -88,6 +88,14 @@ class ArchitectureConfig:
 	pool_shuffle_ratio: float = 0.0
 	# Assortative mating ratio: 0.0 = random p2, 1.0 = always pick most similar p2 (NEAT-style)
 	assortative_mating_ratio: float = 0.85
+	# IDS-26 P1 (flow param ga_dedupe_neurons): neuron crossover keeps each
+	# cluster's neurons distinct by (bits, connections); shortfall = fresh random
+	# neurons at the parents' mode bits. Rust offspring path (IDS) only.
+	dedupe_neurons: bool = False
+	# IDS-26 (flow param ga_joint_mutation): the GA runs PhaseType.JOINT —
+	# NEURONS crossover + neurons → bits → connections mutation on every child.
+	# Chosen ONLY by this flag; _derive_phase_type's mapping is untouched.
+	joint_mutation: bool = False
 	# Per-cluster (min, max) bounds — MCST support tiering (None = global bounds)
 	neuron_bounds_per_cluster: Optional[list[tuple[int, int]]] = None
 	bits_bounds_per_cluster: Optional[list[tuple[int, int]]] = None

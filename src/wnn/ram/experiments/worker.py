@@ -1861,6 +1861,10 @@ class FlowWorker:
                 pool_shuffle_ratio=float(params.get("pool_shuffle_ratio", 0.0)),
                 # Assortative mating ratio (NEAT-style)
                 assortative_mating_ratio=float(params.get("assortative_mating_ratio", 0.85)),
+                # IDS-26 GA knobs — all default OFF (absent = bit-identical GA)
+                ga_dedupe_neurons=bool(params.get("ga_dedupe_neurons", False)),
+                immigrant_fraction=float(params.get("immigrant_fraction", 0.0)),
+                ga_joint_mutation=bool(params.get("ga_joint_mutation", False)),
             )
             exp_configs.append(exp_config)
 

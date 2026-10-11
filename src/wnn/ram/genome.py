@@ -403,7 +403,8 @@ class ClusterGenome:
 		if rng is None:
 			rng = random.Random()
 		if pool_shuffle_ratio > 0.0 and rng.random() < pool_shuffle_ratio:
-			return self._crossover_pool_shuffle(other, phase_type, rng)
+			# Was self._crossover_pool_shuffle (no such method → AttributeError).
+			return self.crossover_pool_shuffle2(other, phase_type, rng)[0]
 		child1, _ = self.crossover2(other, phase_type, rng)
 		return child1
 
@@ -414,7 +415,7 @@ class ClusterGenome:
 	def crossover_pool_shuffle2(self, other: ClusterGenome, phase_type: PhaseType, rng: random.Random) -> tuple[ClusterGenome, ClusterGenome]:
 		"""Pool-and-shuffle crossover producing 2 complementary offspring."""
 		match phase_type:
-			case PhaseType.NEURONS:
+			case PhaseType.NEURONS | PhaseType.JOINT:
 				return self._crossover_ps_neurons(other, rng)
 			case PhaseType.BITS:
 				return self._crossover_ps_bits(other, rng)
@@ -539,7 +540,7 @@ class ClusterGenome:
 		if rng is None:
 			rng = random.Random()
 		match phase_type:
-			case PhaseType.NEURONS:
+			case PhaseType.NEURONS | PhaseType.JOINT:
 				return self._crossover2_neurons(other, rng)
 			case PhaseType.BITS:
 				return self._crossover2_bits(other, rng)
@@ -810,7 +811,7 @@ class ClusterGenome:
 		if rng is None:
 			rng = random.Random()
 		match phase_type:
-			case PhaseType.CLUSTER:
+			case PhaseType.CLUSTER | PhaseType.JOINT:
 				# All-dimension mutation: neurons, then bits, then connections
 				g = self._mutate_neurons(mutation_rate, config, total_input_bits, rng)
 				g = g._mutate_bits(mutation_rate, config, total_input_bits, rng)

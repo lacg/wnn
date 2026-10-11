@@ -42,12 +42,17 @@ class OptimizationDimension(IntEnum):
 	               mutation. (Generic "all architecture dims" reading elsewhere.)
 	- MEMORY:      evolve the stored cell *contents*, architecture frozen
 	               (controller paradigm B / GA-Memory). Not architecture.
+	- JOINT:       IDS GA only, selected solely by the flow param
+	               `ga_joint_mutation` (never derived from optimize_* flags):
+	               NEURONS crossover, then every offspring gets the neurons →
+	               bits → connections mutations in that order (Rust PhaseType::Joint).
 	"""
 	NEURONS = 0
 	BITS = 1
 	CONNECTIONS = 2
 	CLUSTER = 3
 	MEMORY = 4
+	JOINT = 5
 
 
 # Backward-compatible alias: IDS code imports this name from adaptive_cluster,

@@ -15,7 +15,7 @@ use super::*;
 
 const SEED: u64 = 0x1D5_2026;
 
-type Genome = (Vec<usize>, Vec<usize>, Vec<i64>, f64);
+pub(super) type Genome = (Vec<usize>, Vec<usize>, Vec<i64>, f64);
 
 /// FNV-1a over a stream of u64 words.
 struct Digest(u64);
@@ -69,7 +69,7 @@ fn make_genome(neurons: &[usize], cluster_bits: &[usize], tib: usize, fit: f64, 
 }
 
 /// 8-genome, 3-cluster population with per-cluster uniform bits.
-fn population_multi() -> Vec<Genome>
+pub(super) fn population_multi() -> Vec<Genome>
 {
 	let mut rng = StdRng::seed_from_u64(7);
 	let cluster_bits = [6usize, 9, 12];
@@ -82,7 +82,7 @@ fn population_multi() -> Vec<Genome>
 }
 
 /// IDS-like: one cluster, 20..40 neurons of 10 bits, 200 input bits.
-fn population_ids() -> Vec<Genome>
+pub(super) fn population_ids() -> Vec<Genome>
 {
 	let mut rng = StdRng::seed_from_u64(11);
 	(0..10)
@@ -90,7 +90,7 @@ fn population_ids() -> Vec<Genome>
 		.collect()
 }
 
-fn ga_config(pop: &[Genome], phase: PhaseType, tib: usize, ratios: (f64, f64, f64)) -> GAConfig
+pub(super) fn ga_config(pop: &[Genome], phase: PhaseType, tib: usize, ratios: (f64, f64, f64)) -> GAConfig
 {
 	GAConfig {
 		num_clusters: pop[0].1.len(),
@@ -108,11 +108,18 @@ fn ga_config(pop: &[Genome], phase: PhaseType, tib: usize, ratios: (f64, f64, f6
 		cluster_crossover_ratio: ratios.0,
 		pool_shuffle_ratio: ratios.1,
 		assortative_mating_ratio: ratios.2,
+		dedupe_neurons: false,
 	}
 }
 
+/// The new knob at its default: original operators.
+fn xo_off(total_input_bits: usize) -> NeuronXo
+{
+	NeuronXo { dedupe: false, total_input_bits }
+}
+
 /// Deterministic stand-in for the IDS evaluator: metrics are a hash of the genome.
-fn fake_eval(bits: &[usize], neurons: &[usize], conns: &[i64], count: usize) -> Vec<(f64, f64, f64, f64)>
+pub(super) fn fake_eval(bits: &[usize], neurons: &[usize], conns: &[i64], count: usize) -> Vec<(f64, f64, f64, f64)>
 {
 	let nc = neurons.len() / count.max(1);
 	let mut out = Vec::with_capacity(count);
@@ -181,10 +188,10 @@ fn operator_digest() -> u64
 		{
 			for k in 0..pop.len() - 1
 			{
-				let (a, b) = crossover_pool_shuffle(&pop[k], &pop[k + 1], nc, phase, &mut rng);
+				let (a, b) = crossover_pool_shuffle(&pop[k], &pop[k + 1], nc, phase, xo_off(tib), &mut rng);
 				d.genome(&a.0, &a.1, &a.2);
 				d.genome(&b.0, &b.1, &b.2);
-				let (a, b) = crossover2(&pop[k], &pop[k + 1], nc, phase, &mut rng);
+				let (a, b) = crossover2(&pop[k], &pop[k + 1], nc, phase, xo_off(tib), &mut rng);
 				d.genome(&a.0, &a.1, &a.2);
 				d.genome(&b.0, &b.1, &b.2);
 				let cfg = ga_config(&pop, phase, tib, (0.0, 0.0, 0.0));

@@ -549,6 +549,7 @@ class BaseEvaluator(ABC):
 		cluster_crossover_ratio: float = 0.0,
 		pool_shuffle_ratio: float = 0.0,
 		assortative_mating_ratio: float = 0.0,
+		dedupe_neurons: bool = False,
 	) -> OffspringSearchResult:
 		"""Search for GA offspring above accuracy threshold.
 
@@ -562,6 +563,8 @@ class BaseEvaluator(ABC):
 		cluster_crossover_ratio: fraction of crossovers using CLUSTER mode (0.0-1.0).
 		pool_shuffle_ratio: fraction using old pool-and-shuffle crossover (0.0-1.0).
 		"""
+		if dedupe_neurons:
+			raise NotImplementedError("ga_dedupe_neurons lives in the Rust IDS offspring path (IDSEvaluator) only")
 		if not population:
 			return OffspringSearchResult(genomes=[], evaluated=0, viable=0)
 

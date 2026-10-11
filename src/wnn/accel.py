@@ -56,7 +56,12 @@ import os
 #   generation's seeds from them; the IDS Rust offspring generator's WALL-CLOCK seed
 #   is gone, so IDS GA runs are reproducible from their seed from this ABI on.
 #   Must land at a worker-idle swap together with the template Python.
-EXPECTED_ABI = 14
+# 15 (11/10/2026, IDS-26): additive — IDSCacheWrapper.search_offspring takes
+#   dedupe_neurons (default False) and phase_type 5 (JOINT). Defaults are
+#   bit-identical to ABI 14 (ram_core golden digests). The Python GA always passes
+#   the new kwarg, so the template Python and this wheel land together at idle.
+#   NOTE: the validation cache pins worker_abi, so this bump re-validates.
+EXPECTED_ABI = 15
 
 BUILD_HINT = (
 	"Rebuild the accelerator: cd src/wnn/ram/strategies/accelerator && "

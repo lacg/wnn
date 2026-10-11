@@ -318,7 +318,12 @@ use pyapi::*;
 /// generator's WALL-CLOCK seed — IDS GA runs become reproducible from their seed.
 /// Offspring draws change, so an IDS GA run from this wheel is not bit-comparable
 /// to one from ABI 13 (none of those were seed-reproducible anyway).
-pub const ABI_VERSION: u32 = 14;
+/// 15 (11/10/2026, IDS-26): IDSCacheWrapper.search_offspring gains
+/// `dedupe_neurons` (default false) and phase_type 5 = JOINT. Additive: with
+/// the defaults the offspring are bit-identical to ABI 14 (golden digests in
+/// ram_core neighbor_search_golden.rs). Bumped so a Python tree that passes the
+/// new kwarg can never load a wheel that rejects it.
+pub const ABI_VERSION: u32 = 15;
 
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()>

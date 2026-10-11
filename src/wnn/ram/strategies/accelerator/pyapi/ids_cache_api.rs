@@ -809,6 +809,7 @@ impl IDSCacheWrapper
 		{
 			1 => neighbor_search::PhaseType::Bits,
 			2 => neighbor_search::PhaseType::Connections,
+			5 => neighbor_search::PhaseType::Joint,
 			_ => neighbor_search::PhaseType::Neurons,
 		};
 
@@ -945,7 +946,8 @@ impl IDSCacheWrapper
         phase_type = 0,
         cluster_crossover_ratio = 0.0,
         pool_shuffle_ratio = 0.0,
-        assortative_mating_ratio = 0.0
+        assortative_mating_ratio = 0.0,
+        dedupe_neurons = false
     ))]
 	fn search_offspring(
 		&self,
@@ -984,6 +986,8 @@ impl IDSCacheWrapper
 		cluster_crossover_ratio: f64,
 		pool_shuffle_ratio: f64,
 		assortative_mating_ratio: f64,
+		// IDS-26 P1 (flow param `ga_dedupe_neurons`): distinct neurons per child.
+		dedupe_neurons: bool,
 	) -> PyResult<(
 		Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64, f64)>,
 		usize,
@@ -1003,6 +1007,7 @@ impl IDSCacheWrapper
 		{
 			1 => neighbor_search::PhaseType::Bits,
 			2 => neighbor_search::PhaseType::Connections,
+			5 => neighbor_search::PhaseType::Joint,
 			_ => neighbor_search::PhaseType::Neurons,
 		};
 
@@ -1022,6 +1027,7 @@ impl IDSCacheWrapper
 			cluster_crossover_ratio,
 			pool_shuffle_ratio,
 			assortative_mating_ratio,
+			dedupe_neurons,
 		};
 
 		let lp_arc = self.inner.live_progress.clone();

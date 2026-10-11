@@ -33,6 +33,9 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	"random_search",
 	"neurons_grid", "bits_grid", "grid_top_k", "grid_source", "top_m",
 	"cluster_crossover_ratio", "pool_shuffle_ratio", "assortative_mating_ratio",
+	# IDS-26 GA knobs (11/10/2026), all default OFF (absent = bit-identical GA):
+	# ga_dedupe_neurons (bool), immigrant_fraction (float), ga_joint_mutation (bool).
+	"ga_dedupe_neurons", "immigrant_fraction", "ga_joint_mutation",
 	"adaptation_iterations", "genesis_mode", "start_from_experiment",
 	# Fitness
 	"fitness_calculator", "fitness_percentile", "min_accuracy_floor",

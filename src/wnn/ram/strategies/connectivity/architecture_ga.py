@@ -126,7 +126,11 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		self._checkpoint_config = checkpoint_config
 		self._phase_name = phase_name
 		self._shutdown_check = shutdown_check
-		self._phase_type = self._derive_phase_type()
+		if not 0.0 <= self._config.immigrant_fraction <= 1.0:
+			raise ValueError(f"immigrant_fraction={self._config.immigrant_fraction} must be in [0, 1]")
+		# JOINT is selected ONLY by the explicit ga_joint_mutation flag; every
+		# existing optimize_* combination keeps its _derive_phase_type mapping.
+		self._phase_type = PhaseType.JOINT if arch_config.joint_mutation else self._derive_phase_type()
 
 	@property
 	def name(self) -> str:
@@ -246,95 +250,112 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 	# =========================================================================
 
 	def _generate_offspring(self, population, n_needed, threshold, generation):
-		"""Generate offspring via Rust search_offspring or Python fallback."""
+		"""Generate offspring via Rust search_offspring or Python fallback.
+		With immigrant_fraction > 0 (Rust path), round(f·n_needed) slots are fresh
+		phase-following immigrants scored like the bred offspring; the rest are
+		bred by Rust. f = 0 → the original path, no extra RNG draws."""
 		# Random-search baseline: bypass the Rust breeding path (it tournaments/
 		# crosses/mutates) — the base implementation samples fresh random genomes
 		# and still evaluates through the Rust batch evaluator.
-		if getattr(self._config, 'random_search', False):
+		if getattr(self._config, 'random_search', False) or self._cached_evaluator is None:
 			return super()._generate_offspring(population, n_needed, threshold, generation)
-		if self._cached_evaluator is not None:
-			cfg = self._config
-			arch_cfg = self._arch_config
-			evaluator = self._cached_evaluator
+		n_immigrants = round(self._config.immigrant_fraction * n_needed)
+		offspring = self._rust_offspring(population, n_needed - n_immigrants, threshold, generation)
+		if n_immigrants > 0:
+			offspring += self._evaluated_immigrants(population, n_immigrants)
+		return offspring
 
-			# Phase-aware mutation rates: each phase uses cfg.mutation_rate
-			# for its own dimension, 0.0 for others
-			if self._phase_type == PhaseType.NEURONS:
-				bits_mutation_rate = 0.0
-				neurons_mutation_rate = cfg.mutation_rate
-			else:  # BITS or CONNECTIONS
-				# Both phases drive their kernel off `bits_mutation_rate`: Rust's
-				# mutate_connections_phase (neighbor_search.rs:424) gates on that
-				# field too, so despite the name it is the phase's generic rate,
-				# not a bits-specific one. The two branches were separate and
-				# byte-identical, which read as if CONNECTIONS had its own policy.
-				# Collapsed — behaviour unchanged. The honest repair is renaming
-				# the Rust MutationConfig field; that is batched with the ram_core
-				# work so it costs one worker-wheel swap, not two.
-				bits_mutation_rate = cfg.mutation_rate
-				neurons_mutation_rate = 0.0
+	def _phase_mutation_rates(self, rate: float) -> tuple[float, float]:
+		"""(bits_mutation_rate, neurons_mutation_rate) for this phase.
 
-			# fitness_percentile controls selectivity: generate a larger pool,
-			# rank by fitness, keep only the top fraction → return exactly n_needed.
-			# e.g. percentile=0.75 → generate ceil(24/0.75)=32, rank, keep best 24.
-			import math
-			pct = cfg.fitness_percentile if cfg.fitness_percentile and 0 < cfg.fitness_percentile < 1.0 else None
-			generate_count = math.ceil(n_needed / pct) if pct else n_needed
+		Each single-dimension phase uses `rate` for its own dimension, 0.0 for
+		the others. BITS and CONNECTIONS both drive their kernel off
+		`bits_mutation_rate`: Rust's mutate_connections_phase gates on that field
+		too, so despite the name it is the phase's generic rate. JOINT runs all
+		three mutations, each at `rate` (no new rates invented)."""
+		if self._phase_type == PhaseType.NEURONS:
+			return 0.0, rate
+		if self._phase_type == PhaseType.JOINT:
+			return rate, rate
+		return rate, 0.0
 
-			# Convert (genome, Metrics) to (genome, ce_float) for Rust evaluator
-			rust_population = [(t[0], t[1].ce) for t in population]
+	def _rust_offspring(self, population, n_needed, threshold, generation):
+		"""Rust-bred offspring: tournament + crossover + mutation + eval in one call."""
+		cfg = self._config
+		arch_cfg = self._arch_config
+		bits_mutation_rate, neurons_mutation_rate = self._phase_mutation_rates(cfg.mutation_rate)
 
-			# Pre-compute fitness scores so tournament selection uses the
-			# same metric as elite selection (e.g. HarmonicRank), not raw CE
-			fitness_scores = None
-			if self._fitness_calculator is not None:
-				pop_metrics_list = [t[1] for t in population]
-				fitness_scores = self._fitness_calculator.fitness(pop_metrics_list)
+		# fitness_percentile controls selectivity: generate a larger pool,
+		# rank by fitness, keep only the top fraction → return exactly n_needed.
+		# e.g. percentile=0.75 → generate ceil(24/0.75)=32, rank, keep best 24.
+		import math
+		pct = cfg.fitness_percentile if cfg.fitness_percentile and 0 < cfg.fitness_percentile < 1.0 else None
+		generate_count = math.ceil(n_needed / pct) if pct else n_needed
 
-			search_result = evaluator.search_offspring(
-				population=rust_population,
-				target_count=generate_count,
-				max_attempts=generate_count * 5,
-				accuracy_threshold=threshold,
-				min_bits=arch_cfg.min_bits,
-				max_bits=arch_cfg.max_bits,
-				min_neurons=arch_cfg.min_neurons,
-				max_neurons=arch_cfg.max_neurons,
-				bits_mutation_rate=bits_mutation_rate,
-				neurons_mutation_rate=neurons_mutation_rate,
-				crossover_rate=cfg.crossover_rate,
-				tournament_size=cfg.tournament_size,
-				train_subset_idx=self._phase_train_idx,
-				eval_subset_idx=0,
-				seed=self._offspring_seed,
-				logger=self._log,
-				generation=generation,
-				total_generations=cfg.generations,
-				return_best_n=True,
-				mutable_clusters=arch_cfg.mutable_clusters,
-				phase_type=int(self._phase_type),
-				fitness_scores=fitness_scores,
-				cluster_crossover_ratio=arch_cfg.cluster_crossover_ratio,
-				pool_shuffle_ratio=arch_cfg.pool_shuffle_ratio,
-				assortative_mating_ratio=arch_cfg.assortative_mating_ratio,
-			)
+		# Convert (genome, Metrics) to (genome, ce_float) for Rust evaluator
+		rust_population = [(t[0], t[1].ce) for t in population]
 
-			# Convert to (genome, Metrics) tuples, rank by fitness, return best n_needed
-			offspring = [
-				(g, g.metrics)
-				for g in search_result.genomes
-				if hasattr(g, 'metrics') and g.metrics is not None
-			]
+		# Pre-compute fitness scores so tournament selection uses the
+		# same metric as elite selection (e.g. HarmonicRank), not raw CE
+		fitness_scores = None
+		if self._fitness_calculator is not None:
+			pop_metrics_list = [t[1] for t in population]
+			fitness_scores = self._fitness_calculator.fitness(pop_metrics_list)
 
-			if pct and len(offspring) > n_needed:
-				scores = self._fitness_calculator.fitness([t[1] for t in offspring])
-				ranked = sorted(zip(offspring, scores), key=lambda x: x[1])
-				offspring = [item for item, _ in ranked[:n_needed]]
+		search_result = self._cached_evaluator.search_offspring(
+			population=rust_population,
+			target_count=generate_count,
+			max_attempts=generate_count * 5,
+			accuracy_threshold=threshold,
+			min_bits=arch_cfg.min_bits,
+			max_bits=arch_cfg.max_bits,
+			min_neurons=arch_cfg.min_neurons,
+			max_neurons=arch_cfg.max_neurons,
+			bits_mutation_rate=bits_mutation_rate,
+			neurons_mutation_rate=neurons_mutation_rate,
+			crossover_rate=cfg.crossover_rate,
+			tournament_size=cfg.tournament_size,
+			train_subset_idx=self._phase_train_idx,
+			eval_subset_idx=0,
+			seed=self._offspring_seed,
+			logger=self._log,
+			generation=generation,
+			total_generations=cfg.generations,
+			return_best_n=True,
+			mutable_clusters=arch_cfg.mutable_clusters,
+			phase_type=int(self._phase_type),
+			fitness_scores=fitness_scores,
+			cluster_crossover_ratio=arch_cfg.cluster_crossover_ratio,
+			pool_shuffle_ratio=arch_cfg.pool_shuffle_ratio,
+			assortative_mating_ratio=arch_cfg.assortative_mating_ratio,
+			dedupe_neurons=arch_cfg.dedupe_neurons,
+		)
 
-			return offspring
+		# Convert to (genome, Metrics) tuples, rank by fitness, return best n_needed
+		offspring = [
+			(g, g.metrics)
+			for g in search_result.genomes
+			if hasattr(g, 'metrics') and g.metrics is not None
+		]
 
-		# Fallback to Python generation
-		return super()._generate_offspring(population, n_needed, threshold, generation)
+		if pct and len(offspring) > n_needed:
+			scores = self._fitness_calculator.fitness([t[1] for t in offspring])
+			ranked = sorted(zip(offspring, scores), key=lambda x: x[1])
+			offspring = [item for item, _ in ranked[:n_needed]]
+
+		return offspring
+
+	def _evaluated_immigrants(self, population, count: int):
+		"""IDS-26 P2: `count` fresh immigrants (create_immigrant follows the phase:
+		non-optimized dims from the live population), scored on the SAME fold and
+		evaluator call as the Rust offspring, returned as (genome, Metrics). They
+		join the offspring pool unfiltered and must win the μ+λ truncation."""
+		reference = [t[0] for t in population]
+		immigrants = [self.create_immigrant(reference) for _ in range(count)]
+		metrics = self._cached_evaluator.evaluate_offspring_batch(immigrants, self._phase_train_idx)
+		self._log.info(f"[{self.name}] Immigrants: {count} evaluated "
+		               f"(immigrant_fraction={self._config.immigrant_fraction})")
+		return list(zip(immigrants, metrics))
 
 	def _on_reseed(self, generation):
 		"""Seed for this generation's Rust offspring generator (WNN-1). Was

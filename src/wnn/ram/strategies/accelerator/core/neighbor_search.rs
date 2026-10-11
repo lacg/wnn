@@ -53,6 +53,9 @@ impl LiveProgress
 /// - Neurons: changes neuron counts, preserves existing neurons' bits + connections
 /// - Bits: changes bit counts per neuron, adds/removes connections (no drift)
 /// - Connections: perturbs connection targets, preserves architecture
+/// - Joint (IDS-26, flow param `ga_joint_mutation`): NEURONS crossover, then
+///   EVERY offspring gets the neurons → bits → connections mutations in order.
+///   5, not 4: Python's OptimizationDimension.MEMORY owns 4.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PhaseType
 {
@@ -60,6 +63,7 @@ pub enum PhaseType
 	Bits = 1,
 	Connections = 2,
 	Cluster = 3,
+	Joint = 5,
 }
 
 /// Configuration for genome mutation.
@@ -315,7 +319,7 @@ pub fn mutate_genome(
 			config,
 			rng,
 		),
-		PhaseType::Cluster =>
+		PhaseType::Cluster | PhaseType::Joint =>
 		{
 			// All-dimension mutation: neurons → bits → connections
 			let (b1, n1, c1) = mutate_neurons_phase(
@@ -384,20 +388,7 @@ fn mutate_neurons_phase(
 		let cluster_bits: Vec<usize> = (old_start..neuron_off[c + 1])
 			.map(|i| bits_per_neuron[i])
 			.collect();
-		let mode_bits = if cluster_bits.is_empty()
-		{
-			(config.min_bits + config.max_bits) / 2
-		}
-		else
-		{
-			// Simple mode: most common value
-			let mut counts = std::collections::HashMap::new();
-			for &b in &cluster_bits
-			{
-				*counts.entry(b).or_insert(0usize) += 1;
-			}
-			*counts.iter().max_by_key(|&(_, &count)| count).unwrap().0
-		};
+		let mode_bits = cluster_mode_bits(&cluster_bits).unwrap_or((config.min_bits + config.max_bits) / 2);
 
 		// Copy existing neurons (up to min of old/new)
 		let keep_n = old_n.min(new_n);
@@ -414,15 +405,33 @@ fn mutate_neurons_phase(
 		// Add new neurons with mode bit size + random connections
 		for _ in keep_n..new_n
 		{
-			new_bits.push(mode_bits);
-			for _ in 0..mode_bits
-			{
-				new_conns.push(rng.gen_range(0..config.total_input_bits as i64));
-			}
+			push_random_neuron(&mut new_bits, &mut new_conns, mode_bits, config.total_input_bits, rng);
 		}
 	}
 
 	(new_bits, new_neurons, new_conns)
+}
+
+/// Most common bits value (std HashMap: a tie breaks by per-instance hash
+/// order — pre-existing, kept so the default path is unchanged). None if empty.
+fn cluster_mode_bits(cluster_bits: &[usize]) -> Option<usize>
+{
+	let mut counts = std::collections::HashMap::new();
+	for &b in cluster_bits
+	{
+		*counts.entry(b).or_insert(0usize) += 1;
+	}
+	counts.iter().max_by_key(|&(_, &count)| count).map(|(&b, _)| b)
+}
+
+/// Append one fresh neuron: `mode_bits` bits, uniformly random connections.
+fn push_random_neuron(bits: &mut Vec<usize>, conns: &mut Vec<i64>, mode_bits: usize, total_input_bits: usize, rng: &mut impl Rng)
+{
+	bits.push(mode_bits);
+	for _ in 0..mode_bits
+	{
+		conns.push(rng.gen_range(0..total_input_bits as i64));
+	}
 }
 
 /// Bits phase mutation: change bit counts per neuron.
@@ -989,6 +998,25 @@ pub struct GAConfig
 	pub cluster_crossover_ratio: f64, // 0.0 = phase-specific, 1.0 = all cluster-level
 	pub pool_shuffle_ratio: f64,      // 0.0 = all uniform (2→2), 1.0 = all pool-and-shuffle (2→1)
 	pub assortative_mating_ratio: f64, // 0.0 = random p2, 1.0 = always pick most similar p2
+	/// IDS-26 P1 (flow param `ga_dedupe_neurons`): neuron crossover keeps each
+	/// cluster's neurons DISTINCT by (bits, connections). false = original operators.
+	pub dedupe_neurons: bool,
+}
+
+/// Neuron-crossover options. `dedupe` false = the original operators, same RNG draws.
+#[derive(Clone, Copy)]
+pub struct NeuronXo
+{
+	pub dedupe: bool,
+	pub total_input_bits: usize,
+}
+
+impl NeuronXo
+{
+	fn from_config(config: &GAConfig) -> Self
+	{
+		NeuronXo { dedupe: config.dedupe_neurons, total_input_bits: config.total_input_bits }
+	}
 }
 
 /// Tournament selection: pick best from random subset.
@@ -1076,17 +1104,18 @@ fn crossover(
 	parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
 	num_clusters: usize,
 	phase_type: PhaseType,
-	_total_input_bits: usize,
+	total_input_bits: usize,
 	pool_shuffle_ratio: f64,
 	rng: &mut impl Rng,
 ) -> (Vec<usize>, Vec<usize>, Vec<i64>)
 {
+	let xo = NeuronXo { dedupe: false, total_input_bits };
 	if pool_shuffle_ratio > 0.0 && rng.gen::<f64>() < pool_shuffle_ratio
 	{
-		let (child1, _) = crossover_pool_shuffle(parent1, parent2, num_clusters, phase_type, rng);
+		let (child1, _) = crossover_pool_shuffle(parent1, parent2, num_clusters, phase_type, xo, rng);
 		return child1;
 	}
-	let (child1, _) = crossover2(parent1, parent2, num_clusters, phase_type, rng);
+	let (child1, _) = crossover2(parent1, parent2, num_clusters, phase_type, xo, rng);
 	child1
 }
 
@@ -1096,6 +1125,7 @@ fn crossover_pool_shuffle(
 	parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
 	num_clusters: usize,
 	phase_type: PhaseType,
+	xo: NeuronXo,
 	rng: &mut impl Rng,
 ) -> (
 	(Vec<usize>, Vec<usize>, Vec<i64>),
@@ -1104,7 +1134,7 @@ fn crossover_pool_shuffle(
 {
 	match phase_type
 	{
-		PhaseType::Neurons => crossover_ps_neurons(parent1, parent2, num_clusters, rng),
+		PhaseType::Neurons | PhaseType::Joint => crossover_ps_neurons(parent1, parent2, num_clusters, xo, rng),
 		PhaseType::Bits => crossover_ps_bits(parent1, parent2, num_clusters, rng),
 		PhaseType::Connections => crossover_ps_connections(parent1, parent2, num_clusters, rng),
 		PhaseType::Cluster => crossover2_cluster(parent1, parent2, num_clusters, rng),
@@ -1113,10 +1143,14 @@ fn crossover_pool_shuffle(
 
 /// Pool-and-shuffle neuron crossover (2→2 complementary): pool all neurons, shuffle once,
 /// child1 takes first p1_n, child2 takes next p2_n. Guarantees no overlap.
+/// `xo.dedupe`: the pool is a SET keyed by (bits, connections); a cluster
+/// short of its count is topped up with fresh random neurons at the parents'
+/// mode bits (see `dedupe_fill`).
 fn crossover_ps_neurons(
 	parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
 	parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
 	num_clusters: usize,
+	xo: NeuronXo,
 	rng: &mut impl Rng,
 ) -> (
 	(Vec<usize>, Vec<usize>, Vec<i64>),
@@ -1133,6 +1167,9 @@ fn crossover_ps_neurons(
 	let mut c2_bits = Vec::new();
 	let mut c2_neurons = Vec::new();
 	let mut c2_conns = Vec::new();
+	let dedupe = xo.dedupe && !parent1.2.is_empty() && !parent2.2.is_empty();
+	let mut c1_taken = Vec::new();
+	let mut c2_taken = Vec::new();
 	for c in 0..num_clusters
 	{
 		let p1_n = parent1.1[c];
@@ -1182,7 +1219,14 @@ fn crossover_ps_neurons(
 				},
 			});
 		}
+		if dedupe
+		{
+			let mut seen = std::collections::HashSet::new();
+			pool.retain(|n| seen.insert((n.bits, n.conns)));
+		}
 		pool.shuffle(rng);
+		c1_taken.push(pool.len().min(c1_n));
+		c2_taken.push(pool.len().saturating_sub(c1_n).min(c2_n));
 		// Each child samples its count from the shuffled pool
 		for neuron in pool.iter().take(c1_n)
 		{
@@ -1195,10 +1239,99 @@ fn crossover_ps_neurons(
 			c2_conns.extend_from_slice(neuron.conns);
 		}
 	}
-	(
-		(c1_bits, c1_neurons, c1_conns),
-		(c2_bits, c2_neurons, c2_conns),
-	)
+	let child1 = (c1_bits, c1_neurons, c1_conns);
+	let child2 = (c2_bits, c2_neurons, c2_conns);
+	if !dedupe
+	{
+		return (child1, child2);
+	}
+	let modes = parent_cluster_modes(parent1, parent2, num_clusters);
+	let child1 = dedupe_fill(&child1, &c1_taken, &modes, xo.total_input_bits, rng);
+	let child2 = dedupe_fill(&child2, &c2_taken, &modes, xo.total_input_bits, rng);
+	(child1, child2)
+}
+
+type Child = (Vec<usize>, Vec<usize>, Vec<i64>);
+
+/// Per cluster, the mode bits over BOTH parents' neurons (0 if both are empty;
+/// an empty cluster is never filled).
+fn parent_cluster_modes(
+	parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+	parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+	num_clusters: usize,
+) -> Vec<usize>
+{
+	let (o1, o2) = (compute_neuron_offsets(&parent1.1), compute_neuron_offsets(&parent2.1));
+	(0..num_clusters)
+		.map(|c| {
+			let mut pooled = parent1.0[o1[c]..o1[c + 1]].to_vec();
+			pooled.extend_from_slice(&parent2.0[o2[c]..o2[c + 1]]);
+			cluster_mode_bits(&pooled).unwrap_or(0)
+		})
+		.collect()
+}
+
+/// IDS-26 P1: rebuild `child` so cluster c holds exactly `child.1[c]` DISTINCT
+/// neurons. `present[c]` = neurons actually laid out for c in child.0/child.2
+/// (may be < child.1[c]); repeats are dropped (first kept) and the shortfall is
+/// filled with fresh random neurons at `modes[c]` bits.
+fn dedupe_fill(child: &Child, present: &[usize], modes: &[usize], total_input_bits: usize, rng: &mut impl Rng) -> Child
+{
+	let conn_off = compute_conn_offsets(&child.0);
+	let mut out: Child = (Vec::new(), child.1.clone(), Vec::new());
+	let mut start = 0;
+	for c in 0..child.1.len()
+	{
+		let mut seen = std::collections::HashSet::new();
+		for g in start..start + present[c]
+		{
+			push_distinct(&mut out, &mut seen, child.0[g], &child.2[conn_off[g]..conn_off[g + 1]]);
+		}
+		fill_fresh(&mut out, &mut seen, child.1[c], modes[c], total_input_bits, rng);
+		start += present[c];
+	}
+	out
+}
+
+/// Append a neuron unless its (bits, connections) key is already in `seen`.
+fn push_distinct(out: &mut Child, seen: &mut std::collections::HashSet<(usize, Vec<i64>)>, bits: usize, conns: &[i64])
+{
+	if seen.insert((bits, conns.to_vec()))
+	{
+		out.0.push(bits);
+		out.2.extend_from_slice(conns);
+	}
+}
+
+/// Top a cluster up to `target` neurons with fresh random ones (the mutation's
+/// appended-neuron rule), re-drawing a collision; after a bounded number of
+/// re-draws a collision is accepted so the count is always met.
+fn fill_fresh(
+	out: &mut Child,
+	seen: &mut std::collections::HashSet<(usize, Vec<i64>)>,
+	target: usize,
+	mode_bits: usize,
+	total_input_bits: usize,
+	rng: &mut impl Rng,
+)
+{
+	let mut have = seen.len();
+	let mut redraws = 0;
+	while have < target
+	{
+		let (mut b, mut c) = (Vec::new(), Vec::new());
+		push_random_neuron(&mut b, &mut c, mode_bits, total_input_bits, rng);
+		if seen.insert((mode_bits, c.clone())) || redraws >= 16
+		{
+			out.0.push(mode_bits);
+			out.2.extend(c);
+			have += 1;
+		}
+		else
+		{
+			redraws += 1;
+		}
+	}
 }
 
 /// Pool-and-shuffle bits crossover (2→2 complementary): per-neuron coin flip with complement.
@@ -1341,6 +1474,7 @@ fn crossover2(
 	parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
 	num_clusters: usize,
 	phase_type: PhaseType,
+	xo: NeuronXo,
 	rng: &mut impl Rng,
 ) -> (
 	(Vec<usize>, Vec<usize>, Vec<i64>),
@@ -1349,7 +1483,7 @@ fn crossover2(
 {
 	match phase_type
 	{
-		PhaseType::Neurons => crossover2_neurons(parent1, parent2, num_clusters, rng),
+		PhaseType::Neurons | PhaseType::Joint => crossover2_neurons(parent1, parent2, num_clusters, xo, rng),
 		PhaseType::Bits => crossover2_bits(parent1, parent2, num_clusters, rng),
 		PhaseType::Connections => crossover2_connections(parent1, parent2, num_clusters, rng),
 		PhaseType::Cluster => crossover2_cluster(parent1, parent2, num_clusters, rng),
@@ -1358,10 +1492,13 @@ fn crossover2(
 
 /// Neuron crossover (2 offspring): per-position uniform crossover.
 /// Coin flip per shared position, extras inherited from own parent.
+/// `xo.dedupe`: each child is then de-duplicated per cluster and topped back up
+/// to its parent's count (see `dedupe_fill`).
 fn crossover2_neurons(
 	parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
 	parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
 	num_clusters: usize,
+	xo: NeuronXo,
 	rng: &mut impl Rng,
 ) -> (
 	(Vec<usize>, Vec<usize>, Vec<i64>),
@@ -1440,10 +1577,16 @@ fn crossover2_neurons(
 		}
 	}
 
-	(
-		(c1_bits, c1_neurons, c1_conns),
-		(c2_bits, c2_neurons, c2_conns),
-	)
+	let child1 = (c1_bits, c1_neurons, c1_conns);
+	let child2 = (c2_bits, c2_neurons, c2_conns);
+	if !(xo.dedupe && has_conns)
+	{
+		return (child1, child2);
+	}
+	let modes = parent_cluster_modes(parent1, parent2, num_clusters);
+	let child1 = dedupe_fill(&child1, &parent1.1, &modes, xo.total_input_bits, rng);
+	let child2 = dedupe_fill(&child2, &parent2.1, &modes, xo.total_input_bits, rng);
+	(child1, child2)
 }
 
 /// Bit crossover (2 offspring): per-neuron swap.
@@ -1917,13 +2060,14 @@ where
 				{
 					// 2→1: pool-shuffle produces complementary pair, keep only child1
 					let (child1, _child2) =
-						crossover_pool_shuffle(p1, p2, ga_config.num_clusters, xo_phase, &mut rng);
+						crossover_pool_shuffle(p1, p2, ga_config.num_clusters, xo_phase, NeuronXo::from_config(ga_config), &mut rng);
 					vec![child1]
 				}
 				else
 				{
 					// 2→2: uniform crossover produces both children
-					let (child1, child2) = crossover2(p1, p2, ga_config.num_clusters, xo_phase, &mut rng);
+					let (child1, child2) =
+						crossover2(p1, p2, ga_config.num_clusters, xo_phase, NeuronXo::from_config(ga_config), &mut rng);
 					vec![child1, child2]
 				};
 
@@ -2105,6 +2249,8 @@ where
 mod tests
 {
 	use super::*;
+
+	const XO_OFF: NeuronXo = NeuronXo { dedupe: false, total_input_bits: 64 };
 
 	#[test]
 	fn test_mutation_config()
@@ -2371,7 +2517,7 @@ mod tests
 		let (p1, p2) = make_test_parents();
 
 		let ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns)) =
-			crossover2_neurons(&p1, &p2, 3, &mut rng);
+			crossover2_neurons(&p1, &p2, 3, XO_OFF, &mut rng);
 
 		// child1 preserves parent1's neuron counts
 		assert_eq!(c1_neurons, p1.1, "child1 must have parent1's neuron counts");
@@ -2392,7 +2538,7 @@ mod tests
 		let mut rng = rand::rngs::StdRng::seed_from_u64(123);
 		let (p1, p2) = make_test_parents();
 
-		let ((_, c1_neurons, _), (_, c2_neurons, _)) = crossover2_neurons(&p1, &p2, 3, &mut rng);
+		let ((_, c1_neurons, _), (_, c2_neurons, _)) = crossover2_neurons(&p1, &p2, 3, XO_OFF, &mut rng);
 
 		for c in 0..3
 		{
@@ -2613,7 +2759,7 @@ mod tests
 		]
 		{
 			let ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns)) =
-				crossover2(&p1, &p2, 3, phase, &mut rng);
+				crossover2(&p1, &p2, 3, phase, XO_OFF, &mut rng);
 
 			// Basic structural validity
 			assert_eq!(c1_bits.len(), c1_neurons.iter().sum::<usize>());
@@ -2627,3 +2773,7 @@ mod tests
 #[cfg(test)]
 #[path = "neighbor_search_golden.rs"]
 mod golden;
+
+#[cfg(test)]
+#[path = "neighbor_search_knob_tests.rs"]
+mod knob_tests;
