@@ -181,3 +181,62 @@ fn joint_search_offspring_respects_bands()
 		assert_eq!(c.connections.len(), c.bits_per_neuron.iter().sum::<usize>());
 	}
 }
+
+// ---- mode-bits tie-break (11/10/2026) ----------------------------------------
+
+/// The pre-11/10 rule, verbatim: HashMap order decides a tie.
+fn legacy_mode_bits(bits: &[usize]) -> Option<usize>
+{
+	let mut counts = std::collections::HashMap::new();
+	for &b in bits
+	{
+		*counts.entry(b).or_insert(0usize) += 1;
+	}
+	counts.iter().max_by_key(|&(_, &count)| count).map(|(&b, _)| b)
+}
+
+/// Values sharing the top count, ascending (a tie when more than one).
+fn top_values(bits: &[usize]) -> Vec<usize>
+{
+	let count = |b: &usize| bits.iter().filter(|&x| x == b).count();
+	let max = bits.iter().map(count).max().unwrap_or(0);
+	let mut top: Vec<usize> = bits.iter().copied().filter(|b| count(b) == max).collect();
+	top.sort_unstable();
+	top.dedup();
+	top
+}
+
+#[test]
+fn mode_bits_changes_only_on_ties()
+{
+	let mut rng = StdRng::seed_from_u64(2026);
+	let (mut ties, mut non_ties) = (0, 0);
+	for _ in 0..5000
+	{
+		let len = rng.gen_range(1..30);
+		let bits: Vec<usize> = (0..len).map(|_| rng.gen_range(4..9)).collect();
+		let top = top_values(&bits);
+		if top.len() == 1
+		{
+			non_ties += 1;
+			assert_eq!(cluster_mode_bits(&bits), legacy_mode_bits(&bits), "non-tie must be unchanged: {bits:?}");
+		}
+		else
+		{
+			ties += 1;
+			assert_eq!(cluster_mode_bits(&bits), Some(top[0]), "tie must go to the fewest bits: {bits:?}");
+		}
+	}
+	assert!(ties > 100 && non_ties > 100, "both cases exercised ({ties} ties, {non_ties} non-ties)");
+	assert_eq!(cluster_mode_bits(&[]), None);
+}
+
+#[test]
+fn mode_bits_tie_is_stable_across_fresh_hashmaps()
+{
+	// 10, 12 and 34 tied; every call hashes with fresh keys.
+	for _ in 0..200
+	{
+		assert_eq!(cluster_mode_bits(&[12, 10, 34, 12, 10, 34]), Some(10));
+	}
+}

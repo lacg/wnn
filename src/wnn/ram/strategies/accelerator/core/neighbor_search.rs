@@ -412,8 +412,10 @@ fn mutate_neurons_phase(
 	(new_bits, new_neurons, new_conns)
 }
 
-/// Most common bits value (std HashMap: a tie breaks by per-instance hash
-/// order — pre-existing, kept so the default path is unchanged). None if empty.
+/// Most common bits value; a tie goes to the FEWEST bits — deterministic, and
+/// the same rule as Python's genome.mode_or_midpoint. Before 11/10/2026 a tie
+/// broke by std HashMap per-instance hash order, i.e. at random, so a fixed-seed
+/// IDS GA run diverged whenever a cluster mixed bit widths. None if empty.
 fn cluster_mode_bits(cluster_bits: &[usize]) -> Option<usize>
 {
 	let mut counts = std::collections::HashMap::new();
@@ -421,7 +423,7 @@ fn cluster_mode_bits(cluster_bits: &[usize]) -> Option<usize>
 	{
 		*counts.entry(b).or_insert(0usize) += 1;
 	}
-	counts.iter().max_by_key(|&(_, &count)| count).map(|(&b, _)| b)
+	counts.iter().max_by_key(|&(&b, &count)| (count, std::cmp::Reverse(b))).map(|(&b, _)| b)
 }
 
 /// Append one fresh neuron: `mode_bits` bits, uniformly random connections.

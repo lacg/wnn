@@ -245,3 +245,55 @@ fn golden_operators_defaults_unchanged()
 {
 	assert_eq!(operator_digest(), GOLDEN_OPERATORS);
 }
+
+// ---- tie population (11/10/2026: deterministic mode-bits tie-break) -----------
+
+/// IDS-like single cluster whose neurons alternate 10 / 12 bits, so the cluster
+/// mode is TIED in every parent (even sizes) and in most crossover children.
+/// Under the pre-11/10 HashMap tie-break this population was not reproducible.
+fn population_ties() -> Vec<Genome>
+{
+	let mut rng = StdRng::seed_from_u64(13);
+	(0..10)
+		.map(|i| {
+			let n = 20 + 2 * ((i * 7) % 11);
+			let bits: Vec<usize> = (0..n).map(|k| if k % 2 == 0 { 10 } else { 12 }).collect();
+			let total: usize = bits.iter().sum();
+			let conns: Vec<i64> = (0..total).map(|_| rng.gen_range(0..200i64)).collect();
+			(bits, vec![n], conns, 0.5 + i as f64 * 0.03)
+		})
+		.collect()
+}
+
+/// search_offspring digests on the tie population: the phases whose operators
+/// read the mode (Neurons, Cluster, Joint) × ratio combos × dedupe off/on.
+fn tie_digests() -> Vec<u64>
+{
+	let pop = population_ties();
+	let mut out = Vec::new();
+	for phase in [PhaseType::Neurons, PhaseType::Cluster, PhaseType::Joint]
+	{
+		for ratios in RATIOS
+		{
+			for dedupe in [false, true]
+			{
+				let mut cfg = ga_config(&pop, phase, 200, ratios);
+				cfg.dedupe_neurons = dedupe;
+				out.push(search_digest(&pop, &cfg, 0.0));
+			}
+		}
+	}
+	out
+}
+
+#[test]
+fn golden_ties_print()
+{
+	let d = tie_digests();
+	eprintln!("GOLDEN_TIES = {:?}", d);
+	// Every call builds fresh HashMaps (fresh hash keys): must not move the result.
+	for _ in 0..5
+	{
+		assert_eq!(tie_digests(), d);
+	}
+}
