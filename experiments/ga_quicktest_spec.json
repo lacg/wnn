@@ -1,0 +1,227 @@
+[
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAT-unswt-CTRL-r20419",
+  "set": {
+   "seed": 20419
+  },
+  "why": "GA quick test 11/10/2026 (Luiz): control: current GA. Paired seeds, worker ABI 15."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAT-unswt-NOXO-r20419",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "seed": 20419
+  },
+  "why": "GA quick test 11/10/2026 (Luiz): IDS-26 P4 no-code probe: random parents + positional crossover. Paired seeds, worker ABI 15."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAT-unswt-DEDUP-r20419",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "seed": 20419
+  },
+  "why": "GA quick test 11/10/2026 (Luiz): IDS-26 P1: dedupe neurons in crossover. Paired seeds, worker ABI 15."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAT-unswt-IMM10-r20419",
+  "set": {
+   "immigrant_fraction": 0.1,
+   "seed": 20419
+  },
+  "why": "GA quick test 11/10/2026 (Luiz): IDS-26 P2: 10% random immigrants per gen on the Rust path. Paired seeds, worker ABI 15."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAT-unswt-JOINT-r20419",
+  "set": {
+   "ga_joint_mutation": true,
+   "seed": 20419
+  },
+  "why": "GA quick test 11/10/2026 (Luiz): Luiz joint axes: neurons->bits->connections mutation every offspring. Paired seeds, worker ABI 15."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAT-unswt-CTRL-r20420",
+  "set": {
+   "seed": 20420
+  },
+  "why": "GA quick test 11/10/2026 (Luiz): control: current GA. Paired seeds, worker ABI 15."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAT-unswt-NOXO-r20420",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "seed": 20420
+  },
+  "why": "GA quick test 11/10/2026 (Luiz): IDS-26 P4 no-code probe: random parents + positional crossover. Paired seeds, worker ABI 15."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAT-unswt-DEDUP-r20420",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "seed": 20420
+  },
+  "why": "GA quick test 11/10/2026 (Luiz): IDS-26 P1: dedupe neurons in crossover. Paired seeds, worker ABI 15."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAT-unswt-IMM10-r20420",
+  "set": {
+   "immigrant_fraction": 0.1,
+   "seed": 20420
+  },
+  "why": "GA quick test 11/10/2026 (Luiz): IDS-26 P2: 10% random immigrants per gen on the Rust path. Paired seeds, worker ABI 15."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAT-unswt-JOINT-r20420",
+  "set": {
+   "ga_joint_mutation": true,
+   "seed": 20420
+  },
+  "why": "GA quick test 11/10/2026 (Luiz): Luiz joint axes: neurons->bits->connections mutation every offspring. Paired seeds, worker ABI 15."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAT-unswt-CTRL-r20421",
+  "set": {
+   "seed": 20421
+  },
+  "why": "GA quick test 11/10/2026 (Luiz): control: current GA. Paired seeds, worker ABI 15."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAT-unswt-NOXO-r20421",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "seed": 20421
+  },
+  "why": "GA quick test 11/10/2026 (Luiz): IDS-26 P4 no-code probe: random parents + positional crossover. Paired seeds, worker ABI 15."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAT-unswt-DEDUP-r20421",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "seed": 20421
+  },
+  "why": "GA quick test 11/10/2026 (Luiz): IDS-26 P1: dedupe neurons in crossover. Paired seeds, worker ABI 15."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAT-unswt-IMM10-r20421",
+  "set": {
+   "immigrant_fraction": 0.1,
+   "seed": 20421
+  },
+  "why": "GA quick test 11/10/2026 (Luiz): IDS-26 P2: 10% random immigrants per gen on the Rust path. Paired seeds, worker ABI 15."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAT-unswt-JOINT-r20421",
+  "set": {
+   "ga_joint_mutation": true,
+   "seed": 20421
+  },
+  "why": "GA quick test 11/10/2026 (Luiz): Luiz joint axes: neurons->bits->connections mutation every offspring. Paired seeds, worker ABI 15."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAT-unswt-CTRL-r20422",
+  "set": {
+   "seed": 20422
+  },
+  "why": "GA quick test 11/10/2026 (Luiz): control: current GA. Paired seeds, worker ABI 15."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAT-unswt-NOXO-r20422",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "seed": 20422
+  },
+  "why": "GA quick test 11/10/2026 (Luiz): IDS-26 P4 no-code probe: random parents + positional crossover. Paired seeds, worker ABI 15."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAT-unswt-DEDUP-r20422",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "seed": 20422
+  },
+  "why": "GA quick test 11/10/2026 (Luiz): IDS-26 P1: dedupe neurons in crossover. Paired seeds, worker ABI 15."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAT-unswt-IMM10-r20422",
+  "set": {
+   "immigrant_fraction": 0.1,
+   "seed": 20422
+  },
+  "why": "GA quick test 11/10/2026 (Luiz): IDS-26 P2: 10% random immigrants per gen on the Rust path. Paired seeds, worker ABI 15."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAT-unswt-JOINT-r20422",
+  "set": {
+   "ga_joint_mutation": true,
+   "seed": 20422
+  },
+  "why": "GA quick test 11/10/2026 (Luiz): Luiz joint axes: neurons->bits->connections mutation every offspring. Paired seeds, worker ABI 15."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAT-unswt-CTRL-r20423",
+  "set": {
+   "seed": 20423
+  },
+  "why": "GA quick test 11/10/2026 (Luiz): control: current GA. Paired seeds, worker ABI 15."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAT-unswt-NOXO-r20423",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "seed": 20423
+  },
+  "why": "GA quick test 11/10/2026 (Luiz): IDS-26 P4 no-code probe: random parents + positional crossover. Paired seeds, worker ABI 15."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAT-unswt-DEDUP-r20423",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "seed": 20423
+  },
+  "why": "GA quick test 11/10/2026 (Luiz): IDS-26 P1: dedupe neurons in crossover. Paired seeds, worker ABI 15."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAT-unswt-IMM10-r20423",
+  "set": {
+   "immigrant_fraction": 0.1,
+   "seed": 20423
+  },
+  "why": "GA quick test 11/10/2026 (Luiz): IDS-26 P2: 10% random immigrants per gen on the Rust path. Paired seeds, worker ABI 15."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAT-unswt-JOINT-r20423",
+  "set": {
+   "ga_joint_mutation": true,
+   "seed": 20423
+  },
+  "why": "GA quick test 11/10/2026 (Luiz): Luiz joint axes: neurons->bits->connections mutation every offspring. Paired seeds, worker ABI 15."
+ }
+]

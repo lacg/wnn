@@ -1,0 +1,892 @@
+[
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-CTRL-r20419",
+  "set": {
+   "seed": 20419
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): CTRL. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO-r20419",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "seed": 20419
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-DEDUP-r20419",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "seed": 20419
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): DEDUP. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-IMM10-r20419",
+  "set": {
+   "immigrant_fraction": 0.1,
+   "seed": 20419
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): IMM10. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-JOINT-r20419",
+  "set": {
+   "ga_joint_mutation": true,
+   "seed": 20419
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+DEDUP-r20419",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "ga_dedupe_neurons": true,
+   "seed": 20419
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+DEDUP. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+IMM10-r20419",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "immigrant_fraction": 0.1,
+   "seed": 20419
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+IMM10. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+JOINT-r20419",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "ga_joint_mutation": true,
+   "seed": 20419
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-DEDUP+IMM10-r20419",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "immigrant_fraction": 0.1,
+   "seed": 20419
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): DEDUP+IMM10. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-DEDUP+JOINT-r20419",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "ga_joint_mutation": true,
+   "seed": 20419
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): DEDUP+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-IMM10+JOINT-r20419",
+  "set": {
+   "immigrant_fraction": 0.1,
+   "ga_joint_mutation": true,
+   "seed": 20419
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): IMM10+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+DEDUP+IMM10-r20419",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "ga_dedupe_neurons": true,
+   "immigrant_fraction": 0.1,
+   "seed": 20419
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+DEDUP+IMM10. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+DEDUP+JOINT-r20419",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "ga_dedupe_neurons": true,
+   "ga_joint_mutation": true,
+   "seed": 20419
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+DEDUP+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+IMM10+JOINT-r20419",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "immigrant_fraction": 0.1,
+   "ga_joint_mutation": true,
+   "seed": 20419
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+IMM10+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-DEDUP+IMM10+JOINT-r20419",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "immigrant_fraction": 0.1,
+   "ga_joint_mutation": true,
+   "seed": 20419
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): DEDUP+IMM10+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+DEDUP+IMM10+JOINT-r20419",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "ga_dedupe_neurons": true,
+   "immigrant_fraction": 0.1,
+   "ga_joint_mutation": true,
+   "seed": 20419
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+DEDUP+IMM10+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-DEDUPNF-r20419",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "ga_dedupe_fill": false,
+   "seed": 20419
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): DEDUPNF. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-CTRL-r20420",
+  "set": {
+   "seed": 20420
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): CTRL. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO-r20420",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "seed": 20420
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-DEDUP-r20420",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "seed": 20420
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): DEDUP. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-IMM10-r20420",
+  "set": {
+   "immigrant_fraction": 0.1,
+   "seed": 20420
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): IMM10. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-JOINT-r20420",
+  "set": {
+   "ga_joint_mutation": true,
+   "seed": 20420
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+DEDUP-r20420",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "ga_dedupe_neurons": true,
+   "seed": 20420
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+DEDUP. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+IMM10-r20420",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "immigrant_fraction": 0.1,
+   "seed": 20420
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+IMM10. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+JOINT-r20420",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "ga_joint_mutation": true,
+   "seed": 20420
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-DEDUP+IMM10-r20420",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "immigrant_fraction": 0.1,
+   "seed": 20420
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): DEDUP+IMM10. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-DEDUP+JOINT-r20420",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "ga_joint_mutation": true,
+   "seed": 20420
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): DEDUP+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-IMM10+JOINT-r20420",
+  "set": {
+   "immigrant_fraction": 0.1,
+   "ga_joint_mutation": true,
+   "seed": 20420
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): IMM10+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+DEDUP+IMM10-r20420",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "ga_dedupe_neurons": true,
+   "immigrant_fraction": 0.1,
+   "seed": 20420
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+DEDUP+IMM10. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+DEDUP+JOINT-r20420",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "ga_dedupe_neurons": true,
+   "ga_joint_mutation": true,
+   "seed": 20420
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+DEDUP+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+IMM10+JOINT-r20420",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "immigrant_fraction": 0.1,
+   "ga_joint_mutation": true,
+   "seed": 20420
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+IMM10+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-DEDUP+IMM10+JOINT-r20420",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "immigrant_fraction": 0.1,
+   "ga_joint_mutation": true,
+   "seed": 20420
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): DEDUP+IMM10+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+DEDUP+IMM10+JOINT-r20420",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "ga_dedupe_neurons": true,
+   "immigrant_fraction": 0.1,
+   "ga_joint_mutation": true,
+   "seed": 20420
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+DEDUP+IMM10+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-DEDUPNF-r20420",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "ga_dedupe_fill": false,
+   "seed": 20420
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): DEDUPNF. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-CTRL-r20421",
+  "set": {
+   "seed": 20421
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): CTRL. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO-r20421",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "seed": 20421
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-DEDUP-r20421",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "seed": 20421
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): DEDUP. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-IMM10-r20421",
+  "set": {
+   "immigrant_fraction": 0.1,
+   "seed": 20421
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): IMM10. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-JOINT-r20421",
+  "set": {
+   "ga_joint_mutation": true,
+   "seed": 20421
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+DEDUP-r20421",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "ga_dedupe_neurons": true,
+   "seed": 20421
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+DEDUP. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+IMM10-r20421",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "immigrant_fraction": 0.1,
+   "seed": 20421
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+IMM10. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+JOINT-r20421",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "ga_joint_mutation": true,
+   "seed": 20421
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-DEDUP+IMM10-r20421",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "immigrant_fraction": 0.1,
+   "seed": 20421
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): DEDUP+IMM10. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-DEDUP+JOINT-r20421",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "ga_joint_mutation": true,
+   "seed": 20421
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): DEDUP+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-IMM10+JOINT-r20421",
+  "set": {
+   "immigrant_fraction": 0.1,
+   "ga_joint_mutation": true,
+   "seed": 20421
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): IMM10+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+DEDUP+IMM10-r20421",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "ga_dedupe_neurons": true,
+   "immigrant_fraction": 0.1,
+   "seed": 20421
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+DEDUP+IMM10. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+DEDUP+JOINT-r20421",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "ga_dedupe_neurons": true,
+   "ga_joint_mutation": true,
+   "seed": 20421
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+DEDUP+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+IMM10+JOINT-r20421",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "immigrant_fraction": 0.1,
+   "ga_joint_mutation": true,
+   "seed": 20421
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+IMM10+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-DEDUP+IMM10+JOINT-r20421",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "immigrant_fraction": 0.1,
+   "ga_joint_mutation": true,
+   "seed": 20421
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): DEDUP+IMM10+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+DEDUP+IMM10+JOINT-r20421",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "ga_dedupe_neurons": true,
+   "immigrant_fraction": 0.1,
+   "ga_joint_mutation": true,
+   "seed": 20421
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+DEDUP+IMM10+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-DEDUPNF-r20421",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "ga_dedupe_fill": false,
+   "seed": 20421
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): DEDUPNF. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-CTRL-r20422",
+  "set": {
+   "seed": 20422
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): CTRL. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO-r20422",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "seed": 20422
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-DEDUP-r20422",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "seed": 20422
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): DEDUP. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-IMM10-r20422",
+  "set": {
+   "immigrant_fraction": 0.1,
+   "seed": 20422
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): IMM10. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-JOINT-r20422",
+  "set": {
+   "ga_joint_mutation": true,
+   "seed": 20422
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+DEDUP-r20422",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "ga_dedupe_neurons": true,
+   "seed": 20422
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+DEDUP. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+IMM10-r20422",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "immigrant_fraction": 0.1,
+   "seed": 20422
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+IMM10. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+JOINT-r20422",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "ga_joint_mutation": true,
+   "seed": 20422
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-DEDUP+IMM10-r20422",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "immigrant_fraction": 0.1,
+   "seed": 20422
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): DEDUP+IMM10. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-DEDUP+JOINT-r20422",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "ga_joint_mutation": true,
+   "seed": 20422
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): DEDUP+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-IMM10+JOINT-r20422",
+  "set": {
+   "immigrant_fraction": 0.1,
+   "ga_joint_mutation": true,
+   "seed": 20422
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): IMM10+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+DEDUP+IMM10-r20422",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "ga_dedupe_neurons": true,
+   "immigrant_fraction": 0.1,
+   "seed": 20422
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+DEDUP+IMM10. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+DEDUP+JOINT-r20422",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "ga_dedupe_neurons": true,
+   "ga_joint_mutation": true,
+   "seed": 20422
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+DEDUP+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+IMM10+JOINT-r20422",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "immigrant_fraction": 0.1,
+   "ga_joint_mutation": true,
+   "seed": 20422
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+IMM10+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-DEDUP+IMM10+JOINT-r20422",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "immigrant_fraction": 0.1,
+   "ga_joint_mutation": true,
+   "seed": 20422
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): DEDUP+IMM10+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+DEDUP+IMM10+JOINT-r20422",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "ga_dedupe_neurons": true,
+   "immigrant_fraction": 0.1,
+   "ga_joint_mutation": true,
+   "seed": 20422
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+DEDUP+IMM10+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-DEDUPNF-r20422",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "ga_dedupe_fill": false,
+   "seed": 20422
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): DEDUPNF. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-CTRL-r20423",
+  "set": {
+   "seed": 20423
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): CTRL. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO-r20423",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "seed": 20423
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-DEDUP-r20423",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "seed": 20423
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): DEDUP. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-IMM10-r20423",
+  "set": {
+   "immigrant_fraction": 0.1,
+   "seed": 20423
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): IMM10. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-JOINT-r20423",
+  "set": {
+   "ga_joint_mutation": true,
+   "seed": 20423
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+DEDUP-r20423",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "ga_dedupe_neurons": true,
+   "seed": 20423
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+DEDUP. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+IMM10-r20423",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "immigrant_fraction": 0.1,
+   "seed": 20423
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+IMM10. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+JOINT-r20423",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "ga_joint_mutation": true,
+   "seed": 20423
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-DEDUP+IMM10-r20423",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "immigrant_fraction": 0.1,
+   "seed": 20423
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): DEDUP+IMM10. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-DEDUP+JOINT-r20423",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "ga_joint_mutation": true,
+   "seed": 20423
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): DEDUP+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-IMM10+JOINT-r20423",
+  "set": {
+   "immigrant_fraction": 0.1,
+   "ga_joint_mutation": true,
+   "seed": 20423
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): IMM10+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+DEDUP+IMM10-r20423",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "ga_dedupe_neurons": true,
+   "immigrant_fraction": 0.1,
+   "seed": 20423
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+DEDUP+IMM10. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+DEDUP+JOINT-r20423",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "ga_dedupe_neurons": true,
+   "ga_joint_mutation": true,
+   "seed": 20423
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+DEDUP+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+IMM10+JOINT-r20423",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "immigrant_fraction": 0.1,
+   "ga_joint_mutation": true,
+   "seed": 20423
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+IMM10+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-DEDUP+IMM10+JOINT-r20423",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "immigrant_fraction": 0.1,
+   "ga_joint_mutation": true,
+   "seed": 20423
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): DEDUP+IMM10+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-NOXO+DEDUP+IMM10+JOINT-r20423",
+  "set": {
+   "assortative_mating_ratio": 0.0,
+   "pool_shuffle_ratio": 0.0,
+   "ga_dedupe_neurons": true,
+   "immigrant_fraction": 0.1,
+   "ga_joint_mutation": true,
+   "seed": 20423
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): NOXO+DEDUP+IMM10+JOINT. Fold-paired seeds 20419-20423, worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "GAF-unswt-DEDUPNF-r20423",
+  "set": {
+   "ga_dedupe_neurons": true,
+   "ga_dedupe_fill": false,
+   "seed": 20423
+  },
+  "why": "GA population-health factorial (IDS-33, Luiz 11/10/2026), seed-fixed worker (IDS-32): DEDUPNF. Fold-paired seeds 20419-20423, worker ABI 16."
+ }
+]
