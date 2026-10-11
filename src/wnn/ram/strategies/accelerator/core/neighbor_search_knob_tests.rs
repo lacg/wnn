@@ -42,7 +42,7 @@ fn dedupe_crossover_children_are_distinct_with_full_counts()
 	for (pop, tib) in [(population_multi(), 96usize), (population_ids(), 200usize)]
 	{
 		assert!(has_duplicates(&pop), "fixture must carry duplicate neurons");
-		let xo = NeuronXo { dedupe: true, total_input_bits: tib };
+		let xo = NeuronXo { dedupe: true, total_input_bits: tib, fill: true, min_neurons: 0 };
 		let mut rng = StdRng::seed_from_u64(99);
 		for k in 0..pop.len() - 1
 		{
@@ -65,7 +65,7 @@ fn dedupe_fills_shortfall_at_mode_bits()
 	// Both parents: 6 copies of ONE neuron. Pool set = 1 neuron; 5 must be fresh.
 	let neuron: Vec<i64> = (0..10).collect();
 	let p: Genome = (vec![10; 6], vec![6], neuron.repeat(6), 1.0);
-	let xo = NeuronXo { dedupe: true, total_input_bits: 200 };
+	let xo = NeuronXo { dedupe: true, total_input_bits: 200, fill: true, min_neurons: 0 };
 	let mut rng = StdRng::seed_from_u64(3);
 	let (a, _) = crossover_ps_neurons(&p, &p.clone(), 1, xo, &mut rng);
 	assert_consistent_distinct(&a);
@@ -79,7 +79,7 @@ fn dedupe_off_still_duplicates()
 {
 	let neuron: Vec<i64> = (0..10).collect();
 	let p: Genome = (vec![10; 6], vec![6], neuron.repeat(6), 1.0);
-	let xo = NeuronXo { dedupe: false, total_input_bits: 200 };
+	let xo = NeuronXo { dedupe: false, total_input_bits: 200, fill: true, min_neurons: 0 };
 	let (a, _) = crossover_ps_neurons(&p, &p.clone(), 1, xo, &mut StdRng::seed_from_u64(3));
 	assert_eq!(cluster_keys(&a)[0].iter().collect::<HashSet<_>>().len(), 1);
 }
@@ -107,7 +107,7 @@ fn dedupe_search_offspring_all_distinct()
 fn joint_crossover_matches_neurons_crossover()
 {
 	let pop = population_multi();
-	let xo = NeuronXo { dedupe: false, total_input_bits: 96 };
+	let xo = NeuronXo { dedupe: false, total_input_bits: 96, fill: true, min_neurons: 0 };
 	for k in 0..pop.len() - 1
 	{
 		let run = |phase| {
@@ -238,5 +238,78 @@ fn mode_bits_tie_is_stable_across_fresh_hashmaps()
 	for _ in 0..200
 	{
 		assert_eq!(cluster_mode_bits(&[12, 10, 34, 12, 10, 34]), Some(10));
+	}
+}
+
+// ---- ga_dedupe_fill = false (no refill; child may shrink) ---------------------
+
+fn xo_nofill(min_neurons: usize) -> NeuronXo
+{
+	NeuronXo { dedupe: true, total_input_bits: 200, fill: false, min_neurons }
+}
+
+/// Both parents: 6 copies of ONE neuron → only 1 distinct survives.
+fn clone_parent() -> (Genome, Vec<i64>)
+{
+	let neuron: Vec<i64> = (0..10).collect();
+	((vec![10; 6], vec![6], neuron.repeat(6), 1.0), neuron)
+}
+
+#[test]
+fn nofill_keeps_only_distinct_neurons()
+{
+	let (p, neuron) = clone_parent();
+	for positional in [false, true]
+	{
+		let mut rng = StdRng::seed_from_u64(3);
+		let (a, b) = if positional
+		{
+			crossover2_neurons(&p, &p.clone(), 1, xo_nofill(0), &mut rng)
+		}
+		else
+		{
+			crossover_ps_neurons(&p, &p.clone(), 1, xo_nofill(0), &mut rng)
+		};
+		assert_consistent_distinct(&a);
+		assert_eq!(a.1, vec![1], "shrinks to the single distinct neuron");
+		assert_eq!(cluster_keys(&a)[0], vec![(10, neuron.clone())]);
+		// Pool-shuffle's complement child finds the 1-neuron pool already taken:
+		// it gets one fresh neuron rather than an EMPTY cluster.
+		assert_consistent_distinct(&b);
+		assert_eq!(b.1, vec![1]);
+	}
+}
+
+#[test]
+fn nofill_refills_only_up_to_min_neurons()
+{
+	let (p, neuron) = clone_parent();
+	let (a, _) = crossover_ps_neurons(&p, &p.clone(), 1, xo_nofill(4), &mut StdRng::seed_from_u64(3));
+	assert_consistent_distinct(&a);
+	assert_eq!(a.1, vec![4], "1 distinct + 3 fresh to reach min_neurons");
+	assert!(a.0.iter().all(|&b| b == 10), "fresh neurons at the parents' mode bits");
+	assert!(cluster_keys(&a)[0].contains(&(10, neuron)));
+	// min_neurons above the wanted count never makes the child larger than a filled one.
+	let (a, _) = crossover_ps_neurons(&p, &p.clone(), 1, xo_nofill(50), &mut StdRng::seed_from_u64(3));
+	assert_eq!(a.1, vec![6]);
+}
+
+#[test]
+fn nofill_search_offspring_shrinks_and_respects_min()
+{
+	let pop = population_ids();
+	for ps_ratio in [0.0, 1.0]
+	{
+		let mut cfg = ga_config(&pop, PhaseType::Neurons, 200, (0.0, ps_ratio, 0.85));
+		(cfg.dedupe_neurons, cfg.dedupe_fill, cfg.min_neurons) = (true, false, 5);
+		(cfg.crossover_rate, cfg.neurons_mutation_rate) = (1.0, 0.0);
+		let res = search_offspring(&pop, 20, 60, 0.0, &cfg, &fake_eval, 5, None, None, None, true, None);
+		let min_parent = pop.iter().map(|g| g.1[0]).min().unwrap();
+		assert!(res.candidates.iter().any(|c| c.neurons_per_cluster[0] < min_parent), "some child shrank");
+		for c in &res.candidates
+		{
+			assert!(c.neurons_per_cluster[0] >= 5);
+			assert_consistent_distinct(&(c.bits_per_neuron.clone(), c.neurons_per_cluster.clone(), c.connections.clone()));
+		}
 	}
 }

@@ -1003,6 +1003,10 @@ pub struct GAConfig
 	/// IDS-26 P1 (flow param `ga_dedupe_neurons`): neuron crossover keeps each
 	/// cluster's neurons DISTINCT by (bits, connections). false = original operators.
 	pub dedupe_neurons: bool,
+	/// Flow param `ga_dedupe_fill` (only read when dedupe_neurons): true = top a
+	/// deduped cluster back up to its count with fresh neurons; false = keep only
+	/// the distinct neurons (the child may SHRINK), refilling only up to min_neurons.
+	pub dedupe_fill: bool,
 }
 
 /// Neuron-crossover options. `dedupe` false = the original operators, same RNG draws.
@@ -1011,13 +1015,34 @@ pub struct NeuronXo
 {
 	pub dedupe: bool,
 	pub total_input_bits: usize,
+	/// Refill a deduped cluster to its full count (true) or only to `min_neurons`.
+	pub fill: bool,
+	pub min_neurons: usize,
 }
 
 impl NeuronXo
 {
 	fn from_config(config: &GAConfig) -> Self
 	{
-		NeuronXo { dedupe: config.dedupe_neurons, total_input_bits: config.total_input_bits }
+		NeuronXo {
+			dedupe: config.dedupe_neurons,
+			total_input_bits: config.total_input_bits,
+			fill: config.dedupe_fill,
+			min_neurons: config.min_neurons,
+		}
+	}
+
+	/// Neurons cluster c ends with after dedupe: the full `wanted` count when
+	/// filling; else the `distinct` survivors, raised to max(min_neurons, 1) — a
+	/// non-empty cluster never empties — and never above `wanted`, so a no-fill
+	/// child is never larger than a filled one.
+	fn target(&self, wanted: usize, distinct: usize) -> usize
+	{
+		if self.fill
+		{
+			return wanted;
+		}
+		distinct.max(self.min_neurons.max(1).min(wanted))
 	}
 }
 
@@ -1111,7 +1136,7 @@ fn crossover(
 	rng: &mut impl Rng,
 ) -> (Vec<usize>, Vec<usize>, Vec<i64>)
 {
-	let xo = NeuronXo { dedupe: false, total_input_bits };
+	let xo = NeuronXo { dedupe: false, total_input_bits, fill: true, min_neurons: 0 };
 	if pool_shuffle_ratio > 0.0 && rng.gen::<f64>() < pool_shuffle_ratio
 	{
 		let (child1, _) = crossover_pool_shuffle(parent1, parent2, num_clusters, phase_type, xo, rng);
@@ -1248,8 +1273,8 @@ fn crossover_ps_neurons(
 		return (child1, child2);
 	}
 	let modes = parent_cluster_modes(parent1, parent2, num_clusters);
-	let child1 = dedupe_fill(&child1, &c1_taken, &modes, xo.total_input_bits, rng);
-	let child2 = dedupe_fill(&child2, &c2_taken, &modes, xo.total_input_bits, rng);
+	let child1 = dedupe_fill(&child1, &c1_taken, &modes, xo, rng);
+	let child2 = dedupe_fill(&child2, &c2_taken, &modes, xo, rng);
 	(child1, child2)
 }
 
@@ -1273,11 +1298,13 @@ fn parent_cluster_modes(
 		.collect()
 }
 
-/// IDS-26 P1: rebuild `child` so cluster c holds exactly `child.1[c]` DISTINCT
-/// neurons. `present[c]` = neurons actually laid out for c in child.0/child.2
-/// (may be < child.1[c]); repeats are dropped (first kept) and the shortfall is
+/// IDS-26 P1: rebuild `child` so each cluster's neurons are DISTINCT.
+/// `present[c]` = neurons actually laid out for c in child.0/child.2 (may be
+/// < child.1[c]); repeats are dropped (first kept). The cluster then ends with
+/// `xo.target(child.1[c], distinct)` neurons — the full count (ga_dedupe_fill,
+/// default) or just the survivors floored at min_neurons — any shortfall
 /// filled with fresh random neurons at `modes[c]` bits.
-fn dedupe_fill(child: &Child, present: &[usize], modes: &[usize], total_input_bits: usize, rng: &mut impl Rng) -> Child
+fn dedupe_fill(child: &Child, present: &[usize], modes: &[usize], xo: NeuronXo, rng: &mut impl Rng) -> Child
 {
 	let conn_off = compute_conn_offsets(&child.0);
 	let mut out: Child = (Vec::new(), child.1.clone(), Vec::new());
@@ -1289,7 +1316,9 @@ fn dedupe_fill(child: &Child, present: &[usize], modes: &[usize], total_input_bi
 		{
 			push_distinct(&mut out, &mut seen, child.0[g], &child.2[conn_off[g]..conn_off[g + 1]]);
 		}
-		fill_fresh(&mut out, &mut seen, child.1[c], modes[c], total_input_bits, rng);
+		let target = xo.target(child.1[c], seen.len());
+		out.1[c] = target;
+		fill_fresh(&mut out, &mut seen, target, modes[c], xo.total_input_bits, rng);
 		start += present[c];
 	}
 	out
@@ -1586,8 +1615,8 @@ fn crossover2_neurons(
 		return (child1, child2);
 	}
 	let modes = parent_cluster_modes(parent1, parent2, num_clusters);
-	let child1 = dedupe_fill(&child1, &parent1.1, &modes, xo.total_input_bits, rng);
-	let child2 = dedupe_fill(&child2, &parent2.1, &modes, xo.total_input_bits, rng);
+	let child1 = dedupe_fill(&child1, &parent1.1, &modes, xo, rng);
+	let child2 = dedupe_fill(&child2, &parent2.1, &modes, xo, rng);
 	(child1, child2)
 }
 
@@ -2252,7 +2281,7 @@ mod tests
 {
 	use super::*;
 
-	const XO_OFF: NeuronXo = NeuronXo { dedupe: false, total_input_bits: 64 };
+	const XO_OFF: NeuronXo = NeuronXo { dedupe: false, total_input_bits: 64, fill: true, min_neurons: 0 };
 
 	#[test]
 	fn test_mutation_config()

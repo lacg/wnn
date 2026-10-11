@@ -541,6 +541,7 @@ class TieredEvaluator(BaseEvaluator):
         pool_shuffle_ratio: float = 0.0,
         assortative_mating_ratio: float = 0.0,
         dedupe_neurons: bool = False,
+        dedupe_fill: bool = True,
     ) -> OffspringSearchResult:
         """
         Search for GA offspring above accuracy threshold, entirely in Rust.

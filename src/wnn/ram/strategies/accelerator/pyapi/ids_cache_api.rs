@@ -947,7 +947,8 @@ impl IDSCacheWrapper
         cluster_crossover_ratio = 0.0,
         pool_shuffle_ratio = 0.0,
         assortative_mating_ratio = 0.0,
-        dedupe_neurons = false
+        dedupe_neurons = false,
+        dedupe_fill = true
     ))]
 	fn search_offspring(
 		&self,
@@ -988,6 +989,9 @@ impl IDSCacheWrapper
 		assortative_mating_ratio: f64,
 		// IDS-26 P1 (flow param `ga_dedupe_neurons`): distinct neurons per child.
 		dedupe_neurons: bool,
+		// Flow param `ga_dedupe_fill` (ABI 16): false = deduped children keep only
+		// their distinct neurons (may shrink; floored at min_neurons).
+		dedupe_fill: bool,
 	) -> PyResult<(
 		Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64, f64)>,
 		usize,
@@ -1028,6 +1032,7 @@ impl IDSCacheWrapper
 			pool_shuffle_ratio,
 			assortative_mating_ratio,
 			dedupe_neurons,
+			dedupe_fill,
 		};
 
 		let lp_arc = self.inner.live_progress.clone();
