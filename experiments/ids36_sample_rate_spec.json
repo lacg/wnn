@@ -1,0 +1,47 @@
+[
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "SR1-unswt-CTRL-r20419",
+  "set": {
+   "seed": 20419,
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-36 (Luiz 12/10/2026): neuron_sample_rate 1.0 vs 0.25 at the GAF CTRL config \u2014 copies become truly identical at 1.0; paired vs GAF-unswt-CTRL-r20419 (0.25). Seed-fixed worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20420",
+  "name": "SR1-unswt-CTRL-r20420",
+  "set": {
+   "seed": 20420,
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-36 (Luiz 12/10/2026): neuron_sample_rate 1.0 vs 0.25 at the GAF CTRL config \u2014 copies become truly identical at 1.0; paired vs GAF-unswt-CTRL-r20420 (0.25). Seed-fixed worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20421",
+  "name": "SR1-unswt-CTRL-r20421",
+  "set": {
+   "seed": 20421,
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-36 (Luiz 12/10/2026): neuron_sample_rate 1.0 vs 0.25 at the GAF CTRL config \u2014 copies become truly identical at 1.0; paired vs GAF-unswt-CTRL-r20421 (0.25). Seed-fixed worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20422",
+  "name": "SR1-unswt-CTRL-r20422",
+  "set": {
+   "seed": 20422,
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-36 (Luiz 12/10/2026): neuron_sample_rate 1.0 vs 0.25 at the GAF CTRL config \u2014 copies become truly identical at 1.0; paired vs GAF-unswt-CTRL-r20422 (0.25). Seed-fixed worker ABI 16."
+ },
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20423",
+  "name": "SR1-unswt-CTRL-r20423",
+  "set": {
+   "seed": 20423,
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-36 (Luiz 12/10/2026): neuron_sample_rate 1.0 vs 0.25 at the GAF CTRL config \u2014 copies become truly identical at 1.0; paired vs GAF-unswt-CTRL-r20423 (0.25). Seed-fixed worker ABI 16."
+ }
+]

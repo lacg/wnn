@@ -122,10 +122,11 @@ class Condition:
 	disturbance: str
 	airframe: str | None
 	translation: bool
+	tilt: float
 
 	def label(self):
-		return "%s / %s / %s" % (self.disturbance, self.airframe or "legacy-plant",
-		                         "translation" if self.translation else "attitude-only")
+		return "%s / %s / %s / tilt %g°" % (self.disturbance, self.airframe or "legacy-plant",
+		                                   "translation" if self.translation else "attitude-only", self.tilt)
 
 	def argv(self):
 		out = ["--disturbance", self.disturbance]
@@ -152,7 +153,7 @@ def _regime(cond, a):
 	"""Resolve a Condition EXACTLY as phased_ga would: its own parser supplies every
 	default the held-out report reads, episode_config_from_args assembles the plant."""
 	from wnn.control.phased_ga import build_arg_parser, episode_config_from_args
-	argv = cond.argv() + ["--steps", str(a.steps), "--tilt", str(a.tilt),
+	argv = cond.argv() + ["--steps", str(a.steps), "--tilt", str(cond.tilt),
 	                      "--body-rate", str(a.body_rate), "--yaw-rate", str(a.yaw_rate),
 	                      "--report-episodes", str(a.episodes), "--num-eval-folds", "5"]
 	args = build_arg_parser().parse_args(argv)
@@ -169,10 +170,11 @@ def _pick(override, default):
 
 def _conditions(a):
 	"""(scoring, trained): the trained regime defaults field-wise to the scoring one."""
-	score = Condition(a.disturbance, a.airframe, bool(a.translation))
+	score = Condition(a.disturbance, a.airframe, bool(a.translation), a.tilt)
 	trained = Condition(_pick(a.trained_disturbance, score.disturbance),
 	                    _pick(a.trained_airframe, score.airframe),
-	                    bool(_pick(a.trained_translation, score.translation)))
+	                    bool(_pick(a.trained_translation, score.translation)),
+	                    _pick(a.trained_tilt, score.tilt))
 	return score, trained
 
 
@@ -376,6 +378,12 @@ def _build_parser():
 	                help="airframe the winner was TRAINED on (default: --airframe)")
 	ap.add_argument("--trained-translation", action=argparse.BooleanOptionalAction, default=None,
 	                help="whether the winner was TRAINED with translation (default: --translation)")
+	# STRESS re-score (tilt-width rule, 12/10/2026): scoring at --tilt 15/30 must NOT
+	# move the 'train' thresholds, which phased_ga calibrates at the run's own --tilt
+	# (calib_episode_config). Without this the stress read re-quantizes the inputs —
+	# the threshold-misalignment bug, reintroduced by a scoring-tilt change.
+	ap.add_argument("--trained-tilt", type=float, default=None,
+	                help="--tilt the winner was TRAINED/calibrated at (default: --tilt)")
 	ap.add_argument("--dry-run", action="store_true",
 	                help="print the resolved regimes + matched winners and exit")
 	ap.add_argument("--out", required=True)
