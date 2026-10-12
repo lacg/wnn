@@ -1,0 +1,23 @@
+{
+ "story": "Tilt-width ladder ROUND 2 (CTRL-25) — 5->15 (_tw515), 8->20 (_tw20), 8->35 (_tw35), paired vs _op31 (8->30)",
+ "registered": "2026-10-12 ~10:50 EDT, before any round-2 run exists; round 1 (_tw7/_tw10/_tw15 x s2-s5) banked 12/12; round-1 stress re-score flying",
+ "registered_by": "Luiz 12/10: 'add the 5->15, 8->20 and 8->35 (not 45 for now, I want baby steps and check trend, if 45 go to far, it won't say anything about closer range, like 35, nor 40)'; 'yes, please' to queue after the stress re-score",
+ "questions": {
+  "_tw515": "START angle: same end as _tw15 (15°), start 5° instead of 8° — round 1 moved start and end together (3/5 vs 8).",
+  "_tw20": "END angle between 15 and 30 at start 8° — where does the benefit level off?",
+  "_tw35": "first END above 30 at start 8° — baby step past the never-swept 30° default (45 deferred)."
+ },
+ "arms": {
+  "_tw515": "--rg-easy-tilt-deg 5 --rg-full-tilt-deg 15",
+  "_tw20":  "--rg-easy-tilt-deg 8 --rg-full-tilt-deg 20",
+  "_tw35":  "--rg-easy-tilt-deg 8 --rg-full-tilt-deg 35"
+ },
+ "recipe": "_op31 recipe (--obs-pwm --skip-stages connections,bits --max-output-neurons 512 --max-cells 1000000000, --teacher-hover derived), ABI-31 trainer, b24 n256, seeds s31337002-05 — identical to round 1",
+ "order": "SEED-MAJOR interleaved: s2 {_tw515,_tw20,_tw35}, then s3, s4, s5",
+ "metric": "HEADLINE held-out rows (stable, err, steady, alt) on report seeds 99990101-05, plus MEMORY stage rows (selection-draw check)",
+ "rule": "UNCHANGED from experiments/ctrl_tilt_width_rule.json: each arm vs _op31 on the SAME seeds, n=4 mean paired delta; an arm BEATS 8->30 iff (>=3/4 of stable up, err down, steady down, alt down AND err delta <= +0.10°) AND the stress read holds (rescore_winners.py --tilt 15 and --tilt 30 with --trained-tilt 5, 'train' thresholds, same report seeds: mean stable not lower than _op31 by > 2.5 pp and mean err not higher by > 0.4° at EACH stress tilt). Round-1 and round-2 arms that beat 8->30 are pooled; the lowest mean headline hd wins. None -> 8->30 stays. Tie -> incumbent (8->30).",
+ "trend_read": "DESCRIPTIVE ONLY (not a test): per-seed and mean headline hd vs END angle at start 8° (15, 20, 30, 35) and vs START angle at end 15° (5 vs 8).",
+ "confound": "Each arm moves training-state coverage, the best-round checkpoint tilt (= full) and the gate lambda (computed at full) together — report 'curriculum X wins', never 'coverage'.",
+ "consequence": "Luiz writes experiments/tilt_decision after rounds 1+2 + stress. A _tw winner needs a LEVELS relaunch with its curriculum (queue_2009c accepts only coherent|wide).",
+ "caveats": ["n=4: a 3-of-4 column rule fires by chance ~31%; say 'the rule fired'.", "Six arms vs one control = six looks; the lowest-hd tie-break is a selection, not a test.", "Stress tilts are outside the scored envelope: a robustness read, not a headline.", "The stress read scores each run's MEMORY winner (winner file = population[0]), which is not always the stage-select headline genome."]
+}
