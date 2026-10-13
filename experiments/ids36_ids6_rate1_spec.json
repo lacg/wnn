@@ -1,0 +1,10 @@
+[
+ {
+  "source": "IDS6-ciciot46m-B15AC-desir-r20419",
+  "name": "IDS6-ciciot46m-B15AC-desir-r20419-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-36 SR1 accepted (Luiz 12/10/2026): fresh rate-1.0 run; the original 6433 ran its grid at 0.25 and stays paused as the record."
+ }
+]

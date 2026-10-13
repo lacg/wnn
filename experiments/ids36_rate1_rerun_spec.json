@@ -1,0 +1,26 @@
+[
+ {
+  "source": "IDS3-unswt-B15CE-desir-r20419",
+  "name": "IDS3-unswt-B15CE-desir-r20419-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-36 SR1 accepted (Luiz 12/10/2026): re-run of the already-completed 0.25 run at neuron_sample_rate 1.0; the 0.25 result is kept."
+ },
+ {
+  "source": "IDS4-cicids-CE20-zs-r20419",
+  "name": "IDS4-cicids-CE20-zs-r20419-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-36 SR1 accepted (Luiz 12/10/2026): re-run of the already-completed 0.25 run at neuron_sample_rate 1.0; the 0.25 result is kept."
+ },
+ {
+  "source": "IDS5-ciciot-B15AC-desir-r20419",
+  "name": "IDS5-ciciot-B15AC-desir-r20419-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-36 SR1 accepted (Luiz 12/10/2026): re-run of the already-completed 0.25 run at neuron_sample_rate 1.0; the 0.25 result is kept."
+ }
+]
