@@ -363,68 +363,9 @@ impl SparseLayerMemory
 	}
 }
 
-/// GPU-compatible sparse memory export
-/// Format optimized for binary search on GPU
-#[derive(Clone)]
-pub struct SparseGpuExport
-{
-	/// Sorted keys for all neurons, concatenated
-	pub keys: Vec<u64>,
-	/// Values corresponding to keys
-	pub values: Vec<u8>,
-	/// Start offset for each neuron in keys array
-	pub offsets: Vec<u32>,
-	/// Number of entries for each neuron
-	pub counts: Vec<u32>,
-	/// Total number of neurons
-	// KEPT-API: GPU-export contract completeness; TODO(D-followup) unify into neuron_memory::SparseGpuExport
-	#[allow(dead_code)]
-	pub num_neurons: usize,
-}
-
-impl SparseGpuExport
-{
-	/// CPU binary search lookup (for verification)
-	#[inline]
-	// KEPT-API: CPU verification twin of the Metal lookup (parity debugging)
-	#[allow(dead_code)]
-	pub fn lookup(&self, neuron_idx: usize, address: u64) -> u8
-	{
-		let start = self.offsets[neuron_idx] as usize;
-		let count = self.counts[neuron_idx] as usize;
-
-		if count == 0
-		{
-			return EMPTY;
-		}
-
-		let end = start + count;
-		let keys_slice = &self.keys[start..end];
-
-		// Binary search
-		match keys_slice.binary_search(&address)
-		{
-			Ok(idx) => self.values[start + idx],
-			Err(_) => EMPTY,
-		}
-	}
-
-	/// Total memory size in bytes
-	// KEPT-API: export introspection; TODO unify into neuron_memory
-	#[allow(dead_code)]
-	pub fn memory_size(&self) -> usize
-	{
-		self.keys.len() * 8 + self.values.len() + self.offsets.len() * 4 + self.counts.len() * 4
-	}
-
-	/// Total number of entries
-	// KEPT-API: export introspection; TODO unify into neuron_memory
-	#[allow(dead_code)]
-	pub fn total_entries(&self) -> usize
-	{
-		self.keys.len()
-	}
-}
+/// The sorted CSR export lives in its own module (one class per file) and is
+/// shared with the IDS worker — re-exported here for the existing paths.
+pub use crate::sparse_gpu_export::SparseGpuExport;
 
 // Canonical address computation lives in neuron_memory.rs (single source of truth).
 pub use crate::neuron_memory::compute_address_sparse as compute_address;

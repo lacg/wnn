@@ -499,57 +499,9 @@ impl GroupDenseMemory
 	}
 }
 
-/// GPU-compatible sparse memory export (sorted arrays for binary search)
-#[derive(Clone)]
-pub struct SparseGpuExport
-{
-	/// Sorted keys for all neurons, concatenated
-	pub keys: Vec<u64>,
-	/// Values corresponding to keys (0=FALSE, 1=TRUE)
-	pub values: Vec<u8>,
-	/// Start offset for each neuron in keys array
-	pub offsets: Vec<u32>,
-	/// Number of entries for each neuron
-	pub counts: Vec<u32>,
-	/// Total number of neurons
-	pub num_neurons: usize,
-}
-
-impl SparseGpuExport
-{
-	/// CPU binary search lookup. `miss_default` is the cell an ABSENT address
-	/// reads as — memory-mode-dependent (QUAD: 1 = WEAK_FALSE, TERNARY: 2 =
-	/// EMPTY; compute via `default_cell_for_mode`). Fixed 07/07/2026: this
-	/// returned hardcoded TERNARY EMPTY(2) on miss, which QUAD cell_to_weight
-	/// reads as WEAK_TRUE (0.75) instead of WEAK_FALSE (0.25) — diverging
-	/// from the GPU sparse eval's default_cell_value semantics.
-	#[inline]
-	pub fn lookup(&self, neuron_idx: usize, address: u64, miss_default: u8) -> u8
-	{
-		let start = self.offsets[neuron_idx] as usize;
-		let count = self.counts[neuron_idx] as usize;
-
-		if count == 0
-		{
-			return miss_default;
-		}
-
-		let end = start + count;
-		let keys_slice = &self.keys[start..end];
-
-		match keys_slice.binary_search(&address)
-		{
-			Ok(idx) => self.values[start + idx],
-			Err(_) => miss_default,
-		}
-	}
-
-	/// Total memory size in bytes
-	pub fn memory_size(&self) -> usize
-	{
-		self.keys.len() * 8 + self.values.len() + self.offsets.len() * 4 + self.counts.len() * 4
-	}
-}
+/// The sorted CSR export is the ram_core type (unified 12/10/2026, IDS-37
+/// stage 1): one struct, so `SparseGpuExport::alias` exists exactly once.
+pub use ram_core::sparse_memory::SparseGpuExport;
 
 /// Sparse memory for a config group (concurrent hash-based, for bits > 12)
 /// Uses DashMap for thread-safe concurrent access during parallel training.
