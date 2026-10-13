@@ -109,6 +109,11 @@ def _episode_fields(ec, draw: HoldoutDraw) -> tuple:
 	from .training import sample_ics_flat
 	pool = draw.pool_seed()
 	q0, w0 = sample_ics_flat(pool, draw.episodes, ec)
+	if ec.disturbance is None:
+		# Weather off (no --disturbance): the clean plant, exactly as the WNN scorer
+		# flies it (evaluator: dist_enabled only when a DisturbanceConfig exists).
+		# Used to crash on `None.seed` — every rival row of a no-disturbance run.
+		return q0, w0, {}
 	dseed, asym = disturbance_stream(ec.disturbance, pool)
 	return q0, w0, _dist_fields(ec.disturbance, dseed, asym)
 

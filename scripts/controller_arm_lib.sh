@@ -131,9 +131,9 @@ run_controller_arm() {
 		"$logfn" "$tag: rc=$rc (watchdog stop) — NO marker; waiting for memory to recover, will retry"
 		local calm=0 av
 		while [ "$calm" -lt 3 ]; do
-			sleep 60
+			sleep "${WNN_RETRY_POLL_S:-60}"
 			av=$(vm_stat | awk '/free|inactive|speculative|purgeable/ {gsub("\\.","");s+=$NF} END {printf "%.0f", s*16384/1073741824}')
-			if [ "${av:-0}" -ge 25 ]; then calm=$((calm + 1)); else calm=0; fi
+			if [ "${av:-0}" -ge "${WNN_RETRY_CALM_GB:-25}" ]; then calm=$((calm + 1)); else calm=0; fi
 			"$logfn" "$tag: waiting to retry (avail=${av}GB, calm=${calm}/3)"
 		done
 		# 11/08/2026 — RESUME, don't restart. The in-stage crash-save manager
@@ -141,22 +141,47 @@ run_controller_arm() {
 		# --save-stage-checkpoints dir; a retry that ignores it re-earns hours of
 		# bit-identical generations the dump already holds (the 11/08 sn=8 kill:
 		# 5h38m lost, incl. a FINISHED stage, with a 1.4GB resumable dump sitting
-		# right there). Find the newest dump and resume the dumped stage from its
-		# population (--resume-mode same). No dump (killed during grid) → the old
-		# from-scratch retry. A repeat retry appends the flag again — argparse
-		# takes the last occurrence, which is also the newest dump.
+		# right there). Pick the resume point (below) and resume from it. No
+		# checkpoint at all (killed during grid) → the old from-scratch retry. A
+		# repeat retry appends the flags again — argparse takes the last occurrence,
+		# which is the newest pick.
 		local stagedir="" resume="" prev_arg=""
 		for a in "$@"; do
 			[ "$prev_arg" = "--save-stage-checkpoints" ] && stagedir="$a"
 			prev_arg="$a"
 		done
-		[ -n "$stagedir" ] && resume=$(ls -t "$stagedir"/emergency_stage*.yaml.gz 2>/dev/null | head -1)
+		# 13/10/2026 — pick by STAGE, not by mtime (scripts/pick_resume_point.py has
+		# the rule + why). `ls -t emergency_stage*` could hand back a finished stage's
+		# STALE dump (dumps are never deleted, and stage k's first dump comes only
+		# after its first save interval), re-running a finished stage. The picker
+		# ignores dumps older than their stage's final checkpoint, takes the highest
+		# stage, and when stage k-1 finished but stage k never dumped, resumes from
+		# stage k-1's FINAL checkpoint with --resume-mode next.
+		local pick="" rmode="same" prc=0
+		if [ -n "$stagedir" ]; then
+			pick=$("$vp" -u scripts/pick_resume_point.py "$stagedir" 2>/dev/null); prc=$?
+			if [ "$prc" != "0" ]; then
+				"$logfn" "$tag: resume picker FAILED (rc=$prc) — NOT retrying. NO marker."
+				return 4
+			fi
+		fi
+		if [ -n "$pick" ]; then
+			resume="${pick%%	*}"
+			rmode="${pick##*	}"
+			# Anything but "<existing file>\t<same|next>" is a picker failure. Do NOT
+			# guess (a from-scratch retry would silently discard hours of finished
+			# stages): stop here, no marker, a human looks.
+			if [ ! -f "$resume" ] || { [ "$rmode" != "same" ] && [ "$rmode" != "next" ]; }; then
+				"$logfn" "$tag: resume picker returned an unusable answer ('$pick') — NOT retrying. NO marker."
+				return 4
+			fi
+		fi
 		# Preserve the killed attempt's log — the retry overwrites $out, which on
 		# 11/08 destroyed the only record of gens 1-4 of the killed attempt.
 		[ -f "$out" ] && mv "$out" "${out}.killed$((tries + 1))"
 		if [ -n "$resume" ]; then
-			"$logfn" "$tag: memory recovered — retry $((tries + 1))/2 RESUMING from $(basename "$resume") (--resume-mode same)"
-			WNN_ARM_TRIES=$((tries + 1)) run_controller_arm "$tag" "$markdir" "$outdir" "$vp" "$logfn" "$extra" -- "$@" --resume-from-emergency "$resume" --resume-mode same
+			"$logfn" "$tag: memory recovered — retry $((tries + 1))/2 RESUMING from $(basename "$resume") (--resume-mode $rmode)"
+			WNN_ARM_TRIES=$((tries + 1)) run_controller_arm "$tag" "$markdir" "$outdir" "$vp" "$logfn" "$extra" -- "$@" --resume-from-emergency "$resume" --resume-mode "$rmode"
 		else
 			"$logfn" "$tag: memory recovered — retry $((tries + 1))/2 (no emergency dump — from scratch)"
 			WNN_ARM_TRIES=$((tries + 1)) run_controller_arm "$tag" "$markdir" "$outdir" "$vp" "$logfn" "$extra" -- "$@"

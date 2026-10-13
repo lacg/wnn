@@ -77,7 +77,9 @@ import numpy as np
 #                                  population (default)
 #   --resume-mode next             skip the dumped stage entirely and start
 #                                  the NEXT stage with the dumped best as
-#                                  warm-start
+#                                  warm-start (PATH may be a stage's FINAL
+#                                  checkpoint; MEMORY's = publish-only)
+#   controller_arm_lib.sh picks PATH + mode via scripts/pick_resume_point.py.
 
 # --- Emergency / in-stage crash-save lives on the shared cooperative-cancel core.
 # Per-strategy state is held by ControllerCancelMixin (its per-gen hook on
@@ -1721,6 +1723,14 @@ def _resume_completed_stages(args, resume_state: dict, resume_start_stage: int,
 	return out
 
 
+def _same_file(a, b) -> bool:
+	"""True when both paths exist and name the same file (b may be None)."""
+	try:
+		return b is not None and os.path.samefile(str(a), str(b))
+	except OSError:
+		return False
+
+
 def _reload_completed_stages(args, ec: EpisodeConfig, seeds, resume_state: dict,
                              completed: list) -> list:
 	"""Reload each finished stage (top-K only) and re-publish its held-out, in stage
@@ -1741,12 +1751,17 @@ def _reload_completed_stages(args, ec: EpisodeConfig, seeds, resume_state: dict,
 	k = _stage_select_top_k(args)
 	out = []
 	for sn, name, path in completed:
-		if path is None:   # --resume-mode next, no final checkpoint: the dump itself
+		if path is None or _same_file(path, resume_state.get("source_path")):
+			# --resume-mode next: the stage the resume file holds. Either the cut-short
+			# emergency snapshot (path None) or the stage's FINAL checkpoint, which the
+			# lib passes when "stage k-1 finished, stage k never dumped" — already in
+			# memory as resume_state, so it is not read a second time.
 			pop = list(resume_state.get("population") or [])[:k]
 			spec = resume_state.get("spec")
 			res = SimpleNamespace(final_population=pop or None,
 			                      best_genome=resume_state.get("best_genome"))
-			label, iters, src = name.upper(), resume_state.get("generation"), "the emergency snapshot"
+			label, iters = name.upper(), resume_state.get("generation")
+			src = "the emergency snapshot" if path is None else str(path)
 		else:
 			e = _stage_entry_from_checkpoint(path, top_k=k)
 			if e is None:
@@ -1920,14 +1935,13 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 			zrank_clamp=getattr(args, "zrank_clamp", 3.0),
 			gate_stable_min=_gate_args(args)[0],
 			gate_err_max=_gate_args(args)[1])
-		try:
-			vals = calc.fitness([scored[l] for l in labels])
-			whms = dict(zip(labels, vals))
-			winner = min(whms, key=lambda l: whms[l])
-		except Exception as e:
-			print(f"  [stage-select] union ranking failed ({e}) — falling back to val steady")
-			winner = min(labels, key=lambda l: (scored[l].mean_steady_error_deg
-			                                    if scored[l].mean_steady_error_deg is not None else 9e9))
+		# No fallback (13/10/2026). A failing calculator used to fall back to "lowest
+		# val steady" — a DIFFERENT selection rule whose headline then banked exactly
+		# like a ranked one (only the .out said otherwise). It never fired in any log;
+		# if it ever does, that is a defect to see, not a rule to swap in silently.
+		vals = calc.fitness([scored[l] for l in labels])
+		whms = dict(zip(labels, vals))
+		winner = min(whms, key=lambda l: whms[l])
 
 	print("\n" + "=" * 72)
 	print("  STAGE TABLE — every stage published; headline = val-selected (union rank)")
@@ -2004,13 +2018,12 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 	if winner in cand_meta and (wh is None
 	                            or (not winner.endswith("#0") and winner != win_label)):
 		_lbl, _spec, _g = cand_meta[winner]
-		try:
-			wh = _maybe_holdout(args, ec, _spec,
-			                    SimpleNamespace(best_genome=_g, final_population=None),
-			                    seeds, label=f"HEADLINE-{winner}")
-		except Exception as e:
-			print(f"  [stage-select] could not score the selected runner-up ({e}) — "
-			      f"headline triple below is stage pop[0], NOT the selected genome")
+		# No catch (13/10/2026): on failure this used to print pop[0]'s triple as the
+		# headline — a published number for a genome that was NOT selected — and it
+		# swallowed _maybe_holdout's deliberate HoldoutScoringError. Fail the run.
+		wh = _maybe_holdout(args, ec, _spec,
+		                    SimpleNamespace(best_genome=_g, final_population=None),
+		                    seeds, label=f"HEADLINE-{winner}")
 	if wh is not None:
 		# 15/08/2026: pos= belongs HERE too. Every other held-out surface carries it
 		# (RESULT line, per-stage multi-seed block, rival rows), but the headline —
@@ -2229,7 +2242,11 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 			resume_spec        = resume_state.get("spec")
 			resume_warm_genome = resume_state.get("best_genome")
 		elif resume_mode == "next":
-			resume_start_stage = min(dumped_stage + 1, 4)
+			# dumped_stage 4 → 5 = PUBLISH-ONLY: every GA stage is finished (the lib
+			# passes MEMORY's final checkpoint when the kill landed after it was
+			# written — held-out / stage-select / winner save). It used to clamp to 4
+			# and re-run the whole MEMORY stage. The reload below publishes it.
+			resume_start_stage = dumped_stage + 1
 			# Carry the FULL dumped population forward: one phase FEEDS the next —
 			# the next stage continues evolving the previous stage's whole population,
 			# NOT a rebuild from the single winner. best_genome/spec set the seed spec.
@@ -2371,6 +2388,11 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 	if stage_holdouts is not None:
 		stage_holdouts.update(orch.stage_holdouts)
 	res4 = orch.best_result()
+	if res4 is None and resume_start_stage > 4:
+		# Publish-only resume: the MEMORY result IS the loaded final checkpoint (its
+		# FULL population, for --save-winner — the reload kept only the top-K).
+		from types import SimpleNamespace as _SNS
+		res4 = _SNS(best_genome=resume_warm_genome, final_population=resume_population)
 
 	# Publish every stage; headline the val-selected one (see _select_headline_stage).
 	# Report-only: this changes NOTHING about the search, the carry, or --save-winner.
@@ -2390,11 +2412,16 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 	_entries = [e for e in [_grid_stage_entry] if e is not None]
 	_entries.extend(_reloaded_entries)
 	_entries.extend(orch.stage_entries())
+	# NO catch here (13/10/2026). This used to be `except Exception: print("skipped")`,
+	# which swallowed the HoldoutScoringError _select_headline_stage raises ON PURPOSE
+	# (the 14/08 fail-fast rule) and any other defect: the run exited rc=0 with no
+	# headline, the marker banked a hole, and nobody saw why. A failure here now
+	# kills the run (rc!=0 -> controller_arm_lib R2: no marker, a human looks); every
+	# stage checkpoint is already on disk, so --recalc-headline re-selects without a
+	# re-fly. The one recoverable case — the union ranking itself failing — keeps its
+	# own narrow fallback inside _select_headline_stage.
 	if _entries:
-		try:
-			_select_headline_stage(args, ec, seeds, _entries, _all_ho)
-		except Exception as e:
-			print(f"  [stage-select] skipped ({e}) — per-stage held-outs above are unaffected")
+		_select_headline_stage(args, ec, seeds, _entries, _all_ho)
 
 	# PID baseline on the val seed (the held-out reference).
 	pid_rows = _pid_baseline(ec, args.eval_episodes, seeds.val,
@@ -3209,7 +3236,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                choices=["same", "next"],
 	                help="'same' (default): continue the dumped stage from its dumped "
 	                     "population. 'next': skip the dumped stage and warm-start the "
-	                     "next stage from the dumped best_genome.")
+	                     "next stage from the dumped population/best_genome. 'next' also "
+	                     "accepts a stage's FINAL checkpoint (stageN_<name>.yaml.gz — what "
+	                     "scripts/pick_resume_point.py picks when stage N finished and N+1 "
+	                     "never dumped); on MEMORY's it is publish-only (held-outs + "
+	                     "stage-select + winner save, no GA). Every stage finished before "
+	                     "the resume point is reloaded from --save-stage-checkpoints into "
+	                     "stage-select and the per-stage report; a missing one refuses.")
 	ap.add_argument("--seed-winner", type=str, default=None,
 	                help="Path to a saved winner.yaml.gz (a controller checkpoint). "
 	                     "CURRICULUM warm-start (E5.2): skip the grid and start the "
@@ -3354,6 +3387,7 @@ def main():
 			raise FileNotFoundError(f"--resume-from-emergency {resume_path} does not exist")
 		resume_state = _ctl_load(resume_path)
 		resume_state["resume_mode"] = args.resume_mode
+		resume_state["source_path"] = str(resume_path)
 		print(f"[main] Loaded emergency dump from {resume_path}")
 		print(f"[main]   stage_num={resume_state.get('stage_num')} "
 		      f"stage_name={resume_state.get('stage_name')!r} "

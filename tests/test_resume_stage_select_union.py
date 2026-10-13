@@ -123,7 +123,8 @@ def harness(monkeypatch, tmp_path):
 	"""_run_one with every expensive call stubbed; records what the selector scored."""
 	_write_stage(tmp_path, 0, "grid", 15)
 	_write_stage(tmp_path, 1, "neurons", 50)
-	scored, holdouts = [], []
+	scored, holdouts, ran = [], [], []
+	fail = {}   # {"val": exc} / {"holdout": (label-prefix, exc)} — deliberate aborts
 	ok = SimpleNamespace(acc=1.0, stable_rate=1.0, mean_attitude_error_deg=1.0, reward=-1.0,
 	                     fitness=-1.0, mean_steady_error_deg=1.0, motor_jerk_mean=0.1,
 	                     mono_violations_total=0.0, mean_effort=0.5)
@@ -139,15 +140,22 @@ def harness(monkeypatch, tmp_path):
 		        ck.iterations_run)
 
 	def fake_val(args, ec, spec, genome, final_population, vs, train, stage_label=""):
+		if "val" in fail:
+			raise fail["val"]
 		scored.append(genome.name)
 		return ok
 
 	def fake_holdout(args, ec, spec, res, seeds, label):
-		holdouts.append((label, res.final_population[0].name))
+		if "holdout" in fail and label.startswith(fail["holdout"][0]):
+			raise fail["holdout"][1]
+		pop = res.final_population or [res.best_genome]
+		holdouts.append((label, pop[0].name))
 		return ok
 
 	def fake_run_all(self, specs, carry):
-		assert [s.name for s in specs] == ["MEMORY"], "resume must slice to the dumped stage"
+		ran.extend(s.name for s in specs)
+		if "MEMORY" not in [s.name for s in specs]:
+			return
 		pop = [SimpleNamespace(name=f"MEMORY#{i}", cells=object()) for i in range(50)]
 		self._res_by_stage[4] = SimpleNamespace(best_genome=pop[0], final_population=pop)
 		self._row_by_stage[4] = ("Memory", carry.extra["spec"], None, 0.0, 1)
@@ -160,8 +168,9 @@ def harness(monkeypatch, tmp_path):
 	monkeypatch.setattr(P, "_maybe_holdout", fake_holdout)
 	monkeypatch.setattr(P, "_pid_baseline", lambda *a, **k: [])
 	monkeypatch.setattr(P, "stage0_grid", no_grid)
+	monkeypatch.setattr(P, "_spec_from_best", lambda best, base: base)   # toy specs
 	monkeypatch.setattr(ControllerOrchestrator, "run_all", fake_run_all)
-	return SimpleNamespace(dir=tmp_path, scored=scored, holdouts=holdouts)
+	return SimpleNamespace(dir=tmp_path, scored=scored, holdouts=holdouts, ran=ran, fail=fail)
 
 
 def _resume_state(mode="same"):
@@ -175,6 +184,7 @@ def test_resume_at_memory_ranks_the_full_nine_candidate_union(harness):
 	seeds = SimpleNamespace(train=7, val=1000, test=11)
 	ho = {}
 	P._run_one(args, None, seeds, resume_state=_resume_state(), stage_holdouts=ho)
+	assert harness.ran == ["MEMORY"], "resume must slice to the dumped stage"
 	unique = set(harness.scored)
 	want = {f"{s}#{i}" for s in ("GRID", "NEURONS", "MEMORY") for i in range(3)}
 	assert unique == want, f"stage-select pool was {sorted(unique)}"
@@ -193,7 +203,84 @@ def test_seed_winner_start_does_not_reload(harness):
 	st["resume_source"] = "seed_winner"
 	P._run_one(args, None, SimpleNamespace(train=7, val=1000, test=11), resume_state=st)
 	assert {n.split("#")[0] for n in harness.scored} == {"MEMORY"}
-	assert harness.holdouts == []
+	assert [h for h in harness.holdouts if not h[0].startswith("HEADLINE-")] == []
+
+
+# ---------------------------------------------------------------- resume from a FINAL checkpoint
+def _final_state(tmp_path, sn, name, n=50):
+	"""What main() builds for `--resume-from-emergency stage<sn>_<name>.yaml.gz
+	--resume-mode next` (the picker's "stage finished, next never dumped" case)."""
+	path = next(tmp_path.glob(f"stage{sn}_{name}.yaml.gz"))
+	return {"stage_num": sn, "resume_mode": "next", "spec": SimpleNamespace(tag=name.upper()),
+	        "best_genome": SimpleNamespace(name=f"{name.upper()}-BEST", cells=object()),
+	        "population": [SimpleNamespace(name=f"{name.upper()}#{i}", cells=object()) for i in range(n)],
+	        "generation": 7, "source_path": str(path)}
+
+
+def test_next_from_neurons_final_runs_memory_and_keeps_the_union(harness):
+	args = _args(harness.dir, skip_stages="bits,connections")
+	P._run_one(args, None, SimpleNamespace(train=7, val=1000, test=11),
+	           resume_state=_final_state(harness.dir, 1, "neurons"))
+	assert harness.ran == ["BITS", "CONNECTIONS", "MEMORY"]   # skips are the orchestrator's
+	assert set(harness.scored) == {f"{s}#{i}" for s in ("GRID", "NEURONS", "MEMORY") for i in range(3)}
+	assert harness.holdouts == [("GRID", "GRID#0"), ("NEURONS", "NEURONS#0")]
+
+
+def test_next_from_memory_final_is_publish_only(harness):
+	"""Killed AFTER MEMORY's final save: no GA stage re-runs (it used to clamp to 4
+	and re-fly MEMORY); MEMORY is published from the checkpoint, the union is
+	complete, and --save-winner gets the FULL population."""
+	_write_stage(harness.dir, 4, "memory", 50)
+	st = _final_state(harness.dir, 4, "memory")
+	_rows, best, pop, _pid = P._run_one(_args(harness.dir, skip_stages="bits,connections"), None,
+	                                    SimpleNamespace(train=7, val=1000, test=11), resume_state=st)
+	assert harness.ran == [], "publish-only: no GA stage may run"
+	assert set(harness.scored) == {f"{s}#{i}" for s in ("GRID", "NEURONS", "MEMORY") for i in range(3)}
+	assert [label for label, _g in harness.holdouts] == ["GRID", "NEURONS", "MEMORY"]
+	assert best is st["best_genome"] and len(pop) == 50
+
+
+def test_picker_rule(tmp_path):
+	import os
+	sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+	import pick_resume_point as K
+
+	def touch(name, ns):
+		p = tmp_path / name
+		p.write_text("x")
+		os.utime(p, ns=(ns, ns))
+
+	assert K.pick(tmp_path) is None                       # killed in the grid: from scratch
+	touch("stage0_grid.yaml.gz", 100)
+	assert K.pick(tmp_path) == (str(tmp_path / "stage0_grid.yaml.gz"), "next")
+	touch("emergency_stage1_neurons.yaml.gz", 200)
+	assert K.pick(tmp_path) == (str(tmp_path / "emergency_stage1_neurons.yaml.gz"), "same")
+	touch("stage1_neurons.yaml.gz", 200)                  # same mtime: the final save follows the dump
+	assert K.pick(tmp_path) == (str(tmp_path / "stage1_neurons.yaml.gz"), "next")
+	touch("stage4_memory.yaml.gz.tmp.123", 999)           # a half-written final is never a resume point
+	assert K.pick(tmp_path)[0].endswith("stage1_neurons.yaml.gz")
+
+
+# ---------------------------------------------------------------- deliberate aborts propagate
+def test_stage_select_holdout_error_propagates(harness):
+	"""HoldoutScoringError in stage-select used to be swallowed by `except Exception`
+	in _run_one: rc=0, no headline, a marker with a hole. It must kill the run."""
+	harness.fail["val"] = P.HoldoutScoringError("val seed died")
+	with pytest.raises(P.HoldoutScoringError, match="val seed died"):
+		P._run_one(_args(harness.dir, skip_stages="bits,connections"), None,
+		           SimpleNamespace(train=7, val=1000, test=11), resume_state=_resume_state())
+
+
+def test_runner_up_rescore_error_propagates(harness, monkeypatch):
+	"""A selected runner-up whose report-seed score failed used to publish pop[0]'s
+	triple under the headline. Make the last candidate win, then fail its re-score."""
+	from wnn.ram.fitness import FitnessCalculatorControllerHarmonic
+	monkeypatch.setattr(FitnessCalculatorControllerHarmonic, "fitness",
+	                    lambda self, ms: [0.0 if i == len(ms) - 1 else 1.0 for i in range(len(ms))])
+	harness.fail["holdout"] = ("HEADLINE-", P.HoldoutScoringError("report seed died"))
+	with pytest.raises(P.HoldoutScoringError, match="report seed died"):
+		P._run_one(_args(harness.dir, skip_stages="bits,connections"), None,
+		           SimpleNamespace(train=7, val=1000, test=11), resume_state=_resume_state())
 
 
 # ---------------------------------------------------------------- banked-run repair
