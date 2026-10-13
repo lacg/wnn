@@ -812,7 +812,7 @@ pub mod batched_path
 			let chunk_bits = &genomes_bits_flat[start..end];
 			let chunk_conns = &genomes_connections_flat[conn_prefix[start]..conn_prefix[end]];
 			let chunk_neurons = [end - start];
-			let mut chunk_exports = batched_train_core(
+			let tb = train_batch_to_table(
 				chunk_bits,
 				&chunk_neurons,
 				chunk_conns,
@@ -830,23 +830,20 @@ pub mod batched_path
 				class_weights,
 				start as u32,
 				memory_mode,
+				crate::train_knobs::TrainKnobs::from_env(),
 			)?;
-			let export = chunk_exports
-				.pop()
-				.ok_or_else(|| "neuron-chunked path: core returned empty Vec".to_string())?;
-			let sparse = export
-				.sparse_exports
-				.into_iter()
-				.next()
-				.ok_or_else(|| "neuron-chunked path: chunk export has no sparse_exports".to_string())?;
+			// The chunk's RAW per-neuron ranges, straight off its table. Until
+			// 12/10/2026 this took the chunk's finished GenomeExport: under
+			// WNN_COALESCE_GROUPS=1 that export is padded to the chunk's
+			// neuron BUCKET (2 neurons -> 5 slots), so every later chunk landed
+			// at the wrong neuron index; at bits <= SPARSE_THRESHOLD it was
+			// densified and the chunk errored (no sparse_exports).
+			let (k, v, o, c) = tb.single_cluster_ranges(end - start);
 			let base = keys.len() as u32;
-			for n in 0..sparse.num_neurons
-			{
-				offsets.push(base + sparse.offsets[n]);
-				counts.push(sparse.counts[n]);
-			}
-			keys.extend_from_slice(&sparse.keys);
-			values.extend_from_slice(&sparse.values);
+			offsets.extend(o.iter().map(|&off| base + off));
+			counts.extend_from_slice(&c);
+			keys.extend_from_slice(&k);
+			values.extend_from_slice(&v);
 			start = end;
 		}
 
@@ -868,13 +865,18 @@ pub mod batched_path
 			&neurons_full,
 			&groups,
 		);
+		// A coalesced group lays out its neuron BUCKET (>= n_total); the slots
+		// past the real neurons are empty ranges, as the unchunked export has.
+		let group_neurons = groups[0].total_neurons();
+		offsets.resize(group_neurons, keys.len() as u32);
+		counts.resize(group_neurons, 0);
 		// Same bits routing as the grouped path above.
 		let bits0 = groups[0].bits;
 		let (group_info, dense_exports, dense_coverage, sparse_exports) =
 			if bits0 <= crate::adaptive::SPARSE_THRESHOLD
 			{
 				let (words, coverage) = crate::adaptive::eval_export::densify_sparse_export(
-					&keys, &values, &offsets, &counts, n_total, bits0, memory_mode,
+					&keys, &values, &offsets, &counts, group_neurons, bits0, memory_mode,
 				);
 				(vec![(false, 0, vec![0])], vec![words], vec![coverage], vec![])
 			}
@@ -885,7 +887,7 @@ pub mod batched_path
 					values,
 					offsets,
 					counts,
-					num_neurons: n_total,
+					num_neurons: group_neurons,
 				}])
 			};
 		Ok(vec![GenomeExport {
@@ -1199,6 +1201,22 @@ pub mod batched_path
 		memory_mode: u8,
 		/// The knobs this batch trained under (the export reads the wF filter).
 		knobs: crate::train_knobs::TrainKnobs,
+	}
+
+	impl TrainedBatch
+	{
+		/// Sorted per-neuron (keys, values, offsets, counts) of the first `n`
+		/// neurons of genome 0 / cluster 0 — a single-cluster neuron chunk —
+		/// with duplicate slots merged per the writer. No group layout, no
+		/// densify: the caller assembles the full genome's export.
+		fn single_cluster_ranges(&self, n: usize) -> (Vec<u64>, Vec<u8>, Vec<u32>, Vec<u32>)
+		{
+			let cap = self.cluster_capacity[0] as u32;
+			let base = self.cluster_offset_in_genome[0] as u32;
+			let slot_offsets: Vec<u32> = (0..n as u32).map(|i| base + i * cap).collect();
+			let merge = crate::atomic_hashtable::SlotMerge::for_batch(self.use_oi, self.memory_mode, self.knobs.export_skip_wf);
+			self.gpu_table.export_per_neuron(&slot_offsets, &vec![cap; n], merge)
+		}
 	}
 
 	/// The original batched dispatch body. `neuron_index_offset` is threaded to
@@ -2424,6 +2442,44 @@ pub mod batched_path
 		fn multigroup_parity_pln()
 		{
 			run_multigroup_parity(ram_core::neuron_memory::PLN);
+		}
+
+		/// Chunked vs unchunked on a DENSE (bits <= SPARSE_THRESHOLD), MIXED-bits
+		/// genome, TERNARY (lattice: exact under any order). Before 12/10/2026
+		/// the chunked trainer read each chunk's finished export: a low-bits
+		/// chunk was already densified (Err: no sparse_exports), and under
+		/// WNN_COALESCE_GROUPS=1 every chunk was padded to its neuron bucket,
+		/// shifting later neurons. Run with and without WNN_COALESCE_GROUPS=1.
+		#[test]
+		fn neuron_chunked_matches_unchunked_dense_mixed_bits()
+		{
+			if get_trainer().is_err()
+			{
+				eprintln!("[chunked_tests] no Metal device — skipping");
+				return;
+			}
+			let (num_train, tib) = (1500usize, 16usize);
+			let bools: Vec<bool> = (0..num_train * tib).map(|i| (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 63 == 1).collect();
+			let packed = ram_core::packed_bits::PackedBits::from_bool_slice(&bools, tib);
+			let targets: Vec<i64> = (0..num_train).map(|ex| ((ex * 7) % 3 == 0) as i64).collect();
+			let bits_flat = vec![10usize, 8, 10, 10, 9, 10, 7];
+			let conns: Vec<i64> = bits_flat.iter().enumerate().flat_map(|(n, &b)| (0..b).map(move |k| ((3 * k + n) % tib) as i64)).collect();
+			let mode = ram_core::neuron_memory::TERNARY;
+			let unchunked = batched_train_offspring(
+				&bits_flat, &[bits_flat.len()], &conns, 1, 1, &packed, &targets, &[], num_train, 0, tib, 0.5, 0.5, 42, None, mode,
+			)
+			.expect("unchunked train failed");
+			let cap = marker_capacity_for_train(num_train, 10, 0.5);
+			let chunked = train_single_genome_neuron_chunked(
+				&bits_flat, &conns, &packed, &targets, &[], num_train, 0, tib, 0.5, 0.5, 42, None, cap * 16 * 2, mode,
+			)
+			.expect("chunked train failed");
+			let (a, b) = (&unchunked[0], &chunked[0]);
+			assert_eq!(a.connections, b.connections, "connections differ");
+			assert_eq!(a.group_info, b.group_info, "group_info differs");
+			assert!(a.sparse_exports.is_empty() && b.sparse_exports.is_empty(), "low bits must densify");
+			assert_eq!(a.dense_exports, b.dense_exports, "dense rows differ");
+			assert_eq!(a.dense_coverage, b.dense_coverage, "coverage differs");
 		}
 
 		/// Chunked-vs-unchunked parity. Data is built so every (neuron, example)
