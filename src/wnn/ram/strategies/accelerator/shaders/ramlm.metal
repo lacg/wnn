@@ -148,6 +148,7 @@ kernel void ramlm_forward_pass(
 		constant RAMLMParams &params [[buffer(3)]],
 		device float *probs_out [[buffer(4)]],			 // [num_examples * num_clusters]
 		device const ulong *coverage [[buffer(5)]],  // dense coverage bitmap (dummy if unused)
+		device const uint *cluster_neurons [[buffer(6)]], // [num_clusters] neurons SCORED per cluster
 		uint2 thread_pos [[thread_position_in_grid]] // (cluster_idx, example_idx)
 )
 {
@@ -162,10 +163,13 @@ kernel void ramlm_forward_pass(
 	device const ulong *packed_input = packed_input_flat + example_idx * params.words_per_example;
 	uint start_neuron = cluster_idx * params.neurons_per_cluster;
 
+	// Layout stride = neurons_per_cluster (a coalesced group's bucket MAX);
+	// the mean runs over the cluster's ACTUAL neurons (cluster_neurons) —
+	// padded neurons are not part of the cluster (CPU twin: actual_neurons).
 	float prob = accumulate_dense(
 			packed_input, connections_flat, memory_words,
 			coverage, params.coverage_aware, params.addresses_per_neuron,
-			start_neuron, params.neurons_per_cluster,
+			start_neuron, cluster_neurons[cluster_idx],
 			params.bits_per_neuron, params.words_per_neuron,
 			params.memory_mode, params.empty_value,
 			params.run_seed, example_idx);
@@ -188,6 +192,7 @@ kernel void ramlm_forward_pass_per_example(
 		constant RAMLMParams &params [[buffer(3)]],
 		device float *probs_out [[buffer(4)]],
 		device const ulong *coverage [[buffer(5)]],  // dense coverage bitmap (dummy if unused)
+		device const uint *cluster_neurons [[buffer(6)]], // [num_clusters] neurons SCORED per cluster
 		uint example_idx [[thread_position_in_grid]])
 {
 	if (example_idx >= params.num_examples)
@@ -203,7 +208,7 @@ kernel void ramlm_forward_pass_per_example(
 		example_probs[cluster_idx] = accumulate_dense(
 				packed_input, connections_flat, memory_words,
 				coverage, params.coverage_aware, params.addresses_per_neuron,
-				start_neuron, params.neurons_per_cluster,
+				start_neuron, cluster_neurons[cluster_idx],
 				params.bits_per_neuron, params.words_per_neuron,
 				params.memory_mode, params.empty_value,
 				params.run_seed, example_idx);
@@ -241,6 +246,7 @@ kernel void ramlm_forward_to_buffer(
 		device const uint *cluster_ids [[buffer(3)]], // Maps local → global cluster ID
 		constant DenseToBufferParams &params [[buffer(4)]],
 		device float *shared_buffer [[buffer(5)]], // Shared across all groups
+		device const uint *cluster_neurons [[buffer(6)]], // [num_group_clusters] neurons SCORED
 		uint2 thread_pos [[thread_position_in_grid]])
 {
 	uint local_cluster = thread_pos.x;
@@ -260,7 +266,7 @@ kernel void ramlm_forward_to_buffer(
 	float prob = accumulate_dense(
 			packed_input, connections_flat, memory_words,
 			nullptr, 0u, 0u,
-			start_neuron, params.neurons_per_cluster,
+			start_neuron, cluster_neurons[local_cluster],
 			params.bits_per_neuron, params.words_per_neuron,
 			params.memory_mode, params.empty_value,
 			params.run_seed, example_idx);

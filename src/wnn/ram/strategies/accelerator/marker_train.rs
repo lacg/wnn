@@ -2285,11 +2285,15 @@ pub mod batched_path
 			// group index — they coincide here only because both groups are dense.
 			assert_eq!(bexp.group_info[0], (false, 0, vec![0, 1]));
 			assert_eq!(bexp.group_info[1], (false, 1, vec![2]));
-			// 4 neurons x 2^8 cells and 3 neurons x 2^10 cells, packed 31/word.
-			assert_eq!(bexp.dense_exports[0].len(), 4 * (256usize.div_ceil(31)));
-			assert_eq!(bexp.dense_exports[1].len(), 3 * (1024usize.div_ceil(31)));
-			assert_eq!(bexp.dense_coverage[0].len(), (4 * 256usize).div_ceil(64));
-			assert_eq!(bexp.dense_coverage[1].len(), (3 * 1024usize).div_ceil(64));
+			// 4 neurons x 2^8 cells and 3 neurons x 2^10 cells, packed 31/word —
+			// or, under WNN_COALESCE_GROUPS=1, each cluster laid out at its
+			// neuron BUCKET (2 -> 5, 3 -> 5): 10 and 5 neuron slots.
+			let (n0, n1) = if crate::adaptive::use_coalesced_groups() { (10, 5) } else { (4, 3) };
+			assert_eq!((bexp.groups[0].total_neurons(), bexp.groups[1].total_neurons()), (n0, n1));
+			assert_eq!(bexp.dense_exports[0].len(), n0 * (256usize.div_ceil(31)));
+			assert_eq!(bexp.dense_exports[1].len(), n1 * (1024usize.div_ceil(31)));
+			assert_eq!(bexp.dense_coverage[0].len(), (n0 * 256usize).div_ceil(64));
+			assert_eq!(bexp.dense_coverage[1].len(), (n1 * 1024usize).div_ceil(64));
 			// Coverage must be a strict subset of the address space and non-empty:
 			// something was trained, but not everything was reached.
 			let set: u32 = bexp.dense_coverage[0].iter().map(|w| w.count_ones()).sum();

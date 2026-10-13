@@ -1090,6 +1090,7 @@ pub(crate) fn evaluate_group_metal(
 		run_seed,
 		coverage,
 		coverage_aware,
+		group.actual_neurons.as_deref(),
 	)
 }
 
@@ -1134,5 +1135,6 @@ pub(crate) fn evaluate_group_sparse_gpu(
 		memory_mode,
 		empty_value,
 		run_seed,
+		group.actual_neurons.as_deref(),
 	)
 }

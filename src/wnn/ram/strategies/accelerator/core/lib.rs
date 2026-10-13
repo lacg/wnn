@@ -100,6 +100,7 @@ pub mod metal_sparse
 			_: u8,
 			_: f32,
 			_: u64,
+			_: Option<&[u32]>,
 		) -> Result<Vec<f32>, String>
 		{
 			Err("Metal not available on this platform".into())

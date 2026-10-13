@@ -995,6 +995,7 @@ fn gpu_forward_heterogeneous(
 			0, // run_seed: LM dense forward is never QSR/PLN
 			&[],   // coverage: LM dense forward, not the IDS scorer
 			false,
+			None, // actual_neurons: uniform clusters
 		)
 		{
 			Ok(probs) =>
@@ -1064,6 +1065,7 @@ fn gpu_forward_heterogeneous(
 					memory_mode,
 					empty_value,
 					0, // run_seed: LM bitwise path is never QSR
+					None, // actual_neurons: uniform clusters
 				)
 				{
 					Ok(probs) =>
@@ -1562,6 +1564,7 @@ pub(crate) fn forward_eval_into(
 					0, // run_seed: LM dense forward is never QSR/PLN
 					&[],   // coverage: LM dense forward, not the IDS scorer
 					false,
+					None, // actual_neurons: uniform clusters
 				)
 				{
 					Ok(probs) =>

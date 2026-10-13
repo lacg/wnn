@@ -328,6 +328,7 @@ pub fn evaluate_genome_hybrid(
 							empty_value,
 							memory_mode,
 							settings.run_seed,
+							group.actual_neurons.as_deref(),
 						);
 
 						if phase_timing

@@ -107,12 +107,16 @@ impl MetalRAMLMEvaluator
 		// tracked, in which case every cell reads as covered.
 		coverage: &[u64],
 		coverage_aware: bool,
+		// Neurons SCORED per cluster (a coalesced group's actual_neurons);
+		// None = every cluster scores all `neurons_per_cluster`.
+		actual_neurons: Option<&[u32]>,
 	) -> Result<Vec<f32>, String>
 	{
 		if num_examples == 0
 		{
 			return Ok(vec![]);
 		}
+		let cluster_neurons = cluster_neuron_counts(actual_neurons, neurons_per_cluster, num_clusters)?;
 
 		// Convert i64 connections to i32 for GPU
 		let connections_i32: Vec<i32> = connections_flat.iter().map(|&c| c as i32).collect();
@@ -191,6 +195,11 @@ impl MetalRAMLMEvaluator
 			mem::size_of::<RAMLMParams>() as u64,
 			MTLResourceOptions::StorageModeShared,
 		);
+		let cluster_neurons_buffer = self.device.new_buffer_with_data(
+			cluster_neurons.as_ptr() as *const _,
+			std::mem::size_of_val(cluster_neurons.as_slice()) as u64,
+			MTLResourceOptions::StorageModeShared,
+		);
 
 		// Output buffer
 		let output_size = num_examples * num_clusters;
@@ -216,6 +225,7 @@ impl MetalRAMLMEvaluator
 			encoder.set_buffer(3, Some(&params_buffer), 0);
 			encoder.set_buffer(4, Some(&output_buffer), 0);
 			encoder.set_buffer(5, Some(&coverage_buffer), 0);
+			encoder.set_buffer(6, Some(&cluster_neurons_buffer), 0);
 
 			let grid_size = MTLSize::new(num_examples as u64, 1, 1);
 			let max_threads = self
@@ -234,6 +244,7 @@ impl MetalRAMLMEvaluator
 			encoder.set_buffer(3, Some(&params_buffer), 0);
 			encoder.set_buffer(4, Some(&output_buffer), 0);
 			encoder.set_buffer(5, Some(&coverage_buffer), 0);
+			encoder.set_buffer(6, Some(&cluster_neurons_buffer), 0);
 
 			let grid_size = MTLSize::new(num_clusters as u64, num_examples as u64, 1);
 			let thread_group_size =
@@ -250,6 +261,28 @@ impl MetalRAMLMEvaluator
 		let results: Vec<f32> = unsafe { std::slice::from_raw_parts(result_ptr, output_size).to_vec() };
 
 		Ok(results)
+	}
+}
+
+
+/// Neurons SCORED per cluster, one u32 per cluster (the kernels' mean
+/// denominator). A coalesced group lays clusters out at its bucket MAX
+/// `neurons_per_cluster` but scores only each cluster's actual neurons — the
+/// CPU scorers' rule. Until 12/10/2026 the GPU averaged over the padded MAX.
+pub(crate) fn cluster_neuron_counts(
+	actual_neurons: Option<&[u32]>,
+	neurons_per_cluster: usize,
+	num_clusters: usize,
+) -> Result<Vec<u32>, String>
+{
+	match actual_neurons
+	{
+		None => Ok(vec![neurons_per_cluster as u32; num_clusters.max(1)]),
+		Some(a) if a.len() == num_clusters && a.iter().all(|&n| n as usize <= neurons_per_cluster) => Ok(a.to_vec()),
+		Some(a) => Err(format!(
+			"actual_neurons {:?} must have {} entries, each <= neurons_per_cluster {}",
+			a, num_clusters, neurons_per_cluster
+		)),
 	}
 }
 

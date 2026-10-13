@@ -977,10 +977,20 @@ impl MetalGroupEvaluator
 		empty_value: f32,
 		memory_mode: u8,
 		run_seed: u64,
+		// Neurons SCORED per local cluster (a coalesced group's actual_neurons).
+		actual_neurons: Option<&[u32]>,
 	)
 	{
 		let num_group_clusters = cluster_ids.len();
 		let num_neurons = num_group_clusters * neurons_per_cluster;
+		let cluster_neurons =
+			crate::metal_ramlm::cluster_neuron_counts(actual_neurons, neurons_per_cluster, num_group_clusters)
+				.expect("eval_dense_to_buffer: actual_neurons does not match the group");
+		let cluster_neurons_buffer = self.device.new_buffer_with_data(
+			cluster_neurons.as_ptr() as *const _,
+			std::mem::size_of_val(cluster_neurons.as_slice()) as u64,
+			metal::MTLResourceOptions::StorageModeShared,
+		);
 
 		// Convert to GPU-friendly formats
 		let connections_i32: Vec<i32> = connections.iter().map(|&c| c as i32).collect();
@@ -1054,6 +1064,7 @@ impl MetalGroupEvaluator
 		encoder.set_buffer(3, Some(&cluster_ids_buffer), 0);
 		encoder.set_buffer(4, Some(&params_buffer), 0);
 		encoder.set_buffer(5, Some(scores_buffer), 0);
+		encoder.set_buffer(6, Some(&cluster_neurons_buffer), 0);
 
 		let grid_size = MTLSize::new(num_group_clusters as u64, num_examples as u64, 1);
 		let thread_group_size = MTLSize::new(
