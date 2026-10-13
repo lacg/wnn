@@ -631,3 +631,27 @@ breaking tuple change) and there are additive PyO3 functions
 - Whether cross-genome sharing should extend to scoring storage (Arc'd exports)
   after stage 5's measurement.
 - The re-synthesis batch (EC2) for unit-emitted RTL, to quantify LUT savings.
+
+---
+
+## Stage 0 — MEASURED (12/10/2026, worker idle)
+
+**Flow-level split (worker log, MARKER_TRAIN_BATCHED = GPU training kernel time):**
+
+| cohort | runs | total | GPU train kernel | everything else |
+|---|---|---|---|---|
+| GAF (rate 0.25) | 11 | 23.1 min | 8.8 min | 14.3 min |
+| SR1 (rate 1.0) | 5 | 56.8 min | 14.9 min | 41.9 min |
+
+**Same genomes, k-fold `evaluate_batch` (the GA hot path), WNN_TIMING=1** (4 GA genomes of SR1 r20419, 482 neurons, 24.7% distinct):
+
+| rate | hybrid batch_size | "train" (train + sparse build/export) per genome | eval per genome | sparse keys per genome | wall |
+|---|---|---|---|---|---|
+| 0.25 | 10 | ~650-670 ms | ~12 ms | ~310k | 13.6 s |
+| 1.0 | **2** | ~940-1190 ms | ~12 ms | ~420k | 24.0 s |
+
+Readings:
+1. **Scoring is negligible** (~12 ms/genome at both rates). Count-weighted scoring (stage 9) has no time payoff → recommend NOT doing it.
+2. The rate-1.0 cost is the CPU-side train/sparse-build/export + **lost parallelism**: rate 1.0 writes ~35% more sparse keys per genome and the hybrid batch shrinks 10 → 2.
+3. Stage 2 (train + store unique neurons only) cuts keys per genome ~4x (24.7% distinct) — below the rate-0.25 footprint — which should restore the batch size. This is exactly the cost the design targets.
+4. Cross-genome sharing (indicative only — full populations are not checkpointed): 131 distinct of 1929 neurons across 4 related GA genomes = 6.8%. Stage 1's UnitGrouping must log the per-batch distinct fraction so stage 5 is sized on real batches.
