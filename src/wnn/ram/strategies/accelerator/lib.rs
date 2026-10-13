@@ -282,6 +282,8 @@ mod marker_train;
 // IDS-37 stages 2+4: train a batch's distinct neurons once (rate >= 1.0, OI).
 #[cfg(target_os = "macos")]
 mod multiplicity_batch;
+// IDS-37 stage 7: a genome trained as final validation trains it, as units.
+mod trained_layer;
 #[cfg(all(test, target_os = "macos"))]
 mod multiplicity_parity_tests;
 

@@ -700,6 +700,19 @@ class IDSEvaluator(BaseEvaluator):
 		]
 		return eval_scores, train_scores, val_scores, metrics, Footprint.from_tuple(raw_footprint)
 
+	def export_trained_layer(self, genome) -> "TrainedLayerExport":
+		"""Train ONCE exactly as evaluate_at_thresholds does and return the
+		genome as deployable PHYSICAL units + its eval scores (FPGA export,
+		IDS-37 stage 7). Single-cluster, in-memory datasets only."""
+		from wnn.ram.architecture.TrainedLayerExport import TrainedLayerExport
+		if self._streaming_mode:
+			raise NotImplementedError("export_trained_layer: streaming datasets are not exportable yet")
+		bits_flat, neurons_flat, connections_flat = self._flatten_genomes([genome])
+		return TrainedLayerExport.from_tuple(self._cache.export_trained(
+			bits_flat, neurons_flat, connections_flat,
+			self._empty_value, self._neuron_sample_rate, 0,
+		))
+
 	def evaluate_multiclass_at_thresholds(self, genome) -> dict:
 		"""Train ONCE, score eval/train(/val) as K-vectors, return per-mode
 		multiclass metrics computed on the EVAL set.

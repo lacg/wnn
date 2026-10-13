@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-"""Export a trained WNN genome to FPGA-ready sparse memory files.
+"""Export a trained WNN genome as FPGA-ready per-UNIT sparse tables.
 
-Trains the genome on the dataset, extracts sparse (address, value) pairs
-per neuron, and writes them as sorted arrays for BRAM initialization.
+The genome is trained EXACTLY as the worker's final validation trained it
+(FlowLayerTrainer: the worker's IdsEvaluatorFactory + IDSCacheWrapper.export_trained,
+the flow's real neuron_sample_rate / memory_mode / OI / class weights) and must
+reproduce the recorded validation row bit for bit (FidelityGate) before any
+file is written. Identical neurons (same connections; at rate >= 1.0 they hold
+identical memory) are emitted ONCE: one table per physical unit, and
+metadata.json carries each unit's logical count (the RTL adder weight).
 
 Usage:
     python export_genome.py --flow-id 973 --genome-type best_fitness
@@ -10,440 +15,83 @@ Usage:
 
 import argparse
 import json
-import sqlite3
 import struct
 import sys
 from pathlib import Path
 
-import numpy as np
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src" / "wnn"))
+from export_metadata import build_metadata, footprint_line  # noqa: E402
+from export_test_vectors import write_test_vectors  # noqa: E402
+from flow_genome_source import FlowGenomeSource  # noqa: E402
+from flow_layer_trainer import FlowLayerTrainer  # noqa: E402
 
-
-def load_dataset(ids_dataset: str, ids_split: str, n_bits: int, feature_selection: str):
-	"""Load and thermometer-encode an IDS dataset."""
-	if ids_dataset == "cicids2017":
-		from wnn.ids.cicids2017 import load_cicids2017
-		return load_cicids2017(split=ids_split, n_bits=n_bits, feature_selection=feature_selection)
-	elif ids_dataset == "unsw-nb15":
-		from wnn.ids.dataset import load_unsw_nb15
-		return load_unsw_nb15(split=ids_split, n_bits=n_bits, feature_selection=feature_selection)
-	elif ids_dataset == "ciciot2023":
-		from wnn.ids.ciciot2023 import load_ciciot2023
-		return load_ciciot2023(split=ids_split, n_bits=n_bits, feature_selection=feature_selection)
-	elif ids_dataset == "ciciot2023_full":
-		# Full 46.7M-record CIC-IoT-2023 — same loader, different HF repo via dataset_size="full"
-		from wnn.ids.ciciot2023 import load_ciciot2023
-		return load_ciciot2023(split=ids_split, n_bits=n_bits, feature_selection=feature_selection, dataset_size="full")
-	elif ids_dataset == "ciciot2023_neto_subsample":
-		from wnn.ids.ciciot2023 import load_ciciot2023
-		return load_ciciot2023(split=ids_split, n_bits=n_bits, feature_selection=feature_selection, dataset_size="neto_subsample")
-	elif ids_dataset == "ciciot2023_neto_full":
-		from wnn.ids.ciciot2023 import load_ciciot2023
-		return load_ciciot2023(split=ids_split, n_bits=n_bits, feature_selection=feature_selection, dataset_size="neto_full")
-	else:
-		raise ValueError(f"Unknown dataset: {ids_dataset}")
+REPO = Path(__file__).resolve().parents[2]
 
 
-def get_genome_connections(db_path: str, flow_id: int, genome_type: str = "best_fitness", phase: str | None = None):
-	"""Get genome connections and config from the database.
-
-	Matches experiments by `phase_type` column (grid_search / ga_neurons / ...)
-	rather than by `name`, so it works for both PUB50 flows
-	("Grid Search (neurons x bits)") and single-genome flows
-	("Grid Search (1 point)"). If phase is None, prefers ga_neurons then
-	falls back to grid_search.
-	"""
-	db = sqlite3.connect(db_path)
-
-	# Get flow config
-	row = db.execute("SELECT config_json FROM flows WHERE id = ?", (flow_id,)).fetchone()
-	if not row:
-		raise ValueError(f"Flow {flow_id} not found")
-	config = json.loads(row[0])
-	params = config["params"]
-
-	# Build phase_type preference list
-	valid_phase_types = {"ga_neurons", "grid_search"}
-	if phase is not None:
-		if phase not in valid_phase_types:
-			raise ValueError(f"Unknown phase: {phase}. Use 'ga_neurons' or 'grid_search'.")
-		phase_order = [phase]
-	else:
-		phase_order = ["ga_neurons", "grid_search"]
-
-	# Get the genome from validation_summaries -> genomes by phase_type
-	genome = None
-	for pt in phase_order:
-		row = db.execute("""
-			SELECT vs.genome_hash, g.total_neurons, g.connections_json, g.tiers_json, e.name
-			FROM validation_summaries vs
-			JOIN experiments e ON vs.experiment_id = e.id AND e.phase_type = ?
-			JOIN genomes g ON g.experiment_id = e.id AND g.config_hash = vs.genome_hash
-			WHERE e.flow_id = ? AND vs.validation_point = 'final' AND vs.genome_type = ?
-		""", (pt, flow_id, genome_type)).fetchone()
-		if row:
-			genome = {
-				"hash": row[0],
-				"total_neurons": row[1],
-				"connections_csv": row[2],
-				"tiers_json": row[3],
-				"phase": row[4],
-			}
-			break
-
-	if not genome:
-		phase_label = phase if phase else "any phase"
-		raise ValueError(f"No {genome_type} genome found for flow {flow_id} in {phase_label}")
-
-	# Parse connections — handle BOTH uniform and mixed-bits genomes correctly.
-	# Mixed-bits (e.g., GA-evolved 250n × {60, 64}b genomes) store connections
-	# as a flat CSV where the per-neuron count varies according to the genome's
-	# `bits_per_neuron` list in tiers_json. A naive `len(all_conns) // n_neurons`
-	# division silently drops connections when (sum % n) != 0 and produces wrong
-	# slices when bits aren't uniform — that's the panic seen on the 250n×60-64b
-	# 2747/2748 GA winners (script computed bits=62, lost 108 of 15608 entries,
-	# misaligned all per-neuron slices).
-	all_conns = list(map(int, genome["connections_csv"].split(",")))
-	tiers = json.loads(genome["tiers_json"]) if genome.get("tiers_json") else {}
-	bits_per_neuron_list = tiers.get("bits_per_neuron")
-	if bits_per_neuron_list and len(bits_per_neuron_list) == genome["total_neurons"]:
-		# Authoritative per-neuron bits from the genome record.
-		if sum(bits_per_neuron_list) != len(all_conns):
-			raise ValueError(
-				f"connections_csv length {len(all_conns)} != sum(bits_per_neuron) "
-				f"{sum(bits_per_neuron_list)} for {genome_type} on flow {flow_id}"
-			)
-		connections = []
-		offset = 0
-		for b in bits_per_neuron_list:
-			connections.append(all_conns[offset:offset + b])
-			offset += b
-	else:
-		# Fallback for legacy genomes without a bits_per_neuron list — assume
-		# uniform bits (requires exact divisibility, else error rather than drop).
-		if len(all_conns) % genome["total_neurons"] != 0:
-			raise ValueError(
-				f"Uniform-bits fallback but connections {len(all_conns)} not "
-				f"divisible by {genome['total_neurons']} neurons for {genome_type} "
-				f"on flow {flow_id} (no bits_per_neuron in tiers_json)"
-			)
-		bits_per_neuron = len(all_conns) // genome["total_neurons"]
-		connections = []
-		for n in range(genome["total_neurons"]):
-			start = n * bits_per_neuron
-			connections.append(all_conns[start:start + bits_per_neuron])
-
-	db.close()
-	return params, genome, connections
-
-
-def train_and_extract_sparse(X_train, y_train, connections, n_bits_addr):
-	"""Rust-accelerated training + sparse extraction (replaces Python loop).
-
-	Uses the IDS accelerator's training pipeline (Option B GPU + dense fallback)
-	instead of a Python per-example loop. Required for 46M-scale exports.
-	Falls back to the Python implementation if the Rust accelerator is missing.
-	"""
-	try:
-		import ram_accelerator
-	except ImportError:
-		print("  ram_accelerator unavailable — falling back to Python loop")
-		return train_and_extract_sparse_py(X_train, y_train, connections, n_bits_addr)
-
-	n_neurons = len(connections)
-
-	# Convert X_train (LazyEncodedArray or ndarray) to packed bytes.
-	if hasattr(X_train, "as_packed_uint8"):
-		train_packed_u8 = X_train.as_packed_uint8().ravel()
-		total_input_bits = X_train.total_bits
-	elif hasattr(X_train, "to_numpy_bool"):
-		bool_arr = X_train.to_numpy_bool()
-		train_packed_u8 = np.packbits(bool_arr, axis=1, bitorder='little').ravel()
-		total_input_bits = bool_arr.shape[1]
-	else:
-		# Already a numpy bool/uint8 array.
-		if X_train.dtype == np.bool_:
-			train_packed_u8 = np.packbits(X_train, axis=1, bitorder='little').ravel()
-			total_input_bits = X_train.shape[1]
-		else:
-			raise ValueError(f"Unsupported X_train type: {type(X_train)}")
-
-	if hasattr(y_train, "astype"):
-		train_labels = y_train.astype(np.int64).tolist()
-	else:
-		train_labels = [int(v) for v in y_train]
-
-	# Flatten connections AND derive per-neuron bits from the connections shape
-	# (NOT from the passed n_bits_addr, which assumes uniform-bits and silently
-	# drops data for mixed-bits genomes). The Rust IDS training path accepts
-	# per-neuron bits via genomes_bits_flat — same as the production GA loop.
-	if hasattr(connections, "ravel"):
-		# numpy 2D array (uniform-bits case): one row per neuron.
-		connections_flat = connections.ravel().astype(np.int64).tolist()
-		bits_flat = [int(connections.shape[1])] * n_neurons
-	else:
-		# list of lists (variable-length per neuron — the mixed-bits case).
-		connections_flat = [int(b) for neuron_conns in connections for b in neuron_conns]
-		bits_flat = [len(neuron_conns) for neuron_conns in connections]
-
-	neurons_flat = [n_neurons]              # single cluster
-	unique_bits = sorted(set(bits_flat))
-	bits_summary = f"{unique_bits[0]}" if len(unique_bits) == 1 else f"mix of {unique_bits}"
-
-	print(f"  Calling Rust train_genome_export_fpga: {n_neurons} neurons × {bits_summary} bits, "
-		  f"{len(train_labels):,} examples, {len(train_packed_u8):,} packed bytes")
-
-	sparse_per_neuron = ram_accelerator.train_genome_export_fpga(
-		bits_flat=bits_flat,
-		neurons_flat=neurons_flat,
-		connections=connections_flat,
-		num_clusters=1,
-		train_packed_u8=train_packed_u8.astype(np.uint8),
-		train_labels=train_labels,
-		total_input_bits=total_input_bits,
-		empty_value=0.5,
-		neuron_sample_rate=1.0,   # full training for FPGA faithfulness
-		rng_seed=42,
-		class_weights=None,
-	)
-
-	# Convert from Rust Vec<(Vec<u64>, Vec<u8>)> to list of (np.uint64, np.uint8).
-	# PyO3 hands Vec<u8> back as a Python `bytes` object; np.frombuffer is the
-	# zero-copy way to view it as uint8.
-	sparse_neurons = [
-		(
-			np.asarray(keys, dtype=np.uint64),
-			np.frombuffer(values, dtype=np.uint8) if isinstance(values, (bytes, bytearray))
-				else np.asarray(values, dtype=np.uint8),
-		)
-		for keys, values in sparse_per_neuron
-	]
-
-	for n_idx in range(min(3, n_neurons)):
-		print(f"  Neuron {n_idx:>3}: {len(sparse_neurons[n_idx][0]):>6,} entries")
-	if n_neurons > 4:
-		print(f"  ... ({n_neurons - 4} more neurons)")
-	print(f"  Neuron {n_neurons-1:>3}: {len(sparse_neurons[-1][0]):>6,} entries")
-
-	return sparse_neurons
-
-
-def train_and_extract_sparse_py(X_train, y_train, connections, n_bits_addr):
-	"""Pure-Python QUAD_WEIGHTED training + sparse extraction (legacy fallback).
-
-	Kept for parity testing against the Rust-accelerated path. Too slow for
-	46M-row exports (~13h per genome); use ``train_and_extract_sparse`` for
-	production runs.
-
-	For each neuron, gather addressed bits, form an address, and nudge the
-	cell toward the class label. Returns list of (sorted_keys, values) per
-	neuron.
-	"""
-	n_neurons = len(connections)
-	# QUAD_WEIGHTED cell values
-	QUAD_FALSE = 0
-	QUAD_WEAK_FALSE = 1
-	QUAD_WEAK_TRUE = 2
-	QUAD_TRUE = 3
-	EMPTY = QUAD_WEAK_FALSE  # default for untrained cells (0.25 weight)
-
-	# The dataset loader now returns a LazyEncodedArray (PackedBits-backed).
-	# Bit-level slicing requires an unpacked bool view; unpack once up front.
-	# Cost: n_rows * n_bits bytes. For 1.14M × 1845 ≈ 2.1 GB which fits the
-	# Mac Studio comfortably; for 46M-row exports use the streaming path
-	# (not yet implemented for FPGA export — TODO if/when needed).
-	if hasattr(X_train, "to_numpy_bool"):
-		print(f"  Unpacking {X_train.n_rows:,} × {X_train.total_bits} bits to bool for connection slicing...")
-		X_train = X_train.to_numpy_bool()
-	elif hasattr(X_train, "as_packed_uint8") and not isinstance(X_train, np.ndarray):
-		# Belt-and-suspenders: anything LazyEncodedArray-like that exposes
-		# packed access but not to_numpy_bool — unpack via np.unpackbits.
-		print(f"  Unpacking packed bytes to bool for connection slicing...")
-		packed = X_train.as_packed_uint8()
-		X_train = np.unpackbits(packed, axis=1, bitorder='little').astype(bool)
-
-	sparse_neurons = []
-
-	for n_idx in range(n_neurons):
-		conn = connections[n_idx]
-		# Gather the addressed bits for all training examples
-		selected = X_train[:, conn]  # shape: (n_samples, n_bits_addr)
-
-		# Convert bit patterns to integer addresses
-		# Each row is a binary vector -> integer
-		powers = 1 << np.arange(len(conn) - 1, -1, -1, dtype=np.uint64)
-		addresses = selected.astype(np.uint64) @ powers
-
-		# Build sparse memory via QUAD_WEIGHTED nudging
-		memory = {}  # address -> cell_value (0-3)
-
-		for i in range(len(X_train)):
-			addr = int(addresses[i])
-			label = int(y_train[i])  # 0 = normal, 1 = attack
-
-			current = memory.get(addr, EMPTY)
-
-			if label == 1:  # attack -> nudge toward TRUE
-				if current < QUAD_TRUE:
-					memory[addr] = current + 1
-			else:  # normal -> nudge toward FALSE
-				if current > QUAD_FALSE:
-					memory[addr] = current - 1
-
-		# Sort by key for binary search
-		sorted_items = sorted(memory.items())
-		keys = np.array([k for k, v in sorted_items], dtype=np.uint64)
-		values = np.array([v for k, v in sorted_items], dtype=np.uint8)
-
-		sparse_neurons.append((keys, values))
-
-		if n_idx < 3 or n_idx == n_neurons - 1:
-			features_spanned = len(set(c // 16 for c in conn))
-			print(f"  Neuron {n_idx:>3}: {len(keys):>6,} entries, "
-				  f"{features_spanned} features spanned")
-		elif n_idx == 3:
-			print(f"  ... ({n_neurons - 4} more neurons)")
-
-	return sparse_neurons
-
-
-def write_fpga_files(output_dir: Path, connections, sparse_neurons, genome_info, params):
-	"""Write FPGA-ready files: memory init, connection map, and metadata."""
+def write_sparse_units(output_dir: Path, trained) -> dict:
+	"""metadata.json, connections.json (per unit), sparse_memory.bin/.txt (per unit)."""
 	output_dir.mkdir(parents=True, exist_ok=True)
-	n_neurons = len(connections)
+	meta = build_metadata(trained, "sparse")
+	units = trained.layer.units
+	(output_dir / "metadata.json").write_text(json.dumps(meta, indent=2))
+	(output_dir / "connections.json").write_text(json.dumps([u.connections for u in units]))
+	_write_sparse_bin(output_dir / "sparse_memory.bin", units)
+	_write_sparse_txt(output_dir / "sparse_memory.txt", units, meta["counts"])
+	return meta
 
-	# 1. Metadata JSON
-	total_entries = sum(len(k) for k, v in sparse_neurons)
-	meta = {
-		"flow_id": params.get("_flow_id"),
-		"genome_hash": genome_info["hash"],
-		"phase": genome_info["phase"],
-		"total_neurons": n_neurons,
-		"bits_per_neuron": len(connections[0]),
-		"input_bits": params["_input_bits"],
-		"n_bits_thermometer": params["ids_n_bits"],
-		"n_features": 20,  # top20
-		"total_sparse_entries": total_entries,
-		"per_neuron_entries": [len(k) for k, v in sparse_neurons],
-		"sparse_bytes_u64_u8": total_entries * 9,
-		"sparse_bytes_packed": total_entries * 6,
-		"dataset": params.get("ids_dataset", "unsw-nb15"),
-		"split": params.get("ids_split", "temporal"),
-	}
-	with open(output_dir / "metadata.json", "w") as f:
-		json.dump(meta, f, indent=2)
-	print(f"\nMetadata: {output_dir / 'metadata.json'}")
 
-	# 2. Connection map (per neuron, list of input bit indices)
-	with open(output_dir / "connections.json", "w") as f:
-		json.dump(connections, f)
-	print(f"Connections: {output_dir / 'connections.json'}")
+def _write_sparse_bin(path: Path, units) -> None:
+	"""Header: num_units (u32), per-unit entry count (u32); then (u64 key, u8 cell) pairs."""
+	with open(path, "wb") as f:
+		f.write(struct.pack("<I", len(units)))
+		for u in units:
+			f.write(struct.pack("<I", len(u.keys)))
+		for u in units:
+			for k, c in zip(u.keys.tolist(), u.cells.tolist()):
+				f.write(struct.pack("<QB", k, c))
 
-	# 3. Sparse memory binary files (for BRAM initialization)
-	# Format: per neuron, sorted (u64 key, u8 value) pairs
-	with open(output_dir / "sparse_memory.bin", "wb") as f:
-		# Header: num_neurons (u32), then per-neuron: count (u32)
-		f.write(struct.pack("<I", n_neurons))
-		for keys, values in sparse_neurons:
-			f.write(struct.pack("<I", len(keys)))
-		# Then all key-value data concatenated
-		for keys, values in sparse_neurons:
-			for k, v in zip(keys, values):
-				f.write(struct.pack("<QB", int(k), int(v)))
-	print(f"Sparse memory: {output_dir / 'sparse_memory.bin'}")
 
-	# 4. Human-readable sparse memory (for verification)
-	with open(output_dir / "sparse_memory.txt", "w") as f:
-		for n_idx, (keys, values) in enumerate(sparse_neurons):
-			f.write(f"# Neuron {n_idx}: {len(keys)} entries\n")
-			f.write(f"# Connections: {connections[n_idx]}\n")
-			for k, v in zip(keys, values):
-				f.write(f"{k} {v}\n")
+def _write_sparse_txt(path: Path, units, counts) -> None:
+	with open(path, "w") as f:
+		for i, u in enumerate(units):
+			f.write(f"# Unit {i}: {len(u.keys)} entries, x{counts[i]} logical neurons, connections {u.connections}\n")
+			f.writelines(f"{k} {c}\n" for k, c in zip(u.keys.tolist(), u.cells.tolist()))
 			f.write("\n")
-	print(f"Readable: {output_dir / 'sparse_memory.txt'}")
 
-	# Print summary
-	total_bytes = total_entries * 9
-	print(f"\n{'='*50}")
-	print(f"FPGA Export Summary")
-	print(f"{'='*50}")
-	print(f"  Genome: {genome_info['hash']} ({genome_info['phase']})")
-	print(f"  Neurons: {n_neurons}, Bits/neuron: {len(connections[0])}")
-	print(f"  Input bits: {meta['input_bits']}")
-	print(f"  Total sparse entries: {total_entries:,}")
-	if total_bytes < 1024:
-		size_str = f"{total_bytes} B"
-	elif total_bytes < 1024*1024:
-		size_str = f"{total_bytes/1024:.1f} KB"
-	else:
-		size_str = f"{total_bytes/1024/1024:.1f} MB"
-	print(f"  Model size (sparse): {size_str}")
-	if total_bytes < 612*1024:
-		print(f"  Z-7020 BRAM (612 KB): FITS in on-chip BRAM")
-	else:
-		print(f"  Z-7020: requires external DDR ({size_str} > 612 KB BRAM)")
+
+def parse_args(description: str, default_suffix: str):
+	parser = argparse.ArgumentParser(description=description)
+	parser.add_argument("--flow-id", type=int, required=True)
+	parser.add_argument("--genome-type", default="best_fitness",
+		help="best_fitness, best_f1, best_acc, best_ce, best_fpr")
+	parser.add_argument("--point", default="final", help="validation_point of the recorded row to reproduce")
+	parser.add_argument("--db", default="db/wnn.db", help="Dashboard DB (opened read-only)")
+	parser.add_argument("--output", default=None)
+	parser.add_argument("--phase", default=None, choices=["ga_neurons", "grid_search"],
+		help="Force a phase. Default tries GA Neurons then Grid Search.")
+	parser.add_argument("--num-vectors", type=int, default=1000, help="HW-vs-Rust test vectors (0 = none)")
+	args = parser.parse_args()
+	db = Path(args.db) if Path(args.db).is_absolute() else REPO / args.db
+	out = Path(args.output) if args.output else REPO / "fpga" / "export" / f"flow_{args.flow_id}{default_suffix}"
+	return args, str(db), out
+
+
+def train_for_export(args, db: str):
+	print(f"Loading genome from flow {args.flow_id} ({args.genome_type}, {args.point})...")
+	source = FlowGenomeSource.read(db, args.flow_id, args.genome_type, args.phase, args.point)
+	print(f"  Genome {source.genome_hash} ({source.phase_name}): {len(source.bits_per_neuron)} neurons")
+	return FlowLayerTrainer().train(source)
 
 
 def main():
-	parser = argparse.ArgumentParser(description="Export WNN genome for FPGA")
-	parser.add_argument("--flow-id", type=int, required=True, help="Flow ID")
-	parser.add_argument("--genome-type", default="best_fitness",
-						help="Genome type: best_fitness, best_f1, best_acc, best_ce, best_fpr")
-	parser.add_argument("--db", default="db/wnn.db", help="Database path")
-	parser.add_argument("--output", default=None, help="Output directory")
-	parser.add_argument("--phase", default=None, choices=["ga_neurons", "grid_search"],
-		help="Force a specific phase. Default tries GA Neurons then Grid Search.")
-	parser.add_argument("--py-fallback", action="store_true",
-		help="Force the legacy Python training path (slow, for parity testing only).")
-	args = parser.parse_args()
-
-	db_path = str(Path(__file__).resolve().parents[2] / args.db)
-
-	# 1. Get genome connections and flow config
-	print(f"Loading genome from flow {args.flow_id}...")
-	params, genome, connections = get_genome_connections(db_path, args.flow_id, args.genome_type, args.phase)
-
-	n_bits = params["ids_n_bits"]
-	dataset_name = params.get("ids_dataset", "unsw-nb15")
-	split = params.get("ids_split", "temporal")
-	feature_sel = params.get("ids_feature_selection", "top20")
-
-	print(f"  Dataset: {dataset_name}, Split: {split}, Thermometer: {n_bits}-bit")
-	print(f"  Genome: {genome['total_neurons']}n × {len(connections[0])}b ({genome['phase']})")
-	print(f"  Hash: {genome['hash']}")
-
-	# 2. Load dataset
-	print(f"\nLoading {dataset_name} ({n_bits}-bit thermometer)...")
-	dataset = load_dataset(dataset_name, split, n_bits, feature_sel)
-	X_train = dataset.X_train
-	y_train = dataset.y_train_binary
-
-	# X_train can be a LazyEncodedArray (packed bytes) or a bool ndarray. The
-	# FPGA metadata wants the BIT count, so prefer .total_bits when available
-	# (packed .shape[1] is bytes, not bits).
-	if hasattr(X_train, "total_bits"):
-		params["_input_bits"] = X_train.total_bits
-	else:
-		params["_input_bits"] = X_train.shape[1]
-	params["_flow_id"] = args.flow_id
-
-	if hasattr(X_train, "n_rows"):
-		print(f"  Train: {X_train.n_rows:,} rows × {params['_input_bits']} bits")
-	else:
-		print(f"  Train: {X_train.shape}")
-
-	# 3. Train and extract sparse memory
-	print(f"\nTraining {genome['total_neurons']} neurons...")
-	if args.py_fallback:
-		print("  --py-fallback set: using legacy Python training path")
-		sparse_neurons = train_and_extract_sparse_py(X_train, y_train, connections, len(connections[0]))
-	else:
-		sparse_neurons = train_and_extract_sparse(X_train, y_train, connections, len(connections[0]))
-
-	# 4. Write FPGA files
-	output_dir = Path(args.output) if args.output else Path(__file__).resolve().parents[1] / "export" / f"flow_{args.flow_id}"
-	write_fpga_files(output_dir, connections, sparse_neurons, genome, params)
+	args, db, output_dir = parse_args("Export a WNN genome as per-unit sparse FPGA tables", "")
+	trained = train_for_export(args, db)
+	meta = write_sparse_units(output_dir, trained)
+	if args.num_vectors > 0:
+		write_test_vectors(output_dir / "testbench", trained, meta, args.num_vectors)
+	print(f"\nFPGA export ({output_dir}):\n  {footprint_line(meta)}")
+	print(f"  Fidelity: {meta['fidelity_modes_verified']} recorded threshold modes reproduced exactly")
 
 
 if __name__ == "__main__":

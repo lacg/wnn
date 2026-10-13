@@ -14,7 +14,12 @@ pub(crate) type GroupingTuple = (Vec<u32>, Vec<u32>, Vec<u32>, Vec<u32>);
 
 fn grouping_to_py(g: &UnitGrouping) -> GroupingTuple
 {
-	(g.index_map().to_vec(), g.representatives().to_vec(), g.member_offsets().to_vec(), g.all_members().to_vec())
+	(
+		g.index_map().to_vec(),
+		g.representatives().to_vec(),
+		g.member_offsets().to_vec(),
+		g.all_members().to_vec(),
+	)
 }
 
 /// Group a flat genome's identical neurons (same cluster, bits, connections).
@@ -46,9 +51,11 @@ pub(crate) fn group_neurons(
 /// unit u holding `unit_cells[u]` cells (`ram_core::Footprint`, the same
 /// accounting as `GenomeExport::footprint`).
 #[pyfunction]
-pub(crate) fn layer_footprint(index_of: Vec<u32>, unit_cells: Vec<u64>) -> PyResult<FootprintTuple>
+pub(crate) fn layer_footprint(index_of: Vec<u32>, unit_cells: Vec<u64>)
+	-> PyResult<FootprintTuple>
 {
-	let grouping = UnitGrouping::from_index_of(index_of).map_err(pyo3::exceptions::PyValueError::new_err)?;
+	let grouping =
+		UnitGrouping::from_index_of(index_of).map_err(pyo3::exceptions::PyValueError::new_err)?;
 	if grouping.num_groups() != unit_cells.len()
 	{
 		return Err(pyo3::exceptions::PyValueError::new_err(format!(
@@ -60,7 +67,10 @@ pub(crate) fn layer_footprint(index_of: Vec<u32>, unit_cells: Vec<u64>) -> PyRes
 	let mut fp = Footprint::default();
 	for n in 0..grouping.num_units()
 	{
-		fp.add_neuron(unit_cells[grouping.index_of(n) as usize], grouping.is_representative(n));
+		fp.add_neuron(
+			unit_cells[grouping.index_of(n) as usize],
+			grouping.is_representative(n),
+		);
 	}
 	Ok(footprint_to_py(fp))
 }

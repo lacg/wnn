@@ -702,6 +702,38 @@ impl IDSCacheWrapper
 		})
 	}
 
+	/// Train ONE genome exactly as `evaluate_at_thresholds` does and return it
+	/// as deployable PHYSICAL units (IDS-37 stage 7, the FPGA export):
+	/// `(index_of, representatives, member_offsets, members, units, miss_cell,
+	/// cell_weight_quarters, footprint, eval_scores, val_scores)` with each unit
+	/// `(cluster, bits, connections, keys, cells)` (keys ascending; dense units
+	/// list all 2^bits). `cell_weight_quarters` is None for stochastic modes.
+	fn export_trained(
+		&self,
+		py: Python<'_>,
+		bits_flat: Vec<usize>,
+		neurons_flat: Vec<usize>,
+		connections_flat: Vec<i64>,
+		empty_value: f32,
+		neuron_sample_rate: f32,
+		rng_seed: u64,
+	) -> PyResult<TrainedLayerTuple>
+	{
+		validate_flat_genomes_py(&bits_flat, &neurons_flat, &connections_flat, 1, self.inner.num_genome_clusters())?;
+		py.allow_threads(|| {
+			let layer = ids_cache::export_trained_ids_cached(
+				&self.inner,
+				&bits_flat,
+				&neurons_flat,
+				&connections_flat,
+				empty_value,
+				neuron_sample_rate,
+				rng_seed,
+			);
+			Ok(trained_layer_to_py(layer))
+		})
+	}
+
 	/// Multiclass (K-cluster) analogue of `evaluate_at_thresholds`.
 	///
 	/// Trains a single genome ONCE, scores eval + train (+ val when the cache
@@ -1144,4 +1176,39 @@ impl IDSCacheWrapper
 		}
 		result
 	}
+}
+
+/// `(cluster, bits, connections, keys, cells)` of one physical unit.
+pub(crate) type UnitTableTuple = (u32, u32, Vec<i64>, Vec<u64>, Vec<u8>);
+
+/// `IDSCacheWrapper.export_trained`'s flat result (see its doc).
+pub(crate) type TrainedLayerTuple = (
+	Vec<u32>,
+	Vec<u32>,
+	Vec<u32>,
+	Vec<u32>,
+	Vec<UnitTableTuple>,
+	u8,
+	Option<Vec<u32>>,
+	FootprintTuple,
+	Vec<f64>,
+	Option<Vec<f64>>,
+);
+
+fn trained_layer_to_py(layer: crate::trained_layer::TrainedLayer) -> TrainedLayerTuple
+{
+	let g = &layer.grouping;
+	let units = layer.units.into_iter().map(|u| (u.cluster, u.bits, u.connections, u.keys, u.cells)).collect();
+	(
+		g.index_map().to_vec(),
+		g.representatives().to_vec(),
+		g.member_offsets().to_vec(),
+		g.all_members().to_vec(),
+		units,
+		layer.miss_cell,
+		layer.cell_weight_quarters.map(|q| q.to_vec()),
+		footprint_to_py(layer.footprint),
+		layer.eval_scores,
+		layer.val_scores,
+	)
 }

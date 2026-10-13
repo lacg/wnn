@@ -912,21 +912,13 @@ pub fn train_and_score_single(
 /// plus its logical/physical `Footprint` (IDS-37 stage 3).
 pub type ScoredSets = (Vec<f64>, Vec<f64>, Option<Vec<f64>>, ram_core::footprint::Footprint);
 
-/// Train a single genome ONCE and return raw scores for BOTH eval and train sets.
-///
-/// Equivalent to calling `train_and_score_single` twice (once with eval, once with
-/// train_input_bits as the eval set), but trains the memory only once. Used by the
-/// IDS validation phase to feed multiple thresholding strategies (train_cal,
-/// fixed_05, val_cal/oracle, platt, beta, empirical, empirical_cumulative) without
-/// retraining the genome 7+ times.
-///
-/// Returns (eval_scores, train_scores, val_scores, footprint) — Vec<f64> of length num_eval
-/// and num_train respectively; val_scores is Some(Vec<f64> of length num_val)
-/// when `val_input_bits` is provided (Protocol v2: 3-way splits score the val
-/// partition from the same trained memory), None otherwise.
-/// Single-cluster (binary IDS) mode only.
+/// Train ONE genome exactly as final validation does (`train_single_via_marker`
+/// -> the GPU training factory, so the multiplicity layer at rate >= 1.0; dense
+/// CPU fallback on error) and return its scored export. Shared by
+/// `train_and_score_eval_and_train` and the FPGA export (`export_trained`), so
+/// a deployed table is the validated model by construction.
 #[allow(clippy::too_many_arguments)]
-pub fn train_and_score_eval_and_train(
+pub fn train_genome_export(
 	genomes_bits_flat: &[usize],
 	genomes_neurons_flat: &[usize],
 	genomes_connections_flat: &[i64],
@@ -936,16 +928,12 @@ pub fn train_and_score_eval_and_train(
 	train_negatives: &[i64],
 	num_train: usize,
 	num_negatives: usize,
-	eval_input_bits: &ram_core::packed_bits::PackedBits,
-	num_eval: usize,
-	val_input_bits: Option<&ram_core::packed_bits::PackedBits>,
-	num_val: usize,
 	total_input_bits: usize,
 	settings: ram_core::neuron_memory::EvalSettings,
 	neuron_sample_rate: f32,
 	rng_seed: u64,
 	class_weights: Option<&[u32]>,
-) -> ScoredSets
+) -> GenomeExport
 {
 	let empty_value = settings.empty_value;
 	let memory_mode = settings.memory_mode;
@@ -966,7 +954,7 @@ pub fn train_and_score_eval_and_train(
 		ram_core::neuron_memory::pack_packed_to_u64(train_input_bits);
 
 	// Path 2 migration — same pattern as train_and_predict_single.
-	let export = match train_single_via_marker(
+	match train_single_via_marker(
 		genomes_bits_flat,
 		genomes_neurons_flat,
 		genomes_connections_flat,
@@ -1040,69 +1028,97 @@ pub fn train_and_score_eval_and_train(
 			);
 			export_genome_for_gpu(&memories, &groups, &gpu_connections)
 		}
-	};
+	}
+}
 
-	let metal = get_metal_evaluator();
-	let sparse_metal = get_sparse_metal_evaluator();
-
-	// Score eval set
-	let (packed_eval, eval_words) = ram_core::neuron_memory::pack_packed_to_u64(eval_input_bits);
-	let eval_all_scores = compute_per_example_scores(
-		&export,
-		eval_input_bits,
-		&packed_eval,
-		eval_words,
-		num_eval,
+/// Single-cluster (binary IDS) score of every example: cluster 0's mean cell
+/// weight, through the production scorer (GPU when available).
+pub fn score_examples_binary(
+	export: &GenomeExport,
+	input_bits: &ram_core::packed_bits::PackedBits,
+	num_examples: usize,
+	num_clusters: usize,
+	total_input_bits: usize,
+	settings: ram_core::neuron_memory::EvalSettings,
+) -> Vec<f64>
+{
+	let (metal, sparse_metal) = (get_metal_evaluator(), get_sparse_metal_evaluator());
+	let (packed, words) = ram_core::neuron_memory::pack_packed_to_u64(input_bits);
+	compute_per_example_scores(
+		export,
+		input_bits,
+		&packed,
+		words,
+		num_examples,
 		num_clusters,
 		total_input_bits,
-		empty_value,
-		memory_mode,
+		settings.empty_value,
+		settings.memory_mode,
 		settings.run_seed,
 		settings.coverage_aware,
 		metal.as_deref(),
 		sparse_metal.as_deref(),
-	);
-	let eval_scores: Vec<f64> = eval_all_scores.iter().map(|s| s[0]).collect();
+	)
+	.iter()
+	.map(|s| s[0])
+	.collect()
+}
 
-	// Score train set (reuses already-packed train input)
-	let train_all_scores = compute_per_example_scores(
-		&export,
+/// Train a single genome ONCE and return raw scores for BOTH eval and train sets.
+///
+/// Equivalent to calling `train_and_score_single` twice (once with eval, once with
+/// train_input_bits as the eval set), but trains the memory only once. Used by the
+/// IDS validation phase to feed multiple thresholding strategies (train_cal,
+/// fixed_05, val_cal/oracle, platt, beta, empirical, empirical_cumulative) without
+/// retraining the genome 7+ times.
+///
+/// Returns (eval_scores, train_scores, val_scores, footprint) — Vec<f64> of length num_eval
+/// and num_train respectively; val_scores is Some(Vec<f64> of length num_val)
+/// when `val_input_bits` is provided (Protocol v2: 3-way splits score the val
+/// partition from the same trained memory), None otherwise.
+/// Single-cluster (binary IDS) mode only.
+#[allow(clippy::too_many_arguments)]
+pub fn train_and_score_eval_and_train(
+	genomes_bits_flat: &[usize],
+	genomes_neurons_flat: &[usize],
+	genomes_connections_flat: &[i64],
+	num_clusters: usize,
+	train_input_bits: &ram_core::packed_bits::PackedBits,
+	train_targets: &[i64],
+	train_negatives: &[i64],
+	num_train: usize,
+	num_negatives: usize,
+	eval_input_bits: &ram_core::packed_bits::PackedBits,
+	num_eval: usize,
+	val_input_bits: Option<&ram_core::packed_bits::PackedBits>,
+	num_val: usize,
+	total_input_bits: usize,
+	settings: ram_core::neuron_memory::EvalSettings,
+	neuron_sample_rate: f32,
+	rng_seed: u64,
+	class_weights: Option<&[u32]>,
+) -> ScoredSets
+{
+	let export = train_genome_export(
+		genomes_bits_flat,
+		genomes_neurons_flat,
+		genomes_connections_flat,
+		num_clusters,
 		train_input_bits,
-		&packed_train_input,
-		words_per_example,
+		train_targets,
+		train_negatives,
 		num_train,
-		num_clusters,
+		num_negatives,
 		total_input_bits,
-		empty_value,
-		memory_mode,
-		settings.run_seed,
-		settings.coverage_aware,
-		metal.as_deref(),
-		sparse_metal.as_deref(),
+		settings,
+		neuron_sample_rate,
+		rng_seed,
+		class_weights,
 	);
-	let train_scores: Vec<f64> = train_all_scores.iter().map(|s| s[0]).collect();
-
-	// Score val set (Protocol v2: same trained memory, packed like the eval set)
-	let val_scores: Option<Vec<f64>> = val_input_bits.map(|val_bits| {
-		let (packed_val, val_words) = ram_core::neuron_memory::pack_packed_to_u64(val_bits);
-		let val_all_scores = compute_per_example_scores(
-			&export,
-			val_bits,
-			&packed_val,
-			val_words,
-			num_val,
-			num_clusters,
-			total_input_bits,
-			empty_value,
-			memory_mode,
-			settings.run_seed,
-			settings.coverage_aware,
-			metal.as_deref(),
-			sparse_metal.as_deref(),
-		);
-		val_all_scores.iter().map(|s| s[0]).collect()
-	});
-
+	let score = |bits: &ram_core::packed_bits::PackedBits, n: usize| score_examples_binary(&export, bits, n, num_clusters, total_input_bits, settings);
+	let eval_scores = score(eval_input_bits, num_eval);
+	let train_scores = score(train_input_bits, num_train);
+	let val_scores = val_input_bits.map(|v| score(v, num_val));
 	(eval_scores, train_scores, val_scores, export.footprint())
 }
 

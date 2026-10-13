@@ -386,7 +386,43 @@ fn check_batched(batch: &Batch, data: &Data, mode: u8, what: &str)
 		assert_storage_equal(&plain[g], &mult[g], &what);
 		assert_eq!(plain[g].footprint().logical_cells, mult[g].footprint().logical_cells, "{what}: logical cells");
 		assert_scores_equal(&plain[g], &mult[g], data, mode, cpu_scorable(batch), &what);
+		assert_unit_tables(&plain[g], &mult[g], &logical_genome(batch, data.num_clusters, g), &what);
 	}
+}
+
+/// Stage 7: the deployable unit tables. The plain export yields one table per
+/// LOGICAL neuron; every logical neuron's table must equal its unit's table
+/// in the multiplicity export (coverage-aware on and off), and there are
+/// exactly as many tables as units.
+fn assert_unit_tables(plain: &GenomeExport, mult: &GenomeExport, logical: &(Vec<usize>, Vec<usize>, Vec<i64>), what: &str)
+{
+	let genome = FlatGenome { bits: &logical.0, neurons_per_cluster: &logical.1, connections: &logical.2 };
+	for coverage_aware in [false, true]
+	{
+		let per_neuron = plain.unit_tables(genome, coverage_aware);
+		let units = mult.unit_tables(genome, coverage_aware);
+		let phys = PhysicalGenome::collapse(&logical.0, &logical.1, &logical.2);
+		let expect_units = if mult.grouping.is_identity() { logical.0.len() } else { phys.num_neurons() };
+		assert_eq!(units.len(), expect_units, "{what}: unit count");
+		for (l, table) in per_neuron.iter().enumerate()
+		{
+			let u = if mult.grouping.is_identity() { l } else { mult.grouping.index_of(l) as usize };
+			assert_eq!(table, &units[u], "{what}: neuron {l} vs unit {u} (coverage_aware={coverage_aware})");
+		}
+	}
+}
+
+#[test]
+fn cell_weight_quarters_per_mode()
+{
+	use crate::adaptive::cell_weight_quarters;
+	assert_eq!(cell_weight_quarters(QUAD_WEIGHTED, 0.0), Some([0, 1, 3, 4]));
+	assert_eq!(cell_weight_quarters(QUAD_BINARY, 0.0), Some([0, 0, 4, 4]));
+	assert_eq!(cell_weight_quarters(QSR, 0.0), None, "stochastic read");
+	assert_eq!(cell_weight_quarters(PLN, 0.5), None, "stochastic read");
+	let ternary = cell_weight_quarters(TERNARY, 0.5).expect("TERNARY with a quarter empty value is integral");
+	assert_eq!((ternary[0], ternary[1], ternary[2]), (0, 4, 2), "FALSE / TRUE / EMPTY=0.5");
+	assert_eq!(cell_weight_quarters(TERNARY, 0.3), None, "0.3 is not a quarter");
 }
 
 /// One genome of a batch as its own single-genome batch (the plain reference

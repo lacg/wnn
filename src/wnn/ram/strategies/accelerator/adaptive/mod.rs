@@ -53,6 +53,8 @@ pub use eval_export::*;
 mod genome_export_physical;
 pub use genome_export_physical::PhysicalUnits;
 mod genome_footprint;
+mod unit_table;
+pub use unit_table::{cell_weight_quarters, UnitTable};
 mod eval_single;
 pub use eval_single::*;
 mod eval_hybrid;
