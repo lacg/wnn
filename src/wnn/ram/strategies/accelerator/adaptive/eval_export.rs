@@ -35,6 +35,11 @@ pub struct GenomeExport
 	pub sparse_exports: Vec<SparseGpuExport>,
 	/// Config groups for this genome
 	pub groups: Vec<ConfigGroup>,
+	/// Logical neuron (cluster-major genome order) -> physical unit. Identity
+	/// for the plain layer; a collapsing grouping when the multiplicity layer
+	/// trained duplicate neurons once (`from_physical`). Every field above is
+	/// the LOGICAL layout either way, so scorers never consult it.
+	pub grouping: ram_core::unit_grouping::UnitGrouping,
 }
 
 /// Materialise a per-neuron sparse export into DENSE packed words plus a
@@ -123,6 +128,7 @@ impl GenomeExport
 			dense_coverage: Vec::new(),
 			sparse_exports: Vec::new(),
 			groups: Vec::new(),
+			grouping: ram_core::unit_grouping::UnitGrouping::identity(0),
 		}
 	}
 
@@ -848,6 +854,9 @@ pub(crate) fn export_genome_for_gpu(
 		dense_coverage: Vec::new(),
 		sparse_exports,
 		groups: groups.to_vec(),
+		grouping: ram_core::unit_grouping::UnitGrouping::identity(
+			groups.iter().map(|g| g.true_total_neurons()).sum(),
+		),
 	}
 }
 

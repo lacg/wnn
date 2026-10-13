@@ -757,6 +757,7 @@ mod flat_genome_validation_tests
 			dense_coverage: vec![],
 			sparse_exports: vec![sparse],
 			groups: vec![dense_group, sparse_group],
+			grouping: ram_core::unit_grouping::UnitGrouping::identity(5),
 		};
 		// 32 (dense full array) + 5 (sparse keys) = 37 — NOT 2 + 3×2^14.
 		assert_eq!(export.materialized_cells(), 37);

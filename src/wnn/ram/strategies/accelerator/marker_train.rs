@@ -809,6 +809,7 @@ pub mod batched_path
 			dense_coverage,
 			sparse_exports,
 			groups,
+			grouping: ram_core::unit_grouping::UnitGrouping::identity(n_total),
 		}])
 	}
 
@@ -2028,6 +2029,7 @@ pub mod batched_path
 				dense_coverage,
 				sparse_exports,
 				groups,
+				grouping: ram_core::unit_grouping::UnitGrouping::identity(num_neurons_per_genome),
 			};
 			exports.push(export);
 		}
