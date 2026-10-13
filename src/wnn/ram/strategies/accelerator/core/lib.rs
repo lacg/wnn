@@ -15,6 +15,7 @@ pub mod cancel;
 pub mod cell_mode;
 pub mod forward;
 pub mod neuron_memory;
+pub mod aligned_words;
 pub mod packed_bits;
 pub mod sparse_memory;
 pub mod train;

@@ -180,9 +180,9 @@ impl IDSCacheWrapper
 
 		// Interpret incoming uint8 as packed bytes (np.packbits output).
 		let train_packed =
-			ram_core::packed_bits::PackedBits::from_packed_bytes(train_slice.to_vec(), total_features);
+			ram_core::packed_bits::PackedBits::from_packed_slice(train_slice, total_features);
 		let eval_packed =
-			ram_core::packed_bits::PackedBits::from_packed_bytes(eval_slice.to_vec(), total_features);
+			ram_core::packed_bits::PackedBits::from_packed_slice(eval_slice, total_features);
 
 		// Protocol v2: optional val partition, same packed-byte layout as eval.
 		let val_packed = match &val_features
@@ -195,8 +195,8 @@ impl IDSCacheWrapper
 						e
 					))
 				})?;
-				Some(ram_core::packed_bits::PackedBits::from_packed_bytes(
-					val_slice.to_vec(),
+				Some(ram_core::packed_bits::PackedBits::from_packed_slice(
+					val_slice,
 					total_features,
 				))
 			}

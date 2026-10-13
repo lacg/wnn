@@ -613,40 +613,16 @@ pub fn words_per_neuron(bits: usize) -> usize
 // Packing: Bool → u64 (for GPU input)
 // =============================================================================
 
-/// Pack PackedBits (LSB-first u8) into u64 words (LSB-first within u64).
+/// PackedBits as the GPU's u64 words (LSB-first within u64), plus words per row.
 ///
-/// Since both representations are little-endian within their containers, this is
-/// effectively a memcpy of bytes into u64 form — much faster than the bool-by-bool
-/// path. Trailing bytes in each row beyond `total_bits` are zero by PackedBits
-/// invariant (`row_as_bools` never reads them).
-pub fn pack_packed_to_u64(packed: &crate::packed_bits::PackedBits) -> (Vec<u64>, usize)
+/// Since 13/10/2026 this is a zero-copy BORROW: PackedBits stores its rows
+/// 8-byte padded in a page-aligned buffer, so its memory already IS this
+/// layout. Before, every call re-packed the whole matrix into a fresh Vec<u64>
+/// (6.9 GB per k-fold call at 46M rows). The words are bit-identical to the old
+/// re-pack (`packed_bits` test `word_view_equals_legacy_repack_for_every_width`).
+pub fn pack_packed_to_u64(packed: &crate::packed_bits::PackedBits) -> (&[u64], usize)
 {
-	let total_bits = packed.total_bits();
-	let num_examples = packed.num_rows();
-	let words_per_example = (total_bits + 63) / 64;
-	let bytes_per_row = packed.bytes_per_row();
-	let bytes_per_word = 8usize;
-
-	let mut out = vec![0u64; num_examples * words_per_example];
-	let bytes = packed.as_bytes();
-
-	for ex in 0..num_examples
-	{
-		let byte_off = ex * bytes_per_row;
-		let word_off = ex * words_per_example;
-		for w in 0..words_per_example
-		{
-			let b_start = w * bytes_per_word;
-			let mut word_bytes = [0u8; 8];
-			let take = bytes_per_word.min(bytes_per_row.saturating_sub(b_start));
-			if take > 0
-			{
-				word_bytes[..take].copy_from_slice(&bytes[byte_off + b_start..byte_off + b_start + take]);
-			}
-			out[word_off + w] = u64::from_le_bytes(word_bytes);
-		}
-	}
-	(out, words_per_example)
+	(packed.as_u64_words(), packed.words_per_row())
 }
 
 /// Pack flat bool slice into u64 words (LSB-first, matching Metal shader bit extraction).

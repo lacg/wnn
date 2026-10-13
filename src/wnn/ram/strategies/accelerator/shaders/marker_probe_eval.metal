@@ -180,3 +180,30 @@ kernel void marker_probe_eval(
 			WNN_QUAD_VOTES_X4[cell],
 			memory_order_relaxed);
 }
+
+// -----------------------------------------------------------------------------
+// Votes -> per-example scores (13/10/2026). The export path scores a QUAD
+// genome on the GPU as `weighted_sum / float(neurons_per_cluster)`
+// (core/shaders/sparse_forward.metal), compiled with the default options —
+// FAST MATH, whose division is NOT IEEE. votes * 0.25 is that weighted sum
+// exactly (quarters, far under the 24-bit mantissa), so the same division,
+// compiled the same way, makes the probe's scores bit-identical to the export
+// path's. (Normalizing on the CPU — IEEE division — differed by an ulp: the
+// pre-13/10 eval-in-place CE was not the export path's.)
+struct VoteScoreParams
+{
+	uint count;								// examples (x clusters) in the votes buffer
+	uint neurons_per_cluster; // the genome's neuron count (single cluster)
+};
+
+kernel void marker_votes_to_scores(
+		device const uint *votes [[buffer(0)]],
+		constant VoteScoreParams &params [[buffer(1)]],
+		device float *scores [[buffer(2)]],
+		uint gid [[thread_position_in_grid]])
+{
+	if (gid >= params.count)
+		return;
+	float weighted_sum = float(votes[gid]) * 0.25f;
+	scores[gid] = weighted_sum / float(params.neurons_per_cluster);
+}
