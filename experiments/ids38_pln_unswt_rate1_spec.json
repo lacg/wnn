@@ -1,0 +1,162 @@
+[
+ {
+  "source": "SP-unswt-bin-16bWb-n30-r98954",
+  "name": "IDS38-unswt-QUAD-16bWb-r98954-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 PLN re-check (Luiz 13/10/2026, staged unswt n=10): QUAD control at neuron_sample_rate 1.0, paired with the fixed-PLN arm on the same seed (worker ABI 17)."
+ },
+ {
+  "source": "SP-unswt-ablpln-16bWb-n10-r98954",
+  "name": "IDS38-unswt-PLN-16bWb-r98954-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 PLN re-check (Luiz 13/10/2026, staged unswt n=10): PLN with the ABI-17 fix (was trained through the inverted QUAD nudge), rate 1.0, paired with the QUAD control on the same seed."
+ },
+ {
+  "source": "SP-unswt-bin-16bWb-n30-r77715",
+  "name": "IDS38-unswt-QUAD-16bWb-r77715-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 PLN re-check (Luiz 13/10/2026, staged unswt n=10): QUAD control at neuron_sample_rate 1.0, paired with the fixed-PLN arm on the same seed (worker ABI 17)."
+ },
+ {
+  "source": "SP-unswt-ablpln-16bWb-n10-r77715",
+  "name": "IDS38-unswt-PLN-16bWb-r77715-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 PLN re-check (Luiz 13/10/2026, staged unswt n=10): PLN with the ABI-17 fix (was trained through the inverted QUAD nudge), rate 1.0, paired with the QUAD control on the same seed."
+ },
+ {
+  "source": "SP-unswt-bin-16bWb-n30-r25052",
+  "name": "IDS38-unswt-QUAD-16bWb-r25052-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 PLN re-check (Luiz 13/10/2026, staged unswt n=10): QUAD control at neuron_sample_rate 1.0, paired with the fixed-PLN arm on the same seed (worker ABI 17)."
+ },
+ {
+  "source": "SP-unswt-ablpln-16bWb-n10-r25052",
+  "name": "IDS38-unswt-PLN-16bWb-r25052-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 PLN re-check (Luiz 13/10/2026, staged unswt n=10): PLN with the ABI-17 fix (was trained through the inverted QUAD nudge), rate 1.0, paired with the QUAD control on the same seed."
+ },
+ {
+  "source": "SP-unswt-bin-16bWb-n30-r72261",
+  "name": "IDS38-unswt-QUAD-16bWb-r72261-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 PLN re-check (Luiz 13/10/2026, staged unswt n=10): QUAD control at neuron_sample_rate 1.0, paired with the fixed-PLN arm on the same seed (worker ABI 17)."
+ },
+ {
+  "source": "SP-unswt-ablpln-16bWb-n10-r72261",
+  "name": "IDS38-unswt-PLN-16bWb-r72261-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 PLN re-check (Luiz 13/10/2026, staged unswt n=10): PLN with the ABI-17 fix (was trained through the inverted QUAD nudge), rate 1.0, paired with the QUAD control on the same seed."
+ },
+ {
+  "source": "SP-unswt-bin-16bWb-n30-r67145",
+  "name": "IDS38-unswt-QUAD-16bWb-r67145-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 PLN re-check (Luiz 13/10/2026, staged unswt n=10): QUAD control at neuron_sample_rate 1.0, paired with the fixed-PLN arm on the same seed (worker ABI 17)."
+ },
+ {
+  "source": "SP-unswt-ablpln-16bWb-n10-r67145",
+  "name": "IDS38-unswt-PLN-16bWb-r67145-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 PLN re-check (Luiz 13/10/2026, staged unswt n=10): PLN with the ABI-17 fix (was trained through the inverted QUAD nudge), rate 1.0, paired with the QUAD control on the same seed."
+ },
+ {
+  "source": "SP-unswt-bin-16bWb-n30-r88120",
+  "name": "IDS38-unswt-QUAD-16bWb-r88120-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 PLN re-check (Luiz 13/10/2026, staged unswt n=10): QUAD control at neuron_sample_rate 1.0, paired with the fixed-PLN arm on the same seed (worker ABI 17)."
+ },
+ {
+  "source": "SP-unswt-ablpln-16bWb-n10-r88120",
+  "name": "IDS38-unswt-PLN-16bWb-r88120-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 PLN re-check (Luiz 13/10/2026, staged unswt n=10): PLN with the ABI-17 fix (was trained through the inverted QUAD nudge), rate 1.0, paired with the QUAD control on the same seed."
+ },
+ {
+  "source": "SP-unswt-bin-16bWb-n30-r34952",
+  "name": "IDS38-unswt-QUAD-16bWb-r34952-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 PLN re-check (Luiz 13/10/2026, staged unswt n=10): QUAD control at neuron_sample_rate 1.0, paired with the fixed-PLN arm on the same seed (worker ABI 17)."
+ },
+ {
+  "source": "SP-unswt-ablpln-16bWb-n10-r34952",
+  "name": "IDS38-unswt-PLN-16bWb-r34952-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 PLN re-check (Luiz 13/10/2026, staged unswt n=10): PLN with the ABI-17 fix (was trained through the inverted QUAD nudge), rate 1.0, paired with the QUAD control on the same seed."
+ },
+ {
+  "source": "SP-unswt-bin-16bWb-n30-r58983",
+  "name": "IDS38-unswt-QUAD-16bWb-r58983-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 PLN re-check (Luiz 13/10/2026, staged unswt n=10): QUAD control at neuron_sample_rate 1.0, paired with the fixed-PLN arm on the same seed (worker ABI 17)."
+ },
+ {
+  "source": "SP-unswt-ablpln-16bWb-n10-r58983",
+  "name": "IDS38-unswt-PLN-16bWb-r58983-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 PLN re-check (Luiz 13/10/2026, staged unswt n=10): PLN with the ABI-17 fix (was trained through the inverted QUAD nudge), rate 1.0, paired with the QUAD control on the same seed."
+ },
+ {
+  "source": "SP-unswt-bin-16bWb-n30-r63749",
+  "name": "IDS38-unswt-QUAD-16bWb-r63749-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 PLN re-check (Luiz 13/10/2026, staged unswt n=10): QUAD control at neuron_sample_rate 1.0, paired with the fixed-PLN arm on the same seed (worker ABI 17)."
+ },
+ {
+  "source": "SP-unswt-ablpln-16bWb-n10-r63749",
+  "name": "IDS38-unswt-PLN-16bWb-r63749-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 PLN re-check (Luiz 13/10/2026, staged unswt n=10): PLN with the ABI-17 fix (was trained through the inverted QUAD nudge), rate 1.0, paired with the QUAD control on the same seed."
+ },
+ {
+  "source": "SP-unswt-bin-16bWb-n30-r35879",
+  "name": "IDS38-unswt-QUAD-16bWb-r35879-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 PLN re-check (Luiz 13/10/2026, staged unswt n=10): QUAD control at neuron_sample_rate 1.0, paired with the fixed-PLN arm on the same seed (worker ABI 17)."
+ },
+ {
+  "source": "SP-unswt-ablpln-16bWb-n10-r35879",
+  "name": "IDS38-unswt-PLN-16bWb-r35879-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 PLN re-check (Luiz 13/10/2026, staged unswt n=10): PLN with the ABI-17 fix (was trained through the inverted QUAD nudge), rate 1.0, paired with the QUAD control on the same seed."
+ }
+]
