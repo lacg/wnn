@@ -22,6 +22,24 @@ import argparse, re, shutil
 from pathlib import Path
 
 
+BLOCK_ROM = 'rom_style = "block"'
+DISTRIBUTED_ROM = 'rom_style = "distributed"'
+
+
+def distributed_neuron(neuron_sv: str) -> str:
+	"""Steer the neuron's key/value ROMs to distributed (LUT) ROM.
+
+	The arrays are ROMs (only $readmemh writes them), so the attribute that
+	steers them is rom_style (wnn_neuron.sv, fixed 31/08/2026). This used to
+	replace `ram_style = "block"`, which no longer exists in the RTL: the
+	replace silently did nothing and every "logic-only" variant still asked
+	for block ROM. Refuse instead of emitting a variant that is not one.
+	"""
+	if BLOCK_ROM not in neuron_sv:
+		raise ValueError(f"neuron RTL has no `{BLOCK_ROM}` attribute to steer to distributed ROM")
+	return neuron_sv.replace(BLOCK_ROM, DISTRIBUTED_ROM)
+
+
 def main():
 	ap = argparse.ArgumentParser()
 	ap.add_argument("--export-dir", required=True)
@@ -35,10 +53,8 @@ def main():
 		shutil.rmtree(dst)
 	(dst / "mem").mkdir(parents=True)
 
-	# 1) distributed-RAM variant of the neuron (same module name).
-	neuron = Path(args.rtl).read_text()
-	neuron = neuron.replace('ram_style = "block"', 'ram_style = "distributed"')
-	(dst / "wnn_neuron.sv").write_text(neuron)
+	# 1) distributed-ROM variant of the neuron (same module name).
+	(dst / "wnn_neuron.sv").write_text(distributed_neuron(Path(args.rtl).read_text()))
 
 	# 2) cap NUM_ENTRIES in the classifier instantiations.
 	cls = (src / "wnn_classifier_impl.sv").read_text()
