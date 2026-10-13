@@ -1616,23 +1616,22 @@ pub fn order_independent_training_active(memory_mode: u8) -> bool
 
 /// True iff the IDS trainers write every cell through a COMMUTATIVE update, so
 /// the final memory does not depend on the order examples reach a neuron:
-/// TERNARY (TRUE-wins lattice) and BINARY (one-shot set) always; the OI-counter
-/// modes (QUAD_WEIGHTED / QUAD_BINARY / QSR) only when the OI trainer is active
-/// — their legacy clamped nudge is order-dependent. An unknown mode is never.
+/// TERNARY / PLN (`WriteRule::Lattice`, the TRUE-wins join) and BINARY
+/// (`WriteRule::Set`) always; the OI-counter modes (QUAD_WEIGHTED / QUAD_BINARY
+/// / QSR, `WriteRule::Nudge`) only when the OI trainer is active — their legacy
+/// clamped nudge is order-dependent. An unknown mode is never.
 ///
-/// PLN is NOT, despite sharing TERNARY's cells: both IDS trainers route it
-/// through the legacy clamped QUAD nudge (CPU `use_nudge = mode != TERNARY`,
-/// eval_export.rs; the marker kernel has no PLN branch and falls to
-/// `slot_nudge`), which is order-dependent — measured by the multiplicity parity
-/// sweep (12/10/2026). Revisit if PLN gets a lattice writer.
+/// PLN was excluded until 12/10/2026: both IDS trainers sent it through the
+/// clamped QUAD nudge (inverted on its ternary codes). It now takes TERNARY's
+/// lattice writer on both trainers (`CellMode::write_rule`).
 pub fn training_is_order_independent(memory_mode: u8) -> bool
 {
-	use crate::cell_mode::CellMode;
-	match CellMode::from_u8(memory_mode)
+	use crate::cell_mode::{CellMode, WriteRule};
+	match CellMode::from_u8(memory_mode).map(|m| m.write_rule())
 	{
-		Some(CellMode::Ternary) | Some(CellMode::Binary) => true,
-		Some(m) if m.uses_oi_counters() => order_independent_training_active(memory_mode),
-		_ => false,
+		Some(WriteRule::Lattice) | Some(WriteRule::Set) => true,
+		Some(WriteRule::Nudge) => order_independent_training_active(memory_mode),
+		None => false,
 	}
 }
 

@@ -83,7 +83,10 @@ pub fn evaluate_genome_with_gating(
 	}
 
 	// Train: iterate over training examples (parallel)
-	let use_nudge = memory_mode != ram_core::neuron_memory::TERNARY;
+	// Nudge only the 4-state modes (`CellMode::write_rule`); PLN/TERNARY take
+	// the TRUE-wins lattice write, which for BINARY's FALSE-default cells is
+	// its own-class set. `!= TERNARY` nudged PLN/BINARY cells until 12/10/2026.
+	let use_nudge = ram_core::cell_mode::WriteRule::of_code(memory_mode) == ram_core::cell_mode::WriteRule::Nudge;
 	(0..num_train).into_par_iter().for_each(|ex_idx| {
 		// Cooperative SIGTERM cancellation (added 31/05/2026): once the flag
 		// is set, every remaining example is a no-op. The par_iter still

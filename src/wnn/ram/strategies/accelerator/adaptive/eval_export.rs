@@ -545,12 +545,17 @@ pub(crate) fn train_genome_in_slot_range(
 )
 {
 	let use_sampling = neuron_sample_rate < 1.0;
+	// The writer comes from `CellMode::write_rule` (GPU twin: common.metal
+	// `wnn_write_rule`), never a mode literal — `!= TERNARY` sent PLN's ternary
+	// cells through the QUAD nudge until 12/10/2026 (inverted training).
 	// BINARY (classical WiSARD, Luiz 12/07/2026): one-shot own-class set —
 	// a positive-class visit writes TRUE; FALSE-direction and negative-class
 	// visits are IGNORED (per-discriminator classical training). No nudging,
 	// no OI (a set is commutative — order-independent by construction).
-	let is_binary = memory_mode == ram_core::neuron_memory::BINARY;
-	let use_nudge = memory_mode != ram_core::neuron_memory::TERNARY && !is_binary;
+	// TERNARY / PLN: the TRUE-wins lattice write (`GroupMemory::write`).
+	let write_rule = ram_core::cell_mode::WriteRule::of_code(memory_mode);
+	let is_binary = write_rule == ram_core::cell_mode::WriteRule::Set;
+	let use_nudge = write_rule == ram_core::cell_mode::WriteRule::Nudge;
 	// OI is only meaningful for the 4-state nudging family (QUAD_WEIGHTED /
 	// QUAD_BINARY / QSR — the modes whose clamped nudge has order-dependence to
 	// fix); the gate is `CellMode::uses_oi_counters`, never a mode literal.

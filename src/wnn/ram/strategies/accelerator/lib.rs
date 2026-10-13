@@ -283,6 +283,9 @@ mod marker_train;
 mod multiplicity_batch;
 #[cfg(all(test, target_os = "macos"))]
 mod multiplicity_parity_tests;
+// PLN trains through TERNARY's lattice on both IDS trainers (12/10/2026).
+#[cfg(all(test, target_os = "macos"))]
+mod pln_writer_tests;
 
 #[cfg(target_os = "macos")]
 mod marker_probe;

@@ -2143,7 +2143,7 @@ pub mod batched_path
 		/// (the OI gate used to be a `== QUAD_WEIGHTED` literal, so QSR trained
 		/// on a different path than the mode it shares its cells with).
 		///
-		/// Training happens in `memory_mode`; SCORING of a stochastic mode (QSR)
+		/// Training happens in `memory_mode`; SCORING of a stochastic mode (QSR; PLN → TERNARY)
 		/// goes through its deterministic twin QUAD_WEIGHTED — same 4-state cells,
 		/// graded read instead of the coin — so the comparison is exact and the
 		/// argmax-separation check is meaningful (a coin on the untrained 0.25
@@ -2156,6 +2156,8 @@ pub mod batched_path
 				{
 					ram_core::neuron_memory::QUAD_WEIGHTED
 				}
+				// PLN's deterministic twin: TERNARY at empty_value 0.5.
+				Some(ram_core::cell_mode::CellMode::Pln) => ram_core::neuron_memory::TERNARY,
 				_ => memory_mode,
 			};
 			use crate::adaptive::{
@@ -2405,6 +2407,14 @@ pub mod batched_path
 		fn multigroup_parity_quad_binary()
 		{
 			run_multigroup_parity(ram_core::neuron_memory::QUAD_BINARY);
+		}
+
+		/// PLN trains through TERNARY's lattice on both trainers (12/10/2026;
+		/// it fell to the clamped QUAD nudge before, inverting FALSE visits).
+		#[test]
+		fn multigroup_parity_pln()
+		{
+			run_multigroup_parity(ram_core::neuron_memory::PLN);
 		}
 
 		/// Chunked-vs-unchunked parity. Data is built so every (neuron, example)

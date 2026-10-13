@@ -202,9 +202,10 @@ fn logical_genome(batch: &Batch, num_clusters: usize, g: usize) -> (Vec<usize>, 
 // ---------------------------------------------------------------- comparisons
 
 /// Plain GPU training is itself run-to-run reproducible only for an
-/// order-independent writer: the legacy clamped nudge (QUAD/QSR without OI,
-/// and PLN always) races under GPU scheduling, so two PLAIN runs differ. For
-/// those modes only the selection (identity grouping) is asserted.
+/// order-independent writer: the legacy clamped nudge (QUAD/QSR without OI)
+/// races under GPU scheduling, so two PLAIN runs differ. For those modes only
+/// the selection (identity grouping) is asserted. PLN writes TERNARY's lattice
+/// since 12/10/2026 and is checked in full.
 fn deterministic(mode: u8) -> bool
 {
 	ram_core::neuron_memory::training_is_order_independent(mode)
@@ -423,8 +424,8 @@ fn multiplicity_parity_pln()
 	run_parity(PLN);
 }
 
-/// TERNARY / BINARY always selected; OI modes exactly when the OI trainer is
-/// on; PLN never (its IDS writer is the order-dependent clamped nudge).
+/// TERNARY / BINARY / PLN always selected (lattice / set writers commute);
+/// OI modes exactly when the OI trainer is on.
 #[test]
 fn multiplicity_selection_rule()
 {
@@ -434,8 +435,7 @@ fn multiplicity_selection_rule()
 	{
 		let expected = match mode
 		{
-			TERNARY | BINARY => true,
-			PLN => false,
+			TERNARY | BINARY | PLN => true,
 			_ => oi,
 		};
 		assert_eq!(multiplicity_selected(1.0, mode, &conns), expected, "mode {mode}");
