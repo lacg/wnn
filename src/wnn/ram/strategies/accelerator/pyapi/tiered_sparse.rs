@@ -731,7 +731,7 @@ pub(crate) fn run_marker_train_parity_test(
 			.collect();
 		let slot_capacities: Vec<u32> = vec![slot_capacity as u32; num_neurons];
 		let (keys, values, offsets, counts) =
-			gpu_table.export_per_neuron(&slot_offsets, &slot_capacities, false);
+			gpu_table.export_per_neuron(&slot_offsets, &slot_capacities, crate::atomic_hashtable::SlotMerge::Unmerged);
 		// Verify offsets+counts are consistent
 		let mut consistent = true;
 		for n in 0..num_neurons

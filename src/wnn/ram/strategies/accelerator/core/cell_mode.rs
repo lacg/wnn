@@ -55,6 +55,28 @@ impl WriteRule
 	{
 		CellMode::from_u8(code).map_or(WriteRule::Nudge, |m| m.write_rule())
 	}
+
+	/// The lattice join of two ternary cells (EMPTY < FALSE < TRUE) — what
+	/// the two writes leave on one cell in either order. Duplicate-key GPU
+	/// slots of one address merge through this, as OI counters merge through
+	/// `oi_merge`. BINARY cells (TRUE only, else FALSE) join the same way.
+	#[inline]
+	pub fn lattice_join(a: u8, b: u8) -> u8
+	{
+		use crate::neuron_memory::{FALSE_U8, TRUE_U8};
+		if a == TRUE_U8 || b == TRUE_U8
+		{
+			TRUE_U8
+		}
+		else if a == FALSE_U8 || b == FALSE_U8
+		{
+			FALSE_U8
+		}
+		else
+		{
+			a
+		}
+	}
 }
 
 #[repr(u8)]
@@ -337,6 +359,25 @@ mod tests
 			assert_eq!(WriteRule::of_code(mode.as_u8()), mode.write_rule(), "{mode}");
 		}
 		assert_eq!(WriteRule::of_code(99), WriteRule::Nudge);
+	}
+
+	/// The join is commutative, idempotent, and TRUE-wins: it equals the
+	/// writer's result for any two writes (EMPTY=2 is the identity).
+	#[test]
+	fn lattice_join_is_the_writer_join()
+	{
+		use crate::neuron_memory::TRUE_U8;
+		for a in [FALSE_U8, TRUE_U8, EMPTY_U8]
+		{
+			assert_eq!(WriteRule::lattice_join(a, a), a);
+			assert_eq!(WriteRule::lattice_join(a, EMPTY_U8), a);
+			assert_eq!(WriteRule::lattice_join(a, TRUE_U8), TRUE_U8);
+			for b in [FALSE_U8, TRUE_U8, EMPTY_U8]
+			{
+				assert_eq!(WriteRule::lattice_join(a, b), WriteRule::lattice_join(b, a));
+			}
+		}
+		assert_eq!(WriteRule::lattice_join(FALSE_U8, EMPTY_U8), FALSE_U8);
 	}
 
 	#[test]

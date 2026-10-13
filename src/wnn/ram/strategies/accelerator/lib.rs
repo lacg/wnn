@@ -279,6 +279,9 @@ mod metal_atomic_test;
 
 #[cfg(target_os = "macos")]
 mod marker_train;
+// The GPU trainer's knobs as a per-call value (never process-global set_var).
+#[cfg(target_os = "macos")]
+mod train_knobs;
 // IDS-37 stage 2: train each genome's distinct neurons once (rate >= 1.0, OI).
 mod multiplicity_batch;
 #[cfg(all(test, target_os = "macos"))]

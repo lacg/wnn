@@ -24,7 +24,9 @@ inline uint slot_hash(ulong key, uint mask)
 // table-full. Caller must check the return value before writing.
 //
 // Mirrors Rust MarkerInner::find_or_claim_slot but adapted for GPU:
-//   - No spin_loop() hint (use bounded retry counter to avoid warp deadlock)
+//   - No spin_loop() hint; the CLAIMED wait below is bounded (it waits on
+//     ANOTHER thread's progress — unbounded could deadlock a diverged SIMD
+//     group). The claim CAS itself retries until decided (lock-free).
 //   - On CLAIMED slot, probe forward instead of waiting (loses some slot
 //     coalescing but avoids deadlock; load factor accommodates)
 inline uint find_or_claim_slot(
@@ -50,8 +52,10 @@ inline uint find_or_claim_slot(
 		{
 			uint expected = MARKER_EMPTY;
 			bool won = false;
-			// Weak CAS retry to handle spurious failures.
-			for (uint retry = 0; retry < 4; retry++)
+			// Weak CAS: retry until it either wins or sees another claimer. A
+			// bounded retry (was 4) fell through on spurious failures with the
+			// slot still EMPTY and probed forward -> a duplicate-key slot.
+			while (true)
 			{
 				if (atomic_compare_exchange_weak_explicit(
 								&slot_markers[slot], &expected, MARKER_CLAIMED,
@@ -100,10 +104,17 @@ inline uint find_or_claim_slot(
 }
 
 // Apply nudge (clamped delta) to the value field. Mirrors CPU MarkerInner::nudge.
+//
+// Every CAS loop below is UNBOUNDED (12/10/2026; were 8 / 8 / 256 retries). A
+// bounded loop SILENTLY DROPPED the write when contention outlasted it — the
+// cross-run nondeterminism oi_z_parity used to flake on. Unbounded is safe: the
+// loops are lock-free, not locks — a failed CAS means another thread's CAS on
+// the same slot SUCCEEDED, so some thread always progresses and no thread ever
+// waits on another's progress (no SIMD-divergence deadlock).
 inline void slot_nudge(device atomic_uint *slot_values, uint slot, bool target_true)
 {
 	int delta = target_true ? 1 : -1;
-	for (uint retry = 0; retry < 8; retry++)
+	while (true)
 	{
 		uint current = atomic_load_explicit(&slot_values[slot], memory_order_relaxed);
 		int new_cell = clamp(int(current) + delta, 0, 3);
@@ -130,7 +141,7 @@ inline void slot_write_ternary(device atomic_uint *slot_values, uint slot, bool 
 		atomic_store_explicit(&slot_values[slot], 1u, memory_order_relaxed);
 		return;
 	}
-	for (uint retry = 0; retry < 8; retry++)
+	while (true)
 	{
 		uint current = atomic_load_explicit(&slot_values[slot], memory_order_relaxed);
 		if (current == 1u || current == 0u)
@@ -197,13 +208,9 @@ inline uint oi_apply_nudge_inline(uint old, int delta)
 // CAS. Replaces the clamped slot_nudge when TrainParams.oi_mode == 1.
 inline void slot_nudge_oi(device atomic_uint *slot_values, uint slot, int delta)
 {
-	// 256 retries (was 16, then 64): high-z dispatches put more threads on
-	// hot slots; an exhausted loop SILENTLY DROPS the nudge. At 64 the
-	// oi_z_parity contention-storm test still dropped ~1 nudge in 4/20 runs
-	// (07/07/2026 audit). 256 makes drops unobservable there while the loop
-	// stays microsecond-bounded (relaxed CAS, no lock hold). Production
-	// (b≥48, near-unique addresses) never approaches this contention.
-	for (uint retry = 0; retry < 256; retry++)
+	// Unbounded (was 16, 64, then 256 retries — each exhausted loop silently
+	// dropped a nudge: ~1 in 4/20 oi_z_parity runs at 64). See slot_nudge.
+	while (true)
 	{
 		uint old = atomic_load_explicit(&slot_values[slot], memory_order_relaxed);
 		uint nw = oi_apply_nudge_inline(old, delta);
