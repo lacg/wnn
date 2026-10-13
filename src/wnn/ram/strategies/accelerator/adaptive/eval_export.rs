@@ -814,8 +814,6 @@ thread_local! {
 pub(crate) fn compute_per_example_scores(
 	export: &GenomeExport,
 	eval_input_bits: &ram_core::packed_bits::PackedBits,
-	packed_eval: &[u64],
-	words_per_example: usize,
 	num_eval: usize,
 	num_clusters: usize,
 	_total_input_bits: usize,
@@ -883,12 +881,11 @@ pub(crate) fn compute_per_example_scores(
 			{
 				match evaluate_group_sparse_gpu(
 					sparse_eval,
-					packed_eval,
+					eval_input_bits,
 					&export.connections,
 					sparse_export,
 					group,
 					num_eval,
-					words_per_example,
 					coverage_aware,
 					memory_mode,
 					empty_value,
@@ -979,12 +976,11 @@ pub(crate) fn compute_per_example_scores(
 			{
 				match evaluate_group_metal(
 					metal_eval,
-					packed_eval,
+					eval_input_bits,
 					&export.connections,
 					dense_words,
 					group,
 					num_eval,
-					words_per_example,
 					dense_cov,
 					coverage_aware,
 					memory_mode,

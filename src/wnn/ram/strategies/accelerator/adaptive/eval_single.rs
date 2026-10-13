@@ -36,8 +36,6 @@ pub fn evaluate_genome_hybrid(
 		let all_scores = compute_per_example_scores(
 			export,
 			eval_input_bits,
-			&packed_eval,
-			words_per_example,
 			num_eval,
 			num_clusters,
 			total_input_bits,
@@ -396,8 +394,6 @@ pub fn evaluate_genome_hybrid(
 	let all_scores = compute_per_example_scores(
 		export,
 		eval_input_bits,
-		&packed_eval,
-		words_per_example,
 		num_eval,
 		num_clusters,
 		total_input_bits,
@@ -471,14 +467,10 @@ pub fn predict_genome_hybrid(
 	let empty_value = settings.empty_value;
 	let memory_mode = settings.memory_mode;
 
-	let (packed_eval, words_per_example) =
-		ram_core::neuron_memory::pack_packed_to_u64(eval_input_bits);
 
 	let all_scores = compute_per_example_scores(
 		export,
 		eval_input_bits,
-		&packed_eval,
-		words_per_example,
 		num_eval,
 		num_clusters,
 		total_input_bits,
@@ -724,8 +716,6 @@ pub fn train_and_predict_single(
 		let train_scores = compute_per_example_scores(
 			&export,
 			train_input_bits,
-			&packed_train_input,
-			words_per_example,
 			num_train,
 			num_clusters,
 			total_input_bits,
@@ -882,13 +872,10 @@ pub fn train_and_score_single(
 	let metal = get_metal_evaluator();
 	let sparse_metal = get_sparse_metal_evaluator();
 
-	let (packed_eval, eval_words) = ram_core::neuron_memory::pack_packed_to_u64(eval_input_bits);
 
 	let all_scores = compute_per_example_scores(
 		&export,
 		eval_input_bits,
-		&packed_eval,
-		eval_words,
 		num_eval,
 		num_clusters,
 		total_input_bits,
@@ -1039,12 +1026,9 @@ pub fn score_examples_binary(
 ) -> Vec<f64>
 {
 	let (metal, sparse_metal) = (get_metal_evaluator(), get_sparse_metal_evaluator());
-	let (packed, words) = ram_core::neuron_memory::pack_packed_to_u64(input_bits);
 	compute_per_example_scores(
 		export,
 		input_bits,
-		&packed,
-		words,
 		num_examples,
 		num_clusters,
 		total_input_bits,
@@ -1256,12 +1240,9 @@ pub fn train_and_score_sets_flat(
 	};
 
 	// Score eval set
-	let (packed_eval, eval_words) = ram_core::neuron_memory::pack_packed_to_u64(eval_input_bits);
 	let eval_all_scores = compute_per_example_scores(
 		&export,
 		eval_input_bits,
-		&packed_eval,
-		eval_words,
 		num_eval,
 		num_clusters,
 		total_input_bits,
@@ -1278,8 +1259,6 @@ pub fn train_and_score_sets_flat(
 	let train_all_scores = compute_per_example_scores(
 		&export,
 		train_input_bits,
-		&packed_train_input,
-		words_per_example,
 		num_train,
 		num_clusters,
 		total_input_bits,
@@ -1294,12 +1273,9 @@ pub fn train_and_score_sets_flat(
 
 	// Score val set (Protocol v2: same trained memory)
 	let val_scores: Option<Vec<f64>> = val_input_bits.map(|val_bits| {
-		let (packed_val, val_words) = ram_core::neuron_memory::pack_packed_to_u64(val_bits);
 		let val_all_scores = compute_per_example_scores(
 			&export,
 			val_bits,
-			&packed_val,
-			val_words,
 			num_val,
 			num_clusters,
 			total_input_bits,

@@ -28,7 +28,7 @@ use crate::marker_train::batched_path::{
 	train_single_genome_neuron_chunked, BUDGET_ERR_PREFIX,
 };
 use crate::multiplicity_batch::{MultiplicityBatch, UnitTrainers};
-use ram_core::neuron_memory::{pack_packed_to_u64, BINARY, PLN, QSR, QUAD_BINARY, QUAD_WEIGHTED, TERNARY};
+use ram_core::neuron_memory::{BINARY, PLN, QSR, QUAD_BINARY, QUAD_WEIGHTED, TERNARY};
 use ram_core::packed_bits::PackedBits;
 use ram_core::physical_genome::PhysicalGenome;
 use ram_core::super_genome::{FlatGenome, SuperGenome};
@@ -276,13 +276,10 @@ fn scores(
 	sparse: &Option<ram_core::metal_sparse::MetalSparseEvaluator>,
 ) -> Vec<u64>
 {
-	let (packed, wpe) = pack_packed_to_u64(&data.eval);
 	let num_eval = data.eval.num_rows();
 	let rows = compute_per_example_scores(
 		e,
 		&data.eval,
-		&packed,
-		wpe,
 		num_eval,
 		data.num_clusters,
 		TIB,

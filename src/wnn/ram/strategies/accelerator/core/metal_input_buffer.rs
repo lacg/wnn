@@ -1,25 +1,28 @@
 //! Zero-copy Metal view of a `PackedBits` input matrix (13/10/2026 memory fix).
 //!
 //! Apple Silicon has unified memory: the GPU can read the host allocation
-//! directly. `new_buffer_with_data` nevertheless COPIED the whole training
-//! matrix into a fresh Metal buffer on every marker-train dispatch (6.9 GB
-//! per chunk at 46M rows, on top of the u64 re-pack it was made from).
-//! `PackedBits` now lives in a page-aligned, page-multiple allocation already
-//! in the kernels' u64 word layout, so this wraps it with
-//! `newBufferWithBytesNoCopy` instead.
+//! directly. `new_buffer_with_data` nevertheless COPIED the whole input matrix
+//! into a fresh Metal buffer on every marker-train dispatch, every train-score
+//! threshold calibration and every eval scoring (6.9 GB per copy for the 46M
+//! train set). `PackedBits` lives in a page-aligned, page-multiple allocation
+//! already in the kernels' u64 word layout, so `NoCopyInputBuffer` wraps it
+//! with `newBufferWithBytesNoCopy` instead. `GpuInputRows` lets one forward
+//! pass take either a `PackedBits` (aliased) or a bare word slice (copied —
+//! the LM callers that pack their own `Vec<u64>`), explicitly, per call site.
 //!
 //! Lifetime: the wrapper borrows the matrix (`PhantomData<&'a PackedBits>`),
 //! so the borrow checker forbids the Metal buffer outliving — or the matrix
 //! being mutated/reallocated under — it. Every dispatch that reads it is
-//! committed and `wait_until_completed` before the wrapper drops (the marker
-//! trainer and probe are synchronous). No deallocator is registered: Metal
-//! never frees the memory, `PackedBits` does.
+//! committed and `wait_until_completed` before the wrapper drops (all callers
+//! are synchronous). No deallocator is registered: Metal never frees the
+//! memory, `PackedBits` does.
 
 use std::marker::PhantomData;
 
 use metal::{Buffer, DeviceRef, MTLResourceOptions};
-use ram_core::aligned_words::PAGE_BYTES;
-use ram_core::packed_bits::PackedBits;
+
+use crate::aligned_words::PAGE_BYTES;
+use crate::packed_bits::PackedBits;
 
 /// A shared-storage Metal buffer aliasing a `PackedBits`' words (no copy).
 pub struct NoCopyInputBuffer<'a>
@@ -76,6 +79,54 @@ impl<'a> NoCopyInputBuffer<'a>
 	}
 }
 
+/// The packed input rows a GPU forward pass reads.
+#[derive(Clone, Copy)]
+pub enum GpuInputRows<'a>
+{
+	/// A `PackedBits` matrix: aliased in place, no copy.
+	Packed(&'a PackedBits),
+	/// A bare `u64` word slice (callers that pack their own rows): copied
+	/// into a fresh Metal buffer, as every input was before 13/10/2026.
+	Words(&'a [u64]),
+}
+
+/// The Metal buffer a `GpuInputRows` resolved to (kept alive for the dispatch).
+pub enum GpuInputBuffer<'a>
+{
+	Aliased(NoCopyInputBuffer<'a>),
+	Copied(Buffer),
+}
+
+impl<'a> GpuInputRows<'a>
+{
+	/// Resolve to a Metal buffer on `device`.
+	pub fn upload(self, device: &DeviceRef) -> GpuInputBuffer<'a>
+	{
+		match self
+		{
+			GpuInputRows::Packed(rows) => GpuInputBuffer::Aliased(NoCopyInputBuffer::new(device, rows)),
+			GpuInputRows::Words(words) => GpuInputBuffer::Copied(device.new_buffer_with_data(
+				words.as_ptr() as *const std::ffi::c_void,
+				(words.len().max(1) * 8) as u64,
+				MTLResourceOptions::StorageModeShared,
+			)),
+		}
+	}
+}
+
+impl GpuInputBuffer<'_>
+{
+	/// The buffer to bind.
+	pub fn buffer(&self) -> &Buffer
+	{
+		match self
+		{
+			GpuInputBuffer::Aliased(b) => b.buffer(),
+			GpuInputBuffer::Copied(b) => b,
+		}
+	}
+}
+
 #[cfg(test)]
 mod tests
 {
@@ -91,5 +142,9 @@ mod tests
 		assert_eq!(wrapped.buffer().contents() as *const u64, pb.as_u64_words().as_ptr());
 		let words = unsafe { std::slice::from_raw_parts(wrapped.buffer().contents() as *const u64, pb.as_u64_words().len()) };
 		assert_eq!(words, pb.as_u64_words());
+		let copied = GpuInputRows::Words(pb.as_u64_words()).upload(&device);
+		assert_ne!(copied.buffer().contents() as *const u64, pb.as_u64_words().as_ptr(), "Words must copy");
+		let copied_words = unsafe { std::slice::from_raw_parts(copied.buffer().contents() as *const u64, pb.as_u64_words().len()) };
+		assert_eq!(copied_words, pb.as_u64_words());
 	}
 }

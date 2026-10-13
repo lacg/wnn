@@ -1101,12 +1101,12 @@ pub mod batched_path
 
 		// Probe-set buffers persist across chunks: votes accumulate atomically.
 		// Both alias the host matrices (no u64 re-pack, no Metal copy).
-		let eval_input = crate::metal_input_buffer::NoCopyInputBuffer::new(device, eval_input_bits);
+		let eval_input = ram_core::metal_input_buffer::NoCopyInputBuffer::new(device, eval_input_bits);
 		let (eval_buf, eval_words) = (eval_input.buffer(), eval_input_bits.words_per_row());
 		let eval_votes_buf = crate::marker_probe::new_zeroed_vote_buffer(device, num_eval);
 		let train_probe = if score_train
 		{
-			let train_input = crate::metal_input_buffer::NoCopyInputBuffer::new(device, train_input_bits);
+			let train_input = ram_core::metal_input_buffer::NoCopyInputBuffer::new(device, train_input_bits);
 			let train_votes_buf = crate::marker_probe::new_zeroed_vote_buffer(device, num_train);
 			Some((train_input, train_votes_buf, train_input_bits.words_per_row()))
 		}
@@ -1791,7 +1791,7 @@ pub mod batched_path
 
 		// Metal buffers (the input aliases train_input_bits; dropped at return,
 		// after trainer.train has waited for the dispatch to complete)
-		let packed_input = crate::metal_input_buffer::NoCopyInputBuffer::new(device, train_input_bits);
+		let packed_input = ram_core::metal_input_buffer::NoCopyInputBuffer::new(device, train_input_bits);
 		let packed_buf = packed_input.buffer();
 		let conn_buf = device.new_buffer_with_data(
 			connections_i32.as_ptr() as *const _,
@@ -2371,12 +2371,9 @@ pub mod batched_path
 
 			// Score-level comparison on the training data (CPU eval on both
 			// exports — implementation-independent of the Metal eval path).
-			let (packed_u64, wpe) = pack_packed_to_u64(&packed);
 			let sb = compute_per_example_scores(
 				bexp,
 				&packed,
-				&packed_u64,
-				wpe,
 				num_train,
 				num_classes,
 				total_input_bits,
@@ -2390,8 +2387,6 @@ pub mod batched_path
 			let sc = compute_per_example_scores(
 				&cexp,
 				&packed,
-				&packed_u64,
-				wpe,
 				num_train,
 				num_classes,
 				total_input_bits,
@@ -2794,9 +2789,8 @@ pub mod batched_path
 				Some(_) => None,
 				None =>
 				{
-					let (words, wpe) = ram_core::neuron_memory::pack_packed_to_u64(train);
 					let scores = crate::adaptive::compute_per_example_scores(
-						export, train, words, wpe, train.num_rows(), 1, train.total_bits(), settings.empty_value,
+						export, train, train.num_rows(), 1, train.total_bits(), settings.empty_value,
 						settings.memory_mode, settings.run_seed, settings.coverage_aware, metal, sparse,
 					);
 					let flat: Vec<f64> = scores.iter().map(|s| s[0]).collect();
@@ -3553,18 +3547,16 @@ pub mod batched_path
 			.expect("bench_prod train failed");
 			let export_train_ms = t0.elapsed().as_secs_f64() * 1000.0;
 			let keys: usize = out[0].sparse_exports.iter().map(|s| s.keys.len()).sum();
-			let (packed_eval_u64, eval_words) = ram_core::neuron_memory::pack_packed_to_u64(&packed_eval);
 			let t_score = std::time::Instant::now();
 			let sparse_eval =
 				ram_core::metal_sparse::MetalSparseEvaluator::new().expect("sparse evaluator");
 			let scores = crate::adaptive::evaluate_group_sparse_gpu(
 				&sparse_eval,
-				&packed_eval_u64,
+				&packed_eval,
 				&out[0].connections,
 				&out[0].sparse_exports[0],
 				&out[0].groups[0],
 				num_eval,
-				eval_words,
 				false, // coverage_aware: export-path timing bench, not the IDS scorer
 				2,
 				0.5,

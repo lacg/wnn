@@ -82,7 +82,8 @@ impl MetalRAMLMEvaluator
 	/// Batch forward pass on GPU
 	///
 	/// Args:
-	///   packed_input: [num_examples * words_per_example] packed u64
+	///   packed_input: [num_examples * words_per_example] packed u64 rows — a
+	///     `PackedBits` (aliased, no copy) or a bare word slice (copied)
 	///   connections_flat: [num_neurons * bits_per_neuron] connection indices
 	///   memory_words: [num_neurons * words_per_neuron] packed memory
 	///   ... dimension parameters ...
@@ -90,7 +91,7 @@ impl MetalRAMLMEvaluator
 	/// Returns: [num_examples * num_clusters] probabilities
 	pub fn forward_batch(
 		&self,
-		packed_input: &[u64],
+		packed_input: ram_core::metal_input_buffer::GpuInputRows<'_>,
 		connections_flat: &[i64],
 		memory_words: &[i64],
 		num_examples: usize,
@@ -162,12 +163,9 @@ impl MetalRAMLMEvaluator
 			run_seed,
 		};
 
-		// Create buffers
-		let input_buffer = self.device.new_buffer_with_data(
-			packed_input.as_ptr() as *const _,
-			(packed_input.len() * mem::size_of::<u64>()) as u64,
-			MTLResourceOptions::StorageModeShared,
-		);
+		// Create buffers (a PackedBits input is aliased — no copy)
+		let input = packed_input.upload(&self.device);
+		let input_buffer = input.buffer();
 
 		let conn_buffer = self.device.new_buffer_with_data(
 			connections_i32.as_ptr() as *const _,
@@ -219,7 +217,7 @@ impl MetalRAMLMEvaluator
 		{
 			// One thread per example
 			encoder.set_compute_pipeline_state(&self.forward_per_example_pipeline);
-			encoder.set_buffer(0, Some(&input_buffer), 0);
+			encoder.set_buffer(0, Some(input_buffer), 0);
 			encoder.set_buffer(1, Some(&conn_buffer), 0);
 			encoder.set_buffer(2, Some(&memory_buffer), 0);
 			encoder.set_buffer(3, Some(&params_buffer), 0);
@@ -238,7 +236,7 @@ impl MetalRAMLMEvaluator
 		{
 			// One thread per (cluster, example) pair
 			encoder.set_compute_pipeline_state(&self.forward_pipeline);
-			encoder.set_buffer(0, Some(&input_buffer), 0);
+			encoder.set_buffer(0, Some(input_buffer), 0);
 			encoder.set_buffer(1, Some(&conn_buffer), 0);
 			encoder.set_buffer(2, Some(&memory_buffer), 0);
 			encoder.set_buffer(3, Some(&params_buffer), 0);

@@ -277,11 +277,11 @@ impl Forward for MetalForward
 		req.validate()?;
 		let l = req.layout;
 		let r = req.read;
-		let (words, wpe) = pack_packed_to_u64(req.input);
+		let wpe = req.input.words_per_row();
 		self
 			.evaluator
 			.forward_batch_sparse(
-				&words,
+				crate::metal_input_buffer::GpuInputRows::Packed(req.input),
 				req.connections,
 				&req.memory.keys,
 				&req.memory.values,

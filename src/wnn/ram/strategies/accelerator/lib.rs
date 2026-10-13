@@ -281,9 +281,6 @@ mod metal_atomic_test;
 
 #[cfg(target_os = "macos")]
 mod marker_train;
-// Zero-copy Metal view of a PackedBits input (unified memory, 13/10/2026).
-#[cfg(target_os = "macos")]
-mod metal_input_buffer;
 // The GPU trainer's knobs as a per-call value (never process-global set_var).
 #[cfg(target_os = "macos")]
 mod train_knobs;

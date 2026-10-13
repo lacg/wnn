@@ -338,8 +338,6 @@ pub(crate) fn evaluate_genomes_parallel_legacy(
         let metal = get_metal_evaluator();
         let sparse_metal = get_sparse_metal_evaluator();
 
-        // Pack eval input bits to u64 for GPU (pack once, reuse for all groups)
-        let (packed_eval, words_per_example) = ram_core::neuron_memory::pack_packed_to_u64(eval_input_bits);
 
         // Process each group - Metal for dense, GPU sparse for sparse, CPU fallback
         for (group_idx, group) in groups.iter().enumerate() {
@@ -351,12 +349,11 @@ pub(crate) fn evaluate_genomes_parallel_legacy(
                 if let Some(memory_words) = memory.export_for_metal() {
                     match evaluate_group_metal(
                         metal_eval.as_ref(),
-                        &packed_eval,
+                        eval_input_bits,
                         &gpu_connections,
                         &memory_words,
                         group,
                         num_eval,
-                        words_per_example,
                         &[],   // coverage: LM/legacy parallel path
                         false,
                         memory_mode,
@@ -383,12 +380,11 @@ pub(crate) fn evaluate_genomes_parallel_legacy(
                 if let Some(export) = memory.export_for_gpu_sparse() {
                     match evaluate_group_sparse_gpu(
                         sparse_eval.as_ref(),
-                        &packed_eval,
+                        eval_input_bits,
                         &gpu_connections,
                         &export,
                         group,
                         num_eval,
-                        words_per_example,
                         settings.coverage_aware,
                         memory_mode,
                         empty_value,

@@ -53,6 +53,9 @@ pub mod counter_rng;
 // per-platform Metal gating so the crate still type-checks on non-macOS).
 #[cfg(target_os = "macos")]
 pub mod metal_sparse;
+// Zero-copy Metal view of a PackedBits input (unified memory, 13/10/2026).
+#[cfg(target_os = "macos")]
+pub mod metal_input_buffer;
 
 #[cfg(not(target_os = "macos"))]
 pub mod metal_sparse

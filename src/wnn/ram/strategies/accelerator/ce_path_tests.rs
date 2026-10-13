@@ -11,7 +11,7 @@
 
 use crate::adaptive::{compute_per_example_scores, evaluate_genome_hybrid, multiclass_ce_acc, GenomeExport};
 use crate::marker_train::batched_path::{batched_train_offspring_plain, trainer_available};
-use ram_core::neuron_memory::{pack_packed_to_u64, EvalSettings, QUAD_WEIGHTED, TERNARY};
+use ram_core::neuron_memory::{EvalSettings, QUAD_WEIGHTED, TERNARY};
 use ram_core::packed_bits::PackedBits;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
@@ -65,9 +65,8 @@ fn assert_fitness_matches_reference(e: &GenomeExport, data: &Data, mode: u8, cov
 	let (ce, acc, _, _, _) = evaluate_genome_hybrid(
 		e, &data.eval, &data.eval_targets, n, K, TIB, settings, dense.as_deref(), sparse.as_deref(), None,
 	);
-	let (packed, wpe) = pack_packed_to_u64(&data.eval);
 	let scores = compute_per_example_scores(
-		e, &data.eval, &packed, wpe, n, K, TIB, 0.5, mode, 0, coverage_aware, dense.as_deref(), sparse.as_deref(),
+		e, &data.eval, n, K, TIB, 0.5, mode, 0, coverage_aware, dense.as_deref(), sparse.as_deref(),
 	);
 	let (ref_ce, ref_acc, _) = multiclass_ce_acc(&scores, &data.eval_targets);
 	assert!((ce - ref_ce).abs() < 1e-5, "{what} cov={coverage_aware}: ce {ce} vs reference {ref_ce}");
