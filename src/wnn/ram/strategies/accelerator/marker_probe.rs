@@ -228,7 +228,9 @@ pub mod metal_impl
 		buf
 	}
 
-	/// Read a vote buffer back into a Vec<u32>.
+	/// Read a vote buffer back into a Vec<u32> (tests: the production path
+	/// reads scores via `MarkerProber::votes_to_scores`).
+	#[cfg(test)]
 	pub fn read_vote_buffer(buf: &metal::Buffer, len: usize) -> Vec<u32>
 	{
 		let ptr = buf.contents() as *const u32;
@@ -237,4 +239,6 @@ pub mod metal_impl
 } // mod metal_impl
 
 #[cfg(target_os = "macos")]
-pub use metal_impl::{get_prober, new_zeroed_vote_buffer, read_vote_buffer};
+pub use metal_impl::{get_prober, new_zeroed_vote_buffer};
+#[cfg(all(test, target_os = "macos"))]
+pub use metal_impl::read_vote_buffer;

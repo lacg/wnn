@@ -961,9 +961,10 @@ pub mod batched_path
 			> BATCH_MEMORY_BUDGET
 	}
 
-	/// Per-example integer vote sums from the eval-in-place probe. One u32 per
-	/// (example, cluster) — single-cluster in the current fused path, so one per
-	/// example. votes/4.0 = the sum of QUAD cell weights the sorted-export eval
+	/// Per-example scores from the eval-in-place probe. The probe accumulates
+	/// one integer vote sum per (example, cluster) — single-cluster in the
+	/// current fused path, so one per example. votes/4.0 = the sum of QUAD cell
+	/// weights the sorted-export eval
 	/// would have produced (F=0, wF=1, wT=3, T=4 quarters; a table MISS
 	/// contributes the QUAD default cell WEAK_FALSE = 1, identical to how the
 	/// export-path eval miss-defaults — which is also why the wF-filter never
@@ -975,13 +976,10 @@ pub mod batched_path
 	/// votes was an ulp off it (13/10/2026).
 	pub struct ChunkedVoteSums
 	{
-		pub eval_votes: Vec<u32>,
-		/// Present when the caller also needs train-set scores (threshold
-		/// calibration on training data — the fitness path's default).
-		pub train_votes: Option<Vec<u32>>,
 		/// Per-example eval scores, bit-identical to the export path's.
 		pub eval_scores: Vec<f32>,
-		/// Per-example train scores (when `train_votes` is present).
+		/// Present when the caller also needs train-set scores (threshold
+		/// calibration on training data — the fitness path's default).
 		pub train_scores: Option<Vec<f32>>,
 	}
 
@@ -1201,11 +1199,7 @@ pub mod batched_path
 		}
 
 		Ok(ChunkedVoteSums {
-			eval_votes: crate::marker_probe::read_vote_buffer(&eval_votes_buf, num_eval),
 			eval_scores: prober.votes_to_scores(&eval_votes_buf, num_eval, n_total),
-			train_votes: train_probe
-				.as_ref()
-				.map(|(_, votes_buf, _)| crate::marker_probe::read_vote_buffer(votes_buf, num_train)),
 			train_scores: train_probe.as_ref().map(|(_, votes_buf, _)| prober.votes_to_scores(votes_buf, num_train, n_total)),
 		})
 	}
@@ -2747,12 +2741,12 @@ pub mod batched_path
 					per_neuron * chunk, mode,
 				)
 				.expect("probe train failed");
-				(v.eval_votes, v.train_votes)
+				(v.eval_scores, v.train_scores)
 			};
 			let reference = probe(n);
 			for chunk in [1usize, 3]
 			{
-				assert_eq!(probe(chunk), reference, "probe votes moved with chunk={}", chunk);
+				assert_eq!(probe(chunk), reference, "probe scores moved with chunk={}", chunk);
 			}
 		}
 
@@ -3452,17 +3446,17 @@ pub mod batched_path
 				ram_core::neuron_memory::QUAD_WEIGHTED,
 			)
 			.expect("scored wrapper failed");
-			assert_eq!(scored.eval_votes.len(), num_eval);
-			let train_votes = scored.train_votes.expect("train votes requested");
-			assert_eq!(train_votes.len(), num_train);
-			let max_vote = (4 * n_neurons) as u32;
+			assert_eq!(scored.eval_scores.len(), num_eval);
+			let train_scores = scored.train_scores.expect("train scores requested");
+			assert_eq!(train_scores.len(), num_train);
+			// votes <= 4 x neurons <=> score <= 1.0 (score = votes/4/neurons).
 			assert!(
-				scored.eval_votes.iter().all(|&v| v <= max_vote),
-				"eval vote exceeds 4×neurons"
+				scored.eval_scores.iter().all(|&v| (0.0..=1.0).contains(&v)),
+				"eval score outside [0, 1] (a vote exceeded 4×neurons)"
 			);
 			assert!(
-				train_votes.iter().all(|&v| v <= max_vote),
-				"train vote exceeds 4×neurons"
+				train_scores.iter().all(|&v| (0.0..=1.0).contains(&v)),
+				"train score outside [0, 1] (a vote exceeded 4×neurons)"
 			);
 		}
 
@@ -3615,7 +3609,7 @@ pub mod batched_path
 			)
 			.expect("bench_prod fused failed");
 			let fused_ms = t1.elapsed().as_secs_f64() * 1000.0;
-			let nonzero = scored.eval_votes.iter().filter(|&&v| v > 0).count();
+			let nonzero = scored.eval_scores.iter().filter(|&&v| v > 0.0).count();
 			eprintln!(
 			"[bench_prod] FUSED PATH  250n×64b×10M + {}-example probe: total={:.0}ms (export+eval skipped) → {:.2}x vs export-path total  nonzero_votes={}  (export scores head: {:?})",
 			num_eval, fused_ms, export_total_ms / fused_ms.max(1.0), nonzero, export_scores_probe,
