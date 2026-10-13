@@ -399,7 +399,20 @@ export interface ValidationSummary
 	f1_macro: number | null
 	fpr: number | null
 	threshold_metadata: ThresholdMetadata | null
+	// Logical + physical size of the validated genome (IDS-37); null on rows
+	// written before worker ABI 17.
+	footprint: ValidationFootprint | null
 	created_at: string
+}
+
+/** What a validated genome costs — logical (copies included) AND physical
+ *  (distinct neurons trained and held), always both. */
+export interface ValidationFootprint
+{
+	logical_neurons: number
+	physical_neurons: number
+	logical_cells: number
+	physical_cells: number
 }
 
 // =============================================================================

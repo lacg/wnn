@@ -15,7 +15,8 @@ pub async fn get_validation_summaries(
 {
 	let rows = sqlx::query(
 		r#"SELECT id, flow_id, experiment_id, validation_point, genome_type,
-                  genome_hash, ce, accuracy, f1_macro, fpr, threshold_metadata, created_at
+                  genome_hash, ce, accuracy, f1_macro, fpr, threshold_metadata,
+                  logical_neurons, physical_neurons, logical_cells, physical_cells, created_at
            FROM validation_summaries
            WHERE experiment_id = ?
            ORDER BY validation_point, genome_type"#,
@@ -40,7 +41,8 @@ pub async fn get_flow_validation_summaries(
 {
 	let rows = sqlx::query(
         r#"SELECT vs.id, vs.flow_id, vs.experiment_id, vs.validation_point, vs.genome_type,
-                  vs.genome_hash, vs.ce, vs.accuracy, vs.f1_macro, vs.fpr, vs.threshold_metadata, vs.created_at
+                  vs.genome_hash, vs.ce, vs.accuracy, vs.f1_macro, vs.fpr, vs.threshold_metadata,
+                  vs.logical_neurons, vs.physical_neurons, vs.logical_cells, vs.physical_cells, vs.created_at
            FROM validation_summaries vs
            JOIN experiments e ON vs.experiment_id = e.id
            WHERE e.flow_id = ?
@@ -86,10 +88,11 @@ impl<'a> CacheScope<'a>
 	}
 }
 
-type CachedValidation = (f64, f64, Option<f64>, Option<f64>, Option<serde_json::Value>);
+type CachedValidation =
+	(f64, f64, Option<f64>, Option<f64>, Option<serde_json::Value>, Option<ValidationFootprint>);
 
 /// Check if a genome has already been validated UNDER THE SAME SCOPE.
-/// Returns the cached CE, accuracy, f1_macro, fpr, and threshold_metadata if found.
+/// Returns the cached CE, accuracy, f1_macro, fpr, threshold_metadata and footprint if found.
 ///
 /// A hit requires genome_hash, cache_key AND worker_abi to match a row stamped
 /// with them. No scope -> no hit; rows with a NULL key or ABI (every row written
@@ -106,7 +109,8 @@ pub async fn get_cached_validation(
 		return Ok(None);
 	};
 	let row = sqlx::query(
-		r#"SELECT ce, accuracy, f1_macro, fpr, threshold_metadata
+		r#"SELECT ce, accuracy, f1_macro, fpr, threshold_metadata,
+                  logical_neurons, physical_neurons, logical_cells, physical_cells
            FROM validation_summaries
            WHERE genome_hash = ? AND cache_key = ? AND worker_abi = ?
            ORDER BY threshold_metadata IS NOT NULL DESC, id DESC
@@ -124,7 +128,17 @@ fn cached_validation_from_row(r: &sqlx::sqlite::SqliteRow) -> CachedValidation
 {
 	let tm_str: Option<String> = r.get("threshold_metadata");
 	let tm = tm_str.and_then(|s| serde_json::from_str(&s).ok());
-	(r.get("ce"), r.get("accuracy"), r.get("f1_macro"), r.get("fpr"), tm)
+	(r.get("ce"), r.get("accuracy"), r.get("f1_macro"), r.get("fpr"), tm, footprint_from_row(r))
+}
+
+fn footprint_from_row(r: &sqlx::sqlite::SqliteRow) -> Option<ValidationFootprint>
+{
+	ValidationFootprint::from_parts(
+		r.get("logical_neurons"),
+		r.get("physical_neurons"),
+		r.get("logical_cells"),
+		r.get("physical_cells"),
+	)
 }
 
 /// Create a validation summary (upsert by experiment_id + validation_point + genome_type)
@@ -141,14 +155,16 @@ pub async fn upsert_validation_summary(
 	fpr: Option<f64>,
 	threshold_metadata: Option<&str>,
 	scope: Option<CacheScope<'_>>,
+	footprint: Option<ValidationFootprint>,
 ) -> Result<i64>
 {
 	let now = Utc::now().to_rfc3339();
 
 	let result = sqlx::query(
         r#"INSERT INTO validation_summaries
-           (flow_id, experiment_id, validation_point, genome_type, genome_hash, ce, accuracy, f1_macro, fpr, threshold_metadata, cache_key, worker_abi, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           (flow_id, experiment_id, validation_point, genome_type, genome_hash, ce, accuracy, f1_macro, fpr, threshold_metadata, cache_key, worker_abi,
+            logical_neurons, physical_neurons, logical_cells, physical_cells, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(experiment_id, validation_point, genome_type) DO UPDATE SET
              flow_id = excluded.flow_id,
              genome_hash = excluded.genome_hash,
@@ -159,6 +175,10 @@ pub async fn upsert_validation_summary(
              threshold_metadata = excluded.threshold_metadata,
              cache_key = excluded.cache_key,
              worker_abi = excluded.worker_abi,
+             logical_neurons = excluded.logical_neurons,
+             physical_neurons = excluded.physical_neurons,
+             logical_cells = excluded.logical_cells,
+             physical_cells = excluded.physical_cells,
              created_at = excluded.created_at"#,
     )
     .bind(flow_id)
@@ -173,6 +193,10 @@ pub async fn upsert_validation_summary(
     .bind(threshold_metadata)
     .bind(scope.map(|sc| sc.key))
     .bind(scope.map(|sc| sc.worker_abi))
+    .bind(footprint.map(|f| f.logical_neurons))
+    .bind(footprint.map(|f| f.physical_neurons))
+    .bind(footprint.map(|f| f.logical_cells))
+    .bind(footprint.map(|f| f.physical_cells))
     .bind(&now)
     .execute(pool)
     .await?;
@@ -199,6 +223,7 @@ fn row_to_validation_summary(row: &sqlx::sqlite::SqliteRow) -> Result<Validation
 		f1_macro: row.get("f1_macro"),
 		fpr: row.get("fpr"),
 		threshold_metadata,
+		footprint: footprint_from_row(row),
 		created_at: parse_datetime(row.get("created_at"))?,
 	})
 }
@@ -365,7 +390,7 @@ mod cache_scope_tests
 	async fn write_row(pool: &DbPool, scope: Option<CacheScope<'_>>, f1: f64)
 	{
 		let exp = new_experiment(pool).await;
-		upsert_validation_summary(pool, None, exp, "final", "best_f1", "g1", 0.1, 0.9, Some(f1), Some(0.05), None, scope)
+		upsert_validation_summary(pool, None, exp, "final", "best_f1", "g1", 0.1, 0.9, Some(f1), Some(0.05), None, scope, None)
 			.await
 			.unwrap();
 	}
@@ -436,6 +461,24 @@ mod cache_scope_tests
 			let hit = get_cached_validation(&pool, "g1", scope(&key, 14)).await.unwrap();
 			assert!(hit.is_none(), "{name} must not hit a quad_default row");
 		}
+	}
+
+	/// IDS-37 stage 3: the footprint round-trips through the row, the summary
+	/// listing and the cache, and a re-upsert without one clears it.
+	#[tokio::test]
+	async fn footprint_round_trips_and_partial_is_none()
+	{
+		let pool = test_pool("footprint").await;
+		let exp = new_experiment(&pool).await;
+		let quad = fixture_key("quad_default");
+		let fp = ValidationFootprint { logical_neurons: 500, physical_neurons: 137, logical_cells: 4_410_000, physical_cells: 1_210_000 };
+		let write = |footprint| upsert_validation_summary(&pool, None, exp, "final", "best_f1", "g1", 0.1, 0.9, Some(0.8), Some(0.05), None, scope(&quad, 17), footprint);
+		write(Some(fp)).await.unwrap();
+		assert_eq!(get_validation_summaries(&pool, exp).await.unwrap()[0].footprint, Some(fp));
+		assert_eq!(get_cached_validation(&pool, "g1", scope(&quad, 17)).await.unwrap().expect("hit").5, Some(fp));
+		write(None).await.unwrap();
+		assert_eq!(get_validation_summaries(&pool, exp).await.unwrap()[0].footprint, None);
+		assert_eq!(ValidationFootprint::from_parts(Some(1), Some(1), None, Some(1)), None);
 	}
 
 	#[test]

@@ -772,7 +772,7 @@
 					expId: experiment.id,
 					sequenceOrder: experiment.sequence_order ?? 0,
 					validationPoint: 'init',
-					summaries: initSummaries.map(s => ({ genomeType: s.genome_type, ce: s.ce, accuracy: s.accuracy, f1_macro: s.f1_macro, fpr: s.fpr, threshold_metadata: s.threshold_metadata }))
+					summaries: initSummaries.map(s => ({ genomeType: s.genome_type, ce: s.ce, accuracy: s.accuracy, f1_macro: s.f1_macro, fpr: s.fpr, threshold_metadata: s.threshold_metadata, footprint: s.footprint }))
 				})
 			}
 			if (finalSummaries.length > 0)
@@ -782,7 +782,7 @@
 					expId: experiment.id,
 					sequenceOrder: experiment.sequence_order ?? 0,
 					validationPoint: 'final',
-					summaries: finalSummaries.map(s => ({ genomeType: s.genome_type, ce: s.ce, accuracy: s.accuracy, f1_macro: s.f1_macro, fpr: s.fpr, threshold_metadata: s.threshold_metadata }))
+					summaries: finalSummaries.map(s => ({ genomeType: s.genome_type, ce: s.ce, accuracy: s.accuracy, f1_macro: s.f1_macro, fpr: s.fpr, threshold_metadata: s.threshold_metadata, footprint: s.footprint }))
 				})
 			}
 			return points
@@ -843,7 +843,7 @@
 				expId,
 				sequenceOrder: seqOrder,
 				validationPoint: point as 'init' | 'final',
-				summaries: validations.map(v => ({ genomeType: v.genome_type, ce: v.ce, accuracy: v.accuracy, f1_macro: v.f1_macro, fpr: v.fpr, threshold_metadata: v.threshold_metadata }))
+				summaries: validations.map(v => ({ genomeType: v.genome_type, ce: v.ce, accuracy: v.accuracy, f1_macro: v.f1_macro, fpr: v.fpr, threshold_metadata: v.threshold_metadata, footprint: v.footprint }))
 			})
 		}
 

@@ -492,7 +492,42 @@ pub struct ValidationSummary
 	pub f1_macro: Option<f64>,
 	pub fpr: Option<f64>,
 	pub threshold_metadata: Option<serde_json::Value>,
+	/// Logical + physical size of the validated genome (IDS-37); None for rows
+	/// written before worker ABI 17 or by non-IDS validations.
+	#[serde(default)]
+	pub footprint: Option<ValidationFootprint>,
 	pub created_at: DateTime<Utc>,
+}
+
+/// What a validated genome costs, LOGICAL (what the genome says, copies
+/// included) and PHYSICAL (distinct neurons actually trained and held) —
+/// always both (docs/ids_multiplicity_layer_design.md §5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidationFootprint
+{
+	pub logical_neurons: i64,
+	pub physical_neurons: i64,
+	pub logical_cells: i64,
+	pub physical_cells: i64,
+}
+
+impl ValidationFootprint
+{
+	/// All four columns or nothing: a partial footprint is never reported.
+	pub fn from_parts(
+		logical_neurons: Option<i64>,
+		physical_neurons: Option<i64>,
+		logical_cells: Option<i64>,
+		physical_cells: Option<i64>,
+	) -> Option<Self>
+	{
+		Some(Self {
+			logical_neurons: logical_neurons?,
+			physical_neurons: physical_neurons?,
+			logical_cells: logical_cells?,
+			physical_cells: physical_cells?,
+		})
+	}
 }
 
 // =============================================================================

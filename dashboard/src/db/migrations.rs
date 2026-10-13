@@ -172,6 +172,16 @@ pub(crate) async fn run_migrations(pool: &DbPool) -> Result<()>
 		.execute(pool)
 		.await;
 
+	// Migration (12/10/2026, IDS-37 stage 3): the validated genome's footprint,
+	// LOGICAL and PHYSICAL — always both. Physical < logical when the
+	// multiplicity layer trained duplicate neurons once. NULL on older rows.
+	for column in ["logical_neurons", "physical_neurons", "logical_cells", "physical_cells"]
+	{
+		let _ = sqlx::query(&format!("ALTER TABLE validation_summaries ADD COLUMN {column} INTEGER"))
+			.execute(pool)
+			.await;
+	}
+
 	// Migration: Add IDS metrics to genome_evaluations (per-genome F1-macro and FPR)
 	let _ = sqlx::query("ALTER TABLE genome_evaluations ADD COLUMN f1_macro REAL")
 		.execute(pool)
