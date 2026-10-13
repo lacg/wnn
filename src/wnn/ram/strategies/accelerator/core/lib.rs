@@ -22,6 +22,7 @@ pub mod train;
 // layer, GA crossover dedupe, sparse export alias). docs/ids_multiplicity_layer_design.md §2.
 pub mod distinct_fractions;
 pub mod neuron_key;
+pub mod physical_genome;
 pub mod sparse_gpu_export;
 pub mod unit_grouping;
 
