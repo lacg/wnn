@@ -11,6 +11,7 @@ count_u x quarters(cell_u)), must equal the Rust score x 4N on held-out vectors
 Reads the dashboard DB read-only; skipped where it is absent. Needs the ABI-17
 wheel (IDSCacheWrapper.export_trained).
 """
+import os
 import sys
 from pathlib import Path
 
@@ -21,6 +22,7 @@ DB = Path("/Volumes/20260401-WDBlack-SN850X-2TB/wnn/db/wnn.db")
 SCRIPTS = Path(__file__).resolve().parents[1] / "fpga" / "scripts"
 pytestmark = pytest.mark.skipif(not DB.exists(), reason="dashboard DB not mounted")
 sys.path.insert(0, str(SCRIPTS))
+OI_AT_IMPORT = os.environ.get("WNN_ORDER_INDEPENDENT_TRAIN")
 
 
 def _adder_sums(trained, rows: np.ndarray) -> np.ndarray:
@@ -50,6 +52,12 @@ def trained(request):
 	source = FlowGenomeSource.read(str(DB), flow_id, "best_f1", "ga_neurons")
 	assert source.params["neuron_sample_rate"] == rate
 	return FlowLayerTrainer(log=lambda m: None).train(source)
+
+
+def test_export_leaves_the_environment_alone(trained):
+	"""Training sets the OI env var to the flow's value only for the call
+	(it used to leak into every later test of the process)."""
+	assert os.environ.get("WNN_ORDER_INDEPENDENT_TRAIN") == OI_AT_IMPORT
 
 
 def test_export_reproduces_the_recorded_row(trained):

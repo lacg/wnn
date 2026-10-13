@@ -41,15 +41,31 @@ class FlowLayerTrainer:
 		from wnn.ram.experiments.IdsEvaluatorSettings import IdsEvaluatorSettings
 		settings = IdsEvaluatorSettings.from_params(source.params)
 		self._require_exportable(settings)
-		IdsEvaluatorSettings.apply_oi_env(source.params)
 		factory = IdsEvaluatorFactory(self._log)
 		dataset = factory.load(settings)
 		_, test_eval = factory.flat(dataset, settings)
-		layer = test_eval.export_trained_layer(source.genome())
+		layer = self._export_with_flow_oi(test_eval, source, settings.order_independent_train)
 		gate = FidelityGate(list(test_eval._y_test), test_eval._normal_class)
 		modes = gate.require(layer.eval_scores, source.threshold_metadata)
 		self._log(f"[FIDELITY] {modes} recorded threshold modes reproduced exactly")
 		return TrainedFlowGenome(source, settings, layer, dataset, list(test_eval._y_test), modes)
+
+	@staticmethod
+	def _export_with_flow_oi(test_eval, source: FlowGenomeSource, oi: bool):
+		"""Train with the env var the Rust trainer reads set EXACTLY to the
+		flow's OI setting (on -> "1", off -> unset, whatever the caller's shell
+		has), restoring the caller's environment afterwards."""
+		import os
+		from wnn.ram.experiments.IdsEvaluatorSettings import OI_ENV
+		previous = os.environ.pop(OI_ENV, None)
+		if oi:
+			os.environ[OI_ENV] = "1"
+		try:
+			return test_eval.export_trained_layer(source.genome())
+		finally:
+			os.environ.pop(OI_ENV, None)
+			if previous is not None:
+				os.environ[OI_ENV] = previous
 
 	@staticmethod
 	def _require_exportable(settings) -> None:
