@@ -1597,48 +1597,168 @@ def _refit_thresholds_from_student(args, ec, seeds, grid, winner_genome):
 	return thr
 
 
-def _stage_entries_from_checkpoints(ckpt_dir) -> list:
+def _stage_entry_from_checkpoint(path, top_k: int | None = None):
+	"""(LABEL, spec, res-like, iterations_run) for ONE stage checkpoint, or None
+	when the file is not a usable stage checkpoint (no spec / no genome).
+
+	The label comes from the checkpoint's own `phase_name` (GRID, NEURONS, ...),
+	the res-like carries `final_population` (fitness-sorted, so pop[0] is the
+	published genome) and `best_genome` — exactly what `_select_headline_stage`
+	and `_maybe_holdout` read. top_k=None loads the whole population; an int
+	streams only the first top_k members (bounded memory: a b24 n256 stage file is
+	~3.4 GB of YAML text, and stage-select never reads past pop[:K])."""
+	from types import SimpleNamespace
+	from wnn.control.evaluator import ControllerSpec
+	from wnn.ram.strategies.phased.checkpoint import load_checkpoint, load_checkpoint_top_k
+	from wnn.ram.strategies.phased.codecs import ControllerGenomeCodec
+
+	codec = ControllerGenomeCodec()
+	cp = (load_checkpoint(str(path), codec) if top_k is None
+	      else load_checkpoint_top_k(str(path), codec, top_k))
+	if cp is None:
+		return None
+	name = Path(str(path)).name
+	spec_d = (cp.extra or {}).get("spec")
+	if not isinstance(spec_d, dict):
+		print(f"  [stage-ckpt] {name}: no spec in checkpoint — skipped")
+		return None
+	pop = list(cp.final_population or [])
+	if not pop:
+		if cp.best_genome is None:
+			print(f"  [stage-ckpt] {name}: neither population nor best_genome — skipped")
+			return None
+		pop = [cp.best_genome]
+	label = str(cp.phase_name or name).upper()
+	print(f"  [stage-ckpt] {name}: {label} population={len(pop)}"
+	      f"{'' if top_k is None else f' (top-{top_k} streamed)'}")
+	return (label, ControllerSpec(**spec_d),
+	        SimpleNamespace(final_population=pop, best_genome=cp.best_genome),
+	        int(cp.iterations_run or 0))
+
+
+def _stage_entries_from_checkpoints(ckpt_dir, top_k: int | None = None) -> list:
 	"""Rebuild `stage_entries` from a run's saved stage checkpoints.
 
 	Reads `stageN_<name>.yaml.gz` (emergency dumps ignored — they are mid-stage
 	snapshots of a stage that also has a final one) and returns them in stage
 	order as (LABEL, spec, res-like). The label comes from the checkpoint's own
 	`phase_name`, so this never needs to know which stages a run happened to
-	execute. Each entry carries the stage's saved `final_population`, which is
-	exactly what `_select_headline_stage` slices its top-K from."""
+	execute. Each entry carries the stage's saved `final_population` (whole, or
+	only its first `top_k` members when given — see _stage_entry_from_checkpoint),
+	which is exactly what `_select_headline_stage` slices its top-K from."""
 	import re
-	from pathlib import Path
-	from types import SimpleNamespace
-	from wnn.control.evaluator import ControllerSpec
-	from wnn.ram.strategies.phased.checkpoint import load_checkpoint
-	from wnn.ram.strategies.phased.codecs import ControllerGenomeCodec
 
-	codec = ControllerGenomeCodec()
 	found = []
 	for p in sorted(Path(ckpt_dir).glob("stage*_*.yaml.gz")):
 		m = re.match(r"stage(\d+)_", p.name)
 		if m is None:
 			continue
-		cp = load_checkpoint(str(p), codec)
-		if cp is None:
-			continue
-		spec_d = (cp.extra or {}).get("spec")
-		if not isinstance(spec_d, dict):
-			print(f"  [recalc] {p.name}: no spec in checkpoint — skipped")
-			continue
-		pop = list(cp.final_population or [])
-		if not pop:
-			if cp.best_genome is None:
-				print(f"  [recalc] {p.name}: neither population nor best_genome — skipped")
-				continue
-			pop = [cp.best_genome]
-		label = str(cp.phase_name or p.name).upper()
-		found.append((int(m.group(1)), label,
-		              (label, ControllerSpec(**spec_d),
-		               SimpleNamespace(final_population=pop, best_genome=cp.best_genome))))
-		print(f"  [recalc] {p.name}: {label} population={len(pop)}")
+		e = _stage_entry_from_checkpoint(p, top_k)
+		if e is not None:
+			found.append((int(m.group(1)), e[:3]))
 	found.sort(key=lambda t: t[0])
-	return [e for _sn, _lbl, e in found]
+	return [e for _sn, e in found]
+
+
+def _stage_select_top_k(args) -> int:
+	"""The K of the union stage-select (top-K genomes of every stage)."""
+	from wnn.control.controller_orchestrator import ControllerOrchestrator
+	return max(1, int(getattr(args, "stage_select_top_k",
+	                          ControllerOrchestrator.STAGE_SELECT_TOP_K)))
+
+
+def _report_seeds_configured(args) -> bool:
+	"""True when the run publishes held-out rows (--report-seeds or --report-seed)."""
+	return bool(getattr(args, "report_seeds", None)) or getattr(args, "report_seed", None) is not None
+
+
+def _resume_completed_stages(args, resume_state: dict, resume_start_stage: int,
+                             skip_stages: set) -> list:
+	"""Stages an UNINTERRUPTED run would have finished before `resume_start_stage`
+	— the ones a resume must reload so its stage-select and per-stage report match
+	(13/10/2026, _tw20 s2: a stage-4 resume ranked 3 MEMORY candidates, not 9).
+
+	Returns [(stage_num, name, path-or-None)] in stage order. GRID (0) is listed
+	only when report seeds are set, because only then does a fresh run make it a
+	candidate (_run_one's `_grid_stage_entry`). --skip-stages members are left out
+	(a fresh run produced nothing for them either). Under --resume-mode next the
+	DUMPED stage was cut short by choice; its final checkpoint is used when one
+	exists, else path=None = "use the emergency snapshot itself" (said loudly).
+
+	FAILS LOUDLY when a required stage checkpoint is missing: a resume that quietly
+	ranked fewer candidates is how the 3-candidate headline got banked."""
+	from wnn.control.controller_orchestrator import _STAGES
+	from wnn.ram.strategies.phased.checkpoint import find_checkpoint_file
+	names = {0: "grid"}
+	names.update({i: key for i, (key, _n, _k, _d) in enumerate(_STAGES, start=1)})
+	want = [0] if _report_seeds_configured(args) else []
+	want += [sn for sn in range(1, resume_start_stage) if names[sn] not in skip_stages]
+	if not want:
+		return []
+	ckpt_dir = getattr(args, "save_stage_checkpoints", None)
+	_sn = resume_state.get("stage_num")
+	dumped = int(_sn) if _sn is not None else None
+	mode = (resume_state.get("resume_mode") or "same").lower()
+	out, missing = [], []
+	for sn in want:
+		p = (find_checkpoint_file(Path(ckpt_dir) / f"stage{sn}_{names[sn]}.pkl")
+		     if ckpt_dir else None)
+		if p is None and mode == "next" and sn == dumped:
+			print(f"  [resume] WARNING Stage {sn} ({names[sn].upper()}) has no FINAL checkpoint "
+			      f"(--resume-mode next cut it short) — its stage-select candidates are the "
+			      f"EMERGENCY SNAPSHOT (gen {resume_state.get('generation')}), not a finished stage")
+		elif p is None:
+			missing.append(f"stage{sn}_{names[sn]}.yaml.gz")
+		out.append((sn, names[sn], p))
+	if missing:
+		raise SystemExit(
+			f"[resume] REFUSING to resume at stage {resume_start_stage}: the finished "
+			f"stage checkpoint(s) {missing} are missing from "
+			f"{ckpt_dir or '(no --save-stage-checkpoints dir)'}. An uninterrupted run "
+			f"ranks the top-{_stage_select_top_k(args)} of EVERY stage and publishes every "
+			f"stage's held-out; resuming without them would silently shrink both. "
+			f"Re-run from scratch, or restore the checkpoints.")
+	return out
+
+
+def _reload_completed_stages(args, ec: EpisodeConfig, seeds, resume_state: dict,
+                             completed: list) -> list:
+	"""Reload each finished stage (top-K only) and re-publish its held-out, in stage
+	order, where a fresh run would have published it (before the resumed stage).
+	Returns [(LABEL, spec, res-like, held-out-or-None)].
+
+	Identity with an uninterrupted run: the candidates are the stage checkpoint's
+	pop[:K] — the genomes `_release_prior_populations` keeps — and the held-out
+	RESULT / MULTI-SEED rows score pop[0], the genome a fresh run scores. The
+	checkpoint is written before (stages 1-4) or after (GRID) that held-out, and
+	both paths train on the train seed under train-seed thresholds, so the rows are
+	the ones the killed attempt printed. Only the DESCRIPTIVE "population" line
+	differs: it spans the top-K here instead of the fresh run's 8-genome sample.
+
+	The "STAGE n (NAME) done" line keeps the marker's per-stage anchors working
+	(controller_arm_lib.sh `held_neurons`)."""
+	from types import SimpleNamespace
+	k = _stage_select_top_k(args)
+	out = []
+	for sn, name, path in completed:
+		if path is None:   # --resume-mode next, no final checkpoint: the dump itself
+			pop = list(resume_state.get("population") or [])[:k]
+			spec = resume_state.get("spec")
+			res = SimpleNamespace(final_population=pop or None,
+			                      best_genome=resume_state.get("best_genome"))
+			label, iters, src = name.upper(), resume_state.get("generation"), "the emergency snapshot"
+		else:
+			e = _stage_entry_from_checkpoint(path, top_k=k)
+			if e is None:
+				raise SystemExit(f"[resume] stage checkpoint {path} is unusable (no spec/genome) — "
+				                 f"refusing to resume with a shrunken stage-select pool")
+			label, spec, res, iters = e
+			src = str(path)
+		print(f"  STAGE {sn} ({label}) done: reloaded on resume from {src} "
+		      f"(gen {iters}; finished by an earlier attempt — not re-run)")
+		ho = _maybe_holdout(args, ec, spec, res, seeds, label)
+		out.append((label, spec, res, ho))
+	return out
 
 
 def _recalc_headline(args, ec: EpisodeConfig) -> None:
@@ -1649,7 +1769,8 @@ def _recalc_headline(args, ec: EpisodeConfig) -> None:
 	prints. The caller must pass the SAME flags the original run used — the seeds,
 	the episodes and the scoring all derive from them, so a mismatched flag would
 	silently produce a number that is not comparable with the original."""
-	entries = _stage_entries_from_checkpoints(args.recalc_headline)
+	entries = _stage_entries_from_checkpoints(args.recalc_headline,
+	                                          top_k=_stage_select_top_k(args))
 	if not entries:
 		raise SystemExit(f"--recalc-headline: no usable stage checkpoints in {args.recalc_headline}")
 	base = args.base_seed if args.base_seed is not None else args.seed
@@ -2119,6 +2240,18 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 			raise ValueError(f"unknown resume_mode {resume_mode!r}; expected 'same' or 'next'")
 		print(f"\n[resume] dumped stage={dumped_stage} mode={resume_mode!r} → starting at "
 		      f"stage {resume_start_stage} (pop={len(resume_state.get('population') or [])} genomes)")
+	# A RESUME (not a --seed-winner curriculum start, whose earlier stages never ran
+	# in this run) must reproduce the uninterrupted run's stage-select pool and
+	# per-stage report, so the stages finished by the killed attempt are reloaded
+	# from their stage checkpoints. Resolved HERE, before any work, so a missing
+	# checkpoint refuses the resume in seconds instead of after the resumed stage.
+	# (13/10/2026: _tw20 s2 resumed at MEMORY and ranked 3 candidates, not 9.)
+	_completed = []
+	if resume_state is not None and resume_state.get("resume_source") != "seed_winner":
+		_completed = _resume_completed_stages(args, resume_state, resume_start_stage, skip_stages)
+		if _completed:
+			print(f"[resume] reloading finished stage(s) "
+			      f"{[n.upper() for _sn, n, _p in _completed]} for stage-select + held-out")
 
 	# Stage 0 — grid. Skipped on resume (only its winner_spec matters and the
 	# resume's captured `spec` carries that forward).
@@ -2188,6 +2321,22 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 			raise ValueError("resume_state missing both spec and best_genome — cannot determine winner_spec")
 		stage_results = [("Grid (skipped on resume)", winner_spec, None, 0.0, 0)]
 
+	# Finished stages of the killed attempt: their top-K rejoin the stage-select
+	# pool and their held-out is re-published, in stage order, before the resumed
+	# stage runs — the same place an uninterrupted run publishes them.
+	_reloaded_entries, _reloaded_holdouts = [], {}
+	for _lbl, _spec, _res, _ho in _reload_completed_stages(args, ec, seeds, resume_state, _completed):
+		if _ho is not None:
+			_reloaded_holdouts[_lbl] = _ho
+		if _lbl == "GRID":
+			# Fresh-run rule: GRID is a candidate only when its held-out was scored.
+			if _ho is not None:
+				_grid_stage_entry, _grid_holdout = (_lbl, _spec, _res), _ho
+			continue
+		_reloaded_entries.append((_lbl, _spec, _res))
+	if stage_holdouts is not None:
+		stage_holdouts.update(_reloaded_holdouts)
+
 	# ---- Stages 1-4 via the shared PhasedOrchestrator ----------------------
 	# The controller's phase sequencing lives ONCE in ControllerOrchestrator (on
 	# the same PhasedOrchestrator skeleton IDS uses). The hand-rolled Stage 1-4
@@ -2230,10 +2379,16 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 		_all_ho.update(stage_holdouts)
 	if _grid_holdout is not None:
 		_all_ho.setdefault("GRID", _grid_holdout)
+	for _lbl, _ho in _reloaded_holdouts.items():
+		_all_ho.setdefault(_lbl, _ho)
 	# GRID + every stage the orchestrator actually ran. The stage list comes from
 	# the orchestrator's own registry (see ControllerOrchestrator.stage_entries) —
 	# naming stages here is what dropped BITS and CONNECTIONS from selection.
+	# On a resume, the stages finished by the killed attempt (reloaded above) sit
+	# between GRID and the orchestrator's stages: all < resume_start_stage, so the
+	# concatenation keeps stage order.
 	_entries = [e for e in [_grid_stage_entry] if e is not None]
+	_entries.extend(_reloaded_entries)
 	_entries.extend(orch.stage_entries())
 	if _entries:
 		try:
@@ -3226,6 +3381,9 @@ def main():
 		_sw_stage = getattr(args, "seed_winner_stage", "neurons")
 		resume_state["stage_num"] = _sw_stage_map.get(_sw_stage, 0)
 		resume_state["resume_mode"] = "next"
+		# Not a resume: the skipped stages never ran in THIS run, so there is
+		# nothing finished to reload into stage-select (_resume_completed_stages).
+		resume_state["resume_source"] = "seed_winner"
 		_sw_desc = {
 			"neurons": "NEURONS warm-started (full arch re-search)",
 			"bits": "BITS onward (neuron-count frozen)",

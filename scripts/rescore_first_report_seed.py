@@ -243,7 +243,7 @@ def process_marker(path: str, stages: list[str], dry_run: bool, log) -> str:
 			continue
 		if entries is None:
 			from wnn.control.phased_ga import _stage_entries_from_checkpoints
-			entries = _stage_entries_from_checkpoints(ck)
+			entries = _stage_entries_from_checkpoints(ck, top_k=1)   # pop[0] only
 		spec, genome = load_stage_genome(entries, stage)
 		if genome is None:
 			align[stage] = dict(seed=s1, status="skip: no stage checkpoint")
