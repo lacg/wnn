@@ -310,6 +310,8 @@ def test_streaming_multiclass_at_thresholds_parity():
 	r_stream = ev_stream.evaluate_multiclass_at_thresholds(_make_multiclass_genome())
 
 	assert r_stream["num_classes"] == 4
+	# Footprint (ABI 17): both paths train the same logical genome.
+	assert r_stream["footprint"].logical_neurons == r_inmem["footprint"].logical_neurons
 	assert set(r_stream["modes"]) == set(r_inmem["modes"]), \
 		f"mode sets differ: {set(r_stream['modes'])} vs {set(r_inmem['modes'])}"
 	assert "margin_val_cal" in r_stream["modes"], "val partition must produce margin_val_cal"

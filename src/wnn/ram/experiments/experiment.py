@@ -1314,6 +1314,7 @@ class Experiment:
 		f1 = None
 		fpr_val = None
 		cached_threshold_metadata = None
+		footprint = None  # IDS-37: logical + physical size of the trained genome
 		if cached is not None:
 			result = cached
 			ce, acc = result[0], result[1]
@@ -1321,6 +1322,7 @@ class Experiment:
 			f1 = result[2] if len(result) > 2 else None
 			fpr_val = result[3] if len(result) > 3 else None
 			cached_threshold_metadata = result[4] if len(result) > 4 else None
+			cached_footprint = result[5] if len(result) > 5 else None
 			# Option B: invalidate cache if per_class is missing — re-run for completeness
 			_needs_per_class = (val_evaluator is not None
 				and getattr(val_evaluator, "_y_test_multi", None) is not None)
@@ -1417,6 +1419,7 @@ class Experiment:
 				_t0 = _time.time()
 				_mc = val_evaluator.evaluate_multiclass_at_thresholds(genome)
 				threshold_metadata = _mc['modes']
+				footprint = _mc.get('footprint')
 				if 'margin_val_cal' in threshold_metadata:
 					self.log(f"    [PROTOCOL-V2] margin_val_cal tau calibrated on val partition; "
 							 f"test partition is report-only")
@@ -1467,7 +1470,7 @@ class Experiment:
 				_t0 = _time.time()
 				# Single training pass: returns eval/train scores + metrics
 				# at the requested thresholds (-1.0 oracle, 0.5 fixed).
-				eval_scores, train_scores, val_scores, anchor_metrics = val_evaluator.evaluate_at_thresholds(
+				eval_scores, train_scores, val_scores, anchor_metrics, footprint = val_evaluator.evaluate_at_thresholds(
 					genome, [-1.0, 0.5],
 				)
 				oracle_metrics, fixed_metrics = anchor_metrics
@@ -1659,6 +1662,10 @@ class Experiment:
 
 		# Collect results keyed by genome_type (use .value for dict key)
 		results[genome_type.value] = {'ce': ce, 'acc': acc, 'f1': f1, 'fpr': fpr_val}
+		if footprint is None and cached is not None:
+			footprint = cached_footprint
+		if footprint is not None:
+			self.log(f"    Footprint:   {footprint.render(genome.bits_per_neuron)}")
 
 		# Always store summary via dashboard API (even if cached)
 		# This ensures each (experiment_id, validation_point, genome_type) has a record
@@ -1676,6 +1683,7 @@ class Experiment:
 					fpr=fpr_val,
 					threshold_metadata=json.dumps(threshold_metadata) if threshold_metadata else None,
 					scope=self.validation_scope,
+					footprint=footprint,
 				)
 			except Exception as e:
 				self.log(f"  Warning: Failed to save {genome_type.value} summary: {e}")

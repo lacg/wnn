@@ -25,6 +25,7 @@ import numpy as np
 
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 from wnn.ram.metrics import IDSMetrics, Metrics
+from wnn.ram.footprint import Footprint
 from wnn.ram.architecture.base_evaluator import BaseEvaluator, EvalResult, OffspringSearchResult
 
 
@@ -656,7 +657,7 @@ class IDSEvaluator(BaseEvaluator):
 		self,
 		genome,
 		thresholds: list[float],
-	) -> tuple[list[float], list[float], Optional[list[float]], list[Metrics]]:
+	) -> tuple[list[float], list[float], Optional[list[float]], list[Metrics], Footprint]:
 		"""Train ONCE, score eval+train (+val), evaluate metrics at multiple thresholds.
 
 		Returns:
@@ -667,6 +668,9 @@ class IDSEvaluator(BaseEvaluator):
 			metrics: list of Metrics (ce, acc, f1, fpr, threshold) — one per
 				threshold in `thresholds`. A threshold of -1.0 is the oracle
 				sentinel: sweeps eval scores for the optimal F1 threshold.
+			footprint: logical AND physical neurons/cells of the trained genome
+				(IDS-37 stage 3; physical < logical when the multiplicity layer
+				collapsed duplicate neurons).
 
 		Replaces 7×evaluate_batch_full + score_examples + score_train_examples
 		(9 trainings) with a single training pass.
@@ -685,7 +689,7 @@ class IDSEvaluator(BaseEvaluator):
 			return self._evaluate_at_thresholds_streaming(genome, thresholds)
 
 		bits_flat, neurons_flat, connections_flat = self._flatten_genomes([genome])
-		eval_scores, train_scores, val_scores, raw_metrics = self._cache.evaluate_at_thresholds(
+		eval_scores, train_scores, val_scores, raw_metrics, raw_footprint = self._cache.evaluate_at_thresholds(
 			bits_flat, neurons_flat, connections_flat,
 			thresholds,
 			self._empty_value, self._neuron_sample_rate, 0,
@@ -694,7 +698,7 @@ class IDSEvaluator(BaseEvaluator):
 			IDSMetrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=t)
 			for (ce, acc, f1, fpr, t) in raw_metrics
 		]
-		return eval_scores, train_scores, val_scores, metrics
+		return eval_scores, train_scores, val_scores, metrics, Footprint.from_tuple(raw_footprint)
 
 	def evaluate_multiclass_at_thresholds(self, genome) -> dict:
 		"""Train ONCE, score eval/train(/val) as K-vectors, return per-mode
@@ -706,7 +710,7 @@ class IDSEvaluator(BaseEvaluator):
 		Protocol v2, only when a val partition exists)}.
 
 		Returns:
-			{'num_classes': K, 'modes': {mode_name: {
+			{'num_classes': K, 'footprint': Footprint, 'modes': {mode_name: {
 				'ce', 'acc', 'macro_f1', 'weighted_f1', 'benign_fpr',
 				'f1', 'fpr',    # aliases (= macro_f1 / benign_fpr) so shared
 				                # consumers (leaderboard submit, 5-table
@@ -718,10 +722,10 @@ class IDSEvaluator(BaseEvaluator):
 		"""
 		import math
 		if self._streaming_mode:
-			num_classes, mode_results = self._evaluate_multiclass_streaming(genome)
+			num_classes, mode_results, raw_footprint = self._evaluate_multiclass_streaming(genome)
 		else:
 			bits_flat, neurons_flat, connections_flat = self._flatten_genomes([genome])
-			num_classes, mode_results = self._cache.evaluate_multiclass_at_thresholds(
+			num_classes, mode_results, raw_footprint = self._cache.evaluate_multiclass_at_thresholds(
 				bits_flat, neurons_flat, connections_flat,
 				self._empty_value, self._neuron_sample_rate, 0,
 			)
@@ -752,7 +756,7 @@ class IDSEvaluator(BaseEvaluator):
 			if not math.isnan(tau):
 				entry['tau'] = tau
 			modes[mode] = entry
-		return {'num_classes': num_classes, 'modes': modes}
+		return {'num_classes': num_classes, 'footprint': Footprint.from_tuple(raw_footprint), 'modes': modes}
 
 	def evaluate_batch_full(
 		self,
@@ -983,7 +987,7 @@ class IDSEvaluator(BaseEvaluator):
 		self,
 		genome,
 		thresholds: list[float],
-	) -> tuple[list[float], list[float], Optional[list[float]], list[Metrics]]:
+	) -> tuple[list[float], list[float], Optional[list[float]], list[Metrics], Footprint]:
 		"""Streaming evaluate_at_thresholds (Protocol v2): train ONCE via
 		IDSGenomeStreamer, then score eval + train (+ materialized val) sets
 		from the sealed memory via multi-set take_scores passes.
@@ -998,6 +1002,7 @@ class IDSEvaluator(BaseEvaluator):
 
 		streamer = self._build_streamer(genome)
 		self._streaming_train_pass(streamer, self._train_stream)
+		footprint = Footprint.from_tuple(streamer.footprint())
 
 		eval_scores = self._streaming_score_stream(streamer, self._eval_stream)
 		train_scores = self._streaming_score_stream(streamer, self._train_stream)
@@ -1018,16 +1023,16 @@ class IDSEvaluator(BaseEvaluator):
 				eval_scores, self._y_test, resolved, self._normal_class,
 			)
 			metrics.append(IDSMetrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=resolved))
-		return eval_scores, train_scores, val_scores, metrics
+		return eval_scores, train_scores, val_scores, metrics, footprint
 
-	def _evaluate_multiclass_streaming(self, genome) -> "tuple[int, list]":
+	def _evaluate_multiclass_streaming(self, genome) -> "tuple[int, list, tuple]":
 		"""Streaming multiclass Protocol v2: train ONCE via IDSGenomeStreamer,
 		score eval + train (+ materialized val) as flat K-vectors
 		(`take_scores` drains rows × K), then compute the decode-mode
 		metrics Rust-side. `multiclass_modes_from_scores` returns the exact
 		`(num_classes, mode tuples)` contract of the in-memory
-		`IDSCacheWrapper.evaluate_multiclass_at_thresholds`, so the caller's
-		dict building is shared.
+		`IDSCacheWrapper.evaluate_multiclass_at_thresholds` (plus the sealed
+		memory's footprint tuple, ABI 17), so the caller's dict building is shared.
 
 		Memory note: the flat train-score buffer is rows × K floats as a
 		Python list (~11M for the 1.4M×K=8 subsample — fine; a 46M
@@ -1040,6 +1045,7 @@ class IDSEvaluator(BaseEvaluator):
 			streamer, self._train_stream,
 			train_labels=self._stream_label_override(self._y_train),
 		)
+		raw_footprint = streamer.footprint()
 		eval_flat = self._streaming_score_stream(
 			streamer, self._eval_stream, labels=self._stream_label_override(self._y_test),
 		)
@@ -1050,13 +1056,14 @@ class IDSEvaluator(BaseEvaluator):
 		val_flat = None
 		if val_encoded is not None:
 			val_flat = self._streaming_score_encoded(streamer, val_encoded, self._y_val)
-		return ram_accelerator.multiclass_modes_from_scores(
+		num_classes, mode_results = ram_accelerator.multiclass_modes_from_scores(
 			eval_flat, self._y_test,
 			train_flat, self._y_train,
 			self._num_classes, self._normal_class,
 			val_scores=val_flat,
 			val_labels=self._y_val if val_flat is not None else None,
 		)
+		return num_classes, mode_results, raw_footprint
 
 	def _evaluate_batch_streaming_kfold(
 		self,
