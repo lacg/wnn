@@ -225,6 +225,17 @@ impl<'a> HybridBatchConfig<'a>
 		)
 	}
 
+	/// The sampling seed EVERY genome of this call trains with, on every route
+	/// (batched dispatch, shape group, hybrid arms, per-genome, eval-in-place).
+	/// It used to be the genome's batch position (rng_seed + batch_start /
+	/// + genome_idx) — and the batch size comes from the available memory, so
+	/// a rate < 1.0 genome's mask (and score) moved with the machine's free RAM.
+	/// The mask is keyed on (seed, neuron index, example) in the kernel.
+	fn train_seed(&self) -> u64
+	{
+		self.rng_seed
+	}
+
 	/// Concurrent genomes the memory budget (60% of available) allows.
 	fn budget_batch_size(&self, num_genomes: usize, cpu_cores: usize) -> usize
 	{
@@ -342,7 +353,7 @@ fn train_one_genome_cpu(
 		cfg.total_input_bits,
 		cfg.empty_value,
 		cfg.neuron_sample_rate,
-		cfg.rng_seed.wrapping_add(genome_idx as u64),
+		cfg.train_seed(),
 		cfg.class_weights,
 		cfg.memory_mode,
 	)
@@ -384,7 +395,7 @@ fn train_one_genome_cpu(
 					cfg.total_input_bits,
 					gpu_addresses.as_deref(),
 					cfg.neuron_sample_rate,
-					cfg.rng_seed.wrapping_add(genome_idx as u64),
+					cfg.train_seed(),
 					cfg.memory_mode,
 					cfg.class_weights,
 					true,
@@ -436,7 +447,7 @@ fn train_one_genome_cpu(
 						chunk_start..chunk_end,
 						chunk_len,
 						cfg.neuron_sample_rate,
-						cfg.rng_seed.wrapping_add(genome_idx as u64),
+						cfg.train_seed(),
 						cfg.memory_mode,
 						cfg.class_weights,
 						true,
@@ -550,9 +561,7 @@ fn try_eval_in_place_batch(
 		let bits = &cfg.genomes_bits_flat[cfg.genome_bpn_offsets[g]..cfg.genome_bpn_offsets[g + 1]];
 		let conns =
 			&cfg.genomes_connections_flat[cfg.conn_offsets[g]..cfg.conn_offsets[g] + cfg.conn_sizes[g]];
-		// Seed matches the per-genome route the chunked regime otherwise takes
-		// (train_one_genome_cpu → train_single_via_marker: rng_seed + genome_idx;
-		// identical to the Option-B batch seed at batch size 1).
+		// Same seed as every other route (HybridBatchConfig::train_seed).
 		let votes = match crate::marker_train::train_single_genome_chunked_scored(
 			bits,
 			conns,
@@ -564,7 +573,7 @@ fn try_eval_in_place_batch(
 			cfg.total_input_bits,
 			cfg.empty_value,
 			cfg.neuron_sample_rate,
-			cfg.rng_seed.wrapping_add(g as u64),
+			cfg.train_seed(),
 			cfg.class_weights,
 			eval_input_bits,
 			num_eval,
@@ -903,7 +912,6 @@ fn train_batch(
 		num_negatives,
 		empty_value,
 		neuron_sample_rate,
-		rng_seed,
 		class_weights,
 		genome_bpn_offsets,
 		conn_offsets,
@@ -1031,7 +1039,7 @@ fn train_batch(
 					total_input_bits,
 					empty_value,
 					neuron_sample_rate,
-					rng_seed.wrapping_add(batch_start as u64),
+					cfg.train_seed(),
 					class_weights,
 					cfg.memory_mode,
 				)
@@ -1122,7 +1130,7 @@ fn train_batch(
 					total_input_bits,
 					empty_value,
 					neuron_sample_rate,
-					rng_seed.wrapping_add(batch_start as u64),
+					cfg.train_seed(),
 					class_weights,
 					cfg.memory_mode,
 				)
@@ -1237,7 +1245,7 @@ fn train_batch(
 						total_input_bits,
 						empty_value,
 						neuron_sample_rate,
-						rng_seed.wrapping_add(gpu_batch_start as u64),
+						cfg.train_seed(),
 						class_weights,
 						cfg.memory_mode,
 					);
@@ -1866,5 +1874,74 @@ mod tests
 		let input = ram_core::packed_bits::PackedBits::empty(32);
 		let g = config(&bits, &npc, &conns, &offsets, &input).genomes(2);
 		assert_eq!((g[0].connections, g[1].connections), (&conns[..3], &conns[3..]));
+	}
+
+	/// Four 120n x 14b single-cluster genomes on random data, rate 0.25.
+	fn sampled_results(batch_size: &str) -> Vec<(f64, f64, f64, f64, f64)>
+	{
+		use rand::{Rng, SeedableRng};
+		let mut rng = rand::rngs::SmallRng::seed_from_u64(0x5EED);
+		let (tib, n_train, n_eval, neurons, bits, genomes) = (32usize, 400usize, 120usize, 120usize, 14usize, 4usize);
+		let rows = |n: usize, rng: &mut rand::rngs::SmallRng| {
+			let b: Vec<bool> = (0..n * tib).map(|_| rng.gen_bool(0.5)).collect();
+			ram_core::packed_bits::PackedBits::from_bool_slice(&b, tib)
+		};
+		let (train, eval) = (rows(n_train, &mut rng), rows(n_eval, &mut rng));
+		let train_y: Vec<i64> = (0..n_train).map(|_| rng.gen_range(0..2)).collect();
+		let eval_y: Vec<i64> = (0..n_eval).map(|_| rng.gen_range(0..2)).collect();
+		let conns: Vec<i64> = (0..genomes * neurons * bits).map(|_| rng.gen_range(0..tib as i64)).collect();
+		let settings = ram_core::neuron_memory::EvalSettings {
+			empty_value: 0.0,
+			memory_mode: ram_core::neuron_memory::QUAD_WEIGHTED,
+			normal_class: 0,
+			fitness_weights: None,
+			run_seed: 0,
+			coverage_aware: false,
+		};
+		std::env::set_var("WNN_BATCH_SIZE", batch_size);
+		let out = evaluate_genomes_parallel_hybrid(
+			&vec![bits; genomes * neurons],
+			&vec![neurons; genomes],
+			&conns,
+			genomes,
+			1,
+			&train,
+			&train_y,
+			&[],
+			n_train,
+			0,
+			&eval,
+			&eval_y,
+			n_eval,
+			tib,
+			settings,
+			0.25,
+			0,
+			None,
+		);
+		std::env::remove_var("WNN_BATCH_SIZE");
+		out.into_iter().map(|(ce, acc, f1, fpr, t, _ms)| (ce, acc, f1, fpr, t)).collect()
+	}
+
+	/// Regression: below rate 1.0 a genome's sampling mask was seeded from its
+	/// BATCH position (rng_seed + batch_start for every genome of a batched
+	/// dispatch, rng_seed + genome_idx on the per-genome route), and the batch
+	/// size comes from the AVAILABLE MEMORY — so the same genome scored
+	/// differently with the machine's free memory. Every route now trains
+	/// with the call's seed.
+	#[test]
+	fn sampled_results_do_not_depend_on_batch_size()
+	{
+		if !crate::marker_train::batched_path::trainer_available()
+		{
+			eprintln!("[eval_hybrid] no Metal device — skipping");
+			return;
+		}
+		let one = sampled_results("1");
+		let four = sampled_results("4");
+		let bits = |v: &[(f64, f64, f64, f64, f64)]| {
+			v.iter().map(|r| [r.0.to_bits(), r.1.to_bits(), r.2.to_bits(), r.3.to_bits(), r.4.to_bits()]).collect::<Vec<_>>()
+		};
+		assert_eq!(bits(&one), bits(&four));
 	}
 }
