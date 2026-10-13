@@ -1,0 +1,162 @@
+[
+ {
+  "source": "SP-unswt-abl2s-16bWb-n10-r98954",
+  "name": "IDS38-unswt-BINARY-16bWb-r98954-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 memory-mode re-check (Luiz 13/10/2026): BINARY ablation arm with the ABI-17 fixes (bug 3: GPU duplicate-slot/CAS lost writes), rate 1.0, paired with the IDS38 QUAD control on the same seed."
+ },
+ {
+  "source": "SP-unswt-abl3s-16bWb-n10-r98954",
+  "name": "IDS38-unswt-TERNARY-16bWb-r98954-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 memory-mode re-check (Luiz 13/10/2026): TERNARY ablation arm with the ABI-17 fixes (bug 3: GPU duplicate-slot/CAS lost writes), rate 1.0, paired with the IDS38 QUAD control on the same seed."
+ },
+ {
+  "source": "SP-unswt-abl2s-16bWb-n10-r77715",
+  "name": "IDS38-unswt-BINARY-16bWb-r77715-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 memory-mode re-check (Luiz 13/10/2026): BINARY ablation arm with the ABI-17 fixes (bug 3: GPU duplicate-slot/CAS lost writes), rate 1.0, paired with the IDS38 QUAD control on the same seed."
+ },
+ {
+  "source": "SP-unswt-abl3s-16bWb-n10-r77715",
+  "name": "IDS38-unswt-TERNARY-16bWb-r77715-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 memory-mode re-check (Luiz 13/10/2026): TERNARY ablation arm with the ABI-17 fixes (bug 3: GPU duplicate-slot/CAS lost writes), rate 1.0, paired with the IDS38 QUAD control on the same seed."
+ },
+ {
+  "source": "SP-unswt-abl2s-16bWb-n10-r25052",
+  "name": "IDS38-unswt-BINARY-16bWb-r25052-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 memory-mode re-check (Luiz 13/10/2026): BINARY ablation arm with the ABI-17 fixes (bug 3: GPU duplicate-slot/CAS lost writes), rate 1.0, paired with the IDS38 QUAD control on the same seed."
+ },
+ {
+  "source": "SP-unswt-abl3s-16bWb-n10-r25052",
+  "name": "IDS38-unswt-TERNARY-16bWb-r25052-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 memory-mode re-check (Luiz 13/10/2026): TERNARY ablation arm with the ABI-17 fixes (bug 3: GPU duplicate-slot/CAS lost writes), rate 1.0, paired with the IDS38 QUAD control on the same seed."
+ },
+ {
+  "source": "SP-unswt-abl2s-16bWb-n10-r72261",
+  "name": "IDS38-unswt-BINARY-16bWb-r72261-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 memory-mode re-check (Luiz 13/10/2026): BINARY ablation arm with the ABI-17 fixes (bug 3: GPU duplicate-slot/CAS lost writes), rate 1.0, paired with the IDS38 QUAD control on the same seed."
+ },
+ {
+  "source": "SP-unswt-abl3s-16bWb-n10-r72261",
+  "name": "IDS38-unswt-TERNARY-16bWb-r72261-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 memory-mode re-check (Luiz 13/10/2026): TERNARY ablation arm with the ABI-17 fixes (bug 3: GPU duplicate-slot/CAS lost writes), rate 1.0, paired with the IDS38 QUAD control on the same seed."
+ },
+ {
+  "source": "SP-unswt-abl2s-16bWb-n10-r67145",
+  "name": "IDS38-unswt-BINARY-16bWb-r67145-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 memory-mode re-check (Luiz 13/10/2026): BINARY ablation arm with the ABI-17 fixes (bug 3: GPU duplicate-slot/CAS lost writes), rate 1.0, paired with the IDS38 QUAD control on the same seed."
+ },
+ {
+  "source": "SP-unswt-abl3s-16bWb-n10-r67145",
+  "name": "IDS38-unswt-TERNARY-16bWb-r67145-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 memory-mode re-check (Luiz 13/10/2026): TERNARY ablation arm with the ABI-17 fixes (bug 3: GPU duplicate-slot/CAS lost writes), rate 1.0, paired with the IDS38 QUAD control on the same seed."
+ },
+ {
+  "source": "SP-unswt-abl2s-16bWb-n10-r88120",
+  "name": "IDS38-unswt-BINARY-16bWb-r88120-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 memory-mode re-check (Luiz 13/10/2026): BINARY ablation arm with the ABI-17 fixes (bug 3: GPU duplicate-slot/CAS lost writes), rate 1.0, paired with the IDS38 QUAD control on the same seed."
+ },
+ {
+  "source": "SP-unswt-abl3s-16bWb-n10-r88120",
+  "name": "IDS38-unswt-TERNARY-16bWb-r88120-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 memory-mode re-check (Luiz 13/10/2026): TERNARY ablation arm with the ABI-17 fixes (bug 3: GPU duplicate-slot/CAS lost writes), rate 1.0, paired with the IDS38 QUAD control on the same seed."
+ },
+ {
+  "source": "SP-unswt-abl2s-16bWb-n10-r34952",
+  "name": "IDS38-unswt-BINARY-16bWb-r34952-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 memory-mode re-check (Luiz 13/10/2026): BINARY ablation arm with the ABI-17 fixes (bug 3: GPU duplicate-slot/CAS lost writes), rate 1.0, paired with the IDS38 QUAD control on the same seed."
+ },
+ {
+  "source": "SP-unswt-abl3s-16bWb-n10-r34952",
+  "name": "IDS38-unswt-TERNARY-16bWb-r34952-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 memory-mode re-check (Luiz 13/10/2026): TERNARY ablation arm with the ABI-17 fixes (bug 3: GPU duplicate-slot/CAS lost writes), rate 1.0, paired with the IDS38 QUAD control on the same seed."
+ },
+ {
+  "source": "SP-unswt-abl2s-16bWb-n10-r58983",
+  "name": "IDS38-unswt-BINARY-16bWb-r58983-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 memory-mode re-check (Luiz 13/10/2026): BINARY ablation arm with the ABI-17 fixes (bug 3: GPU duplicate-slot/CAS lost writes), rate 1.0, paired with the IDS38 QUAD control on the same seed."
+ },
+ {
+  "source": "SP-unswt-abl3s-16bWb-n10-r58983",
+  "name": "IDS38-unswt-TERNARY-16bWb-r58983-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 memory-mode re-check (Luiz 13/10/2026): TERNARY ablation arm with the ABI-17 fixes (bug 3: GPU duplicate-slot/CAS lost writes), rate 1.0, paired with the IDS38 QUAD control on the same seed."
+ },
+ {
+  "source": "SP-unswt-abl2s-16bWb-n10-r63749",
+  "name": "IDS38-unswt-BINARY-16bWb-r63749-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 memory-mode re-check (Luiz 13/10/2026): BINARY ablation arm with the ABI-17 fixes (bug 3: GPU duplicate-slot/CAS lost writes), rate 1.0, paired with the IDS38 QUAD control on the same seed."
+ },
+ {
+  "source": "SP-unswt-abl3s-16bWb-n10-r63749",
+  "name": "IDS38-unswt-TERNARY-16bWb-r63749-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 memory-mode re-check (Luiz 13/10/2026): TERNARY ablation arm with the ABI-17 fixes (bug 3: GPU duplicate-slot/CAS lost writes), rate 1.0, paired with the IDS38 QUAD control on the same seed."
+ },
+ {
+  "source": "SP-unswt-abl2s-16bWb-n10-r35879",
+  "name": "IDS38-unswt-BINARY-16bWb-r35879-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 memory-mode re-check (Luiz 13/10/2026): BINARY ablation arm with the ABI-17 fixes (bug 3: GPU duplicate-slot/CAS lost writes), rate 1.0, paired with the IDS38 QUAD control on the same seed."
+ },
+ {
+  "source": "SP-unswt-abl3s-16bWb-n10-r35879",
+  "name": "IDS38-unswt-TERNARY-16bWb-r35879-rate1",
+  "set": {
+   "neuron_sample_rate": 1.0
+  },
+  "why": "IDS-38 memory-mode re-check (Luiz 13/10/2026): TERNARY ablation arm with the ABI-17 fixes (bug 3: GPU duplicate-slot/CAS lost writes), rate 1.0, paired with the IDS38 QUAD control on the same seed."
+ }
+]
