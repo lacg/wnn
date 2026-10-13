@@ -23,6 +23,35 @@ pub struct FlatGenome<'a>
 	pub connections: &'a [i64],
 }
 
+impl<'a> FlatGenome<'a>
+{
+	/// A flat genome BATCH (genome-major `bits`, `num_clusters` counts per
+	/// genome, unpadded genome-major `connections`) as per-genome slices.
+	/// Empty `connections` (kernel-generated random ones) gives every genome
+	/// empty connections.
+	pub fn split_batch(
+		bits_flat: &'a [usize],
+		neurons_flat: &'a [usize],
+		connections_flat: &'a [i64],
+		num_genomes: usize,
+		num_clusters: usize,
+	) -> Vec<FlatGenome<'a>>
+	{
+		let (mut b0, mut c0) = (0usize, 0usize);
+		let mut genomes = Vec::with_capacity(num_genomes);
+		for g in 0..num_genomes
+		{
+			let npc = &neurons_flat[g * num_clusters..(g + 1) * num_clusters];
+			let bits = &bits_flat[b0..b0 + npc.iter().sum::<usize>()];
+			let width = if connections_flat.is_empty() { 0 } else { bits.iter().sum::<usize>() };
+			genomes.push(FlatGenome { bits, neurons_per_cluster: npc, connections: &connections_flat[c0..c0 + width] });
+			b0 += bits.len();
+			c0 += width;
+		}
+		genomes
+	}
+}
+
 /// The collapsed batch: a flat genome of units plus each genome's logical -> unit map.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SuperGenome
@@ -130,6 +159,18 @@ mod tests
 	fn flat<'a>(bits: &'a [usize], npc: &'a [usize], conns: &'a [i64]) -> FlatGenome<'a>
 	{
 		FlatGenome { bits, neurons_per_cluster: npc, connections: conns }
+	}
+
+	#[test]
+	fn flat_genome_split_batch_unequal_widths()
+	{
+		// g0: 2 neurons (2b, 1b); g1: 1 neuron (3b) — unequal connection totals.
+		let (bits, npc, conns) = ([2usize, 1, 3], [2usize, 1], [1i64, 2, 3, 4, 5, 6]);
+		let g = FlatGenome::split_batch(&bits, &npc, &conns, 2, 1);
+		assert_eq!((g[0].bits, g[0].connections), (&bits[..2], &conns[..3]));
+		assert_eq!((g[1].bits, g[1].neurons_per_cluster, g[1].connections), (&bits[2..], &npc[1..], &conns[3..]));
+		let random = FlatGenome::split_batch(&bits, &npc, &[], 2, 1);
+		assert!(random.iter().all(|g| g.connections.is_empty()));
 	}
 
 	#[test]

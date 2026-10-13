@@ -53,7 +53,7 @@ impl<'a> MultiplicityBatch<'a>
 		memory_mode: u8,
 	) -> Self
 	{
-		let genomes = split_genomes(bits_flat, neurons_flat, connections_flat, num_genomes, num_clusters);
+		let genomes = FlatGenome::split_batch(bits_flat, neurons_flat, connections_flat, num_genomes, num_clusters);
 		let own = genomes
 			.iter()
 			.map(|g| UnitGrouping::by_key(NeuronKey::genome_keys(g.bits, g.neurons_per_cluster, g.connections)))
@@ -62,11 +62,14 @@ impl<'a> MultiplicityBatch<'a>
 		Self { genomes, own, whole, memory_mode }
 	}
 
-	/// True when nothing collapses: the plain batched dispatch is then exactly
-	/// the multiplicity result, and keeps its single GPU dispatch.
-	pub(crate) fn is_identity(&self) -> bool
+	/// True when the plain batched dispatch is exactly the multiplicity result
+	/// AND can take this batch: nothing collapses and every genome has the
+	/// same per-cluster neuron counts (the plain kernel's shape constraint;
+	/// the super-genome has none, so a mixed-shape batch always takes it).
+	pub(crate) fn plain_is_exact(&self) -> bool
 	{
-		self.whole.grouping.is_identity()
+		let first = self.genomes.first().map(|g| g.neurons_per_cluster);
+		self.whole.grouping.is_identity() && self.genomes.iter().all(|g| Some(g.neurons_per_cluster) == first)
 	}
 
 	/// The `[MULTIPLICITY]` line: per-genome distinct fractions and the
@@ -137,25 +140,49 @@ impl<'a> MultiplicityBatch<'a>
 	}
 }
 
-/// The factory's flat batch as per-genome slices.
-fn split_genomes<'a>(
-	bits_flat: &'a [usize],
-	neurons_flat: &'a [usize],
-	connections_flat: &'a [i64],
-	num_genomes: usize,
-	num_clusters: usize,
-) -> Vec<FlatGenome<'a>>
+/// Neurons per cluster the training factory actually trains (and holds) for
+/// one genome: its distinct neurons when the multiplicity layer is selected,
+/// every logical neuron otherwise. Memory sizing reads this, so a rate-1.0
+/// batch is sized by its physical footprint, not its logical one.
+pub(crate) fn trained_neurons_per_cluster(genome: &FlatGenome, neuron_sample_rate: f32, memory_mode: u8) -> Vec<usize>
 {
-	let (mut b0, mut c0) = (0usize, 0usize);
-	let mut genomes = Vec::with_capacity(num_genomes);
-	for g in 0..num_genomes
+	if !crate::marker_train::batched_path::multiplicity_selected(neuron_sample_rate, memory_mode, genome.connections)
 	{
-		let npc = &neurons_flat[g * num_clusters..(g + 1) * num_clusters];
-		let bits = &bits_flat[b0..b0 + npc.iter().sum::<usize>()];
-		let conns = &connections_flat[c0..c0 + bits.iter().sum::<usize>()];
-		genomes.push(FlatGenome { bits, neurons_per_cluster: npc, connections: conns });
-		b0 += bits.len();
-		c0 += conns.len();
+		return genome.neurons_per_cluster.to_vec();
 	}
-	genomes
+	let grouping = UnitGrouping::by_key(NeuronKey::genome_keys(genome.bits, genome.neurons_per_cluster, genome.connections));
+	ram_core::physical_genome::PhysicalGenome::cluster_counts(&grouping, genome.neurons_per_cluster)
+}
+
+#[cfg(test)]
+mod tests
+{
+	use super::*;
+	use ram_core::neuron_memory::QUAD_WEIGHTED as QUAD_WEIGHTED_MODE;
+
+	#[test]
+	fn trained_neurons_per_cluster_is_physical_only_when_selected()
+	{
+		// cluster 0: a, a, b; cluster 1: c, c
+		let (bits, npc, conns) = ([1usize, 1, 1, 1, 1], [3usize, 2], [5i64, 5, 6, 7, 7]);
+		let g = FlatGenome { bits: &bits, neurons_per_cluster: &npc, connections: &conns };
+		let selected = ram_core::neuron_memory::multiplicity_applies(1.0, QUAD_WEIGHTED_MODE);
+		let expect = if selected { vec![2, 1] } else { vec![3, 2] };
+		assert_eq!(trained_neurons_per_cluster(&g, 1.0, QUAD_WEIGHTED_MODE), expect);
+		assert_eq!(trained_neurons_per_cluster(&g, 0.25, QUAD_WEIGHTED_MODE), vec![3, 2]);
+		let random = FlatGenome { bits: &bits, neurons_per_cluster: &npc, connections: &[] };
+		assert_eq!(trained_neurons_per_cluster(&random, 1.0, QUAD_WEIGHTED_MODE), vec![3, 2]);
+	}
+
+	#[test]
+	fn plain_is_exact_needs_identity_and_one_shape()
+	{
+		let (bits, conns) = ([1usize, 1, 1], [5i64, 6, 7]);
+		let same = MultiplicityBatch::new(&bits[..2], &[1, 1], &conns[..2], 2, 1, QUAD_WEIGHTED_MODE);
+		assert!(same.plain_is_exact());
+		let mixed = MultiplicityBatch::new(&bits, &[1, 2], &conns, 2, 1, QUAD_WEIGHTED_MODE);
+		assert!(!mixed.plain_is_exact(), "mixed shapes: plain kernel cannot take the batch");
+		let dup = MultiplicityBatch::new(&bits[..2], &[2], &[5, 5], 1, 1, QUAD_WEIGHTED_MODE);
+		assert!(!dup.plain_is_exact());
+	}
 }

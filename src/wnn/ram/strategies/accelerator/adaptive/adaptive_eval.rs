@@ -794,21 +794,16 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
 		.ok()
 		.and_then(|s| s.parse::<usize>().ok())
 		.unwrap_or_else(|| {
-			let first_neurons = &genomes_neurons_flat[0..num_clusters];
-			let first_per_neuron_bits = &genomes_bits_flat[0..genome_bpn_offsets[1]];
-			let first_bits_per_cluster = per_cluster_max_bits(first_per_neuron_bits, first_neurons);
-			let budget_gb = get_available_memory_gb() * 0.4; // 40% budget (adaptation keeps memory longer)
-			let cpu_cores = rayon::current_num_threads();
-			let (_, computed_batch) = calculate_pool_size(
-				&first_bits_per_cluster,
-				first_neurons,
+			// 40% budget (adaptation keeps memory longer); worst genome, trained shape.
+			let genomes = ram_core::super_genome::FlatGenome::split_batch(
+				genomes_bits_flat,
+				genomes_neurons_flat,
+				genomes_connections_flat,
+				num_genomes,
 				num_clusters,
-				budget_gb,
-				cpu_cores,
-				num_train,
-				neuron_sample_rate,
 			);
-			computed_batch
+			let budget_gb = get_available_memory_gb() * 0.4;
+			budget_batch_size(&genomes, budget_gb, rayon::current_num_threads(), num_train, neuron_sample_rate, memory_mode)
 		});
 
 	let mut all_results: Vec<(usize, f64, f64, f64, f64, f64)> = Vec::with_capacity(num_genomes);

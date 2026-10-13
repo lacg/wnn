@@ -310,6 +310,33 @@ pub(crate) fn calculate_pool_size(
 	(pool_size, batch_size)
 }
 
+/// Concurrent-genome budget of one training call: the MOST restrictive genome
+/// wins (a heterogeneous population sized off one genome under-estimates the
+/// large ones — the 96b×250n rc=-9 OOM), and each genome is sized by the
+/// neurons training actually holds (`trained_neurons_per_cluster`: physical
+/// at rate >= 1.0 under the multiplicity layer, logical otherwise). At least 1.
+pub(crate) fn budget_batch_size(
+	genomes: &[ram_core::super_genome::FlatGenome],
+	budget_gb: f64,
+	cpu_cores: usize,
+	num_train: usize,
+	neuron_sample_rate: f32,
+	memory_mode: u8,
+) -> usize
+{
+	genomes
+		.iter()
+		.map(|g| {
+			let trained = crate::multiplicity_batch::trained_neurons_per_cluster(g, neuron_sample_rate, memory_mode);
+			let bits_per_cluster = per_cluster_max_bits(g.bits, g.neurons_per_cluster);
+			let n = trained.len();
+			calculate_pool_size(&bits_per_cluster, &trained, n, budget_gb, cpu_cores, num_train, neuron_sample_rate).1
+		})
+		.min()
+		.unwrap_or(1)
+		.max(1)
+}
+
 /// Get available memory in GB (macOS specific)
 pub(crate) fn get_available_memory_gb() -> f64
 {

@@ -597,7 +597,7 @@ pub mod batched_path
 			memory_mode,
 		);
 		eprintln!("{}", batch.log_line());
-		if batch.is_identity()
+		if batch.plain_is_exact()
 		{
 			return plain(genomes_bits_flat, genomes_neurons_flat, genomes_connections_flat, num_genomes);
 		}

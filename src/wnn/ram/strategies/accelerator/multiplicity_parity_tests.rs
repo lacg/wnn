@@ -203,6 +203,20 @@ fn unequal_genomes(rng: &mut SmallRng) -> Batch
 	])
 }
 
+/// G = 3, K = 3, unequal shapes and NO duplicate anywhere (inside or across
+/// genomes): nothing collapses, yet the plain batched kernel cannot take the
+/// mixed shapes — the factory must train it as one super-genome (it used to
+/// hand the batch to the plain kernel, which errors on the shape).
+fn unequal_genomes_all_distinct(rng: &mut SmallRng) -> Batch
+{
+	let b = bases(&[14, 10, 8, 12, 14, 6, 10, 13, 14, 9, 11, 7, 12], rng);
+	batch_of(vec![
+		genome(&b, &[vec![0, 1], vec![2], vec![3, 4, 5]]),
+		genome(&b, &[vec![6], vec![7, 8], vec![9]]),
+		genome(&b, &[vec![10], vec![11], vec![12]]),
+	])
+}
+
 fn metal_available() -> bool
 {
 	crate::marker_train::batched_path::trainer_available()
@@ -528,6 +542,21 @@ fn run_parity(mode: u8)
 	let unequal = unequal_genomes(&mut rng);
 	check_super_genome(&unequal, &multi, mode);
 	check_bisection(&unequal, &multi, mode);
+	check_mixed_shapes_identity(&unequal_genomes_all_distinct(&mut rng), &multi, mode);
+}
+
+/// Mixed shapes, nothing to collapse: still one dispatch, still exact.
+fn check_mixed_shapes_identity(batch: &Batch, data: &Data, mode: u8)
+{
+	if !multiplicity_selected(1.0, mode, &batch.conns)
+	{
+		return;
+	}
+	let mb = MultiplicityBatch::new(&batch.bits, &batch.npc, &batch.conns, batch.num_genomes, data.num_clusters, mode);
+	assert!(!mb.plain_is_exact(), "fixture must need the super-genome (mixed shapes)");
+	let mult = train_factory(batch, data, mode, 1.0);
+	assert!(mult.iter().all(|e| e.grouping.is_identity()), "nothing collapses");
+	assert_matches_plain_per_genome(batch, data, mode, &mult, "mixed shapes, identity");
 }
 
 #[test]
