@@ -556,6 +556,14 @@ pub mod batched_path
 		memory_mode: u8,
 	) -> Result<Vec<GenomeExport>, String>
 	{
+		log_distinct_fractions(
+			genomes_bits_flat,
+			genomes_neurons_flat,
+			genomes_connections_flat,
+			num_genomes,
+			num_clusters,
+			neuron_sample_rate,
+		);
 		let result = batched_train_core(
 			genomes_bits_flat,
 			genomes_neurons_flat,
@@ -602,6 +610,33 @@ pub mod batched_path
 			}
 			other => other,
 		}
+	}
+
+	/// One `[MULTIPLICITY]` line per training batch at rate >= 1.0 (the only
+	/// rate where duplicate neurons train identically): per-genome and
+	/// batch-level distinct-neuron fractions, so cross-genome sharing (IDS-37
+	/// stage 5) is sized on real batches. Random-connection calls are skipped.
+	fn log_distinct_fractions(
+		genomes_bits_flat: &[usize],
+		genomes_neurons_flat: &[usize],
+		genomes_connections_flat: &[i64],
+		num_genomes: usize,
+		num_clusters: usize,
+		neuron_sample_rate: f32,
+	)
+	{
+		if neuron_sample_rate < 1.0 || genomes_connections_flat.is_empty() || num_genomes == 0
+		{
+			return;
+		}
+		let fractions = ram_core::distinct_fractions::DistinctFractions::of_batch(
+			genomes_bits_flat,
+			genomes_neurons_flat,
+			genomes_connections_flat,
+			num_genomes,
+			num_clusters,
+		);
+		eprintln!("{}", fractions.log_line());
 	}
 
 	/// Stable prefix of the budget-overflow error — the chunked-path routing in
