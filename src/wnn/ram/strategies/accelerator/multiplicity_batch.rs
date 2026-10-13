@@ -1,26 +1,43 @@
-//! `MultiplicityBatch`: train each genome's distinct neurons once (IDS-37 stage 2).
+//! `MultiplicityBatch`: train a genome batch's distinct neurons once, in one
+//! dispatch (IDS-37 stages 2 + 4).
 //!
 //! Selected by the GPU training factory (`marker_train::batched_train_offspring`)
 //! only when `ram_core::neuron_memory::multiplicity_applies(rate, mode)` holds —
-//! then same-key neurons would train byte-identically, so each genome is
-//! collapsed to its `PhysicalGenome`, the physical genome is trained through the
-//! plain trainer (inheriting its budget/chunked routing), and the logical export
-//! is rebuilt by `GenomeExport::from_physical`. Stage 2 trains G > 1 batches as
-//! a per-genome loop; super-genome batching is stage 4.
-//! docs/ids_multiplicity_layer_design.md §3.
+//! then same-key neurons train byte-identically. The batch collapses to one
+//! `SuperGenome` (each genome's distinct neurons, cluster-major, any shapes),
+//! which trains as ONE genome; every genome's logical export is then rebuilt
+//! from the trained units by `GenomeExport::from_physical`. A super-genome over
+//! the GPU budget bisects the batch; a single genome over budget takes the
+//! plain trainer's neuron-chunked route. docs/ids_multiplicity_layer_design.md §3.
 
-use crate::adaptive::GenomeExport;
-use ram_core::physical_genome::PhysicalGenome;
+use crate::adaptive::{GenomeExport, PhysicalUnits};
+use crate::marker_train::batched_path::is_budget_error;
+use ram_core::distinct_fractions::DistinctFractions;
+use ram_core::neuron_key::NeuronKey;
+use ram_core::super_genome::{FlatGenome, SuperGenome};
+use ram_core::unit_grouping::UnitGrouping;
+use std::borrow::Cow;
 
-/// A flat genome batch (the factory's layout), collapsed per genome.
+/// How a super-genome trains, as ONE genome. `batch` serves a multi-genome
+/// super-genome and must surface a budget overflow as the budget error (the
+/// batch then bisects); `single` serves one genome and may chunk.
+pub(crate) struct UnitTrainers<B, S>
+where
+	B: Fn(&SuperGenome) -> Result<GenomeExport, String>,
+	S: Fn(&SuperGenome) -> Result<GenomeExport, String>,
+{
+	pub batch: B,
+	pub single: S,
+}
+
+/// A flat genome batch (the factory's layout), collapsed.
 pub(crate) struct MultiplicityBatch<'a>
 {
-	bits_flat: &'a [usize],
-	neurons_flat: &'a [usize],
-	connections_flat: &'a [i64],
-	num_clusters: usize,
+	genomes: Vec<FlatGenome<'a>>,
+	/// Per genome: logical neuron -> its own distinct neuron (the footprint)
+	own: Vec<UnitGrouping>,
+	whole: SuperGenome,
 	memory_mode: u8,
-	physical: Vec<PhysicalGenome>,
 }
 
 impl<'a> MultiplicityBatch<'a>
@@ -35,69 +52,109 @@ impl<'a> MultiplicityBatch<'a>
 		memory_mode: u8,
 	) -> Self
 	{
-		let mut batch = Self { bits_flat, neurons_flat, connections_flat, num_clusters, memory_mode, physical: Vec::new() };
-		let (mut b0, mut c0) = (0usize, 0usize);
-		for g in 0..num_genomes
-		{
-			let (bits, npc, conns) = batch.logical(g, b0, c0);
-			batch.physical.push(PhysicalGenome::collapse(bits, npc, conns));
-			b0 += bits.len();
-			c0 += conns.len();
-		}
-		batch
+		let genomes = split_genomes(bits_flat, neurons_flat, connections_flat, num_genomes, num_clusters);
+		let own = genomes
+			.iter()
+			.map(|g| UnitGrouping::by_key(NeuronKey::genome_keys(g.bits, g.neurons_per_cluster, g.connections)))
+			.collect();
+		let whole = SuperGenome::collapse(&genomes);
+		Self { genomes, own, whole, memory_mode }
 	}
 
-	/// Genome g's logical (bits, neurons_per_cluster, connections), given the
-	/// running bits/connection offsets of genomes before it.
-	fn logical(&self, g: usize, bits_start: usize, conn_start: usize) -> (&'a [usize], &'a [usize], &'a [i64])
-	{
-		let npc = &self.neurons_flat[g * self.num_clusters..(g + 1) * self.num_clusters];
-		let bits = &self.bits_flat[bits_start..bits_start + npc.iter().sum::<usize>()];
-		let conns = &self.connections_flat[conn_start..conn_start + bits.iter().sum::<usize>()];
-		(bits, npc, conns)
-	}
-
-	/// True when no genome has a duplicate: the plain batched dispatch is then
-	/// exactly the multiplicity result, and keeps its single GPU dispatch.
+	/// True when nothing collapses: the plain batched dispatch is then exactly
+	/// the multiplicity result, and keeps its single GPU dispatch.
 	pub(crate) fn is_identity(&self) -> bool
 	{
-		self.physical.iter().all(|p| p.grouping.is_identity())
+		self.whole.grouping.is_identity()
 	}
 
-	/// Train every genome's physical genome with `train_physical` (the plain
-	/// trainer for ONE genome) and return the logical exports in genome order.
-	pub(crate) fn train<F>(&self, train_physical: F) -> Result<Vec<GenomeExport>, String>
-	where
-		F: Fn(&PhysicalGenome) -> Result<GenomeExport, String>,
+	/// The `[MULTIPLICITY]` line: per-genome distinct fractions and the batch
+	/// units actually trained.
+	pub(crate) fn log_line(&self) -> String
 	{
-		let mut exports = Vec::with_capacity(self.physical.len());
-		let (mut b0, mut c0) = (0usize, 0usize);
-		for (g, phys) in self.physical.iter().enumerate()
+		DistinctFractions::from_groupings(&self.own, &self.whole.grouping).log_line()
+	}
+
+	/// Train the batch's units and return the logical exports in genome order.
+	pub(crate) fn train<B, S>(&self, trainers: &UnitTrainers<B, S>) -> Result<Vec<GenomeExport>, String>
+	where
+		B: Fn(&SuperGenome) -> Result<GenomeExport, String>,
+		S: Fn(&SuperGenome) -> Result<GenomeExport, String>,
+	{
+		let all: Vec<usize> = (0..self.genomes.len()).collect();
+		self.train_subset(&all, trainers)
+	}
+
+	fn train_subset<B, S>(&self, subset: &[usize], trainers: &UnitTrainers<B, S>) -> Result<Vec<GenomeExport>, String>
+	where
+		B: Fn(&SuperGenome) -> Result<GenomeExport, String>,
+		S: Fn(&SuperGenome) -> Result<GenomeExport, String>,
+	{
+		let units = self.super_genome(subset);
+		let trained = if subset.len() == 1 { (trainers.single)(&units) } else { (trainers.batch)(&units) };
+		match trained
 		{
-			let (bits, npc, conns) = self.logical(g, b0, c0);
-			exports.push(self.train_one(phys, bits, npc, conns, &train_physical)?);
-			b0 += bits.len();
-			c0 += conns.len();
+			Ok(export) => self.logical_exports(subset, &units, &export),
+			Err(msg) if subset.len() > 1 && is_budget_error(&msg) => self.bisect(subset, trainers),
+			Err(msg) => Err(msg),
 		}
+	}
+
+	/// Over budget: train each half on its own (the halves' shared units train twice).
+	fn bisect<B, S>(&self, subset: &[usize], trainers: &UnitTrainers<B, S>) -> Result<Vec<GenomeExport>, String>
+	where
+		B: Fn(&SuperGenome) -> Result<GenomeExport, String>,
+		S: Fn(&SuperGenome) -> Result<GenomeExport, String>,
+	{
+		let (left, right) = subset.split_at(subset.len() / 2);
+		eprintln!("[MULTIPLICITY] super-genome over budget: bisecting {} genomes -> {} + {}", subset.len(), left.len(), right.len());
+		let mut exports = self.train_subset(left, trainers)?;
+		exports.extend(self.train_subset(right, trainers)?);
 		Ok(exports)
 	}
 
-	fn train_one<F>(
-		&self,
-		phys: &PhysicalGenome,
-		bits: &[usize],
-		npc: &[usize],
-		conns: &[i64],
-		train_physical: &F,
-	) -> Result<GenomeExport, String>
-	where
-		F: Fn(&PhysicalGenome) -> Result<GenomeExport, String>,
+	fn super_genome(&self, subset: &[usize]) -> Cow<'_, SuperGenome>
 	{
-		let trained = train_physical(phys)?;
-		if phys.grouping.is_identity()
+		if subset.len() == self.genomes.len()
 		{
-			return Ok(trained);
+			return Cow::Borrowed(&self.whole);
 		}
-		GenomeExport::from_physical(trained, phys.grouping.clone(), bits, npc, conns, self.memory_mode)
+		let genomes: Vec<FlatGenome> = subset.iter().map(|&g| self.genomes[g]).collect();
+		Cow::Owned(SuperGenome::collapse(&genomes))
 	}
+
+	fn logical_exports(&self, subset: &[usize], units: &SuperGenome, export: &GenomeExport) -> Result<Vec<GenomeExport>, String>
+	{
+		let physical = PhysicalUnits::new(export, &units.neurons_per_cluster);
+		subset
+			.iter()
+			.enumerate()
+			.map(|(i, &g)| {
+				GenomeExport::from_physical(&physical, &units.unit_of[i], self.own[g].clone(), self.genomes[g], self.memory_mode)
+			})
+			.collect()
+	}
+}
+
+/// The factory's flat batch as per-genome slices.
+fn split_genomes<'a>(
+	bits_flat: &'a [usize],
+	neurons_flat: &'a [usize],
+	connections_flat: &'a [i64],
+	num_genomes: usize,
+	num_clusters: usize,
+) -> Vec<FlatGenome<'a>>
+{
+	let (mut b0, mut c0) = (0usize, 0usize);
+	let mut genomes = Vec::with_capacity(num_genomes);
+	for g in 0..num_genomes
+	{
+		let npc = &neurons_flat[g * num_clusters..(g + 1) * num_clusters];
+		let bits = &bits_flat[b0..b0 + npc.iter().sum::<usize>()];
+		let conns = &connections_flat[c0..c0 + bits.iter().sum::<usize>()];
+		genomes.push(FlatGenome { bits, neurons_per_cluster: npc, connections: conns });
+		b0 += bits.len();
+		c0 += conns.len();
+	}
+	genomes
 }

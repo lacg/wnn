@@ -556,14 +556,6 @@ pub mod batched_path
 		memory_mode: u8,
 	) -> Result<Vec<GenomeExport>, String>
 	{
-		log_distinct_fractions(
-			genomes_bits_flat,
-			genomes_neurons_flat,
-			genomes_connections_flat,
-			num_genomes,
-			num_clusters,
-			neuron_sample_rate,
-		);
 		let plain = |bits: &[usize], neurons: &[usize], conns: &[i64], g: usize| {
 			batched_train_offspring_plain(
 				bits,
@@ -586,6 +578,14 @@ pub mod batched_path
 		};
 		if !multiplicity_selected(neuron_sample_rate, memory_mode, genomes_connections_flat)
 		{
+			log_distinct_fractions(
+				genomes_bits_flat,
+				genomes_neurons_flat,
+				genomes_connections_flat,
+				num_genomes,
+				num_clusters,
+				neuron_sample_rate,
+			);
 			return plain(genomes_bits_flat, genomes_neurons_flat, genomes_connections_flat, num_genomes);
 		}
 		let batch = crate::multiplicity_batch::MultiplicityBatch::new(
@@ -596,11 +596,36 @@ pub mod batched_path
 			num_clusters,
 			memory_mode,
 		);
+		eprintln!("{}", batch.log_line());
 		if batch.is_identity()
 		{
 			return plain(genomes_bits_flat, genomes_neurons_flat, genomes_connections_flat, num_genomes);
 		}
-		batch.train(|p| one_export(plain(&p.bits, &p.neurons_per_cluster, &p.connections, 1)?))
+		// One super-genome dispatch; `batch` reports a budget overflow (no
+		// chunked fallback) so the batch bisects, `single` may chunk.
+		let core = |s: &ram_core::super_genome::SuperGenome| {
+			one_export(batched_train_core(
+				&s.bits,
+				&s.neurons_per_cluster,
+				&s.connections,
+				1,
+				num_clusters,
+				train_input_bits,
+				train_targets,
+				train_negatives,
+				num_train,
+				num_negatives,
+				total_input_bits,
+				empty_value,
+				neuron_sample_rate,
+				rng_seed,
+				class_weights,
+				0,
+				memory_mode,
+			)?)
+		};
+		let single = |s: &ram_core::super_genome::SuperGenome| one_export(plain(&s.bits, &s.neurons_per_cluster, &s.connections, 1)?);
+		batch.train(&crate::multiplicity_batch::UnitTrainers { batch: core, single })
 	}
 
 	/// True iff the Metal marker trainer initialised (tests skip without it).
@@ -725,9 +750,15 @@ pub mod batched_path
 		eprintln!("{}", fractions.log_line());
 	}
 
+	/// True iff `msg` is the batch-budget overflow (the super-genome bisects on it).
+	pub(crate) fn is_budget_error(msg: &str) -> bool
+	{
+		msg.starts_with(BUDGET_ERR_PREFIX)
+	}
+
 	/// Stable prefix of the budget-overflow error — the chunked-path routing in
 	/// `batched_train_offspring` matches on it. Keep format! below in sync.
-	const BUDGET_ERR_PREFIX: &str = "batched_train_offspring would allocate";
+	pub(crate) const BUDGET_ERR_PREFIX: &str = "batched_train_offspring would allocate";
 
 	/// Batched-dispatch Metal buffer cap (16 GB total slots; Mac Studio 64 GB
 	/// unified, but other GPU buffers + Rust heap + Python all share; 16 GB keeps

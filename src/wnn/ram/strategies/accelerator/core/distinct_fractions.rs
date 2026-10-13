@@ -52,6 +52,17 @@ impl DistinctFractions
 		Self { per_genome, batch_logical, batch_distinct }
 	}
 
+	/// From groupings already built: each genome's own (logical -> distinct)
+	/// and the batch's (every neuron -> the unit it trains as).
+	pub fn from_groupings(per_genome: &[UnitGrouping], batch: &UnitGrouping) -> Self
+	{
+		Self {
+			per_genome: per_genome.iter().map(UnitGrouping::distinct_fraction).collect(),
+			batch_logical: batch.num_units(),
+			batch_distinct: batch.num_groups(),
+		}
+	}
+
 	/// One log line: `[MULTIPLICITY] batch genomes=G logical=N distinct/genome
 	/// mean=..% min=..% max=..% | batch distinct=U (..%)`.
 	pub fn log_line(&self) -> String

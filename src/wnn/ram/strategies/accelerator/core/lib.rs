@@ -25,6 +25,7 @@ pub mod footprint;
 pub mod neuron_key;
 pub mod physical_genome;
 pub mod sparse_gpu_export;
+pub mod super_genome;
 pub mod unit_grouping;
 
 #[cfg(feature = "gpu-wgpu")]

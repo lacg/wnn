@@ -4,7 +4,9 @@
 //!
 //! Per memory mode, routes: batched G = 1 (sparse and dense single-cluster,
 //! K = 3 multi-group whose logical groups split across physical groups), the
-//! G = 3 per-genome loop, and the neuron-chunked over-budget trainer.
+//! G = 3 uniform batch, the neuron-chunked over-budget trainer, the stage-4
+//! super-genome (G = 4 of unequal shapes, dense logical clusters read from
+//! sparse / wider units) and its bisection on the budget error.
 //! Assertions: per-logical-neuron storage equal; `compute_per_example_scores`
 //! `to_bits` equal on CPU and GPU scorers, coverage-aware on and off;
 //! `grouping.is_identity()` exactly when not selected; selected exports store
@@ -17,16 +19,17 @@
 
 use crate::adaptive::{
 	build_groups, build_neuron_metadata, compute_per_example_scores, export_genome_for_gpu, per_cluster_max_bits,
-	reorganize_connections_for_gpu, train_genome_in_slot, GenomeExport, GroupMemory,
+	reorganize_connections_for_gpu, train_genome_in_slot, GenomeExport, GroupMemory, PhysicalUnits,
 };
 use crate::marker_train::batched_path::{
 	batched_train_offspring, batched_train_offspring_plain, multiplicity_selected, one_export,
-	train_single_genome_neuron_chunked,
+	train_single_genome_neuron_chunked, BUDGET_ERR_PREFIX,
 };
-use crate::multiplicity_batch::MultiplicityBatch;
+use crate::multiplicity_batch::{MultiplicityBatch, UnitTrainers};
 use ram_core::neuron_memory::{pack_packed_to_u64, BINARY, PLN, QSR, QUAD_BINARY, QUAD_WEIGHTED, TERNARY};
 use ram_core::packed_bits::PackedBits;
 use ram_core::physical_genome::PhysicalGenome;
+use ram_core::super_genome::{FlatGenome, SuperGenome};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
@@ -179,6 +182,22 @@ fn three_genomes(rng: &mut SmallRng) -> Batch
 		genome(&b, &[vec![0, 1, 0, 2, 1, 0]]),
 		genome(&b, &[vec![3, 3, 3, 3, 4, 3]]),
 		genome(&b, &[vec![0, 1, 2, 3, 4, 5]]),
+	])
+}
+
+/// G = 4, K = 3, every genome a different shape (per-cluster neuron counts and
+/// max bits differ, so a cluster can be DENSE in one genome and SPARSE in the
+/// super-genome: g2's c2 is 6-bit dense, the batch's c2 max is 13). Planted
+/// duplicates inside genomes, and base neurons repeated ACROSS genomes in the
+/// same cluster (stage 5 shares those).
+fn unequal_genomes(rng: &mut SmallRng) -> Batch
+{
+	let b = bases(&[14, 10, 8, 12, 14, 6, 10, 13], rng);
+	batch_of(vec![
+		genome(&b, &[vec![1, 1, 2], vec![0, 0], vec![5, 3, 5, 7]]),
+		genome(&b, &[vec![0, 1], vec![2, 4, 2, 2], vec![6]]),
+		genome(&b, &[vec![1, 2, 1, 2, 1], vec![3], vec![5, 5]]),
+		genome(&b, &[vec![7], vec![6], vec![1]]),
 	])
 }
 
@@ -354,6 +373,76 @@ fn check_batched(batch: &Batch, data: &Data, mode: u8, what: &str)
 	}
 }
 
+/// One genome of a batch as its own single-genome batch (the plain reference
+/// for batches whose shapes the plain batched dispatch cannot take together).
+fn single_genome_batch(batch: &Batch, num_clusters: usize, g: usize) -> Batch
+{
+	batch_of(vec![logical_genome(batch, num_clusters, g)])
+}
+
+/// Each genome of a multiplicity export batch vs the plain layer trained on
+/// that genome ALONE: storage, footprint and scores bit-exact.
+fn assert_matches_plain_per_genome(batch: &Batch, data: &Data, mode: u8, mult: &[GenomeExport], what: &str)
+{
+	assert_eq!(mult.len(), batch.num_genomes);
+	for g in 0..batch.num_genomes
+	{
+		let single = single_genome_batch(batch, data.num_clusters, g);
+		let plain = train_plain_batched(&single, data, mode, 1.0);
+		let what = format!("{what} mode={mode} genome={g}");
+		assert_selection(&plain[0], &mult[g], &logical_genome(batch, data.num_clusters, g), true);
+		assert_storage_equal(&plain[0], &mult[g], &what);
+		assert_scores_equal(&plain[0], &mult[g], data, mode, cpu_scorable(&single), &what);
+	}
+}
+
+/// Stage 4: the factory trains a G = 4 batch of unequal shapes as ONE
+/// super-genome dispatch; every genome equals its plain training.
+fn check_super_genome(batch: &Batch, data: &Data, mode: u8)
+{
+	if !multiplicity_selected(1.0, mode, &batch.conns)
+	{
+		return;
+	}
+	let mult = train_factory(batch, data, mode, 1.0);
+	assert_matches_plain_per_genome(batch, data, mode, &mult, "super-genome G=4");
+}
+
+/// Stage 4 bisection: a batch trainer that reports the budget overflow for
+/// any super-genome above `max_units` forces the batch to split down to
+/// trainable halves (and single genomes to the `single` trainer); the result
+/// must still equal the plain layer, genome for genome.
+fn check_bisection(batch: &Batch, data: &Data, mode: u8)
+{
+	if !multiplicity_selected(1.0, mode, &batch.conns)
+	{
+		return;
+	}
+	let mb = MultiplicityBatch::new(&batch.bits, &batch.npc, &batch.conns, batch.num_genomes, data.num_clusters, mode);
+	let (batch_calls, single_calls) = (std::cell::Cell::new(0usize), std::cell::Cell::new(0usize));
+	let train_units = |s: &SuperGenome| {
+		let units = batch_of(vec![(s.bits.clone(), s.neurons_per_cluster.clone(), s.connections.clone())]);
+		one_export(train_plain_batched(&units, data, mode, 1.0))
+	};
+	let trainers = UnitTrainers {
+		batch: |s: &SuperGenome| {
+			batch_calls.set(batch_calls.get() + 1);
+			if s.num_units() > 8
+			{
+				return Err(format!("{BUDGET_ERR_PREFIX} (test: {} units)", s.num_units()));
+			}
+			train_units(s)
+		},
+		single: |s: &SuperGenome| {
+			single_calls.set(single_calls.get() + 1);
+			train_units(s)
+		},
+	};
+	let mult = mb.train(&trainers).expect("bisected train");
+	assert!(batch_calls.get() >= 3 && single_calls.get() >= 1, "bisection not exercised: {batch_calls:?} {single_calls:?}");
+	assert_matches_plain_per_genome(batch, data, mode, &mult, "bisection");
+}
+
 fn chunked(bits: &[usize], conns: &[i64], data: &Data, mode: u8, budget: usize) -> GenomeExport
 {
 	one_export(
@@ -378,7 +467,11 @@ fn check_chunked(batch: &Batch, data: &Data, mode: u8)
 	let budget = 2 * cap * 16;
 	let plain = chunked(&batch.bits, &batch.conns, data, mode, budget);
 	let mb = MultiplicityBatch::new(&batch.bits, &batch.npc, &batch.conns, 1, 1, mode);
-	let mult = mb.train(|p| Ok(chunked(&p.bits, &p.connections, data, mode, budget))).expect("mult chunked");
+	let trainers = UnitTrainers {
+		batch: |_: &SuperGenome| -> Result<GenomeExport, String> { unreachable!("one genome never takes the batch trainer") },
+		single: |s: &SuperGenome| Ok(chunked(&s.bits, &s.connections, data, mode, budget)),
+	};
+	let mult = mb.train(&trainers).expect("mult chunked");
 	let what = format!("chunked mode={mode}");
 	assert_selection(&plain, &mult[0], &logical_genome(batch, 1, 0), true);
 	assert_storage_equal(&plain, &mult[0], &what);
@@ -406,6 +499,9 @@ fn run_parity(mode: u8)
 	check_batched(&multi_cluster(false, &mut rng), &multi, mode, "K=3 multigroup uniform");
 	check_chunked(&sparse_hetero, &binary, mode);
 	check_chunked(&sparse_uniform, &binary, mode);
+	let unequal = unequal_genomes(&mut rng);
+	check_super_genome(&unequal, &multi, mode);
+	check_bisection(&unequal, &multi, mode);
 }
 
 #[test]
@@ -545,7 +641,10 @@ fn from_physical_aliases_and_copies()
 			assert!(!p.grouping.is_identity(), "fixture {i} must carry duplicates");
 			let logical = cpu_export(&batch.bits, &batch.npc, &batch.conns, data, mode);
 			let physical = cpu_export(&p.bits, &p.neurons_per_cluster, &p.connections, data, mode);
-			let rebuilt = GenomeExport::from_physical(physical, p.grouping.clone(), &batch.bits, &batch.npc, &batch.conns, mode)
+			let units = PhysicalUnits::new(&physical, &p.neurons_per_cluster);
+			let unit_of: Vec<u32> = (0..batch.bits.len()).map(|l| p.grouping.index_of(l)).collect();
+			let logical_genome = FlatGenome { bits: &batch.bits, neurons_per_cluster: &batch.npc, connections: &batch.conns };
+			let rebuilt = GenomeExport::from_physical(&units, &unit_of, p.grouping.clone(), logical_genome, mode)
 				.expect("from_physical");
 			assert_storage_equal(&logical, &rebuilt, &format!("cpu fixture {i} mode {mode}"));
 			let cpu = cpu_scorable(batch);
