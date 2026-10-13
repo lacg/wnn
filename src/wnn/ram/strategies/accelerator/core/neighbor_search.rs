@@ -16,6 +16,9 @@ use std::fs::OpenOptions;
 use std::sync::{Arc, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use crate::neuron_key::NeuronKey;
+use crate::unit_grouping::UnitGrouping;
+
 /// Live progress data shared between search functions and Python observer.
 ///
 /// Updated per-batch during search_offspring/search_neighbors. The Python
@@ -1311,27 +1314,38 @@ fn dedupe_fill(child: &Child, present: &[usize], modes: &[usize], xo: NeuronXo, 
 	let mut start = 0;
 	for c in 0..child.1.len()
 	{
-		let mut seen = std::collections::HashSet::new();
-		for g in start..start + present[c]
-		{
-			push_distinct(&mut out, &mut seen, child.0[g], &child.2[conn_off[g]..conn_off[g + 1]]);
-		}
+		let mut seen = push_distinct(&mut out, child, &conn_off, c, start..start + present[c]);
 		let target = xo.target(child.1[c], seen.len());
 		out.1[c] = target;
-		fill_fresh(&mut out, &mut seen, target, modes[c], xo.total_input_bits, rng);
+		fill_fresh(&mut out, &mut seen, c, target, modes[c], xo.total_input_bits, rng);
 		start += present[c];
 	}
 	out
 }
 
-/// Append a neuron unless its (bits, connections) key is already in `seen`.
-fn push_distinct(out: &mut Child, seen: &mut std::collections::HashSet<(usize, Vec<i64>)>, bits: usize, conns: &[i64])
+/// Append each distinct neuron of `child` in `range` (cluster `cluster`) once,
+/// in first-occurrence order — the `UnitGrouping` representatives over
+/// `NeuronKey` — and return the set of kept keys.
+fn push_distinct(
+	out: &mut Child,
+	child: &Child,
+	conn_off: &[usize],
+	cluster: usize,
+	range: std::ops::Range<usize>,
+) -> std::collections::HashSet<NeuronKey>
 {
-	if seen.insert((bits, conns.to_vec()))
+	let keys: Vec<NeuronKey> = range
+		.clone()
+		.map(|g| NeuronKey::of(cluster as u32, child.0[g] as u32, &child.2[conn_off[g]..conn_off[g + 1]]))
+		.collect();
+	let grouping = UnitGrouping::by_key(keys.iter());
+	for &r in grouping.representatives()
 	{
-		out.0.push(bits);
-		out.2.extend_from_slice(conns);
+		let g = range.start + r as usize;
+		out.0.push(child.0[g]);
+		out.2.extend_from_slice(&child.2[conn_off[g]..conn_off[g + 1]]);
 	}
+	grouping.gather(&keys).into_iter().collect()
 }
 
 /// Top a cluster up to `target` neurons with fresh random ones (the mutation's
@@ -1339,7 +1353,8 @@ fn push_distinct(out: &mut Child, seen: &mut std::collections::HashSet<(usize, V
 /// re-draws a collision is accepted so the count is always met.
 fn fill_fresh(
 	out: &mut Child,
-	seen: &mut std::collections::HashSet<(usize, Vec<i64>)>,
+	seen: &mut std::collections::HashSet<NeuronKey>,
+	cluster: usize,
 	target: usize,
 	mode_bits: usize,
 	total_input_bits: usize,
@@ -1352,7 +1367,7 @@ fn fill_fresh(
 	{
 		let (mut b, mut c) = (Vec::new(), Vec::new());
 		push_random_neuron(&mut b, &mut c, mode_bits, total_input_bits, rng);
-		if seen.insert((mode_bits, c.clone())) || redraws >= 16
+		if seen.insert(NeuronKey::of(cluster as u32, mode_bits as u32, &c)) || redraws >= 16
 		{
 			out.0.push(mode_bits);
 			out.2.extend(c);

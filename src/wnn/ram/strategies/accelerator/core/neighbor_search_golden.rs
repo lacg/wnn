@@ -204,6 +204,44 @@ fn operator_digest() -> u64
 	d.0
 }
 
+/// Digest of the DEDUPE crossover path (ga_dedupe_neurons on, fill on and off):
+/// the operators that call `dedupe_fill`. The defaults-off digests above never
+/// reach it, so the 12/10/2026 UnitGrouping/NeuronKey refactor of
+/// `push_distinct` is pinned here instead.
+fn dedupe_operator_digest() -> u64
+{
+	let mut d = Digest::new();
+	for (pop, tib) in [(population_multi(), 96usize), (population_ids(), 200usize)]
+	{
+		let nc = pop[0].1.len();
+		let mut rng = StdRng::seed_from_u64(SEED ^ 0xD3D0);
+		for fill in [true, false]
+		{
+			let xo = NeuronXo { dedupe: true, total_input_bits: tib, fill, min_neurons: 2 };
+			for k in 0..pop.len() - 1
+			{
+				let (a, b) = crossover_ps_neurons(&pop[k], &pop[k + 1], nc, xo, &mut rng);
+				d.genome(&a.0, &a.1, &a.2);
+				d.genome(&b.0, &b.1, &b.2);
+				let (a, b) = crossover2_neurons(&pop[k], &pop[k + 1], nc, xo, &mut rng);
+				d.genome(&a.0, &a.1, &a.2);
+				d.genome(&b.0, &b.1, &b.2);
+			}
+		}
+	}
+	d.0
+}
+
+/// Captured from c2b8bf97 (pre-refactor `push_distinct`, inline HashSet key).
+const GOLDEN_DEDUPE_OPERATORS: u64 = 0xfca5_f895_40ce_c136;
+
+#[test]
+fn golden_dedupe_operators_unchanged()
+{
+	eprintln!("GOLDEN_DEDUPE_OPERATORS = {:#x}", dedupe_operator_digest());
+	assert_eq!(dedupe_operator_digest(), GOLDEN_DEDUPE_OPERATORS);
+}
+
 /// Captured from commit 4cb4fc62 (pre-change operators).
 const GOLDEN_SEARCH: [u64; 64] = [
 	13130087642153563210, 15943725861416142908, 6987742805683153432, 6906628960249555962,
