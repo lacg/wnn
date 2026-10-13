@@ -337,6 +337,9 @@ use pyapi::*;
 /// genome's footprint (logical_neurons, physical_neurons, logical_cells,
 /// physical_cells). IDSGenomeStreamerWrapper gains footprint(). Training is
 /// unchanged from ABI 16 + the stage-2 multiplicity layer (bit-identical scores).
+/// Same ABI (one swap) also adds: group_neurons / layer_footprint (stage 6),
+/// sparse_train_batch / sparse_forward_batch optional `index_of` (stage 6),
+/// IDSCacheWrapper.export_trained (stage 7).
 pub const ABI_VERSION: u32 = 17;
 
 #[pymodule]
@@ -373,6 +376,8 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()>
 	m.add_function(wrap_pyfunction!(sparse_train_batch, m)?)?;
 	m.add_function(wrap_pyfunction!(sparse_bitwise_train_batch, m)?)?; // Bitwise multi-label training (sparse)
 	m.add_function(wrap_pyfunction!(sparse_forward_batch, m)?)?;
+	m.add_function(wrap_pyfunction!(group_neurons, m)?)?;
+	m.add_function(wrap_pyfunction!(layer_footprint, m)?)?;
 	// Tiered sparse memory backend (for variable bits per tier)
 	m.add_class::<TieredSparseMemory>()?;
 	m.add_function(wrap_pyfunction!(sparse_train_batch_tiered, m)?)?;

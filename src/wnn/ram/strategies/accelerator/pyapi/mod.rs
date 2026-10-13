@@ -38,3 +38,5 @@ mod connections_api;
 pub(crate) use connections_api::*;
 mod counter_rng_api;
 pub(crate) use counter_rng_api::*;
+mod unit_grouping_api;
+pub(crate) use unit_grouping_api::*;

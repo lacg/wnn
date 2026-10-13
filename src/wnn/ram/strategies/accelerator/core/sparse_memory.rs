@@ -31,6 +31,7 @@ use std::hash::BuildHasherDefault;
 use rustc_hash::FxHasher;
 
 use crate::neuron_memory::{EMPTY_U8 as EMPTY, FALSE_U8 as FALSE, TRUE_U8 as TRUE};
+use crate::unit_grouping::UnitGrouping;
 
 /// Fast hasher type for DashMap
 type FxBuildHasher = BuildHasherDefault<FxHasher>;
@@ -370,10 +371,33 @@ pub use crate::sparse_gpu_export::SparseGpuExport;
 // Canonical address computation lives in neuron_memory.rs (single source of truth).
 pub use crate::neuron_memory::compute_address_sparse as compute_address;
 
+/// Storage slot a LOGICAL neuron writes: its unit, and only from the unit's
+/// representative (copies receive identical writes, so writing once is
+/// exact). `None` grouping = the plain layer: every neuron is its own slot.
+#[inline]
+fn write_slot(grouping: Option<&UnitGrouping>, neuron: usize) -> Option<usize>
+{
+	match grouping
+	{
+		None => Some(neuron),
+		Some(g) if g.is_representative(neuron) => Some(g.index_of(neuron) as usize),
+		Some(_) => None,
+	}
+}
+
+/// Storage slot a LOGICAL neuron reads: its unit.
+#[inline]
+fn read_slot(grouping: Option<&UnitGrouping>, neuron: usize) -> usize
+{
+	grouping.map_or(neuron, |g| g.index_of(neuron) as usize)
+}
+
 /// Batch training for sparse memory backend
 ///
 /// Same interface as ramlm::train_batch but uses sparse storage.
-/// Two-phase training: TRUEs first (with override), then FALSEs (no override)
+/// Two-phase training: TRUEs first (with override), then FALSEs (no override).
+/// `connections_flat` is LOGICAL (one row per logical neuron); `grouping`
+/// (the multiplicity layer) stores each unit once — `None` is the plain layer.
 pub fn train_batch_sparse(
 	memory: &SparseLayerMemory,
 	input_bits_flat: &[bool],
@@ -390,6 +414,7 @@ pub fn train_batch_sparse(
 	neurons_per_cluster: usize,
 	num_negatives: usize,
 	_allow_override: bool,
+	grouping: Option<&UnitGrouping>,
 ) -> usize
 {
 	// Phase 1: Write ALL TRUEs first (with override to ensure TRUE takes priority)
@@ -407,13 +432,14 @@ pub fn train_batch_sparse(
 			for neuron_offset in 0..neurons_per_cluster
 			{
 				let neuron_idx = true_start_neuron + neuron_offset;
+				let Some(slot) = write_slot(grouping, neuron_idx) else { continue };
 				let conn_start = neuron_idx * bits_per_neuron;
 				let connections = &connections_flat[conn_start..conn_start + bits_per_neuron];
 
 				let address = compute_address(input_bits, connections, bits_per_neuron);
 
 				// TRUE writes always override (priority over FALSE)
-				if memory.write_cell(neuron_idx, address, TRUE, true)
+				if memory.write_cell(slot, address, TRUE, true)
 				{
 					ex_modified += 1;
 				}
@@ -441,13 +467,14 @@ pub fn train_batch_sparse(
 				for neuron_offset in 0..neurons_per_cluster
 				{
 					let neuron_idx = false_start_neuron + neuron_offset;
+					let Some(slot) = write_slot(grouping, neuron_idx) else { continue };
 					let conn_start = neuron_idx * bits_per_neuron;
 					let connections = &connections_flat[conn_start..conn_start + bits_per_neuron];
 
 					let address = compute_address(input_bits, connections, bits_per_neuron);
 
 					// FALSE writes only to EMPTY cells
-					if memory.write_cell(neuron_idx, address, FALSE, false)
+					if memory.write_cell(slot, address, FALSE, false)
 					{
 						ex_modified += 1;
 					}
@@ -555,7 +582,8 @@ pub fn bitwise_train_batch_sparse(
 
 /// Batch forward pass for sparse memory backend
 ///
-/// Same interface as ramlm::forward_batch but uses sparse storage.
+/// Same interface as ramlm::forward_batch but uses sparse storage. Every
+/// LOGICAL neuron reads its unit's storage (`grouping`; `None` = plain).
 pub fn forward_batch_sparse(
 	memory: &SparseLayerMemory,
 	input_bits_flat: &[bool],
@@ -566,6 +594,7 @@ pub fn forward_batch_sparse(
 	neurons_per_cluster: usize,
 	num_clusters: usize,
 	empty_value: f32,
+	grouping: Option<&UnitGrouping>,
 ) -> Vec<f32>
 {
 	let mut probs = vec![0.0f32; num_examples * num_clusters];
@@ -592,7 +621,7 @@ pub fn forward_batch_sparse(
 					let connections = &connections_flat[conn_start..conn_start + bits_per_neuron];
 
 					let address = compute_address(input_bits, connections, bits_per_neuron);
-					let cell_value = memory.read_cell(neuron_idx, address);
+					let cell_value = memory.read_cell(read_slot(grouping, neuron_idx), address);
 
 					if cell_value == TRUE
 					{
@@ -1441,6 +1470,43 @@ fn evaluate_gpu_batch(
 mod tests
 {
 	use super::*;
+
+	/// 2 clusters x 4 neurons x 3 bits over 8 input bits; cluster 0 = a, b, a, a
+	/// and cluster 1 = c, c, d, a' (a' has a's connections but another cluster).
+	fn grouped_fixture() -> (Vec<i64>, UnitGrouping, Vec<bool>, Vec<i64>, Vec<i64>)
+	{
+		let (a, b, c, d) = ([0i64, 3, 5], [1i64, 2, 7], [4i64, 6, 0], [7i64, 5, 1]);
+		let rows = [a, b, a, a, c, c, d, a];
+		let conns: Vec<i64> = rows.iter().flatten().copied().collect();
+		let keys = rows.iter().enumerate().map(|(n, r)| crate::neuron_key::NeuronKey::of((n / 4) as u32, 3, r));
+		let grouping = UnitGrouping::by_key(keys);
+		let inputs: Vec<bool> = (0..12 * 8).map(|i| (i * 7 + i / 5) % 3 == 0).collect();
+		let trues: Vec<i64> = (0..12).map(|e| (e % 2) as i64).collect();
+		let falses: Vec<i64> = trues.iter().map(|&t| 1 - t).collect();
+		(conns, grouping, inputs, trues, falses)
+	}
+
+	#[test]
+	fn sparse_grouped_train_forward_equals_plain()
+	{
+		let (conns, g, inputs, trues, falses) = grouped_fixture();
+		assert_eq!(g.num_groups(), 5);
+		let plain = SparseLayerMemory::new(8, 3);
+		let grouped = SparseLayerMemory::new(g.num_groups(), 3);
+		let mp = train_batch_sparse(&plain, &inputs, &trues, &falses, &conns, 12, 8, 3, 4, 1, false, None);
+		let mg = train_batch_sparse(&grouped, &inputs, &trues, &falses, &conns, 12, 8, 3, 4, 1, false, Some(&g));
+		assert!(mg < mp, "copies must not be written ({mg} vs {mp})");
+		for n in 0..8
+		{
+			for addr in 0..8u64
+			{
+				assert_eq!(plain.read_cell(n, addr), grouped.read_cell(g.index_of(n) as usize, addr), "neuron {n} addr {addr}");
+			}
+		}
+		let fp = forward_batch_sparse(&plain, &inputs, &conns, 12, 8, 3, 4, 2, 0.5, None);
+		let fg = forward_batch_sparse(&grouped, &inputs, &conns, 12, 8, 3, 4, 2, 0.5, Some(&g));
+		assert_eq!(fp.iter().map(|x| x.to_bits()).collect::<Vec<_>>(), fg.iter().map(|x| x.to_bits()).collect::<Vec<_>>());
+	}
 
 	#[test]
 	fn test_sparse_basic()

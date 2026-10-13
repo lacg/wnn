@@ -104,6 +104,7 @@ impl SparseMemory
 
 /// Batch training for sparse memory backend (parallel)
 #[pyfunction]
+#[pyo3(signature = (memory, input_bits_flat, true_clusters, false_clusters_flat, connections_flat, num_examples, total_input_bits, neurons_per_cluster, num_negatives, allow_override, index_of=None))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn sparse_train_batch(
 	py: Python<'_>,
@@ -117,8 +118,10 @@ pub(crate) fn sparse_train_batch(
 	neurons_per_cluster: usize,
 	num_negatives: usize,
 	allow_override: bool,
+	index_of: Option<Vec<u32>>,
 ) -> PyResult<usize>
 {
+	let grouping = grouping_from_py(index_of)?;
 	py.allow_threads(|| {
 		let modified = ram_core::sparse_memory::train_batch_sparse(
 			&memory.inner,
@@ -132,9 +135,19 @@ pub(crate) fn sparse_train_batch(
 			neurons_per_cluster,
 			num_negatives,
 			allow_override,
+			grouping.as_ref(),
 		);
 		Ok(modified)
 	})
+}
+
+/// The multiplicity layer's logical -> unit map from Python (`None` = plain).
+fn grouping_from_py(index_of: Option<Vec<u32>>) -> PyResult<Option<ram_core::unit_grouping::UnitGrouping>>
+{
+	index_of
+		.map(ram_core::unit_grouping::UnitGrouping::from_index_of)
+		.transpose()
+		.map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
 /// Bitwise batch training for sparse memory backend
@@ -188,6 +201,7 @@ pub(crate) fn sparse_bitwise_train_batch<'py>(
 
 /// Batch forward pass for sparse memory backend (parallel)
 #[pyfunction]
+#[pyo3(signature = (memory, input_bits_flat, connections_flat, num_examples, total_input_bits, neurons_per_cluster, num_clusters, empty_value, index_of=None))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn sparse_forward_batch(
 	py: Python<'_>,
@@ -199,8 +213,10 @@ pub(crate) fn sparse_forward_batch(
 	neurons_per_cluster: usize,
 	num_clusters: usize,
 	empty_value: f32,
+	index_of: Option<Vec<u32>>,
 ) -> PyResult<Vec<f32>>
 {
+	let grouping = grouping_from_py(index_of)?;
 	py.allow_threads(|| {
 		let probs = ram_core::sparse_memory::forward_batch_sparse(
 			&memory.inner,
@@ -212,6 +228,7 @@ pub(crate) fn sparse_forward_batch(
 			neurons_per_cluster,
 			num_clusters,
 			empty_value,
+			grouping.as_ref(),
 		);
 		Ok(probs)
 	})

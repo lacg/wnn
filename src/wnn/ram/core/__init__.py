@@ -336,6 +336,10 @@ from wnn.ram.core.Memory import Memory
 from wnn.ram.core.SparseMemory import SparseMemory
 from wnn.ram.core.RAMLayer import RAMLayer
 from wnn.ram.core.RAMClusterLayer import RAMClusterLayer, bits_needed, MemoryBackend
+from wnn.ram.core.UnitGroupingView import UnitGroupingView
+from wnn.ram.core.MultiplicityRAMClusterLayer import MultiplicityRAMClusterLayer
+from wnn.ram.core.ClusterLayerConfig import ClusterLayerConfig
+from wnn.ram.core.ClusterLayerFactory import ClusterLayerFactory
 from wnn.ram.core.TieredRAMClusterLayer import TieredRAMClusterLayer, TierConfig
 from wnn.ram.core.AdaptiveClusteredRAM import AdaptiveClusteredRAM, ConfigGroup
 
@@ -510,6 +514,10 @@ __all__ = [
 	'SparseMemory',
 	'RAMLayer',
 	'RAMClusterLayer',
+	'MultiplicityRAMClusterLayer',
+	'UnitGroupingView',
+	'ClusterLayerConfig',
+	'ClusterLayerFactory',
 	'TieredRAMClusterLayer',
 	'TierConfig',
 	'AdaptiveClusteredRAM',

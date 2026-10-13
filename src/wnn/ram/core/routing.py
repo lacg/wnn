@@ -48,6 +48,8 @@ from torch import topk as torch_topk
 
 from wnn.ram.core.base import RAMComponent
 from wnn.ram.core.RAMClusterLayer import RAMClusterLayer, bits_needed
+from wnn.ram.core.ClusterLayerConfig import ClusterLayerConfig
+from wnn.ram.core.ClusterLayerFactory import ClusterLayerFactory
 
 
 class RoutingStrategy(Enum):
@@ -108,13 +110,13 @@ class RouterRAM(RAMComponent):
 
 		# Router is a small RAMClusterLayer: maps input bits -> route scores
 		# Uses 3 neurons per route for stable voting
-		self.router_layer = RAMClusterLayer(
+		self.router_layer = ClusterLayerFactory.create(ClusterLayerConfig(
 			total_input_bits=total_input_bits,
 			num_clusters=num_routes,
 			neurons_per_cluster=3,
 			bits_per_neuron=min(router_bits, total_input_bits),
 			rng=rng,
-		)
+		))
 
 	def forward(self, input_bits: Tensor) -> Tensor:
 		"""Route inputs to expert indices.
@@ -446,13 +448,13 @@ class RoutedRAMClusterLayer(RAMComponent):
 		# Create expert RAMClusterLayers
 		self.experts: list[RAMClusterLayer] = []
 		for i in range(num_routes):
-			expert = RAMClusterLayer(
+			expert = ClusterLayerFactory.create(ClusterLayerConfig(
 				total_input_bits=total_input_bits,
 				num_clusters=num_clusters,
 				neurons_per_cluster=neurons_per_cluster_per_route,
 				bits_per_neuron=bits_per_neuron,
 				rng=(rng + i + 1) if rng is not None else None,
-			)
+			))
 			self.experts.append(expert)
 
 		# Cached merged arrays for single-dispatch Metal evaluation
@@ -522,10 +524,10 @@ class RoutedRAMClusterLayer(RAMComponent):
 		self._expert_caches = []
 		for e in self.experts:
 			self._expert_caches.append({
-				'connections': e.memory.connections.flatten().numpy().astype(np.int64),
-				'memory_words': e.memory.memory_words.flatten().numpy().astype(np.int64),
+				'connections': e.connections.flatten().numpy().astype(np.int64),
+				'memory_words': e.logical_memory_words().flatten().numpy().astype(np.int64),
 				'total_input_bits': e.memory.total_input_bits,
-				'num_neurons': e.memory.num_neurons,
+				'num_neurons': e.total_neurons,
 				'n_bits_per_neuron': e.memory.n_bits_per_neuron,
 				'neurons_per_cluster': e.neurons_per_cluster,
 				'num_clusters': e.num_clusters,

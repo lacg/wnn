@@ -85,6 +85,43 @@ impl UnitGrouping
 		(offsets, members)
 	}
 
+	/// Rebuild from a logical -> group map (e.g. handed back by Python). The
+	/// groups must be numbered in first-occurrence order, as `by_key` numbers
+	/// them — so the result equals the grouping that produced the map.
+	pub fn from_index_of(index_of: Vec<u32>) -> Result<Self, String>
+	{
+		let mut representatives: Vec<u32> = Vec::new();
+		for (unit, &g) in index_of.iter().enumerate()
+		{
+			match (g as usize).cmp(&representatives.len())
+			{
+				std::cmp::Ordering::Equal => representatives.push(unit as u32),
+				std::cmp::Ordering::Greater => return Err(format!("unit {unit}: group {g} before group {}", representatives.len())),
+				std::cmp::Ordering::Less => {}
+			}
+		}
+		let (member_offsets, members) = Self::csr(&index_of, representatives.len());
+		Ok(Self { index_of, representatives, member_offsets, members })
+	}
+
+	/// The whole logical -> group map.
+	pub fn index_map(&self) -> &[u32]
+	{
+		&self.index_of
+	}
+
+	/// CSR offsets over groups (len = groups + 1) into `all_members`.
+	pub fn member_offsets(&self) -> &[u32]
+	{
+		&self.member_offsets
+	}
+
+	/// Every group's logical units, group-major, ascending within a group.
+	pub fn all_members(&self) -> &[u32]
+	{
+		&self.members
+	}
+
 	pub fn num_units(&self) -> usize
 	{
 		self.index_of.len()
@@ -187,6 +224,18 @@ mod tests
 		assert_eq!(g.members(1), &[1, 4]);
 		assert_eq!(g.members(2), &[3]);
 		assert_eq!((0..3).map(|k| g.count(k)).collect::<Vec<_>>(), vec![3, 2, 1]);
+	}
+
+	#[test]
+	fn unit_grouping_from_index_of_round_trip()
+	{
+		let g = UnitGrouping::by_key(["b", "a", "b", "c", "a", "b"]);
+		assert_eq!(UnitGrouping::from_index_of(g.index_map().to_vec()), Ok(g.clone()));
+		assert_eq!(g.member_offsets(), &[0, 3, 5, 6]);
+		assert_eq!(g.all_members(), &[0, 2, 5, 1, 4, 3]);
+		assert!(UnitGrouping::from_index_of(vec![0, 2, 1]).is_err(), "group 2 before group 1");
+		assert!(UnitGrouping::from_index_of(vec![1]).is_err());
+		assert_eq!(UnitGrouping::from_index_of(Vec::new()), Ok(UnitGrouping::identity(0)));
 	}
 
 	#[test]
