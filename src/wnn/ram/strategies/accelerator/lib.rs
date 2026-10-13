@@ -279,6 +279,10 @@ mod metal_atomic_test;
 
 #[cfg(target_os = "macos")]
 mod marker_train;
+// IDS-37 stage 2: train each genome's distinct neurons once (rate >= 1.0, OI).
+mod multiplicity_batch;
+#[cfg(all(test, target_os = "macos"))]
+mod multiplicity_parity_tests;
 
 #[cfg(target_os = "macos")]
 mod marker_probe;

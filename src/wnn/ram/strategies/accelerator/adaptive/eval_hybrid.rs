@@ -445,6 +445,13 @@ fn try_eval_in_place_batch(
 	{
 		return None;
 	}
+	// IDS-37: where the multiplicity layer applies, the export path trains each
+	// distinct neuron once; the probe would train every copy. Same scores either
+	// way (both exact), so route to the cheaper export path.
+	if ram_core::neuron_memory::multiplicity_applies(cfg.neuron_sample_rate, cfg.memory_mode)
+	{
+		return None;
+	}
 	// The probe merges OI counters — only meaningful when this mode trains
 	// through them (env AND `CellMode::uses_oi_counters`).
 	if !ram_core::neuron_memory::order_independent_training_active(cfg.memory_mode)

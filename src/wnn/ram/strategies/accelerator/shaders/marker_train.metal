@@ -86,6 +86,11 @@ struct TrainParams
 // xorshift32-based per-(neuron, example) sampling decision. Matches CPU
 // path at adaptive.rs:2867-2880 byte-for-byte.
 // Returns true if this (neuron_idx, ex_idx) pair should be SKIPPED.
+// INVARIANT (IDS-37 multiplicity layer): at sample_rate >= 1.0 this returns
+// BEFORE reading neuron_idx/rng_seed — the only place training depends on a
+// neuron's position. Same-key neurons therefore receive identical writes, which
+// is what lets `multiplicity_applies` train duplicates once. Keep the early
+// return first.
 inline bool should_skip_sample(uint neuron_idx, uint ex_idx, uint rng_seed, float sample_rate)
 {
 	if (sample_rate >= 1.0f)

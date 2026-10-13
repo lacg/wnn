@@ -564,6 +564,92 @@ pub mod batched_path
 			num_clusters,
 			neuron_sample_rate,
 		);
+		let plain = |bits: &[usize], neurons: &[usize], conns: &[i64], g: usize| {
+			batched_train_offspring_plain(
+				bits,
+				neurons,
+				conns,
+				g,
+				num_clusters,
+				train_input_bits,
+				train_targets,
+				train_negatives,
+				num_train,
+				num_negatives,
+				total_input_bits,
+				empty_value,
+				neuron_sample_rate,
+				rng_seed,
+				class_weights,
+				memory_mode,
+			)
+		};
+		if !multiplicity_selected(neuron_sample_rate, memory_mode, genomes_connections_flat)
+		{
+			return plain(genomes_bits_flat, genomes_neurons_flat, genomes_connections_flat, num_genomes);
+		}
+		let batch = crate::multiplicity_batch::MultiplicityBatch::new(
+			genomes_bits_flat,
+			genomes_neurons_flat,
+			genomes_connections_flat,
+			num_genomes,
+			num_clusters,
+			memory_mode,
+		);
+		if batch.is_identity()
+		{
+			return plain(genomes_bits_flat, genomes_neurons_flat, genomes_connections_flat, num_genomes);
+		}
+		batch.train(|p| one_export(plain(&p.bits, &p.neurons_per_cluster, &p.connections, 1)?))
+	}
+
+	/// True iff the Metal marker trainer initialised (tests skip without it).
+	#[cfg(test)]
+	pub(crate) fn trainer_available() -> bool
+	{
+		get_trainer().is_ok()
+	}
+
+	/// THE selection rule of the training factory: the multiplicity layer runs
+	/// iff duplicates provably train identically (`multiplicity_applies`: rate
+	/// >= 1.0 AND an order-independent writer) and the caller supplied the
+	/// connections (empty = kernel-generated random ones, nothing to group).
+	pub(crate) fn multiplicity_selected(neuron_sample_rate: f32, memory_mode: u8, connections: &[i64]) -> bool
+	{
+		ram_core::neuron_memory::multiplicity_applies(neuron_sample_rate, memory_mode) && !connections.is_empty()
+	}
+
+	pub(crate) fn one_export(mut exports: Vec<GenomeExport>) -> Result<GenomeExport, String>
+	{
+		match (exports.pop(), exports.is_empty())
+		{
+			(Some(e), true) => Ok(e),
+			_ => Err("multiplicity: plain trainer did not return exactly one export".to_string()),
+		}
+	}
+
+	/// The plain layer: every logical neuron trained in its own slot region.
+	/// Byte-identical to the factory body before IDS-37 stage 2.
+	#[allow(clippy::too_many_arguments)]
+	pub(crate) fn batched_train_offspring_plain(
+		genomes_bits_flat: &[usize],
+		genomes_neurons_flat: &[usize],
+		genomes_connections_flat: &[i64],
+		num_genomes: usize,
+		num_clusters: usize,
+		train_input_bits: &ram_core::packed_bits::PackedBits,
+		train_targets: &[i64],
+		train_negatives: &[i64],
+		num_train: usize,
+		num_negatives: usize,
+		total_input_bits: usize,
+		empty_value: f32,
+		neuron_sample_rate: f32,
+		rng_seed: u64,
+		class_weights: Option<&[u32]>,
+		memory_mode: u8,
+	) -> Result<Vec<GenomeExport>, String>
+	{
 		let result = batched_train_core(
 			genomes_bits_flat,
 			genomes_neurons_flat,
@@ -666,7 +752,7 @@ pub mod batched_path
 	/// neuron order; groups/connections are rebuilt from the FULL genome so the
 	/// merged `GenomeExport` is indistinguishable from an unchunked one.
 	#[allow(clippy::too_many_arguments)]
-	fn train_single_genome_neuron_chunked(
+	pub(crate) fn train_single_genome_neuron_chunked(
 		genomes_bits_flat: &[usize],
 		genomes_connections_flat: &[i64],
 		train_input_bits: &ram_core::packed_bits::PackedBits,
