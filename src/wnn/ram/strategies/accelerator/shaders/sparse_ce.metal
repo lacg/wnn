@@ -211,7 +211,11 @@ kernel void sparse_forward_with_ce(
 		{
 			max_score = score;
 		}
-		if (score > predicted_score)
+		// Ties go to the LAST max cluster: the convention of ce_reduce.metal
+		// (`>=`) and every CPU argmax (Rust `max_by`). These kernels took the
+		// first (`>`) until 12/10/2026, so the multi-cluster GA fitness fast
+		// path disagreed with every other scorer on tied clusters.
+		if (score >= predicted_score)
 		{
 			predicted_score = score;
 			predicted_cluster = cluster_idx;
@@ -304,7 +308,11 @@ kernel void sparse_forward_with_ce_online(
 				params.run_seed, example_idx);
 
 		// Track predicted (argmax)
-		if (score > predicted_score)
+		// Ties go to the LAST max cluster: the convention of ce_reduce.metal
+		// (`>=`) and every CPU argmax (Rust `max_by`). These kernels took the
+		// first (`>`) until 12/10/2026, so the multi-cluster GA fitness fast
+		// path disagreed with every other scorer on tied clusters.
+		if (score >= predicted_score)
 		{
 			predicted_score = score;
 			predicted_cluster = cluster_idx;

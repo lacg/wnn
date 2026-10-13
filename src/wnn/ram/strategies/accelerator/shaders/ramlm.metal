@@ -236,6 +236,8 @@ struct DenseToBufferParams
 	uint words_per_neuron;
 	float empty_value;
 	uint memory_mode; // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED, 4=QSR, 5=PLN
+	uint coverage_aware;			 // 1 = an unaddressed cell contributes NOTHING (bitmap present)
+	uint addresses_per_neuron; // 1 << bits_per_neuron; strides the coverage bitmap
 	ulong run_seed;		// QSR/PLN per-run seed; ignored by other modes
 };
 
@@ -247,6 +249,7 @@ kernel void ramlm_forward_to_buffer(
 		constant DenseToBufferParams &params [[buffer(4)]],
 		device float *shared_buffer [[buffer(5)]], // Shared across all groups
 		device const uint *cluster_neurons [[buffer(6)]], // [num_group_clusters] neurons SCORED
+		device const ulong *coverage [[buffer(7)]],				 // dense coverage bitmap (dummy if unused)
 		uint2 thread_pos [[thread_position_in_grid]])
 {
 	uint local_cluster = thread_pos.x;
@@ -261,11 +264,13 @@ kernel void ramlm_forward_to_buffer(
 
 	uint start_neuron = local_cluster * params.neurons_per_cluster;
 
-	// LM shared-buffer route — not the IDS scoring path. It has no coverage
-	// bitmap, so it passes has_coverage=0 and behaves exactly as before.
+	// The multi-cluster GA fitness (CE) path. Coverage-aware like the other
+	// dense kernels since 12/10/2026 (it passed no bitmap, so under
+	// coverage_aware the fitness scored untouched cells the 0.25 pedestal
+	// while every report path skipped them).
 	float prob = accumulate_dense(
 			packed_input, connections_flat, memory_words,
-			nullptr, 0u, 0u,
+			coverage, params.coverage_aware, params.addresses_per_neuron,
 			start_neuron, cluster_neurons[local_cluster],
 			params.bits_per_neuron, params.words_per_neuron,
 			params.memory_mode, params.empty_value,

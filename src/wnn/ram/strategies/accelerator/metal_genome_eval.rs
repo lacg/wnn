@@ -520,6 +520,8 @@ struct DenseToBufferParams
 	words_per_neuron: u32,
 	empty_value: f32,
 	memory_mode: u32,
+	coverage_aware: u32,
+	addresses_per_neuron: u32,
 	run_seed: u64,
 }
 
@@ -979,6 +981,9 @@ impl MetalGroupEvaluator
 		run_seed: u64,
 		// Neurons SCORED per local cluster (a coalesced group's actual_neurons).
 		actual_neurons: Option<&[u32]>,
+		// Dense coverage bitmap (GenomeExport::dense_coverage); empty = untracked.
+		coverage: &[u64],
+		coverage_aware: bool,
 	)
 	{
 		let num_group_clusters = cluster_ids.len();
@@ -1007,8 +1012,16 @@ impl MetalGroupEvaluator
 			words_per_neuron: words_per_neuron as u32,
 			empty_value,
 			memory_mode: memory_mode as u32,
+			coverage_aware: u32::from(coverage_aware && !coverage.is_empty()),
+			addresses_per_neuron: 1u32.checked_shl(bits_per_neuron as u32).unwrap_or(0),
 			run_seed,
 		};
+		let coverage_src: &[u64] = if coverage.is_empty() { &[0u64] } else { coverage };
+		let coverage_buffer = self.device.new_buffer_with_data(
+			coverage_src.as_ptr() as *const _,
+			std::mem::size_of_val(coverage_src) as u64,
+			metal::MTLResourceOptions::StorageModeShared,
+		);
 		// Convert params to slice for get_or_create_buffer
 		let params_slice = unsafe {
 			std::slice::from_raw_parts(
@@ -1065,6 +1078,7 @@ impl MetalGroupEvaluator
 		encoder.set_buffer(4, Some(&params_buffer), 0);
 		encoder.set_buffer(5, Some(scores_buffer), 0);
 		encoder.set_buffer(6, Some(&cluster_neurons_buffer), 0);
+		encoder.set_buffer(7, Some(&coverage_buffer), 0);
 
 		let grid_size = MTLSize::new(num_group_clusters as u64, num_examples as u64, 1);
 		let thread_group_size = MTLSize::new(
@@ -1517,7 +1531,8 @@ mod tests
 					run_seed,
 					e,
 				);
-				if s > best_s
+				// Ties -> LAST max (the project-wide argmax convention).
+				if s >= best_s
 				{
 					best_s = s;
 					best_c = c;
