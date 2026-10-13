@@ -1614,6 +1614,30 @@ pub fn order_independent_training_active(memory_mode: u8) -> bool
 		&& crate::cell_mode::CellMode::from_u8(memory_mode).map_or(false, |m| m.uses_oi_counters())
 }
 
+/// True iff a training pass writes every cell through a COMMUTATIVE update, so
+/// the final memory does not depend on the order examples reach a neuron:
+/// TERNARY/PLN (TRUE-wins lattice) and BINARY (one-shot set) always; the
+/// OI-counter modes (QUAD_WEIGHTED / QUAD_BINARY / QSR) only when the OI
+/// trainer is active — their legacy clamped nudge is order-dependent. An
+/// unknown mode code is never order-independent.
+pub fn training_is_order_independent(memory_mode: u8) -> bool
+{
+	match crate::cell_mode::CellMode::from_u8(memory_mode)
+	{
+		Some(m) => !m.uses_oi_counters() || order_independent_training_active(memory_mode),
+		None => false,
+	}
+}
+
+/// THE multiplicity gate (docs/ids_multiplicity_layer_design.md §1.1): same-key
+/// neurons train byte-identically iff no neuron is sub-sampled (rate >= 1.0
+/// short-circuits `should_skip_sample` before it reads the neuron index) AND
+/// the writes commute. Only then may duplicates be trained once and shared.
+pub fn multiplicity_applies(neuron_sample_rate: f32, memory_mode: u8) -> bool
+{
+	neuron_sample_rate >= 1.0f32 && training_is_order_independent(memory_mode)
+}
+
 #[cfg(test)]
 mod oi_tests
 {
