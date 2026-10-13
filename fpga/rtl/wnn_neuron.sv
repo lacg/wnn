@@ -83,6 +83,14 @@ module wnn_neuron #(
 
 	// Binary search registers
 	localparam int IDX_BITS = $clog2(NUM_ENTRIES) + 1;
+	// Search bounds as UNSIGNED IDX_BITS-wide constants. `IDX_BITS'(NUM_ENTRIES) >> 1`
+	// cast the SIGNED int parameter: for a power-of-two NUM_ENTRIES the cast's MSB is
+	// set, so a tool that sign-extends before the shift starts the search at
+	// mid = 1.5 N (Yosys: 1536 for N = 1024) and every key in the upper half reads
+	// the miss cell. Found 13/10/2026 by RTL simulation (flow 6947: 269/400 vectors
+	// wrong, units with exactly 512 and 1024 entries).
+	localparam logic [IDX_BITS-1:0] IDX_END  = NUM_ENTRIES;
+	localparam logic [IDX_BITS-1:0] IDX_HALF = NUM_ENTRIES / 2;
 	logic [IDX_BITS-1:0] lo, hi, mid;
 	logic [KEY_BITS-1:0] search_key;
 	logic [KEY_BITS-1:0] read_key;
@@ -120,10 +128,10 @@ module wnn_neuron #(
 				IDLE: begin
 					if (start) begin
 						lo    <= '0;
-						hi    <= IDX_BITS'(NUM_ENTRIES);
+						hi    <= IDX_END;
 						found <= 1'b0;
 						// Compute first mid and issue BRAM read
-						mid       <= IDX_BITS'(NUM_ENTRIES) >> 1;
+						mid       <= IDX_HALF;
 						read_addr <= (NUM_ENTRIES >> 1);
 						state     <= SEARCH_ADDR;  // Go to ADDR first to let BRAM read settle
 					end
