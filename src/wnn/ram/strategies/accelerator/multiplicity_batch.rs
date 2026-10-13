@@ -1,10 +1,11 @@
 //! `MultiplicityBatch`: train a genome batch's distinct neurons once, in one
-//! dispatch (IDS-37 stages 2 + 4).
+//! dispatch (IDS-37 stages 2, 4, 5).
 //!
 //! Selected by the GPU training factory (`marker_train::batched_train_offspring`)
 //! only when `ram_core::neuron_memory::multiplicity_applies(rate, mode)` holds —
 //! then same-key neurons train byte-identically. The batch collapses to one
-//! `SuperGenome` (each genome's distinct neurons, cluster-major, any shapes),
+//! `SuperGenome` (the batch's distinct neurons — shared across genomes —
+//! cluster-major, any shapes),
 //! which trains as ONE genome; every genome's logical export is then rebuilt
 //! from the trained units by `GenomeExport::from_physical`. A super-genome over
 //! the GPU budget bisects the batch; a single genome over budget takes the
@@ -68,8 +69,8 @@ impl<'a> MultiplicityBatch<'a>
 		self.whole.grouping.is_identity()
 	}
 
-	/// The `[MULTIPLICITY]` line: per-genome distinct fractions and the batch
-	/// units actually trained.
+	/// The `[MULTIPLICITY]` line: per-genome distinct fractions and the
+	/// batch-wide distinct fraction — exactly the units this batch trains.
 	pub(crate) fn log_line(&self) -> String
 	{
 		DistinctFractions::from_groupings(&self.own, &self.whole.grouping).log_line()

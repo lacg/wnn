@@ -1,10 +1,12 @@
 //! `SuperGenome`: the distinct neurons of a whole genome BATCH as one flat
-//! genome, so a batch trains in a single dispatch (IDS-37 stage 4).
+//! genome, so a batch trains in a single dispatch (IDS-37 stages 4 + 5).
 //!
 //! The batch's neurons are walked cluster-major (cluster c of genome 0, of
-//! genome 1, ...) and collapsed by `NeuronKey` within each genome, so every
-//! cluster's units stay contiguous whatever the genomes' per-cluster neuron
-//! counts — no uniform-shape constraint, no padding, no kernel edit.
+//! genome 1, ...) and collapsed by `NeuronKey` ACROSS genomes (stage 5: a
+//! neuron two genomes share trains once — every genome of one call trains on
+//! the same data, class weights and mode), so every cluster's units stay
+//! contiguous whatever the genomes' per-cluster neuron counts — no
+//! uniform-shape constraint, no padding, no kernel edit.
 //! `unit_of[i][l]` maps logical neuron l of the batch's i-th genome to its unit.
 //! Exact wherever `neuron_memory::multiplicity_applies` holds: a unit trains
 //! as each of its copies would (docs/ids_multiplicity_layer_design.md §3).
@@ -53,7 +55,7 @@ impl SuperGenome
 			.map(|g| NeuronKey::genome_keys(g.bits, g.neurons_per_cluster, g.connections).collect())
 			.collect();
 		let walk = cluster_major_walk(genomes);
-		let grouping = UnitGrouping::by_key(walk.iter().map(|v| (v.genome, &keys[v.genome][v.logical])));
+		let grouping = UnitGrouping::by_key(walk.iter().map(|v| &keys[v.genome][v.logical]));
 		let mut unit_of: Vec<Vec<u32>> = genomes.iter().map(|g| vec![0u32; g.bits.len()]).collect();
 		for (pos, v) in walk.iter().enumerate()
 		{
@@ -141,16 +143,25 @@ mod tests
 	}
 
 	#[test]
+	fn super_genome_never_shares_across_clusters()
+	{
+		// Same connections in different clusters are different neurons.
+		let (b0, n0, k0) = ([1usize, 1], [1usize, 1], [5i64, 5]);
+		let s = SuperGenome::collapse(&[flat(&b0, &n0, &k0), flat(&b0, &n0, &k0)]);
+		assert_eq!((s.neurons_per_cluster.clone(), s.unit_of.clone()), (vec![1, 1], vec![vec![0, 1], vec![0, 1]]));
+	}
+
+	#[test]
 	fn super_genome_is_cluster_major_with_unequal_shapes()
 	{
-		// g0: c0 = [a, a], c1 = [b]; g1: c0 = [a], c1 = [b, c, b]. Per-genome
-		// collapse only: g1's a and b are separate units from g0's.
+		// g0: c0 = [a, a], c1 = [b]; g1: c0 = [a], c1 = [b, c, b]. Collapsed
+		// across genomes: one a, one b, one c.
 		let (b0, n0, k0) = ([1usize, 1, 1], [2usize, 1], [5i64, 5, 6]);
 		let (b1, n1, k1) = ([1usize, 1, 1, 1], [1usize, 3], [5i64, 6, 7, 6]);
 		let s = SuperGenome::collapse(&[flat(&b0, &n0, &k0), flat(&b1, &n1, &k1)]);
-		assert_eq!(s.neurons_per_cluster, vec![2, 3]);
-		assert_eq!(s.connections, vec![5, 5, 6, 6, 7]);
-		assert_eq!(s.unit_of, vec![vec![0, 0, 2], vec![1, 3, 4, 3]]);
-		assert_eq!(s.num_units(), 5);
+		assert_eq!(s.neurons_per_cluster, vec![1, 2]);
+		assert_eq!(s.connections, vec![5, 6, 7]);
+		assert_eq!(s.unit_of, vec![vec![0, 0, 1], vec![0, 1, 2, 1]]);
+		assert_eq!(s.num_units(), 3);
 	}
 }

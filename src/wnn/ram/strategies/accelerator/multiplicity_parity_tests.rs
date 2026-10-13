@@ -6,14 +6,16 @@
 //! K = 3 multi-group whose logical groups split across physical groups), the
 //! G = 3 uniform batch, the neuron-chunked over-budget trainer, the stage-4
 //! super-genome (G = 4 of unequal shapes, dense logical clusters read from
-//! sparse / wider units) and its bisection on the budget error.
+//! sparse / wider units) and its bisection on the budget error, with neurons
+//! shared ACROSS genomes trained once (stage 5).
 //! Assertions: per-logical-neuron storage equal; `compute_per_example_scores`
 //! `to_bits` equal on CPU and GPU scorers, coverage-aware on and off;
 //! `grouping.is_identity()` exactly when not selected; selected exports store
 //! fewer physical keys. Plus the CPU slot-trainer route through
 //! `from_physical`, and rate < 1.0 never selecting the layer.
 //!
-//! Run twice — the OI modes are only selected under the OI trainer:
+//! Run twice — the OI modes are only selected under the OI trainer — and both
+//! again with WNN_COALESCE_GROUPS=1 (coalesced groups: pads, actual_neurons):
 //!   WNN_ORDER_INDEPENDENT_TRAIN=1 cargo test -p ram_accelerator --lib --no-default-features multiplicity
 //!   cargo test -p ram_accelerator --lib --no-default-features multiplicity
 
@@ -406,6 +408,25 @@ fn check_super_genome(batch: &Batch, data: &Data, mode: u8)
 	}
 	let mult = train_factory(batch, data, mode, 1.0);
 	assert_matches_plain_per_genome(batch, data, mode, &mult, "super-genome G=4");
+	assert_shares_across_genomes(batch, data.num_clusters);
+}
+
+/// Stage 5: the super-genome trains the batch-wide distinct neurons — fewer
+/// than the per-genome distinct sum when genomes share neurons — and the
+/// [MULTIPLICITY] line reports exactly that number.
+fn assert_shares_across_genomes(batch: &Batch, num_clusters: usize)
+{
+	let genomes: Vec<(Vec<usize>, Vec<usize>, Vec<i64>)> =
+		(0..batch.num_genomes).map(|g| logical_genome(batch, num_clusters, g)).collect();
+	let flats: Vec<FlatGenome> =
+		genomes.iter().map(|(b, n, c)| FlatGenome { bits: b, neurons_per_cluster: n, connections: c }).collect();
+	let units = SuperGenome::collapse(&flats).num_units();
+	let per_genome: usize = genomes.iter().map(|(b, n, c)| PhysicalGenome::collapse(b, n, c).num_neurons()).sum();
+	let fractions = ram_core::distinct_fractions::DistinctFractions::of_batch(&batch.bits, &batch.npc, &batch.conns, batch.num_genomes, num_clusters);
+	assert_eq!(units, fractions.batch_distinct, "trained units = batch-wide distinct");
+	assert!(units < per_genome, "fixture must share neurons across genomes ({units} vs {per_genome})");
+	let mb = MultiplicityBatch::new(&batch.bits, &batch.npc, &batch.conns, batch.num_genomes, num_clusters, QUAD_WEIGHTED);
+	assert!(mb.log_line().contains(&format!("batch distinct={units} (")), "{}", mb.log_line());
 }
 
 /// Stage 4 bisection: a batch trainer that reports the budget overflow for
@@ -457,9 +478,14 @@ fn chunked(bits: &[usize], conns: &[i64], data: &Data, mode: u8, budget: usize) 
 
 /// The over-budget route: the physical genome trained through the
 /// neuron-chunked trainer (2 neurons per chunk) vs the logical one.
+///
+/// Skipped under WNN_COALESCE_GROUPS: the PLAIN neuron-chunked trainer itself
+/// mis-places heterogeneous-bits neurons when groups coalesce (pre-existing;
+/// `chunked_tests::neuron_chunked_matches_unchunked` fails the same way), so
+/// there is no correct plain reference to compare against.
 fn check_chunked(batch: &Batch, data: &Data, mode: u8)
 {
-	if !multiplicity_selected(1.0, mode, &batch.conns)
+	if !multiplicity_selected(1.0, mode, &batch.conns) || std::env::var("WNN_COALESCE_GROUPS").is_ok()
 	{
 		return;
 	}
