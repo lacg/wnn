@@ -200,7 +200,7 @@ fn kind(is_sparse: bool) -> &'static str
 }
 
 /// First genome-order neuron of each cluster.
-fn cluster_starts(npc: &[usize]) -> Vec<usize>
+pub(super) fn cluster_starts(npc: &[usize]) -> Vec<usize>
 {
 	let mut starts = Vec::with_capacity(npc.len());
 	let mut acc = 0usize;
@@ -215,7 +215,7 @@ fn cluster_starts(npc: &[usize]) -> Vec<usize>
 /// A group's slot layout (cluster li's neurons at li * group.neurons + n, the
 /// layout every export and scorer uses): Some(genome-order neuron) or None for
 /// a coalescing pad.
-fn group_slots(group: &ConfigGroup, starts: &[usize]) -> Vec<Option<usize>>
+pub(super) fn group_slots(group: &ConfigGroup, starts: &[usize]) -> Vec<Option<usize>>
 {
 	let mut slots = Vec::with_capacity(group.total_neurons());
 	for (li, &c) in group.cluster_ids.iter().enumerate()

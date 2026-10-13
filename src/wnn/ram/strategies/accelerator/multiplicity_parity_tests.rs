@@ -285,12 +285,32 @@ fn assert_selection(plain: &GenomeExport, mult: &GenomeExport, logical: &(Vec<us
 	let expect_collapse = selected && !phys.grouping.is_identity();
 	assert!(plain.grouping.is_identity(), "plain export must carry the identity grouping");
 	assert_eq!(!mult.grouping.is_identity(), expect_collapse, "grouping identity iff not selected");
+	assert_footprint(plain, mult, &phys, expect_collapse);
 	if expect_collapse
 	{
 		assert_eq!(mult.grouping, phys.grouping);
 		let keys = |e: &GenomeExport| e.sparse_exports.iter().map(|s| s.total_entries()).sum::<usize>();
 		assert!(keys(plain) == 0 || keys(mult) < keys(plain), "physical keys must shrink");
 	}
+}
+
+/// Footprint (stage 3): the plain export is plain; the multiplicity export
+/// reports the genome's logical neurons and its distinct units as physical;
+/// for an all-sparse genome physical cells are exactly the stored keys (each
+/// unit's range held once).
+fn assert_footprint(plain: &GenomeExport, mult: &GenomeExport, phys: &PhysicalGenome, collapsed: bool)
+{
+	let (fp, fm) = (plain.footprint(), mult.footprint());
+	assert!(fp.is_plain() && fp.logical_cells == fp.physical_cells, "plain footprint must be plain: {fp:?}");
+	assert_eq!(fm.logical_neurons, fp.logical_neurons, "logical neurons");
+	let expect_physical = if collapsed { phys.num_neurons() } else { phys.grouping.num_units() };
+	assert_eq!(fm.physical_neurons as usize, expect_physical, "physical neurons");
+	if mult.dense_exports.is_empty()
+	{
+		let stored: usize = mult.sparse_exports.iter().map(|s| s.keys.len()).sum();
+		assert_eq!(fm.physical_cells as usize, stored, "physical cells = stored keys");
+	}
+	assert!(fm.physical_cells <= fm.logical_cells, "{fm:?}");
 }
 
 // ---------------------------------------------------------------- routes
@@ -329,6 +349,7 @@ fn check_batched(batch: &Batch, data: &Data, mode: u8, what: &str)
 			continue;
 		}
 		assert_storage_equal(&plain[g], &mult[g], &what);
+		assert_eq!(plain[g].footprint().logical_cells, mult[g].footprint().logical_cells, "{what}: logical cells");
 		assert_scores_equal(&plain[g], &mult[g], data, mode, cpu_scorable(batch), &what);
 	}
 }

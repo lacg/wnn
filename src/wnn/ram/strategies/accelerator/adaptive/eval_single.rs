@@ -908,6 +908,10 @@ pub fn train_and_score_single(
 	all_scores.iter().map(|scores| scores[0]).collect()
 }
 
+/// Scores of one trained genome on the eval, train and (Protocol v2) val sets,
+/// plus its logical/physical `Footprint` (IDS-37 stage 3).
+pub type ScoredSets = (Vec<f64>, Vec<f64>, Option<Vec<f64>>, ram_core::footprint::Footprint);
+
 /// Train a single genome ONCE and return raw scores for BOTH eval and train sets.
 ///
 /// Equivalent to calling `train_and_score_single` twice (once with eval, once with
@@ -916,7 +920,7 @@ pub fn train_and_score_single(
 /// fixed_05, val_cal/oracle, platt, beta, empirical, empirical_cumulative) without
 /// retraining the genome 7+ times.
 ///
-/// Returns (eval_scores, train_scores, val_scores) — Vec<f64> of length num_eval
+/// Returns (eval_scores, train_scores, val_scores, footprint) — Vec<f64> of length num_eval
 /// and num_train respectively; val_scores is Some(Vec<f64> of length num_val)
 /// when `val_input_bits` is provided (Protocol v2: 3-way splits score the val
 /// partition from the same trained memory), None otherwise.
@@ -941,7 +945,7 @@ pub fn train_and_score_eval_and_train(
 	neuron_sample_rate: f32,
 	rng_seed: u64,
 	class_weights: Option<&[u32]>,
-) -> (Vec<f64>, Vec<f64>, Option<Vec<f64>>)
+) -> ScoredSets
 {
 	let empty_value = settings.empty_value;
 	let memory_mode = settings.memory_mode;
@@ -1099,7 +1103,7 @@ pub fn train_and_score_eval_and_train(
 		val_all_scores.iter().map(|s| s[0]).collect()
 	});
 
-	(eval_scores, train_scores, val_scores)
+	(eval_scores, train_scores, val_scores, export.footprint())
 }
 
 /// Train a single genome ONCE and return FLATTENED per-cluster scores for the
@@ -1131,7 +1135,7 @@ pub fn train_and_score_sets_flat(
 	neuron_sample_rate: f32,
 	rng_seed: u64,
 	class_weights: Option<&[u32]>,
-) -> (Vec<f64>, Vec<f64>, Option<Vec<f64>>)
+) -> ScoredSets
 {
 	let empty_value = settings.empty_value;
 	let memory_mode = settings.memory_mode;
@@ -1297,7 +1301,7 @@ pub fn train_and_score_sets_flat(
 		flatten(&val_all_scores)
 	});
 
-	(eval_scores, train_scores, val_scores)
+	(eval_scores, train_scores, val_scores, export.footprint())
 }
 
 /// Compute (CE, accuracy, F1-macro, FPR) for a single-cluster binary classifier

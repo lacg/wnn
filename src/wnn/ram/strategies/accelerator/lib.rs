@@ -331,7 +331,12 @@ use pyapi::*;
 /// `dedupe_fill` (default true = ABI-15 dedupe). false = a deduped child keeps
 /// only its distinct neurons (may shrink; floored at max(min_neurons, 1)).
 /// Defaults bit-identical to ABI 15 (all golden digests incl. GOLDEN_TIES).
-pub const ABI_VERSION: u32 = 16;
+/// 17 (12/10/2026, IDS-37 stage 3): BREAKING — IDSCacheWrapper.evaluate_at_thresholds
+/// returns a 5th element and evaluate_multiclass_at_thresholds a 3rd: the trained
+/// genome's footprint (logical_neurons, physical_neurons, logical_cells,
+/// physical_cells). IDSGenomeStreamerWrapper gains footprint(). Training is
+/// unchanged from ABI 16 + the stage-2 multiplicity layer (bit-identical scores).
+pub const ABI_VERSION: u32 = 17;
 
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()>

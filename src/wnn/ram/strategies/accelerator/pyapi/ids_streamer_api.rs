@@ -138,6 +138,18 @@ impl IDSGenomeStreamerWrapper
 		Ok(inner.finalize_metrics())
 	}
 
+	/// (logical_neurons, physical_neurons, logical_cells, physical_cells) of the
+	/// sealed memory. Raises before `seal_for_scoring` (ABI 17).
+	fn footprint(&self) -> PyResult<FootprintTuple>
+	{
+		let inner = self.inner.as_ref().ok_or_else(|| {
+			pyo3::exceptions::PyRuntimeError::new_err("IDSGenomeStreamer already finalized")
+		})?;
+		inner.footprint().map(footprint_to_py).ok_or_else(|| {
+			pyo3::exceptions::PyRuntimeError::new_err("IDSGenomeStreamer.footprint() before seal_for_scoring()")
+		})
+	}
+
 	fn train_seen(&self) -> PyResult<usize>
 	{
 		self.inner.as_ref().map(|i| i.train_seen()).ok_or_else(|| {

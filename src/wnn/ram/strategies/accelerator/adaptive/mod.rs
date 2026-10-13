@@ -51,6 +51,7 @@ pub use eval_parallel::*;
 pub mod eval_export;
 pub use eval_export::*;
 mod genome_export_physical;
+mod genome_footprint;
 mod eval_single;
 pub use eval_single::*;
 mod eval_hybrid;

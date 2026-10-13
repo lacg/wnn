@@ -244,6 +244,14 @@ impl IDSGenomeStreamer
 		));
 	}
 
+	/// Logical/physical footprint of the sealed memory (None before
+	/// `seal_for_scoring`). The streamer trains the plain layer, so physical ==
+	/// logical until stage 8 builds it on the physical genome.
+	pub fn footprint(&self) -> Option<ram_core::footprint::Footprint>
+	{
+		self.export.as_ref().map(GenomeExport::footprint)
+	}
+
 	/// Score a single eval chunk. Accumulates per-row scores into the
 	/// `eval_scores` buffer (small — one f64 per eval row).
 	pub fn score_chunk(&mut self, packed: &PackedBits, labels: &[i64])

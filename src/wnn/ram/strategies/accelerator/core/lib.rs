@@ -21,6 +21,7 @@ pub mod train;
 // Group-identical-units map + the one "same neuron" key (IDS multiplicity
 // layer, GA crossover dedupe, sparse export alias). docs/ids_multiplicity_layer_design.md §2.
 pub mod distinct_fractions;
+pub mod footprint;
 pub mod neuron_key;
 pub mod physical_genome;
 pub mod sparse_gpu_export;

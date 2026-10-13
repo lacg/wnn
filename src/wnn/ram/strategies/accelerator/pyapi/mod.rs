@@ -18,6 +18,8 @@ mod per_cluster_api;
 pub(crate) use per_cluster_api::*;
 mod token_cache_api;
 pub(crate) use token_cache_api::*;
+mod footprint_api;
+pub(crate) use footprint_api::*;
 mod ids_cache_api;
 pub(crate) use ids_cache_api::*;
 mod ids_builder_api;

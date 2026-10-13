@@ -657,8 +657,10 @@ impl IDSCacheWrapper
 
 	/// Train a single genome ONCE and evaluate at multiple thresholds.
 	///
-	/// Returns a tuple (eval_scores, train_scores, val_scores, metrics) where
-	/// `metrics[i] = (ce, acc, f1, fpr, resolved_threshold)` for thresholds[i].
+	/// Returns a tuple (eval_scores, train_scores, val_scores, metrics, footprint)
+	/// where `metrics[i] = (ce, acc, f1, fpr, resolved_threshold)` for
+	/// thresholds[i] and `footprint` = (logical_neurons, physical_neurons,
+	/// logical_cells, physical_cells) of the trained genome (ABI 17).
 	/// `val_scores` is a list when the cache was built with a val partition
 	/// (Protocol v2, `_3way` splits), None otherwise. A threshold of -1.0 is
 	/// the oracle sentinel — sweeps EVAL scores for the optimal F1 threshold
@@ -682,10 +684,11 @@ impl IDSCacheWrapper
 		Vec<f64>,
 		Option<Vec<f64>>,
 		Vec<(f64, f64, f64, f64, f64)>,
+		FootprintTuple,
 	)>
 	{
 		py.allow_threads(|| {
-			Ok(ids_cache::evaluate_at_thresholds_ids_cached(
+			let (eval, train, val, metrics, footprint) = ids_cache::evaluate_at_thresholds_ids_cached(
 				&self.inner,
 				&bits_flat,
 				&neurons_flat,
@@ -694,15 +697,16 @@ impl IDSCacheWrapper
 				empty_value,
 				neuron_sample_rate,
 				rng_seed,
-			))
+			);
+			Ok((eval, train, val, metrics, footprint_to_py(footprint)))
 		})
 	}
 
 	/// Multiclass (K-cluster) analogue of `evaluate_at_thresholds`.
 	///
 	/// Trains a single genome ONCE, scores eval + train (+ val when the cache
-	/// holds a Protocol-v2 partition), and returns `(num_classes, modes)`
-	/// where each mode is a flat tuple:
+	/// holds a Protocol-v2 partition), and returns `(num_classes, modes, footprint)`
+	/// (footprint as in `evaluate_at_thresholds`) where each mode is a flat tuple:
 	///   (mode_name, tau, ce, acc, macro_f1, weighted_f1, benign_fpr,
 	///    confusion, precision, recall, f1, support)
 	/// with `confusion` a K*K row-major Vec<u64> (row = true class) and the
@@ -720,7 +724,7 @@ impl IDSCacheWrapper
 		empty_value: f32,
 		neuron_sample_rate: f32,
 		rng_seed: u64,
-	) -> PyResult<(usize, Vec<MulticlassModeTuple>)>
+	) -> PyResult<(usize, Vec<MulticlassModeTuple>, FootprintTuple)>
 	{
 		if self.inner.num_genome_clusters() != self.inner.num_classes() || self.inner.num_classes() < 2
 		{
@@ -739,7 +743,7 @@ impl IDSCacheWrapper
 			self.inner.num_genome_clusters(),
 		)?;
 		py.allow_threads(|| {
-			let (num_classes, modes) = ids_cache::evaluate_multiclass_at_thresholds_ids_cached(
+			let (num_classes, modes, footprint) = ids_cache::evaluate_multiclass_at_thresholds_ids_cached(
 				&self.inner,
 				&bits_flat,
 				&neurons_flat,
@@ -748,7 +752,7 @@ impl IDSCacheWrapper
 				neuron_sample_rate,
 				rng_seed,
 			);
-			Ok((num_classes, multiclass_modes_to_py(modes)))
+			Ok((num_classes, multiclass_modes_to_py(modes), footprint_to_py(footprint)))
 		})
 	}
 

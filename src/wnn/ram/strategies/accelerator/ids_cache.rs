@@ -1031,6 +1031,16 @@ pub fn score_examples_ids_cached(
 	)
 }
 
+/// `evaluate_at_thresholds_ids_cached` result: eval/train/val scores, per-threshold
+/// `(ce, acc, f1, fpr, resolved_threshold)` and the trained genome's footprint.
+pub type ThresholdEvaluation = (
+	Vec<f64>,
+	Vec<f64>,
+	Option<Vec<f64>>,
+	Vec<(f64, f64, f64, f64, f64)>,
+	ram_core::footprint::Footprint,
+);
+
 /// Train ONCE and evaluate at multiple thresholds, returning eval/train scores
 /// and per-threshold metrics.
 ///
@@ -1044,7 +1054,7 @@ pub fn score_examples_ids_cached(
 ///   - `t == -1.0`: oracle — find optimal F1 threshold on EVAL scores
 ///                  (matches evaluate_genomes_parallel_hybrid_with_override semantics)
 ///
-/// Returns `(eval_scores, train_scores, val_scores, metrics_per_threshold)` where
+/// Returns `(eval_scores, train_scores, val_scores, metrics_per_threshold, footprint)` where
 /// `metrics_per_threshold[i] = (ce, acc, f1, fpr, resolved_threshold)` and
 /// `val_scores` is Some when the cache holds a val partition (Protocol v2),
 /// None otherwise. The -1.0 oracle sentinel stays computed on EVAL scores —
@@ -1058,19 +1068,14 @@ pub fn evaluate_at_thresholds_ids_cached(
 	empty_value: f32,
 	neuron_sample_rate: f32,
 	rng_seed: u64,
-) -> (
-	Vec<f64>,
-	Vec<f64>,
-	Option<Vec<f64>>,
-	Vec<(f64, f64, f64, f64, f64)>,
-)
+) -> ThresholdEvaluation
 {
 	let train = cache.full_train();
 	let eval = cache.full_eval();
 	let val = cache.full_val();
 
 	// Train ONCE + score eval, train (and val, when present) sets
-	let (eval_scores, train_scores, val_scores) = crate::adaptive::train_and_score_eval_and_train(
+	let (eval_scores, train_scores, val_scores, footprint) = crate::adaptive::train_and_score_eval_and_train(
 		bits_flat,
 		neurons_flat,
 		connections_flat,
@@ -1124,7 +1129,7 @@ pub fn evaluate_at_thresholds_ids_cached(
 		})
 		.collect();
 
-	(eval_scores, train_scores, val_scores, metrics)
+	(eval_scores, train_scores, val_scores, metrics, footprint)
 }
 
 /// Multiclass (K-cluster) analogue of `evaluate_at_thresholds_ids_cached`.
@@ -1138,7 +1143,7 @@ pub fn evaluate_at_thresholds_ids_cached(
 ///   - `margin_train_cal` — τ swept on TRAIN margins (macro-F1-optimal)
 ///   - `margin_val_cal`   — τ swept on VAL margins (only when val present)
 ///
-/// Returns `(num_classes, mode_results)`; each result carries the full metric
+/// Returns `(num_classes, mode_results, footprint)`; each result carries the full metric
 /// set (K-class CE, confusion matrix, per-class P/R/F1, macro-/weighted-F1,
 /// accuracy, benign-FPR). The benign class is `cache.normal_class` (0 for all
 /// multiclass IDS datasets — benign = index 0 by construction).
@@ -1150,7 +1155,7 @@ pub fn evaluate_multiclass_at_thresholds_ids_cached(
 	empty_value: f32,
 	neuron_sample_rate: f32,
 	rng_seed: u64,
-) -> (usize, Vec<crate::multiclass_metrics::MulticlassModeResult>)
+) -> (usize, Vec<crate::multiclass_metrics::MulticlassModeResult>, ram_core::footprint::Footprint)
 {
 	use crate::multiclass_metrics as mm;
 
@@ -1169,7 +1174,7 @@ pub fn evaluate_multiclass_at_thresholds_ids_cached(
 	let val = cache.full_val();
 
 	// Train ONCE + flattened K-vector scores for eval/train(/val)
-	let (eval_scores, train_scores, val_scores) = crate::adaptive::train_and_score_sets_flat(
+	let (eval_scores, train_scores, val_scores, footprint) = crate::adaptive::train_and_score_sets_flat(
 		bits_flat,
 		neurons_flat,
 		connections_flat,
@@ -1210,7 +1215,7 @@ pub fn evaluate_multiclass_at_thresholds_ids_cached(
 		cache.normal_class,
 	);
 
-	(num_classes, modes)
+	(num_classes, modes, footprint)
 }
 
 /// Score TRAINING examples (for calibration fitting on training data).
