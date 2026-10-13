@@ -685,3 +685,100 @@ Readings:
   neuron-chunked trainer mis-places heterogeneous-bits neurons
   (`chunked_tests::neuron_chunked_matches_unchunked` fails). The parity sweep
   skips only its chunked comparison under coalescing.
+
+---
+
+## Batch sizing + stages 6-8 — IMPLEMENTED (12-13/10/2026, worktree branch, not deployed)
+
+### A. Hybrid batches sized and routed by the TRAINED footprint — MEASURED
+
+`budget_batch_size` (adaptive/eval_export.rs) sizes every genome by
+`trained_neurons_per_cluster` (multiplicity_batch.rs): its distinct neurons
+when the factory will train it through the multiplicity layer, its logical
+neurons otherwise; the most restrictive genome wins (adaptive_eval.rs used to
+size off genome 0 only — same OOM class as the old 96b×250n bug; its seeds are
+per genome_idx, so this is result-neutral there). `decide_batch_routing`:
+under the multiplicity layer a batch is ONE dispatch (`one_dispatch`) — no B14
+per-shape groups, no B12 hybrid split — so the super-genome shares units
+across the whole batch. `MultiplicityBatch::plain_is_exact` sends an identity
+batch of MIXED shapes to the super-genome (the plain kernel errors on them).
+
+SR1-unswt-CTRL-r20419, 50 genomes (the 4 checkpointed GA genomes + 46
+children from the GA's own crossover/NEURONS mutation, seeded; 444-500
+neurons, ~23.5% distinct per genome, ~5.4% distinct per 5-genome batch),
+k-fold `evaluate_batch` (5 folds), WNN_ORDER_INDEPENDENT_TRAIN=1, WNN_TIMING=1,
+live IDS flow co-tenant (batch sizes are memory-dependent; all runs measured
+back to back under the same load):
+
+| wheel | rate | batch_size | train ms/genome/fold | eval ms/genome/fold | sparse keys/genome | wall ms/genome (5 folds) | metrics vs plain wheel |
+|---|---|---|---|---|---|---|---|
+| plain (live ABI 16) | 0.25 | 5 | ~235 | ~19 | ~278k | 1385 | — |
+| plain (live ABI 16) | 1.0 | 1 | ~488 | ~22 | ~386k | 2553 | — |
+| stage 5 (logical sizing) | 1.0 | 1 | ~158 | ~18 | ~86k | 892 | bit-identical (50/50) |
+| **A (physical sizing + one dispatch)** | 1.0 | **5-6** | ~126 | ~24 | ~86k | **736** | bit-identical (50/50) |
+| A | 0.25 | 5 | ~207 | ~18 | ~278k | 1137 | bit-identical (50/50) |
+
+Rate 1.0 is now 3.5x faster than the plain wheel at rate 1.0 and 1.9x faster
+than the plain wheel at rate 0.25.
+
+### Bugs found and fixed on the way (each with a regression test)
+
+- **Option B / B12 hybrid trained RANDOM connections** whenever a same-shape
+  batch's connection totals differed (`&[]` = kernel-random). Now the
+  contiguous genome-major slice (`HybridBatchConfig::batch_connections`).
+- **`Memory.explore_batch` lost writes**: every written word was rebuilt from
+  the pre-batch word, so two cells of one 31-cell word in one batch kept only
+  the last (tests/test_memory_explore_batch.py).
+- **`RAMClusterLayer.reset_memory` left the SPARSE / LSH stores trained.**
+- **Dashboard validation cache drifted metrics by an ULP**: serde_json's
+  default float parse is not correctly rounded, and a cache hit re-stores the
+  served metadata as the final row (196/18500 recorded as ...596 instead of
+  ...595). `float_roundtrip` enabled; dashboard test
+  `cached_threshold_metadata_floats_round_trip_exactly`.
+- FPGA scripts put `src/wnn` (not `src`) on sys.path, so they imported
+  whatever `wnn` the venv's editable install pointed at.
+- **The RTL adder summed raw cell CODES (0..3)**, not the scorer's weights
+  (QUAD 0, 0.25, 0.75, 1 = quarters 0,1,3,4): the deployed classifier ranked
+  examples differently from the validated model. Now a per-mode LUT from
+  the accelerator.
+
+### Stage 6 — Python layer
+
+As designed (§4): five identity seams on `RAMClusterLayer` (`_storage_neurons`,
+`_storage_connections`, `_logical_columns` — generalises `_logical_cells` to
+addresses too —, `_storage_writes`, `_unit_grouping` returning None for the
+identity), `UnitGroupingView`, `MultiplicityRAMClusterLayer`,
+`ClusterLayerConfig`, `ClusterLayerFactory`, callers switched (ramlm.py,
+routing.py router + experts; the routed expert cache reads logical rows).
+Sparse backend: ram_core `train_batch_sparse` / `forward_batch_sparse` take
+`Option<&UnitGrouping>`; PyO3 `group_neurons`, `layer_footprint`, optional
+`index_of` on the sparse calls. **Deviation:** write return counts on the
+sparse/LSH backends are storage-level (copies are not written).
+
+### Stage 7 — FPGA exporter
+
+`IdsEvaluatorSettings` + `IdsEvaluatorFactory` (src/wnn/ram/experiments/) are
+the one evaluator construction; the worker delegates to them. Rust
+`train_genome_export` (shared with `train_and_score_eval_and_train`, so export
+training IS validation training), `GenomeExport::unit_tables`, `TrainedLayer`,
+`IDSCacheWrapper.export_trained`, Python `TrainedLayerExport`. fpga/scripts:
+`FlowGenomeSource` (DB read-only), `FlowLayerTrainer`, `FidelityGate`
+(every recorded threshold mode reproduced; MAX_ULPS=4 only for the legacy
+serde drift — a real model difference moves a metric by >= 1/n), per-unit
+sparse/dense files, `rtl_adder` (count x quarters LUT, ACC_BITS from logical
+N), generated testbench + parametric run_sim.sh (expected = Rust score x 4N).
+Python reimplementations deleted (`train_and_extract_sparse_py`,
+`python_classify`, `load_dataset`). Measured on real rows: SR1 r20419
+best_f1 (rate 1.0) 462n -> 115 units, 381,118 -> 91,219 cells, 7/7 modes
+reproduced; GAF-CTRL r20423 best_f1 (rate 0.25) 489 -> 489, 7/7 reproduced;
+the RTL adder model equals Rust score x 4N on 400 held-out vectors for both.
+Stochastic modes (QSR/PLN) refuse RTL generation (no combinational adder
+reproduces a per-example coin). Re-synthesis (LUT counts) still EC2-pending.
+
+### Stage 8 — streaming
+
+`IDSGenomeStreamer::new` trains the physical genome when
+`multiplicity_applies` (CPU slot trainer: copies receive identical writes);
+`seal_for_scoring` rebuilds the logical export with `from_physical`, so
+`footprint()` reports physical < logical. Test: the streamer with planted
+duplicates scores bit-identically to its rotated-connection twin.
