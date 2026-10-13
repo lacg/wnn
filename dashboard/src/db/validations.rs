@@ -400,6 +400,30 @@ mod cache_scope_tests
 		Some(CacheScope { key, worker_abi })
 	}
 
+	/// A cache hit re-serves the stored threshold_metadata, which the worker
+	/// then stores AGAIN as the final row. serde_json's default float parse is
+	/// best-effort (not correctly rounded), so every hit shifted metrics by an
+	/// ULP (recorded 0.010594594594594596 for 196/18500 = 0.010594594594594595).
+	/// With `float_roundtrip` the cached metadata comes back bit-exact.
+	#[tokio::test]
+	async fn cached_threshold_metadata_floats_round_trip_exactly()
+	{
+		let pool = test_pool("floats").await;
+		let quad = fixture_key("quad_default");
+		let values = [196.0f64 / 18500.0, 0.8150955590204203, 0.1 + 0.2, 1.0 / 3.0, 0.977505087852478];
+		let tm = serde_json::json!({ "empirical": { "fpr": values[0], "f1": values[1], "a": values[2], "b": values[3], "t": values[4] } }).to_string();
+		let exp = new_experiment(&pool).await;
+		upsert_validation_summary(&pool, None, exp, "final", "best_f1", "g1", 0.1, 0.9, Some(0.5), Some(0.05), Some(&tm), scope(&quad, 17), None)
+			.await
+			.unwrap();
+		let hit = get_cached_validation(&pool, "g1", scope(&quad, 17)).await.unwrap().expect("hit");
+		let served = hit.4.expect("metadata");
+		for (key, want) in ["fpr", "f1", "a", "b", "t"].iter().zip(values)
+		{
+			assert_eq!(served["empirical"][key].as_f64().map(f64::to_bits), Some(want.to_bits()), "{key}");
+		}
+	}
+
 	#[tokio::test]
 	async fn quad_flow_never_inherits_a_qsr_row()
 	{
