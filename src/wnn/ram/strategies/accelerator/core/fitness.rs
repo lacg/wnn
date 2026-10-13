@@ -374,7 +374,9 @@ pub fn gated_combine_flat(
 /// gate's job. Per metric a utility u(x) in (eps, 1], 1 = ideal; fitness is
 /// the product PROD u_i^w_i. The score returned is
 ///
-///     -log2(fitness) = SUM w_i * h_i(x_i),   h_i = -log2(u_i)
+/// ```text
+/// -log2(fitness) = SUM w_i * h_i(x_i),   h_i = -log2(u_i)
+/// ```
 ///
 /// "weighted half-lives of desirability lost" — additive, LOWER = better
 /// (matches the combine contract), no float underflow. The exchange rate
