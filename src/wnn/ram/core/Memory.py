@@ -22,6 +22,7 @@ from torch import tensor
 from torch import Tensor
 from torch import stack
 from torch import uint8
+from torch import unique
 from torch import where
 from torch import zeros
 
@@ -270,20 +271,29 @@ class Memory(RAMComponent):
 		"""
 		Vectorized write of K **already-encoded** values in {0,1,2}.
 		encoded_vals MUST be int64 and already contain the MemoryVal numbers.
+
+		Several cells of ONE word land together, and a repeated cell keeps its
+		LAST write. (Each write used to rebuild its word from the pre-batch
+		word, so two cells of one word in one batch kept only the last.)
 		"""
+		keep = self._last_write_per_cell(neuron_indices, addresses)
+		neuron_indices, addresses, encoded_vals = neuron_indices[keep], addresses[keep], encoded_vals[keep]
 		word_index, bit_shift = self._cell_coords(addresses)
+		word_key = neuron_indices * self.words_per_neuron + word_index
+		words, inverse = unique(word_key, return_inverse=True)
+		# Distinct cells of a word occupy disjoint bit fields: their sum is their OR.
+		clear = zeros(words.shape, dtype=int64, device=words.device).scatter_add_(0, inverse, 3 << bit_shift)
+		value = zeros(words.shape, dtype=int64, device=words.device).scatter_add_(0, inverse, (encoded_vals & 0b11) << bit_shift)
+		rows, cols = words // self.words_per_neuron, words % self.words_per_neuron
+		self.memory_words[rows, cols] = (self.memory_words[rows, cols] & ~clear) | value
 
-		# Gather the words
-		words = self.memory_words[neuron_indices, word_index]
-
-		# Build masks
-		mask        = (3 << bit_shift)     # which cell to update
-		clear_mask  = ~mask
-		val_shifted = (encoded_vals & 0b11) << bit_shift
-
-		# Perform packed write
-		new_words = (words & clear_mask) | val_shifted
-		self.memory_words[neuron_indices, word_index] = new_words
+	def _last_write_per_cell(self, neuron_indices: Tensor, addresses: Tensor) -> Tensor:
+		"""Positions of the last write to each distinct (neuron, address) cell."""
+		cell_key = neuron_indices * self.memory_size + addresses
+		cells, inverse = unique(cell_key, return_inverse=True)
+		positions = arange(cell_key.shape[0], dtype=int64, device=cell_key.device)
+		last = zeros(cells.shape, dtype=int64, device=cell_key.device)
+		return last.scatter_reduce_(0, inverse, positions, reduce="amax", include_self=False)
 
 	# In Memory class (near other helpers like get_memory, get_memories_for_bits)
 
