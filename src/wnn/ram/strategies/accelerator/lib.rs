@@ -286,6 +286,9 @@ mod multiplicity_parity_tests;
 // PLN trains through TERNARY's lattice on both IDS trainers (12/10/2026).
 #[cfg(all(test, target_os = "macos"))]
 mod pln_writer_tests;
+// CPU scorers skip the -1 prefix-pad connections like the GPU kernels (12/10/2026).
+#[cfg(all(test, target_os = "macos"))]
+mod mixed_bits_scorer_tests;
 
 #[cfg(target_os = "macos")]
 mod marker_probe;

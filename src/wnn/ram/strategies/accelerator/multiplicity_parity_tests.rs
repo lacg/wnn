@@ -152,24 +152,6 @@ fn multi_cluster(hetero: bool, rng: &mut SmallRng) -> Batch
 	batch_of(vec![genome(&b, &[vec![0, 1, 0, 0], vec![2, 3, 4, 2], vec![5, 6, 5, 7, 6]])])
 }
 
-/// The CPU scorers (`compute_address_packed_bytes`) do not skip the -1
-/// prefix-pad connections of a heterogeneous-bits group the way the GPU
-/// kernels do (pre-existing; out-of-bounds read). Score those on GPU only.
-fn cpu_scorable(batch: &Batch) -> bool
-{
-	let mut start = 0usize;
-	for n in &batch.npc
-	{
-		let bits = &batch.bits[start..start + n];
-		if bits.iter().any(|&b| b != bits[0])
-		{
-			return false;
-		}
-		start += n;
-	}
-	true
-}
-
 /// G = 3 uniform-shape genomes (same bits / npc), different duplicate
 /// structure; genome 2 has none (identity inside a collapsing batch).
 fn three_genomes(rng: &mut SmallRng) -> Batch
@@ -232,12 +214,13 @@ fn assert_storage_equal(a: &GenomeExport, b: &GenomeExport, what: &str)
 }
 
 /// Scores bitwise equal on the CPU and GPU scorers, coverage-aware on and off.
-fn assert_scores_equal(a: &GenomeExport, b: &GenomeExport, data: &Data, mode: u8, cpu: bool, what: &str)
+/// The CPU scorers handle mixed-bits (-1 prefix-pad) groups since 12/10/2026.
+fn assert_scores_equal(a: &GenomeExport, b: &GenomeExport, data: &Data, mode: u8, what: &str)
 {
 	let dense = crate::metal_ramlm::MetalRAMLMEvaluator::new().ok();
 	let sparse = ram_core::metal_sparse::MetalSparseEvaluator::new().ok();
-	assert!(cpu || (dense.is_some() && sparse.is_some()), "{what}: GPU-only fixture needs both Metal scorers");
-	for gpu in [false, true].into_iter().filter(|&g| g || cpu)
+	let gpus: &[bool] = if dense.is_some() && sparse.is_some() { &[false, true] } else { &[false] };
+	for &gpu in gpus
 	{
 		for coverage_aware in [false, true]
 		{
@@ -330,7 +313,7 @@ fn check_batched(batch: &Batch, data: &Data, mode: u8, what: &str)
 			continue;
 		}
 		assert_storage_equal(&plain[g], &mult[g], &what);
-		assert_scores_equal(&plain[g], &mult[g], data, mode, cpu_scorable(batch), &what);
+		assert_scores_equal(&plain[g], &mult[g], data, mode, &what);
 	}
 }
 
@@ -362,7 +345,7 @@ fn check_chunked(batch: &Batch, data: &Data, mode: u8)
 	let what = format!("chunked mode={mode}");
 	assert_selection(&plain, &mult[0], &logical_genome(batch, 1, 0), true);
 	assert_storage_equal(&plain, &mult[0], &what);
-	assert_scores_equal(&plain, &mult[0], data, mode, cpu_scorable(batch), &what);
+	assert_scores_equal(&plain, &mult[0], data, mode, &what);
 }
 
 fn run_parity(mode: u8)
@@ -527,8 +510,7 @@ fn from_physical_aliases_and_copies()
 			let rebuilt = GenomeExport::from_physical(physical, p.grouping.clone(), &batch.bits, &batch.npc, &batch.conns, mode)
 				.expect("from_physical");
 			assert_storage_equal(&logical, &rebuilt, &format!("cpu fixture {i} mode {mode}"));
-			let cpu = cpu_scorable(batch);
-			assert_scores_equal(&logical, &rebuilt, data, mode, cpu, &format!("cpu fixture {i} mode {mode}"));
+			assert_scores_equal(&logical, &rebuilt, data, mode, &format!("cpu fixture {i} mode {mode}"));
 		}
 	}
 }

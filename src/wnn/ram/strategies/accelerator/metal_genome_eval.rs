@@ -1389,15 +1389,9 @@ mod tests
 		{
 			let neuron_idx = start_neuron + n;
 			let conn = &connections[neuron_idx * bits_per_neuron..(neuron_idx + 1) * bits_per_neuron];
-			// address = pack observed bits MSB-first (matches wnn_compute_address_u64)
-			let mut address = 0u64;
-			for &bit in conn
-			{
-				let b = bit as usize;
-				let word = packed_input[b / 64];
-				let set = (word >> (b % 64)) & 1;
-				address = (address << 1) | set;
-			}
+			// THE shared address definition (twin of wnn_compute_address_u64);
+			// a private MSB-first loop here skipped neither pads nor wide names.
+			let address = ram_core::neuron_memory::compute_address_packed(packed_input, conn, bits_per_neuron) as u64;
 			let mem_start = offsets[neuron_idx] as usize;
 			let mem_count = counts[neuron_idx] as usize;
 			let mut cell = default_cell;

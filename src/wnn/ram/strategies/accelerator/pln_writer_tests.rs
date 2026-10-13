@@ -119,6 +119,8 @@ fn fixtures(rng: &mut SmallRng) -> Vec<(Genome, Data)>
 	vec![
 		(Genome::random(&[14, 14, 14, 14], rng), Data::random(2000, rng)),
 		(Genome::random(&[10, 10, 10, 10], rng), Data::random(2000, rng)),
+		(Genome::random(&[14, 14, 13, 14], rng), Data::random(2000, rng)),
+		(Genome::random(&[10, 10, 8, 10], rng), Data::random(2000, rng)),
 	]
 }
 
