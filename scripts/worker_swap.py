@@ -174,6 +174,20 @@ def api_restart_flow(url: str, flow_id: int, verify: bool) -> bool:
 		return False
 
 
+def requeue_interrupted(args, interrupted: list[int]) -> list[int]:
+	"""Re-queue flows the stop interrupted, skipping any that already re-queued
+	themselves. Must run while the worker is DOWN (see main, step 5)."""
+	requeued = []
+	for fid in interrupted:
+		st = get_flow_status(args.db, fid)
+		if st == "queued":
+			print(f"[swap] flow {fid} already re-queued itself — leaving it", flush=True)
+			requeued.append(fid)
+		elif api_restart_flow(args.dashboard_url, fid, args.ssl_verify):
+			requeued.append(fid)
+	return requeued
+
+
 def write_marker(marker: Path | None, payload: dict) -> None:
 	if marker is None:
 		return
@@ -264,20 +278,23 @@ def main() -> int:
 	if args.install_wheel is not None:
 		install_wheel(args.venv, args.install_wheel)
 
-	# 5) Relaunch the worker on the (possibly new) wheel.
+	# 5) Re-queue interrupted flows via the API (keep checkpoints) BEFORE the relaunch.
+	# A flow_runner stopped by SIGTERM normally re-queues ITSELF ('queued'); calling
+	# /restart on it after the relaunch hit a flow the new worker had already started,
+	# and /restart on a RUNNING flow stops it → 'cancelled' (lost 6254 on 26/09 and
+	# 6435 on 12/10). So: requeue only flows not already queued, and only while the
+	# worker is still down.
+	requeued = []
+	if not args.no_restart:
+		requeued = requeue_interrupted(args, interrupted)
+
+	# 6) Relaunch the worker on the (possibly new) wheel.
 	new_pid = None
 	if args.no_restart:
 		print("[swap] --no-restart: leaving the worker DOWN.", flush=True)
 	else:
 		new_pid = relaunch_worker(args.project, args.venv, args.rayon_threads,
 		                          args.worker_args, args.worker_log)
-
-	# 6) Re-queue interrupted flows via the API (keep checkpoints).
-	requeued = []
-	if not args.no_restart:
-		for fid in interrupted:
-			if api_restart_flow(args.dashboard_url, fid, args.ssl_verify):
-				requeued.append(fid)
 
 	write_marker(args.marker, {
 		"watched_flow": watch,
