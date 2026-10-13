@@ -35,6 +35,11 @@ pub struct GenomeExport
 	pub sparse_exports: Vec<SparseGpuExport>,
 	/// Config groups for this genome
 	pub groups: Vec<ConfigGroup>,
+	/// Logical neuron (cluster-major genome order) -> physical unit. Identity
+	/// for the plain layer; a collapsing grouping when the multiplicity layer
+	/// trained duplicate neurons once (`from_physical`). Every field above is
+	/// the LOGICAL layout either way, so scorers never consult it.
+	pub grouping: ram_core::unit_grouping::UnitGrouping,
 }
 
 /// Materialise a per-neuron sparse export into DENSE packed words plus a
@@ -123,34 +128,8 @@ impl GenomeExport
 			dense_coverage: Vec::new(),
 			sparse_exports: Vec::new(),
 			groups: Vec::new(),
+			grouping: ram_core::unit_grouping::UnitGrouping::identity(0),
 		}
-	}
-
-	/// Total MATERIALIZED cell count for this trained genome — the convention-free
-	/// footprint primitive (see docs/sparse_footprint_fix.md). Sparse groups
-	/// (bits > SPARSE_THRESHOLD) materialize only the distinct trained addresses
-	/// (`keys.len()`); dense groups materialize the full array (`true_neurons ×
-	/// 2^bits`). NOT the dense-only `2^bits` fiction — sparse genomes never
-	/// materialize their 2^34 address space. Every byte/LUT figure derives from
-	/// this count. `group_info[i]` is built in lockstep with `groups[i]`.
-	pub fn materialized_cells(&self) -> u64
-	{
-		let mut total = 0u64;
-		for (i, (is_sparse, sub_idx, _)) in self.group_info.iter().enumerate()
-		{
-			if *is_sparse
-			{
-				total += self.sparse_exports[*sub_idx].keys.len() as u64;
-			}
-			else
-			{
-				let g = &self.groups[i];
-				// bits ≤ SPARSE_THRESHOLD for dense, so 2^bits is small; guard anyway.
-				let addrs = 1u64.checked_shl(g.bits as u32).unwrap_or(u64::MAX);
-				total = total.saturating_add((g.true_total_neurons() as u64).saturating_mul(addrs));
-			}
-		}
-		total
 	}
 
 	/// Path 2 abstraction: read a single trained-memory cell at
@@ -329,6 +308,33 @@ pub(crate) fn calculate_pool_size(
 	let batch_size = pool_size;
 
 	(pool_size, batch_size)
+}
+
+/// Concurrent-genome budget of one training call: the MOST restrictive genome
+/// wins (a heterogeneous population sized off one genome under-estimates the
+/// large ones — the 96b×250n rc=-9 OOM), and each genome is sized by the
+/// neurons training actually holds (`trained_neurons_per_cluster`: physical
+/// at rate >= 1.0 under the multiplicity layer, logical otherwise). At least 1.
+pub(crate) fn budget_batch_size(
+	genomes: &[ram_core::super_genome::FlatGenome],
+	budget_gb: f64,
+	cpu_cores: usize,
+	num_train: usize,
+	neuron_sample_rate: f32,
+	memory_mode: u8,
+) -> usize
+{
+	genomes
+		.iter()
+		.map(|g| {
+			let trained = crate::multiplicity_batch::trained_neurons_per_cluster(g, neuron_sample_rate, memory_mode);
+			let bits_per_cluster = per_cluster_max_bits(g.bits, g.neurons_per_cluster);
+			let n = trained.len();
+			calculate_pool_size(&bits_per_cluster, &trained, n, budget_gb, cpu_cores, num_train, neuron_sample_rate).1
+		})
+		.min()
+		.unwrap_or(1)
+		.max(1)
 }
 
 /// Get available memory in GB (macOS specific)
@@ -539,12 +545,17 @@ pub(crate) fn train_genome_in_slot_range(
 )
 {
 	let use_sampling = neuron_sample_rate < 1.0;
+	// The writer comes from `CellMode::write_rule` (GPU twin: common.metal
+	// `wnn_write_rule`), never a mode literal — `!= TERNARY` sent PLN's ternary
+	// cells through the QUAD nudge until 12/10/2026 (inverted training).
 	// BINARY (classical WiSARD, Luiz 12/07/2026): one-shot own-class set —
 	// a positive-class visit writes TRUE; FALSE-direction and negative-class
 	// visits are IGNORED (per-discriminator classical training). No nudging,
 	// no OI (a set is commutative — order-independent by construction).
-	let is_binary = memory_mode == ram_core::neuron_memory::BINARY;
-	let use_nudge = memory_mode != ram_core::neuron_memory::TERNARY && !is_binary;
+	// TERNARY / PLN: the TRUE-wins lattice write (`GroupMemory::write`).
+	let write_rule = ram_core::cell_mode::WriteRule::of_code(memory_mode);
+	let is_binary = write_rule == ram_core::cell_mode::WriteRule::Set;
+	let use_nudge = write_rule == ram_core::cell_mode::WriteRule::Nudge;
 	// OI is only meaningful for the 4-state nudging family (QUAD_WEIGHTED /
 	// QUAD_BINARY / QSR — the modes whose clamped nudge has order-dependence to
 	// fix); the gate is `CellMode::uses_oi_counters`, never a mode literal.
@@ -848,6 +859,9 @@ pub(crate) fn export_genome_for_gpu(
 		dense_coverage: Vec::new(),
 		sparse_exports,
 		groups: groups.to_vec(),
+		grouping: ram_core::unit_grouping::UnitGrouping::identity(
+			groups.iter().map(|g| g.true_total_neurons()).sum(),
+		),
 	}
 }
 

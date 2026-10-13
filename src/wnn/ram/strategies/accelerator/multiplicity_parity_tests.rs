@@ -1,0 +1,727 @@
+//! IDS-37 stage 2 parity sweep: the multiplicity layer (duplicate neurons
+//! trained once, `GenomeExport::from_physical`) vs the plain layer (every copy
+//! trained in its own slot region), bit for bit.
+//!
+//! Per memory mode, routes: batched G = 1 (sparse and dense single-cluster,
+//! K = 3 multi-group whose logical groups split across physical groups), the
+//! G = 3 uniform batch, the neuron-chunked over-budget trainer, the stage-4
+//! super-genome (G = 4 of unequal shapes, dense logical clusters read from
+//! sparse / wider units) and its bisection on the budget error, with neurons
+//! shared ACROSS genomes trained once (stage 5).
+//! Assertions: per-logical-neuron storage equal; `compute_per_example_scores`
+//! `to_bits` equal on CPU and GPU scorers, coverage-aware on and off;
+//! `grouping.is_identity()` exactly when not selected; selected exports store
+//! fewer physical keys. Plus the CPU slot-trainer route through
+//! `from_physical`, and rate < 1.0 never selecting the layer.
+//!
+//! Run twice — the OI modes are only selected under the OI trainer — and both
+//! again with WNN_COALESCE_GROUPS=1 (coalesced groups: pads, actual_neurons):
+//!   WNN_ORDER_INDEPENDENT_TRAIN=1 cargo test -p ram_accelerator --lib --no-default-features multiplicity
+//!   cargo test -p ram_accelerator --lib --no-default-features multiplicity
+
+use crate::adaptive::{
+	build_groups, build_neuron_metadata, compute_per_example_scores, export_genome_for_gpu, per_cluster_max_bits,
+	reorganize_connections_for_gpu, train_genome_in_slot, GenomeExport, GroupMemory, PhysicalUnits,
+};
+use crate::marker_train::batched_path::{
+	batched_train_offspring, batched_train_offspring_plain, multiplicity_selected, one_export,
+	train_single_genome_neuron_chunked, BUDGET_ERR_PREFIX,
+};
+use crate::multiplicity_batch::{MultiplicityBatch, UnitTrainers};
+use ram_core::neuron_memory::{pack_packed_to_u64, BINARY, PLN, QSR, QUAD_BINARY, QUAD_WEIGHTED, TERNARY};
+use ram_core::packed_bits::PackedBits;
+use ram_core::physical_genome::PhysicalGenome;
+use ram_core::super_genome::{FlatGenome, SuperGenome};
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
+
+const TIB: usize = 24;
+const EMPTY_VALUE: f32 = 0.5;
+const RUN_SEED: u64 = 7;
+const ALL_MODES: [u8; 6] = [QUAD_WEIGHTED, QUAD_BINARY, QSR, TERNARY, BINARY, PLN];
+
+/// Training + eval data for `num_clusters` classes (1 = binary IDS: 0/1 labels).
+struct Data
+{
+	train: PackedBits,
+	targets: Vec<i64>,
+	negatives: Vec<i64>,
+	num_negatives: usize,
+	eval: PackedBits,
+	num_clusters: usize,
+}
+
+impl Data
+{
+	fn new(num_clusters: usize, rng: &mut SmallRng) -> Self
+	{
+		let (num_train, num_eval) = (400usize, 160usize);
+		let random_rows = |n: usize, rng: &mut SmallRng| {
+			let bools: Vec<bool> = (0..n * TIB).map(|_| rng.gen_bool(0.5)).collect();
+			PackedBits::from_bool_slice(&bools, TIB)
+		};
+		let train = random_rows(num_train, rng);
+		let eval = random_rows(num_eval, rng);
+		let classes = num_clusters.max(2) as i64;
+		let targets: Vec<i64> = (0..num_train).map(|_| rng.gen_range(0..classes)).collect();
+		let num_negatives = if num_clusters > 1 { num_clusters - 1 } else { 0 };
+		let negatives = exhaustive_negatives(&targets, num_clusters);
+		Self { train, targets, negatives, num_negatives, eval, num_clusters }
+	}
+
+	fn num_train(&self) -> usize
+	{
+		self.targets.len()
+	}
+}
+
+fn exhaustive_negatives(targets: &[i64], num_clusters: usize) -> Vec<i64>
+{
+	if num_clusters < 2
+	{
+		return Vec::new();
+	}
+	targets
+		.iter()
+		.flat_map(|&t| (0..num_clusters as i64).filter(move |&c| c != t))
+		.collect()
+}
+
+/// A flat genome batch (the factory's layout).
+struct Batch
+{
+	bits: Vec<usize>,
+	npc: Vec<usize>,
+	conns: Vec<i64>,
+	num_genomes: usize,
+}
+
+/// One genome built from distinct base neurons and a copy plan: `plan[c]` lists
+/// base-neuron indices of cluster c in logical order (repeats = duplicates).
+fn genome(bases: &[(usize, Vec<i64>)], plan: &[Vec<usize>]) -> (Vec<usize>, Vec<usize>, Vec<i64>)
+{
+	let mut out = (Vec::new(), Vec::new(), Vec::new());
+	for cluster in plan
+	{
+		out.1.push(cluster.len());
+		for &b in cluster
+		{
+			out.0.push(bases[b].0);
+			out.2.extend_from_slice(&bases[b].1);
+		}
+	}
+	out
+}
+
+fn bases(bits: &[usize], rng: &mut SmallRng) -> Vec<(usize, Vec<i64>)>
+{
+	bits.iter().map(|&b| (b, (0..b).map(|_| rng.gen_range(0..TIB as i64)).collect())).collect()
+}
+
+/// Copies k = 1..5 of five bases, interleaved round-robin.
+fn interleaved_plan() -> Vec<usize>
+{
+	let copies = [1usize, 2, 3, 4, 5];
+	(0..5).flat_map(|r| (0..5).filter(move |&b| copies[b] > r)).collect()
+}
+
+fn batch_of(genomes: Vec<(Vec<usize>, Vec<usize>, Vec<i64>)>) -> Batch
+{
+	let num_genomes = genomes.len();
+	let mut b = Batch { bits: Vec::new(), npc: Vec::new(), conns: Vec::new(), num_genomes };
+	for (bits, npc, conns) in genomes
+	{
+		b.bits.extend(bits);
+		b.npc.extend(npc);
+		b.conns.extend(conns);
+	}
+	b
+}
+
+/// Single cluster of five base neurons (bits per base given), copies k = 1..5
+/// interleaved. Max bits 14 -> one SPARSE group; max 10 -> one DENSE group
+/// (coverage bitmap). Mixed bits exercise the heterogeneous (-1 prefix-pad) path.
+fn single_cluster(base_bits: [usize; 5], rng: &mut SmallRng) -> Batch
+{
+	let b = bases(&base_bits, rng);
+	batch_of(vec![genome(&b, &[interleaved_plan()])])
+}
+
+/// K = 3: c0, c1 = 4n x 14b share ONE logical group but collapse to 2 and 3
+/// physical neurons (two physical groups); c2 = 5n, dense. `hetero` mixes
+/// bits within c1 and c2.
+fn multi_cluster(hetero: bool, rng: &mut SmallRng) -> Batch
+{
+	let (b13, b8) = if hetero { (13, 8) } else { (14, 10) };
+	let b = bases(&[14, 14, 14, b13, 14, 10, b8, 10], rng);
+	batch_of(vec![genome(&b, &[vec![0, 1, 0, 0], vec![2, 3, 4, 2], vec![5, 6, 5, 7, 6]])])
+}
+
+/// G = 3 uniform-shape genomes (same bits / npc), different duplicate
+/// structure; genome 2 has none (identity inside a collapsing batch).
+fn three_genomes(rng: &mut SmallRng) -> Batch
+{
+	let b = bases(&[14, 14, 14, 14, 14, 14], rng);
+	batch_of(vec![
+		genome(&b, &[vec![0, 1, 0, 2, 1, 0]]),
+		genome(&b, &[vec![3, 3, 3, 3, 4, 3]]),
+		genome(&b, &[vec![0, 1, 2, 3, 4, 5]]),
+	])
+}
+
+/// G = 4, K = 3, every genome a different shape (per-cluster neuron counts and
+/// max bits differ, so a cluster can be DENSE in one genome and SPARSE in the
+/// super-genome: g2's c2 is 6-bit dense, the batch's c2 max is 13). Planted
+/// duplicates inside genomes, and base neurons repeated ACROSS genomes in the
+/// same cluster (stage 5 shares those).
+fn unequal_genomes(rng: &mut SmallRng) -> Batch
+{
+	let b = bases(&[14, 10, 8, 12, 14, 6, 10, 13], rng);
+	batch_of(vec![
+		genome(&b, &[vec![1, 1, 2], vec![0, 0], vec![5, 3, 5, 7]]),
+		genome(&b, &[vec![0, 1], vec![2, 4, 2, 2], vec![6]]),
+		genome(&b, &[vec![1, 2, 1, 2, 1], vec![3], vec![5, 5]]),
+		genome(&b, &[vec![7], vec![6], vec![1]]),
+	])
+}
+
+/// G = 3, K = 3, unequal shapes and NO duplicate anywhere (inside or across
+/// genomes): nothing collapses, yet the plain batched kernel cannot take the
+/// mixed shapes — the factory must train it as one super-genome (it used to
+/// hand the batch to the plain kernel, which errors on the shape).
+fn unequal_genomes_all_distinct(rng: &mut SmallRng) -> Batch
+{
+	let b = bases(&[14, 10, 8, 12, 14, 6, 10, 13, 14, 9, 11, 7, 12], rng);
+	batch_of(vec![
+		genome(&b, &[vec![0, 1], vec![2], vec![3, 4, 5]]),
+		genome(&b, &[vec![6], vec![7, 8], vec![9]]),
+		genome(&b, &[vec![10], vec![11], vec![12]]),
+	])
+}
+
+fn metal_available() -> bool
+{
+	crate::marker_train::batched_path::trainer_available()
+}
+
+/// Logical (bits, npc, conns) of genome g in a batch.
+fn logical_genome(batch: &Batch, num_clusters: usize, g: usize) -> (Vec<usize>, Vec<usize>, Vec<i64>)
+{
+	let npc_all: Vec<&[usize]> = batch.npc.chunks(num_clusters).collect();
+	let n0: usize = npc_all[..g].iter().map(|n| n.iter().sum::<usize>()).sum();
+	let n: usize = npc_all[g].iter().sum();
+	let c0: usize = batch.bits[..n0].iter().sum();
+	let bits = batch.bits[n0..n0 + n].to_vec();
+	let c: usize = bits.iter().sum();
+	(bits, npc_all[g].to_vec(), batch.conns[c0..c0 + c].to_vec())
+}
+
+// ---------------------------------------------------------------- comparisons
+
+/// Plain GPU training is itself run-to-run reproducible only for an
+/// order-independent writer: the legacy clamped nudge (QUAD/QSR without OI)
+/// races under GPU scheduling, so two PLAIN runs differ. For those modes only
+/// the selection (identity grouping) is asserted. PLN writes TERNARY's lattice
+/// since 12/10/2026 and is checked in full.
+fn deterministic(mode: u8) -> bool
+{
+	ram_core::neuron_memory::training_is_order_independent(mode)
+}
+
+/// Per-logical-neuron storage: same layout, same connections, every slot's
+/// sparse range / dense row / coverage bits equal.
+fn assert_storage_equal(a: &GenomeExport, b: &GenomeExport, what: &str)
+{
+	assert_eq!(a.connections, b.connections, "{what}: connections");
+	assert_eq!(a.group_info, b.group_info, "{what}: group_info");
+	assert_eq!(a.groups.len(), b.groups.len(), "{what}: groups");
+	assert_eq!(a.dense_exports, b.dense_exports, "{what}: dense rows");
+	assert_eq!(a.dense_coverage, b.dense_coverage, "{what}: dense coverage");
+	assert_eq!(a.sparse_exports.len(), b.sparse_exports.len(), "{what}: sparse groups");
+	for (s, (sa, sb)) in a.sparse_exports.iter().zip(&b.sparse_exports).enumerate()
+	{
+		assert_eq!(sa.num_neurons, sb.num_neurons, "{what}: sparse group {s} neurons");
+		for n in 0..sa.num_neurons
+		{
+			assert_eq!(sa.neuron_range(n), sb.neuron_range(n), "{what}: sparse group {s} neuron {n}");
+		}
+	}
+}
+
+/// Scores bitwise equal on the CPU and GPU scorers, coverage-aware on and off.
+/// The CPU scorers handle mixed-bits (-1 prefix-pad) groups since 12/10/2026.
+fn assert_scores_equal(a: &GenomeExport, b: &GenomeExport, data: &Data, mode: u8, what: &str)
+{
+	let dense = crate::metal_ramlm::MetalRAMLMEvaluator::new().ok();
+	let sparse = ram_core::metal_sparse::MetalSparseEvaluator::new().ok();
+	let gpus: &[bool] = if dense.is_some() && sparse.is_some() { &[false, true] } else { &[false] };
+	for &gpu in gpus
+	{
+		for coverage_aware in [false, true]
+		{
+			let score = |e: &GenomeExport| scores(e, data, mode, coverage_aware, gpu, &dense, &sparse);
+			let (sa, sb) = (score(a), score(b));
+			assert!(sa == sb, "{what}: scores differ (gpu={gpu}, coverage_aware={coverage_aware})");
+		}
+	}
+}
+
+fn scores(
+	e: &GenomeExport,
+	data: &Data,
+	mode: u8,
+	coverage_aware: bool,
+	gpu: bool,
+	dense: &Option<crate::metal_ramlm::MetalRAMLMEvaluator>,
+	sparse: &Option<ram_core::metal_sparse::MetalSparseEvaluator>,
+) -> Vec<u64>
+{
+	let (packed, wpe) = pack_packed_to_u64(&data.eval);
+	let num_eval = data.eval.num_rows();
+	let rows = compute_per_example_scores(
+		e,
+		&data.eval,
+		&packed,
+		wpe,
+		num_eval,
+		data.num_clusters,
+		TIB,
+		EMPTY_VALUE,
+		mode,
+		RUN_SEED,
+		coverage_aware,
+		if gpu { dense.as_ref() } else { None },
+		if gpu { sparse.as_ref() } else { None },
+	);
+	rows.iter().flatten().map(|s| s.to_bits()).collect()
+}
+
+/// Selection is visible on the export: a collapsing grouping exactly when the
+/// layer ran AND the genome has duplicates; then fewer physical keys.
+fn assert_selection(plain: &GenomeExport, mult: &GenomeExport, logical: &(Vec<usize>, Vec<usize>, Vec<i64>), selected: bool)
+{
+	let phys = PhysicalGenome::collapse(&logical.0, &logical.1, &logical.2);
+	let expect_collapse = selected && !phys.grouping.is_identity();
+	assert!(plain.grouping.is_identity(), "plain export must carry the identity grouping");
+	assert_eq!(!mult.grouping.is_identity(), expect_collapse, "grouping identity iff not selected");
+	assert_footprint(plain, mult, &phys, expect_collapse);
+	if expect_collapse
+	{
+		assert_eq!(mult.grouping, phys.grouping);
+		let keys = |e: &GenomeExport| e.sparse_exports.iter().map(|s| s.total_entries()).sum::<usize>();
+		assert!(keys(plain) == 0 || keys(mult) < keys(plain), "physical keys must shrink");
+	}
+}
+
+/// Footprint (stage 3): the plain export is plain; the multiplicity export
+/// reports the genome's logical neurons and its distinct units as physical;
+/// for an all-sparse genome physical cells are exactly the stored keys (each
+/// unit's range held once).
+fn assert_footprint(plain: &GenomeExport, mult: &GenomeExport, phys: &PhysicalGenome, collapsed: bool)
+{
+	let (fp, fm) = (plain.footprint(), mult.footprint());
+	assert!(fp.is_plain() && fp.logical_cells == fp.physical_cells, "plain footprint must be plain: {fp:?}");
+	assert_eq!(fm.logical_neurons, fp.logical_neurons, "logical neurons");
+	let expect_physical = if collapsed { phys.num_neurons() } else { phys.grouping.num_units() };
+	assert_eq!(fm.physical_neurons as usize, expect_physical, "physical neurons");
+	if mult.dense_exports.is_empty()
+	{
+		let stored: usize = mult.sparse_exports.iter().map(|s| s.keys.len()).sum();
+		assert_eq!(fm.physical_cells as usize, stored, "physical cells = stored keys");
+	}
+	assert!(fm.physical_cells <= fm.logical_cells, "{fm:?}");
+}
+
+// ---------------------------------------------------------------- routes
+
+fn train_plain_batched(batch: &Batch, data: &Data, mode: u8, rate: f32) -> Vec<GenomeExport>
+{
+	batched_train_offspring_plain(
+		&batch.bits, &batch.npc, &batch.conns, batch.num_genomes, data.num_clusters, &data.train, &data.targets,
+		&data.negatives, data.num_train(), data.num_negatives, TIB, EMPTY_VALUE, rate, 42, None, mode,
+	)
+	.expect("plain train")
+}
+
+fn train_factory(batch: &Batch, data: &Data, mode: u8, rate: f32) -> Vec<GenomeExport>
+{
+	batched_train_offspring(
+		&batch.bits, &batch.npc, &batch.conns, batch.num_genomes, data.num_clusters, &data.train, &data.targets,
+		&data.negatives, data.num_train(), data.num_negatives, TIB, EMPTY_VALUE, rate, 42, None, mode,
+	)
+	.expect("factory train")
+}
+
+/// Factory (plain or multiplicity, as it selects) vs the plain layer.
+fn check_batched(batch: &Batch, data: &Data, mode: u8, what: &str)
+{
+	let plain = train_plain_batched(batch, data, mode, 1.0);
+	let mult = train_factory(batch, data, mode, 1.0);
+	let selected = multiplicity_selected(1.0, mode, &batch.conns);
+	assert_eq!((plain.len(), mult.len()), (batch.num_genomes, batch.num_genomes));
+	for g in 0..batch.num_genomes
+	{
+		let what = format!("{what} mode={mode} genome={g}");
+		assert_selection(&plain[g], &mult[g], &logical_genome(batch, data.num_clusters, g), selected);
+		if !deterministic(mode)
+		{
+			continue;
+		}
+		assert_storage_equal(&plain[g], &mult[g], &what);
+		assert_eq!(plain[g].footprint().logical_cells, mult[g].footprint().logical_cells, "{what}: logical cells");
+		assert_scores_equal(&plain[g], &mult[g], data, mode, &what);
+		assert_unit_tables(&plain[g], &mult[g], &logical_genome(batch, data.num_clusters, g), &what);
+	}
+}
+
+/// Stage 7: the deployable unit tables. The plain export yields one table per
+/// LOGICAL neuron; every logical neuron's table must equal its unit's table
+/// in the multiplicity export (coverage-aware on and off), and there are
+/// exactly as many tables as units.
+fn assert_unit_tables(plain: &GenomeExport, mult: &GenomeExport, logical: &(Vec<usize>, Vec<usize>, Vec<i64>), what: &str)
+{
+	let genome = FlatGenome { bits: &logical.0, neurons_per_cluster: &logical.1, connections: &logical.2 };
+	for coverage_aware in [false, true]
+	{
+		let per_neuron = plain.unit_tables(genome, coverage_aware);
+		let units = mult.unit_tables(genome, coverage_aware);
+		let phys = PhysicalGenome::collapse(&logical.0, &logical.1, &logical.2);
+		let expect_units = if mult.grouping.is_identity() { logical.0.len() } else { phys.num_neurons() };
+		assert_eq!(units.len(), expect_units, "{what}: unit count");
+		for (l, table) in per_neuron.iter().enumerate()
+		{
+			let u = if mult.grouping.is_identity() { l } else { mult.grouping.index_of(l) as usize };
+			assert_eq!(table, &units[u], "{what}: neuron {l} vs unit {u} (coverage_aware={coverage_aware})");
+		}
+	}
+}
+
+#[test]
+fn cell_weight_quarters_per_mode()
+{
+	use crate::adaptive::cell_weight_quarters;
+	assert_eq!(cell_weight_quarters(QUAD_WEIGHTED, 0.0), Some([0, 1, 3, 4]));
+	assert_eq!(cell_weight_quarters(QUAD_BINARY, 0.0), Some([0, 0, 4, 4]));
+	assert_eq!(cell_weight_quarters(QSR, 0.0), None, "stochastic read");
+	assert_eq!(cell_weight_quarters(PLN, 0.5), None, "stochastic read");
+	let ternary = cell_weight_quarters(TERNARY, 0.5).expect("TERNARY with a quarter empty value is integral");
+	assert_eq!((ternary[0], ternary[1], ternary[2]), (0, 4, 2), "FALSE / TRUE / EMPTY=0.5");
+	assert_eq!(cell_weight_quarters(TERNARY, 0.3), None, "0.3 is not a quarter");
+}
+
+/// One genome of a batch as its own single-genome batch (the plain reference
+/// for batches whose shapes the plain batched dispatch cannot take together).
+fn single_genome_batch(batch: &Batch, num_clusters: usize, g: usize) -> Batch
+{
+	batch_of(vec![logical_genome(batch, num_clusters, g)])
+}
+
+/// Each genome of a multiplicity export batch vs the plain layer trained on
+/// that genome ALONE: storage, footprint and scores bit-exact.
+fn assert_matches_plain_per_genome(batch: &Batch, data: &Data, mode: u8, mult: &[GenomeExport], what: &str)
+{
+	assert_eq!(mult.len(), batch.num_genomes);
+	for g in 0..batch.num_genomes
+	{
+		let single = single_genome_batch(batch, data.num_clusters, g);
+		let plain = train_plain_batched(&single, data, mode, 1.0);
+		let what = format!("{what} mode={mode} genome={g}");
+		assert_selection(&plain[0], &mult[g], &logical_genome(batch, data.num_clusters, g), true);
+		assert_storage_equal(&plain[0], &mult[g], &what);
+		assert_scores_equal(&plain[0], &mult[g], data, mode, &what);
+	}
+}
+
+/// Stage 4: the factory trains a G = 4 batch of unequal shapes as ONE
+/// super-genome dispatch; every genome equals its plain training.
+fn check_super_genome(batch: &Batch, data: &Data, mode: u8)
+{
+	if !multiplicity_selected(1.0, mode, &batch.conns)
+	{
+		return;
+	}
+	let mult = train_factory(batch, data, mode, 1.0);
+	assert_matches_plain_per_genome(batch, data, mode, &mult, "super-genome G=4");
+	assert_shares_across_genomes(batch, data.num_clusters);
+}
+
+/// Stage 5: the super-genome trains the batch-wide distinct neurons — fewer
+/// than the per-genome distinct sum when genomes share neurons — and the
+/// [MULTIPLICITY] line reports exactly that number.
+fn assert_shares_across_genomes(batch: &Batch, num_clusters: usize)
+{
+	let genomes: Vec<(Vec<usize>, Vec<usize>, Vec<i64>)> =
+		(0..batch.num_genomes).map(|g| logical_genome(batch, num_clusters, g)).collect();
+	let flats: Vec<FlatGenome> =
+		genomes.iter().map(|(b, n, c)| FlatGenome { bits: b, neurons_per_cluster: n, connections: c }).collect();
+	let units = SuperGenome::collapse(&flats).num_units();
+	let per_genome: usize = genomes.iter().map(|(b, n, c)| PhysicalGenome::collapse(b, n, c).num_neurons()).sum();
+	let fractions = ram_core::distinct_fractions::DistinctFractions::of_batch(&batch.bits, &batch.npc, &batch.conns, batch.num_genomes, num_clusters);
+	assert_eq!(units, fractions.batch_distinct, "trained units = batch-wide distinct");
+	assert!(units < per_genome, "fixture must share neurons across genomes ({units} vs {per_genome})");
+	let mb = MultiplicityBatch::new(&batch.bits, &batch.npc, &batch.conns, batch.num_genomes, num_clusters, QUAD_WEIGHTED);
+	assert!(mb.log_line().contains(&format!("batch distinct={units} (")), "{}", mb.log_line());
+}
+
+/// Stage 4 bisection: a batch trainer that reports the budget overflow for
+/// any super-genome above `max_units` forces the batch to split down to
+/// trainable halves (and single genomes to the `single` trainer); the result
+/// must still equal the plain layer, genome for genome.
+fn check_bisection(batch: &Batch, data: &Data, mode: u8)
+{
+	if !multiplicity_selected(1.0, mode, &batch.conns)
+	{
+		return;
+	}
+	let mb = MultiplicityBatch::new(&batch.bits, &batch.npc, &batch.conns, batch.num_genomes, data.num_clusters, mode);
+	let (batch_calls, single_calls) = (std::cell::Cell::new(0usize), std::cell::Cell::new(0usize));
+	let train_units = |s: &SuperGenome| {
+		let units = batch_of(vec![(s.bits.clone(), s.neurons_per_cluster.clone(), s.connections.clone())]);
+		one_export(train_plain_batched(&units, data, mode, 1.0))
+	};
+	let trainers = UnitTrainers {
+		batch: |s: &SuperGenome| {
+			batch_calls.set(batch_calls.get() + 1);
+			if s.num_units() > 8
+			{
+				return Err(format!("{BUDGET_ERR_PREFIX} (test: {} units)", s.num_units()));
+			}
+			train_units(s)
+		},
+		single: |s: &SuperGenome| {
+			single_calls.set(single_calls.get() + 1);
+			train_units(s)
+		},
+	};
+	let mult = mb.train(&trainers).expect("bisected train");
+	assert!(batch_calls.get() >= 3 && single_calls.get() >= 1, "bisection not exercised: {batch_calls:?} {single_calls:?}");
+	assert_matches_plain_per_genome(batch, data, mode, &mult, "bisection");
+}
+
+fn chunked(bits: &[usize], conns: &[i64], data: &Data, mode: u8, budget: usize) -> GenomeExport
+{
+	one_export(
+		train_single_genome_neuron_chunked(
+			bits, conns, &data.train, &data.targets, &data.negatives, data.num_train(), data.num_negatives, TIB,
+			EMPTY_VALUE, 1.0, 42, None, budget, mode,
+		)
+		.expect("chunked train"),
+	)
+	.expect("one export")
+}
+
+/// The over-budget route: the physical genome trained through the
+/// neuron-chunked trainer (2 neurons per chunk) vs the logical one.
+///
+/// Skipped under WNN_COALESCE_GROUPS: the PLAIN neuron-chunked trainer itself
+/// mis-places heterogeneous-bits neurons when groups coalesce (pre-existing;
+/// `chunked_tests::neuron_chunked_matches_unchunked` fails the same way), so
+/// there is no correct plain reference to compare against.
+fn check_chunked(batch: &Batch, data: &Data, mode: u8)
+{
+	if !multiplicity_selected(1.0, mode, &batch.conns) || std::env::var("WNN_COALESCE_GROUPS").is_ok()
+	{
+		return;
+	}
+	let cap = crate::marker_train::genome_path::marker_capacity_for_train(data.num_train(), 14, 1.0);
+	let budget = 2 * cap * 16;
+	let plain = chunked(&batch.bits, &batch.conns, data, mode, budget);
+	let mb = MultiplicityBatch::new(&batch.bits, &batch.npc, &batch.conns, 1, 1, mode);
+	let trainers = UnitTrainers {
+		batch: |_: &SuperGenome| -> Result<GenomeExport, String> { unreachable!("one genome never takes the batch trainer") },
+		single: |s: &SuperGenome| Ok(chunked(&s.bits, &s.connections, data, mode, budget)),
+	};
+	let mult = mb.train(&trainers).expect("mult chunked");
+	let what = format!("chunked mode={mode}");
+	assert_selection(&plain, &mult[0], &logical_genome(batch, 1, 0), true);
+	assert_storage_equal(&plain, &mult[0], &what);
+	assert_scores_equal(&plain, &mult[0], data, mode, &what);
+}
+
+fn run_parity(mode: u8)
+{
+	if !metal_available()
+	{
+		eprintln!("[multiplicity] no Metal device — skipping");
+		return;
+	}
+	let mut rng = SmallRng::seed_from_u64(0x1D5_0037 ^ mode as u64);
+	let binary = Data::new(1, &mut rng);
+	let sparse_hetero = single_cluster([14, 10, 14, 12, 14], &mut rng);
+	let sparse_uniform = single_cluster([14; 5], &mut rng);
+	check_batched(&sparse_hetero, &binary, mode, "single sparse hetero");
+	check_batched(&sparse_uniform, &binary, mode, "single sparse uniform");
+	check_batched(&single_cluster([10, 6, 10, 8, 10], &mut rng), &binary, mode, "single dense hetero");
+	check_batched(&single_cluster([10; 5], &mut rng), &binary, mode, "single dense uniform");
+	check_batched(&three_genomes(&mut rng), &binary, mode, "G=3");
+	let multi = Data::new(3, &mut rng);
+	check_batched(&multi_cluster(true, &mut rng), &multi, mode, "K=3 multigroup hetero");
+	check_batched(&multi_cluster(false, &mut rng), &multi, mode, "K=3 multigroup uniform");
+	check_chunked(&sparse_hetero, &binary, mode);
+	check_chunked(&sparse_uniform, &binary, mode);
+	let unequal = unequal_genomes(&mut rng);
+	check_super_genome(&unequal, &multi, mode);
+	check_bisection(&unequal, &multi, mode);
+	check_mixed_shapes_identity(&unequal_genomes_all_distinct(&mut rng), &multi, mode);
+}
+
+/// Mixed shapes, nothing to collapse: still one dispatch, still exact.
+fn check_mixed_shapes_identity(batch: &Batch, data: &Data, mode: u8)
+{
+	if !multiplicity_selected(1.0, mode, &batch.conns)
+	{
+		return;
+	}
+	let mb = MultiplicityBatch::new(&batch.bits, &batch.npc, &batch.conns, batch.num_genomes, data.num_clusters, mode);
+	assert!(!mb.plain_is_exact(), "fixture must need the super-genome (mixed shapes)");
+	let mult = train_factory(batch, data, mode, 1.0);
+	assert!(mult.iter().all(|e| e.grouping.is_identity()), "nothing collapses");
+	assert_matches_plain_per_genome(batch, data, mode, &mult, "mixed shapes, identity");
+}
+
+#[test]
+fn multiplicity_parity_quad_weighted()
+{
+	run_parity(QUAD_WEIGHTED);
+}
+
+#[test]
+fn multiplicity_parity_quad_binary()
+{
+	run_parity(QUAD_BINARY);
+}
+
+#[test]
+fn multiplicity_parity_qsr()
+{
+	run_parity(QSR);
+}
+
+#[test]
+fn multiplicity_parity_ternary()
+{
+	run_parity(TERNARY);
+}
+
+#[test]
+fn multiplicity_parity_binary()
+{
+	run_parity(BINARY);
+}
+
+#[test]
+fn multiplicity_parity_pln()
+{
+	run_parity(PLN);
+}
+
+/// TERNARY / BINARY / PLN always selected (lattice / set writers commute);
+/// OI modes exactly when the OI trainer is on.
+#[test]
+fn multiplicity_selection_rule()
+{
+	let conns = [1i64];
+	let oi = ram_core::neuron_memory::order_independent_training_enabled();
+	for mode in ALL_MODES
+	{
+		let expected = match mode
+		{
+			TERNARY | BINARY | PLN => true,
+			_ => oi,
+		};
+		assert_eq!(multiplicity_selected(1.0, mode, &conns), expected, "mode {mode}");
+		assert!(!multiplicity_selected(1.0, mode, &[]), "random connections never select (mode {mode})");
+		for rate in [0.0f32, 0.25, 0.5, 0.999]
+		{
+			assert!(!multiplicity_selected(rate, mode, &conns), "rate {rate} selected mode {mode}");
+		}
+	}
+	assert!(!multiplicity_selected(1.0, 99, &conns), "unknown mode never selects");
+}
+
+/// Below rate 1.0 the factory output is the plain layer, byte for byte.
+#[test]
+fn multiplicity_never_below_rate_one()
+{
+	if !metal_available()
+	{
+		eprintln!("[multiplicity] no Metal device — skipping");
+		return;
+	}
+	let mut rng = SmallRng::seed_from_u64(0x0025);
+	let data = Data::new(1, &mut rng);
+	let batch = single_cluster([14, 10, 14, 12, 14], &mut rng);
+	for mode in ALL_MODES
+	{
+		for rate in [0.25f32, 0.999]
+		{
+			let plain = train_plain_batched(&batch, &data, mode, rate);
+			let factory = train_factory(&batch, &data, mode, rate);
+			assert!(factory[0].grouping.is_identity(), "rate {rate} mode {mode} selected the layer");
+			if !deterministic(mode)
+			{
+				continue;
+			}
+			assert_storage_equal(&plain[0], &factory[0], &format!("rate {rate} mode {mode}"));
+		}
+	}
+}
+
+// ---------------------------------------------------------------- CPU route
+
+/// Plain CPU slot trainer (sequential) + export, as the multigroup reference.
+fn cpu_export(bits: &[usize], npc: &[usize], conns: &[i64], data: &Data, mode: u8) -> GenomeExport
+{
+	let groups = build_groups(&per_cluster_max_bits(bits, npc), npc);
+	let (cluster_starts, conn_offsets) = build_neuron_metadata(bits, npc);
+	let mut cluster_to_group = vec![(0usize, 0usize); npc.len()];
+	for (gi, gr) in groups.iter().enumerate()
+	{
+		for (li, &cid) in gr.cluster_ids.iter().enumerate()
+		{
+			cluster_to_group[cid] = (gi, li);
+		}
+	}
+	let mut memories: Vec<GroupMemory> =
+		groups.iter().map(|gr| GroupMemory::new(gr.total_neurons(), gr.bits, mode)).collect();
+	train_genome_in_slot(
+		&mut memories, &groups, conns, bits, &cluster_starts, &conn_offsets, &cluster_to_group, &data.train,
+		&data.targets, &data.negatives, data.num_train(), data.num_negatives, TIB, None, 1.0, 42, mode, None, false,
+	);
+	export_genome_for_gpu(&memories, &groups, &reorganize_connections_for_gpu(conns, bits, npc, &groups))
+}
+
+/// CPU only: the sequential slot trainer writes copies identically in EVERY
+/// mode (one writer per neuron, example order fixed), so `from_physical` over
+/// the physical genome's CPU export must reproduce the logical CPU export —
+/// sparse ranges aliased, dense rows copied, untracked coverage kept empty.
+#[test]
+fn from_physical_aliases_and_copies()
+{
+	let mut rng = SmallRng::seed_from_u64(0xF00D);
+	let cases: Vec<(Batch, Data)> = vec![
+		(single_cluster([14, 10, 14, 12, 14], &mut rng), Data::new(1, &mut rng)),
+		(single_cluster([14; 5], &mut rng), Data::new(1, &mut rng)),
+		(single_cluster([10, 6, 10, 8, 10], &mut rng), Data::new(1, &mut rng)),
+		(single_cluster([10; 5], &mut rng), Data::new(1, &mut rng)),
+		(multi_cluster(true, &mut rng), Data::new(3, &mut rng)),
+		(multi_cluster(false, &mut rng), Data::new(3, &mut rng)),
+	];
+	for mode in ALL_MODES
+	{
+		for (i, (batch, data)) in cases.iter().enumerate()
+		{
+			let p = PhysicalGenome::collapse(&batch.bits, &batch.npc, &batch.conns);
+			assert!(!p.grouping.is_identity(), "fixture {i} must carry duplicates");
+			let logical = cpu_export(&batch.bits, &batch.npc, &batch.conns, data, mode);
+			let physical = cpu_export(&p.bits, &p.neurons_per_cluster, &p.connections, data, mode);
+			let units = PhysicalUnits::new(&physical, &p.neurons_per_cluster);
+			let unit_of: Vec<u32> = (0..batch.bits.len()).map(|l| p.grouping.index_of(l)).collect();
+			let logical_genome = FlatGenome { bits: &batch.bits, neurons_per_cluster: &batch.npc, connections: &batch.conns };
+			let rebuilt = GenomeExport::from_physical(&units, &unit_of, p.grouping.clone(), logical_genome, mode)
+				.expect("from_physical");
+			assert_storage_equal(&logical, &rebuilt, &format!("cpu fixture {i} mode {mode}"));
+			assert_scores_equal(&logical, &rebuilt, data, mode, &format!("cpu fixture {i} mode {mode}"));
+		}
+	}
+}

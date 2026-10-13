@@ -247,6 +247,24 @@ pub struct CreateValidationSummaryRequest
 	/// pre-fix workers -> NULL -> the row is never served from cache.
 	pub cache_key: Option<String>,
 	pub worker_abi: Option<i64>,
+	/// IDS-37 footprint, flat; absent from pre-ABI-17 workers -> NULL columns.
+	pub logical_neurons: Option<i64>,
+	pub physical_neurons: Option<i64>,
+	pub logical_cells: Option<i64>,
+	pub physical_cells: Option<i64>,
+}
+
+impl CreateValidationSummaryRequest
+{
+	fn footprint(&self) -> Option<crate::models::ValidationFootprint>
+	{
+		crate::models::ValidationFootprint::from_parts(
+			self.logical_neurons,
+			self.physical_neurons,
+			self.logical_cells,
+			self.physical_cells,
+		)
+	}
 }
 
 pub(crate) async fn create_validation_summary(
@@ -268,6 +286,7 @@ pub(crate) async fn create_validation_summary(
 		req.fpr,
 		req.threshold_metadata.as_deref(),
 		crate::db::queries::CacheScope::from_parts(req.cache_key.as_deref(), req.worker_abi),
+		req.footprint(),
 	)
 	.await
 	{
@@ -302,7 +321,7 @@ pub(crate) async fn check_cached_validation(
 	)
 	.await
 	{
-		Ok(Some((ce, accuracy, f1_macro, fpr, threshold_metadata))) => (
+		Ok(Some((ce, accuracy, f1_macro, fpr, threshold_metadata, footprint))) => (
 			StatusCode::OK,
 			Json(serde_json::json!({
 					"found": true,
@@ -310,7 +329,8 @@ pub(crate) async fn check_cached_validation(
 					"accuracy": accuracy,
 					"f1_macro": f1_macro,
 					"fpr": fpr,
-					"threshold_metadata": threshold_metadata
+					"threshold_metadata": threshold_metadata,
+					"footprint": footprint
 			})),
 		)
 			.into_response(),

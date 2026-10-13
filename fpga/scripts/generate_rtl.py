@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Generate FPGA RTL from exported WNN genome.
 
-Reads the exported sparse memory and connections, generates:
-1. Per-neuron BRAM initialization files (.mem)
-2. wnn_classifier_impl.sv with actual neuron instances and connection wiring
+Reads the per-UNIT export (export_genome.py) and generates:
+1. Per-unit table initialization files (.mem)
+2. wnn_classifier_impl.sv: one neuron instance per physical unit, the adder
+   weighting each unit by its logical count (rtl_adder.py)
 3. Vivado project TCL script for synthesis
 
 Usage:
@@ -12,9 +13,14 @@ Usage:
 
 import argparse
 import json
+import sys
 import struct
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from math import ceil, log2
+
+from rtl_adder import acc_bits, cell_quarters_function, header_lines, require_integer_weights, weighted_sum_block
 
 
 def load_export(export_dir: Path):
@@ -48,185 +54,133 @@ def write_mem_files(output_dir: Path, sparse_neurons, key_bits=64, value_bits=8)
 
 	for n_idx, (keys, values) in enumerate(sparse_neurons):
 		# Keys memory file (hex format, one entry per line)
-		with open(mem_dir / f"neuron_{n_idx:03d}_keys.mem", "w") as f:
+		with open(mem_dir / f"unit_{n_idx:03d}_keys.mem", "w") as f:
 			for k in keys:
 				f.write(f"{k:016x}\n")
 
 		# Values memory file
-		with open(mem_dir / f"neuron_{n_idx:03d}_values.mem", "w") as f:
+		with open(mem_dir / f"unit_{n_idx:03d}_values.mem", "w") as f:
 			for v in values:
 				f.write(f"{v:02x}\n")
 
-	print(f"  Wrote {len(sparse_neurons)} neuron memory files to {mem_dir}/")
+	print(f"  Wrote {len(sparse_neurons)} unit memory files to {mem_dir}/")
 
 
 def generate_classifier_impl(output_dir: Path, meta, connections, sparse_neurons):
-	"""Generate the wnn_classifier_impl.sv with neuron instances."""
-	num_neurons = meta["total_neurons"]
-	bits_per_neuron = meta["bits_per_neuron"]
-	input_bits = meta["input_bits"]
-	n_features = meta["n_features"]
-	n_bits_therm = meta["n_bits_thermometer"]
-
-	lines = []
-	lines.append("// Auto-generated WNN classifier implementation")
-	lines.append(f"// Genome: {meta['genome_hash']} from flow {meta['flow_id']}")
-	lines.append(f"// {num_neurons} neurons × {bits_per_neuron}-bit addresses")
-	lines.append(f"// {meta['total_sparse_entries']:,} total sparse entries")
-	lines.append(f"// Dataset: {meta['dataset']} ({meta['split']} split)")
-	lines.append(f"// Thermometer: {n_bits_therm}-bit ({input_bits} input bits)")
-	lines.append("")
-	lines.append(f"module wnn_classifier_impl #(")
-	lines.append(f"\tparameter int THRESHOLD = 0,")
-	# MEM_READ_LATENCY threads down to every neuron's binary-search probe.
-	# Default 1 = on-chip BRAM. Override (e.g. 30) to model external DRAM
-	# latency for the genomes whose tables don't fit on-chip.
-	lines.append(f"\tparameter int MEM_READ_LATENCY = 1")
-	lines.append(f") (")
-	lines.append(f"\tinput  logic                     clk,")
-	lines.append(f"\tinput  logic                     rst_n,")
-	lines.append(f"\tinput  logic                     input_valid,")
-	lines.append(f"\tinput  logic [{input_bits-1}:0]  input_vec,")
-	lines.append(f"")
-	lines.append(f"\toutput logic                     class_out,")
-	lines.append(f"\toutput logic [{ceil(log2(num_neurons * 3 + 1))}-1:0] score_out,")
-	lines.append(f"\toutput logic                     output_valid,")
-	lines.append(f"\toutput logic                     busy")
-	lines.append(f");")
-	lines.append("")
-	lines.append(f"\tlocalparam int NUM_NEURONS = {num_neurons};")
-	lines.append(f"\tlocalparam int ADDR_BITS   = {bits_per_neuron};")
-	lines.append(f"\tlocalparam int INPUT_BITS  = {input_bits};")
-	lines.append(f"\tlocalparam int ACC_BITS    = {ceil(log2(num_neurons * 3 + 1))};")
-	lines.append("")
-
-	# Per-neuron signals
-	lines.append(f"\t// Per-neuron signals")
-	lines.append(f"\tlogic [7:0]  neuron_result [{num_neurons}];")
-	lines.append(f"\tlogic [{num_neurons}-1:0] neuron_valid;")
-	lines.append(f"\tlogic [{num_neurons}-1:0] neuron_busy;")
-	lines.append(f"\tlogic neuron_start;")
-	lines.append("")
-	lines.append(f"\tassign neuron_start = input_valid & ~(|neuron_busy);")
-	lines.append(f"\tassign busy = |neuron_busy;")
-	lines.append("")
-
-	# Per-neuron address formation (connection wiring)
-	lines.append(f"\t// --- Per-neuron address formation (evolved connections) ---")
-	for n_idx in range(num_neurons):
-		conn = connections[n_idx]
-		num_entries = len(sparse_neurons[n_idx][0])
-		lines.append(f"\t// Neuron {n_idx}: {num_entries} entries, "
-					 f"bits from features {sorted(set(c // n_bits_therm for c in conn))}")
-		lines.append(f"\tlogic [{bits_per_neuron-1}:0] addr_{n_idx};")
-
-		# Wire each address bit to the corresponding input bit.
-		# Python bit index k maps to Verilog input_vec[INPUT_BITS-1-k]
-		# because $readmemh loads hex MSB-first into the highest bit.
-		assignments = []
-		for bit_pos, input_idx in enumerate(conn):
-			verilog_idx = input_bits - 1 - input_idx
-			assignments.append(f"input_vec[{verilog_idx}]")
-
-		# Concatenate: MSB first
-		lines.append(f"\tassign addr_{n_idx} = {{{', '.join(assignments)}}};")
-		lines.append("")
-
-	# Neuron instances
-	lines.append(f"\t// --- Neuron instances ---")
-	for n_idx in range(num_neurons):
-		num_entries = len(sparse_neurons[n_idx][0])
-		search_depth = max(1, ceil(log2(max(num_entries, 2))))
-		lines.append(f"\twnn_neuron #(")
-		lines.append(f"\t\t.NUM_ENTRIES({num_entries}),")
-		lines.append(f"\t\t.ADDR_BITS({bits_per_neuron}),")
-		lines.append(f"\t\t.INPUT_BITS({input_bits}),")
-		lines.append(f"\t\t.SEARCH_DEPTH({search_depth}),")
-		lines.append(f"\t\t.MEM_READ_LATENCY(MEM_READ_LATENCY),")
-		# Hierarchical $readmemh (neuron_0.key_mem) does not synthesize
-		# in Vivado — error 8-6086 "cannot be referred hierarchically".
-		# Push the file paths into the neuron via string parameters so
-		# the readmemh lives inside the leaf module and works at
-		# synth-time.
-		lines.append(f"\t\t.KEY_MEM_FILE(\"neuron_{n_idx:03d}_keys.mem\"),")
-		lines.append(f"\t\t.VALUE_MEM_FILE(\"neuron_{n_idx:03d}_values.mem\")")
-		lines.append(f"\t) neuron_{n_idx} (")
-		lines.append(f"\t\t.clk(clk),")
-		lines.append(f"\t\t.rst_n(rst_n),")
-		lines.append(f"\t\t.start(neuron_start),")
-		lines.append(f"\t\t.input_vec(input_vec),")
-		lines.append(f"\t\t.address(addr_{n_idx}),")
-		lines.append(f"\t\t.result(neuron_result[{n_idx}]),")
-		lines.append(f"\t\t.result_valid(neuron_valid[{n_idx}]),")
-		lines.append(f"\t\t.busy(neuron_busy[{n_idx}])")
-		lines.append(f"\t);")
-		lines.append("")
-
-	# Accumulation — use latching registers since neurons finish at different cycles
-	acc_bits = ceil(log2(num_neurons * 3 + 1))
-	lines.append(f"\t// --- Neuron completion latching ---")
-	lines.append(f"\t// Neurons finish at different cycles (different entry counts).")
-	lines.append(f"\t// Latch each result when valid; fire output when all latched.")
-	lines.append(f"\tlogic [{num_neurons}-1:0] neuron_done;")
-	lines.append(f"\tlogic [7:0] neuron_latched [{num_neurons}];")
-	lines.append(f"\tlogic all_done;")
-	lines.append(f"\tassign all_done = &neuron_done;")
-	lines.append("")
-	lines.append(f"\talways_ff @(posedge clk or negedge rst_n) begin")
-	lines.append(f"\t\tif (!rst_n) begin")
-	lines.append(f"\t\t\tneuron_done <= '0;")
-	lines.append(f"\t\tend else if (neuron_start) begin")
-	lines.append(f"\t\t\t// Reset latches on new classification")
-	lines.append(f"\t\t\tneuron_done <= '0;")
-	lines.append(f"\t\tend else begin")
-	for n_idx in range(num_neurons):
-		lines.append(f"\t\t\tif (neuron_valid[{n_idx}]) begin")
-		lines.append(f"\t\t\t\tneuron_done[{n_idx}] <= 1'b1;")
-		lines.append(f"\t\t\t\tneuron_latched[{n_idx}] <= neuron_result[{n_idx}];")
-		lines.append(f"\t\t\tend")
-	lines.append(f"\t\tend")
-	lines.append(f"\tend")
-	lines.append("")
-
-	lines.append(f"\t// --- Weighted accumulation ---")
-	lines.append(f"\tlogic [ACC_BITS-1:0] weighted_sum;")
-	lines.append(f"\talways_comb begin")
-	lines.append(f"\t\tweighted_sum = '0;")
-	for n_idx in range(num_neurons):
-		lines.append(f"\t\tweighted_sum = weighted_sum + ACC_BITS'(neuron_latched[{n_idx}]);")
-	lines.append(f"\tend")
-	lines.append("")
-
-	# Output
-	lines.append(f"\t// --- Output (fires once when all neurons done) ---")
-	lines.append(f"\tlogic output_fired;")
-	lines.append(f"\talways_ff @(posedge clk or negedge rst_n) begin")
-	lines.append(f"\t\tif (!rst_n) begin")
-	lines.append(f"\t\t\tclass_out    <= 1'b0;")
-	lines.append(f"\t\t\tscore_out    <= '0;")
-	lines.append(f"\t\t\toutput_valid <= 1'b0;")
-	lines.append(f"\t\t\toutput_fired <= 1'b0;")
-	lines.append(f"\t\tend else begin")
-	lines.append(f"\t\t\toutput_valid <= 1'b0;")
-	lines.append(f"\t\t\tif (neuron_start) begin")
-	lines.append(f"\t\t\t\toutput_fired <= 1'b0;")
-	lines.append(f"\t\t\tend else if (all_done && !output_fired) begin")
-	lines.append(f"\t\t\t\tscore_out    <= weighted_sum;")
-	lines.append(f"\t\t\t\tclass_out    <= (weighted_sum > ACC_BITS'(THRESHOLD));")
-	lines.append(f"\t\t\t\toutput_valid <= 1'b1;")
-	lines.append(f"\t\t\t\toutput_fired <= 1'b1;")
-	lines.append(f"\t\t\tend")
-	lines.append(f"\t\tend")
-	lines.append(f"\tend")
-	lines.append("")
-	lines.append(f"endmodule")
-
-	# Add address port to wnn_neuron (needs to be an input, not internal)
+	"""wnn_classifier_impl.sv: one wnn_neuron per unit + the unit-weighted adder."""
+	weights = require_integer_weights(meta)
+	lines = header_lines(meta, "sparse") + _ports(meta) + cell_quarters_function(weights)
+	lines += _unit_signals(len(connections))
+	for u, conn in enumerate(connections):
+		lines += _address_lines(u, conn, meta) + _neuron_lines(u, conn, len(sparse_neurons[u][0]), meta)
+	lines += _latching(len(connections)) + weighted_sum_block("neuron_latched", meta["counts"]) + _output_block()
 	sv_path = output_dir / "wnn_classifier_impl.sv"
-	with open(sv_path, "w") as f:
-		f.write("\n".join(lines) + "\n")
+	sv_path.write_text("\n".join(lines) + "\n")
 	print(f"  Generated: {sv_path}")
 	return sv_path
+
+
+def _ports(meta) -> list[str]:
+	n = acc_bits(meta)
+	return [
+		"module wnn_classifier_impl #(",
+		"\tparameter int THRESHOLD = 0,  // class_out = (score_out >= THRESHOLD); metadata threshold_quarters.sum_ge",
+		"\t// MEM_READ_LATENCY threads down to every unit's binary-search probe (1 = on-chip).",
+		"\tparameter int MEM_READ_LATENCY = 1",
+		") (",
+		"\tinput  logic                     clk,",
+		"\tinput  logic                     rst_n,",
+		"\tinput  logic                     input_valid,",
+		f"\tinput  logic [{meta['input_bits']-1}:0]  input_vec,",
+		"",
+		"\toutput logic                     class_out,",
+		f"\toutput logic [{n}-1:0] score_out,",
+		"\toutput logic                     output_valid,",
+		"\toutput logic                     busy",
+		");",
+		"",
+		f"\tlocalparam int NUM_UNITS  = {meta['physical_neurons']};",
+		f"\tlocalparam int INPUT_BITS = {meta['input_bits']};",
+		f"\tlocalparam int ACC_BITS   = {n};",
+		"",
+	]
+
+
+def _unit_signals(num_units: int) -> list[str]:
+	return [
+		f"\tlogic [7:0]  neuron_result [{num_units}];",
+		f"\tlogic [{num_units}-1:0] neuron_valid;",
+		f"\tlogic [{num_units}-1:0] neuron_busy;",
+		"\tlogic neuron_start;",
+		"\tassign neuron_start = input_valid & ~(|neuron_busy);",
+		"\tassign busy = |neuron_busy;",
+		"",
+	]
+
+
+def _address_lines(u: int, conn, meta) -> list[str]:
+	"""Unit u's address: its connections MSB-first (input bit k = input_vec[INPUT_BITS-1-k])."""
+	wires = ", ".join(f"input_vec[{meta['input_bits'] - 1 - c}]" for c in conn)
+	return [f"\tlogic [{len(conn)-1}:0] addr_{u};", f"\tassign addr_{u} = {{{wires}}};", ""]
+
+
+def _neuron_lines(u: int, conn, entries: int, meta) -> list[str]:
+	return [
+		"\twnn_neuron #(",
+		f"\t\t.NUM_ENTRIES({entries}),",
+		f"\t\t.ADDR_BITS({len(conn)}),",
+		f"\t\t.INPUT_BITS({meta['input_bits']}),",
+		f"\t\t.SEARCH_DEPTH({max(1, ceil(log2(max(entries, 2))))}),",
+		f"\t\t.DEFAULT_VALUE(8'd{meta['miss_cell']}),",
+		"\t\t.MEM_READ_LATENCY(MEM_READ_LATENCY),",
+		# $readmemh lives in the leaf (hierarchical readmemh does not synthesize: Vivado 8-6086)
+		f"\t\t.KEY_MEM_FILE(\"unit_{u:03d}_keys.mem\"),",
+		f"\t\t.VALUE_MEM_FILE(\"unit_{u:03d}_values.mem\")",
+		f"\t) unit_{u} (",
+		"\t\t.clk(clk), .rst_n(rst_n), .start(neuron_start), .input_vec(input_vec),",
+		f"\t\t.address(addr_{u}), .result(neuron_result[{u}]), .result_valid(neuron_valid[{u}]), .busy(neuron_busy[{u}])",
+		"\t);",
+		"",
+	]
+
+
+def _latching(num_units: int) -> list[str]:
+	"""Units finish at different cycles (different entry counts): latch each result."""
+	lines = [
+		f"\tlogic [{num_units}-1:0] neuron_done;",
+		f"\tlogic [7:0] neuron_latched [{num_units}];",
+		"\tlogic all_done;",
+		"\tassign all_done = &neuron_done;",
+		"\talways_ff @(posedge clk or negedge rst_n) begin",
+		"\t\tif (!rst_n) neuron_done <= '0;",
+		"\t\telse if (neuron_start) neuron_done <= '0;",
+		"\t\telse begin",
+	]
+	for u in range(num_units):
+		lines += [f"\t\t\tif (neuron_valid[{u}]) begin neuron_done[{u}] <= 1'b1; neuron_latched[{u}] <= neuron_result[{u}]; end"]
+	return lines + ["\t\tend", "\tend", ""]
+
+
+def _output_block() -> list[str]:
+	return [
+		"\tlogic output_fired;",
+		"\talways_ff @(posedge clk or negedge rst_n) begin",
+		"\t\tif (!rst_n) begin",
+		"\t\t\tclass_out <= 1'b0; score_out <= '0; output_valid <= 1'b0; output_fired <= 1'b0;",
+		"\t\tend else begin",
+		"\t\t\toutput_valid <= 1'b0;",
+		"\t\t\tif (neuron_start) output_fired <= 1'b0;",
+		"\t\t\telse if (all_done && !output_fired) begin",
+		"\t\t\t\tscore_out <= weighted_sum;",
+		"\t\t\t\tclass_out <= (weighted_sum >= ACC_BITS'(THRESHOLD));",
+		"\t\t\t\toutput_valid <= 1'b1;",
+		"\t\t\t\toutput_fired <= 1'b1;",
+		"\t\t\tend",
+		"\t\tend",
+		"\tend",
+		"",
+		"endmodule",
+	]
 
 
 def generate_vivado_tcl(output_dir: Path, meta, target_fpga="xc7z020clg400-1", clock_period_ns=5.0):
@@ -247,7 +201,7 @@ def generate_vivado_tcl(output_dir: Path, meta, target_fpga="xc7z020clg400-1", c
 
 	lines = []
 	lines.append(f"# Vivado synthesis script for WNN classifier")
-	lines.append(f"# Genome: {meta['genome_hash']} ({meta['total_neurons']}n × {meta['bits_per_neuron']}b)")
+	lines.append(f"# Genome: {meta['genome_hash']} ({meta['logical_neurons']} logical neurons -> {meta['physical_neurons']} units)")
 	lines.append(f"# Target: {target_fpga}  Clock: {clock_period_ns} ns ({1000.0/clock_period_ns:.0f} MHz)")
 	lines.append("")
 	lines.append(f"create_project wnn_synth {output_dir}/vivado_project -part {target_fpga} -force")
@@ -282,7 +236,7 @@ def generate_vivado_tcl(output_dir: Path, meta, target_fpga="xc7z020clg400-1", c
 	lines.append(f"set timing_paths [get_timing_paths -max_paths 1 -quiet]")
 	lines.append(f"set fp [open {output_dir}/summary.txt w]")
 	lines.append(f"puts $fp \"Genome: {meta['genome_hash']}\"")
-	lines.append(f"puts $fp \"Architecture: {meta['total_neurons']}n x {meta['bits_per_neuron']}b\"")
+	lines.append(f"puts $fp \"Architecture: {meta['logical_neurons']} logical neurons, {meta['physical_neurons']} units\"")
 	lines.append(f"puts $fp \"Clock period (target): {clock_period_ns} ns\"")
 	lines.append(f"if {{[llength $timing_paths] > 0}} {{")
 	lines.append(f"\tset wns [get_property SLACK [lindex $timing_paths 0]]")
@@ -320,8 +274,8 @@ def main():
 	print(f"Loading export from {export_dir}...")
 	meta, connections, sparse_neurons = load_export(export_dir)
 
-	print(f"\nGenome: {meta['total_neurons']}n × {meta['bits_per_neuron']}b, "
-		  f"{meta['total_sparse_entries']:,} entries")
+	from export_metadata import footprint_line
+	print(f"\nGenome: {footprint_line(meta)}")
 	print(f"Target FPGA: {args.target}")
 
 	# 1. Write BRAM initialization files
@@ -332,29 +286,23 @@ def main():
 	print(f"\n2. Generating classifier RTL...")
 	generate_classifier_impl(output_dir, meta, connections, sparse_neurons)
 
+	if (output_dir / "testbench" / "tb_metadata.json").exists():
+		from rtl_testbench import generate_testbench
+		generate_testbench(output_dir, meta, "wnn_classifier_impl")
+
 	# 3. Generate Vivado TCL
 	print(f"\n3. Generating Vivado synthesis script...")
 	generate_vivado_tcl(output_dir, meta, args.target, args.clock_period_ns)
 
 	# Summary
-	total_bytes = meta["sparse_bytes_u64_u8"]
-	max_entries = max(meta["per_neuron_entries"])
+	max_entries = max(meta["unit_entries"])
 	search_cycles = ceil(log2(max(max_entries, 2)))
-	print(f"\n{'='*50}")
-	print(f"RTL Generation Complete")
-	print(f"{'='*50}")
-	print(f"  Neurons: {meta['total_neurons']}")
-	print(f"  Max entries/neuron: {max_entries:,}")
-	print(f"  Binary search depth: {search_cycles} cycles")
-	print(f"  Total BRAM: {total_bytes/1024:.1f} KB")
+	print(f"\n{'='*50}\nRTL Generation Complete\n{'='*50}")
+	print(f"  Units: {meta['physical_neurons']} (logical neurons {meta['logical_neurons']}; adder weights = counts)")
+	print(f"  Max entries/unit: {max_entries:,}, binary search depth {search_cycles} cycles")
 	print(f"  Estimated latency: {search_cycles + 2} cycles")
-	print(f"  At 100 MHz: {(search_cycles + 2) * 10} ns")
-	print(f"  At 200 MHz: {(search_cycles + 2) * 5} ns")
-	print(f"\n  Files:")
-	print(f"    RTL:  {output_dir}/wnn_classifier_impl.sv")
-	print(f"    BRAM: {output_dir}/mem/neuron_*.mem")
-	print(f"    TCL:  {output_dir}/synth.tcl")
-	print(f"\n  To synthesize: vivado -mode batch -source {output_dir}/synth.tcl")
+	print(f"  Files: {output_dir}/wnn_classifier_impl.sv, {output_dir}/mem/unit_*.mem, {output_dir}/synth.tcl")
+	print(f"  To synthesize: vivado -mode batch -source {output_dir}/synth.tcl")
 
 
 if __name__ == "__main__":

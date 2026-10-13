@@ -51,7 +51,7 @@ struct TrainParams
 	uint num_genomes; // batched dispatch: how many genomes in this call
 	uint words_per_example;
 	uint num_classes;
-	uint memory_mode;					 // 2 = QUAD_WEIGHTED (default); 0 = ternary
+	uint memory_mode;					 // wire code; the writer is wnn_write_rule(memory_mode)
 	uint single_cluster;			 // 1 = binary IDS path (true_cluster always 0)
 	uint normal_class;				 // 0 = benign; used for IDS multi-cluster path
 	uint conn_stride;					 // per-genome connection count (sum of bits per
@@ -86,6 +86,11 @@ struct TrainParams
 // xorshift32-based per-(neuron, example) sampling decision. Matches CPU
 // path at adaptive.rs:2867-2880 byte-for-byte.
 // Returns true if this (neuron_idx, ex_idx) pair should be SKIPPED.
+// INVARIANT (IDS-37 multiplicity layer): at sample_rate >= 1.0 this returns
+// BEFORE reading neuron_idx/rng_seed — the only place training depends on a
+// neuron's position. Same-key neurons therefore receive identical writes, which
+// is what lets `multiplicity_applies` train duplicates once. Keep the early
+// return first.
 inline bool should_skip_sample(uint neuron_idx, uint ex_idx, uint rng_seed, float sample_rate)
 {
 	if (sample_rate >= 1.0f)
@@ -254,7 +259,8 @@ kernel void marker_train(
 			continue;
 		// BINARY (classical): own-class one-shot — FALSE-direction participants
 		// write nothing; skip BEFORE claiming so they don't burn slot capacity.
-		if (params.memory_mode == 3u && !nudge_true)
+		uint write_rule = wnn_write_rule(params.memory_mode);
+		if (write_rule == WNN_WRITE_SET && !nudge_true)
 			continue;
 
 		ulong addr = compute_address(
@@ -274,15 +280,16 @@ kernel void marker_train(
 				slot_markers, slot_keys, meta.slot_offset, meta.slot_capacity, addr);
 		if (slot != 0xFFFFFFFFu)
 		{
-			if (params.memory_mode == 3u)
+			if (write_rule == WNN_WRITE_SET)
 			{
 				// BINARY: idempotent one-shot set (weights moot for a bit).
 				slot_write_binary(slot_values, slot);
 			}
-			else if (params.memory_mode == 0u)
+			else if (write_rule == WNN_WRITE_LATTICE)
 			{
-				// TERNARY: TRUE-wins lattice write (CPU trainer twin; weights
-				// moot — the CPU write path ignores repeats too).
+				// TERNARY / PLN: TRUE-wins lattice write (CPU trainer twin;
+				// weights moot — the CPU write path ignores repeats too). PLN
+				// fell through to slot_nudge here until 12/10/2026.
 				slot_write_ternary(slot_values, slot, nudge_true);
 			}
 			else if (params.oi_mode == 1u)

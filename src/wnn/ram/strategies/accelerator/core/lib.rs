@@ -18,6 +18,15 @@ pub mod neuron_memory;
 pub mod packed_bits;
 pub mod sparse_memory;
 pub mod train;
+// Group-identical-units map + the one "same neuron" key (IDS multiplicity
+// layer, GA crossover dedupe, sparse export alias). docs/ids_multiplicity_layer_design.md §2.
+pub mod distinct_fractions;
+pub mod footprint;
+pub mod neuron_key;
+pub mod physical_genome;
+pub mod sparse_gpu_export;
+pub mod super_genome;
+pub mod unit_grouping;
 
 #[cfg(feature = "gpu-wgpu")]
 pub mod wgpu_forward;
@@ -93,6 +102,7 @@ pub mod metal_sparse
 			_: u8,
 			_: f32,
 			_: u64,
+			_: Option<&[u32]>,
 		) -> Result<Vec<f32>, String>
 		{
 			Err("Metal not available on this platform".into())

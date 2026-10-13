@@ -297,6 +297,7 @@ impl Forward for MetalForward
 				r.cell_mode.as_u8(),
 				r.empty_value,
 				r.run_seed,
+				None, // uniform layout: every cluster scores all its neurons
 			)
 			.map_err(ForwardError::Backend)
 	}

@@ -187,6 +187,79 @@ struct HybridBatchConfig<'a>
 	conn_sizes: &'a [usize],
 }
 
+impl<'a> HybridBatchConfig<'a>
+{
+	/// Genomes [start, end)'s connections: the contiguous unpadded genome-major
+	/// slice, which the batched trainer takes for ANY per-genome bit totals.
+	/// Empty only when the caller supplied none (kernel-generated random).
+	fn batch_connections(&self, start: usize, end: usize) -> &'a [i64]
+	{
+		if !self.use_provided_connections
+		{
+			return &[];
+		}
+		&self.genomes_connections_flat[connection_span(self.conn_offsets, self.conn_sizes, start, end)]
+	}
+
+	/// This call's genomes as flat genomes.
+	fn genomes(&self, num_genomes: usize) -> Vec<ram_core::super_genome::FlatGenome<'a>>
+	{
+		ram_core::super_genome::FlatGenome::split_batch(
+			self.genomes_bits_flat,
+			self.genomes_neurons_flat,
+			self.genomes_connections_flat,
+			num_genomes,
+			self.num_clusters,
+		)
+	}
+
+	/// The multiplicity layer trains this call (rate >= 1.0, an order-
+	/// independent writer, real connections): any batch then trains as ONE
+	/// super-genome dispatch, whatever its shapes.
+	fn multiplicity(&self) -> bool
+	{
+		crate::marker_train::batched_path::multiplicity_selected(
+			self.neuron_sample_rate,
+			self.memory_mode,
+			self.genomes_connections_flat,
+		)
+	}
+
+	/// The sampling seed EVERY genome of this call trains with, on every route
+	/// (batched dispatch, shape group, hybrid arms, per-genome, eval-in-place).
+	/// It used to be the genome's batch position (rng_seed + batch_start /
+	/// + genome_idx) — and the batch size comes from the available memory, so
+	/// a rate < 1.0 genome's mask (and score) moved with the machine's free RAM.
+	/// The mask is keyed on (seed, neuron index, example) in the kernel.
+	fn train_seed(&self) -> u64
+	{
+		self.rng_seed
+	}
+
+	/// Concurrent genomes the memory budget (60% of available) allows.
+	fn budget_batch_size(&self, num_genomes: usize, cpu_cores: usize) -> usize
+	{
+		budget_batch_size(
+			&self.genomes(num_genomes),
+			get_available_memory_gb() * 0.6,
+			cpu_cores,
+			self.num_train,
+			self.neuron_sample_rate,
+			self.memory_mode,
+		)
+	}
+}
+
+/// Index range of genomes [start, end) in the genome-major connection array.
+fn connection_span(conn_offsets: &[usize], conn_sizes: &[usize], start: usize, end: usize) -> std::ops::Range<usize>
+{
+	if start >= end
+	{
+		return 0..0;
+	}
+	conn_offsets[start]..conn_offsets[end - 1] + conn_sizes[end - 1]
+}
+
 /// Train ONE genome on the CPU and export it for eval: Path-2 marker training
 /// (MarkerHashTable / batched_train_offspring → GenomeExport) with the original
 /// dense single-shot / chunked path as the fallback on error. Moved VERBATIM from
@@ -280,7 +353,7 @@ fn train_one_genome_cpu(
 		cfg.total_input_bits,
 		cfg.empty_value,
 		cfg.neuron_sample_rate,
-		cfg.rng_seed.wrapping_add(genome_idx as u64),
+		cfg.train_seed(),
 		cfg.class_weights,
 		cfg.memory_mode,
 	)
@@ -322,7 +395,7 @@ fn train_one_genome_cpu(
 					cfg.total_input_bits,
 					gpu_addresses.as_deref(),
 					cfg.neuron_sample_rate,
-					cfg.rng_seed.wrapping_add(genome_idx as u64),
+					cfg.train_seed(),
 					cfg.memory_mode,
 					cfg.class_weights,
 					true,
@@ -374,7 +447,7 @@ fn train_one_genome_cpu(
 						chunk_start..chunk_end,
 						chunk_len,
 						cfg.neuron_sample_rate,
-						cfg.rng_seed.wrapping_add(genome_idx as u64),
+						cfg.train_seed(),
 						cfg.memory_mode,
 						cfg.class_weights,
 						true,
@@ -445,6 +518,13 @@ fn try_eval_in_place_batch(
 	{
 		return None;
 	}
+	// IDS-37: where the multiplicity layer applies, the export path trains each
+	// distinct neuron once; the probe would train every copy. Same scores either
+	// way (both exact), so route to the cheaper export path.
+	if ram_core::neuron_memory::multiplicity_applies(cfg.neuron_sample_rate, cfg.memory_mode)
+	{
+		return None;
+	}
 	// The probe merges OI counters — only meaningful when this mode trains
 	// through them (env AND `CellMode::uses_oi_counters`).
 	if !ram_core::neuron_memory::order_independent_training_active(cfg.memory_mode)
@@ -481,9 +561,7 @@ fn try_eval_in_place_batch(
 		let bits = &cfg.genomes_bits_flat[cfg.genome_bpn_offsets[g]..cfg.genome_bpn_offsets[g + 1]];
 		let conns =
 			&cfg.genomes_connections_flat[cfg.conn_offsets[g]..cfg.conn_offsets[g] + cfg.conn_sizes[g]];
-		// Seed matches the per-genome route the chunked regime otherwise takes
-		// (train_one_genome_cpu → train_single_via_marker: rng_seed + genome_idx;
-		// identical to the Option-B batch seed at batch size 1).
+		// Same seed as every other route (HybridBatchConfig::train_seed).
 		let votes = match crate::marker_train::train_single_genome_chunked_scored(
 			bits,
 			conns,
@@ -495,7 +573,7 @@ fn try_eval_in_place_batch(
 			cfg.total_input_bits,
 			cfg.empty_value,
 			cfg.neuron_sample_rate,
-			cfg.rng_seed.wrapping_add(g as u64),
+			cfg.train_seed(),
 			cfg.class_weights,
 			eval_input_bits,
 			num_eval,
@@ -631,7 +709,9 @@ struct BatchRouting
 	use_gpu_batched: bool,
 	want_hybrid: bool,
 	do_shape_grouping: bool,
-	batch_is_homogeneous: bool,
+	/// The whole batch trains in ONE batched dispatch: same shapes (the plain
+	/// kernel's constraint) or the multiplicity layer (super-genome: any shapes).
+	one_dispatch: bool,
 	batch_shape: ShapeKey,
 	shape_state_pre: HybridSplitState,
 	trace: bool,
@@ -754,11 +834,16 @@ fn decide_batch_routing(
 		.ok()
 		.and_then(|v| v.parse().ok())
 		.unwrap_or(1.5);
+	// Multiplicity layer: one super-genome dispatch trains the batch's
+	// distinct neurons once (shared ACROSS genomes); splitting the batch
+	// (hybrid arms, shape groups) would re-train the shared units per part.
+	let multiplicity = cfg.multiplicity();
 	let want_hybrid = hybrid_enabled
         && use_gpu_batched     // hybrid only makes sense when GPU is a viable path
         && current_batch_size >= 4
         && speed_ratio <= speed_ratio_max
-        && batch_is_homogeneous;
+        && batch_is_homogeneous
+        && !multiplicity;
 	if trace && want_hybrid
 	{
 		eprintln!(
@@ -781,14 +866,14 @@ fn decide_batch_routing(
 	let shape_grouping_enabled = std::env::var("WNN_SHAPE_GROUP")
 		.map(|v| !matches!(v.as_str(), "0" | "off" | "false" | "no"))
 		.unwrap_or(true);
-	let do_shape_grouping =
-		shape_grouping_enabled && use_gpu_batched && !batch_is_homogeneous && !want_hybrid;
+	let one_dispatch = batch_is_homogeneous || multiplicity;
+	let do_shape_grouping = shape_grouping_enabled && use_gpu_batched && !one_dispatch && !want_hybrid;
 
 	BatchRouting {
 		use_gpu_batched,
 		want_hybrid,
 		do_shape_grouping,
-		batch_is_homogeneous,
+		one_dispatch,
 		batch_shape,
 		shape_state_pre,
 		trace,
@@ -827,7 +912,6 @@ fn train_batch(
 		num_negatives,
 		empty_value,
 		neuron_sample_rate,
-		rng_seed,
 		class_weights,
 		genome_bpn_offsets,
 		conn_offsets,
@@ -843,7 +927,7 @@ fn train_batch(
 		use_gpu_batched,
 		want_hybrid,
 		do_shape_grouping,
-		batch_is_homogeneous,
+		one_dispatch,
 		batch_shape,
 		shape_state_pre,
 		trace,
@@ -955,7 +1039,7 @@ fn train_batch(
 					total_input_bits,
 					empty_value,
 					neuron_sample_rate,
-					rng_seed.wrapping_add(batch_start as u64),
+					cfg.train_seed(),
 					class_weights,
 					cfg.memory_mode,
 				)
@@ -1015,7 +1099,7 @@ fn train_batch(
 
 	// Run Option B ONLY when GPU is the chosen path AND hybrid/shape-grouping isn't applicable.
 	let option_b_result: Option<Vec<GenomeExport>> =
-		if use_gpu_batched && !want_hybrid && shape_group_result.is_none() && batch_is_homogeneous
+		if use_gpu_batched && !want_hybrid && shape_group_result.is_none() && one_dispatch
 		{
 			// Slice flat arrays for this batch's genomes
 			let bpn_slice_start = genome_bpn_offsets[batch_start];
@@ -1024,22 +1108,11 @@ fn train_batch(
 			let neurons_slice =
 				&genomes_neurons_flat[batch_start * num_clusters..batch_end * num_clusters];
 
-			// Connections: only pass if all batch genomes share the same
-			// conn_per_genome — i.e., genome i+1 starts exactly conn_per_genome
-			// after genome i in the flat array. The existing path uses
-			// conn_offsets/conn_sizes; for uniform we can pass the slice.
-			let first_conn = conn_sizes[batch_start];
-			let uniform_conns = (batch_start..batch_end).all(|g| conn_sizes[g] == first_conn);
-			let conns_slice: &[i64] = if use_provided_connections && uniform_conns
-			{
-				let cs = conn_offsets[batch_start];
-				let ce = cs + first_conn * current_batch_size;
-				&genomes_connections_flat[cs..ce]
-			}
-			else
-			{
-				&[]
-			};
+			// Connections: the batch's contiguous slice. (Was: passed ONLY when
+			// every genome had the same connection total, else `&[]` — which the
+			// trainer reads as "generate RANDOM connections": same-shape genomes
+			// with different per-neuron bits silently trained random wiring.)
+			let conns_slice = cfg.batch_connections(batch_start, batch_end);
 
 			#[cfg(target_os = "macos")]
 			{
@@ -1057,7 +1130,7 @@ fn train_batch(
 					total_input_bits,
 					empty_value,
 					neuron_sample_rate,
-					rng_seed.wrapping_add(batch_start as u64),
+					cfg.train_seed(),
 					class_weights,
 					cfg.memory_mode,
 				)
@@ -1151,18 +1224,7 @@ fn train_batch(
 			let gpu_bits_slice = &genomes_bits_flat[gpu_bpn_start..gpu_bpn_end];
 			let gpu_neurons_slice =
 				&genomes_neurons_flat[gpu_batch_start * num_clusters..batch_end * num_clusters];
-			let gpu_first_conn = conn_sizes[gpu_batch_start];
-			let gpu_uniform_conns = (gpu_batch_start..batch_end).all(|g| conn_sizes[g] == gpu_first_conn);
-			let gpu_conns_slice: &[i64] = if use_provided_connections && gpu_uniform_conns
-			{
-				let cs = conn_offsets[gpu_batch_start];
-				let ce = cs + gpu_first_conn * k_gpu;
-				&genomes_connections_flat[cs..ce]
-			}
-			else
-			{
-				&[]
-			};
+			let gpu_conns_slice = cfg.batch_connections(gpu_batch_start, batch_end);
 
 			#[cfg(target_os = "macos")]
 			let (cpu_results, gpu_result_or_err, cpu_elapsed, gpu_elapsed) = std::thread::scope(|scope| {
@@ -1183,7 +1245,7 @@ fn train_batch(
 						total_input_bits,
 						empty_value,
 						neuron_sample_rate,
-						rng_seed.wrapping_add(gpu_batch_start as u64),
+						cfg.train_seed(),
 						class_weights,
 						cfg.memory_mode,
 					);
@@ -1326,40 +1388,6 @@ fn evaluate_genomes_parallel_hybrid_impl(
 	// B11 affinity routing (effective CPU thread count).
 	let cpu_cores = rayon::current_num_threads();
 
-	// Calculate memory budget and pool size. Size the batch by the WORST-CASE
-	// (largest) genome, NOT genome 0. A heterogeneous GA population — small early
-	// genomes, large 250n×96b late ones — sized off genome 0 under-estimates the
-	// per-genome footprint, so too many large genomes train concurrently via the
-	// per-genome par_iter and blow the memory budget (the recurring 96b×250n rc=-9
-	// OOM). Taking the most restrictive batch_size across ALL genomes keeps
-	// concurrent × per-genome-peak ≤ budget even for the largest genome (dropping
-	// to batch_size=1 when a single genome alone saturates the budget — the
-	// chunked path then trains it in ≤8 GB sequential neuron-chunks).
-	let batch_size = std::env::var("WNN_BATCH_SIZE")
-		.ok()
-		.and_then(|s| s.parse::<usize>().ok())
-		.unwrap_or_else(|| {
-			let budget_gb = get_available_memory_gb() * 0.6;
-			let mut worst_batch = usize::MAX;
-			for gi in 0..num_genomes
-			{
-				let g_neurons = &genomes_neurons_flat[gi * num_clusters..(gi + 1) * num_clusters];
-				let g_bits = &genomes_bits_flat[genome_bpn_offsets[gi]..genome_bpn_offsets[gi + 1]];
-				let g_bpc = per_cluster_max_bits(g_bits, g_neurons);
-				let (_, gb) = calculate_pool_size(
-					&g_bpc,
-					g_neurons,
-					num_clusters,
-					budget_gb,
-					cpu_cores,
-					num_train,
-					neuron_sample_rate,
-				);
-				worst_batch = worst_batch.min(gb);
-			}
-			worst_batch.max(1)
-		});
-
 	// Connections are provided when the flat array is non-empty (offsets/sizes
 	// already computed above in compute_genome_offsets).
 	let use_provided_connections = !genomes_connections_flat.is_empty();
@@ -1382,18 +1410,6 @@ fn evaluate_genomes_parallel_hybrid_impl(
 	// Collect all results. Tuple is
 	//   (genome_idx, ce, acc, f1, fpr, threshold, per_genome_ms).
 	let mut all_results: Vec<(usize, f64, f64, f64, f64, f64, u32)> = Vec::with_capacity(num_genomes);
-
-	// Process genomes in batches
-	let num_batches = (num_genomes + batch_size - 1) / batch_size;
-
-	// Log batch configuration if WNN_GROUP_LOG is set
-	if std::env::var("WNN_GROUP_LOG").is_ok() && num_batches > 1
-	{
-		eprintln!(
-			"[BATCH_CONFIG] genomes={} batch_size={} num_batches={}",
-			num_genomes, batch_size, num_batches
-		);
-	}
 
 	// Timing instrumentation (enabled via WNN_TIMING env var)
 	let timing_enabled = std::env::var("WNN_TIMING").is_ok();
@@ -1454,6 +1470,26 @@ fn evaluate_genomes_parallel_hybrid_impl(
 		conn_offsets: &conn_offsets,
 		conn_sizes: &conn_sizes,
 	};
+
+	// Batch size from the memory budget (WNN_BATCH_SIZE overrides): every
+	// genome sized by its TRAINED footprint (physical under the multiplicity
+	// layer), the most restrictive genome wins — `budget_batch_size`.
+	let batch_size = std::env::var("WNN_BATCH_SIZE")
+		.ok()
+		.and_then(|s| s.parse::<usize>().ok())
+		.unwrap_or_else(|| cfg.budget_batch_size(num_genomes, cpu_cores));
+
+	// Process genomes in batches
+	let num_batches = (num_genomes + batch_size - 1) / batch_size;
+
+	// Log batch configuration if WNN_GROUP_LOG is set
+	if std::env::var("WNN_GROUP_LOG").is_ok() && num_batches > 1
+	{
+		eprintln!(
+			"[BATCH_CONFIG] genomes={} batch_size={} num_batches={}",
+			num_genomes, batch_size, num_batches
+		);
+	}
 
 	for batch_idx in 0..num_batches
 	{
@@ -1765,4 +1801,155 @@ pub fn evaluate_genomes_parallel_hybrid_with_override(
 		class_weights,
 		override_threshold,
 	)
+}
+
+#[cfg(test)]
+mod tests
+{
+	use super::*;
+
+	/// Two single-cluster genomes, SAME shape (2 neurons) but different
+	/// per-neuron bits, so their connection totals differ (3 vs 4).
+	fn same_shape_unequal_bits() -> (Vec<usize>, Vec<usize>, Vec<i64>)
+	{
+		(vec![2, 1, 2, 2], vec![2, 2], vec![10, 11, 12, 20, 21, 22, 23])
+	}
+
+	fn config<'a>(
+		bits: &'a [usize],
+		npc: &'a [usize],
+		conns: &'a [i64],
+		offsets: &'a GenomeOffsets,
+		input: &'a ram_core::packed_bits::PackedBits,
+	) -> HybridBatchConfig<'a>
+	{
+		HybridBatchConfig {
+			genomes_bits_flat: bits,
+			genomes_neurons_flat: npc,
+			genomes_connections_flat: conns,
+			num_clusters: 1,
+			total_input_bits: 32,
+			use_provided_connections: !conns.is_empty(),
+			memory_mode: ram_core::neuron_memory::QUAD_WEIGHTED,
+			train_input_bits: input,
+			train_targets: &[],
+			train_negatives: &[],
+			num_train: 0,
+			num_negatives: 0,
+			empty_value: 0.0,
+			neuron_sample_rate: 1.0,
+			rng_seed: 0,
+			class_weights: None,
+			packed_train_input: &[],
+			words_per_example: 0,
+			genome_bpn_offsets: &offsets.bpn_offsets,
+			conn_offsets: &offsets.conn_offsets,
+			conn_sizes: &offsets.conn_sizes,
+		}
+	}
+
+	#[test]
+	fn batch_connections_are_real_for_unequal_connection_totals()
+	{
+		// Regression: Option B / the hybrid GPU arm passed `&[]` (= kernel-
+		// RANDOM connections) whenever a same-shape batch's connection totals
+		// differed. The batch must get its own genome-major connections.
+		let (bits, npc, conns) = same_shape_unequal_bits();
+		let offsets = compute_genome_offsets(&bits, &npc, 2, 1);
+		let input = ram_core::packed_bits::PackedBits::empty(32);
+		let cfg = config(&bits, &npc, &conns, &offsets, &input);
+		assert_eq!(cfg.batch_connections(0, 2), &conns[..]);
+		assert_eq!(cfg.batch_connections(1, 2), &conns[3..]);
+		assert_eq!(cfg.batch_connections(0, 1), &conns[..3]);
+		assert!(cfg.batch_connections(1, 1).is_empty());
+		let random = config(&bits, &npc, &[], &offsets, &input);
+		assert!(random.batch_connections(0, 2).is_empty(), "no provided connections stays kernel-random");
+	}
+
+	#[test]
+	fn genomes_split_the_batch_per_genome()
+	{
+		let (bits, npc, conns) = same_shape_unequal_bits();
+		let offsets = compute_genome_offsets(&bits, &npc, 2, 1);
+		let input = ram_core::packed_bits::PackedBits::empty(32);
+		let g = config(&bits, &npc, &conns, &offsets, &input).genomes(2);
+		assert_eq!((g[0].connections, g[1].connections), (&conns[..3], &conns[3..]));
+	}
+
+	/// Four 120n x 14b single-cluster genomes on random data, rate 0.25.
+	fn sampled_results(batch_size: &str) -> Vec<(f64, f64, f64, f64, f64)>
+	{
+		use rand::{Rng, SeedableRng};
+		let mut rng = rand::rngs::SmallRng::seed_from_u64(0x5EED);
+		let (tib, n_train, n_eval, neurons, bits, genomes) = (32usize, 400usize, 120usize, 120usize, 14usize, 4usize);
+		let rows = |n: usize, rng: &mut rand::rngs::SmallRng| {
+			let b: Vec<bool> = (0..n * tib).map(|_| rng.gen_bool(0.5)).collect();
+			ram_core::packed_bits::PackedBits::from_bool_slice(&b, tib)
+		};
+		let (train, eval) = (rows(n_train, &mut rng), rows(n_eval, &mut rng));
+		let train_y: Vec<i64> = (0..n_train).map(|_| rng.gen_range(0..2)).collect();
+		let eval_y: Vec<i64> = (0..n_eval).map(|_| rng.gen_range(0..2)).collect();
+		let conns: Vec<i64> = (0..genomes * neurons * bits).map(|_| rng.gen_range(0..tib as i64)).collect();
+		let settings = ram_core::neuron_memory::EvalSettings {
+			empty_value: 0.0,
+			memory_mode: ram_core::neuron_memory::QUAD_WEIGHTED,
+			normal_class: 0,
+			fitness_weights: None,
+			run_seed: 0,
+			coverage_aware: false,
+		};
+		std::env::set_var("WNN_BATCH_SIZE", batch_size);
+		let out = evaluate_genomes_parallel_hybrid(
+			&vec![bits; genomes * neurons],
+			&vec![neurons; genomes],
+			&conns,
+			genomes,
+			1,
+			&train,
+			&train_y,
+			&[],
+			n_train,
+			0,
+			&eval,
+			&eval_y,
+			n_eval,
+			tib,
+			settings,
+			0.25,
+			0,
+			None,
+		);
+		std::env::remove_var("WNN_BATCH_SIZE");
+		out.into_iter().map(|(ce, acc, f1, fpr, t, _ms)| (ce, acc, f1, fpr, t)).collect()
+	}
+
+	/// Regression: below rate 1.0 a genome's sampling mask was seeded from its
+	/// BATCH position (rng_seed + batch_start for every genome of a batched
+	/// dispatch, rng_seed + genome_idx on the per-genome route), and the batch
+	/// size comes from the AVAILABLE MEMORY — so the same genome scored
+	/// differently with the machine's free memory. Every route now trains
+	/// with the call's seed.
+	#[test]
+	fn sampled_results_do_not_depend_on_batch_size()
+	{
+		if !crate::marker_train::batched_path::trainer_available()
+		{
+			eprintln!("[eval_hybrid] no Metal device — skipping");
+			return;
+		}
+		// Batch-size invariance is an OI property: the legacy clamped QUAD nudge is
+		// write-order dependent, and GPU write order depends on the batch's thread
+		// layout. Same gate as oi_z_parity.
+		if !ram_core::neuron_memory::order_independent_training_enabled()
+		{
+			eprintln!("[eval_hybrid] WNN_ORDER_INDEPENDENT_TRAIN not set — skipping");
+			return;
+		}
+		let one = sampled_results("1");
+		let four = sampled_results("4");
+		let bits = |v: &[(f64, f64, f64, f64, f64)]| {
+			v.iter().map(|r| [r.0.to_bits(), r.1.to_bits(), r.2.to_bits(), r.3.to_bits(), r.4.to_bits()]).collect::<Vec<_>>()
+		};
+		assert_eq!(bits(&one), bits(&four));
+	}
 }

@@ -65,7 +65,13 @@ import os
 #   ABI-15 behaviour; False = deduped children keep only distinct neurons). The GA
 #   always passes it, so wheel + Python land together at idle. The validation
 #   cache pins worker_abi, so this bump re-validates (training is unchanged).
-EXPECTED_ABI = 16
+# 17 (12/10/2026, IDS-37 stage 3): BREAKING — IDSCacheWrapper.evaluate_at_thresholds
+#   returns a 5th element and evaluate_multiclass_at_thresholds a 3rd: the trained
+#   genome's footprint (logical_neurons, physical_neurons, logical_cells,
+#   physical_cells); IDSGenomeStreamerWrapper gains footprint(). IDSEvaluator and
+#   experiment.py unpack it, so wheel + Python land together at idle. The
+#   validation cache pins worker_abi, so this bump re-validates.
+EXPECTED_ABI = 17
 
 BUILD_HINT = (
 	"Rebuild the accelerator: cd src/wnn/ram/strategies/accelerator && "

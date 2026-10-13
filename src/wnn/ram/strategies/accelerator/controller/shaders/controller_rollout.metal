@@ -2301,7 +2301,10 @@ inline uint find_or_claim_slot_multi(
 		{
 			uint expected = MARKER_EMPTY;
 			bool won = false;
-			for (uint retry = 0u; retry < 4u; retry++)
+			// Retry spurious weak-CAS failures until it wins or sees another
+			// claimer (twin of marker_slots.metal; a bounded 4 fell through with
+			// the slot still EMPTY and probed on -> duplicate-key slot).
+			while (true)
 			{
 				if (atomic_compare_exchange_weak_explicit(
 								&markers[slot], &expected, MARKER_CLAIMED,

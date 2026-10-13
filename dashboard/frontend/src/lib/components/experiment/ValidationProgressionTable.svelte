@@ -2,6 +2,7 @@
 	import type { ValidationProgressionPoint } from './types'
 	import PerClassBreakdown from './PerClassBreakdown.svelte'
 	import MulticlassBreakdown from './MulticlassBreakdown.svelte'
+	import FootprintCell from './FootprintCell.svelte'
 
 	export let points: ValidationProgressionPoint[] = []
 	export let isIDS: boolean = false
@@ -100,6 +101,7 @@
 				{@const bestAccSummary = point.summaries.find(s => s.genomeType === 'best_acc')}
 				{@const bestCeSummary = point.summaries.find(s => s.genomeType === 'best_ce')}
 				{@const isCurrentExp = point.expId === currentExperimentId}
+				{@const hasFootprint = isIDS && point.summaries.some(s => s.footprint)}
 				{@const hasThresholds = isIDS && (bestF1Summary?.threshold_metadata || bestFprSummary?.threshold_metadata || bestAccSummary?.threshold_metadata || bestCeSummary?.threshold_metadata || bestFitSummary?.threshold_metadata)}
 				{#if idx > 0}
 					<tbody class="phase-spacer"><tr><td colspan="16"></td></tr></tbody>
@@ -170,6 +172,14 @@
 								</tr>
 							{/if}
 						{/each}
+					{/if}
+					{#if hasFootprint}
+						<tr class="threshold-sub-row footprint-row">
+							<td class="phase-name threshold-mode-label">Footprint</td>
+							{#each [bestF1Summary, bestFprSummary, bestAccSummary, bestCeSummary, bestFitSummary] as s}
+								<FootprintCell footprint={s?.footprint} colspan={3} />
+							{/each}
+						</tr>
 					{/if}
 				</tbody>
 			{/each}

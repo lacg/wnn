@@ -1179,16 +1179,19 @@ impl MarkerHashTable
 	/// — matching the existing `SparseGpuExport` shape that
 	/// `MetalSparseEvaluator` already consumes.
 	///
-	/// `oi_merged`: slots hold RAW packed OI counters (no commit_oi pass) —
-	/// sort per neuron, merge duplicate keys via `oi_merge` (concurrent
-	/// same-key claims in the GPU find-or-claim leave duplicate slots; the
-	/// high-z occupancy dispatch makes them common), THEN bin to 2-bit cells.
-	/// When false: slots hold final cells already (legacy path), no merge.
+	/// `merge` reconciles DUPLICATE-KEY slots of one neuron. The GPU
+	/// find-or-claim leaves them by design (a claimer that out-waits a pending
+	/// CLAIMED probes forward; a stale relaxed key read never matches), more of
+	/// them the more threads share a neuron (z) and the busier the GPU. OI
+	/// counters merge by `oi_merge`; lattice/set cells by the lattice join
+	/// (until 12/10/2026 they were NOT merged, so which duplicate the binary
+	/// search hit — and which one densify wrote last — depended on GPU
+	/// scheduling: TERNARY/BINARY/PLN training was non-repeatable at z > 1).
 	pub fn export_per_neuron(
 		&self,
 		slot_offsets: &[u32],
 		slot_capacities: &[u32],
-		oi_merged: bool,
+		merge: SlotMerge,
 	) -> (Vec<u64>, Vec<u8>, Vec<u32>, Vec<u32>)
 	{
 		assert_eq!(
@@ -1197,11 +1200,7 @@ impl MarkerHashTable
 			"slot_offsets and slot_capacities must have same length"
 		);
 		let guard = self.inner.read().expect("MarkerHashTable RwLock poisoned");
-		let markers = guard.storage.markers();
-		let values = guard.storage.values();
 		let storage_ref = &guard.storage;
-		let markers_len = markers.len();
-
 		let num_neurons = slot_offsets.len();
 
 		// B6: scan + sort each neuron's slot region in parallel. The marker
@@ -1213,84 +1212,7 @@ impl MarkerHashTable
 			.map(|n| {
 				let off = slot_offsets[n] as usize;
 				let cap = slot_capacities[n] as usize;
-				let end = (off + cap).min(markers_len);
-				// Pre-size to ~25% of cap to amortize reallocs without
-				// wasting too much for under-loaded regions.
-				if oi_merged
-				{
-					let mut raw: Vec<(u64, u32)> = Vec::with_capacity(cap / 4);
-					for slot in off..end
-					{
-						if markers[slot].load(Ordering::Relaxed) == MARKER_FINAL
-						{
-							// SAFETY: marker == FINAL → key is fully written.
-							let k = unsafe { storage_ref.key_at(slot) };
-							raw.push((k, values[slot].load(Ordering::Relaxed)));
-						}
-					}
-					raw.sort_by_key(|(k, _)| *k);
-					if std::env::var("WNN_EXPORT_DEBUG").ok().as_deref() == Some("1")
-					{
-						let net_sum: i64 = raw
-							.iter()
-							.map(|&(_, p)| ram_core::neuron_memory::oi_unpack(p).0 as i64)
-							.sum();
-						eprintln!(
-							"[EXPORT_DEBUG] neuron={} raw_slots={} net_sum={}",
-							n,
-							raw.len(),
-							net_sum
-						);
-					}
-					// Eval-identity filter (07/07/2026, WNN_EXPORT_SKIP_WF=0 to
-					// disable): a MISSING address reads the QUAD default cell =
-					// WEAK_FALSE = the same 0.25 weight as a present WEAK_FALSE
-					// entry, so exporting them changes nothing downstream (eval,
-					// report, winner-save all miss-default to wF). At b≥48/sr=0.25
-					// roughly half of all trained cells are single-obs wF —
-					// dropping them halves export alloc+sort, GPU upload, and the
-					// binary-search table eval probes. NOT safe for paths that
-					// re-train from exports (wF carries a vote history a fresh
-					// EMPTY cell lacks) — IDS never does; controller uses its own
-					// crate.
-					let skip_wf = std::env::var("WNN_EXPORT_SKIP_WF").ok().as_deref() != Some("0");
-					const QUAD_WEAK_FALSE_CELL: u8 = 1;
-					let mut entries: Vec<(u64, u8)> = Vec::with_capacity(raw.len());
-					let mut i = 0;
-					while i < raw.len()
-					{
-						let (k, mut acc) = raw[i];
-						let mut j = i + 1;
-						while j < raw.len() && raw[j].0 == k
-						{
-							acc = ram_core::neuron_memory::oi_merge(acc, raw[j].1);
-							j += 1;
-						}
-						let cell = ram_core::neuron_memory::oi_bin_to_cell(acc) as u8;
-						if !(skip_wf && cell == QUAD_WEAK_FALSE_CELL)
-						{
-							entries.push((k, cell));
-						}
-						i = j;
-					}
-					entries
-				}
-				else
-				{
-					let mut entries: Vec<(u64, u8)> = Vec::with_capacity(cap / 4);
-					for slot in off..end
-					{
-						if markers[slot].load(Ordering::Relaxed) == MARKER_FINAL
-						{
-							// SAFETY: marker == FINAL → key is fully written.
-							let k = unsafe { storage_ref.key_at(slot) };
-							let v = values[slot].load(Ordering::Relaxed) as u8;
-							entries.push((k, v));
-						}
-					}
-					entries.sort_by_key(|(k, _)| *k);
-					entries
-				}
+				merge.apply(n, final_slots_sorted(storage_ref, off, cap))
 			})
 			.collect();
 
@@ -1463,6 +1385,123 @@ impl MarkerHashTable
 		let new_inner = guard.grow_2x();
 		*guard = new_inner;
 	}
+}
+
+
+/// Every FINAL slot of one neuron's region as (key, raw value), sorted by key
+/// (stable: duplicates keep slot order).
+fn final_slots_sorted(storage: &MarkerStorage, off: usize, cap: usize) -> Vec<(u64, u32)>
+{
+	let (markers, values) = (storage.markers(), storage.values());
+	let end = (off + cap).min(markers.len());
+	let mut raw: Vec<(u64, u32)> = Vec::with_capacity(cap / 4);
+	for slot in off..end
+	{
+		if markers[slot].load(Ordering::Relaxed) == MARKER_FINAL
+		{
+			// SAFETY: marker == FINAL → key is fully written.
+			let k = unsafe { storage.key_at(slot) };
+			raw.push((k, values[slot].load(Ordering::Relaxed)));
+		}
+	}
+	raw.sort_by_key(|(k, _)| *k);
+	raw
+}
+
+/// Fold runs of equal keys in a key-sorted list with `join`, then map each
+/// folded value to its exported cell (`None` drops the entry).
+fn fold_duplicates(raw: &[(u64, u32)], join: impl Fn(u32, u32) -> u32, cell: impl Fn(u32) -> Option<u8>) -> Vec<(u64, u8)>
+{
+	let mut out: Vec<(u64, u8)> = Vec::with_capacity(raw.len());
+	let mut i = 0;
+	while i < raw.len()
+	{
+		let (k, mut acc) = raw[i];
+		let mut j = i + 1;
+		while j < raw.len() && raw[j].0 == k
+		{
+			acc = join(acc, raw[j].1);
+			j += 1;
+		}
+		if let Some(c) = cell(acc)
+		{
+			out.push((k, c));
+		}
+		i = j;
+	}
+	out
+}
+
+/// How `MarkerHashTable::export_per_neuron` reconciles duplicate-key slots.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SlotMerge
+{
+	/// Slots hold RAW packed OI counters: `oi_merge`, then `oi_bin_to_cell`.
+	/// `skip_wf` drops cells == WEAK_FALSE (they read as the QUAD miss default,
+	/// so eval is identical; NOT safe for a path that re-trains from exports —
+	/// IDS never does; the controller uses its own crate).
+	OiCounters
+	{
+		skip_wf: bool,
+	},
+	/// Slots hold ternary cells from the lattice / set writers (TERNARY, PLN,
+	/// BINARY): `WriteRule::lattice_join` — what the two writes leave in
+	/// either order, so the merge is exact.
+	Lattice,
+	/// Legacy clamped QUAD nudge: cells exported as-is. Duplicates hold split
+	/// tallies that no merge can reconstruct (order-dependent by design).
+	Unmerged,
+}
+
+impl SlotMerge
+{
+	/// The rule for a trained batch: OI counters, else the mode's writer.
+	pub fn for_batch(use_oi: bool, memory_mode: u8, skip_wf: bool) -> SlotMerge
+	{
+		use ram_core::cell_mode::WriteRule;
+		if use_oi
+		{
+			return SlotMerge::OiCounters { skip_wf };
+		}
+		match WriteRule::of_code(memory_mode)
+		{
+			WriteRule::Lattice | WriteRule::Set => SlotMerge::Lattice,
+			WriteRule::Nudge => SlotMerge::Unmerged,
+		}
+	}
+
+	fn apply(self, neuron: usize, raw: Vec<(u64, u32)>) -> Vec<(u64, u8)>
+	{
+		match self
+		{
+			SlotMerge::OiCounters { skip_wf } =>
+			{
+				log_oi_net_sum(neuron, &raw);
+				const QUAD_WEAK_FALSE_CELL: u8 = 1;
+				fold_duplicates(&raw, ram_core::neuron_memory::oi_merge, |acc| {
+					let cell = ram_core::neuron_memory::oi_bin_to_cell(acc) as u8;
+					(!(skip_wf && cell == QUAD_WEAK_FALSE_CELL)).then_some(cell)
+				})
+			}
+			SlotMerge::Lattice => fold_duplicates(
+				&raw,
+				|a, b| ram_core::cell_mode::WriteRule::lattice_join(a as u8, b as u8) as u32,
+				|v| Some(v as u8),
+			),
+			SlotMerge::Unmerged => raw.into_iter().map(|(k, v)| (k, v as u8)).collect(),
+		}
+	}
+}
+
+/// `WNN_EXPORT_DEBUG=1`: per-neuron raw OI net sum (merge audits).
+fn log_oi_net_sum(neuron: usize, raw: &[(u64, u32)])
+{
+	if std::env::var("WNN_EXPORT_DEBUG").ok().as_deref() != Some("1")
+	{
+		return;
+	}
+	let net_sum: i64 = raw.iter().map(|&(_, p)| ram_core::neuron_memory::oi_unpack(p).0 as i64).sum();
+	eprintln!("[EXPORT_DEBUG] neuron={} raw_slots={} net_sum={}", neuron, raw.len(), net_sum);
 }
 
 #[cfg(test)]

@@ -3,6 +3,8 @@
  * child components (P3 decomposition).
  */
 
+import type { ValidationFootprint } from '$lib/types'
+
 /** One point of the cumulative validation progression (init/final per phase). */
 export interface ValidationProgressionPoint
 {
@@ -10,7 +12,7 @@ export interface ValidationProgressionPoint
 	expId: number
 	sequenceOrder: number
 	validationPoint: 'init' | 'final'
-	summaries: { genomeType: string, ce: number, accuracy: number, f1_macro: number | null, fpr: number | null, threshold_metadata: any | null }[]
+	summaries: { genomeType: string, ce: number, accuracy: number, f1_macro: number | null, fpr: number | null, threshold_metadata: any | null, footprint: ValidationFootprint | null }[]
 }
 
 /** One ranked grid-search config result. */

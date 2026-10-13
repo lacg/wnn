@@ -279,6 +279,25 @@ mod metal_atomic_test;
 
 #[cfg(target_os = "macos")]
 mod marker_train;
+// The GPU trainer's knobs as a per-call value (never process-global set_var).
+#[cfg(target_os = "macos")]
+mod train_knobs;
+// IDS-37 stages 2+4: train a batch's distinct neurons once (rate >= 1.0, OI).
+#[cfg(target_os = "macos")]
+mod multiplicity_batch;
+// IDS-37 stage 7: a genome trained as final validation trains it, as units.
+mod trained_layer;
+#[cfg(all(test, target_os = "macos"))]
+mod multiplicity_parity_tests;
+// PLN trains through TERNARY's lattice on both IDS trainers (12/10/2026).
+#[cfg(all(test, target_os = "macos"))]
+mod pln_writer_tests;
+// CPU scorers skip the -1 prefix-pad connections like the GPU kernels (12/10/2026).
+#[cfg(all(test, target_os = "macos"))]
+mod mixed_bits_scorer_tests;
+// The multi-cluster GA fitness (CE) path vs the reference scorer (12/10/2026).
+#[cfg(all(test, target_os = "macos"))]
+mod ce_path_tests;
 
 #[cfg(target_os = "macos")]
 mod marker_probe;
@@ -327,7 +346,15 @@ use pyapi::*;
 /// `dedupe_fill` (default true = ABI-15 dedupe). false = a deduped child keeps
 /// only its distinct neurons (may shrink; floored at max(min_neurons, 1)).
 /// Defaults bit-identical to ABI 15 (all golden digests incl. GOLDEN_TIES).
-pub const ABI_VERSION: u32 = 16;
+/// 17 (12/10/2026, IDS-37 stage 3): BREAKING — IDSCacheWrapper.evaluate_at_thresholds
+/// returns a 5th element and evaluate_multiclass_at_thresholds a 3rd: the trained
+/// genome's footprint (logical_neurons, physical_neurons, logical_cells,
+/// physical_cells). IDSGenomeStreamerWrapper gains footprint(). Training is
+/// unchanged from ABI 16 + the stage-2 multiplicity layer (bit-identical scores).
+/// Same ABI (one swap) also adds: group_neurons / layer_footprint (stage 6),
+/// sparse_train_batch / sparse_forward_batch optional `index_of` (stage 6),
+/// IDSCacheWrapper.export_trained (stage 7).
+pub const ABI_VERSION: u32 = 17;
 
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()>
@@ -363,6 +390,8 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()>
 	m.add_function(wrap_pyfunction!(sparse_train_batch, m)?)?;
 	m.add_function(wrap_pyfunction!(sparse_bitwise_train_batch, m)?)?; // Bitwise multi-label training (sparse)
 	m.add_function(wrap_pyfunction!(sparse_forward_batch, m)?)?;
+	m.add_function(wrap_pyfunction!(group_neurons, m)?)?;
+	m.add_function(wrap_pyfunction!(layer_footprint, m)?)?;
 	// Tiered sparse memory backend (for variable bits per tier)
 	m.add_class::<TieredSparseMemory>()?;
 	m.add_function(wrap_pyfunction!(sparse_train_batch_tiered, m)?)?;

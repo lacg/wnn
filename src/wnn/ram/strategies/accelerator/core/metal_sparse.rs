@@ -67,6 +67,26 @@ pub struct MetalSparseEvaluator
 	sparse_forward_pipeline: ComputePipelineState,
 	sparse_forward_per_example_pipeline: ComputePipelineState,
 	general_forward_pipeline: ComputePipelineState,
+	/// `sparse_forward_to_buffer_masked`: coalesced groups (per-cluster
+	/// actual neuron counts inside a bucket-MAX layout).
+	masked_forward_pipeline: ComputePipelineState,
+}
+
+/// Mirrors `SparseToBufferMaskedParams` in shaders/sparse_forward.metal.
+#[repr(C)]
+struct SparseMaskedParams
+{
+	num_examples: u32,
+	words_per_example: u32,
+	num_neurons: u32,
+	bits_per_neuron: u32,
+	max_neurons_per_cluster: u32,
+	num_group_clusters: u32,
+	total_clusters: u32,
+	empty_value: f32,
+	memory_mode: u32,
+	default_cell_value: u32,
+	run_seed: u64,
 }
 
 impl MetalSparseEvaluator
@@ -116,13 +136,65 @@ impl MetalSparseEvaluator
 			.new_compute_pipeline_state_with_function(&general_forward_kernel)
 			.map_err(|e| format!("Failed to create general forward pipeline: {}", e))?;
 
+		let masked_forward_pipeline = library
+			.get_function("sparse_forward_to_buffer_masked", None)
+			.and_then(|f| device.new_compute_pipeline_state_with_function(&f))
+			.map_err(|e| format!("Failed to create sparse masked pipeline: {}", e))?;
+
 		Ok(Self {
 			device,
 			command_queue,
 			sparse_forward_pipeline,
 			sparse_forward_per_example_pipeline,
 			general_forward_pipeline,
+			masked_forward_pipeline,
 		})
+	}
+
+	fn buffer_of<T>(&self, data: &[T]) -> Buffer
+	{
+		// Metal refuses a zero-length buffer; an empty slice gets one dummy byte.
+		let bytes = std::mem::size_of_val(data).max(1) as u64;
+		self.device.new_buffer_with_data(data.as_ptr() as *const _, bytes, MTLResourceOptions::StorageModeShared)
+	}
+
+	/// Coalesced-group forward: clusters laid out at `max_neurons_per_cluster`
+	/// (the bucket) but scored over `actual_neurons[c]` — the CPU scorers'
+	/// rule. Dispatches the existing `sparse_forward_to_buffer_masked` kernel
+	/// with an identity cluster map; output is [num_examples * num_clusters].
+	#[allow(clippy::too_many_arguments)]
+	fn forward_batch_sparse_masked(
+		&self,
+		inputs: [&Buffer; 6],
+		params: SparseMaskedParams,
+		actual_neurons: &[u32],
+	) -> Vec<f32>
+	{
+		let (num_examples, num_clusters) = (params.num_examples as u64, params.num_group_clusters as u64);
+		let cluster_ids: Vec<u32> = (0..params.num_group_clusters).collect();
+		let output = self.device.new_buffer(
+			(num_examples * num_clusters).max(1) * mem::size_of::<f32>() as u64,
+			MTLResourceOptions::StorageModeShared,
+		);
+		let (ids, actual, p) = (self.buffer_of(&cluster_ids), self.buffer_of(actual_neurons), self.buffer_of(std::slice::from_ref(&params)));
+		let command_buffer = self.command_queue.new_command_buffer();
+		let encoder = command_buffer.new_compute_command_encoder();
+		encoder.set_compute_pipeline_state(&self.masked_forward_pipeline);
+		for (i, b) in inputs.iter().enumerate()
+		{
+			encoder.set_buffer(i as u64, Some(*b), 0);
+		}
+		encoder.set_buffer(6, Some(&ids), 0);
+		encoder.set_buffer(7, Some(&actual), 0);
+		encoder.set_buffer(8, Some(&p), 0);
+		encoder.set_buffer(9, Some(&output), 0);
+		let tg = MTLSize::new(32.min(num_examples), 8.min(num_clusters), 1);
+		encoder.dispatch_threads(MTLSize::new(num_examples, num_clusters, 1), tg);
+		encoder.end_encoding();
+		command_buffer.commit();
+		command_buffer.wait_until_completed();
+		let ptr = output.contents() as *const f32;
+		unsafe { std::slice::from_raw_parts(ptr, (num_examples * num_clusters) as usize).to_vec() }
 	}
 
 	/// Forward pass using sparse memory with binary search on GPU
@@ -154,6 +226,9 @@ impl MetalSparseEvaluator
 		memory_mode: u8,
 		empty_value: f32,
 		run_seed: u64,
+		// Neurons SCORED per cluster (a coalesced group's actual_neurons);
+		// None = every cluster scores all `neurons_per_cluster`.
+		actual_neurons: Option<&[u32]>,
 	) -> Result<Vec<f32>, String>
 	{
 		if num_examples == 0
@@ -162,6 +237,36 @@ impl MetalSparseEvaluator
 		}
 
 		let connections_i32: Vec<i32> = connections_flat.iter().map(|&c| c as i32).collect();
+
+		if let Some(actual) = actual_neurons
+		{
+			if actual.len() != num_clusters || actual.iter().any(|&n| n as usize > neurons_per_cluster)
+			{
+				return Err(format!("actual_neurons {:?} does not fit {} clusters of <= {}", actual, num_clusters, neurons_per_cluster));
+			}
+			let params = SparseMaskedParams {
+				num_examples: num_examples as u32,
+				words_per_example: words_per_example as u32,
+				num_neurons: num_neurons as u32,
+				bits_per_neuron: bits_per_neuron as u32,
+				max_neurons_per_cluster: neurons_per_cluster as u32,
+				num_group_clusters: num_clusters as u32,
+				total_clusters: num_clusters as u32,
+				empty_value,
+				memory_mode: memory_mode as u32,
+				default_cell_value: default_cell_for_coverage(memory_mode, coverage_aware),
+				run_seed,
+			};
+			let inputs = [
+				&self.buffer_of(packed_input),
+				&self.buffer_of(&connections_i32),
+				&self.buffer_of(keys_flat),
+				&self.buffer_of(values_flat),
+				&self.buffer_of(offsets),
+				&self.buffer_of(counts),
+			];
+			return Ok(self.forward_batch_sparse_masked(inputs, params, actual));
+		}
 
 		#[repr(C)]
 		struct SparseParams

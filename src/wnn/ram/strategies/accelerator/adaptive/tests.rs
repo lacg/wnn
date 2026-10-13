@@ -729,13 +729,13 @@ mod flat_genome_validation_tests
 	}
 
 	// =========================================================================
-	// materialized_cells — the convention-free sparse-footprint primitive
-	// (docs/sparse_footprint_fix.md). Dense groups count the full array
+	// footprint() — the convention-free sparse-footprint primitive (formerly
+	// materialized_cells, docs/sparse_footprint_fix.md). Dense groups count the full array
 	// (true_neurons × 2^bits); sparse groups count ONLY distinct trained
 	// addresses (keys.len()) — NOT the 2^bits dense fiction.
 	// =========================================================================
 	#[test]
-	fn materialized_cells_counts_dense_array_and_sparse_keys()
+	fn footprint_counts_dense_array_and_sparse_keys()
 	{
 		use crate::adaptive::{ConfigGroup, GenomeExport, SparseGpuExport};
 		// Group 0: DENSE — 2 neurons × 4 bits → 2 × 2^4 = 32 materialized cells.
@@ -757,11 +757,14 @@ mod flat_genome_validation_tests
 			dense_coverage: vec![],
 			sparse_exports: vec![sparse],
 			groups: vec![dense_group, sparse_group],
+			grouping: ram_core::unit_grouping::UnitGrouping::identity(5),
 		};
 		// 32 (dense full array) + 5 (sparse keys) = 37 — NOT 2 + 3×2^14.
-		assert_eq!(export.materialized_cells(), 37);
+		let fp = export.footprint();
+		assert_eq!((fp.logical_cells, fp.physical_cells), (37, 37));
+		assert_eq!((fp.logical_neurons, fp.physical_neurons), (5, 5));
 		// Sentinel empty export → 0 cells.
-		assert_eq!(GenomeExport::empty().materialized_cells(), 0);
+		assert_eq!(GenomeExport::empty().footprint(), ram_core::footprint::Footprint::default());
 	}
 
 	// =========================================================================

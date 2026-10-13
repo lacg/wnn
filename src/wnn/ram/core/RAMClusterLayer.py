@@ -37,6 +37,8 @@ from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
 	from wnn.ram.core.gating import GatingModel
+	from wnn.ram.core.UnitGroupingView import UnitGroupingView
+	from wnn.ram.footprint import Footprint
 
 
 class MemoryBackend(IntEnum):
@@ -173,64 +175,57 @@ class RAMClusterLayer(RAMClusterBase):
 		self._bits_per_neuron = bits_per_neuron
 		self._total_input_bits = total_input_bits
 
-		# Initialize storage based on backend
+		self._use_hashing = use_hashing
+		self._hash_size = hash_size
+		self._init_storage(connections, rng)
+
+	def _init_storage(self, connections: Optional[Tensor], rng: Optional[int]) -> None:
+		"""Create the backend storage, sized by the storage seams (one row per
+		PHYSICAL neuron — the logical neurons in this base class)."""
+		rows, connections = self._storage_neurons(), self._storage_connections(connections)
 		self._sparse_memory = None
 		self._lsh_memory = None
-
 		match self._backend:
 			case MemoryBackend.LSH:
-				# Use LSH-based approximate storage (for very large address spaces)
-				import ram_accelerator
-				# LSH uses same sparse storage but with hashed addresses
-				self._lsh_memory = ram_accelerator.SparseMemory(
-					self.total_neurons,
-					bits_per_neuron
-				)
-				# Number of hash bits for LSH (reduce address space)
-				self._lsh_bits = min(20, bits_per_neuron)  # Cap at 20 bits (~1M buckets)
-				# Create minimal Memory just for connections (no dense storage)
-				self.memory = Memory(
-					total_input_bits=total_input_bits,
-					num_neurons=self.total_neurons,
-					n_bits_per_neuron=min(8, bits_per_neuron),  # Minimal bits for connections only
-					connections=connections,
-					use_hashing=True,  # Force hashing to avoid dense allocation
-					hash_size=1024,
-					rng=rng,
-				)
-				# Override n_bits_per_neuron after creation
-				self.memory.n_bits_per_neuron = bits_per_neuron
-
+				self._init_lsh_storage(rows, connections, rng)
 			case MemoryBackend.SPARSE:
-				# Use Rust-accelerated sparse storage
-				import ram_accelerator
-				self._sparse_memory = ram_accelerator.SparseMemory(
-					self.total_neurons,
-					bits_per_neuron
-				)
-				# Create Memory for connections (with hashing to avoid large allocation)
-				# For >10 bits, we use sparse Rust storage, so use_hashing prevents dense alloc
-				self.memory = Memory(
-					total_input_bits=total_input_bits,
-					num_neurons=self.total_neurons,
-					n_bits_per_neuron=bits_per_neuron,
-					connections=connections,
-					use_hashing=use_hashing if bits_per_neuron <= 16 else True,
-					hash_size=hash_size if bits_per_neuron <= 16 else min(hash_size, 2**16),
-					rng=rng,
-				)
-
+				self._init_sparse_storage(rows, connections, rng)
 			case _:
-				# DENSE backend: Create full Memory with dense storage
-				self.memory = Memory(
-					total_input_bits=total_input_bits,
-					num_neurons=self.total_neurons,
-					n_bits_per_neuron=bits_per_neuron,
-					connections=connections,
-					use_hashing=use_hashing,
-					hash_size=hash_size,
-					rng=rng,
-				)
+				self._init_dense_storage(rows, connections, rng)
+
+	def _init_lsh_storage(self, rows: int, connections: Optional[Tensor], rng: Optional[int]) -> None:
+		"""LSH: hashed addresses in Rust sparse storage (very large address spaces)."""
+		import ram_accelerator
+		bits = self._bits_per_neuron
+		self._lsh_memory = ram_accelerator.SparseMemory(rows, bits)
+		self._lsh_bits = min(20, bits)  # Cap at 20 bits (~1M buckets)
+		# Minimal Memory just for connections (no dense storage)
+		self.memory = Memory(
+			total_input_bits=self._total_input_bits, num_neurons=rows, n_bits_per_neuron=min(8, bits),
+			connections=connections, use_hashing=True, hash_size=1024, rng=rng,
+		)
+		self.memory.n_bits_per_neuron = bits
+
+	def _init_sparse_storage(self, rows: int, connections: Optional[Tensor], rng: Optional[int]) -> None:
+		"""Rust sparse storage; the Memory keeps connections only (hashing
+		avoids a dense allocation above 16 bits)."""
+		import ram_accelerator
+		bits = self._bits_per_neuron
+		self._sparse_memory = ram_accelerator.SparseMemory(rows, bits)
+		self.memory = Memory(
+			total_input_bits=self._total_input_bits, num_neurons=rows, n_bits_per_neuron=bits,
+			connections=connections,
+			use_hashing=self._use_hashing if bits <= 16 else True,
+			hash_size=self._hash_size if bits <= 16 else min(self._hash_size, 2**16),
+			rng=rng,
+		)
+
+	def _init_dense_storage(self, rows: int, connections: Optional[Tensor], rng: Optional[int]) -> None:
+		"""Full bit-packed dense Memory."""
+		self.memory = Memory(
+			total_input_bits=self._total_input_bits, num_neurons=rows, n_bits_per_neuron=self._bits_per_neuron,
+			connections=connections, use_hashing=self._use_hashing, hash_size=self._hash_size, rng=rng,
+		)
 
 	def __repr__(self) -> str:
 		return (
@@ -281,8 +276,8 @@ class RAMClusterLayer(RAMClusterBase):
 
 	@property
 	def connections(self) -> Tensor:
-		"""Get connectivity matrix [total_neurons, bits_per_neuron]."""
-		return self.memory.connections
+		"""Get the LOGICAL connectivity matrix [total_neurons, bits_per_neuron]."""
+		return self._logical_rows(self.memory.connections)
 
 	@connections.setter
 	def connections(self, value: Tensor) -> None:
@@ -360,7 +355,7 @@ class RAMClusterLayer(RAMClusterBase):
 	def _connections_np(self):
 		"""Cached numpy view of the (immutable-between-optimizations)
 		connections tensor — rebuilt only when the tensor is reassigned."""
-		conns = self.memory.connections
+		conns = self.connections
 		cached = getattr(self, '_conn_np_cache', None)
 		if cached is None or cached[0] is not conns:
 			self._conn_np_cache = (conns, conns.flatten().numpy())
@@ -375,6 +370,97 @@ class RAMClusterLayer(RAMClusterBase):
 			self._ppl_calc_cache = cached
 		return cached
 
+	# =========================================================================
+	# Storage seams (IDS-37 stage 6). The base layer stores one row per
+	# LOGICAL neuron, so every seam is the identity here; the multiplicity
+	# layer (MultiplicityRAMClusterLayer) stores one row per distinct neuron
+	# and overrides exactly these five. docs/ids_multiplicity_layer_design.md §4.
+	# =========================================================================
+
+	def _storage_neurons(self) -> int:
+		"""Rows of storage (sparse / dense / LSH)."""
+		return self.total_neurons
+
+	def _storage_connections(self, connections: Optional[Tensor]) -> Optional[Tensor]:
+		"""Storage connectivity from the LOGICAL connectivity (None = random)."""
+		return connections
+
+	def _logical_columns(self, per_storage: Tensor) -> Tensor:
+		"""[batch, storage rows] -> [batch, logical neurons]."""
+		return per_storage
+
+	def _storage_writes(self, neuron_indices: Tensor) -> tuple[Tensor, Optional[Tensor]]:
+		"""LOGICAL neuron indices -> (storage rows, which entries write; None = all)."""
+		return neuron_indices, None
+
+	def _unit_grouping(self) -> Optional['UnitGroupingView']:
+		"""The logical -> storage grouping; None = identity (no copy collapsed)."""
+		return None
+
+	# ---- helpers built on the seams (shared by every training / forward path)
+
+	def _logical_cells(self, input_bits: Tensor) -> Tensor:
+		return self._logical_columns(self.memory.get_memories_for_bits(input_bits))
+
+	def _logical_addresses(self, input_bits: Tensor) -> Tensor:
+		return self._logical_columns(self.memory.get_addresses(input_bits))
+
+	def _addresses_for(self, input_bits: Tensor, neuron_indices: Tensor) -> Tensor:
+		"""[batch, K] addresses of K LOGICAL neurons (each reads its storage row)."""
+		return self.memory.get_addresses_for_neurons(input_bits, self._storage_writes(neuron_indices)[0])
+
+	def _explore(self, neuron_indices: Tensor, addresses: Tensor, bits: Tensor, allow_override: bool) -> bool:
+		"""explore_batch for LOGICAL neurons: copies' writes are dropped (their
+		storage row's representative receives the identical write)."""
+		rows, keep = self._storage_writes(neuron_indices)
+		if keep is not None:
+			keep = keep.to(addresses.device)
+			rows, addresses, bits = rows[keep], addresses[keep], bits[keep]
+		return self.memory.explore_batch(rows, addresses, bits, allow_override)
+
+	def _logical_rows(self, per_storage: Tensor) -> Tensor:
+		grouping = self._unit_grouping()
+		return per_storage if grouping is None else grouping.expand_rows(per_storage)
+
+	def _storage_rows(self, per_logical: Tensor) -> Tensor:
+		grouping = self._unit_grouping()
+		return per_logical if grouping is None else grouping.gather_rows(per_logical)
+
+	def logical_memory_words(self) -> Tensor:
+		"""Dense packed words, one row per LOGICAL neuron (what the Rust
+		forward/training kernels index by neuron)."""
+		return self._logical_rows(self.memory.memory_words)
+
+	def _sparse_index_of(self) -> Optional[list[int]]:
+		grouping = self._unit_grouping()
+		return None if grouping is None else grouping.index_of_list()
+
+	def _lsh_write_slot(self, neuron: int) -> Optional[int]:
+		grouping = self._unit_grouping()
+		return neuron if grouping is None else grouping.write_slot(neuron)
+
+	def _lsh_read_slot(self, neuron: int) -> int:
+		grouping = self._unit_grouping()
+		return neuron if grouping is None else grouping.read_slot(neuron)
+
+	def footprint(self) -> 'Footprint':
+		"""Logical AND physical neurons / cells (ram_core accounting)."""
+		from wnn.accel import require_accel
+		from wnn.ram.footprint import Footprint
+		grouping = self._unit_grouping()
+		index_of = list(range(self.total_neurons)) if grouping is None else grouping.index_of_list()
+		return Footprint.from_tuple(require_accel().layer_footprint(index_of, self._unit_cells()))
+
+	def _unit_cells(self) -> list[int]:
+		"""Cells held per storage row: trained keys (sparse / LSH) or the full array (dense)."""
+		match self._backend:
+			case MemoryBackend.SPARSE:
+				return [int(c) for c in self._sparse_memory.cell_counts()]
+			case MemoryBackend.LSH:
+				return [int(c) for c in self._lsh_memory.cell_counts()]
+			case _:
+				return [int(self.memory.memory_size)] * self._storage_neurons()
+
 	def forward_quad_scores(self, input_bits: Tensor) -> Tensor:
 		"""QUAD-aware forward scores — the Python twin of the Rust scoring.
 
@@ -384,7 +470,7 @@ class RAMClusterLayer(RAMClusterBase):
 		(WEAK_FALSE would count as TRUE) — the trap documented in Memory.py.
 		"""
 		from wnn.ram.core.cell_semantics import cell_weight_table
-		raw = self.memory.get_memories_for_bits(input_bits)  # [batch, total_neurons]
+		raw = self._logical_cells(input_bits)  # [batch, total_neurons]
 		lut = cell_weight_table(self.memory_mode, float(self._perplexity_calc().empty_value))
 		weights = lut[raw.long()]
 		clustered = weights.view(raw.shape[0], self.num_clusters, self.neurons_per_cluster)
@@ -407,7 +493,7 @@ class RAMClusterLayer(RAMClusterBase):
 		"""
 		# Get raw memory values: [batch, total_neurons]
 		# Values are: FALSE=0, TRUE=1, EMPTY=2
-		raw = self.memory.get_memories_for_bits(input_bits)  # [batch, total_neurons]
+		raw = self._logical_cells(input_bits)  # [batch, total_neurons]
 
 		# Reshape to clusters: [batch, num_clusters, neurons_per_cluster]
 		batch_size = raw.shape[0]
@@ -448,7 +534,7 @@ class RAMClusterLayer(RAMClusterBase):
 		# Use numpy arrays for fast data transfer
 		input_bits_np = input_bits.flatten().to(dtype=long).numpy().astype(np.uint8)
 		connections_np = self._connections_np()
-		memory_words_np = self.memory.memory_words.flatten().numpy()
+		memory_words_np = self.logical_memory_words().flatten().numpy()
 
 		# Call Metal GPU with cached evaluator
 		probs_flat = ram_accelerator.ramlm_forward_batch_metal_cached(
@@ -480,7 +566,7 @@ class RAMClusterLayer(RAMClusterBase):
 			[batch, num_clusters, neurons_per_cluster] int64 tensor
 			with values in {0=FALSE, 1=TRUE, 2=EMPTY}
 		"""
-		raw = self.memory.get_memories_for_bits(input_bits)
+		raw = self._logical_cells(input_bits)
 		batch_size = raw.shape[0]
 		return raw.view(batch_size, self.num_clusters, self.neurons_per_cluster)
 
@@ -527,7 +613,7 @@ class RAMClusterLayer(RAMClusterBase):
 		end_neuron = start_neuron + self.neurons_per_cluster
 
 		# Get addresses for all neurons
-		addresses = self.memory.get_addresses(input_bits)[0]  # [total_neurons]
+		addresses = self._logical_addresses(input_bits)[0]  # [total_neurons]
 
 		# Train only neurons in target cluster
 		neuron_indices = arange(start_neuron, end_neuron, dtype=long, device=input_bits.device)
@@ -542,12 +628,7 @@ class RAMClusterLayer(RAMClusterBase):
 			device=input_bits.device,
 		)
 
-		return self.memory.explore_batch(
-			neuron_indices,
-			cluster_addresses,
-			target_bits,
-			allow_override=allow_override,
-		)
+		return self._explore(neuron_indices, cluster_addresses, target_bits, allow_override)
 
 	def train_batch(
 		self,
@@ -589,7 +670,7 @@ class RAMClusterLayer(RAMClusterBase):
 
 		# Get addresses for all neurons for all batch items
 		# addresses: [batch, total_neurons]
-		addresses = self.memory.get_addresses(input_bits)
+		addresses = self._logical_addresses(input_bits)
 
 		# ===== Train TRUE clusters =====
 		for b in range(batch_size):
@@ -601,7 +682,7 @@ class RAMClusterLayer(RAMClusterBase):
 			cluster_addresses = addresses[b, start_neuron:end_neuron]
 			target_bits = ones(self.neurons_per_cluster, dtype=torch_bool, device=device)
 
-			if self.memory.explore_batch(neuron_indices, cluster_addresses, target_bits, allow_override):
+			if self._explore(neuron_indices, cluster_addresses, target_bits, allow_override):
 				modified += self.neurons_per_cluster
 
 		# ===== Train FALSE clusters =====
@@ -625,7 +706,7 @@ class RAMClusterLayer(RAMClusterBase):
 					cluster_addresses = addresses[b, start_neuron:end_neuron]
 					target_bits = zeros(self.neurons_per_cluster, dtype=torch_bool, device=device)
 
-					if self.memory.explore_batch(neuron_indices, cluster_addresses, target_bits, allow_override):
+					if self._explore(neuron_indices, cluster_addresses, target_bits, allow_override):
 						modified += self.neurons_per_cluster
 
 		return modified
@@ -672,7 +753,7 @@ class RAMClusterLayer(RAMClusterBase):
 		unique_neuron_indices = (unique_start_neurons.unsqueeze(1) + offsets).flatten()
 
 		# Compute addresses only for unique neurons: [num_examples, num_unique * npc]
-		addresses = self.memory.get_addresses_for_neurons(input_bits, unique_neuron_indices)
+		addresses = self._addresses_for(input_bits, unique_neuron_indices)
 
 		# ===== Collect TRUE writes (fully vectorized) =====
 		# Map true_clusters to positions in unique_clusters using inverse_indices
@@ -714,10 +795,10 @@ class RAMClusterLayer(RAMClusterBase):
 		# ===== Write TRUE first, then FALSE =====
 		modified = 0
 
-		if self.memory.explore_batch(true_neuron_indices, true_addresses, true_bits, allow_override):
+		if self._explore(true_neuron_indices, true_addresses, true_bits, allow_override):
 			modified += len(true_neuron_indices)
 
-		if self.memory.explore_batch(false_neuron_indices, false_addresses, false_bits, allow_override):
+		if self._explore(false_neuron_indices, false_addresses, false_bits, allow_override):
 			modified += len(false_neuron_indices)
 
 		return modified
@@ -734,7 +815,7 @@ class RAMClusterLayer(RAMClusterBase):
 		"""
 		start = cluster_idx * self.neurons_per_cluster
 		end = start + self.neurons_per_cluster
-		return self.memory.connections[start:end]
+		return self.connections[start:end]
 
 	def set_cluster_connectivity(self, cluster_idx: int, connections: Tensor) -> None:
 		"""
@@ -754,9 +835,13 @@ class RAMClusterLayer(RAMClusterBase):
 		Reset all memory cells to EMPTY, preserving connectivity.
 
 		Clears all learned mappings while keeping the connectivity pattern.
-		Useful for retraining after connectivity optimization.
+		Useful for retraining after connectivity optimization. Resets every
+		backend's store (the sparse / LSH stores used to be left trained).
 		"""
 		self.memory.reset()
+		for store in (self._sparse_memory, self._lsh_memory):
+			if store is not None:
+				store.reset()
 
 	# =========================================================================
 	# Gating Support (Engram-inspired content-based filtering)
@@ -939,7 +1024,7 @@ class RAMClusterLayer(RAMClusterBase):
 		# Use numpy arrays for fast data transfer
 		input_bits_np = input_bits.flatten().to(dtype=long).numpy().astype(np.uint8)
 		connections_np = self._connections_np()
-		memory_words_np = self.memory.memory_words.flatten().numpy()
+		memory_words_np = self.logical_memory_words().flatten().numpy()
 
 		# Call Rust with numpy arrays
 		probs_flat = ram_accelerator.ramlm_forward_batch_numpy(
@@ -993,7 +1078,7 @@ class RAMClusterLayer(RAMClusterBase):
 		# Use numpy arrays for fast data transfer (zero-copy)
 		input_bits_np = input_bits.flatten().to(dtype=long).numpy().astype(np.uint8)
 		connections_np = self._connections_np()
-		memory_words_np = self.memory.memory_words.flatten().numpy()
+		memory_words_np = self.logical_memory_words().flatten().numpy()
 
 		# Call Metal GPU with numpy arrays
 		probs_flat = ram_accelerator.ramlm_forward_batch_metal_numpy(
@@ -1043,7 +1128,7 @@ class RAMClusterLayer(RAMClusterBase):
 		# Use numpy arrays for fast data transfer
 		input_bits_np = input_bits.flatten().to(dtype=long).numpy().astype(np.uint8)
 		connections_np = self._connections_np()
-		memory_words_np = self.memory.memory_words.flatten().numpy()
+		memory_words_np = self.logical_memory_words().flatten().numpy()
 
 		# Call hybrid CPU+GPU
 		probs_flat = ram_accelerator.ramlm_forward_batch_hybrid_numpy(
@@ -1129,7 +1214,7 @@ class RAMClusterLayer(RAMClusterBase):
 		true_clusters_np = true_clusters.numpy().astype(np.int64)
 		false_clusters_np = false_clusters.flatten().numpy().astype(np.int64)
 		connections_np = self._connections_np().astype(np.int64)
-		memory_words_np = self.memory.memory_words.flatten().numpy().astype(np.int64)
+		memory_words_np = self.logical_memory_words().flatten().numpy().astype(np.int64)
 
 		# Call Rust with numpy arrays
 		modified, new_memory = ram_accelerator.ramlm_train_batch_numpy(
@@ -1148,8 +1233,9 @@ class RAMClusterLayer(RAMClusterBase):
 			allow_override,
 		)
 
-		# Update memory from Rust result
-		self.memory.memory_words[:] = torch_tensor(new_memory, dtype=int64).view_as(self.memory.memory_words)
+		# Update memory from Rust result (the logical rows; each unit keeps its representative's)
+		logical = torch_tensor(new_memory, dtype=int64).view(self.total_neurons, self.memory.words_per_neuron)
+		self.memory.memory_words[:] = self._storage_rows(logical)
 
 		return modified
 
@@ -1250,7 +1336,7 @@ class RAMClusterLayer(RAMClusterBase):
 		input_bits_flat = input_bits.flatten().bool().tolist()
 		true_clusters_list = true_clusters.tolist()
 		false_clusters_flat = false_clusters.flatten().tolist()
-		connections_flat = self.memory.connections.flatten().tolist()
+		connections_flat = self.connections.flatten().tolist()
 
 		# Call Rust sparse training
 		modified = ram_accelerator.sparse_train_batch(
@@ -1264,6 +1350,7 @@ class RAMClusterLayer(RAMClusterBase):
 			self.neurons_per_cluster,
 			num_negatives,
 			allow_override,
+			self._sparse_index_of(),
 		)
 
 		return modified
@@ -1295,7 +1382,7 @@ class RAMClusterLayer(RAMClusterBase):
 
 		# Flatten tensors for Rust
 		input_bits_flat = input_bits.flatten().bool().tolist()
-		connections_flat = self.memory.connections.flatten().tolist()
+		connections_flat = self.connections.flatten().tolist()
 
 		# Call Rust sparse forward
 		probs_flat = ram_accelerator.sparse_forward_batch(
@@ -1307,6 +1394,7 @@ class RAMClusterLayer(RAMClusterBase):
 			self.neurons_per_cluster,
 			self.num_clusters,
 			float(self._perplexity_calc().empty_value),  # per-call EMPTY contribution (was a process-global)
+			self._sparse_index_of(),
 		)
 
 		# Reshape to [batch_size, num_clusters]
@@ -1387,7 +1475,10 @@ class RAMClusterLayer(RAMClusterBase):
 			# Train TRUE cluster neurons
 			for neuron_offset in range(self.neurons_per_cluster):
 				neuron_idx = true_cluster * self.neurons_per_cluster + neuron_offset
-				connections = self.memory.connections[neuron_idx]
+				slot = self._lsh_write_slot(neuron_idx)
+				if slot is None:
+					continue
+				connections = self.connections[neuron_idx]
 
 				# Compute full address from input bits
 				address = 0
@@ -1399,7 +1490,7 @@ class RAMClusterLayer(RAMClusterBase):
 				hashed_addr = self._lsh_hash_address(address)
 
 				# Write TRUE (with override for priority)
-				if self._lsh_memory.write_cell(neuron_idx, hashed_addr, 1, True):
+				if self._lsh_memory.write_cell(slot, hashed_addr, 1, True):
 					modified += 1
 
 			# Train FALSE cluster neurons
@@ -1408,7 +1499,10 @@ class RAMClusterLayer(RAMClusterBase):
 
 				for neuron_offset in range(self.neurons_per_cluster):
 					neuron_idx = false_cluster * self.neurons_per_cluster + neuron_offset
-					connections = self.memory.connections[neuron_idx]
+					slot = self._lsh_write_slot(neuron_idx)
+					if slot is None:
+						continue
+					connections = self.connections[neuron_idx]
 
 					# Compute full address
 					address = 0
@@ -1420,7 +1514,7 @@ class RAMClusterLayer(RAMClusterBase):
 					hashed_addr = self._lsh_hash_address(address)
 
 					# Write FALSE (only to EMPTY cells)
-					if self._lsh_memory.write_cell(neuron_idx, hashed_addr, 0, allow_override):
+					if self._lsh_memory.write_cell(slot, hashed_addr, 0, allow_override):
 						modified += 1
 
 		return modified
@@ -1463,7 +1557,7 @@ class RAMClusterLayer(RAMClusterBase):
 
 				for neuron_offset in range(self.neurons_per_cluster):
 					neuron_idx = cluster_idx * self.neurons_per_cluster + neuron_offset
-					connections = self.memory.connections[neuron_idx]
+					connections = self.connections[neuron_idx]
 
 					# Compute full address
 					address = 0
@@ -1475,7 +1569,7 @@ class RAMClusterLayer(RAMClusterBase):
 					hashed_addr = self._lsh_hash_address(address)
 
 					# Look up in LSH memory
-					cell_value = self._lsh_memory.read_cell(neuron_idx, hashed_addr)
+					cell_value = self._lsh_memory.read_cell(self._lsh_read_slot(neuron_idx), hashed_addr)
 
 					if cell_value == 1:  # TRUE
 						count_true += 1

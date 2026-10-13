@@ -232,6 +232,20 @@ impl PartialFitState
 
 impl IDSCache
 {
+	/// The per-call scoring settings every IDS path trains/scores with (one
+	/// definition; was copied at nine call sites).
+	pub fn eval_settings(&self, empty_value: f32) -> ram_core::neuron_memory::EvalSettings
+	{
+		ram_core::neuron_memory::EvalSettings {
+			empty_value,
+			normal_class: self.normal_class,
+			fitness_weights: self.fitness_weights,
+			memory_mode: self.memory_mode,
+			run_seed: self.run_seed,
+			coverage_aware: self.coverage_aware,
+		}
+	}
+
 	/// Create a new IDS cache with stratified partitioning.
 	///
 	/// # Arguments
@@ -754,14 +768,7 @@ pub fn evaluate_genomes_ids_cached_hybrid(
 		&eval.targets,
 		eval.num_examples,
 		cache.total_features(),
-		ram_core::neuron_memory::EvalSettings {
-			empty_value,
-			normal_class: cache.normal_class,
-			fitness_weights: cache.fitness_weights,
-			memory_mode: cache.memory_mode,
-			run_seed: cache.run_seed,
-			coverage_aware: cache.coverage_aware,
-		},
+		cache.eval_settings(empty_value),
 		neuron_sample_rate,
 		rng_seed,
 		cache.class_weights.as_deref(),
@@ -883,14 +890,7 @@ pub fn evaluate_genomes_ids_kfold_hybrid(
 		&eval.targets,
 		eval.num_examples,
 		cache.total_features(),
-		ram_core::neuron_memory::EvalSettings {
-			empty_value,
-			normal_class: cache.normal_class,
-			fitness_weights: cache.fitness_weights,
-			memory_mode: cache.memory_mode,
-			run_seed: cache.run_seed,
-			coverage_aware: cache.coverage_aware,
-		},
+		cache.eval_settings(empty_value),
 		neuron_sample_rate,
 		rng_seed,
 		cache.class_weights.as_deref(),
@@ -928,14 +928,7 @@ pub fn evaluate_genomes_ids_cached_full_hybrid(
 		&eval.targets,
 		eval.num_examples,
 		cache.total_features(),
-		ram_core::neuron_memory::EvalSettings {
-			empty_value,
-			normal_class: cache.normal_class,
-			fitness_weights: cache.fitness_weights,
-			memory_mode: cache.memory_mode,
-			run_seed: cache.run_seed,
-			coverage_aware: cache.coverage_aware,
-		},
+		cache.eval_settings(empty_value),
 		neuron_sample_rate,
 		rng_seed,
 		cache.class_weights.as_deref(),
@@ -973,14 +966,7 @@ pub fn predict_examples_ids_cached(
 		&eval.input_bits,
 		eval.num_examples,
 		cache.total_features(),
-		ram_core::neuron_memory::EvalSettings {
-			empty_value,
-			normal_class: cache.normal_class,
-			fitness_weights: cache.fitness_weights,
-			memory_mode: cache.memory_mode,
-			run_seed: cache.run_seed,
-			coverage_aware: cache.coverage_aware,
-		},
+		cache.eval_settings(empty_value),
 		neuron_sample_rate,
 		rng_seed,
 		cache.class_weights.as_deref(),
@@ -1017,19 +1003,22 @@ pub fn score_examples_ids_cached(
 		&eval.input_bits,
 		eval.num_examples,
 		cache.total_features(),
-		ram_core::neuron_memory::EvalSettings {
-			empty_value,
-			normal_class: cache.normal_class,
-			fitness_weights: cache.fitness_weights,
-			memory_mode: cache.memory_mode,
-			run_seed: cache.run_seed,
-			coverage_aware: cache.coverage_aware,
-		},
+		cache.eval_settings(empty_value),
 		neuron_sample_rate,
 		rng_seed,
 		cache.class_weights.as_deref(),
 	)
 }
+
+/// `evaluate_at_thresholds_ids_cached` result: eval/train/val scores, per-threshold
+/// `(ce, acc, f1, fpr, resolved_threshold)` and the trained genome's footprint.
+pub type ThresholdEvaluation = (
+	Vec<f64>,
+	Vec<f64>,
+	Option<Vec<f64>>,
+	Vec<(f64, f64, f64, f64, f64)>,
+	ram_core::footprint::Footprint,
+);
 
 /// Train ONCE and evaluate at multiple thresholds, returning eval/train scores
 /// and per-threshold metrics.
@@ -1044,7 +1033,7 @@ pub fn score_examples_ids_cached(
 ///   - `t == -1.0`: oracle — find optimal F1 threshold on EVAL scores
 ///                  (matches evaluate_genomes_parallel_hybrid_with_override semantics)
 ///
-/// Returns `(eval_scores, train_scores, val_scores, metrics_per_threshold)` where
+/// Returns `(eval_scores, train_scores, val_scores, metrics_per_threshold, footprint)` where
 /// `metrics_per_threshold[i] = (ce, acc, f1, fpr, resolved_threshold)` and
 /// `val_scores` is Some when the cache holds a val partition (Protocol v2),
 /// None otherwise. The -1.0 oracle sentinel stays computed on EVAL scores —
@@ -1058,19 +1047,14 @@ pub fn evaluate_at_thresholds_ids_cached(
 	empty_value: f32,
 	neuron_sample_rate: f32,
 	rng_seed: u64,
-) -> (
-	Vec<f64>,
-	Vec<f64>,
-	Option<Vec<f64>>,
-	Vec<(f64, f64, f64, f64, f64)>,
-)
+) -> ThresholdEvaluation
 {
 	let train = cache.full_train();
 	let eval = cache.full_eval();
 	let val = cache.full_val();
 
 	// Train ONCE + score eval, train (and val, when present) sets
-	let (eval_scores, train_scores, val_scores) = crate::adaptive::train_and_score_eval_and_train(
+	let (eval_scores, train_scores, val_scores, footprint) = crate::adaptive::train_and_score_eval_and_train(
 		bits_flat,
 		neurons_flat,
 		connections_flat,
@@ -1085,14 +1069,7 @@ pub fn evaluate_at_thresholds_ids_cached(
 		val.map(|v| &v.input_bits),
 		val.map_or(0, |v| v.num_examples),
 		cache.total_features(),
-		ram_core::neuron_memory::EvalSettings {
-			empty_value,
-			normal_class: cache.normal_class,
-			fitness_weights: cache.fitness_weights,
-			memory_mode: cache.memory_mode,
-			run_seed: cache.run_seed,
-			coverage_aware: cache.coverage_aware,
-		},
+		cache.eval_settings(empty_value),
 		neuron_sample_rate,
 		rng_seed,
 		cache.class_weights.as_deref(),
@@ -1124,7 +1101,52 @@ pub fn evaluate_at_thresholds_ids_cached(
 		})
 		.collect();
 
-	(eval_scores, train_scores, val_scores, metrics)
+	(eval_scores, train_scores, val_scores, metrics, footprint)
+}
+
+/// Train ONE genome exactly as `evaluate_at_thresholds_ids_cached` does (full
+/// train set, same settings, `train_genome_export`) and return it as physical
+/// unit tables plus its eval (+ val) scores — the FPGA export's source.
+pub fn export_trained_ids_cached(
+	cache: &IDSCache,
+	bits_flat: &[usize],
+	neurons_flat: &[usize],
+	connections_flat: &[i64],
+	empty_value: f32,
+	neuron_sample_rate: f32,
+	rng_seed: u64,
+) -> crate::trained_layer::TrainedLayer
+{
+	let (train, eval, val) = (cache.full_train(), cache.full_eval(), cache.full_val());
+	let settings = cache.eval_settings(empty_value);
+	let clusters = cache.num_genome_clusters();
+	let export = crate::adaptive::train_genome_export(
+		bits_flat,
+		neurons_flat,
+		connections_flat,
+		clusters,
+		&train.input_bits,
+		&train.targets,
+		&train.negatives,
+		train.num_examples,
+		cache.num_negatives(),
+		cache.total_features(),
+		settings,
+		neuron_sample_rate,
+		rng_seed,
+		cache.class_weights.as_deref(),
+	);
+	let score = |bits: &PackedBits, n: usize| {
+		crate::adaptive::score_examples_binary(&export, bits, n, clusters, cache.total_features(), settings)
+	};
+	let eval_scores = score(&eval.input_bits, eval.num_examples);
+	let val_scores = val.map(|v| score(&v.input_bits, v.num_examples));
+	let logical = ram_core::super_genome::FlatGenome {
+		bits: bits_flat,
+		neurons_per_cluster: neurons_flat,
+		connections: connections_flat,
+	};
+	crate::trained_layer::TrainedLayer::from_export(&export, logical, settings, eval_scores, val_scores)
 }
 
 /// Multiclass (K-cluster) analogue of `evaluate_at_thresholds_ids_cached`.
@@ -1138,7 +1160,7 @@ pub fn evaluate_at_thresholds_ids_cached(
 ///   - `margin_train_cal` — τ swept on TRAIN margins (macro-F1-optimal)
 ///   - `margin_val_cal`   — τ swept on VAL margins (only when val present)
 ///
-/// Returns `(num_classes, mode_results)`; each result carries the full metric
+/// Returns `(num_classes, mode_results, footprint)`; each result carries the full metric
 /// set (K-class CE, confusion matrix, per-class P/R/F1, macro-/weighted-F1,
 /// accuracy, benign-FPR). The benign class is `cache.normal_class` (0 for all
 /// multiclass IDS datasets — benign = index 0 by construction).
@@ -1150,7 +1172,7 @@ pub fn evaluate_multiclass_at_thresholds_ids_cached(
 	empty_value: f32,
 	neuron_sample_rate: f32,
 	rng_seed: u64,
-) -> (usize, Vec<crate::multiclass_metrics::MulticlassModeResult>)
+) -> (usize, Vec<crate::multiclass_metrics::MulticlassModeResult>, ram_core::footprint::Footprint)
 {
 	use crate::multiclass_metrics as mm;
 
@@ -1169,7 +1191,7 @@ pub fn evaluate_multiclass_at_thresholds_ids_cached(
 	let val = cache.full_val();
 
 	// Train ONCE + flattened K-vector scores for eval/train(/val)
-	let (eval_scores, train_scores, val_scores) = crate::adaptive::train_and_score_sets_flat(
+	let (eval_scores, train_scores, val_scores, footprint) = crate::adaptive::train_and_score_sets_flat(
 		bits_flat,
 		neurons_flat,
 		connections_flat,
@@ -1184,14 +1206,7 @@ pub fn evaluate_multiclass_at_thresholds_ids_cached(
 		val.map(|v| &v.input_bits),
 		val.map_or(0, |v| v.num_examples),
 		cache.total_features(),
-		ram_core::neuron_memory::EvalSettings {
-			empty_value,
-			normal_class: cache.normal_class,
-			fitness_weights: cache.fitness_weights,
-			memory_mode: cache.memory_mode,
-			run_seed: cache.run_seed,
-			coverage_aware: cache.coverage_aware,
-		},
+		cache.eval_settings(empty_value),
 		neuron_sample_rate,
 		rng_seed,
 		cache.class_weights.as_deref(),
@@ -1210,7 +1225,7 @@ pub fn evaluate_multiclass_at_thresholds_ids_cached(
 		cache.normal_class,
 	);
 
-	(num_classes, modes)
+	(num_classes, modes, footprint)
 }
 
 /// Score TRAINING examples (for calibration fitting on training data).
@@ -1240,14 +1255,7 @@ pub fn score_train_examples_ids_cached(
 		&train.input_bits, // score training data, not eval
 		train.num_examples,
 		cache.total_features(),
-		ram_core::neuron_memory::EvalSettings {
-			empty_value,
-			normal_class: cache.normal_class,
-			fitness_weights: cache.fitness_weights,
-			memory_mode: cache.memory_mode,
-			run_seed: cache.run_seed,
-			coverage_aware: cache.coverage_aware,
-		},
+		cache.eval_settings(empty_value),
 		neuron_sample_rate,
 		rng_seed,
 		cache.class_weights.as_deref(),
@@ -1291,14 +1299,7 @@ pub fn evaluate_genomes_ids_cached_hybrid_adaptive(
 		&eval.targets,
 		eval.num_examples,
 		cache.total_features(),
-		ram_core::neuron_memory::EvalSettings {
-			empty_value,
-			normal_class: cache.normal_class,
-			fitness_weights: cache.fitness_weights,
-			memory_mode: cache.memory_mode,
-			run_seed: cache.run_seed,
-			coverage_aware: cache.coverage_aware,
-		},
+		cache.eval_settings(empty_value),
 		neuron_sample_rate,
 		rng_seed,
 		adapt_config,

@@ -128,6 +128,7 @@ pub(crate) fn ramlm_forward_batch_metal_numpy<'py>(
 				0, // run_seed: LM numpy forward is never QSR/PLN
 				&[],   // coverage: LM numpy forward, not the IDS scorer
 				false,
+				None, // actual_neurons: uniform clusters
 			)
 			.map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
 	})
@@ -201,6 +202,7 @@ pub(crate) fn ramlm_forward_batch_metal_cached<'py>(
 				0, // run_seed: LM numpy forward is never QSR/PLN
 				&[],   // coverage: LM numpy forward, not the IDS scorer
 				false,
+				None, // actual_neurons: uniform clusters
 			)
 			.map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
 	})
@@ -293,6 +295,7 @@ pub(crate) fn ramlm_forward_batch_hybrid_numpy<'py>(
 						0, // run_seed: LM numpy forward is never QSR/PLN
 						&[],   // coverage: LM numpy forward, not the IDS scorer
 						false,
+						None, // actual_neurons: uniform clusters
 					)
 					.map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e));
 			}
@@ -324,6 +327,7 @@ pub(crate) fn ramlm_forward_batch_hybrid_numpy<'py>(
 				0, // run_seed: LM numpy forward is never QSR/PLN
 				&[],   // coverage: LM numpy forward, not the IDS scorer
 				false,
+				None, // actual_neurons: uniform clusters
 			)
 		});
 

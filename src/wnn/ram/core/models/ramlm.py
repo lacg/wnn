@@ -58,6 +58,8 @@ from torch import zeros
 
 from wnn.ram.core.base import RAMComponent, RAMClusterBase
 from wnn.ram.core.RAMClusterLayer import RAMClusterLayer, bits_needed
+from wnn.ram.core.ClusterLayerConfig import ClusterLayerConfig
+from wnn.ram.core.ClusterLayerFactory import ClusterLayerFactory
 from wnn.ram.core.TieredRAMClusterLayer import TieredRAMClusterLayer
 from wnn.ram.core import AccelerationMode
 from wnn.representations.token_bit_encoder import (
@@ -159,13 +161,13 @@ class RAMLM(RAMComponent):
 			)
 		else:
 			# Uniform architecture
-			self.layer = RAMClusterLayer(
+			self.layer = ClusterLayerFactory.create(ClusterLayerConfig(
 				total_input_bits=self.total_input_bits,
 				num_clusters=vocab_size,
 				neurons_per_cluster=neurons_per_cluster,
 				bits_per_neuron=bits_per_neuron,
 				rng=rng,
-			)
+			))
 
 		# Optional tokenizer
 		self._tokenizer = None

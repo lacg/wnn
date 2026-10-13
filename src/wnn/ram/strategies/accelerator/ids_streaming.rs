@@ -56,10 +56,11 @@ use crate::adaptive::{
 	build_groups, build_neuron_metadata, compute_f1_fpr_with_normal_class,
 	compute_per_example_scores, export_genome_for_gpu, find_optimal_threshold_auto,
 	get_metal_evaluator, get_sparse_metal_evaluator, per_cluster_max_bits,
-	reorganize_connections_for_gpu, train_genome_in_slot, ConfigGroup, GenomeExport, GroupMemory,
+	reorganize_connections_for_gpu, train_genome_in_slot_range, ConfigGroup, GenomeExport, GroupMemory,
 };
 use ram_core::neuron_memory::pack_packed_to_u64;
 use ram_core::packed_bits::PackedBits;
+use ram_core::physical_genome::PhysicalGenome;
 
 /// Streaming evaluator state for a single genome.
 ///
@@ -83,10 +84,14 @@ pub struct IDSGenomeStreamer
 	/// Computed by the caller (Python) from materialized y_train labels.
 	class_weights: Option<Vec<u32>>,
 
-	// ── Genome ───────────────────────────────────────────────────────────
+	// ── Genome (the TRAINED one: physical when the multiplicity layer applies)
 	bits_flat: Vec<usize>,
 	neurons_flat: Vec<usize>,
 	original_connections: Vec<i64>,
+	/// The LOGICAL genome + its grouping when duplicates were collapsed
+	/// (IDS-37 stage 8): `seal_for_scoring` rebuilds the logical export from
+	/// the trained units (`GenomeExport::from_physical`). None = plain layer.
+	logical: Option<PhysicalGenomeOf>,
 
 	// ── Derived once at construction ─────────────────────────────────────
 	groups: Vec<ConfigGroup>,
@@ -96,6 +101,12 @@ pub struct IDSGenomeStreamer
 
 	// ── Training phase state ────────────────────────────────────────────
 	memories: Vec<GroupMemory>,
+	/// Order-independent training: the OI counters are opened ONCE in `new`
+	/// and committed ONCE in `seal_for_scoring`, so every chunk's evidence
+	/// tallies together (as the in-memory one-shot trainer does). They used
+	/// to be opened and committed per `train_chunk`, so a later chunk
+	/// overwrote the cells it touched with ITS tallies only.
+	oi: bool,
 	train_seen: usize, // count of rows seen during training (for stats)
 
 	// ── Scoring phase state ─────────────────────────────────────────────
@@ -123,6 +134,8 @@ impl IDSGenomeStreamer
 	{
 		// Streamer is QUAD-only (Option F shipped after the QUAD mandate).
 		let memory_mode = ram_core::neuron_memory::QUAD_WEIGHTED;
+		let (bits_flat, neurons_flat, connections, logical) =
+			PhysicalGenomeOf::trained_genome(bits_flat, neurons_flat, connections, neuron_sample_rate, memory_mode);
 		let bits_per_cluster = per_cluster_max_bits(&bits_flat, &neurons_flat);
 		let groups = build_groups(&bits_per_cluster, &neurons_flat);
 		let (cluster_neuron_starts, neuron_conn_offsets) =
@@ -141,10 +154,15 @@ impl IDSGenomeStreamer
 			}
 		}
 
-		let memories: Vec<GroupMemory> = groups
+		let mut memories: Vec<GroupMemory> = groups
 			.iter()
 			.map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
 			.collect();
+		let oi = ram_core::neuron_memory::order_independent_training_active(memory_mode);
+		if oi
+		{
+			memories.iter_mut().for_each(GroupMemory::init_oi_counters);
+		}
 
 		Self {
 			num_classes,
@@ -160,11 +178,13 @@ impl IDSGenomeStreamer
 			bits_flat,
 			neurons_flat,
 			original_connections: connections,
+			logical,
 			groups,
 			cluster_to_group,
 			cluster_neuron_starts,
 			neuron_conn_offsets,
 			memories,
+			oi,
 			train_seen: 0,
 			export: None,
 			eval_scores: Vec::new(),
@@ -198,8 +218,8 @@ impl IDSGenomeStreamer
 		// empty. For multi-class, exhaustive enumeration: all classes except target.
 		let negatives = compute_chunk_negatives(labels, self.num_classes, self.num_negatives);
 
-		train_genome_in_slot(
-			&mut self.memories,
+		train_genome_in_slot_range(
+			&self.memories,
 			&self.groups,
 			&self.original_connections,
 			&self.bits_flat,
@@ -213,6 +233,8 @@ impl IDSGenomeStreamer
 			self.num_negatives,
 			total_input_bits,
 			None, // gpu_addresses: per-row CPU compute (streaming v1)
+			0..num_train,
+			num_train,
 			self.neuron_sample_rate,
 			self.rng_seed.wrapping_add(self.train_seen as u64),
 			self.memory_mode,
@@ -231,17 +253,30 @@ impl IDSGenomeStreamer
 		{
 			panic!("seal_for_scoring called twice");
 		}
+		if self.oi
+		{
+			self.memories.iter_mut().for_each(GroupMemory::commit_oi);
+		}
 		let gpu_connections = reorganize_connections_for_gpu(
 			&self.original_connections,
 			&self.bits_flat,
 			&self.neurons_flat,
 			&self.groups,
 		);
-		self.export = Some(export_genome_for_gpu(
-			&self.memories,
-			&self.groups,
-			&gpu_connections,
-		));
+		let trained = export_genome_for_gpu(&self.memories, &self.groups, &gpu_connections);
+		self.export = Some(match &self.logical
+		{
+			None => trained,
+			Some(logical) => logical.logical_export(&trained, &self.neurons_flat, self.memory_mode),
+		});
+	}
+
+	/// Logical/physical footprint of the sealed memory (None before
+	/// `seal_for_scoring`). Physical < logical when the multiplicity layer
+	/// trained the distinct neurons only.
+	pub fn footprint(&self) -> Option<ram_core::footprint::Footprint>
+	{
+		self.export.as_ref().map(GenomeExport::footprint)
 	}
 
 	/// Score a single eval chunk. Accumulates per-row scores into the
@@ -446,6 +481,59 @@ impl IDSGenomeStreamer
 	}
 }
 
+/// The logical genome a streamer collapsed (IDS-37 stage 8).
+struct PhysicalGenomeOf
+{
+	bits: Vec<usize>,
+	neurons_per_cluster: Vec<usize>,
+	connections: Vec<i64>,
+	physical: PhysicalGenome,
+}
+
+impl PhysicalGenomeOf
+{
+	/// The genome the streamer trains: the physical one (duplicates collapsed)
+	/// exactly when `multiplicity_applies` (copies then train identically —
+	/// the CPU slot trainer gives each neuron the same writes), else the
+	/// logical one unchanged.
+	#[allow(clippy::type_complexity)]
+	fn trained_genome(
+		bits: Vec<usize>,
+		npc: Vec<usize>,
+		conns: Vec<i64>,
+		neuron_sample_rate: f32,
+		memory_mode: u8,
+	) -> (Vec<usize>, Vec<usize>, Vec<i64>, Option<Self>)
+	{
+		if conns.is_empty() || !ram_core::neuron_memory::multiplicity_applies(neuron_sample_rate, memory_mode)
+		{
+			return (bits, npc, conns, None);
+		}
+		let physical = PhysicalGenome::collapse(&bits, &npc, &conns);
+		if physical.grouping.is_identity()
+		{
+			return (bits, npc, conns, None);
+		}
+		let trained = (physical.bits.clone(), physical.neurons_per_cluster.clone(), physical.connections.clone());
+		(trained.0, trained.1, trained.2, Some(Self { bits, neurons_per_cluster: npc, connections: conns, physical }))
+	}
+
+	/// The logical scoring export over the trained units.
+	fn logical_export(&self, trained: &GenomeExport, trained_npc: &[usize], memory_mode: u8) -> GenomeExport
+	{
+		let units = crate::adaptive::PhysicalUnits::new(trained, trained_npc);
+		let unit_of: Vec<u32> = (0..self.bits.len()).map(|l| self.physical.grouping.index_of(l)).collect();
+		let logical = ram_core::super_genome::FlatGenome {
+			bits: &self.bits,
+			neurons_per_cluster: &self.neurons_per_cluster,
+			connections: &self.connections,
+		};
+		GenomeExport::from_physical(&units, &unit_of, self.physical.grouping.clone(), logical, memory_mode)
+			.expect("streamer: logical export from its own physical genome")
+	}
+
+}
+
 #[cfg(test)]
 mod tests
 {
@@ -566,6 +654,99 @@ mod tests
 		assert_eq!(acc, 1.0, "separable data must decode perfectly");
 		assert_eq!(f1, 1.0);
 		assert_eq!(fpr, 0.0);
+	}
+
+	/// Single-cluster genome: 3 distinct 14-bit base neurons over 24 input
+	/// bits; `twin = false` repeats them (0,1,0,2,0,1); `twin = true` gives
+	/// copy k of a base its connections ROTATED by k — an address bijection,
+	/// so every neuron reads the same cells as its base, but no two are equal.
+	fn twin_genome(twin: bool, bits: usize) -> (Vec<usize>, Vec<usize>, Vec<i64>)
+	{
+		let bases: Vec<Vec<i64>> = (0..3).map(|b| (0..bits).map(|k| ((b * 5 + k * 7) % 24) as i64).collect()).collect();
+		let plan = [0usize, 1, 0, 2, 0, 1];
+		let mut seen = [0usize; 3];
+		let mut conns = Vec::new();
+		for &b in &plan
+		{
+			let mut row = bases[b].clone();
+			if twin
+			{
+				row.rotate_left(seen[b]);
+			}
+			seen[b] += 1;
+			conns.extend(row);
+		}
+		(vec![bits; plan.len()], vec![plan.len()], conns)
+	}
+
+	fn rows(n: usize, seed: u64) -> (PackedBits, Vec<i64>)
+	{
+		use rand::{Rng, SeedableRng};
+		let mut rng = rand::rngs::SmallRng::seed_from_u64(seed);
+		let bools: Vec<bool> = (0..n * 24).map(|_| rng.gen_bool(0.5)).collect();
+		(PackedBits::from_bool_slice(&bools, 24), (0..n).map(|_| rng.gen_range(0..2)).collect())
+	}
+
+	fn streamed_scores(twin: bool) -> (Vec<f64>, ram_core::footprint::Footprint)
+	{
+		let (bits, npc, conns) = twin_genome(twin, 14);
+		let mut s = IDSGenomeStreamer::new(bits, npc, conns, 2, 1, true, 0, 0.0, 1.0, 7, None);
+		for seed in [1u64, 2]
+		{
+			let (x, y) = rows(150, seed);
+			s.train_chunk(&x, &y);
+		}
+		s.seal_for_scoring();
+		let (x, y) = rows(120, 3);
+		s.score_chunk(&x, &y);
+		(s.take_scores(), s.footprint().expect("sealed"))
+	}
+
+	/// Stage 8: the streamer trains the physical genome and scores through the
+	/// logical export — scores bit-identical to the twin genome (same
+	/// function, nothing to collapse), physical < logical only when the
+	/// multiplicity layer applies.
+	#[test]
+	fn streamer_multiplicity_matches_rotated_twin()
+	{
+		let (dup, dup_fp) = streamed_scores(false);
+		let (twin, twin_fp) = streamed_scores(true);
+		assert!(twin_fp.is_plain() && twin_fp.logical_neurons == 6);
+		let applies = ram_core::neuron_memory::multiplicity_applies(1.0, ram_core::neuron_memory::QUAD_WEIGHTED);
+		assert_eq!(dup_fp.logical_neurons, 6);
+		assert_eq!(dup_fp.physical_neurons, if applies { 3 } else { 6 }, "{dup_fp:?}");
+		if applies
+		{
+			let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+			assert_eq!(bits(&dup), bits(&twin), "multiplicity streamer must score as the plain twin");
+			assert!(dup_fp.physical_cells < dup_fp.logical_cells);
+		}
+	}
+
+	/// Chunking must not change what the streamer learns: 3 chunks vs one
+	/// chunk of the same rows, scores bit-identical (rate 1.0: no sampling).
+	/// 6-bit neurons so every cell is hit in every chunk. Failed under OI
+	/// before the counters spanned all chunks (a later chunk overwrote).
+	#[test]
+	fn streamer_chunking_is_invisible()
+	{
+		let (bits, npc, conns) = twin_genome(true, 6);
+		let (x, y) = rows(300, 9);
+		let score = |chunks: usize| {
+			let mut s = IDSGenomeStreamer::new(bits.clone(), npc.clone(), conns.clone(), 2, 1, true, 0, 0.0, 1.0, 7, None);
+			let per = 300 / chunks;
+			for c in 0..chunks
+			{
+				let mut part = PackedBits::empty(24);
+				(c * per..(c + 1) * per).for_each(|r| part.extend_row_from(&x, r));
+				s.train_chunk(&part, &y[c * per..(c + 1) * per]);
+			}
+			s.seal_for_scoring();
+			let (ex, ey) = rows(100, 4);
+			s.score_chunk(&ex, &ey);
+			s.take_scores().iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+		};
+		assert_eq!(score(1), score(3));
 	}
 }
 

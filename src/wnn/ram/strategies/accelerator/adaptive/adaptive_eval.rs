@@ -474,19 +474,13 @@ pub(crate) fn axonogenesis_pass_adaptive(
 
 		// Pre-compute base addresses for this neuron on sampled examples
 		let neuron_conns = &connections[conn_start..conn_start + n_bits];
-		let mut base_addresses: Vec<usize> = Vec::with_capacity(n_sample);
-		for &ex in &sample_indices
-		{
-			let row_start = ex * words_per_example;
-			let mut addr = 0usize;
-			for (i, &conn_idx) in neuron_conns.iter().enumerate()
-			{
-				let idx = conn_idx as usize;
-				let bit = (packed_input[row_start + idx / 64] >> (idx % 64)) & 1;
-				addr |= (bit as usize) << (n_bits - 1 - i);
-			}
-			base_addresses.push(addr);
-		}
+		// THE shared address definition (a private MSB-first loop here
+		// overflowed above 64 bits, where names are hashes, not integers).
+		let row = |ex: usize| &packed_input[ex * words_per_example..(ex + 1) * words_per_example];
+		let base_addresses: Vec<u64> = sample_indices
+			.iter()
+			.map(|&ex| ram_core::neuron_memory::compute_address_packed(row(ex), neuron_conns, n_bits) as u64)
+			.collect();
 
 		// Stage 3 prep: existing connection bit values
 		let existing_bit_vals: Vec<Option<&Vec<u8>>> = (0..n_bits)
@@ -520,6 +514,8 @@ pub(crate) fn axonogenesis_pass_adaptive(
 				{
 					continue;
 				}
+				let mut swapped_conns = connections[conn_start..conn_start + n_bits].to_vec();
+				swapped_conns[local_idx] = cand_conn;
 
 				// Stage 2: Accuracy delta — measure per-neuron accuracy from swapping
 				let mut delta = 0i32;
@@ -533,7 +529,7 @@ pub(crate) fn axonogenesis_pass_adaptive(
 					let old_cell = export.read_cell_at(
 						group_idx,
 						neuron_in_group,
-						old_addr as u64,
+						old_addr,
 						ram_core::metal_sparse::default_cell_for_mode(memory_mode) as u8,
 					);
 					let old_weight = ram_core::neuron_memory::QUAD_WEIGHTS[old_cell.clamp(0, 3) as usize];
@@ -545,20 +541,25 @@ pub(crate) fn axonogenesis_pass_adaptive(
 						(packed_input[row_start + old_conn as usize / 64] >> (old_conn as usize % 64)) & 1;
 					let new_bit =
 						(packed_input[row_start + cand_conn as usize / 64] >> (cand_conn as usize % 64)) & 1;
-					let new_addr = if old_bit != new_bit
+					let new_addr = if old_bit == new_bit
 					{
-						old_addr ^ (1 << (n_bits - 1 - local_idx))
+						old_addr
+					}
+					else if n_bits <= ram_core::neuron_memory::WIDE_ADDRESS_THRESHOLD
+					{
+						old_addr ^ (1u64 << (n_bits - 1 - local_idx))
 					}
 					else
 					{
-						old_addr
+						// Wide names are hashes: no bit to flip, rename the tuple.
+						ram_core::neuron_memory::compute_address_packed(row(ex), &swapped_conns, n_bits) as u64
 					};
 
 					// New prediction
 					let new_cell = export.read_cell_at(
 						group_idx,
 						neuron_in_group,
-						new_addr as u64,
+						new_addr,
 						ram_core::metal_sparse::default_cell_for_mode(memory_mode) as u8,
 					);
 					let new_weight = ram_core::neuron_memory::QUAD_WEIGHTS[new_cell.clamp(0, 3) as usize];
@@ -794,21 +795,16 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
 		.ok()
 		.and_then(|s| s.parse::<usize>().ok())
 		.unwrap_or_else(|| {
-			let first_neurons = &genomes_neurons_flat[0..num_clusters];
-			let first_per_neuron_bits = &genomes_bits_flat[0..genome_bpn_offsets[1]];
-			let first_bits_per_cluster = per_cluster_max_bits(first_per_neuron_bits, first_neurons);
-			let budget_gb = get_available_memory_gb() * 0.4; // 40% budget (adaptation keeps memory longer)
-			let cpu_cores = rayon::current_num_threads();
-			let (_, computed_batch) = calculate_pool_size(
-				&first_bits_per_cluster,
-				first_neurons,
+			// 40% budget (adaptation keeps memory longer); worst genome, trained shape.
+			let genomes = ram_core::super_genome::FlatGenome::split_batch(
+				genomes_bits_flat,
+				genomes_neurons_flat,
+				genomes_connections_flat,
+				num_genomes,
 				num_clusters,
-				budget_gb,
-				cpu_cores,
-				num_train,
-				neuron_sample_rate,
 			);
-			computed_batch
+			let budget_gb = get_available_memory_gb() * 0.4;
+			budget_batch_size(&genomes, budget_gb, rayon::current_num_threads(), num_train, neuron_sample_rate, memory_mode)
 		});
 
 	let mut all_results: Vec<(usize, f64, f64, f64, f64, f64)> = Vec::with_capacity(num_genomes);
