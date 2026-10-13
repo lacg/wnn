@@ -655,3 +655,33 @@ Readings:
 2. The rate-1.0 cost is the CPU-side train/sparse-build/export + **lost parallelism**: rate 1.0 writes ~35% more sparse keys per genome and the hybrid batch shrinks 10 → 2.
 3. Stage 2 (train + store unique neurons only) cuts keys per genome ~4x (24.7% distinct) — below the rate-0.25 footprint — which should restore the batch size. This is exactly the cost the design targets.
 4. Cross-genome sharing (indicative only — full populations are not checkpointed): 131 distinct of 1929 neurons across 4 related GA genomes = 6.8%. Stage 1's UnitGrouping must log the per-batch distinct fraction so stage 5 is sized on real batches.
+
+---
+
+## Stages 3-5 — IMPLEMENTED (12/10/2026, worktree branch, not deployed)
+
+- **Stage 3 (footprint, worker ABI 17).** `ram_core::footprint::Footprint`;
+  `GenomeExport::footprint()` replaces `materialized_cells`. Threaded through
+  `evaluate_at_thresholds` (5th tuple element) / `evaluate_multiclass_at_thresholds`
+  (3rd) / `IDSGenomeStreamer.footprint()` → `wnn.ram.footprint.Footprint` →
+  `IDSEvaluator` → `experiment.py` (log line + summary) → dashboard.
+  **Deviation (§5 step 7):** stored on `validation_summaries`
+  (`logical_neurons, physical_neurons, logical_cells, physical_cells`), not on
+  `genomes` — a `genomes` row exists only for leaderboard submissions, written
+  after the summary and only at `final`, so the upsert would miss most rows.
+  The validation-cache hit carries the footprint back.
+- **Stage 4 (super-genome).** `ram_core::super_genome::SuperGenome`: batch
+  neurons walked cluster-major, collapsed, trained as ONE genome through
+  `batched_train_core`; budget overflow bisects; a single genome takes the plain
+  trainer (chunked fallback). `GenomeExport::from_physical` reads
+  `PhysicalUnits`; a unit may sit in a wider physical group than its logical
+  group (dense slots re-pack / densify — exact). No `export_genome_from_table`
+  extraction was needed: the logical export is rebuilt from the super-genome's
+  ordinary export.
+- **Stage 5 (cross-genome sharing).** The super-genome key is `NeuronKey` alone,
+  so neurons shared by genomes of one call train once. Each genome keeps its own
+  grouping for the footprint.
+- **Known pre-existing defect:** with `WNN_COALESCE_GROUPS=1` the PLAIN
+  neuron-chunked trainer mis-places heterogeneous-bits neurons
+  (`chunked_tests::neuron_chunked_matches_unchunked` fails). The parity sweep
+  skips only its chunked comparison under coalescing.
