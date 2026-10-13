@@ -484,23 +484,44 @@ pub fn compute_address_wide(bits_per_neuron: usize, bit_at: impl Fn(usize) -> bo
 	h
 }
 
+/// THE address definition every CPU reader shares (GPU twin:
+/// `wnn_compute_address_u64` in common.metal). Slot i holds `connections[i]`;
+/// a NEGATIVE connection is padding — the -1 prefix-pad of a mixed-bits group
+/// (`reorganize_connections_for_gpu`) — and contributes a 0 bit at its slot,
+/// exactly as the Metal kernels skip it. Until 12/10/2026 the CPU readers cast
+/// -1 to usize::MAX and read out of bounds (debug panic / release garbage) on
+/// every mixed-bits group; the GPU scorers were right.
+///
+/// `read(idx)` returns input bit `idx` (idx >= 0 guaranteed). Narrow widths
+/// stop at the end of `connections` (`take`, the historical reader contract).
+#[inline(always)]
+fn address_over(connections: &[i64], bits_per_neuron: usize, read: impl Fn(usize) -> bool) -> u64
+{
+	let bit = |conn: i64| conn >= 0 && read(conn as usize);
+	if bits_per_neuron > WIDE_ADDRESS_THRESHOLD
+	{
+		return compute_address_wide(bits_per_neuron, |i| bit(connections[i]));
+	}
+	let mut address: u64 = 0;
+	for (i, &conn) in connections.iter().take(bits_per_neuron).enumerate()
+	{
+		address |= (bit(conn) as u64) << (bits_per_neuron - 1 - i);
+	}
+	address
+}
+
+/// Input bit `idx` of a `PackedBits::packed_row` (LSB-first within byte).
+#[inline(always)]
+fn packed_byte_bit(packed_row: &[u8], idx: usize) -> bool
+{
+	(packed_row[idx >> 3] >> (idx & 7)) & 1 == 1
+}
+
 /// Compute memory address from boolean input bits (MSB-first).
 #[inline]
 pub fn compute_address(input_bits: &[bool], connections: &[i64], bits_per_neuron: usize) -> usize
 {
-	if bits_per_neuron > WIDE_ADDRESS_THRESHOLD
-	{
-		return compute_address_wide(bits_per_neuron, |i| input_bits[connections[i] as usize]) as usize;
-	}
-	let mut address: usize = 0;
-	for (i, &conn_idx) in connections.iter().take(bits_per_neuron).enumerate()
-	{
-		if input_bits[conn_idx as usize]
-		{
-			address |= 1 << (bits_per_neuron - 1 - i);
-		}
-	}
-	address
+	address_over(connections, bits_per_neuron, |idx| input_bits[idx]) as usize
 }
 
 /// Compute memory address from a bit-packed row (LSB-first within byte).
@@ -515,21 +536,7 @@ pub fn compute_address_packed_bytes(
 	bits_per_neuron: usize,
 ) -> usize
 {
-	if bits_per_neuron > WIDE_ADDRESS_THRESHOLD
-	{
-		return compute_address_wide(bits_per_neuron, |i| {
-			let idx = connections[i] as usize;
-			(unsafe { *packed_row.get_unchecked(idx >> 3) } >> (idx & 7)) & 1 == 1
-		}) as usize;
-	}
-	let mut address: usize = 0;
-	for (i, &conn_idx) in connections.iter().take(bits_per_neuron).enumerate()
-	{
-		let idx = conn_idx as usize;
-		let bit = (unsafe { *packed_row.get_unchecked(idx >> 3) } >> (idx & 7)) & 1;
-		address |= (bit as usize) << (bits_per_neuron - 1 - i);
-	}
-	address
+	address_over(connections, bits_per_neuron, |idx| packed_byte_bit(packed_row, idx)) as usize
 }
 
 /// Sparse variant of `compute_address_packed_bytes` (returns u64 for high-bit neurons).
@@ -542,21 +549,7 @@ pub fn compute_address_packed_bytes_sparse(
 	bits_per_neuron: usize,
 ) -> u64
 {
-	if bits_per_neuron > WIDE_ADDRESS_THRESHOLD
-	{
-		return compute_address_wide(bits_per_neuron, |i| {
-			let idx = connections[i] as usize;
-			(unsafe { *packed_row.get_unchecked(idx >> 3) } >> (idx & 7)) & 1 == 1
-		});
-	}
-	let mut address: u64 = 0;
-	for (i, &conn_idx) in connections.iter().take(bits_per_neuron).enumerate()
-	{
-		let idx = conn_idx as usize;
-		let bit = (unsafe { *packed_row.get_unchecked(idx >> 3) } >> (idx & 7)) & 1;
-		address |= (bit as u64) << (bits_per_neuron - 1 - i);
-	}
-	address
+	address_over(connections, bits_per_neuron, |idx| packed_byte_bit(packed_row, idx))
 }
 
 /// Compute memory address from packed u64 input bits (8x less memory bandwidth).
@@ -567,21 +560,7 @@ pub fn compute_address_packed(
 	bits_per_neuron: usize,
 ) -> usize
 {
-	if bits_per_neuron > WIDE_ADDRESS_THRESHOLD
-	{
-		return compute_address_wide(bits_per_neuron, |i| {
-			let idx = connections[i] as usize;
-			(packed_words[idx / 64] >> (idx % 64)) & 1 == 1
-		}) as usize;
-	}
-	let mut address: usize = 0;
-	for (i, &conn_idx) in connections.iter().take(bits_per_neuron).enumerate()
-	{
-		let idx = conn_idx as usize;
-		let bit = (packed_words[idx / 64] >> (idx % 64)) & 1;
-		address |= (bit as usize) << (bits_per_neuron - 1 - i);
-	}
-	address
+	address_over(connections, bits_per_neuron, |idx| (packed_words[idx / 64] >> (idx % 64)) & 1 == 1) as usize
 }
 
 /// Compute address for sparse storage (returns u64 for high-bit neurons).
@@ -592,19 +571,7 @@ pub fn compute_address_sparse(
 	bits_per_neuron: usize,
 ) -> u64
 {
-	if bits_per_neuron > WIDE_ADDRESS_THRESHOLD
-	{
-		return compute_address_wide(bits_per_neuron, |i| input_bits[connections[i] as usize]);
-	}
-	let mut address: u64 = 0;
-	for (i, &conn_idx) in connections.iter().take(bits_per_neuron).enumerate()
-	{
-		if input_bits[conn_idx as usize]
-		{
-			address |= 1 << (bits_per_neuron - 1 - i);
-		}
-	}
-	address
+	address_over(connections, bits_per_neuron, |idx| input_bits[idx])
 }
 
 // =============================================================================
@@ -1616,23 +1583,22 @@ pub fn order_independent_training_active(memory_mode: u8) -> bool
 
 /// True iff the IDS trainers write every cell through a COMMUTATIVE update, so
 /// the final memory does not depend on the order examples reach a neuron:
-/// TERNARY (TRUE-wins lattice) and BINARY (one-shot set) always; the OI-counter
-/// modes (QUAD_WEIGHTED / QUAD_BINARY / QSR) only when the OI trainer is active
-/// — their legacy clamped nudge is order-dependent. An unknown mode is never.
+/// TERNARY / PLN (`WriteRule::Lattice`, the TRUE-wins join) and BINARY
+/// (`WriteRule::Set`) always; the OI-counter modes (QUAD_WEIGHTED / QUAD_BINARY
+/// / QSR, `WriteRule::Nudge`) only when the OI trainer is active — their legacy
+/// clamped nudge is order-dependent. An unknown mode is never.
 ///
-/// PLN is NOT, despite sharing TERNARY's cells: both IDS trainers route it
-/// through the legacy clamped QUAD nudge (CPU `use_nudge = mode != TERNARY`,
-/// eval_export.rs; the marker kernel has no PLN branch and falls to
-/// `slot_nudge`), which is order-dependent — measured by the multiplicity parity
-/// sweep (12/10/2026). Revisit if PLN gets a lattice writer.
+/// PLN was excluded until 12/10/2026: both IDS trainers sent it through the
+/// clamped QUAD nudge (inverted on its ternary codes). It now takes TERNARY's
+/// lattice writer on both trainers (`CellMode::write_rule`).
 pub fn training_is_order_independent(memory_mode: u8) -> bool
 {
-	use crate::cell_mode::CellMode;
-	match CellMode::from_u8(memory_mode)
+	use crate::cell_mode::{CellMode, WriteRule};
+	match CellMode::from_u8(memory_mode).map(|m| m.write_rule())
 	{
-		Some(CellMode::Ternary) | Some(CellMode::Binary) => true,
-		Some(m) if m.uses_oi_counters() => order_independent_training_active(memory_mode),
-		_ => false,
+		Some(WriteRule::Lattice) | Some(WriteRule::Set) => true,
+		Some(WriteRule::Nudge) => order_independent_training_active(memory_mode),
+		None => false,
 	}
 }
 
@@ -2151,6 +2117,39 @@ mod wide_address_tests
 				assert_eq!(compute_address_packed_bytes_sparse(&pb, &conns, bits), want, "pbytes_sparse b={bits}");
 				let pw = pack_words(&input);
 				assert_eq!(compute_address_packed(&pw, &conns, bits) as u64, want, "pwords b={bits}");
+			}
+		}
+	}
+
+	/// A negative connection (the -1 prefix-pad of a mixed-bits group) is a 0
+	/// bit at its slot in EVERY reader — the Metal kernels' rule. Narrow: the
+	/// padded name equals the unpadded one (pads are the high bits). Wide: the
+	/// name equals the hash of the tuple with the pad slots forced to 0. Before
+	/// 12/10/2026 every CPU reader indexed the input with usize::MAX here.
+	#[test]
+	fn negative_connections_are_zero_bits_in_every_reader()
+	{
+		for &(real, pad) in &[(8usize, 6usize), (13, 1), (40, 24), (60, 40), (96, 8)]
+		{
+			let bits = real + pad;
+			for seed in 0..10u64
+			{
+				let (input, real_conns) = fixture(real, 256, seed);
+				let conns: Vec<i64> = std::iter::repeat(-1).take(pad).chain(real_conns.iter().copied()).collect();
+				let want = if bits <= WIDE_ADDRESS_THRESHOLD
+				{
+					raw_msb_first(&input, &real_conns, real)
+				}
+				else
+				{
+					compute_address_wide(bits, |i| conns[i] >= 0 && input[conns[i] as usize])
+				};
+				let (pb, pw) = (pack_bytes(&input), pack_words(&input));
+				assert_eq!(compute_address_sparse(&input, &conns, bits), want, "sparse {real}+{pad}");
+				assert_eq!(compute_address(&input, &conns, bits) as u64, want, "bool {real}+{pad}");
+				assert_eq!(compute_address_packed_bytes(&pb, &conns, bits) as u64, want, "pbytes {real}+{pad}");
+				assert_eq!(compute_address_packed_bytes_sparse(&pb, &conns, bits), want, "pbytes_sparse {real}+{pad}");
+				assert_eq!(compute_address_packed(&pw, &conns, bits) as u64, want, "pwords {real}+{pad}");
 			}
 		}
 	}

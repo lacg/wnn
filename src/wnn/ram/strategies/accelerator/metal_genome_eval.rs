@@ -520,6 +520,8 @@ struct DenseToBufferParams
 	words_per_neuron: u32,
 	empty_value: f32,
 	memory_mode: u32,
+	coverage_aware: u32,
+	addresses_per_neuron: u32,
 	run_seed: u64,
 }
 
@@ -977,10 +979,23 @@ impl MetalGroupEvaluator
 		empty_value: f32,
 		memory_mode: u8,
 		run_seed: u64,
+		// Neurons SCORED per local cluster (a coalesced group's actual_neurons).
+		actual_neurons: Option<&[u32]>,
+		// Dense coverage bitmap (GenomeExport::dense_coverage); empty = untracked.
+		coverage: &[u64],
+		coverage_aware: bool,
 	)
 	{
 		let num_group_clusters = cluster_ids.len();
 		let num_neurons = num_group_clusters * neurons_per_cluster;
+		let cluster_neurons =
+			crate::metal_ramlm::cluster_neuron_counts(actual_neurons, neurons_per_cluster, num_group_clusters)
+				.expect("eval_dense_to_buffer: actual_neurons does not match the group");
+		let cluster_neurons_buffer = self.device.new_buffer_with_data(
+			cluster_neurons.as_ptr() as *const _,
+			std::mem::size_of_val(cluster_neurons.as_slice()) as u64,
+			metal::MTLResourceOptions::StorageModeShared,
+		);
 
 		// Convert to GPU-friendly formats
 		let connections_i32: Vec<i32> = connections.iter().map(|&c| c as i32).collect();
@@ -997,8 +1012,16 @@ impl MetalGroupEvaluator
 			words_per_neuron: words_per_neuron as u32,
 			empty_value,
 			memory_mode: memory_mode as u32,
+			coverage_aware: u32::from(coverage_aware && !coverage.is_empty()),
+			addresses_per_neuron: 1u32.checked_shl(bits_per_neuron as u32).unwrap_or(0),
 			run_seed,
 		};
+		let coverage_src: &[u64] = if coverage.is_empty() { &[0u64] } else { coverage };
+		let coverage_buffer = self.device.new_buffer_with_data(
+			coverage_src.as_ptr() as *const _,
+			std::mem::size_of_val(coverage_src) as u64,
+			metal::MTLResourceOptions::StorageModeShared,
+		);
 		// Convert params to slice for get_or_create_buffer
 		let params_slice = unsafe {
 			std::slice::from_raw_parts(
@@ -1054,6 +1077,8 @@ impl MetalGroupEvaluator
 		encoder.set_buffer(3, Some(&cluster_ids_buffer), 0);
 		encoder.set_buffer(4, Some(&params_buffer), 0);
 		encoder.set_buffer(5, Some(scores_buffer), 0);
+		encoder.set_buffer(6, Some(&cluster_neurons_buffer), 0);
+		encoder.set_buffer(7, Some(&coverage_buffer), 0);
 
 		let grid_size = MTLSize::new(num_group_clusters as u64, num_examples as u64, 1);
 		let thread_group_size = MTLSize::new(
@@ -1389,15 +1414,9 @@ mod tests
 		{
 			let neuron_idx = start_neuron + n;
 			let conn = &connections[neuron_idx * bits_per_neuron..(neuron_idx + 1) * bits_per_neuron];
-			// address = pack observed bits MSB-first (matches wnn_compute_address_u64)
-			let mut address = 0u64;
-			for &bit in conn
-			{
-				let b = bit as usize;
-				let word = packed_input[b / 64];
-				let set = (word >> (b % 64)) & 1;
-				address = (address << 1) | set;
-			}
+			// THE shared address definition (twin of wnn_compute_address_u64);
+			// a private MSB-first loop here skipped neither pads nor wide names.
+			let address = ram_core::neuron_memory::compute_address_packed(packed_input, conn, bits_per_neuron) as u64;
 			let mem_start = offsets[neuron_idx] as usize;
 			let mem_count = counts[neuron_idx] as usize;
 			let mut cell = default_cell;
@@ -1512,7 +1531,8 @@ mod tests
 					run_seed,
 					e,
 				);
-				if s > best_s
+				// Ties -> LAST max (the project-wide argmax convention).
+				if s >= best_s
 				{
 					best_s = s;
 					best_c = c;

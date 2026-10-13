@@ -39,6 +39,23 @@ constant uint WNN_MODE_BINARY = 3;
 constant uint WNN_MODE_QSR = 4; // stochastic 4-step MPLN (QUAD read → seeded coin)
 constant uint WNN_MODE_PLN = 5; // stochastic TERNARY (u-state read → fair coin)
 
+// --- Training write rule (twin of cell_mode.rs WriteRule) ---
+// SET: BINARY one-shot TRUE. LATTICE: TERNARY/PLN TRUE-wins join (PLN shares
+// TERNARY's cells AND writer). NUDGE: the 4-state family. Trainers dispatch on
+// this, never on a mode literal (PLN fell to the QUAD nudge until 12/10/2026).
+constant uint WNN_WRITE_SET = 0;
+constant uint WNN_WRITE_LATTICE = 1;
+constant uint WNN_WRITE_NUDGE = 2;
+
+inline uint wnn_write_rule(uint memory_mode)
+{
+	if (memory_mode == WNN_MODE_BINARY)
+		return WNN_WRITE_SET;
+	if (memory_mode == WNN_MODE_TERNARY || memory_mode == WNN_MODE_PLN)
+		return WNN_WRITE_LATTICE;
+	return WNN_WRITE_NUDGE;
+}
+
 // --- QUAD_WEIGHTED forward weights: FALSE, WEAK_FALSE, WEAK_TRUE, TRUE ---
 // (must match neuron_memory.rs QUAD_WEIGHTS)
 constant float WNN_QUAD_WEIGHTS[4] = {0.0f, 0.25f, 0.75f, 1.0f};

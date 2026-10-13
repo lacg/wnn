@@ -279,6 +279,9 @@ mod metal_atomic_test;
 
 #[cfg(target_os = "macos")]
 mod marker_train;
+// The GPU trainer's knobs as a per-call value (never process-global set_var).
+#[cfg(target_os = "macos")]
+mod train_knobs;
 // IDS-37 stages 2+4: train a batch's distinct neurons once (rate >= 1.0, OI).
 #[cfg(target_os = "macos")]
 mod multiplicity_batch;
@@ -286,6 +289,15 @@ mod multiplicity_batch;
 mod trained_layer;
 #[cfg(all(test, target_os = "macos"))]
 mod multiplicity_parity_tests;
+// PLN trains through TERNARY's lattice on both IDS trainers (12/10/2026).
+#[cfg(all(test, target_os = "macos"))]
+mod pln_writer_tests;
+// CPU scorers skip the -1 prefix-pad connections like the GPU kernels (12/10/2026).
+#[cfg(all(test, target_os = "macos"))]
+mod mixed_bits_scorer_tests;
+// The multi-cluster GA fitness (CE) path vs the reference scorer (12/10/2026).
+#[cfg(all(test, target_os = "macos"))]
+mod ce_path_tests;
 
 #[cfg(target_os = "macos")]
 mod marker_probe;

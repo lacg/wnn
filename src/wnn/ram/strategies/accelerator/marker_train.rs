@@ -843,7 +843,7 @@ pub mod batched_path
 			let chunk_bits = &genomes_bits_flat[start..end];
 			let chunk_conns = &genomes_connections_flat[conn_prefix[start]..conn_prefix[end]];
 			let chunk_neurons = [end - start];
-			let mut chunk_exports = batched_train_core(
+			let tb = train_batch_to_table(
 				chunk_bits,
 				&chunk_neurons,
 				chunk_conns,
@@ -861,23 +861,20 @@ pub mod batched_path
 				class_weights,
 				start as u32,
 				memory_mode,
+				crate::train_knobs::TrainKnobs::from_env(),
 			)?;
-			let export = chunk_exports
-				.pop()
-				.ok_or_else(|| "neuron-chunked path: core returned empty Vec".to_string())?;
-			let sparse = export
-				.sparse_exports
-				.into_iter()
-				.next()
-				.ok_or_else(|| "neuron-chunked path: chunk export has no sparse_exports".to_string())?;
+			// The chunk's RAW per-neuron ranges, straight off its table. Until
+			// 12/10/2026 this took the chunk's finished GenomeExport: under
+			// WNN_COALESCE_GROUPS=1 that export is padded to the chunk's
+			// neuron BUCKET (2 neurons -> 5 slots), so every later chunk landed
+			// at the wrong neuron index; at bits <= SPARSE_THRESHOLD it was
+			// densified and the chunk errored (no sparse_exports).
+			let (k, v, o, c) = tb.single_cluster_ranges(end - start);
 			let base = keys.len() as u32;
-			for n in 0..sparse.num_neurons
-			{
-				offsets.push(base + sparse.offsets[n]);
-				counts.push(sparse.counts[n]);
-			}
-			keys.extend_from_slice(&sparse.keys);
-			values.extend_from_slice(&sparse.values);
+			offsets.extend(o.iter().map(|&off| base + off));
+			counts.extend_from_slice(&c);
+			keys.extend_from_slice(&k);
+			values.extend_from_slice(&v);
 			start = end;
 		}
 
@@ -899,13 +896,18 @@ pub mod batched_path
 			&neurons_full,
 			&groups,
 		);
+		// A coalesced group lays out its neuron BUCKET (>= n_total); the slots
+		// past the real neurons are empty ranges, as the unchunked export has.
+		let group_neurons = groups[0].total_neurons();
+		offsets.resize(group_neurons, keys.len() as u32);
+		counts.resize(group_neurons, 0);
 		// Same bits routing as the grouped path above.
 		let bits0 = groups[0].bits;
 		let (group_info, dense_exports, dense_coverage, sparse_exports) =
 			if bits0 <= crate::adaptive::SPARSE_THRESHOLD
 			{
 				let (words, coverage) = crate::adaptive::eval_export::densify_sparse_export(
-					&keys, &values, &offsets, &counts, n_total, bits0, memory_mode,
+					&keys, &values, &offsets, &counts, group_neurons, bits0, memory_mode,
 				);
 				(vec![(false, 0, vec![0])], vec![words], vec![coverage], vec![])
 			}
@@ -916,7 +918,7 @@ pub mod batched_path
 					values,
 					offsets,
 					counts,
-					num_neurons: n_total,
+					num_neurons: group_neurons,
 				}])
 			};
 		Ok(vec![GenomeExport {
@@ -1137,6 +1139,7 @@ pub mod batched_path
 				class_weights,
 				start as u32,
 				memory_mode,
+				crate::train_knobs::TrainKnobs::from_env(),
 			)?;
 			t_train_ms += t0.elapsed().as_secs_f64() * 1000.0;
 			let (markers_buf, keys_buf, values_buf) = tb
@@ -1227,6 +1230,24 @@ pub mod batched_path
 		/// Needed by the export step: densifying a low-bits group must
 		/// initialise untouched cells to the mode's empty word.
 		memory_mode: u8,
+		/// The knobs this batch trained under (the export reads the wF filter).
+		knobs: crate::train_knobs::TrainKnobs,
+	}
+
+	impl TrainedBatch
+	{
+		/// Sorted per-neuron (keys, values, offsets, counts) of the first `n`
+		/// neurons of genome 0 / cluster 0 — a single-cluster neuron chunk —
+		/// with duplicate slots merged per the writer. No group layout, no
+		/// densify: the caller assembles the full genome's export.
+		fn single_cluster_ranges(&self, n: usize) -> (Vec<u64>, Vec<u8>, Vec<u32>, Vec<u32>)
+		{
+			let cap = self.cluster_capacity[0] as u32;
+			let base = self.cluster_offset_in_genome[0] as u32;
+			let slot_offsets: Vec<u32> = (0..n as u32).map(|i| base + i * cap).collect();
+			let merge = crate::atomic_hashtable::SlotMerge::for_batch(self.use_oi, self.memory_mode, self.knobs.export_skip_wf);
+			self.gpu_table.export_per_neuron(&slot_offsets, &vec![cap; n], merge)
+		}
 	}
 
 	/// The original batched dispatch body. `neuron_index_offset` is threaded to
@@ -1279,6 +1300,7 @@ pub mod batched_path
 			class_weights,
 			neuron_index_offset,
 			memory_mode,
+			crate::train_knobs::TrainKnobs::from_env(),
 		)?;
 		let t_after_train = t_phase.elapsed().as_secs_f64() * 1000.0;
 		let exports = export_trained_batch(&tb, genomes_bits_flat, genomes_neurons_flat)?;
@@ -1316,6 +1338,7 @@ pub mod batched_path
 		class_weights: Option<&[u32]>,
 		neuron_index_offset: u32,
 		memory_mode: u8,
+		knobs: crate::train_knobs::TrainKnobs,
 	) -> Result<TrainedBatch, String>
 	{
 		if num_genomes == 0
@@ -1827,17 +1850,15 @@ pub mod batched_path
 		// `== QUAD_WEIGHTED`, which dropped QSR to the legacy clamped-nudge
 		// trainer and its z<=8 / z=1 chunk policy (~12x slower).
 		let use_oi = ram_core::neuron_memory::order_independent_training_active(memory_mode);
-		// WNN_EXAMPLE_CHUNKS overrides the z heuristic (tuning/bench escape hatch).
-		let env_chunks = std::env::var("WNN_EXAMPLE_CHUNKS")
-			.ok()
-			.and_then(|s| s.parse::<u32>().ok())
-			.filter(|&v| v > 0);
+		// WNN_EXAMPLE_CHUNKS (via `knobs`) overrides the z heuristic.
+		let env_chunks = knobs.example_chunks;
 		// Occupancy fix 07/07/2026: the old MAX_EXAMPLE_CHUNKS=8 cap left the
 		// neuron-chunked single-genome path at 256 threads — latency-bound on
 		// big hash tables (34s/dispatch; z=1024 measured 30× faster). High z is
-		// exact ONLY in OI mode: duplicate-key claims from concurrent inserts
-		// are merged at export (oi_merge — commutative counters). Legacy mode
-		// keeps the old tuned heuristic (order-dependent anyway).
+		// exact in OI mode AND for the lattice/set writers (TERNARY/PLN/BINARY):
+		// duplicate-key claims from concurrent inserts are merged at export
+		// (oi_merge / lattice join — `SlotMerge`, since 12/10/2026 for the
+		// lattice). Non-OI modes keep the old tuned heuristic (z <= 8).
 		const OI_TARGET_THREADS: u64 = 32768;
 		const OI_MAX_EXAMPLE_CHUNKS: u64 = 1024;
 		let num_example_chunks: u32 = if let Some(z) = env_chunks
@@ -1960,6 +1981,7 @@ pub mod batched_path
 			has_heterogeneous_bpn,
 			max_bits_in_batch,
 			conn_per_genome,
+			knobs,
 		})
 	}
 
@@ -1987,6 +2009,7 @@ pub mod batched_path
 			max_bits_in_batch,
 			conn_per_genome,
 			memory_mode,
+			knobs,
 			..
 		} = tb;
 		let (num_genomes, num_clusters, num_neurons_per_genome) =
@@ -1999,6 +2022,10 @@ pub mod batched_path
 			*conn_per_genome,
 			*use_oi,
 		);
+
+		// Duplicate-key slots (concurrent GPU claims) merge per the writer:
+		// OI counters, the lattice join (TERNARY/PLN/BINARY), or unmerged.
+		let merge = crate::atomic_hashtable::SlotMerge::for_batch(use_oi, memory_mode, knobs.export_skip_wf);
 
 		// Build per-genome GenomeExport from the flat buffer
 		let mut exports: Vec<GenomeExport> = Vec::with_capacity(num_genomes);
@@ -2063,7 +2090,7 @@ pub mod batched_path
 				}
 
 				let (keys, values, offsets, counts) =
-					gpu_table.export_per_neuron(&slot_offsets, &slot_capacities, use_oi);
+					gpu_table.export_per_neuron(&slot_offsets, &slot_capacities, merge);
 
 				// Store DENSE below the threshold. A hash export at b=4 costs
 				// ~152 B/neuron against the dense array's 4 B and turns an O(1)
@@ -2174,7 +2201,7 @@ pub mod batched_path
 		/// (the OI gate used to be a `== QUAD_WEIGHTED` literal, so QSR trained
 		/// on a different path than the mode it shares its cells with).
 		///
-		/// Training happens in `memory_mode`; SCORING of a stochastic mode (QSR)
+		/// Training happens in `memory_mode`; SCORING of a stochastic mode (QSR; PLN → TERNARY)
 		/// goes through its deterministic twin QUAD_WEIGHTED — same 4-state cells,
 		/// graded read instead of the coin — so the comparison is exact and the
 		/// argmax-separation check is meaningful (a coin on the untrained 0.25
@@ -2187,6 +2214,8 @@ pub mod batched_path
 				{
 					ram_core::neuron_memory::QUAD_WEIGHTED
 				}
+				// PLN's deterministic twin: TERNARY at empty_value 0.5.
+				Some(ram_core::cell_mode::CellMode::Pln) => ram_core::neuron_memory::TERNARY,
 				_ => memory_mode,
 			};
 			use crate::adaptive::{
@@ -2287,11 +2316,15 @@ pub mod batched_path
 			// group index — they coincide here only because both groups are dense.
 			assert_eq!(bexp.group_info[0], (false, 0, vec![0, 1]));
 			assert_eq!(bexp.group_info[1], (false, 1, vec![2]));
-			// 4 neurons x 2^8 cells and 3 neurons x 2^10 cells, packed 31/word.
-			assert_eq!(bexp.dense_exports[0].len(), 4 * (256usize.div_ceil(31)));
-			assert_eq!(bexp.dense_exports[1].len(), 3 * (1024usize.div_ceil(31)));
-			assert_eq!(bexp.dense_coverage[0].len(), (4 * 256usize).div_ceil(64));
-			assert_eq!(bexp.dense_coverage[1].len(), (3 * 1024usize).div_ceil(64));
+			// 4 neurons x 2^8 cells and 3 neurons x 2^10 cells, packed 31/word —
+			// or, under WNN_COALESCE_GROUPS=1, each cluster laid out at its
+			// neuron BUCKET (2 -> 5, 3 -> 5): 10 and 5 neuron slots.
+			let (n0, n1) = if crate::adaptive::use_coalesced_groups() { (10, 5) } else { (4, 3) };
+			assert_eq!((bexp.groups[0].total_neurons(), bexp.groups[1].total_neurons()), (n0, n1));
+			assert_eq!(bexp.dense_exports[0].len(), n0 * (256usize.div_ceil(31)));
+			assert_eq!(bexp.dense_exports[1].len(), n1 * (1024usize.div_ceil(31)));
+			assert_eq!(bexp.dense_coverage[0].len(), (n0 * 256usize).div_ceil(64));
+			assert_eq!(bexp.dense_coverage[1].len(), (n1 * 1024usize).div_ceil(64));
 			// Coverage must be a strict subset of the address space and non-empty:
 			// something was trained, but not everything was reached.
 			let set: u32 = bexp.dense_coverage[0].iter().map(|w| w.count_ones()).sum();
@@ -2436,6 +2469,52 @@ pub mod batched_path
 		fn multigroup_parity_quad_binary()
 		{
 			run_multigroup_parity(ram_core::neuron_memory::QUAD_BINARY);
+		}
+
+		/// PLN trains through TERNARY's lattice on both trainers (12/10/2026;
+		/// it fell to the clamped QUAD nudge before, inverting FALSE visits).
+		#[test]
+		fn multigroup_parity_pln()
+		{
+			run_multigroup_parity(ram_core::neuron_memory::PLN);
+		}
+
+		/// Chunked vs unchunked on a DENSE (bits <= SPARSE_THRESHOLD), MIXED-bits
+		/// genome, TERNARY (lattice: exact under any order). Before 12/10/2026
+		/// the chunked trainer read each chunk's finished export: a low-bits
+		/// chunk was already densified (Err: no sparse_exports), and under
+		/// WNN_COALESCE_GROUPS=1 every chunk was padded to its neuron bucket,
+		/// shifting later neurons. Run with and without WNN_COALESCE_GROUPS=1.
+		#[test]
+		fn neuron_chunked_matches_unchunked_dense_mixed_bits()
+		{
+			if get_trainer().is_err()
+			{
+				eprintln!("[chunked_tests] no Metal device — skipping");
+				return;
+			}
+			let (num_train, tib) = (1500usize, 16usize);
+			let bools: Vec<bool> = (0..num_train * tib).map(|i| (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 63 == 1).collect();
+			let packed = ram_core::packed_bits::PackedBits::from_bool_slice(&bools, tib);
+			let targets: Vec<i64> = (0..num_train).map(|ex| ((ex * 7) % 3 == 0) as i64).collect();
+			let bits_flat = vec![10usize, 8, 10, 10, 9, 10, 7];
+			let conns: Vec<i64> = bits_flat.iter().enumerate().flat_map(|(n, &b)| (0..b).map(move |k| ((3 * k + n) % tib) as i64)).collect();
+			let mode = ram_core::neuron_memory::TERNARY;
+			let unchunked = batched_train_offspring(
+				&bits_flat, &[bits_flat.len()], &conns, 1, 1, &packed, &targets, &[], num_train, 0, tib, 0.5, 0.5, 42, None, mode,
+			)
+			.expect("unchunked train failed");
+			let cap = marker_capacity_for_train(num_train, 10, 0.5);
+			let chunked = train_single_genome_neuron_chunked(
+				&bits_flat, &conns, &packed, &targets, &[], num_train, 0, tib, 0.5, 0.5, 42, None, cap * 16 * 2, mode,
+			)
+			.expect("chunked train failed");
+			let (a, b) = (&unchunked[0], &chunked[0]);
+			assert_eq!(a.connections, b.connections, "connections differ");
+			assert_eq!(a.group_info, b.group_info, "group_info differs");
+			assert!(a.sparse_exports.is_empty() && b.sparse_exports.is_empty(), "low bits must densify");
+			assert_eq!(a.dense_exports, b.dense_exports, "dense rows differ");
+			assert_eq!(a.dense_coverage, b.dense_coverage, "coverage differs");
 		}
 
 		/// Chunked-vs-unchunked parity. Data is built so every (neuron, example)
@@ -2598,6 +2677,32 @@ pub mod batched_path
 			);
 		}
 
+		/// One single-cluster binary-IDS genome trained + exported under
+		/// EXPLICIT knobs (z threads per neuron, wF filter). Tests never
+		/// `set_var` a knob: the env is process-global and every concurrently
+		/// running test that trains would read it (the 12/10/2026 parallel-
+		/// test flakes).
+		#[allow(clippy::too_many_arguments)]
+		fn train_one_with(
+			knobs: crate::train_knobs::TrainKnobs,
+			bits_flat: &[usize],
+			conns: &[i64],
+			packed: &ram_core::packed_bits::PackedBits,
+			targets: &[i64],
+			total_input_bits: usize,
+			sample_rate: f32,
+			memory_mode: u8,
+		) -> GenomeExport
+		{
+			let npc = [bits_flat.len()];
+			let tb = train_batch_to_table(
+				bits_flat, &npc, conns, 1, 1, packed, targets, &[], targets.len(), 0, total_input_bits, 0.5,
+				sample_rate, 42, None, 0, memory_mode, knobs,
+			)
+			.expect("train_one_with: train failed");
+			export_trained_batch(&tb, bits_flat, &npc).expect("train_one_with: export failed").remove(0)
+		}
+
 		/// High-z exactness under address collisions (opt-in: requires
 		/// WNN_ORDER_INDEPENDENT_TRAIN=1 in the process env — OI is what makes
 		/// z-parallel training commutative; skips otherwise).
@@ -2682,30 +2787,10 @@ pub mod batched_path
 			}
 
 			let mut runs = Vec::new();
-			for z in ["1", "2", "8", "64", "1024"]
+			for z in [1u32, 2, 8, 64, 1024]
 			{
-				std::env::set_var("WNN_EXAMPLE_CHUNKS", z);
-				let out = batched_train_core(
-					&bits_flat,
-					&[n_neurons],
-					&conns,
-					1,
-					1,
-					&packed,
-					&targets,
-					&[],
-					num_train,
-					0,
-					total_input_bits,
-					0.5,
-					1.0,
-					42,
-					None,
-					0,
-					memory_mode,
-				)
-				.expect("oi_z_parity train failed");
-				let g = out.into_iter().next().unwrap();
+				let knobs = crate::train_knobs::TrainKnobs::with(Some(z), true);
+				let g = train_one_with(knobs, &bits_flat, &conns, &packed, &targets, total_input_bits, 1.0, memory_mode);
 				let mut hist = [0usize; 4];
 				for &v in &g.sparse_exports[0].values
 				{
@@ -2720,7 +2805,6 @@ pub mod batched_path
 				);
 				runs.push(g);
 			}
-			std::env::remove_var("WNN_EXAMPLE_CHUNKS");
 
 			let a = &runs[0].sparse_exports[0];
 			for (i, run) in runs.iter().enumerate().skip(1)
@@ -2751,6 +2835,99 @@ pub mod batched_path
 				memory_mode,
 				total
 			);
+		}
+
+		/// The oi_z_parity collision fixture (256 distinct 8-bit patterns over
+		/// 16 input bits, 13-bit neurons): every address is first-touched by many
+		/// z-threads at once, so duplicate-key claims are guaranteed at high z.
+		/// Labels follow input bit 0 with a 1-in-7 flip, so lattice cells end
+		/// FALSE as well as TRUE.
+		fn collision_fixture() -> (Vec<usize>, Vec<i64>, ram_core::packed_bits::PackedBits, Vec<i64>)
+		{
+			let (num_train, tib, n_neurons, bits) = (200_000usize, 16usize, 8usize, 13usize);
+			let pattern = |ex: usize| (ex as u32).wrapping_mul(2654435761) >> 16 & 0xFF;
+			let bools: Vec<bool> = (0..num_train).flat_map(|ex| (0..tib).map(move |b| (pattern(ex) >> b) & 1 == 1)).collect();
+			let targets = (0..num_train).map(|ex| ((pattern(ex) & 1) as i64) ^ (ex % 7 == 0) as i64).collect();
+			let conns = (0..n_neurons).flat_map(|n| (0..bits).map(move |k| ((k + n) % tib) as i64)).collect();
+			(vec![bits; n_neurons], conns, ram_core::packed_bits::PackedBits::from_bool_slice(&bools, tib), targets)
+		}
+
+		/// The modes whose GPU training must be exactly repeatable here: the
+		/// lattice / set writers always, the OI-counter modes under OI.
+		fn repeatable_modes() -> Vec<u8>
+		{
+			use ram_core::neuron_memory::*;
+			[TERNARY, PLN, BINARY, QUAD_WEIGHTED, QSR].into_iter().filter(|&m| training_is_order_independent(m)).collect()
+		}
+
+		fn assert_same_export(a: &GenomeExport, b: &GenomeExport, what: &str)
+		{
+			assert_eq!(a.sparse_exports.len(), b.sparse_exports.len(), "{what}: sparse groups");
+			for (sa, sb) in a.sparse_exports.iter().zip(&b.sparse_exports)
+			{
+				assert_eq!(sa.counts, sb.counts, "{what}: counts (unmerged duplicates?)");
+				assert_eq!(sa.keys, sb.keys, "{what}: keys");
+				assert_eq!(sa.values, sb.values, "{what}: cells");
+			}
+		}
+
+		/// Lattice / set modes at z = 1 (one thread per neuron, race-free) vs
+		/// high z (duplicate-key storm): the export's lattice join must rebuild
+		/// the z = 1 memory exactly. Before 12/10/2026 lattice duplicates were
+		/// exported unmerged — TERNARY/PLN/BINARY GPU training depended on
+		/// scheduling at any z > 1 (production z <= 8 on small batches).
+		#[test]
+		fn lattice_z_parity_with_collisions()
+		{
+			if get_trainer().is_err()
+			{
+				eprintln!("[lattice_z_parity] no Metal device — skipping");
+				return;
+			}
+			let (bits, conns, packed, targets) = collision_fixture();
+			for mode in [ram_core::neuron_memory::TERNARY, ram_core::neuron_memory::PLN, ram_core::neuron_memory::BINARY]
+			{
+				let run = |z: u32| {
+					let knobs = crate::train_knobs::TrainKnobs::with(Some(z), true);
+					train_one_with(knobs, &bits, &conns, &packed, &targets, 16, 1.0, mode)
+				};
+				let reference = run(1);
+				for z in [2u32, 8, 64, 1024]
+				{
+					assert_same_export(&reference, &run(z), &format!("mode {mode} z={z} vs z=1"));
+				}
+			}
+		}
+
+		/// Concurrent HOST callers (the production shape: `train_single_via_marker`
+		/// from rayon workers, the B12 hybrid GPU thread beside the CPU arm,
+		/// adaptive retrains in par_iter) each train in their own table on the
+		/// shared queue. Eight threads x three rounds of the collision fixture at
+		/// z = 64 must reproduce the serial export, every mode that is
+		/// order-independent in this process.
+		#[test]
+		fn concurrent_gpu_training_is_deterministic()
+		{
+			if get_trainer().is_err()
+			{
+				eprintln!("[concurrent_train] no Metal device — skipping");
+				return;
+			}
+			let (bits, conns, packed, targets) = collision_fixture();
+			let knobs = crate::train_knobs::TrainKnobs::with(Some(64), true);
+			for mode in repeatable_modes()
+			{
+				let train = || train_one_with(knobs, &bits, &conns, &packed, &targets, 16, 1.0, mode);
+				let reference = train();
+				let runs: Vec<GenomeExport> = std::thread::scope(|scope| {
+					let handles: Vec<_> = (0..8).map(|_| scope.spawn(|| (0..3).map(|_| train()).collect::<Vec<_>>())).collect();
+					handles.into_iter().flat_map(|h| h.join().expect("trainer thread panicked")).collect()
+				});
+				for (i, run) in runs.iter().enumerate()
+				{
+					assert_same_export(&reference, run, &format!("mode {mode} concurrent run {i}"));
+				}
+			}
 		}
 
 		/// Pure-math gate check: eval-in-place must fire for exactly the shapes
@@ -2950,7 +3127,9 @@ pub mod batched_path
 			let mut ref_train = vec![0u32; num_train];
 			let (mut eval_hits, mut eval_misses) = (0usize, 0usize);
 
-			std::env::set_var("WNN_EXPORT_SKIP_WF", "0");
+			// wF cells kept in the export (explicit knobs — never set_var: other
+			// tests train concurrently and would read it).
+			let knobs = crate::train_knobs::TrainKnobs::with(None, false);
 			let mut start = 0usize;
 			while start < n_neurons
 			{
@@ -2976,6 +3155,7 @@ pub mod batched_path
 					None,
 					start as u32,
 					ram_core::neuron_memory::QUAD_WEIGHTED,
+					knobs,
 				)
 				.expect("chunk train failed");
 				// (a) probe the resident table.
@@ -3034,7 +3214,6 @@ pub mod batched_path
 				);
 				start = end;
 			}
-			std::env::remove_var("WNN_EXPORT_SKIP_WF");
 
 			assert!(
 				eval_hits > 0 && eval_misses > 0,
@@ -3301,28 +3480,19 @@ pub mod batched_path
 
 			for z in [8u32, 64, 256, 1024]
 			{
-				std::env::set_var("WNN_EXAMPLE_CHUNKS", z.to_string());
+				let knobs = crate::train_knobs::TrainKnobs::from_env();
+				let knobs = crate::train_knobs::TrainKnobs::with(Some(z), knobs.export_skip_wf);
 				let t0 = std::time::Instant::now();
-				let out = batched_train_core(
+				let out = [train_one_with(
+					knobs,
 					&bits_flat,
-					&[n_neurons],
 					&conns,
-					1,
-					1,
 					&packed,
 					&targets,
-					&[],
-					num_train,
-					0,
 					total_input_bits,
-					0.5,
 					0.25,
-					42,
-					None,
-					0,
 					ram_core::neuron_memory::QUAD_WEIGHTED,
-				)
-				.expect("bench train failed");
+				)];
 				let total: u32 = out[0]
 					.sparse_exports
 					.iter()
@@ -3335,7 +3505,6 @@ pub mod batched_path
 					total
 				);
 			}
-			std::env::remove_var("WNN_EXAMPLE_CHUNKS");
 		}
 	}
 } // mod batched_path

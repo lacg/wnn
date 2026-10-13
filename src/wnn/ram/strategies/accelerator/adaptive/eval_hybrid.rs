@@ -1937,6 +1937,14 @@ mod tests
 			eprintln!("[eval_hybrid] no Metal device — skipping");
 			return;
 		}
+		// Batch-size invariance is an OI property: the legacy clamped QUAD nudge is
+		// write-order dependent, and GPU write order depends on the batch's thread
+		// layout. Same gate as oi_z_parity.
+		if !ram_core::neuron_memory::order_independent_training_enabled()
+		{
+			eprintln!("[eval_hybrid] WNN_ORDER_INDEPENDENT_TRAIN not set — skipping");
+			return;
+		}
 		let one = sampled_results("1");
 		let four = sampled_results("4");
 		let bits = |v: &[(f64, f64, f64, f64, f64)]| {

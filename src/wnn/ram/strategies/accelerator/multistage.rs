@@ -4287,7 +4287,7 @@ mod cpu_gpu_parity_tests
 {
 	use super::*;
 	use crate::adaptive::{
-		build_groups, build_neuron_metadata, evaluate_group_metal, evaluate_group_sparse_gpu,
+		build_neuron_metadata, evaluate_group_metal, evaluate_group_sparse_gpu,
 		get_metal_evaluator, get_sparse_metal_evaluator, per_cluster_max_bits,
 		reorganize_connections_for_gpu, train_genome_in_slot, GroupMemory,
 	};
@@ -4348,7 +4348,33 @@ mod cpu_gpu_parity_tests
 		run_cpu_gpu_parity(200);
 	}
 
+	/// Coalesced groups (WNN_COALESCE_GROUPS's layout, forced here): clusters
+	/// of 4 neurons laid out at the bucket MAX 5, scored over their 4 actual
+	/// neurons. Until 12/10/2026 both GPU forwards averaged over the padded 5.
+	#[test]
+	fn cpu_fallback_matches_gpu_coalesced_dense()
+	{
+		run_cpu_gpu_parity_layout(8, true);
+	}
+
+	#[test]
+	fn cpu_fallback_matches_gpu_coalesced_sparse()
+	{
+		run_cpu_gpu_parity_layout(16, true);
+	}
+
+	/// Neurons a cluster scores: `actual_neurons` in a coalesced group.
+	fn actual_neurons_of(group: &crate::adaptive::ConfigGroup, local_cluster: usize) -> usize
+	{
+		group.actual_neurons.as_ref().map_or(group.neurons, |an| an[local_cluster] as usize)
+	}
+
 	fn run_cpu_gpu_parity(bits: usize)
+	{
+		run_cpu_gpu_parity_layout(bits, crate::adaptive::use_coalesced_groups());
+	}
+
+	fn run_cpu_gpu_parity_layout(bits: usize, coalesced: bool)
 	{
 		let Some(metal) = get_metal_evaluator()
 		else
@@ -4401,7 +4427,15 @@ mod cpu_gpu_parity_tests
 		let (cluster_neuron_starts, neuron_conn_offsets) =
 			build_neuron_metadata(&bits_per_neuron, &neurons_per_cluster);
 		let per_cluster_bits = per_cluster_max_bits(&bits_per_neuron, &neurons_per_cluster);
-		let groups = build_groups(&per_cluster_bits, &neurons_per_cluster);
+		let groups = if coalesced
+		{
+			crate::adaptive::build_config_groups_coalesced(&per_cluster_bits, &neurons_per_cluster)
+		}
+		else
+		{
+			crate::adaptive::build_config_groups(&per_cluster_bits, &neurons_per_cluster)
+		};
+		assert_eq!(groups.iter().any(|g| g.is_coalesced()), coalesced, "layout under test");
 		let mut cluster_to_group = vec![(0usize, 0usize); num_clusters];
 		for (gi, group) in groups.iter().enumerate()
 		{
@@ -4494,19 +4528,11 @@ mod cpu_gpu_parity_tests
 				let input_bits = eval_input.packed_row(ex_idx);
 				for (local_cluster, &cluster_id) in group.cluster_ids.iter().enumerate()
 				{
-					let actual_neurons = if let Some(ref an) = group.actual_neurons
-					{
-						an[local_cluster] as usize
-					}
-					else
-					{
-						group.neurons
-					};
 					let cpu = score_cluster_cpu(
 						memory,
 						local_cluster * group.neurons,
 						cluster_neuron_starts[cluster_id],
-						actual_neurons,
+						actual_neurons_of(group, local_cluster),
 						input_bits,
 						&bits_per_neuron,
 						&neuron_conn_offsets,
@@ -4547,7 +4573,9 @@ mod cpu_gpu_parity_tests
 							memory,
 							local_cluster * group.neurons,
 							cluster_neuron_starts[cluster_id],
-							group.neurons,
+							// The cluster's ACTUAL neurons: a coalesced group's
+							// bucket MAX ran past the genome (index out of bounds).
+							actual_neurons_of(group, local_cluster),
 							input_bits,
 							&bits_per_neuron,
 							&neuron_conn_offsets,

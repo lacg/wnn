@@ -26,6 +26,59 @@ use crate::neuron_memory::{
 	BINARY, EMPTY_U8, FALSE_U8, PLN, QSR, QUAD_BINARY, QUAD_WEAK_FALSE, QUAD_WEIGHTED, TERNARY,
 };
 
+/// How one training visit writes a cell. THE dispatch every IDS trainer keys
+/// on — the CPU slot trainer (`train_genome_in_slot_range`), the GPU marker
+/// kernel (`wnn_write_rule` in common.metal, its twin) and the LM gating
+/// trainer — so a mode can never again reach a writer meant for another cell
+/// encoding (PLN fell through `!= TERNARY` to the QUAD nudge until 12/10/2026:
+/// a FALSE nudge on EMPTY(2) left 1 = PLN TRUE, i.e. inverted training).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriteRule
+{
+	/// BINARY: own-class one-shot set TRUE; FALSE-direction visits write
+	/// nothing. Idempotent, so order-independent.
+	Set,
+	/// TERNARY / PLN: the TRUE-wins lattice join EMPTY < FALSE < TRUE (TRUE
+	/// absorbs, FALSE lands only on EMPTY), on the ternary codes FALSE=0,
+	/// TRUE=1, EMPTY=2. Idempotent + commutative, so order-independent.
+	Lattice,
+	/// QUAD_WEIGHTED / QUAD_BINARY / QSR: the 4-state nudge (OI packed
+	/// counters when active, else the order-dependent clamped nudge).
+	Nudge,
+}
+
+impl WriteRule
+{
+	/// The rule for a wire code. An unknown code keeps the historical
+	/// fall-through (the nudge) — every entry point rejects unknown codes.
+	pub fn of_code(code: u8) -> WriteRule
+	{
+		CellMode::from_u8(code).map_or(WriteRule::Nudge, |m| m.write_rule())
+	}
+
+	/// The lattice join of two ternary cells (EMPTY < FALSE < TRUE) — what
+	/// the two writes leave on one cell in either order. Duplicate-key GPU
+	/// slots of one address merge through this, as OI counters merge through
+	/// `oi_merge`. BINARY cells (TRUE only, else FALSE) join the same way.
+	#[inline]
+	pub fn lattice_join(a: u8, b: u8) -> u8
+	{
+		use crate::neuron_memory::{FALSE_U8, TRUE_U8};
+		if a == TRUE_U8 || b == TRUE_U8
+		{
+			TRUE_U8
+		}
+		else if a == FALSE_U8 || b == FALSE_U8
+		{
+			FALSE_U8
+		}
+		else
+		{
+			a
+		}
+	}
+}
+
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CellMode
@@ -95,14 +148,29 @@ impl CellMode
 		matches!(self, CellMode::Qsr | CellMode::Pln)
 	}
 
+	/// How a training visit writes this mode's cells (see `WriteRule`).
+	/// PLN shares TERNARY's cells AND its writer — it differs only in the
+	/// read (a fair coin on the u-state).
+	#[inline]
+	pub fn write_rule(self) -> WriteRule
+	{
+		match self
+		{
+			CellMode::Binary => WriteRule::Set,
+			CellMode::Ternary | CellMode::Pln => WriteRule::Lattice,
+			CellMode::QuadBinary | CellMode::QuadWeighted | CellMode::Qsr => WriteRule::Nudge,
+		}
+	}
+
 	/// The mode trains through the 4-state nudging lattice and therefore
 	/// takes the ORDER-INDEPENDENT packed (obs, net) counter path
 	/// (`oi_apply_nudge` / `oi_bin_to_cell`, `OI_INITIAL` slot default) when
 	/// `WNN_ORDER_INDEPENDENT_TRAIN=1`. QUAD_WEIGHTED, QUAD_BINARY and QSR
 	/// share the lattice — QSR differs from QUAD_WEIGHTED ONLY in the read
-	/// (a coin with p = graded weight), never in the write. BINARY (one-shot
-	/// set) and TERNARY/PLN (TRUE-wins lattice) are order-independent by
-	/// construction and keep their own rules.
+	/// (a coin with p = graded weight), never in the write. BINARY
+	/// (`WriteRule::Set`) and TERNARY/PLN (`WriteRule::Lattice`, the
+	/// TRUE-wins join) are order-independent by construction and keep their
+	/// own rules. Exactly the `WriteRule::Nudge` modes.
 	///
 	/// THE single source of truth for every OI gate: `SparseTrainer::new`,
 	/// `neuron_memory::order_independent_training_active`, the batched Metal
@@ -274,6 +342,42 @@ mod tests
 		{
 			assert_eq!(mode.default_cell(), QUAD_WEAK_FALSE as u8, "{mode}");
 		}
+	}
+
+	/// PLN writes through TERNARY's lattice (never the QUAD nudge — the
+	/// 12/10/2026 inverted-PLN defect), the nudge set is exactly the OI set,
+	/// and unknown codes keep the historical nudge fall-through.
+	#[test]
+	fn write_rule_per_mode()
+	{
+		assert_eq!(CellMode::Pln.write_rule(), WriteRule::Lattice);
+		assert_eq!(CellMode::Ternary.write_rule(), WriteRule::Lattice);
+		assert_eq!(CellMode::Binary.write_rule(), WriteRule::Set);
+		for mode in CellMode::ALL
+		{
+			assert_eq!(mode.write_rule() == WriteRule::Nudge, mode.uses_oi_counters(), "{mode}");
+			assert_eq!(WriteRule::of_code(mode.as_u8()), mode.write_rule(), "{mode}");
+		}
+		assert_eq!(WriteRule::of_code(99), WriteRule::Nudge);
+	}
+
+	/// The join is commutative, idempotent, and TRUE-wins: it equals the
+	/// writer's result for any two writes (EMPTY=2 is the identity).
+	#[test]
+	fn lattice_join_is_the_writer_join()
+	{
+		use crate::neuron_memory::TRUE_U8;
+		for a in [FALSE_U8, TRUE_U8, EMPTY_U8]
+		{
+			assert_eq!(WriteRule::lattice_join(a, a), a);
+			assert_eq!(WriteRule::lattice_join(a, EMPTY_U8), a);
+			assert_eq!(WriteRule::lattice_join(a, TRUE_U8), TRUE_U8);
+			for b in [FALSE_U8, TRUE_U8, EMPTY_U8]
+			{
+				assert_eq!(WriteRule::lattice_join(a, b), WriteRule::lattice_join(b, a));
+			}
+		}
+		assert_eq!(WriteRule::lattice_join(FALSE_U8, EMPTY_U8), FALSE_U8);
 	}
 
 	#[test]

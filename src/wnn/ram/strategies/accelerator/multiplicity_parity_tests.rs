@@ -157,24 +157,6 @@ fn multi_cluster(hetero: bool, rng: &mut SmallRng) -> Batch
 	batch_of(vec![genome(&b, &[vec![0, 1, 0, 0], vec![2, 3, 4, 2], vec![5, 6, 5, 7, 6]])])
 }
 
-/// The CPU scorers (`compute_address_packed_bytes`) do not skip the -1
-/// prefix-pad connections of a heterogeneous-bits group the way the GPU
-/// kernels do (pre-existing; out-of-bounds read). Score those on GPU only.
-fn cpu_scorable(batch: &Batch) -> bool
-{
-	let mut start = 0usize;
-	for n in &batch.npc
-	{
-		let bits = &batch.bits[start..start + n];
-		if bits.iter().any(|&b| b != bits[0])
-		{
-			return false;
-		}
-		start += n;
-	}
-	true
-}
-
 /// G = 3 uniform-shape genomes (same bits / npc), different duplicate
 /// structure; genome 2 has none (identity inside a collapsing batch).
 fn three_genomes(rng: &mut SmallRng) -> Batch
@@ -237,9 +219,10 @@ fn logical_genome(batch: &Batch, num_clusters: usize, g: usize) -> (Vec<usize>, 
 // ---------------------------------------------------------------- comparisons
 
 /// Plain GPU training is itself run-to-run reproducible only for an
-/// order-independent writer: the legacy clamped nudge (QUAD/QSR without OI,
-/// and PLN always) races under GPU scheduling, so two PLAIN runs differ. For
-/// those modes only the selection (identity grouping) is asserted.
+/// order-independent writer: the legacy clamped nudge (QUAD/QSR without OI)
+/// races under GPU scheduling, so two PLAIN runs differ. For those modes only
+/// the selection (identity grouping) is asserted. PLN writes TERNARY's lattice
+/// since 12/10/2026 and is checked in full.
 fn deterministic(mode: u8) -> bool
 {
 	ram_core::neuron_memory::training_is_order_independent(mode)
@@ -266,12 +249,13 @@ fn assert_storage_equal(a: &GenomeExport, b: &GenomeExport, what: &str)
 }
 
 /// Scores bitwise equal on the CPU and GPU scorers, coverage-aware on and off.
-fn assert_scores_equal(a: &GenomeExport, b: &GenomeExport, data: &Data, mode: u8, cpu: bool, what: &str)
+/// The CPU scorers handle mixed-bits (-1 prefix-pad) groups since 12/10/2026.
+fn assert_scores_equal(a: &GenomeExport, b: &GenomeExport, data: &Data, mode: u8, what: &str)
 {
 	let dense = crate::metal_ramlm::MetalRAMLMEvaluator::new().ok();
 	let sparse = ram_core::metal_sparse::MetalSparseEvaluator::new().ok();
-	assert!(cpu || (dense.is_some() && sparse.is_some()), "{what}: GPU-only fixture needs both Metal scorers");
-	for gpu in [false, true].into_iter().filter(|&g| g || cpu)
+	let gpus: &[bool] = if dense.is_some() && sparse.is_some() { &[false, true] } else { &[false] };
+	for &gpu in gpus
 	{
 		for coverage_aware in [false, true]
 		{
@@ -385,7 +369,7 @@ fn check_batched(batch: &Batch, data: &Data, mode: u8, what: &str)
 		}
 		assert_storage_equal(&plain[g], &mult[g], &what);
 		assert_eq!(plain[g].footprint().logical_cells, mult[g].footprint().logical_cells, "{what}: logical cells");
-		assert_scores_equal(&plain[g], &mult[g], data, mode, cpu_scorable(batch), &what);
+		assert_scores_equal(&plain[g], &mult[g], data, mode, &what);
 		assert_unit_tables(&plain[g], &mult[g], &logical_genome(batch, data.num_clusters, g), &what);
 	}
 }
@@ -444,7 +428,7 @@ fn assert_matches_plain_per_genome(batch: &Batch, data: &Data, mode: u8, mult: &
 		let what = format!("{what} mode={mode} genome={g}");
 		assert_selection(&plain[0], &mult[g], &logical_genome(batch, data.num_clusters, g), true);
 		assert_storage_equal(&plain[0], &mult[g], &what);
-		assert_scores_equal(&plain[0], &mult[g], data, mode, cpu_scorable(&single), &what);
+		assert_scores_equal(&plain[0], &mult[g], data, mode, &what);
 	}
 }
 
@@ -551,7 +535,7 @@ fn check_chunked(batch: &Batch, data: &Data, mode: u8)
 	let what = format!("chunked mode={mode}");
 	assert_selection(&plain, &mult[0], &logical_genome(batch, 1, 0), true);
 	assert_storage_equal(&plain, &mult[0], &what);
-	assert_scores_equal(&plain, &mult[0], data, mode, cpu_scorable(batch), &what);
+	assert_scores_equal(&plain, &mult[0], data, mode, &what);
 }
 
 fn run_parity(mode: u8)
@@ -631,8 +615,8 @@ fn multiplicity_parity_pln()
 	run_parity(PLN);
 }
 
-/// TERNARY / BINARY always selected; OI modes exactly when the OI trainer is
-/// on; PLN never (its IDS writer is the order-dependent clamped nudge).
+/// TERNARY / BINARY / PLN always selected (lattice / set writers commute);
+/// OI modes exactly when the OI trainer is on.
 #[test]
 fn multiplicity_selection_rule()
 {
@@ -642,8 +626,7 @@ fn multiplicity_selection_rule()
 	{
 		let expected = match mode
 		{
-			TERNARY | BINARY => true,
-			PLN => false,
+			TERNARY | BINARY | PLN => true,
 			_ => oi,
 		};
 		assert_eq!(multiplicity_selected(1.0, mode, &conns), expected, "mode {mode}");
@@ -738,8 +721,7 @@ fn from_physical_aliases_and_copies()
 			let rebuilt = GenomeExport::from_physical(&units, &unit_of, p.grouping.clone(), logical_genome, mode)
 				.expect("from_physical");
 			assert_storage_equal(&logical, &rebuilt, &format!("cpu fixture {i} mode {mode}"));
-			let cpu = cpu_scorable(batch);
-			assert_scores_equal(&logical, &rebuilt, data, mode, cpu, &format!("cpu fixture {i} mode {mode}"));
+			assert_scores_equal(&logical, &rebuilt, data, mode, &format!("cpu fixture {i} mode {mode}"));
 		}
 	}
 }

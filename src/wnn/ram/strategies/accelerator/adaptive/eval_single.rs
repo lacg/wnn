@@ -95,7 +95,9 @@ pub fn evaluate_genome_hybrid(
 	// FAST PATH: If single sparse group covering all clusters, use direct CE computation
 	// This avoids the 10GB GPU→CPU transfer by computing CE on GPU
 	#[cfg(target_os = "macos")]
-	if export.group_info.len() == 1 && export.sparse_exports.len() == 1
+	// Not for a coalesced group: the CE kernel averages over the bucket MAX
+	// (no per-cluster masking); the full path below masks.
+	if export.group_info.len() == 1 && export.sparse_exports.len() == 1 && !export.groups[0].is_coalesced()
 	{
 		let (is_sparse, group_idx, cluster_ids) = &export.group_info[0];
 		if *is_sparse && cluster_ids.len() == num_clusters
@@ -246,8 +248,6 @@ pub fn evaluate_genome_hybrid(
 				};
 				let _phase_start = std::time::Instant::now();
 
-				let mut dense_idx: usize;
-				let mut sparse_idx = 0usize;
 				let all_groups_success = true;
 				let mut sparse_time_ms = 0.0f64;
 				let mut dense_time_ms = 0.0f64;
@@ -255,14 +255,17 @@ pub fn evaluate_genome_hybrid(
 
 				// Collect all sparse groups for batched evaluation (single command buffer)
 				// This eliminates ~0.5ms overhead per group from separate commit+wait cycles
+				// group_info[i] = (is_sparse, SUB-index into sparse/dense exports,
+				// cluster ids) and pairs with groups[i]. Until 12/10/2026 these
+				// loops indexed `groups` by the sub-index: a genome with a sparse
+				// AND a dense group scored one with the other's bits/connections.
 				let mut sparse_groups: Vec<crate::metal_genome_eval::SparseGroupData> = Vec::new();
-				for (is_sparse, group_idx, cluster_ids) in &export.group_info
+				for (group_idx, (is_sparse, sub_idx, cluster_ids)) in export.group_info.iter().enumerate()
 				{
 					if *is_sparse
 					{
-						let group = &export.groups[*group_idx];
-						let sparse_export = &export.sparse_exports[sparse_idx];
-						sparse_idx += 1;
+						let group = &export.groups[group_idx];
+						let sparse_export = &export.sparse_exports[*sub_idx];
 
 						sparse_groups.push(crate::metal_genome_eval::SparseGroupData {
 							connections: &export.connections
@@ -303,14 +306,12 @@ pub fn evaluate_genome_hybrid(
 				}
 
 				// Evaluate dense groups individually (uses DENSE_BUFFER_CACHE)
-				dense_idx = 0;
-				for (is_sparse, group_idx, cluster_ids) in &export.group_info
+				for (group_idx, (is_sparse, dense_sub, cluster_ids)) in export.group_info.iter().enumerate()
 				{
 					if !*is_sparse
 					{
-						let group = &export.groups[*group_idx];
-						let dense_words = &export.dense_exports[dense_idx];
-						dense_idx += 1;
+						let (group, dense_sub) = (&export.groups[group_idx], *dense_sub);
+						let dense_words = &export.dense_exports[dense_sub];
 
 						let dense_start = std::time::Instant::now();
 						group_eval.eval_dense_to_buffer(
@@ -328,6 +329,9 @@ pub fn evaluate_genome_hybrid(
 							empty_value,
 							memory_mode,
 							settings.run_seed,
+							group.actual_neurons.as_deref(),
+							export.dense_coverage.get(dense_sub).map_or(&[][..], |c| c.as_slice()),
+							settings.coverage_aware,
 						);
 
 						if phase_timing
@@ -411,40 +415,7 @@ pub fn evaluate_genome_hybrid(
 		eprintln!("[EVAL_HYBRID] CPU_FALLBACK total={}ms", total_ms);
 	}
 
-	// Compute CE, accuracy, and predictions from pre-computed scores
-	let predictions: Vec<u32> = all_scores
-		.par_iter()
-		.map(|scores| {
-			scores
-				.iter()
-				.enumerate()
-				.max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
-				.map(|(idx, _)| idx as u32)
-				.unwrap_or(0)
-		})
-		.collect();
-
-	let (total_ce, total_correct): (f64, u64) = all_scores
-		.par_iter()
-		.enumerate()
-		.map(|(ex_idx, scores)| {
-			let target_idx = eval_targets[ex_idx] as usize;
-			let predicted = predictions[ex_idx] as usize;
-			let correct: u64 = if predicted == target_idx { 1 } else { 0 };
-
-			let max_score = scores.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-			let exp_scores: Vec<f64> = scores.iter().map(|&s| (s - max_score).exp()).collect();
-			let sum_exp: f64 = exp_scores.iter().sum();
-
-			let target_prob = exp_scores[target_idx] / sum_exp;
-			let ce = -(target_prob + epsilon).ln();
-
-			(ce, correct)
-		})
-		.reduce(|| (0.0, 0), |(ce1, c1), (ce2, c2)| (ce1 + ce2, c1 + c2));
-
-	let avg_ce = total_ce / num_eval as f64;
-	let accuracy = total_correct as f64 / num_eval as f64;
+	let (avg_ce, accuracy, predictions) = multiclass_ce_acc(&all_scores, eval_targets);
 	let (f1, fpr) = compute_f1_fpr_with_normal_class(
 		&predictions,
 		eval_targets,
@@ -453,6 +424,31 @@ pub fn evaluate_genome_hybrid(
 	);
 
 	(avg_ce, accuracy, f1, fpr, 0.5)
+}
+
+/// Multi-class CE (softmax over cluster scores), accuracy and argmax
+/// predictions from per-example scores — the reference every GPU CE path
+/// (`compute_ce_from_buffer`, the sparse CE fast path) must reproduce.
+pub(crate) fn multiclass_ce_acc(all_scores: &[Vec<f64>], eval_targets: &[i64]) -> (f64, f64, Vec<u32>)
+{
+	let epsilon = 1e-10f64;
+	let argmax = |scores: &Vec<f64>| {
+		scores.iter().enumerate().max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap()).map_or(0, |(i, _)| i as u32)
+	};
+	let predictions: Vec<u32> = all_scores.par_iter().map(argmax).collect();
+	let (total_ce, total_correct): (f64, u64) = all_scores
+		.par_iter()
+		.enumerate()
+		.map(|(ex_idx, scores)| {
+			let target_idx = eval_targets[ex_idx] as usize;
+			let max_score = scores.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+			let sum_exp: f64 = scores.iter().map(|&s| (s - max_score).exp()).sum();
+			let target_prob = (scores[target_idx] - max_score).exp() / sum_exp;
+			(-(target_prob + epsilon).ln(), (predictions[ex_idx] as usize == target_idx) as u64)
+		})
+		.reduce(|| (0.0, 0), |(ce1, c1), (ce2, c2)| (ce1 + ce2, c1 + c2));
+	let n = all_scores.len().max(1) as f64;
+	(total_ce / n, total_correct as f64 / n, predictions)
 }
 
 /// Predict per-example class indices for a single trained genome.
