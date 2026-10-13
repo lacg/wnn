@@ -717,6 +717,12 @@ back to back under the same load):
 | stage 5 (logical sizing) | 1.0 | 1 | ~158 | ~18 | ~86k | 892 | bit-identical (50/50) |
 | **A (physical sizing + one dispatch)** | 1.0 | **5-6** | ~126 | ~24 | ~86k | **736** | bit-identical (50/50) |
 | A | 0.25 | 5 | ~207 | ~18 | ~278k | 1137 | bit-identical (50/50) |
+| HEAD (A + 6-8 + seed fix), worktree Python | 1.0 | 5 | ~86 | ~19 | ~86k | **529** | bit-identical (50/50) |
+| HEAD, worktree Python | 0.25 | 3-6 (varies with free RAM per fold) | ~200 | ~21 | ~278k | 1113 | 45/50 differ — the seed fix below, by design |
+
+(The plain / stage-5 / A rows ran the main tree's Python, read-only, against
+each wheel; the k-fold path is Rust-orchestrated, the HEAD rows use the
+worktree's Python.)
 
 Rate 1.0 is now 3.5x faster than the plain wheel at rate 1.0 and 1.9x faster
 than the plain wheel at rate 0.25.
@@ -735,6 +741,18 @@ than the plain wheel at rate 0.25.
   served metadata as the final row (196/18500 recorded as ...596 instead of
   ...595). `float_roundtrip` enabled; dashboard test
   `cached_threshold_metadata_floats_round_trip_exactly`.
+- **RESULTS-CHANGING at rate < 1.0 (own commit cb924ce0, droppable):** a
+  genome's sampling mask was seeded from its batch position (rng_seed +
+  batch_start / + genome_idx) and the batch size comes from free memory, so
+  GA fitness moved with the machine's RAM (measured: batch 3-6 across the 5
+  folds of one call). Every eval_hybrid route now trains with the call's seed.
+  Test `sampled_results_do_not_depend_on_batch_size`.
+- **Streamer under OI committed the vote counters per chunk**: later chunks
+  overwrote earlier evidence; streamed != in-memory (CE 0.305 vs 0.139 in
+  test_streaming_evaluator_evaluate_batch_full under OI). Counters now span
+  all chunks. Test `streamer_chunking_is_invisible`. Changes production
+  streaming results under OI.
+- The FPGA exporter leaked WNN_ORDER_INDEPENDENT_TRAIN into the process.
 - FPGA scripts put `src/wnn` (not `src`) on sys.path, so they imported
   whatever `wnn` the venv's editable install pointed at.
 - **The RTL adder summed raw cell CODES (0..3)**, not the scorer's weights
