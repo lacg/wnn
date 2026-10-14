@@ -8,7 +8,8 @@ docs/ids_results_preserved/ so a regeneration cannot silently drop them.
 POSITION IS THE FILENAME PREFIX = section number x 10:
     00-09   HEAD  — emitted BEFORE the generated sections   (e.g. 00 = section 0)
     10-59         — reserved for GENERATED sections 1-5; no files live here
-    60-99   TAIL  — emitted AFTER the generated sections    (60/70/80 = sections 6/7/8)
+    60-99   TAIL  — emitted AFTER the generated sections    (60/70/80 = sections 6/7/8;
+                                                             90-93 = sections 9-12, which overflow x10)
 
 Only the (future) end-to-end assembler should compose these. A generator that emits a
 DIFFERENT report must not append them — doing so injects one document's sections into

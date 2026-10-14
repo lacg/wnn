@@ -18,8 +18,11 @@ doubled: **~11 → ~22 of 100 completed per config**.
 | 6. Prior config-lock analysis (09/08) | `docs/ids_results_preserved/60_*.md` | hand-written, auto-appended |
 | 7. 46M single-flow manual section | `docs/ids_results_preserved/70_*.md` | hand-written, auto-appended |
 | 8. IDSX AC/CE interim (n=2, NOT publishable) | `docs/ids_results_preserved/80_*.md` | hand-written; carries CORRECTIONS to sections 0-7 |
-| 9. MCSD-auto multiclass cohort (n=5, complete) | `ids-security` agent readout, 27/08/2026 | flows 5980-5994; AUTOMATIC per-task CE anchor; pre-registered macro-F1 + benign-FPR |
-| 10. MCST support-tiered arm (n=5, complete) | direct DB read, 28/08/2026 | flows 6000-6004 (`-tiered2`); paired vs §9; `-tiered` 5995-5999 VOID |
+| 9. MCSD-auto multiclass cohort (n=5, complete) | `docs/ids_results_preserved/90_*.md` (`ids-security` agent readout, 27/08/2026) | flows 5980-5994; AUTOMATIC per-task CE anchor; pre-registered macro-F1 + benign-FPR |
+| 10. MCST support-tiered arm (n=5, complete) | `docs/ids_results_preserved/91_*.md` (direct DB read, 28/08/2026) | flows 6000-6004 (`-tiered2`); paired vs §9; `-tiered` 5995-5999 VOID |
+| 11. MCST bits-band arm (tiered3, n=5, complete) | `docs/ids_results_preserved/92_*.md` (appended 28/08/2026) | flows 6005-6009; paired vs §10 |
+| 12. IDSXD AC/CE cohort, cicids2017 cell (24/24) | `docs/ids_results_preserved/93_*.md` (appended 29/08/2026) | flows 5862-5885 |
+| Header (this provenance + metric contract) | `docs/ids_results_preserved/00_doc_header.md` | hand-written; sorts before `00_paper_*` |
 
 **No script produces this file end-to-end** (verified 24/08/2026 — nothing in `scripts/`
 emits the header above). It is hand-assembled from the generators in the table; the
