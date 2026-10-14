@@ -141,7 +141,7 @@ def _cells_carrying(ckpt_dir: str) -> set:
 	from wnn.control.controller_orchestrator import ControllerOrchestrator
 	k = int(ControllerOrchestrator.STAGE_SELECT_TOP_K)
 	have = set()
-	for label, _spec, res in _stage_entries_from_checkpoints(ckpt_dir):
+	for label, _spec, res in _stage_entries_from_checkpoints(ckpt_dir, top_k=k):
 		pop = list(getattr(res, "final_population", None) or [res.best_genome])
 		for i, g in enumerate(pop[:k]):
 			if getattr(g, "cells", None) is not None:
@@ -155,10 +155,12 @@ def _fit_identity(text: str) -> str | None:
 
 
 def _apply_fitness_identity(args, ckpt_dir: str, out_path: str) -> None:
-	from wnn.ram.strategies.phased.checkpoint import load_checkpoint
+	from wnn.ram.strategies.phased.checkpoint import load_checkpoint_top_k
 	from wnn.ram.strategies.phased.codecs import ControllerGenomeCodec
 	stage0 = sorted(glob.glob(os.path.join(ckpt_dir, "stage*_*.yaml.gz")))[0]
-	fw = (load_checkpoint(stage0, ControllerGenomeCodec()).extra or {}).get("fitness_weights") or {}
+	# k=0: the head only (extra = spec + fitness identity) — a full load of a b24 n256
+	# stage file materializes ~3.4 GB of YAML to read one dict.
+	fw = (load_checkpoint_top_k(stage0, ControllerGenomeCodec(), 0).extra or {}).get("fitness_weights") or {}
 	for k in ("err_sq", "stable", "jerk", "mono", "steady", "effort", "alt", "pos"):
 		if k in fw:
 			setattr(args, f"fit_weight_{k}", float(fw[k]))

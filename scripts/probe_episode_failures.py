@@ -64,7 +64,7 @@ def _load_stage_genome(ckpt_dir: str, stage: str, index: int):
 	"""The stage's (spec, genome) exactly as stage-select saw it — via the same
 	loader `--recalc-headline` uses."""
 	from wnn.control.phased_ga import _stage_entries_from_checkpoints
-	entries = _stage_entries_from_checkpoints(ckpt_dir)
+	entries = _stage_entries_from_checkpoints(ckpt_dir, top_k=index + 1)
 	want = stage.split("_", 1)[1].upper() if "_" in stage else stage.upper()
 	for label, spec, res in entries:
 		if label.upper() == want:

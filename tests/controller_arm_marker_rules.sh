@@ -58,6 +58,9 @@ has_marker() { [ -f "$MARKDIR/$1.json" ] && echo yes || echo no; }
 
 echo
 echo "=== R1: watchdog stop must not claim a finished cell ==="
+# The retry's memory-calm wait is zeroed (it is 3x60 s at >=25 GB in production,
+# and used to make this section hang on a busy box).
+export WNN_RETRY_POLL_S=0 WNN_RETRY_CALM_GB=0
 for rc in 143 137; do
 	STUB_BODY="$GOOD_BODY" STUB_RC=$rc \
 		run_controller_arm "wd$rc" "$MARKDIR" "$OUTDIR" "$STUB" quiet "" -- --x >/dev/null 2>&1
@@ -127,6 +130,50 @@ wait
 check "launch waited for the sentinel (>=2 s)" "$([ $((SECONDS - t0)) -ge 2 ] && echo waited || echo did-not-wait)" "waited"
 check "then banked the marker" "$(has_marker held)" "yes"
 check "no sentinel -> no wait" "$(WNN_HOLD_FILE="$TD/absent" wait_while_held quiet x; echo rc=$?)" "rc=0"
+
+echo
+echo "=== watchdog retry RESUMES from the right point (stage, not mtime) ==="
+# A stub that is killed (143) on its first flight and records the retry's argv.
+# The resume picker is real python: the stub hands it straight through.
+RSTUB="$TD/resumepy"
+cat > "$RSTUB" <<'EOS'
+#!/usr/bin/env bash
+if [ "${2:-}" = "scripts/pick_resume_point.py" ]; then exec python3 "$2" "$3"; fi
+n=$(cat "$FLIGHTS" 2>/dev/null || echo 0); echo $((n + 1)) > "$FLIGHTS"
+if [ "$n" = "0" ]; then exit 143; fi
+printf '%s\n' "$*" > "$ARGV_OUT"
+printf '%s\n' "$STUB_BODY"
+EOS
+chmod +x "$RSTUB"
+retry_argv() {   # retry_argv <case> -> the retry's "--resume-from-emergency X --resume-mode M"
+	local ck="$TD/ck_$1"
+	FLIGHTS="$TD/fl_$1" ARGV_OUT="$TD/argv_$1" STUB_BODY="$GOOD_BODY" \
+		run_controller_arm "rs_$1" "$MARKDIR" "$OUTDIR" "$RSTUB" quiet "" -- --save-stage-checkpoints "$ck" >/dev/null 2>&1
+	sed -nE 's/.*--resume-from-emergency ([^ ]+) --resume-mode ([a-z]+).*/\1 \2/p' "$TD/argv_$1" \
+		| sed "s|$ck/||"
+}
+export FLIGHTS ARGV_OUT
+mk() { mkdir -p "$TD/ck_$1"; touch -t "$3" "$TD/ck_$1/$2"; }
+# Case A — the stale-dump trap: stage 1 finished AFTER its dump, stage 4 never dumped.
+mk A emergency_stage1_neurons.yaml.gz 202610130449
+mk A stage0_grid.yaml.gz 202610122125
+mk A stage1_neurons.yaml.gz 202610130651
+check "stale stage-1 dump ignored -> stage-1 FINAL, mode next" "$(retry_argv A)" "stage1_neurons.yaml.gz next"
+# Case B — the _tw20 layout: stage 4 has a live dump (newer than any final).
+mk B emergency_stage1_neurons.yaml.gz 202610130449
+mk B stage0_grid.yaml.gz 202610122125
+mk B stage1_neurons.yaml.gz 202610130651
+mk B emergency_stage4_memory.yaml.gz 202610131744
+check "live stage-4 dump -> resume it, mode same" "$(retry_argv B)" "emergency_stage4_memory.yaml.gz same"
+# Case C — killed after MEMORY's final save: publish-only resume from it.
+mk C stage1_neurons.yaml.gz 202610130651
+mk C emergency_stage4_memory.yaml.gz 202610131744
+mk C stage4_memory.yaml.gz 202610131753
+check "stage-4 final newer than its dump -> stage-4 FINAL, mode next" "$(retry_argv C)" "stage4_memory.yaml.gz next"
+# Case D — the dump's stage is newer than a stale earlier dump in mtime order too.
+mk D stage0_grid.yaml.gz 202610122125
+mk D emergency_stage1_neurons.yaml.gz 202610130100
+check "grid final + live stage-1 dump -> the dump, mode same" "$(retry_argv D)" "emergency_stage1_neurons.yaml.gz same"
 
 echo
 echo "=== an existing marker is never rewritten (idempotent resume) ==="

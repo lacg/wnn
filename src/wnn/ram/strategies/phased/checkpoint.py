@@ -432,6 +432,64 @@ def extract_checkpoint_head(src: "str | Path", dst: "str | Path",
 	return dstp
 
 
+def _schema2_checkpoint(data: dict, codec: GenomeCodec,
+                        final_population: "Optional[list]") -> PhaseCheckpoint:
+	"""A schema-2 payload dict -> PhaseCheckpoint, with the population supplied by
+	the caller (full decode, top-K, or None) so every loader shares ONE field map."""
+	return PhaseCheckpoint(
+		phase_key=data["phase_key"],
+		phase_name=data["phase_name"],
+		strategy_type=data["strategy_type"],
+		best_genome=codec.decode(data["best_genome"]) if data.get("best_genome") is not None else None,
+		final_population=final_population,
+		iterations_run=int(data.get("iterations_run", 0)),
+		patience=int(data.get("patience", 0)),
+		final_fitness=data.get("final_fitness"),
+		final_accuracy=data.get("final_accuracy"),
+		final_threshold=data.get("final_threshold"),
+		initial_fitness=data.get("initial_fitness"),
+		initial_accuracy=data.get("initial_accuracy"),
+		extra=data.get("extra", {}),
+		saved_at=data.get("saved_at", 0.0),
+	)
+
+
+def load_checkpoint_top_k(path: "str | Path", codec: GenomeCodec,
+                          k: int) -> Optional[PhaseCheckpoint]:
+	"""Load a checkpoint with `final_population` truncated to its first `k` members
+	(the top-K: populations are saved fitness-sorted), never materializing the rest.
+
+	Why (13/10/2026): stage-select only ever reads pop[:K] of each stage, but a
+	b24 n256 stage checkpoint is ~0.4 GB gz / ~3.4 GB of YAML text, so a full
+	load_checkpoint() to get three genomes costs several GB. Here the head
+	(everything but the population) and each of the k members are streamed and
+	parsed one at a time — peak = one genome. Returns None if the file does not
+	exist. A legacy pickle / non-gz file still loads whole (no partial format),
+	then is truncated."""
+	p = find_checkpoint_file(path)
+	if p is None:
+		return None
+	k = max(0, int(k))
+	if p.suffix != ".gz":
+		ck = load_checkpoint(p, codec)
+		if ck is not None and ck.final_population:
+			ck.final_population = list(ck.final_population[:k]) or None
+		return ck
+	_head, data = _read_checkpoint_head(p)
+	members: list = []
+	for i in range(k):
+		try:
+			text = _extract_population_member_text(p, i)
+		except IndexError:
+			break                                    # population shorter than k
+		except ValueError as e:
+			if i == 0 and "not a flow sequence" in str(e):
+				break                                # final_population: null
+			raise
+		members.append(codec.decode(yaml.load(text, Loader=_YamlLoader)))
+	return _schema2_checkpoint(data, codec, members or None)
+
+
 def load_checkpoint(path: "str | Path", codec: GenomeCodec,
                     skip_population: bool = False) -> Optional[PhaseCheckpoint]:
 	"""Load a checkpoint: schema-2, legacy experiments json.gz, legacy IDS *.json,
@@ -461,25 +519,9 @@ def load_checkpoint(path: "str | Path", codec: GenomeCodec,
 
 	if data is not None:
 		if data.get("schema") == CHECKPOINT_SCHEMA_VERSION:
-			return PhaseCheckpoint(
-				phase_key=data["phase_key"],
-				phase_name=data["phase_name"],
-				strategy_type=data["strategy_type"],
-				best_genome=codec.decode(data["best_genome"]) if data.get("best_genome") is not None else None,
-				final_population=(
-					[codec.decode(g) for g in data["final_population"]]
-					if data.get("final_population") else None
-				),
-				iterations_run=int(data.get("iterations_run", 0)),
-				patience=int(data.get("patience", 0)),
-				final_fitness=data.get("final_fitness"),
-				final_accuracy=data.get("final_accuracy"),
-				final_threshold=data.get("final_threshold"),
-				initial_fitness=data.get("initial_fitness"),
-				initial_accuracy=data.get("initial_accuracy"),
-				extra=data.get("extra", {}),
-				saved_at=data.get("saved_at", 0.0),
-			)
+			return _schema2_checkpoint(data, codec, (
+				[codec.decode(g) for g in data["final_population"]]
+				if data.get("final_population") else None))
 		if "phase_result" in data:
 			# Legacy experiments format (no generation/patience — defaults 0)
 			pr = data["phase_result"]
