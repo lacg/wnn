@@ -71,7 +71,7 @@ markers with a headline held-out : 297
   h743 fits, exact / bound        : 133 / 0
   h743 off-chip (16 MB QSPI) tier : 53 / 0
   first-seed alignment (14/09)    : headline re-scored 4, arch-only headline NOT re-scorable 38  (rows marked in the tag column: [unfixed])
-  stage-select recalc (15-17/09)  : headline re-selected on the fixed trainer 143  (headline_holdout_recalc takes precedence over _aligned / original)
+  stage-select recalc (15-17/09)  : headline re-selected on the fixed trainer 145  (headline_holdout_recalc takes precedence over _aligned / original)
 ```
 
 ## The 2x2 that is not filled
@@ -159,7 +159,7 @@ moved the ceiling, with the caveat that no run has ever changed only that one fl
     20     0.1038     0.1038  CRN   99.2%    1.35    0.66  0.433  qspi     0  CONNECTIONS  2026-09-15  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_bd
     21     0.1038     0.1038  CRN   99.2%    1.35    0.83  0.255  fits     0  NEURONS      2026-09-18  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_pipeN [unfixed]
     22     0.1064     0.0960  CRN   99.6%    1.46    1.30  0.298  qspi     0  CONNECTIONS  2026-09-14  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_bd
-    23     0.1068     0.1065  CRN   99.4%    1.43    1.01  0.177  qspi?~    0  MEMORY       2026-10-13  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_tw20
+    23     0.1068     0.1065  CRN   99.4%    1.43    1.01  0.177  qspi?~    0  NEURONS      2026-10-13  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_tw20
     24     0.1079     0.1079  CRN   99.2%    1.41    0.76  0.264  fits     0  NEURONS      2026-09-17  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_pipeN [unfixed]
     25     0.1096     0.1036  CRN   99.4%    1.47    1.01  0.205  qspi~    0  MEMORY       2026-09-05  translationab    TAB_on_b32n256_cf21_brushless_L4C_s31337005
 ```
@@ -241,7 +241,7 @@ same-rule rank: a large value means that row owes its placing to the draw.
     17     0.1036  CRN   99.6%    1.42    0.96  0.195  qspi      0.1096     +8  TAB_on_b32n256_cf21_brushless_L4C_s31337005
     18     0.1038  CRN   99.2%    1.35    0.66  0.433  qspi      0.1038     +2  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_bd
     19     0.1038  CRN   99.2%    1.35    0.83  0.255  fits      0.1038     +2  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_pipeN
-    20     0.1047  CRN   99.4%    1.40    1.03  0.494  fits      0.1317    +40  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_l090_l
+    20     0.1047  CRN   99.4%    1.40    1.03  0.494  fits      0.1317    +39  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_l090_l
     21     0.1065  CRN   99.2%    1.39    1.02  0.194  qspi?     0.1068     +2  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_tw20
     22     0.1079  CRN   99.2%    1.41    0.76  0.264  fits      0.1079     +2  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_pipeN
     23     0.1093  CRN   99.2%    1.43    0.80  0.378  fits      0.0981    -14  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_full30
@@ -264,9 +264,9 @@ selection draw is visible when the two disagree.
     rot  same-rule 0.2358  ( 94.6% /  2.40° /  2.14°)   gate-dist 0.1972  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
     Δ same-rule (CRN − rot) -0.1251   Δ gate-dist -0.0314   AGREE
   b24 n256 s31337002
-    CRN  same-rule 0.1446  ( 97.4% /  1.61° /  1.06°)   gate-dist 0.1220  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
+    CRN  same-rule 0.1446  ( 97.4% /  1.61° /  1.06°)   gate-dist 0.1442  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
     rot  same-rule 0.2358  ( 94.6% /  2.40° /  2.14°)   gate-dist 0.1972  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
-    Δ same-rule (CRN − rot) -0.0912   Δ gate-dist -0.0752   AGREE
+    Δ same-rule (CRN − rot) -0.0912   Δ gate-dist -0.0531   AGREE
   b24 n256 s31337002
     CRN  same-rule 0.1099  ( 98.6% /  1.33° /  0.65°)   gate-dist 0.1099  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
     rot  same-rule 0.2358  ( 94.6% /  2.40° /  2.14°)   gate-dist 0.1972  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
