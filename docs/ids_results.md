@@ -150,11 +150,35 @@ WHAT CHANGED
   thermometer input it ties CICIDS, trails UNSW by 0.9pp and beats CIC-IoT by +4.1pp F1 / −7.6pp FPR.
   The old ciciot WNN row (93.34/8.37, 250n×100b) is superseded by the sweep's 92.99/7.49.
   **SUPERSEDED 26/09/2026 for cicids/ciciot by "IDS-2 FINAL (26/09/2026)" below** (IDSXD2 n=5 landed; ciciot call re-derived).
-* **46M (neto_full) RAW comparators, TEST-only + val_cal (13/09/2026, Plane IDS-13;
-  `verify_ids_baselines.py --dataset ciciot46m --split random_3way --raw`):** RF 97.63 / 3.57 →
-  val_cal 97.63 / 3.11 (1.0 GB) · XGB 96.04 / 4.98 → 96.04 / 4.73 (0.39 MB) · AdaBoost-100 94.94 /
-  7.58 (0.05 MB). ~0.7pp F1 above the 28/04 merged read; Acc 99.5-99.8 is the 2.4%-benign base-rate
-  artifact. No Protocol-v2 WNN 46M row exists yet (IDS-6); the legacy 2-way rows are not like-for-like.
+* **46M CIC-IoT-2023 (neto_full) classical comparators — Protocol v2, raw only (measured 13/09/2026,
+  Plane IDS-13; table added 14/10/2026).** `scripts/verify_ids_baselines.py --dataset ciciot46m --split
+  random_3way --raw`; dataset `lacg030175/CIC-IoT-2023-neto-full` (Kaggle/Neto copy, 46,686,580 rows),
+  RAW top-20 canonical features (`TOP20_RF_FEATURES`), Inf/NaN median-imputed; RF 100 trees, XGBoost
+  100/depth 6/lr 0.1, AdaBoost 100 stumps, rs 42; `val_cal` = F1-optimal threshold fit on the 10% VAL
+  (the WNN's rule); scored on the 10% TEST (4,668,657 rows, 2.4% benign). Train time RF 231 s, XGB 19 s,
+  AdaBoost 2602 s. Log: `logs/baselines_ciciot46m/rf_xgb_ada_random_3way_raw.log`. RAW only — 46.7M
+  rows are never thermo-encoded for the trees.
+
+      input  method         mode       thr      F1     FPR     Acc     size
+      raw    RF             fixed_05   0.50   97.63    3.57   99.78   1008.55 MB
+      raw    RF             val_cal    0.53   97.63    3.11   99.78
+      raw    XGBoost        fixed_05   0.50   96.04    4.98   99.63      0.39 MB
+      raw    XGBoost        val_cal    0.51   96.04    4.73   99.62
+      raw    AdaBoost-100   fixed_05   0.50   94.94    7.58   99.52      0.05 MB
+      raw    AdaBoost-100   val_cal    0.50   94.94    7.58   99.52
+      raw    MLP (128-64)   —          —         —       —       —      PENDING (Plane IDS-39, blocked by IDS-6)
+
+  Reading: F1/FPR are the columns — Acc 99.5-99.8 is the 97.6%-attack base-rate artifact. Calibration
+  moves FPR only (RF 3.57→3.11, XGB 4.98→4.73; thr 0.50-0.53 because train/test share the base rate).
+  ~0.7pp F1 above the 28/04 read on the same copy (RF 96.98/4.24, XGB 95.28/5.98, AdaBoost-50
+  93.04/11.84), which merged test+val and scored at 0.5. Neto's own published rows (RF 96.53,
+  AdaBoost 95.63) agree with this copy. The RAID-2026 46M rows (RF 92.64/13.48, XGB 91.67/14.80) are
+  bencorn's re-merge — NOT comparable (see the audit bullet below).
+  **WNN row: none yet.** The Protocol-v2 46M WNN row is IDS-6 (`IDS6-ciciot46m-B15AC-desir-r<seed>`,
+  n=5; first flow 6438 in GA Neurons since 13/10). Its GA iteration numbers (e.g. F1 92.19 / FPR 1.34
+  at gen 2, 14/10) are the during-search K-fold score, NOT comparable to this table — the comparable
+  row is its held-out `val_cal` on the same 10% TEST. The legacy 2-way 46M WNN rows (§7) are not
+  like-for-like.
 * **WHY THE RAID-2026 TABLES DISAGREE WITH THE ROWS ABOVE (13/09/2026 audit, Plane IDS-14).**
   (1) 46M "RF (ours) 92.64/13.48, XGB 91.67/14.80" = the 23/04 run on bencorn's re-merge
   (`canonical-neto`, 45.0M rows, 39 features, fabricated Time_To_Live; logs/canonical_baselines_
