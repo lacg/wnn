@@ -21,6 +21,10 @@ cd "$ROOT" || exit 1
 
 TD=$(mktemp -d)
 trap 'rm -rf "$TD"' EXIT
+# Never read the LIVE hold sentinel: run_controller_arm calls wait_while_held, whose default
+# is experiments/HOLD_CONTROLLER under cwd=$ROOT — with a real HOLD up (a deploy window) every
+# case hung on its 60 s poll (15/10/2026). The HOLD case below sets its own file.
+export WNN_HOLD_FILE="$TD/no_hold"
 MARKDIR="$TD/markers"; OUTDIR="$TD/out"
 mkdir -p "$MARKDIR" "$OUTDIR"
 FAILS=0
