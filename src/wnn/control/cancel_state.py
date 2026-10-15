@@ -71,3 +71,27 @@ def reset_sigterm() -> None:
 	with _lock:
 		_sigterm_received = False
 		_signum = None
+
+
+class RunInterrupted(BaseException):
+	"""A real SIGTERM/SIGINT reached this run: unwind it WITHOUT reporting anything
+	as finished.
+
+	15/10/2026 (SL_C_..._s31337003_tw515): the GA's cooperative stop returns a normal
+	result, and every caller treated that as a COMPLETED stage — "STAGE 4 (MEMORY)
+	done" with zero metrics, a FINAL stage checkpoint the resume picker trusted, a
+	zero held-out, and a stage-select over cancelled scores. Raising this instead
+	stops all of that at the source; main() turns it into exit 143 (the arm lib's
+	watchdog-stop rule: no marker, resume from the emergency dump).
+
+	A BaseException, like KeyboardInterrupt, so the many `except Exception` blocks
+	between a stage and main() (held-out fail-fast wrappers, crash-save handlers)
+	cannot convert a shutdown into a crash (rc!=0 -> no retry) or swallow it.
+	"""
+
+
+def raise_if_interrupted(where: str) -> None:
+	"""Raise RunInterrupted when a proper SIGTERM/SIGINT has been received."""
+	if sigterm_received():
+		raise RunInterrupted(f"shutdown requested (signal {last_signum()}) — {where}; "
+		                     f"nothing after this point is reported as finished")

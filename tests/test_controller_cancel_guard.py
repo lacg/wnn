@@ -16,7 +16,12 @@ import types
 
 import pytest
 
-import ram_accelerator
+# The CONTROLLER wheel — the flag the SIGTERM handler sets and the guard reads.
+# This imported the WORKER wheel (`import ram_accelerator`) until 15/10/2026, so
+# the tests stubbed the very flag the broken guard read and passed while the guard
+# never saw a real SIGTERM (_tw515 s3). The wheels' cancel flags are separate.
+from wnn.control._accel import require_accel
+ram_accelerator = require_accel()
 from wnn.control import cancel_state
 from wnn.control.evaluator import ControllerEvaluator
 from wnn.ram.metrics import Metrics

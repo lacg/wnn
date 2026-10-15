@@ -133,6 +133,12 @@ class ControllerOrchestrator(PhasedOrchestrator):
 				p["patience"], seed, initial_population=self._filter_cells(init_pop),
 				tracker=tr, experiment_id=eid)
 
+		# The stage functions raise RunInterrupted on a cooperative stop
+		# (_stop_if_interrupted); this re-check is the gate for the "done" line, the
+		# stage-final checkpoint and the held-out below — none of them may describe
+		# a stage a shutdown cut short (15/10/2026, _tw515 s3).
+		from wnn.control.cancel_state import raise_if_interrupted
+		raise_if_interrupted(f"Stage {stage_num} ({name}) — not reported as done")
 		m = _print_stage_result(stage_num, name, res, p["gens"], dt, ev)
 		_save_stage_checkpoint(args, stage_num, name.lower(), cur_spec, res, m)
 		ho = _maybe_holdout(args, ec, cur_spec, res, self._seeds, name)

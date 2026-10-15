@@ -192,10 +192,13 @@ def _run_controller_flow(worker, flow_data: dict):
     params = (flow_data.get("config") or {}).get("params") or {}
     worker.current_flow_id = flow_id
 
-    # Reset the Rust cancel flag (a stale flag would short-circuit the GA).
+    # Reset the CONTROLLER wheel's cancel flag (a stale flag would short-circuit
+    # the GA). This reset the WORKER wheel's flag until 15/10/2026 — a separate
+    # static since the 19/06 crate split, i.e. a no-op for the controller.
+    from wnn.control.cancel_state import RunInterrupted
     try:
-        import ram_accelerator
-        ram_accelerator.reset_cancel_flag()
+        from wnn.control._accel import require_accel
+        require_accel().reset_cancel_flag()
     except Exception as e:
         worker._log(f"WARNING: could not reset Rust cancel flag at controller flow start: {e}")
 
@@ -290,9 +293,12 @@ def _run_controller_flow(worker, flow_data: dict):
         else:
             worker._log("Controller flow completed (no final metric).")
 
-    except Exception as e:
+    except (Exception, RunInterrupted) as e:
+        # RunInterrupted (a BaseException, 15/10/2026) is phased_ga's "a signal cut
+        # this run short — nothing is finished": always the shutdown branch.
         error_msg = str(e).lower()
-        is_shutdown = worker._stop_current_flow or "shutdown" in error_msg or "stopped" in error_msg
+        is_shutdown = (isinstance(e, RunInterrupted) or worker._stop_current_flow
+                       or "shutdown" in error_msg or "stopped" in error_msg)
         flow_exists = worker.client.get_flow(flow_id) is not None
         if not flow_exists:
             worker._log(f"Controller flow {flow_id} was deleted, cleaning up")

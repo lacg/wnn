@@ -244,6 +244,29 @@ def _wire_cancel(strat, args, stage_num: int, stage_name: str) -> None:
 	_resume_ga_state_if_targeted(strat, args, stage_num)
 
 
+def _stop_if_interrupted(res, strat) -> None:
+	"""Raise RunInterrupted when the stage's GA stopped on a shutdown request.
+
+	THE ROOT OF 15/10/2026 (_tw515 s3): GenericGAStrategy turns the cooperative
+	stop into `break` + a normal OptimizerResult (stop_reason=SHUTDOWN), and every
+	caller read that as a completed stage. Called right after optimize() (and its
+	crash-save join, so the emergency dump is on disk), BEFORE anything prints
+	"done", writes a stage-final checkpoint, scores a held-out, or carries the
+	population into the next stage — the curricula included, since they all go
+	through _run_arch_phase. A SHUTDOWN without the SIGTERM witness (the Rust flag
+	seen set spuriously) is not a finished stage either."""
+	from wnn.control.cancel_state import RunInterrupted, sigterm_received
+	from wnn.ram.strategies.connectivity.framework.results import StopReason
+	stopped = getattr(res, "stop_reason", None) == StopReason.SHUTDOWN
+	if stopped or sigterm_received():
+		name = getattr(strat, "name", "stage")
+		gens = getattr(res, "iterations_run", "?")
+		raise RunInterrupted(
+			f"{name} stopped on a shutdown request at gen {gens} — NOT a completed stage "
+			f"(no done line, no stage-final checkpoint, no held-out); the emergency dump "
+			f"is the resume point")
+
+
 def _resume_ga_state_if_targeted(strat, args, stage_num: int) -> None:
 	"""--resume-from-emergency with --resume-mode same CONTINUES the dumped stage.
 
@@ -871,6 +894,7 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 		optimize_kwargs["initial_population"] = list(initial_population)
 	res = strat.optimize(**optimize_kwargs)
 	strat._checkpoint_mgr.join()  # flush the last in-stage async crash-save write
+	_stop_if_interrupted(res, strat)
 	return res, ev, time.time() - t
 
 
@@ -1231,6 +1255,7 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 		optimize_kwargs["initial_population"] = list(initial_population)
 	res = strat.optimize(**optimize_kwargs)
 	strat._checkpoint_mgr.join()  # flush the last in-stage async crash-save write
+	_stop_if_interrupted(res, strat)
 	return res, ev, time.time() - t
 
 
@@ -1286,6 +1311,10 @@ def _save_winner(path: str, args, spec: ControllerSpec,
 		},
 	}
 	if stage_num is not None:
+		# The completion marker the resume picker and --resume-mode next require
+		# (wnn.control.stage_completion). Only stage FINALS reach here with a
+		# stage_num; emergency dumps go through the mixin (emergency_dump: true).
+		payload["meta"]["stage_complete"] = True
 		payload["stage_num"] = stage_num
 	if stage_name is not None:
 		payload["stage_name"] = stage_name
@@ -1705,6 +1734,15 @@ def _resume_completed_stages(args, resume_state: dict, resume_start_stage: int,
 	for sn in want:
 		p = (find_checkpoint_file(Path(ckpt_dir) / f"stage{sn}_{names[sn]}.pkl")
 		     if ckpt_dir else None)
+		if p is not None:
+			# A "final" a shutdown wrote (pre-15/10 code) is not a finished stage —
+			# reloading it would rank cancelled-evaluation genomes.
+			from wnn.control.stage_completion import checkpoint_is_complete_final
+			ok, why = checkpoint_is_complete_final(p)
+			if not ok:
+				missing.append(f"{p.name} ({why})")
+				out.append((sn, names[sn], p))
+				continue
 		if p is None and mode == "next" and sn == dumped:
 			print(f"  [resume] WARNING Stage {sn} ({names[sn].upper()}) has no FINAL checkpoint "
 			      f"(--resume-mode next cut it short) — its stage-select candidates are the "
@@ -2115,6 +2153,10 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 			_g.cells = None
 		train_ev._evaluate_core(pop, write_back=True)   # stamp train-seed cells (K-fold accumulate)
 		metrics = ev.score_genomes(pop)                 # held-out: score on report seed, no retrain
+	# A score taken after a SIGTERM is a cancelled evaluation (zeros / sentinels),
+	# never a measurement: do not print it, return it, or let stage-select rank it.
+	from wnn.control.cancel_state import raise_if_interrupted
+	raise_if_interrupted(f"held-out [{stage_label}] on seed {report_seed}")
 	stables = [m.acc * 100 for m in metrics]
 	errs = [m.mean_attitude_error_deg for m in metrics]
 	ds = metrics[0]            # final_population[0] = the during-search winner = THE RESULT
@@ -2161,6 +2203,11 @@ def _save_stage_checkpoint(args, stage_num: int, stage_name: str,
 		return
 	if res is None or res.best_genome is None:
 		return
+	# Last line of defence (15/10/2026): a stage-final checkpoint CLAIMS the stage
+	# finished — the resume picker and --resume-mode next both trust it. Never
+	# write one once a shutdown signal has arrived.
+	from wnn.control.cancel_state import raise_if_interrupted
+	raise_if_interrupted(f"stage-final checkpoint stage{stage_num}_{stage_name.lower()} NOT written")
 	out_dir = Path(args.save_stage_checkpoints)
 	out_dir.mkdir(parents=True, exist_ok=True)
 	path = out_dir / f"stage{stage_num}_{stage_name.lower()}.pkl"
@@ -2274,6 +2321,8 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 	# resume's captured `spec` carries that forward).
 	if resume_state is None:
 		winner_spec, seed_pop0, m0, dt0, _thr = stage0_grid(args, ec, seed)
+		from wnn.control.cancel_state import raise_if_interrupted
+		raise_if_interrupted("GRID (stage 0) — its scores after the signal are cancelled evaluations")
 		stage_results = [("Grid", winner_spec, m0, dt0, grid_point_count(args))]
 		# GRID held-out (REPORT ONLY, same contract as every other stage). The grid
 		# winner is what you would ship if you stopped before the GA, so it needs the
@@ -2296,6 +2345,7 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 		if _thr2 is not None:
 			winner_spec, seed_pop0, m0, dt0, _thr = stage0_grid(
 				args, ec, seed, thresholds_override=_thr2)
+			raise_if_interrupted("GRID regrid (stage 0)")
 			stage_results = [("Grid", winner_spec, m0, dt0, grid_point_count(args))]
 			grid_res = _SNS(best_genome=(seed_pop0[0] if seed_pop0 else None),
 			                final_population=seed_pop0)
@@ -3388,6 +3438,18 @@ def main():
 		resume_state = _ctl_load(resume_path)
 		resume_state["resume_mode"] = args.resume_mode
 		resume_state["source_path"] = str(resume_path)
+		# --resume-mode next from a stage FINAL claims that stage finished. Refuse a
+		# final a shutdown wrote (15/10/2026, _tw515 s3: "MEMORY done" at gen 2/120,
+		# all-zero metrics) — resuming past it would skip the stage's real work.
+		_meta = resume_state.get("meta") or {}
+		if args.resume_mode == "next" and _meta.get("emergency_dump") is not True:
+			from wnn.control.stage_completion import stage_final_status
+			_m = resume_state.get("metrics")
+			_m = _m if isinstance(_m, dict) else (vars(_m) if _m is not None else None)
+			_ok, _why = stage_final_status({**_meta, "metrics": _m})
+			if not _ok:
+				raise SystemExit(f"--resume-mode next refused: {resume_path} is not a finished "
+				                 f"stage ({_why}). Resume its emergency dump with --resume-mode same.")
 		print(f"[main] Loaded emergency dump from {resume_path}")
 		print(f"[main]   stage_num={resume_state.get('stage_num')} "
 		      f"stage_name={resume_state.get('stage_name')!r} "
@@ -3613,8 +3675,19 @@ def main():
 			"neurons_gens": args.neurons_gens, "bits_gens": args.bits_gens,
 			"conns_gens": args.conns_gens, "memory_gens": args.memory_gens,
 		})
-		stage_results, best_final, final_population, pid_rows = _run_one(args, ec, s,
-		                                                              resume_state=resume_state)
+		from wnn.control.cancel_state import RunInterrupted
+		try:
+			stage_results, best_final, final_population, pid_rows = _run_one(
+				args, ec, s, resume_state=resume_state)
+		except RunInterrupted as e:
+			# The ONE exit for a shutdown (15/10/2026): no summary, no winner save,
+			# nothing that reads as finished. 143 = the arm lib's watchdog-stop rule
+			# (no marker; resume from the emergency dump the GA wrote at its stop).
+			_join_pending_saves()
+			print(f"\n[interrupted] {e}\n[interrupted] exiting 143 — resume with "
+			      f"--resume-from-emergency <emergency_stage*.yaml.gz> --resume-mode same",
+			      flush=True)
+			return 143
 		val_runs.append((stage_results, best_final, final_population, pid_rows))
 
 	# Single-run path: print the per-run summary directly.
