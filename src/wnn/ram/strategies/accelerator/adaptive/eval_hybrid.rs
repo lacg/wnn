@@ -518,10 +518,13 @@ fn try_eval_in_place_batch(
 	{
 		return None;
 	}
-	// IDS-37: where the multiplicity layer applies, the export path trains each
-	// distinct neuron once; the probe would train every copy. Same scores either
-	// way (both exact), so route to the cheaper export path.
-	if ram_core::neuron_memory::multiplicity_applies(cfg.neuron_sample_rate, cfg.memory_mode)
+	// IDS-37: where the multiplicity layer COLLAPSES a genome, the export path
+	// trains each distinct neuron once while the probe would train every copy.
+	// Same scores either way (both exact), so route such a batch to the cheaper
+	// export path. A genome with NO duplicate neurons (every grid genome) trains
+	// the same units on both paths, so it keeps the probe — and skips the
+	// sorted export. (07c9541f declined at rate >= 1.0 outright, for cost only.)
+	if multiplicity_collapses_any(cfg, batch_start, batch_end)
 	{
 		return None;
 	}
@@ -594,7 +597,6 @@ fn try_eval_in_place_batch(
 
 		let (ce, acc, f1, fpr, threshold) = score_vote_sums(
 			&votes,
-			bits.len(),
 			eval_targets,
 			cfg.train_targets,
 			settings,
@@ -612,24 +614,45 @@ fn try_eval_in_place_batch(
 	Some(out)
 }
 
-/// Turn per-example integer vote sums into the exact metrics tuple the export
-/// path produces. votes/4.0 = the f32 QUAD weight sum (quarters — exact), so
-/// (votes/4.0)/n reproduces the sparse-GPU per-example score bit-for-bit; the
-/// threshold + BCE/acc/F1/FPR math is the same code the export path calls.
+/// True iff the multiplicity layer would train some genome in [start, end)
+/// as FEWER units than it has neurons: the layer is selected (rate >= 1.0, an
+/// order-independent writer, real connections) and the genome's `NeuronKey`
+/// grouping is not the identity (the same check `PhysicalGenome::collapse`
+/// and `MultiplicityBatch::plain_is_exact` make).
 #[cfg(target_os = "macos")]
-fn score_vote_sums(
+fn multiplicity_collapses_any(cfg: &HybridBatchConfig, start: usize, end: usize) -> bool
+{
+	if !cfg.multiplicity()
+	{
+		return false;
+	}
+	cfg.genomes(end).iter().skip(start).any(|g| {
+		!ram_core::unit_grouping::UnitGrouping::by_key(ram_core::neuron_key::NeuronKey::genome_keys(
+			g.bits,
+			g.neurons_per_cluster,
+			g.connections,
+		))
+		.is_identity()
+	})
+}
+
+/// Turn the probe's per-example scores into the exact metrics tuple the export
+/// path produces. The scores were normalized ON THE GPU with the sparse
+/// forward pass's own division (`ChunkedVoteSums`) — bit-identical to the
+/// export path's GPU scorer (a CPU `(votes/4.0)/n` was an ulp off it, since
+/// Metal compiles with fast math); the threshold + BCE/acc/F1/FPR math is the
+/// same code the export path calls.
+#[cfg(target_os = "macos")]
+pub(crate) fn score_vote_sums(
 	votes: &crate::marker_train::ChunkedVoteSums,
-	num_neurons: usize,
 	eval_targets: &[i64],
 	train_targets: &[i64],
 	settings: ram_core::neuron_memory::EvalSettings,
 	override_threshold: Option<f64>,
 ) -> (f64, f64, f64, f64, f64)
 {
-	let n = num_neurons as f32;
-	let to_scores =
-		|v: &[u32]| -> Vec<f64> { v.iter().map(|&x| ((x as f32 / 4.0) / n) as f64).collect() };
-	let eval_scores = to_scores(&votes.eval_votes);
+	let to_scores = |v: &[f32]| -> Vec<f64> { v.iter().map(|&x| x as f64).collect() };
+	let eval_scores = to_scores(&votes.eval_scores);
 	let threshold = match override_threshold
 	{
 		Some(t) if t >= 0.0 => t,
@@ -644,7 +667,7 @@ fn score_vote_sums(
 			// Default: calibrate on training data (same as the export path's
 			// per-batch calibration loop).
 			let train_votes = votes
-				.train_votes
+				.train_scores
 				.as_ref()
 				.expect("score_train must be requested when override_threshold is None");
 			let train_scores = to_scores(train_votes);
@@ -1392,20 +1415,10 @@ fn evaluate_genomes_parallel_hybrid_impl(
 	// already computed above in compute_genome_offsets).
 	let use_provided_connections = !genomes_connections_flat.is_empty();
 
-	// Create shared eval data (Arc for zero-copy sharing with persistent worker)
-	let eval_data = Arc::new(EvalData {
-		eval_input_bits: eval_input_bits.clone(),
-		eval_targets: eval_targets.to_vec(),
-		num_eval,
-		num_clusters,
-		total_input_bits,
-		settings,
-	});
-
-	// Get persistent eval worker (initialized once, stays alive for session).
-	// Side-effect only: ensures the lazy global is initialized here rather
-	// than in the first hot-path call. Return value intentionally unused.
-	let _ = get_eval_worker();
+	// Eval runs INLINE below on the borrowed eval set. (Until 13/10/2026 this
+	// built an Arc<EvalData> holding a full CLONE of the eval matrix + targets
+	// for the persistent eval worker — which this path never calls, because
+	// it deadlocks rayon. The clone was 1.7 GB per k-fold call at 46M rows.)
 
 	// Collect all results. Tuple is
 	//   (genome_idx, ce, acc, f1, fpr, threshold, per_genome_ms).
@@ -1417,7 +1430,8 @@ fn evaluate_genomes_parallel_hybrid_impl(
 	let mut total_eval_ms = 0u128;
 	let mut total_sparse_keys = 0usize;
 
-	// Pack input bits to u64 once (shared across all genomes for GPU address computation)
+	// The train matrix as GPU u64 words — a zero-copy borrow since 13/10/2026
+	// (was a full re-pack: 6.9 GB per k-fold call at 46M rows).
 	let (packed_train_input, words_per_example) =
 		ram_core::neuron_memory::pack_packed_to_u64(train_input_bits);
 
@@ -1464,7 +1478,7 @@ fn evaluate_genomes_parallel_hybrid_impl(
 		neuron_sample_rate,
 		rng_seed,
 		class_weights,
-		packed_train_input: &packed_train_input,
+		packed_train_input,
 		words_per_example,
 		genome_bpn_offsets: &genome_bpn_offsets,
 		conn_offsets: &conn_offsets,
@@ -1596,8 +1610,6 @@ fn evaluate_genomes_parallel_hybrid_impl(
 					let train_scores = compute_per_example_scores(
 						export,
 						train_input_bits,
-						&packed_train_input,
-						words_per_example,
 						num_train,
 						num_clusters,
 						total_input_bits,
@@ -1650,11 +1662,11 @@ fn evaluate_genomes_parallel_hybrid_impl(
 			.map(|(genome_idx, export, override_threshold)| {
 				let (ce, acc, f1, fpr, threshold) = evaluate_genome_hybrid(
 					&export,
-					&eval_data.eval_input_bits,
-					&eval_data.eval_targets,
-					eval_data.num_eval,
-					eval_data.num_clusters,
-					eval_data.total_input_bits,
+					eval_input_bits,
+					eval_targets,
+					num_eval,
+					num_clusters,
+					total_input_bits,
 					settings,
 					metal_ref,
 					sparse_metal_ref,
@@ -1874,6 +1886,28 @@ mod tests
 		let input = ram_core::packed_bits::PackedBits::empty(32);
 		let g = config(&bits, &npc, &conns, &offsets, &input).genomes(2);
 		assert_eq!((g[0].connections, g[1].connections), (&conns[..3], &conns[3..]));
+	}
+
+	/// The eval-in-place multiplicity gate declines ONLY a batch holding a
+	/// genome the layer collapses: genome 0 has distinct neurons, genome 1
+	/// repeats one. TERNARY (lattice: order-independent without the OI env)
+	/// so the layer is selected at rate 1.0 regardless of the test env.
+	#[cfg(target_os = "macos")]
+	#[test]
+	fn eval_in_place_declines_only_collapsing_genomes()
+	{
+		let bits = vec![2usize, 2, 2, 2];
+		let npc = vec![2usize, 2];
+		let conns = vec![1i64, 2, 3, 4, 7, 8, 7, 8];
+		let offsets = compute_genome_offsets(&bits, &npc, 2, 1);
+		let input = ram_core::packed_bits::PackedBits::empty(32);
+		let mut cfg = config(&bits, &npc, &conns, &offsets, &input);
+		cfg.memory_mode = ram_core::neuron_memory::TERNARY;
+		assert!(!multiplicity_collapses_any(&cfg, 0, 1), "distinct neurons keep the probe");
+		assert!(multiplicity_collapses_any(&cfg, 1, 2), "a duplicate routes to the export path");
+		assert!(multiplicity_collapses_any(&cfg, 0, 2), "one collapsing genome declines the batch");
+		cfg.neuron_sample_rate = 0.5;
+		assert!(!multiplicity_collapses_any(&cfg, 0, 2), "below rate 1.0 the layer never applies");
 	}
 
 	/// Four 120n x 14b single-cluster genomes on random data, rate 0.25.

@@ -1054,12 +1054,11 @@ impl GroupMemory
 /// The scores are in group-local cluster order (need scattering to global order).
 pub(crate) fn evaluate_group_metal(
 	metal: &crate::metal_ramlm::MetalRAMLMEvaluator,
-	packed_eval: &[u64],
+	input: &ram_core::packed_bits::PackedBits,
 	connections_flat: &[i64],
 	memory_words: &[i64],
 	group: &ConfigGroup,
 	num_eval: usize,
-	words_per_example: usize,
 	coverage: &[u64],
 	coverage_aware: bool,
 	memory_mode: u8,
@@ -1075,11 +1074,11 @@ pub(crate) fn evaluate_group_metal(
 	let group_connections = &connections_flat[group.conn_offset..group.conn_offset + conn_size];
 
 	metal.forward_batch(
-		packed_eval,
+		ram_core::metal_input_buffer::GpuInputRows::Packed(input),
 		group_connections,
 		memory_words,
 		num_eval,
-		words_per_example,
+		input.words_per_row(),
 		num_neurons,
 		group.bits,
 		group.neurons,
@@ -1100,12 +1099,11 @@ pub(crate) fn evaluate_group_metal(
 /// The scores are in group-local cluster order (need scattering to global order).
 pub(crate) fn evaluate_group_sparse_gpu(
 	sparse_evaluator: &ram_core::metal_sparse::MetalSparseEvaluator,
-	packed_eval: &[u64],
+	input: &ram_core::packed_bits::PackedBits,
 	connections_flat: &[i64],
 	export: &SparseGpuExport,
 	group: &ConfigGroup,
 	num_eval: usize,
-	words_per_example: usize,
 	coverage_aware: bool,
 	memory_mode: u8,
 	empty_value: f32,
@@ -1119,14 +1117,14 @@ pub(crate) fn evaluate_group_sparse_gpu(
 	let group_connections = &connections_flat[group.conn_offset..group.conn_offset + conn_size];
 
 	sparse_evaluator.forward_batch_sparse(
-		packed_eval,
+		ram_core::metal_input_buffer::GpuInputRows::Packed(input),
 		group_connections,
 		&export.keys,
 		&export.values,
 		&export.offsets,
 		&export.counts,
 		num_eval,
-		words_per_example,
+		input.words_per_row(),
 		export.num_neurons,
 		group.bits,
 		group.neurons,

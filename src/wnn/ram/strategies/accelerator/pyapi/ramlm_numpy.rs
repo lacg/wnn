@@ -113,7 +113,7 @@ pub(crate) fn ramlm_forward_batch_metal_numpy<'py>(
 
 		evaluator
 			.forward_batch(
-				&packed_input,
+				ram_core::metal_input_buffer::GpuInputRows::Words(&packed_input),
 				&conn_vec,
 				&mem_vec,
 				num_examples,
@@ -187,7 +187,7 @@ pub(crate) fn ramlm_forward_batch_metal_cached<'py>(
 
 		evaluator
 			.forward_batch(
-				&packed_input,
+				ram_core::metal_input_buffer::GpuInputRows::Words(&packed_input),
 				&conn_vec,
 				&mem_vec,
 				num_examples,
@@ -280,7 +280,7 @@ pub(crate) fn ramlm_forward_batch_hybrid_numpy<'py>(
 					ram_core::neuron_memory::pack_bools_to_u64(&input_bools, num_examples, total_input_bits);
 				return evaluator
 					.forward_batch(
-						&packed_input,
+						ram_core::metal_input_buffer::GpuInputRows::Words(&packed_input),
 						&conn_vec,
 						&mem_vec,
 						num_examples,
@@ -312,7 +312,7 @@ pub(crate) fn ramlm_forward_batch_hybrid_numpy<'py>(
 			let (packed_gpu_input, gpu_wpe) =
 				ram_core::neuron_memory::pack_bools_to_u64(&gpu_input, gpu_examples, total_input_bits);
 			evaluator.forward_batch(
-				&packed_gpu_input,
+				ram_core::metal_input_buffer::GpuInputRows::Words(&packed_gpu_input),
 				&conn_vec_gpu,
 				&mem_vec_gpu,
 				gpu_examples,

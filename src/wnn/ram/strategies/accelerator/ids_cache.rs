@@ -45,8 +45,11 @@ pub struct IDSCache
 	num_negatives: usize,
 	num_parts: usize,
 
-	// Pre-computed subsets for train (stratified)
-	train_subsets: Vec<IDSSubset>,
+	// Stratified train folds as ROW INDICES into full_train (13/10/2026):
+	// the packed rows exist once, in full_train; a fold's rows are gathered on
+	// demand (byte-identical to the old per-fold copy, which held the whole
+	// train set a second time — 8.6 GB at 46M rows).
+	train_folds: Vec<crate::ids_fold::IDSFold>,
 
 	// Full datasets for final evaluation
 	full_train: IDSSubset,
@@ -325,9 +328,13 @@ impl IDSCache
 		let num_genome_clusters = if single_cluster { 1 } else { num_classes };
 		let actual_negatives = if single_cluster { 0 } else { num_negatives };
 
-		// Build full train subset
+		// Stratified partitioning of training data (labels only — the folds
+		// index full_train's rows instead of copying them).
+		let train_folds = Self::create_stratified_folds(&train_labels, num_classes, actual_negatives, num_parts, seed);
+
+		// Build full train subset (takes the matrix — no clone)
 		let full_train = Self::build_subset(
-			&train_features,
+			train_features,
 			&train_labels,
 			total_features,
 			num_classes,
@@ -337,7 +344,7 @@ impl IDSCache
 
 		// Build full eval subset
 		let full_eval = Self::build_subset(
-			&eval_features,
+			eval_features,
 			&eval_labels,
 			total_features,
 			num_classes,
@@ -365,7 +372,7 @@ impl IDSCache
 					total_features
 				);
 				Some(Self::build_subset(
-					&vf,
+					vf,
 					&vl,
 					total_features,
 					num_classes,
@@ -376,16 +383,6 @@ impl IDSCache
 			(None, None) => None,
 			_ => panic!("val_features and val_labels must both be Some or both be None"),
 		};
-
-		// Stratified partitioning of training data
-		let train_subsets = Self::create_stratified_subsets(
-			&train_features,
-			&train_labels,
-			num_classes,
-			actual_negatives,
-			num_parts,
-			seed,
-		);
 
 		// Compute class weights: max_count / count per class * multiplier (upweights minority)
 		let class_weights = if balance_classes
@@ -406,7 +403,7 @@ impl IDSCache
 			total_features,
 			num_negatives: actual_negatives,
 			num_parts,
-			train_subsets,
+			train_folds,
 			full_train,
 			full_eval,
 			full_val,
@@ -499,9 +496,9 @@ impl IDSCache
 		(new_features, new_labels)
 	}
 
-	/// If num_negatives < num_classes - 1, randomly sample from non-target classes.
+	/// Build an IDSSubset from (owned) features and labels.
 	fn build_subset(
-		features: &PackedBits,
+		features: PackedBits,
 		labels: &[i64],
 		total_features: usize,
 		num_classes: usize,
@@ -519,100 +516,114 @@ impl IDSCache
 				num_examples: 0,
 			};
 		}
-
-		let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-
-		// Input bits are already packed — clone the PackedBits
-		let input_bits = features.clone();
-		let targets = labels.to_vec();
-
-		// Build negatives: all other classes for each example
-		let mut negatives = vec![0i64; num_examples * num_negatives];
-		let all_negatives_needed = num_classes - 1;
-
-		for ex in 0..num_examples
-		{
-			let target = labels[ex];
-			let neg_offset = ex * num_negatives;
-
-			if num_negatives >= all_negatives_needed
-			{
-				// Exhaustive: all classes except target
-				let mut neg_idx = 0;
-				for c in 0..num_classes as i64
-				{
-					if c != target
-					{
-						negatives[neg_offset + neg_idx] = c;
-						neg_idx += 1;
-					}
-				}
-				// If num_negatives > num_classes - 1, fill remaining with random
-				while neg_idx < num_negatives
-				{
-					let mut c = rng.gen_range(0..num_classes) as i64;
-					while c == target
-					{
-						c = rng.gen_range(0..num_classes) as i64;
-					}
-					negatives[neg_offset + neg_idx] = c;
-					neg_idx += 1;
-				}
-			}
-			else
-			{
-				// Sample num_negatives from non-target classes
-				let mut available: Vec<i64> = (0..num_classes as i64).filter(|&c| c != target).collect();
-				available.shuffle(&mut rng);
-				for k in 0..num_negatives
-				{
-					negatives[neg_offset + k] = available[k % available.len()];
-				}
-			}
-		}
-
 		IDSSubset {
-			input_bits,
-			targets,
-			negatives,
+			input_bits: features,
+			targets: labels.to_vec(),
+			negatives: Self::build_negatives(labels, num_classes, num_negatives, seed),
 			num_examples,
 		}
 	}
 
-	/// Create stratified subsets by distributing examples round-robin by class.
+	/// Negatives: for each example, all classes except the target. If
+	/// num_negatives < num_classes - 1, randomly sample from non-target classes.
+	/// The ONLY consumer of the `seed` RNG (so a subset's negatives depend on
+	/// its labels + seed alone, never on its input rows).
+	fn build_negatives(labels: &[i64], num_classes: usize, num_negatives: usize, seed: u64) -> Vec<i64>
+	{
+		let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+		let mut negatives = vec![0i64; labels.len() * num_negatives];
+		for (ex, &target) in labels.iter().enumerate()
+		{
+			let row = &mut negatives[ex * num_negatives..(ex + 1) * num_negatives];
+			Self::fill_example_negatives(row, target, num_classes, &mut rng);
+		}
+		negatives
+	}
+
+	/// One example's negatives (verbatim body of the old per-example loop).
+	fn fill_example_negatives(row: &mut [i64], target: i64, num_classes: usize, rng: &mut rand::rngs::StdRng)
+	{
+		let num_negatives = row.len();
+		if num_negatives >= num_classes - 1
+		{
+			// Exhaustive: all classes except target
+			let mut neg_idx = 0;
+			for c in (0..num_classes as i64).filter(|&c| c != target)
+			{
+				row[neg_idx] = c;
+				neg_idx += 1;
+			}
+			// If num_negatives > num_classes - 1, fill remaining with random
+			while neg_idx < num_negatives
+			{
+				let mut c = rng.gen_range(0..num_classes) as i64;
+				while c == target
+				{
+					c = rng.gen_range(0..num_classes) as i64;
+				}
+				row[neg_idx] = c;
+				neg_idx += 1;
+			}
+		}
+		else
+		{
+			// Sample num_negatives from non-target classes
+			let mut available: Vec<i64> = (0..num_classes as i64).filter(|&c| c != target).collect();
+			available.shuffle(rng);
+			for k in 0..num_negatives
+			{
+				row[k] = available[k % available.len()];
+			}
+		}
+	}
+
+	/// Create stratified folds by distributing examples round-robin by class.
 	///
-	/// This preserves class distribution in each subset, which is critical
+	/// This preserves class distribution in each fold, which is critical
 	/// for imbalanced IDS datasets (e.g., Worms has only 44 examples).
-	fn create_stratified_subsets(
-		features: &PackedBits,
+	/// Same RNG stream, row order and per-fold negative seeds as the old
+	/// `create_stratified_subsets` — only the rows are indices now.
+	fn create_stratified_folds(
 		labels: &[i64],
 		num_classes: usize,
 		num_negatives: usize,
 		num_parts: usize,
 		seed: u64,
-	) -> Vec<IDSSubset>
+	) -> Vec<crate::ids_fold::IDSFold>
+	{
+		assert!(labels.len() <= u32::MAX as usize, "IDS fold rows are u32: {} train rows", labels.len());
+		Self::stratified_fold_rows(labels, num_classes, num_parts, seed)
+			.into_iter()
+			.enumerate()
+			.map(|(part_idx, rows)| {
+				let fold_labels: Vec<i64> = rows.iter().map(|&idx| labels[idx]).collect();
+				let fold_seed = seed + (part_idx as u64 + 1) * 1000;
+				crate::ids_fold::IDSFold {
+					negatives: Self::build_negatives(&fold_labels, num_classes, num_negatives, fold_seed),
+					rows: rows.iter().map(|&r| r as u32).collect(),
+					targets: fold_labels,
+				}
+			})
+			.collect()
+	}
+
+	/// The per-fold row lists: shuffle within class, deal round-robin, shuffle
+	/// within fold (one `seed + 50` stream, in that order).
+	fn stratified_fold_rows(labels: &[i64], num_classes: usize, num_parts: usize, seed: u64) -> Vec<Vec<usize>>
 	{
 		let mut rng = rand::rngs::StdRng::seed_from_u64(seed + 50);
-		let total_features = features.total_bits();
-
-		// Group example indices by class
 		let mut class_indices: Vec<Vec<usize>> = vec![vec![]; num_classes];
 		for (i, &label) in labels.iter().enumerate()
 		{
-			let class_idx = label as usize;
-			if class_idx < num_classes
+			if (label as usize) < num_classes
 			{
-				class_indices[class_idx].push(i);
+				class_indices[label as usize].push(i);
 			}
 		}
-
-		// Shuffle within each class for randomization
 		for indices in &mut class_indices
 		{
 			indices.shuffle(&mut rng);
 		}
-
-		// Distribute round-robin to subsets
 		let mut subset_indices: Vec<Vec<usize>> = vec![vec![]; num_parts];
 		for class_idx_list in &class_indices
 		{
@@ -621,31 +632,11 @@ impl IDSCache
 				subset_indices[i % num_parts].push(ex_idx);
 			}
 		}
-
-		// Shuffle within each subset to mix classes
 		for indices in &mut subset_indices
 		{
 			indices.shuffle(&mut rng);
 		}
-
-		// Build subsets from indices
 		subset_indices
-			.iter()
-			.enumerate()
-			.map(|(part_idx, indices)| {
-				let sub_features = features.select_rows(indices);
-				let sub_labels: Vec<i64> = indices.iter().map(|&idx| labels[idx]).collect();
-
-				Self::build_subset(
-					&sub_features,
-					&sub_labels,
-					total_features,
-					num_classes,
-					num_negatives,
-					seed + (part_idx as u64 + 1) * 1000,
-				)
-			})
-			.collect()
 	}
 
 	// ── Accessors ──────────────────────────────────────────────────────
@@ -655,9 +646,31 @@ impl IDSCache
 		self.train_rotator.next()
 	}
 
-	pub fn train_subset(&self, idx: usize) -> &IDSSubset
+	/// Fold `idx` materialised as an IDSSubset (rows gathered from
+	/// full_train — transient, freed by the caller).
+	pub fn train_subset(&self, idx: usize) -> IDSSubset
 	{
-		&self.train_subsets[idx]
+		self.subset_of(&self.train_folds[idx])
+	}
+
+	/// The k-fold training set: every fold except `held_out`, concatenated in
+	/// fold order and gathered straight into the GPU word layout (one copy;
+	/// was a merge copy + a u64 re-pack).
+	pub fn kfold_train_set(&self, held_out: usize) -> IDSSubset
+	{
+		let others = self.train_folds.iter().enumerate().filter(move |(i, _)| *i != held_out).map(|(_, f)| f);
+		self.subset_of(&crate::ids_fold::IDSFold::concat(others))
+	}
+
+	/// A fold-shaped row list as a materialised IDSSubset.
+	fn subset_of(&self, fold: &crate::ids_fold::IDSFold) -> IDSSubset
+	{
+		IDSSubset {
+			input_bits: fold.gather_input(&self.full_train.input_bits),
+			targets: fold.targets.clone(),
+			negatives: fold.negatives.clone(),
+			num_examples: fold.num_examples(),
+		}
 	}
 
 	pub fn full_train(&self) -> &IDSSubset
@@ -697,7 +710,7 @@ impl IDSCache
 
 	pub fn num_train_subsets(&self) -> usize
 	{
-		self.train_subsets.len()
+		self.train_folds.len()
 	}
 
 	pub fn reset(&mut self, seed: Option<u64>)
@@ -775,70 +788,6 @@ pub fn evaluate_genomes_ids_cached_hybrid(
 	)
 }
 
-/// Merge all subsets except the excluded one into a single IDSSubset.
-///
-/// Used for K-fold cross-validation: K-1 folds become the training set,
-/// the excluded fold becomes the eval set.
-fn merge_subsets_except(subsets: &[&IDSSubset], exclude_idx: usize) -> IDSSubset
-{
-	let total_features = if subsets.is_empty()
-	{
-		0
-	}
-	else
-	{
-		subsets[0].input_bits.total_bits()
-	};
-
-	let mut merged_input_bits = PackedBits::empty(total_features);
-	let mut merged_targets = Vec::new();
-	let mut merged_negatives = Vec::new();
-	let mut merged_num_examples = 0;
-
-	let num_negatives_per_example = if subsets.is_empty() || subsets[0].num_examples == 0
-	{
-		0
-	}
-	else
-	{
-		subsets[0].negatives.len() / subsets[0].num_examples
-	};
-
-	for (i, subset) in subsets.iter().enumerate()
-	{
-		if i == exclude_idx
-		{
-			continue;
-		}
-		merged_input_bits.extend_from(&subset.input_bits);
-		merged_targets.extend_from_slice(&subset.targets);
-		merged_negatives.extend_from_slice(&subset.negatives);
-		merged_num_examples += subset.num_examples;
-	}
-
-	// Sanity checks
-	if merged_num_examples > 0
-	{
-		assert_eq!(
-			merged_input_bits.num_rows(),
-			merged_num_examples,
-			"merge_subsets_except: input_bits rows mismatch"
-		);
-		assert_eq!(
-			merged_negatives.len(),
-			merged_num_examples * num_negatives_per_example,
-			"merge_subsets_except: negatives length mismatch"
-		);
-	}
-
-	IDSSubset {
-		input_bits: merged_input_bits,
-		targets: merged_targets,
-		negatives: merged_negatives,
-		num_examples: merged_num_examples,
-	}
-}
-
 /// Evaluate genomes using K-fold cross-validation.
 ///
 /// Merges all subsets except `held_out_fold` for training, uses the held-out
@@ -863,14 +812,8 @@ pub fn evaluate_genomes_ids_kfold_hybrid(
 		cache.num_parts(),
 	);
 
-	// Build train set from all folds except the held-out one
-	// Borrow the subsets directly — merge_subsets_except only reads them, so the
-	// old `owned_subsets = all_subsets.clone()` (a full copy of the entire packed
-	// train set, ~8.6 GB, allocated on EVERY fold eval) was pure waste.
-	let all_subsets: Vec<&IDSSubset> = (0..cache.num_parts())
-		.map(|i| cache.train_subset(i))
-		.collect();
-	let train = merge_subsets_except(&all_subsets, held_out_fold);
+	// Train set: all folds except the held-out one, gathered once.
+	let train = cache.kfold_train_set(held_out_fold);
 
 	// Use the held-out fold as eval
 	let eval = cache.train_subset(held_out_fold);
@@ -1374,7 +1317,7 @@ mod tests
 		let labels = vec![0i64, 1i64];
 		let packed = PackedBits::from_bool_slice(&features, total_features);
 
-		let subset = IDSCache::build_subset(&packed, &labels, total_features, 2, 1, 42);
+		let subset = IDSCache::build_subset(packed, &labels, total_features, 2, 1, 42);
 
 		assert_eq!(subset.negatives.len(), 2); // 2 examples * 1 negative
 		assert_eq!(subset.negatives[0], 1); // example 0 (class 0) → negative is class 1
@@ -1390,7 +1333,7 @@ mod tests
 		let labels = vec![0i64, 1i64, 2i64];
 		let packed = PackedBits::from_bool_slice(&features, total_features);
 
-		let subset = IDSCache::build_subset(&packed, &labels, total_features, 3, 2, 42);
+		let subset = IDSCache::build_subset(packed, &labels, total_features, 3, 2, 42);
 
 		assert_eq!(subset.negatives.len(), 6); // 3 examples * 2 negatives
 
@@ -1405,87 +1348,211 @@ mod tests
 	fn test_stratified_partitioning()
 	{
 		// Ensure stratified split preserves class distribution
-		let total_features = 4;
-		let num_examples = 100;
 		let num_classes = 2;
 
 		// 70 class 0, 30 class 1
 		let mut labels = vec![0i64; 70];
 		labels.extend(vec![1i64; 30]);
-		let features = vec![false; num_examples * total_features];
 
-		let packed = PackedBits::from_bool_slice(&features, total_features);
-		let subsets = IDSCache::create_stratified_subsets(&packed, &labels, num_classes, 1, 3, 42);
+		let folds = IDSCache::create_stratified_folds(&labels, num_classes, 1, 3, 42);
 
-		// Each of 3 subsets should have roughly 70/3 ≈ 23 class-0 and 30/3 = 10 class-1
-		for subset in &subsets
+		// Each of 3 folds should have roughly 70/3 ≈ 23 class-0 and 30/3 = 10 class-1
+		for fold in &folds
 		{
-			let class0_count = subset.targets.iter().filter(|&&t| t == 0).count();
-			let class1_count = subset.targets.iter().filter(|&&t| t == 1).count();
-			// Allow some variance due to rounding
-			assert!(
-				class0_count >= 20 && class0_count <= 27,
-				"class0: {} not in [20,27]",
-				class0_count
-			);
-			assert!(
-				class1_count >= 8 && class1_count <= 12,
-				"class1: {} not in [8,12]",
-				class1_count
-			);
+			let class0_count = fold.targets.iter().filter(|&&t| t == 0).count();
+			let class1_count = fold.targets.iter().filter(|&&t| t == 1).count();
+			assert!((20..=27).contains(&class0_count), "class0: {} not in [20,27]", class0_count);
+			assert!((8..=12).contains(&class1_count), "class1: {} not in [8,12]", class1_count);
 		}
 	}
 
-	#[test]
-	fn test_merge_subsets_except()
+	/// The pre-13/10/2026 fold construction, verbatim: every fold MATERIALISED
+	/// (select_rows on the train matrix) with negatives from the old
+	/// build_subset loop. The oracle the index-based folds must reproduce.
+	fn legacy_stratified_subsets(
+		features: &PackedBits,
+		labels: &[i64],
+		num_classes: usize,
+		num_negatives: usize,
+		num_parts: usize,
+		seed: u64,
+	) -> Vec<IDSSubset>
 	{
-		// 3 subsets with known sizes
-		let total_features = 4;
-		let num_classes = 2;
-		let num_negatives = 1;
+		let mut rng = rand::rngs::StdRng::seed_from_u64(seed + 50);
+		let mut class_indices: Vec<Vec<usize>> = vec![vec![]; num_classes];
+		for (i, &label) in labels.iter().enumerate()
+		{
+			let class_idx = label as usize;
+			if class_idx < num_classes
+			{
+				class_indices[class_idx].push(i);
+			}
+		}
+		for indices in &mut class_indices
+		{
+			indices.shuffle(&mut rng);
+		}
+		let mut subset_indices: Vec<Vec<usize>> = vec![vec![]; num_parts];
+		for class_idx_list in &class_indices
+		{
+			for (i, &ex_idx) in class_idx_list.iter().enumerate()
+			{
+				subset_indices[i % num_parts].push(ex_idx);
+			}
+		}
+		for indices in &mut subset_indices
+		{
+			indices.shuffle(&mut rng);
+		}
+		subset_indices
+			.iter()
+			.enumerate()
+			.map(|(part_idx, indices)| {
+				let sub_labels: Vec<i64> = indices.iter().map(|&idx| labels[idx]).collect();
+				legacy_build_subset(
+					&features.select_rows(indices),
+					&sub_labels,
+					num_classes,
+					num_negatives,
+					seed + (part_idx as u64 + 1) * 1000,
+				)
+			})
+			.collect()
+	}
 
-		let s0 = IDSCache::build_subset(
-			&PackedBits::from_bool_slice(&vec![true; 3 * total_features], total_features),
-			&vec![0, 1, 0],
-			total_features,
-			num_classes,
-			num_negatives,
-			42,
-		);
-		let s1 = IDSCache::build_subset(
-			&PackedBits::from_bool_slice(&vec![false; 2 * total_features], total_features),
-			&vec![1, 0],
-			total_features,
-			num_classes,
-			num_negatives,
-			43,
-		);
-		let s2 = IDSCache::build_subset(
-			&PackedBits::from_bool_slice(&vec![true; 4 * total_features], total_features),
-			&vec![0, 1, 1, 0],
-			total_features,
-			num_classes,
-			num_negatives,
-			44,
-		);
+	/// The pre-13/10/2026 build_subset negatives loop, verbatim.
+	fn legacy_build_subset(features: &PackedBits, labels: &[i64], num_classes: usize, num_negatives: usize, seed: u64) -> IDSSubset
+	{
+		let num_examples = labels.len();
+		let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+		let mut negatives = vec![0i64; num_examples * num_negatives];
+		if num_examples > 0
+		{
+			let all_negatives_needed = num_classes - 1;
+			for ex in 0..num_examples
+			{
+				let target = labels[ex];
+				let neg_offset = ex * num_negatives;
+				if num_negatives >= all_negatives_needed
+				{
+					let mut neg_idx = 0;
+					for c in 0..num_classes as i64
+					{
+						if c != target
+						{
+							negatives[neg_offset + neg_idx] = c;
+							neg_idx += 1;
+						}
+					}
+					while neg_idx < num_negatives
+					{
+						let mut c = rng.gen_range(0..num_classes) as i64;
+						while c == target
+						{
+							c = rng.gen_range(0..num_classes) as i64;
+						}
+						negatives[neg_offset + neg_idx] = c;
+						neg_idx += 1;
+					}
+				}
+				else
+				{
+					let mut available: Vec<i64> = (0..num_classes as i64).filter(|&c| c != target).collect();
+					available.shuffle(&mut rng);
+					for k in 0..num_negatives
+					{
+						negatives[neg_offset + k] = available[k % available.len()];
+					}
+				}
+			}
+		}
+		IDSSubset {
+			input_bits: features.clone(),
+			targets: labels.to_vec(),
+			negatives,
+			num_examples,
+		}
+	}
 
-		let subsets = vec![&s0, &s1, &s2];
+	/// The pre-13/10/2026 k-fold merge (sequential extend), verbatim.
+	fn legacy_merge_except(subsets: &[IDSSubset], exclude_idx: usize, total_features: usize) -> IDSSubset
+	{
+		let mut merged = IDSSubset {
+			input_bits: PackedBits::empty(total_features),
+			targets: vec![],
+			negatives: vec![],
+			num_examples: 0,
+		};
+		for (i, subset) in subsets.iter().enumerate().filter(|(i, _)| *i != exclude_idx)
+		{
+			let _ = i;
+			merged.input_bits.extend_from(&subset.input_bits);
+			merged.targets.extend_from_slice(&subset.targets);
+			merged.negatives.extend_from_slice(&subset.negatives);
+			merged.num_examples += subset.num_examples;
+		}
+		merged
+	}
 
-		// Exclude fold 0: merge s1 + s2 = 2 + 4 = 6 examples
-		let merged = merge_subsets_except(&subsets, 0);
-		assert_eq!(merged.num_examples, 6);
-		assert_eq!(merged.input_bits.num_rows(), 6);
-		assert_eq!(merged.input_bits.total_bits(), total_features);
-		assert_eq!(merged.targets.len(), 6);
-		assert_eq!(merged.negatives.len(), 6 * num_negatives);
+	fn assert_same_subset(a: &IDSSubset, b: &IDSSubset, what: &str)
+	{
+		assert_eq!(a.num_examples, b.num_examples, "{}: num_examples", what);
+		assert_eq!(a.targets, b.targets, "{}: targets", what);
+		assert_eq!(a.negatives, b.negatives, "{}: negatives", what);
+		assert_eq!(a.input_bits.num_rows(), b.input_bits.num_rows(), "{}: rows", what);
+		assert_eq!(a.input_bits.as_u64_words(), b.input_bits.as_u64_words(), "{}: input words", what);
+	}
 
-		// Exclude fold 1: merge s0 + s2 = 3 + 4 = 7 examples
-		let merged = merge_subsets_except(&subsets, 1);
-		assert_eq!(merged.num_examples, 7);
+	/// Random (features, labels) with every class present.
+	fn random_train(n: usize, total_features: usize, num_classes: usize, seed: u64) -> (Vec<bool>, Vec<i64>)
+	{
+		let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+		let features = (0..n * total_features).map(|_| rng.gen::<bool>()).collect();
+		let labels = (0..n).map(|i| if i < num_classes { i as i64 } else { rng.gen_range(0..num_classes) as i64 }).collect();
+		(features, labels)
+	}
 
-		// Exclude fold 2: merge s0 + s1 = 3 + 2 = 5 examples
-		let merged = merge_subsets_except(&subsets, 2);
-		assert_eq!(merged.num_examples, 5);
+	/// Folds as row indices + on-demand gather reproduce the old materialised
+	/// folds, the old k-fold merge, and the old full_train — byte for byte, for
+	/// binary single-cluster (0 negatives), binary 1-negative, and multiclass
+	/// with SAMPLED negatives (the per-fold RNG path), at a row width that
+	/// needs word padding (1870 bits -> 234 B -> 30 words).
+	#[test]
+	fn index_folds_match_legacy_materialised_folds()
+	{
+		for &(num_classes, num_negatives, single_cluster, total_features) in
+			&[(2usize, 1usize, true, 1870usize), (2, 1, false, 70), (5, 2, false, 13), (4, 3, false, 64)]
+		{
+			let (features, labels) = random_train(203, total_features, num_classes, 9 + num_classes as u64);
+			let packed = PackedBits::from_bool_slice(&features, total_features);
+			let cache = IDSCache::new(
+				packed.clone(),
+				labels.clone(),
+				PackedBits::from_bool_slice(&features[..10 * total_features], total_features),
+				labels[..10].to_vec(),
+				None,
+				None,
+				num_classes,
+				total_features,
+				5,
+				num_negatives,
+				42,
+				false,
+				single_cluster,
+				false,
+				1.0,
+			);
+			let negs = if single_cluster { 0 } else { num_negatives };
+			let legacy = legacy_stratified_subsets(&packed, &labels, num_classes, negs, 5, 42);
+			let full_legacy = legacy_build_subset(&packed, &labels, num_classes, negs, 42);
+			assert_same_subset(cache.full_train(), &full_legacy, "full_train");
+			for k in 0..5
+			{
+				assert_same_subset(&cache.train_subset(k), &legacy[k], &format!("fold {}", k));
+				let merged = legacy_merge_except(&legacy, k, total_features);
+				assert_same_subset(&cache.kfold_train_set(k), &merged, &format!("kfold train {}", k));
+			}
+		}
 	}
 
 	#[test]
@@ -1526,17 +1593,13 @@ mod tests
 			1.0,   // class_weight_multiplier
 		);
 
-		// Each fold should have ~4 examples (12/3)
-		// Merging 2 folds should give ~8 examples
-		let all_subsets: Vec<&IDSSubset> = (0..num_parts).map(|i| cache.train_subset(i)).collect();
-
-		let total_in_subsets: usize = all_subsets.iter().map(|s| s.num_examples).sum();
+		let total_in_subsets: usize = (0..num_parts).map(|i| cache.train_subset(i).num_examples).sum();
 		assert_eq!(total_in_subsets, num_train);
 
 		for held_out in 0..num_parts
 		{
-			let train_merged = merge_subsets_except(&all_subsets, held_out);
-			let eval_fold = &all_subsets[held_out];
+			let train_merged = cache.kfold_train_set(held_out);
+			let eval_fold = cache.train_subset(held_out);
 			assert_eq!(
 				train_merged.num_examples + eval_fold.num_examples,
 				num_train,

@@ -13,7 +13,7 @@
 
 use crate::adaptive::{compute_per_example_scores, GenomeExport};
 use crate::marker_train::batched_path::{batched_train_offspring_plain, trainer_available};
-use ram_core::neuron_memory::{pack_packed_to_u64, BINARY, PLN, QSR, QUAD_BINARY, QUAD_WEIGHTED, TERNARY};
+use ram_core::neuron_memory::{BINARY, PLN, QSR, QUAD_BINARY, QUAD_WEIGHTED, TERNARY};
 use ram_core::packed_bits::PackedBits;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
@@ -88,9 +88,8 @@ fn scores(e: &GenomeExport, data: &Data, mode: u8, coverage_aware: bool, gpu: bo
 	let dense = if gpu { crate::metal_ramlm::MetalRAMLMEvaluator::new().ok() } else { None };
 	let sparse = if gpu { ram_core::metal_sparse::MetalSparseEvaluator::new().ok() } else { None };
 	assert!(!gpu || (dense.is_some() && sparse.is_some()), "GPU scorers unavailable");
-	let (packed, wpe) = pack_packed_to_u64(&data.eval);
 	compute_per_example_scores(
-		e, &data.eval, &packed, wpe, data.eval.num_rows(), data.num_clusters, TIB, 0.5, mode, RUN_SEED,
+		e, &data.eval, data.eval.num_rows(), data.num_clusters, TIB, 0.5, mode, RUN_SEED,
 		coverage_aware, dense.as_ref(), sparse.as_ref(),
 	)
 }

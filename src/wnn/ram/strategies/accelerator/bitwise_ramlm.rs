@@ -980,7 +980,7 @@ fn gpu_forward_heterogeneous(
 		}
 
 		match evaluator.forward_batch(
-			packed_input,
+			ram_core::metal_input_buffer::GpuInputRows::Words(packed_input),
 			&group_connections,
 			&group_memory,
 			num_eval,
@@ -1049,7 +1049,7 @@ fn gpu_forward_heterogeneous(
 				}
 
 				match sparse_evaluator.forward_batch_sparse(
-					packed_input,
+					ram_core::metal_input_buffer::GpuInputRows::Words(packed_input),
 					&group_connections,
 					&all_keys,
 					&all_values,
@@ -1549,7 +1549,7 @@ pub(crate) fn forward_eval_into(
 					flat_memory.extend_from_slice(clusters[c].dense_words());
 				}
 				match evaluator.forward_batch(
-					&eval_subset.packed_input,
+					ram_core::metal_input_buffer::GpuInputRows::Words(&eval_subset.packed_input),
 					connections,
 					&flat_memory,
 					num_eval,

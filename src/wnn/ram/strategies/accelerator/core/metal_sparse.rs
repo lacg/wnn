@@ -200,7 +200,8 @@ impl MetalSparseEvaluator
 	/// Forward pass using sparse memory with binary search on GPU
 	///
 	/// Args:
-	///   packed_input: [num_examples * words_per_example] packed u64
+	///   packed_input: [num_examples * words_per_example] packed u64 rows — a
+	///     `PackedBits` (aliased, no copy) or a bare word slice (copied)
 	///   connections_flat: [num_neurons * bits_per_neuron]
 	///   keys_flat: Sorted keys for all neurons, concatenated
 	///   values_flat: Values corresponding to keys
@@ -210,7 +211,7 @@ impl MetalSparseEvaluator
 	/// Returns: [num_examples * num_clusters] probabilities
 	pub fn forward_batch_sparse(
 		&self,
-		packed_input: &[u64],
+		packed_input: crate::metal_input_buffer::GpuInputRows<'_>,
 		connections_flat: &[i64],
 		keys_flat: &[u64],
 		values_flat: &[u8],
@@ -257,8 +258,9 @@ impl MetalSparseEvaluator
 				default_cell_value: default_cell_for_coverage(memory_mode, coverage_aware),
 				run_seed,
 			};
+			let input = packed_input.upload(&self.device);
 			let inputs = [
-				&self.buffer_of(packed_input),
+				input.buffer(),
 				&self.buffer_of(&connections_i32),
 				&self.buffer_of(keys_flat),
 				&self.buffer_of(values_flat),
@@ -296,12 +298,9 @@ impl MetalSparseEvaluator
 			run_seed,
 		};
 
-		// Create buffers
-		let input_buffer = self.device.new_buffer_with_data(
-			packed_input.as_ptr() as *const _,
-			(packed_input.len() * mem::size_of::<u64>()) as u64,
-			MTLResourceOptions::StorageModeShared,
-		);
+		// Create buffers (a PackedBits input is aliased — no copy)
+		let input = packed_input.upload(&self.device);
+		let input_buffer = input.buffer();
 
 		let conn_buffer = self.device.new_buffer_with_data(
 			connections_i32.as_ptr() as *const _,
@@ -353,7 +352,7 @@ impl MetalSparseEvaluator
 		if use_per_example
 		{
 			encoder.set_compute_pipeline_state(&self.sparse_forward_per_example_pipeline);
-			encoder.set_buffer(0, Some(&input_buffer), 0);
+			encoder.set_buffer(0, Some(input_buffer), 0);
 			encoder.set_buffer(1, Some(&conn_buffer), 0);
 			encoder.set_buffer(2, Some(&keys_buffer), 0);
 			encoder.set_buffer(3, Some(&values_buffer), 0);
@@ -372,7 +371,7 @@ impl MetalSparseEvaluator
 		else
 		{
 			encoder.set_compute_pipeline_state(&self.sparse_forward_pipeline);
-			encoder.set_buffer(0, Some(&input_buffer), 0);
+			encoder.set_buffer(0, Some(input_buffer), 0);
 			encoder.set_buffer(1, Some(&conn_buffer), 0);
 			encoder.set_buffer(2, Some(&keys_buffer), 0);
 			encoder.set_buffer(3, Some(&values_buffer), 0);

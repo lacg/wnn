@@ -1173,28 +1173,80 @@ pub fn calculate_adaptive_pool_size(
 	(pool_size, batch_size)
 }
 
-/// Get available system memory in GB (approximate)
-/// Falls back to 16GB if detection fails
+/// Actually-available memory in GB (free + inactive + purgeable + speculative
+/// on macOS). Shared by the worker's batch/chunk budgets and this crate.
 pub fn get_available_memory_gb() -> f64
 {
-	// Try to read from sysctl on macOS
+	// Actually-AVAILABLE memory (free + inactive + purgeable + speculative),
+	// not hw.memsize: the old total-RAM answer made the budget blind to
+	// co-tenant processes (and to our own persistent allocations — dataset,
+	// packed inputs, caches — which legitimately shrink what a new genome
+	// batch may claim). Floor at 4 GB so a momentary low-memory reading can't
+	// zero the pool (batch size is additionally clamped to ≥1 downstream).
 	#[cfg(target_os = "macos")]
 	{
 		use std::process::Command;
+		if let Ok(output) = Command::new("vm_stat").output()
+		{
+			if let Ok(text) = String::from_utf8(output.stdout)
+			{
+				let mut page_size: f64 = 16384.0;
+				if let Some(first) = text.lines().next()
+				{
+					if let Some(ps) = first.split("page size of").nth(1)
+					{
+						if let Some(n) = ps
+							.split_whitespace()
+							.next()
+							.and_then(|s| s.parse::<f64>().ok())
+						{
+							page_size = n;
+						}
+					}
+				}
+				let mut pages: f64 = 0.0;
+				let mut parsed_any = false;
+				for line in text.lines()
+				{
+					for key in [
+						"Pages free:",
+						"Pages inactive:",
+						"Pages purgeable:",
+						"Pages speculative:",
+					]
+					{
+						if let Some(rest) = line.strip_prefix(key)
+						{
+							if let Some(n) = rest.trim().trim_end_matches('.').parse::<f64>().ok()
+							{
+								pages += n;
+								parsed_any = true;
+							}
+						}
+					}
+				}
+				if parsed_any
+				{
+					let gb = pages * page_size / (1024.0 * 1024.0 * 1024.0);
+					return gb.max(4.0);
+				}
+			}
+		}
+		// vm_stat unavailable/unparseable: fall back to half of total RAM
+		// (the old hw.memsize answer was TOTAL, which over-promised).
 		if let Ok(output) = Command::new("sysctl").arg("-n").arg("hw.memsize").output()
 		{
 			if let Ok(mem_str) = String::from_utf8(output.stdout)
 			{
 				if let Ok(bytes) = mem_str.trim().parse::<u64>()
 				{
-					return bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+					return (bytes as f64 / (1024.0 * 1024.0 * 1024.0) * 0.5).max(4.0);
 				}
 			}
 		}
 	}
-
-	// Fallback: assume 16GB
-	16.0
+	// Fallback: assume half of 64GB (M4 Max typical)
+	32.0
 }
 
 /// Export data for a single candidate (used in batched evaluation)

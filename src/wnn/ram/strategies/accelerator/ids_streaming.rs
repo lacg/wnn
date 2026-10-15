@@ -58,7 +58,6 @@ use crate::adaptive::{
 	get_metal_evaluator, get_sparse_metal_evaluator, per_cluster_max_bits,
 	reorganize_connections_for_gpu, train_genome_in_slot_range, ConfigGroup, GenomeExport, GroupMemory,
 };
-use ram_core::neuron_memory::pack_packed_to_u64;
 use ram_core::packed_bits::PackedBits;
 use ram_core::physical_genome::PhysicalGenome;
 
@@ -297,7 +296,6 @@ impl IDSGenomeStreamer
 
 		let num_eval = packed.num_rows();
 		let total_input_bits = packed.total_bits();
-		let (packed_eval_u64, words_per_example) = pack_packed_to_u64(packed);
 
 		let metal_arc = get_metal_evaluator();
 		let sparse_metal_arc = get_sparse_metal_evaluator();
@@ -307,8 +305,6 @@ impl IDSGenomeStreamer
 		let chunk_scores = compute_per_example_scores(
 			export,
 			packed,
-			&packed_eval_u64,
-			words_per_example,
 			num_eval,
 			self.num_genome_clusters,
 			total_input_bits,

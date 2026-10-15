@@ -768,11 +768,14 @@ mod flat_genome_validation_tests
 	}
 
 	// =========================================================================
-	// Eval-in-place normalization identity (07/07/2026): the fused path's
-	// score (votes/4.0)/n must be BITWISE equal to the export path's f32
-	// sequential weight sum / n, for every reachable vote composition. Holds
-	// because all QUAD weights are quarters (exact in f32) and partial sums
-	// stay far under the 24-bit mantissa; this test pins the invariant.
+	// Eval-in-place normalization identity (07/07/2026): votes/4.0 is BITWISE
+	// the f32 sequential QUAD weight sum, for every reachable vote composition
+	// (all QUAD weights are quarters, exact in f32; partial sums stay far under
+	// the 24-bit mantissa), so (votes/4.0)/n equals the CPU scorer's sum/n.
+	// NOTE (13/10/2026): the export path scores on the GPU, whose fast-math
+	// division is NOT the CPU's — the fused path therefore normalizes on the
+	// GPU too (`marker_votes_to_scores`); end-to-end parity vs the GPU export
+	// scorer is `eval_in_place_matches_export_path_for_distinct_neurons_at_rate_one`.
 	// =========================================================================
 	#[test]
 	fn eval_in_place_vote_normalization_is_bitwise_exact()

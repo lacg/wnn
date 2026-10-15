@@ -4156,8 +4156,6 @@ pub fn train_and_get_tiered_scores(
 	// Reorganize connections for GPU
 	let connections_flat =
 		reorganize_connections_for_gpu(connections, bits_per_neuron, neurons_per_cluster, &groups);
-	let (packed_eval, words_per_example) =
-		ram_core::neuron_memory::pack_packed_to_u64(&eval_data.input_bits);
 
 	for (group_idx, (group, memory)) in groups.iter().zip(memories.iter()).enumerate()
 	{
@@ -4170,12 +4168,11 @@ pub fn train_and_get_tiered_scores(
 				{
 					if let Ok(group_scores) = evaluate_group_metal(
 						&metal,
-						&packed_eval,
+						&eval_data.input_bits,
 						&connections_flat,
 						&mem_words,
 						group,
 						num_eval,
-						words_per_example,
 						&[],   // coverage: LM multistage, not the IDS scorer
 						false,
 						memory_mode,
@@ -4206,12 +4203,11 @@ pub fn train_and_get_tiered_scores(
 				{
 					if let Ok(group_scores) = evaluate_group_sparse_gpu(
 						&sparse_eval,
-						&packed_eval,
+						&eval_data.input_bits,
 						&connections_flat,
 						&export,
 						group,
 						num_eval,
-						words_per_example,
 						false, // coverage_aware: LM multistage, not the IDS scorer
 						memory_mode,
 						empty_value,
@@ -4479,7 +4475,6 @@ mod cpu_gpu_parity_tests
 			&neurons_per_cluster,
 			&groups,
 		);
-		let (packed_eval, words_per_example) = ram_core::neuron_memory::pack_packed_to_u64(&eval_input);
 
 		let mut compared = 0usize;
 		for (group, memory) in groups.iter().zip(memories.iter())
@@ -4489,12 +4484,11 @@ mod cpu_gpu_parity_tests
 				let mem_words = memory.export_for_metal().expect("dense export");
 				evaluate_group_metal(
 					&metal,
-					&packed_eval,
+					&eval_input,
 					&connections_flat,
 					&mem_words,
 					group,
 					num_eval,
-					words_per_example,
 					&[],   // coverage: LM multistage, not the IDS scorer
 					false,
 					memory_mode,
@@ -4509,12 +4503,11 @@ mod cpu_gpu_parity_tests
 				let export = memory.export_for_gpu_sparse().expect("sparse export");
 				evaluate_group_sparse_gpu(
 					&sparse_eval,
-					&packed_eval,
+					&eval_input,
 					&connections_flat,
 					&export,
 					group,
 					num_eval,
-					words_per_example,
 					false, // coverage_aware: LM multistage, not the IDS scorer
 					memory_mode,
 					empty_value,

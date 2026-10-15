@@ -13,7 +13,7 @@ use crate::adaptive::{
 	build_groups, build_neuron_metadata, compute_per_example_scores, export_genome_for_gpu, per_cluster_max_bits,
 	reorganize_connections_for_gpu, train_genome_in_slot, GenomeExport, GroupMemory,
 };
-use ram_core::neuron_memory::{pack_packed_to_u64, EMPTY, FALSE, PLN, TERNARY, TRUE};
+use ram_core::neuron_memory::{EMPTY, FALSE, PLN, TERNARY, TRUE};
 use ram_core::packed_bits::PackedBits;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
@@ -153,10 +153,9 @@ fn scores(e: &GenomeExport, data: &Data, gpu: bool) -> Vec<u64>
 {
 	let dense = if gpu { crate::metal_ramlm::MetalRAMLMEvaluator::new().ok() } else { None };
 	let sparse = if gpu { ram_core::metal_sparse::MetalSparseEvaluator::new().ok() } else { None };
-	let (packed, wpe) = pack_packed_to_u64(&data.train);
 	let n = data.targets.len();
 	let rows = compute_per_example_scores(
-		e, &data.train, &packed, wpe, n, 1, TIB, 0.5, PLN, RUN_SEED, false, dense.as_ref(), sparse.as_ref(),
+		e, &data.train, n, 1, TIB, 0.5, PLN, RUN_SEED, false, dense.as_ref(), sparse.as_ref(),
 	);
 	rows.iter().flatten().map(|s| s.to_bits()).collect()
 }

@@ -218,6 +218,8 @@ mod token_cache;
 
 #[path = "ids_cache.rs"]
 mod ids_cache;
+// One stratified train fold as row indices into the cache's full train matrix.
+mod ids_fold;
 mod ids_streaming;
 mod multiclass_metrics;
 // Desirability CE half-anchor reference scale (26/08/2026). IDS-only: the
@@ -354,7 +356,16 @@ use pyapi::*;
 /// Same ABI (one swap) also adds: group_neurons / layer_footprint (stage 6),
 /// sparse_train_batch / sparse_forward_batch optional `index_of` (stage 6),
 /// IDSCacheWrapper.export_trained (stage 7).
-pub const ABI_VERSION: u32 = 17;
+/// 18 (13/10/2026, memory fixes): NO Python-visible signature change — bumped so
+/// the deploy is identifiable. Results bit-identical to ABI 17; the working set
+/// shrinks: PackedBits rows are 8-byte padded in page-aligned memory (the GPU's
+/// u64 layout — no per-call re-pack, Metal reads it no-copy), IDSCache folds are
+/// row indices into full_train (the train set is held once), the unused eval
+/// clone in the hybrid eval is gone, the marker chunk table is <= 4 GiB (memory-
+/// derived), and eval-in-place (WNN_EVAL_IN_PLACE=1, still default OFF) also
+/// serves rate-1.0 genomes without duplicate neurons, its scores now normalized
+/// on the GPU (they were an ulp off the export path's in CE).
+pub const ABI_VERSION: u32 = 18;
 
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()>

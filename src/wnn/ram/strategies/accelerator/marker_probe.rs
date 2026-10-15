@@ -45,11 +45,21 @@ pub mod metal_impl
 		examples_in_dispatch: u32,
 	}
 
+	#[repr(C)]
+	#[derive(Clone, Copy, Debug)]
+	struct VoteScoreParams
+	{
+		count: u32,
+		neurons_per_cluster: u32,
+	}
+
 	pub struct MarkerProber
 	{
 		device: Device,
 		command_queue: metal::CommandQueue,
 		pipeline: ComputePipelineState,
+		/// `marker_votes_to_scores`: the export path's GPU score division.
+		scores_pipeline: ComputePipelineState,
 	}
 
 	impl MarkerProber
@@ -61,17 +71,53 @@ pub mod metal_impl
 			let library = device
 				.new_library_with_source(SHADER_SOURCE, &opts)
 				.map_err(|e| format!("marker_probe_eval.metal compile failed: {}", e))?;
-			let kernel = library
-				.get_function("marker_probe_eval", None)
-				.map_err(|e| format!("get_function marker_probe_eval: {}", e))?;
-			let pipeline = device
-				.new_compute_pipeline_state_with_function(&kernel)
-				.map_err(|e| format!("pipeline marker_probe_eval: {}", e))?;
 			Ok(Self {
 				device: device.clone(),
 				command_queue: device.new_command_queue(),
-				pipeline,
+				pipeline: Self::pipeline(device, &library, "marker_probe_eval")?,
+				scores_pipeline: Self::pipeline(device, &library, "marker_votes_to_scores")?,
 			})
+		}
+
+		fn pipeline(device: &Device, library: &metal::Library, name: &str) -> Result<ComputePipelineState, String>
+		{
+			let kernel = library.get_function(name, None).map_err(|e| format!("get_function {}: {}", name, e))?;
+			device
+				.new_compute_pipeline_state_with_function(&kernel)
+				.map_err(|e| format!("pipeline {}: {}", name, e))
+		}
+
+		/// Per-example scores from a vote buffer, computed on the GPU with the
+		/// sparse forward pass's exact float expression (see the kernel's note:
+		/// bit-identical to the export path's scorer).
+		pub fn votes_to_scores(&self, votes: &metal::Buffer, count: usize, neurons_per_cluster: usize) -> Vec<f32>
+		{
+			if count == 0
+			{
+				return Vec::new();
+			}
+			let params = VoteScoreParams {
+				count: count as u32,
+				neurons_per_cluster: neurons_per_cluster as u32,
+			};
+			let params_buf = self.device.new_buffer_with_data(
+				&params as *const _ as *const _,
+				std::mem::size_of::<VoteScoreParams>() as u64,
+				MTLResourceOptions::StorageModeShared,
+			);
+			let scores = self.device.new_buffer((count * 4) as u64, MTLResourceOptions::StorageModeShared);
+			let cmd = self.command_queue.new_command_buffer();
+			let enc = cmd.new_compute_command_encoder();
+			enc.set_compute_pipeline_state(&self.scores_pipeline);
+			enc.set_buffer(0, Some(votes), 0);
+			enc.set_buffer(1, Some(&params_buf), 0);
+			enc.set_buffer(2, Some(&scores), 0);
+			let tg = self.scores_pipeline.max_total_threads_per_threadgroup().min(256);
+			enc.dispatch_threads(MTLSize::new(count as u64, 1, 1), MTLSize::new(tg, 1, 1));
+			enc.end_encoding();
+			cmd.commit();
+			cmd.wait_until_completed();
+			unsafe { std::slice::from_raw_parts(scores.contents() as *const f32, count) }.to_vec()
 		}
 
 		/// Probe the (still-resident) table for every (example, neuron) pair and
@@ -182,7 +228,9 @@ pub mod metal_impl
 		buf
 	}
 
-	/// Read a vote buffer back into a Vec<u32>.
+	/// Read a vote buffer back into a Vec<u32> (tests: the production path
+	/// reads scores via `MarkerProber::votes_to_scores`).
+	#[cfg(test)]
 	pub fn read_vote_buffer(buf: &metal::Buffer, len: usize) -> Vec<u32>
 	{
 		let ptr = buf.contents() as *const u32;
@@ -191,4 +239,6 @@ pub mod metal_impl
 } // mod metal_impl
 
 #[cfg(target_os = "macos")]
-pub use metal_impl::{get_prober, new_zeroed_vote_buffer, read_vote_buffer};
+pub use metal_impl::{get_prober, new_zeroed_vote_buffer};
+#[cfg(all(test, target_os = "macos"))]
+pub use metal_impl::read_vote_buffer;

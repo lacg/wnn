@@ -715,7 +715,7 @@ pub mod batched_path
 					neuron_sample_rate,
 					rng_seed,
 					class_weights,
-					CHUNK_MEMORY_BUDGET,
+					chunk_memory_budget(),
 					memory_mode,
 				)
 			}
@@ -767,13 +767,22 @@ pub mod batched_path
 	/// neuron-chunked path).
 	const BATCH_MEMORY_BUDGET: usize = 16 * 1024 * 1024 * 1024;
 
-	/// Per-dispatch Metal buffer target for the neuron-chunked path. Half the
-	/// 16 GB batch budget: the chunk buffer is transient (alloc → train → export
-	/// → free per chunk) but the worker shares 64 GB with the dataset memmap,
-	/// Python heap and any controller run — 8 GB keeps the peak civil while the
-	/// dispatch overhead stays negligible (per-chunk work is neurons × examples,
-	/// so total kernel work is identical at any chunk size).
-	const CHUNK_MEMORY_BUDGET: usize = 8 * 1024 * 1024 * 1024;
+	/// Per-dispatch Metal hash-table target for the neuron-chunked path: a
+	/// quarter of the memory actually available now, clamped to [1, 4] GiB
+	/// (13/10/2026; was a fixed 8 GiB — at 46M rows 8.59 GB resident next to a
+	/// ~50 GB working set). The chunk table is transient (alloc → train →
+	/// export/probe → free per chunk). RESULTS DO NOT DEPEND ON IT: every
+	/// neuron owns its own slot region of the same capacity
+	/// (`marker_capacity_for_train` never sees the chunk), the sampling hash
+	/// gets the GLOBAL neuron index (`neuron_index_offset`), and per-neuron
+	/// ranges concatenate in neuron order — pinned by
+	/// `chunk_budget_does_not_change_results` (export AND probe paths).
+	fn chunk_memory_budget() -> usize
+	{
+		const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+		let quarter_available = crate::adaptive::get_available_memory_gb() * 0.25;
+		(quarter_available.clamp(1.0, 4.0) * GIB) as usize
+	}
 
 	/// Train ONE single-cluster genome whose marker table exceeds the batch
 	/// budget by splitting its neurons into budget-sized chunks. Each chunk is a
@@ -952,19 +961,26 @@ pub mod batched_path
 			> BATCH_MEMORY_BUDGET
 	}
 
-	/// Per-example integer vote sums from the eval-in-place probe. One u32 per
-	/// (example, cluster) — single-cluster in the current fused path, so one per
-	/// example. votes/4.0 = the sum of QUAD cell weights the sorted-export eval
+	/// Per-example scores from the eval-in-place probe. The probe accumulates
+	/// one integer vote sum per (example, cluster) — single-cluster in the
+	/// current fused path, so one per example. votes/4.0 = the sum of QUAD cell
+	/// weights the sorted-export eval
 	/// would have produced (F=0, wF=1, wT=3, T=4 quarters; a table MISS
 	/// contributes the QUAD default cell WEAK_FALSE = 1, identical to how the
 	/// export-path eval miss-defaults — which is also why the wF-filter never
 	/// changes scores).
+	///
+	/// The SCORES are normalized on the GPU (`MarkerProber::votes_to_scores`)
+	/// with the sparse forward pass's own float division — the export path's
+	/// scorer is fast-math Metal, so a CPU (IEEE) normalization of the same
+	/// votes was an ulp off it (13/10/2026).
 	pub struct ChunkedVoteSums
 	{
-		pub eval_votes: Vec<u32>,
+		/// Per-example eval scores, bit-identical to the export path's.
+		pub eval_scores: Vec<f32>,
 		/// Present when the caller also needs train-set scores (threshold
 		/// calibration on training data — the fitness path's default).
-		pub train_votes: Option<Vec<u32>>,
+		pub train_scores: Option<Vec<f32>>,
 	}
 
 	/// Eval-in-place for the over-budget chunked regime: train ONE single-cluster
@@ -1014,7 +1030,7 @@ pub mod batched_path
 			eval_input_bits,
 			num_eval,
 			score_train,
-			CHUNK_MEMORY_BUDGET,
+			chunk_memory_budget(),
 			memory_mode,
 		)
 	}
@@ -1084,25 +1100,15 @@ pub mod batched_path
 		let prober = crate::marker_probe::get_prober(device)?;
 
 		// Probe-set buffers persist across chunks: votes accumulate atomically.
-		let (packed_eval, eval_words) = ram_core::neuron_memory::pack_packed_to_u64(eval_input_bits);
-		let eval_buf = device.new_buffer_with_data(
-			packed_eval.as_ptr() as *const _,
-			(packed_eval.len().max(1) * 8) as u64,
-			MTLResourceOptions::StorageModeShared,
-		);
-		drop(packed_eval);
+		// Both alias the host matrices (no u64 re-pack, no Metal copy).
+		let eval_input = ram_core::metal_input_buffer::NoCopyInputBuffer::new(device, eval_input_bits);
+		let (eval_buf, eval_words) = (eval_input.buffer(), eval_input_bits.words_per_row());
 		let eval_votes_buf = crate::marker_probe::new_zeroed_vote_buffer(device, num_eval);
 		let train_probe = if score_train
 		{
-			let (packed_train, train_words) =
-				ram_core::neuron_memory::pack_packed_to_u64(train_input_bits);
-			let train_buf = device.new_buffer_with_data(
-				packed_train.as_ptr() as *const _,
-				(packed_train.len().max(1) * 8) as u64,
-				MTLResourceOptions::StorageModeShared,
-			);
+			let train_input = ram_core::metal_input_buffer::NoCopyInputBuffer::new(device, train_input_bits);
 			let train_votes_buf = crate::marker_probe::new_zeroed_vote_buffer(device, num_train);
-			Some((train_buf, train_votes_buf, train_words))
+			Some((train_input, train_votes_buf, train_input_bits.words_per_row()))
 		}
 		else
 		{
@@ -1148,7 +1154,7 @@ pub mod batched_path
 				.ok_or("eval-in-place: MarkerHashTable returned no Metal buffers")?;
 			let t1 = std::time::Instant::now();
 			prober.probe_accumulate(
-				&eval_buf,
+				eval_buf,
 				&tb.conn_buf,
 				&tb.neuron_meta,
 				&markers_buf,
@@ -1160,11 +1166,11 @@ pub mod batched_path
 				1,
 			)?;
 			t_eval_ms += t1.elapsed().as_secs_f64() * 1000.0;
-			if let Some((train_buf, train_votes_buf, train_words)) = &train_probe
+			if let Some((train_input, train_votes_buf, train_words)) = &train_probe
 			{
 				let t2 = std::time::Instant::now();
 				prober.probe_accumulate(
-					train_buf,
+					train_input.buffer(),
 					&tb.conn_buf,
 					&tb.neuron_meta,
 					&markers_buf,
@@ -1193,9 +1199,8 @@ pub mod batched_path
 		}
 
 		Ok(ChunkedVoteSums {
-			eval_votes: crate::marker_probe::read_vote_buffer(&eval_votes_buf, num_eval),
-			train_votes: train_probe
-				.map(|(_, votes_buf, _)| crate::marker_probe::read_vote_buffer(&votes_buf, num_train)),
+			eval_scores: prober.votes_to_scores(&eval_votes_buf, num_eval, n_total),
+			train_scores: train_probe.as_ref().map(|(_, votes_buf, _)| prober.votes_to_scores(votes_buf, num_train, n_total)),
 		})
 	}
 
@@ -1627,18 +1632,11 @@ pub mod batched_path
 		}
 		let t_after_alloc = t_phase.elapsed().as_secs_f64() * 1000.0;
 
-		// Pack train_input_bits to u64 once (shared across all genomes)
-		let (packed_train_input, words_per_example) =
-			ram_core::neuron_memory::pack_packed_to_u64(train_input_bits);
-		if trace
-		{
-			eprintln!(
-				"[GPU_BATCHED_TRACE]   pack_packed_to_u64={:.2}ms (words_per_example={}, packed_len={})",
-				t_phase.elapsed().as_secs_f64() * 1000.0 - t_after_alloc,
-				words_per_example,
-				packed_train_input.len()
-			);
-		}
+		// The train matrix IS the kernel's u64 word layout (PackedBits stores
+		// rows 8-byte padded in page-aligned memory since 13/10/2026): the GPU
+		// reads it in place — no u64 re-pack, no Metal copy (6.9 GB each per
+		// dispatch at 46M rows).
+		let words_per_example = train_input_bits.words_per_row();
 
 		// Pre-compute per-neuron cluster_idx within a genome by walking the
 		// uniform `first_neurons_per_cluster[]` shape. neuron n in genome g
@@ -1791,12 +1789,10 @@ pub mod batched_path
 			all
 		};
 
-		// Metal buffers
-		let packed_buf = device.new_buffer_with_data(
-			packed_train_input.as_ptr() as *const _,
-			(packed_train_input.len() * 8) as u64,
-			MTLResourceOptions::StorageModeShared,
-		);
+		// Metal buffers (the input aliases train_input_bits; dropped at return,
+		// after trainer.train has waited for the dispatch to complete)
+		let packed_input = ram_core::metal_input_buffer::NoCopyInputBuffer::new(device, train_input_bits);
+		let packed_buf = packed_input.buffer();
 		let conn_buf = device.new_buffer_with_data(
 			connections_i32.as_ptr() as *const _,
 			(connections_i32.len() * 4) as u64,
@@ -1942,7 +1938,7 @@ pub mod batched_path
 			);
 		}
 		trainer.train(
-			&packed_buf,
+			packed_buf,
 			&conn_buf,
 			&neuron_meta,
 			&targets_buf,
@@ -2375,12 +2371,9 @@ pub mod batched_path
 
 			// Score-level comparison on the training data (CPU eval on both
 			// exports — implementation-independent of the Metal eval path).
-			let (packed_u64, wpe) = pack_packed_to_u64(&packed);
 			let sb = compute_per_example_scores(
 				bexp,
 				&packed,
-				&packed_u64,
-				wpe,
 				num_train,
 				num_classes,
 				total_input_bits,
@@ -2394,8 +2387,6 @@ pub mod batched_path
 			let sc = compute_per_example_scores(
 				&cexp,
 				&packed,
-				&packed_u64,
-				wpe,
 				num_train,
 				num_classes,
 				total_input_bits,
@@ -2675,6 +2666,195 @@ pub mod batched_path
 				with_offset[0].sparse_exports[0].keys, without_offset[0].sparse_exports[0].keys,
 				"offset had no effect on sampling — negative control failed"
 			);
+		}
+
+		/// Unique-address fixture (each example a distinct 16-bit pattern, each
+		/// neuron a rotation of all 16 inputs): every (neuron, example) write
+		/// lands on its own address, so training is race-free and exact in
+		/// every mode — differences can only come from the code under test.
+		fn unique_address_fixture(num_train: usize, n_neurons: usize) -> (Vec<usize>, Vec<i64>, ram_core::packed_bits::PackedBits, Vec<i64>)
+		{
+			let tib = 16usize;
+			let bools: Vec<bool> = (0..num_train * tib).map(|i| ((i / tib) >> (i % tib)) & 1 == 1).collect();
+			let conns: Vec<i64> = (0..n_neurons).flat_map(|n| (0..tib).map(move |k| ((k + n) % tib) as i64)).collect();
+			let targets: Vec<i64> = (0..num_train).map(|ex| ((ex * 7) % 3 == 0) as i64).collect();
+			(vec![tib; n_neurons], conns, ram_core::packed_bits::PackedBits::from_bool_slice(&bools, tib), targets)
+		}
+
+		/// The chunk budget (now derived from available memory) must not move
+		/// any result: per-neuron capacity ignores it, sampling sees the
+		/// global neuron index, ranges concatenate in neuron order. Budgets of
+		/// 1, 2, 4 and all 7 neurons, at rate 0.5 and 1.0, QUAD and TERNARY:
+		/// exports byte-identical. Then the eval-in-place probe route (OI
+		/// only): per-example vote sums identical across the same budgets.
+		#[test]
+		fn chunk_budget_does_not_change_results()
+		{
+			if get_trainer().is_err()
+			{
+				eprintln!("[chunked_tests] no Metal device — skipping");
+				return;
+			}
+			let (num_train, n) = (1200usize, 7usize);
+			let (bits_flat, conns, packed, targets) = unique_address_fixture(num_train, n);
+			for &(mode, rate) in &[
+				(ram_core::neuron_memory::QUAD_WEIGHTED, 0.5f32),
+				(ram_core::neuron_memory::QUAD_WEIGHTED, 1.0),
+				(ram_core::neuron_memory::TERNARY, 1.0),
+			]
+			{
+				let per_neuron = marker_capacity_for_train(num_train, 16, rate) * 16;
+				let train = |chunk: usize| {
+					train_single_genome_neuron_chunked(
+						&bits_flat, &conns, &packed, &targets, &[], num_train, 0, 16, 0.5, rate, 42, None, per_neuron * chunk, mode,
+					)
+					.expect("chunked train failed")
+					.remove(0)
+				};
+				let reference = train(n);
+				for chunk in [1usize, 2, 4]
+				{
+					let got = train(chunk);
+					let what = format!("mode={} rate={} chunk={}", mode, rate, chunk);
+					assert_eq!(got.connections, reference.connections, "{}: connections", what);
+					assert_eq!(got.sparse_exports[0].keys, reference.sparse_exports[0].keys, "{}: keys", what);
+					assert_eq!(got.sparse_exports[0].values, reference.sparse_exports[0].values, "{}: values", what);
+					assert_eq!(got.sparse_exports[0].offsets, reference.sparse_exports[0].offsets, "{}: offsets", what);
+					assert_eq!(got.sparse_exports[0].counts, reference.sparse_exports[0].counts, "{}: counts", what);
+				}
+			}
+			if !ram_core::neuron_memory::order_independent_training_enabled()
+			{
+				eprintln!("[chunked_tests] WNN_ORDER_INDEPENDENT_TRAIN not set — probe half skipped");
+				return;
+			}
+			let mode = ram_core::neuron_memory::QUAD_WEIGHTED;
+			let per_neuron = marker_capacity_for_train(num_train, 16, 1.0) * 16;
+			let probe = |chunk: usize| {
+				let v = train_single_genome_chunked_scored_with_budget(
+					&bits_flat, &conns, &packed, &targets, &[], num_train, 0, 16, 0.5, 1.0, 42, None, &packed, num_train, true,
+					per_neuron * chunk, mode,
+				)
+				.expect("probe train failed");
+				(v.eval_scores, v.train_scores)
+			};
+			let reference = probe(n);
+			for chunk in [1usize, 3]
+			{
+				assert_eq!(probe(chunk), reference, "probe scores moved with chunk={}", chunk);
+			}
+		}
+
+		/// Up to 64 DISTINCT neurons over 18 inputs: neuron n reads a rotation
+		/// (n % 16) of inputs 0..16, reversed when (n / 16) is odd, plus input
+		/// 16 or 17 (n / 32) — always 0 in the data, so every (neuron, example)
+		/// address stays unique (race-free) while every NeuronKey differs.
+		fn distinct_neuron_fixture(num_train: usize, n_neurons: usize) -> (Vec<usize>, Vec<i64>, ram_core::packed_bits::PackedBits, Vec<i64>)
+		{
+			assert!(n_neurons <= 64);
+			let tib = 18usize;
+			let bools: Vec<bool> = (0..num_train * tib).map(|i| (i % tib) < 16 && ((i / tib) >> (i % tib)) & 1 == 1).collect();
+			let neuron = |n: usize| {
+				let mut c: Vec<i64> = (0..16).map(|k| ((k + n) % 16) as i64).collect();
+				if (n / 16) % 2 == 1
+				{
+					c.reverse();
+				}
+				c.push(16 + ((n / 32) % 2) as i64);
+				c
+			};
+			let conns: Vec<i64> = (0..n_neurons).flat_map(neuron).collect();
+			let targets: Vec<i64> = (0..num_train).map(|ex| ((ex * 7) % 3 == 0) as i64).collect();
+			(vec![17; n_neurons], conns, ram_core::packed_bits::PackedBits::from_bool_slice(&bools, tib), targets)
+		}
+
+		/// The export path's metrics for `export`: GPU scorer, threshold fixed
+		/// (Some(t >= 0)), eval-oracle (Some(-1)) or calibrated on the GPU
+		/// train scores (None) — the same steps `evaluate_genomes_parallel_hybrid` takes.
+		fn export_path_metrics(
+			export: &GenomeExport,
+			train: &ram_core::packed_bits::PackedBits,
+			train_targets: &[i64],
+			eval: &ram_core::packed_bits::PackedBits,
+			eval_targets: &[i64],
+			settings: ram_core::neuron_memory::EvalSettings,
+			threshold: Option<f64>,
+		) -> (f64, f64, f64, f64, f64)
+		{
+			let (metal, sparse) = (crate::adaptive::get_metal_evaluator(), crate::adaptive::get_sparse_metal_evaluator());
+			let (metal, sparse) = (metal.as_ref().map(|a| a.as_ref()), sparse.as_ref().map(|a| a.as_ref()));
+			let resolved = match threshold
+			{
+				Some(t) if t >= 0.0 => Some(t),
+				Some(_) => None,
+				None =>
+				{
+					let scores = crate::adaptive::compute_per_example_scores(
+						export, train, train.num_rows(), 1, train.total_bits(), settings.empty_value,
+						settings.memory_mode, settings.run_seed, settings.coverage_aware, metal, sparse,
+					);
+					let flat: Vec<f64> = scores.iter().map(|s| s[0]).collect();
+					Some(crate::adaptive::find_optimal_threshold_auto(&flat, train_targets, settings.fitness_weights).0)
+				}
+			};
+			crate::adaptive::evaluate_genome_hybrid(
+				export, eval, eval_targets, eval.num_rows(), 1, eval.total_bits(), settings, metal, sparse, resolved,
+			)
+		}
+
+		/// Eval-in-place vs the export path for genomes with NO duplicate
+		/// neurons at rate 1.0 — exactly the case the 13/10/2026 gate now lets
+		/// through (it used to decline every rate >= 1.0 genome). The export
+		/// route is the production one: `batched_train_offspring` (multiplicity
+		/// layer selected, identity grouping) → GPU scorer. The probe route is
+		/// `train_single_genome_chunked_scored_with_budget` (3 chunks) →
+		/// `score_vote_sums`. n = 7, 37, 64 neurons; fixed-0.5, eval-oracle and
+		/// train-calibrated thresholds: every metric bit-identical. (Before the
+		/// probe's scores were normalized on the GPU, CE was an ulp off.)
+		/// OI only (the probe merges OI counters); skips otherwise.
+		#[test]
+		fn eval_in_place_matches_export_path_for_distinct_neurons_at_rate_one()
+		{
+			if !ram_core::neuron_memory::order_independent_training_enabled() || get_trainer().is_err()
+			{
+				eprintln!("[eval_in_place] needs WNN_ORDER_INDEPENDENT_TRAIN=1 + Metal — skipping");
+				return;
+			}
+			let num_train = 1500usize;
+			let mode = ram_core::neuron_memory::QUAD_WEIGHTED;
+			let settings = ram_core::neuron_memory::EvalSettings {
+				empty_value: 0.5,
+				memory_mode: mode,
+				normal_class: 0,
+				fitness_weights: None,
+				run_seed: 0,
+				coverage_aware: false,
+			};
+			for n in [7usize, 37, 64]
+			{
+				let (bits_flat, conns, packed, targets) = distinct_neuron_fixture(num_train, n);
+				let eval = packed.gather_rows(700, |k| (k * 13) % num_train);
+				let eval_targets: Vec<i64> = (0..700).map(|k| targets[(k * 13) % num_train]).collect();
+				let export = batched_train_offspring(
+					&bits_flat, &[n], &conns, 1, 1, &packed, &targets, &[], num_train, 0, 18, 0.5, 1.0, 42, None, mode,
+				)
+				.expect("export path train failed")
+				.remove(0);
+				assert!(export.grouping.is_identity(), "fixture must have no duplicate neurons");
+				let per_neuron = marker_capacity_for_train(num_train, 17, 1.0) * 16;
+				let votes = train_single_genome_chunked_scored_with_budget(
+					&bits_flat, &conns, &packed, &targets, &[], num_train, 0, 18, 0.5, 1.0, 42, None, &eval, 700, true,
+					per_neuron * n.div_ceil(3), mode,
+				)
+				.expect("probe route failed");
+				for threshold in [Some(0.5), Some(-1.0), None]
+				{
+					let via_export = export_path_metrics(&export, &packed, &targets, &eval, &eval_targets, settings, threshold);
+					let via_probe = crate::adaptive::score_vote_sums(&votes, &eval_targets, &targets, settings, threshold);
+					let bits = |m: (f64, f64, f64, f64, f64)| [m.0.to_bits(), m.1.to_bits(), m.2.to_bits(), m.3.to_bits(), m.4.to_bits()];
+					assert_eq!(bits(via_export), bits(via_probe), "n={} threshold {:?}: export {:?} vs probe {:?}", n, threshold, via_export, via_probe);
+				}
+			}
 		}
 
 		/// One single-cluster binary-IDS genome trained + exported under
@@ -3260,17 +3440,17 @@ pub mod batched_path
 				ram_core::neuron_memory::QUAD_WEIGHTED,
 			)
 			.expect("scored wrapper failed");
-			assert_eq!(scored.eval_votes.len(), num_eval);
-			let train_votes = scored.train_votes.expect("train votes requested");
-			assert_eq!(train_votes.len(), num_train);
-			let max_vote = (4 * n_neurons) as u32;
+			assert_eq!(scored.eval_scores.len(), num_eval);
+			let train_scores = scored.train_scores.expect("train scores requested");
+			assert_eq!(train_scores.len(), num_train);
+			// votes <= 4 x neurons <=> score <= 1.0 (score = votes/4/neurons).
 			assert!(
-				scored.eval_votes.iter().all(|&v| v <= max_vote),
-				"eval vote exceeds 4×neurons"
+				scored.eval_scores.iter().all(|&v| (0.0..=1.0).contains(&v)),
+				"eval score outside [0, 1] (a vote exceeded 4×neurons)"
 			);
 			assert!(
-				train_votes.iter().all(|&v| v <= max_vote),
-				"train vote exceeds 4×neurons"
+				train_scores.iter().all(|&v| (0.0..=1.0).contains(&v)),
+				"train score outside [0, 1] (a vote exceeded 4×neurons)"
 			);
 		}
 
@@ -3367,18 +3547,16 @@ pub mod batched_path
 			.expect("bench_prod train failed");
 			let export_train_ms = t0.elapsed().as_secs_f64() * 1000.0;
 			let keys: usize = out[0].sparse_exports.iter().map(|s| s.keys.len()).sum();
-			let (packed_eval_u64, eval_words) = ram_core::neuron_memory::pack_packed_to_u64(&packed_eval);
 			let t_score = std::time::Instant::now();
 			let sparse_eval =
 				ram_core::metal_sparse::MetalSparseEvaluator::new().expect("sparse evaluator");
 			let scores = crate::adaptive::evaluate_group_sparse_gpu(
 				&sparse_eval,
-				&packed_eval_u64,
+				&packed_eval,
 				&out[0].connections,
 				&out[0].sparse_exports[0],
 				&out[0].groups[0],
 				num_eval,
-				eval_words,
 				false, // coverage_aware: export-path timing bench, not the IDS scorer
 				2,
 				0.5,
@@ -3423,7 +3601,7 @@ pub mod batched_path
 			)
 			.expect("bench_prod fused failed");
 			let fused_ms = t1.elapsed().as_secs_f64() * 1000.0;
-			let nonzero = scored.eval_votes.iter().filter(|&&v| v > 0).count();
+			let nonzero = scored.eval_scores.iter().filter(|&&v| v > 0.0).count();
 			eprintln!(
 			"[bench_prod] FUSED PATH  250n×64b×10M + {}-example probe: total={:.0}ms (export+eval skipped) → {:.2}x vs export-path total  nonzero_votes={}  (export scores head: {:?})",
 			num_eval, fused_ms, export_total_ms / fused_ms.max(1.0), nonzero, export_scores_probe,

@@ -71,7 +71,11 @@ import os
 #   physical_cells); IDSGenomeStreamerWrapper gains footprint(). IDSEvaluator and
 #   experiment.py unpack it, so wheel + Python land together at idle. The
 #   validation cache pins worker_abi, so this bump re-validates.
-EXPECTED_ABI = 17
+# 18 (13/10/2026, memory fixes): no Python-visible change — bumped so the deploy
+#   is identifiable. Bit-identical results, smaller working set (packed rows in
+#   the GPU word layout, no-copy Metal input, folds as row indices, chunk table
+#   <= 4 GiB). The validation cache pins worker_abi, so this bump re-validates.
+EXPECTED_ABI = 18
 
 BUILD_HINT = (
 	"Rebuild the accelerator: cd src/wnn/ram/strategies/accelerator && "
