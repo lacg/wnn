@@ -171,6 +171,7 @@ class FlowWorker:
             ram_accelerator.set_cancel_flag()
         except Exception as e:
             self._log(f"Could not propagate cancel to Rust accelerator: {e}")
+        self._propagate_to_controller(signum)
 
         # Forward the shutdown to every live flow subprocess so each stops
         # gracefully at the end of its current generation and re-queues itself
@@ -194,6 +195,40 @@ class FlowWorker:
                 self._log(f"Received SIGTERM, stopping scheduler "
                           f"({len(self._running)} flow subprocess(es) signalled)...")
                 self.running = False
+
+    def _propagate_to_controller(self, signum: int) -> None:
+        """Stop a CONTROLLER flow the way phased_ga's own handler would.
+
+        Since the 19/06 crate split the controller runs on its own wheel
+        (ram_controller) whose cancel flag is a SEPARATE static from the worker
+        wheel's set above, and the controller tells a real shutdown from a stray
+        flag by a Python witness (wnn.control.cancel_state). Setting only the
+        worker flag left a dashboard controller flow deaf to SIGTERM until the
+        hard kill (15/10/2026). Here: mark the witness FIRST, then set the
+        controller flag — the same order as phased_ga._sigterm_handler, so no poll
+        ever sees the flag without the witness (that reads as SPURIOUS and is
+        retried, i.e. the signal is ignored).
+
+        ONLY when the controller path is already loaded in this process
+        (sys.modules), never by importing it here:
+          * an IDS flow subprocess / the scheduler never imports wnn.control, so
+            this is a dict lookup and nothing else — IDS behaviour is unchanged;
+          * importing an extension module inside a signal handler can deadlock on
+            the import lock if the main thread is mid-import, and would load the
+            controller dylib (Metal init) into a process that never uses it;
+          * a controller flow has necessarily imported both modules before any
+            controller work exists to cancel (_run_controller_flow → phased_ga).
+        """
+        ctl = sys.modules.get("wnn.control._accel")
+        if ctl is None:
+            return
+        cs = sys.modules.get("wnn.control.cancel_state")
+        try:
+            if cs is not None:
+                cs.mark_sigterm(signum)
+            ctl.set_cancel_flag()
+        except Exception as e:
+            self._log(f"Could not propagate cancel to the controller wheel: {e}")
 
     def _forward_signal_to_children(self, sig: int):
         """Send `sig` to every live flow subprocess (best-effort)."""
