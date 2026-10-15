@@ -32,6 +32,8 @@ the flow's DB status, which the scheduler re-reads):
 """
 
 import argparse
+import os   # os.getpid() in _run_controller_flow — missing since 937d794e, so every
+            # dashboard controller flow died with NameError at register_flow_pid
 import sys
 from pathlib import Path
 
