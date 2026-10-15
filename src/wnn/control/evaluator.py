@@ -2332,10 +2332,14 @@ class ControllerEvaluator:
 		self._ensure_ga_ready()
 		if not _skip_advance:
 			self._advance_fold()  # advance the fold counter ONCE per eval, not per sub-batch
-		from wnn.accel import accel_or_none
-		# Loud by default: with ram_accelerator None the cancel-flag check
-		# degrades to "never cancelled" (the F1=0.49 bug class).
-		ram_accelerator = accel_or_none()
+		# The CONTROLLER wheel's cancel flag — the one the SIGTERM handler sets and
+		# the Rust controller kernels poll. This read wnn.accel (the WORKER wheel)
+		# until 15/10/2026: since the 19/06 crate split the two are separate statics,
+		# so the guard never saw a SIGTERM and cancelled no-op scores (all zeros)
+		# went into selection, the held-out and stage-select (_tw515 s3).
+		# require_accel() raises if the wheel is missing — never "never cancelled".
+		from wnn.control._accel import require_accel
+		ram_accelerator = require_accel()
 
 		N = len(genomes)
 		K = self.num_eval_folds
@@ -2530,10 +2534,14 @@ class ControllerEvaluator:
 		import os
 		self._ensure_ga_ready()
 		self._advance_fold()
-		from wnn.accel import accel_or_none
-		# Loud by default: with ram_accelerator None the cancel-flag check
-		# degrades to "never cancelled" (the F1=0.49 bug class).
-		ram_accelerator = accel_or_none()
+		# The CONTROLLER wheel's cancel flag — the one the SIGTERM handler sets and
+		# the Rust controller kernels poll. This read wnn.accel (the WORKER wheel)
+		# until 15/10/2026: since the 19/06 crate split the two are separate statics,
+		# so the guard never saw a SIGTERM and cancelled no-op scores (all zeros)
+		# went into selection, the held-out and stage-select (_tw515 s3).
+		# require_accel() raises if the wheel is missing — never "never cancelled".
+		from wnn.control._accel import require_accel
+		ram_accelerator = require_accel()
 		# CANCEL GUARD (01/06/2026 — same proper-vs-spurious logic as
 		# evaluate_batch). No training here (cells ARE the genome), but the GPU
 		# score still polls the cancel flag, so a cancel mid-score yields a

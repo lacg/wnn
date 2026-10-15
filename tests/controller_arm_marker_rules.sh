@@ -138,7 +138,7 @@ echo "=== watchdog retry RESUMES from the right point (stage, not mtime) ==="
 RSTUB="$TD/resumepy"
 cat > "$RSTUB" <<'EOS'
 #!/usr/bin/env bash
-if [ "${2:-}" = "scripts/pick_resume_point.py" ]; then exec python3 "$2" "$3"; fi
+if [ "${2:-}" = "scripts/pick_resume_point.py" ]; then exec "$PICK_PY" "$2" "$3"; fi
 n=$(cat "$FLIGHTS" 2>/dev/null || echo 0); echo $((n + 1)) > "$FLIGHTS"
 if [ "$n" = "0" ]; then exit 143; fi
 printf '%s\n' "$*" > "$ARGV_OUT"
@@ -152,8 +152,26 @@ retry_argv() {   # retry_argv <case> -> the retry's "--resume-from-emergency X -
 	sed -nE 's/.*--resume-from-emergency ([^ ]+) --resume-mode ([a-z]+).*/\1 \2/p' "$TD/argv_$1" \
 		| sed "s|$ck/||"
 }
-export FLIGHTS ARGV_OUT
-mk() { mkdir -p "$TD/ck_$1"; touch -t "$3" "$TD/ck_$1/$2"; }
+# The picker reads checkpoint HEADS (completion marker / metrics), so it needs a
+# python with PyYAML — the project venv when present.
+PICK_PY=/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/bin/python
+[ -x "$PICK_PY" ] || PICK_PY=python3
+export FLIGHTS ARGV_OUT PICK_PY
+# mk <case> <file> <touch-time> [extra-mapping]: a gz whose head carries `extra`.
+# Default: a FINISHED final (stage_complete: true) or an emergency dump, by name.
+mk() {
+	local extra="${4:-}"
+	if [ -z "$extra" ]; then
+		case "$2" in
+			emergency_*) extra="{emergency_dump: true}" ;;
+			*) extra="{stage_complete: true}" ;;
+		esac
+	fi
+	mkdir -p "$TD/ck_$1"
+	printf '{schema: 2, phase_key: x, extra: %s, saved_at: 1.0, best_genome: {type: x}, final_population: []}\n' \
+		"$extra" | gzip > "$TD/ck_$1/$2"
+	touch -t "$3" "$TD/ck_$1/$2"
+}
 # Case A — the stale-dump trap: stage 1 finished AFTER its dump, stage 4 never dumped.
 mk A emergency_stage1_neurons.yaml.gz 202610130449
 mk A stage0_grid.yaml.gz 202610122125
@@ -174,6 +192,21 @@ check "stage-4 final newer than its dump -> stage-4 FINAL, mode next" "$(retry_a
 mk D stage0_grid.yaml.gz 202610122125
 mk D emergency_stage1_neurons.yaml.gz 202610130100
 check "grid final + live stage-1 dump -> the dump, mode same" "$(retry_argv D)" "emergency_stage1_neurons.yaml.gz same"
+# Case E — the 15/10 _tw515 s3 layout: MEMORY SIGTERMed at gen 2, its dump (00:18)
+# followed by a pre-fix "final" (00:19) with all-zero metrics and no stage_complete.
+# That is NOT a finished stage: resume the dump, mode same — never `next`.
+ZERO="{metrics: {stable_rate: 0.0, mean_attitude_error_deg: 0.0, mean_steady_error_deg: 0.0}}"
+mk E stage0_grid.yaml.gz 202610141806
+mk E emergency_stage1_neurons.yaml.gz 202610142235
+mk E stage1_neurons.yaml.gz 202610142339
+mk E emergency_stage4_memory.yaml.gz 202610150018
+mk E stage4_memory.yaml.gz 202610150019 "$ZERO"
+check "_tw515 s3: zero-metric stage-4 'final' ignored -> dump, mode same" "$(retry_argv E)" "emergency_stage4_memory.yaml.gz same"
+# Case F — same, but the final says so explicitly (stage_complete: false).
+mk F stage1_neurons.yaml.gz 202610142339
+mk F emergency_stage4_memory.yaml.gz 202610150018
+mk F stage4_memory.yaml.gz 202610150019 "{stage_complete: false}"
+check "stage_complete: false final ignored -> dump, mode same" "$(retry_argv F)" "emergency_stage4_memory.yaml.gz same"
 
 echo
 echo "=== an existing marker is never rewritten (idempotent resume) ==="

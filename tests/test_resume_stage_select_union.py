@@ -245,20 +245,69 @@ def test_picker_rule(tmp_path):
 	sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 	import pick_resume_point as K
 
-	def touch(name, ns):
-		p = tmp_path / name
-		p.write_text("x")
-		os.utime(p, ns=(ns, ns))
+	def touch(name, ns, extra="{stage_complete: true}"):
+		_write_head(tmp_path / name, extra)
+		os.utime(tmp_path / name, ns=(ns, ns))
 
 	assert K.pick(tmp_path) is None                       # killed in the grid: from scratch
 	touch("stage0_grid.yaml.gz", 100)
 	assert K.pick(tmp_path) == (str(tmp_path / "stage0_grid.yaml.gz"), "next")
-	touch("emergency_stage1_neurons.yaml.gz", 200)
+	touch("emergency_stage1_neurons.yaml.gz", 200, "{emergency_dump: true}")
 	assert K.pick(tmp_path) == (str(tmp_path / "emergency_stage1_neurons.yaml.gz"), "same")
 	touch("stage1_neurons.yaml.gz", 200)                  # same mtime: the final save follows the dump
 	assert K.pick(tmp_path) == (str(tmp_path / "stage1_neurons.yaml.gz"), "next")
 	touch("stage4_memory.yaml.gz.tmp.123", 999)           # a half-written final is never a resume point
 	assert K.pick(tmp_path)[0].endswith("stage1_neurons.yaml.gz")
+
+
+def _write_head(path, extra: str):
+	"""A schema-2-shaped checkpoint whose HEAD (all the picker reads) carries `extra`."""
+	import gzip
+	with gzip.open(path, "wt") as f:
+		f.write(f"{{schema: 2, phase_key: '1', extra: {extra}, saved_at: 1.0, "
+		        f"best_genome: {{type: x}}, final_population: []}}\n")
+
+
+_ZERO = ("{metrics: {stable_rate: 0.0, mean_attitude_error_deg: 0.0, "
+         "mean_steady_error_deg: 0.0}}")
+_GOOD = ("{metrics: {stable_rate: 0.99, mean_attitude_error_deg: 1.3, "
+         "mean_steady_error_deg: 0.6}}")
+
+
+def test_picker_tw515_s3_layout_resumes_memory_same(tmp_path):
+	"""The exact 15/10 layout: MEMORY was SIGTERMed at gen 2, its emergency dump
+	(00:18:32) was followed by a "final" (00:19:03) with all-zero metrics. That final
+	is NOT a finished stage: resume the dump, mode same — never `next`."""
+	import os
+	sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+	import pick_resume_point as K
+	layout = [("stage0_grid.yaml.gz", "18:06:25", _GOOD),
+	          ("emergency_stage1_neurons.yaml.gz", "22:35:26", "{emergency_dump: true}"),
+	          ("stage1_neurons.yaml.gz", "23:39:35", _GOOD),
+	          ("emergency_stage4_memory.yaml.gz", "24:18:32", "{emergency_dump: true}"),
+	          ("stage4_memory.yaml.gz", "24:19:03", _ZERO)]           # legacy: no stage_complete
+	for name, hms, extra in layout:
+		h, m, s_ = (int(x) for x in hms.split(":"))
+		_write_head(tmp_path / name, extra)
+		ns = (h * 3600 + m * 60 + s_) * 10**9
+		os.utime(tmp_path / name, ns=(ns, ns))
+	assert K.pick(tmp_path) == (str(tmp_path / "emergency_stage4_memory.yaml.gz"), "same")
+	# The same layout written by the FIXED code has no stage4 final at all.
+	(tmp_path / "stage4_memory.yaml.gz").unlink()
+	assert K.pick(tmp_path) == (str(tmp_path / "emergency_stage4_memory.yaml.gz"), "same")
+
+
+def test_completion_rule():
+	from wnn.control.stage_completion import stage_final_status
+	assert stage_final_status({"stage_complete": True})[0]
+	assert not stage_final_status({"stage_complete": False})[0]
+	assert not stage_final_status({"emergency_dump": True})[0]
+	zero = {"metrics": {"stable_rate": 0.0, "mean_attitude_error_deg": 0.0}}
+	sentinel = {"metrics": {"stable_rate": 0.0, "mean_attitude_error_deg": 180.0}}
+	bad_but_real = {"metrics": {"stable_rate": 0.0, "mean_attitude_error_deg": 14.8}}
+	assert not stage_final_status(zero)[0] and not stage_final_status(sentinel)[0]
+	assert stage_final_status(bad_but_real)[0], "a genuinely bad stage is still a finished one"
+	assert stage_final_status({})[0], "legacy final without metrics stays trusted"
 
 
 # ---------------------------------------------------------------- deliberate aborts propagate
