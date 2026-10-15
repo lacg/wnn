@@ -317,7 +317,7 @@ class FlowWorker:
         """
         try:
             flows = self.client.list_flows(status="running", limit=10)
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc).replace(tzinfo=None)  # naive UTC, like the parsed timestamps below
 
             for flow in flows:
                 # Skip flows owned by THIS worker. With the scheduler, a flow we
