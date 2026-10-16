@@ -383,7 +383,9 @@ use pyapi::*;
 /// neuron-sampling mask is keyed on the GLOBAL train row (chunk-invariant, equal
 /// to the in-memory trainer's) and its rng_seed is the in-memory 0 — a
 /// rate < 1.0 streaming genome's mask changes from ABI 19 (QUAD at rate 1.0 is
-/// bit-identical).
+/// bit-identical). Same ABI: IDSCacheWrapper.set_two_cluster_fitness_f1 +
+/// the streamer's two_cluster_fitness_f1 kwarg ("macro" default, bit-identical
+/// | "attack": a binary two-cluster search reports the attack class's F1).
 pub const ABI_VERSION: u32 = 20;
 
 #[pymodule]

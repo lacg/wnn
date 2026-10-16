@@ -59,7 +59,7 @@ def test_flat_binary_matches_the_worker(captured):
 	assert name == "unsw-nb15" and load["split"] == "temporal_3way" and load["n_bits"] == 16
 	assert load["feature_selection"] == "top20" and load["encoded_storage"] == "memory"
 	common = dict(classification="binary", empty_value=0.0, memory_mode=2, seed=20419, run_seed=20419,
-		coverage_aware=False, write_rule="lattice", num_negatives=None, neuron_sample_rate=1.0, balance_classes=True,
+		coverage_aware=False, write_rule="lattice", two_cluster_fitness_f1="macro", num_negatives=None, neuron_sample_rate=1.0, balance_classes=True,
 		single_cluster=True, undersample_majority=False, flip_labels=False, class_weight_multiplier=1.0)
 	assert optimizer.args == {**common, "dataset": optimizer.args["dataset"], "num_parts": 5, "k_folds": 5,
 		"kfold_per_gen": 5, "reuse_cache": None}

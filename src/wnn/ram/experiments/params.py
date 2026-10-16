@@ -30,6 +30,11 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	# (MAJORITY VOTE: signed class-weighted tally per cell, committed by sign).
 	# BINARY/TERNARY/PLN only — "vote" on a QUAD-family mode is rejected.
 	"ids_write_rule",
+	# ids_two_cluster_fitness_f1 (16/10/2026, worker ABI 20): "macro" (default —
+	# the 2-class macro F1, bit-identical) | "attack" (the attack class's F1)
+	# feeds the GA fitness + patience of a binary TWO-cluster search. Rejected
+	# (non-default) on single-cluster, multiclass and hierarchical flows.
+	"ids_two_cluster_fitness_f1",
 	"min_bits", "max_bits", "min_neurons", "max_neurons", "max_bit_delta",
 	"neuron_sample_rate", "sparse_threshold", "seed",
 	# GA / TS / SA / grid

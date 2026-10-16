@@ -94,6 +94,10 @@ pub struct IDSCache
 	/// set_write_rule): BINARY/TERNARY/PLN train through `WriteRule::Vote`.
 	/// Default false = bit-exact today's Set / TRUE-wins lattice.
 	pub write_vote: bool,
+	/// Two-cluster binary GA-fitness F1 (`ids_two_cluster_fitness_f1="attack"`,
+	/// via set_two_cluster_fitness_f1): the K = 2 search reports the attack
+	/// class's F1. Default false = the 2-class macro F1 (bit-exact).
+	pub fitness_attack_f1: bool,
 
 	// Live progress for observer thread
 	pub live_progress: Arc<RwLock<Option<LiveProgress>>>,
@@ -251,6 +255,7 @@ impl IDSCache
 			run_seed: self.run_seed,
 			coverage_aware: self.coverage_aware,
 			write_vote: self.write_vote,
+			fitness_attack_f1: self.fitness_attack_f1,
 		}
 	}
 
@@ -422,6 +427,7 @@ impl IDSCache
 			run_seed: 0,
 			coverage_aware: false,
 			write_vote: false,
+			fitness_attack_f1: false,
 		}
 	}
 

@@ -98,6 +98,30 @@ pub fn compute_f1_fpr_with_normal_class(
 	}
 }
 
+/// The (F1, FPR) a K-cluster GA-search evaluation reports — what the fitness
+/// calculators and the patience tracker consume. Default: the K-class macro
+/// F1 (`compute_f1_fpr_with_normal_class`). With
+/// `settings.fitness_attack_f1` (`ids_two_cluster_fitness_f1="attack"`, binary
+/// two-cluster only — the entry points refuse it elsewhere) the F1 is the
+/// ATTACK class's (`1 - normal_class`), via `multiclass_metrics::class_prf`,
+/// the formula the validation `attack_f1` uses. FPR is unchanged.
+pub fn search_f1_fpr(
+	predictions: &[u32],
+	targets: &[i64],
+	num_clusters: usize,
+	settings: &ram_core::neuron_memory::EvalSettings,
+) -> (f64, f64)
+{
+	let (macro_f1, fpr) = compute_f1_fpr_with_normal_class(predictions, targets, num_clusters, settings.normal_class);
+	if !(settings.fitness_attack_f1 && num_clusters == 2)
+	{
+		return (macro_f1, fpr);
+	}
+	let confusion = crate::multiclass_metrics::confusion_matrix(predictions, targets, 2);
+	let (_, _, attack_f1, _) = crate::multiclass_metrics::class_prf(&confusion, 2, 1 - settings.normal_class.min(1));
+	(attack_f1, fpr)
+}
+
 /// Find the optimal threshold for binary (single-cluster) classification.
 ///
 /// Efficiently sweeps all unique score boundaries in O(n log n) time.

@@ -1948,6 +1948,7 @@ mod tests
 			run_seed: 0,
 			coverage_aware: false,
 			write_vote: false,
+			fitness_attack_f1: false,
 		};
 		std::env::set_var("WNN_BATCH_SIZE", batch_size);
 		let out = evaluate_genomes_parallel_hybrid(

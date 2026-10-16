@@ -346,6 +346,19 @@ impl IDSCacheWrapper
 		Ok(())
 	}
 
+	/// Two-cluster binary GA-fitness F1 (16/10/2026, worker ABI 20): "macro"
+	/// (default — the 2-class macro F1, bit-exact) or "attack" (the attack
+	/// class's F1). Selects the F1 every K = 2 SEARCH evaluation of this cache
+	/// reports (GA fitness and the patience tracker); validation decode modes
+	/// are unaffected. "attack" on a single-cluster or multiclass cache raises
+	/// ValueError.
+	fn set_two_cluster_fitness_f1(&mut self, fitness_f1: &str) -> PyResult<()>
+	{
+		self.inner.fitness_attack_f1 =
+			parse_two_cluster_fitness_f1(fitness_f1, self.inner.num_classes(), self.inner.num_genome_clusters())?;
+		Ok(())
+	}
+
 	/// Evaluate genomes using hybrid CPU+GPU with a specific train subset.
 	#[allow(clippy::too_many_arguments)]
 	fn evaluate_genomes_hybrid(
@@ -1249,6 +1262,31 @@ pub(crate) fn parse_write_rule(write_rule: &str) -> PyResult<bool>
 		"vote" => Ok(true),
 		other => Err(pyo3::exceptions::PyValueError::new_err(format!(
 			"unknown write_rule {other:?} (expected \"lattice\" or \"vote\")"
+		))),
+	}
+}
+
+/// The `ids_two_cluster_fitness_f1` wire string → `EvalSettings::
+/// fitness_attack_f1`. "attack" exists only for a binary TWO-cluster
+/// evaluation (2 classes, 2 genome clusters); anywhere else it would silently
+/// no-op, so it raises. Shared by `IDSCacheWrapper.set_two_cluster_fitness_f1`
+/// and the `IDSGenomeStreamerWrapper` constructor.
+pub(crate) fn parse_two_cluster_fitness_f1(
+	fitness_f1: &str,
+	num_classes: usize,
+	num_genome_clusters: usize,
+) -> PyResult<bool>
+{
+	match fitness_f1
+	{
+		"macro" => Ok(false),
+		"attack" if num_classes == 2 && num_genome_clusters == 2 => Ok(true),
+		"attack" => Err(pyo3::exceptions::PyValueError::new_err(format!(
+			"two_cluster_fitness_f1=\"attack\" applies to binary two-cluster evaluation only \
+			 (got {num_classes} classes, {num_genome_clusters} genome clusters)"
+		))),
+		other => Err(pyo3::exceptions::PyValueError::new_err(format!(
+			"unknown two_cluster_fitness_f1 {other:?} (expected \"macro\" or \"attack\")"
 		))),
 	}
 }

@@ -187,6 +187,22 @@ pub fn confusion_matrix(predictions: &[u32], targets: &[i64], num_classes: usize
 	confusion
 }
 
+/// (precision, recall, F1, support) of class `c` from a row-major K×K
+/// confusion matrix (row = true class). THE per-class formula: the K-class
+/// metrics below and the two-cluster attack-F1 GA fitness
+/// (`adaptive::search_f1_fpr`) both read it, so the fitness equals the
+/// reported per-class F1 exactly.
+pub fn class_prf(confusion: &[u64], num_classes: usize, c: usize) -> (f64, f64, f64, u64)
+{
+	let tp = confusion[c * num_classes + c];
+	let row: u64 = (0..num_classes).map(|p| confusion[c * num_classes + p]).sum();
+	let col: u64 = (0..num_classes).map(|t| confusion[t * num_classes + c]).sum();
+	let p = if col > 0 { tp as f64 / col as f64 } else { 0.0 };
+	let r = if row > 0 { tp as f64 / row as f64 } else { 0.0 };
+	let f = if p + r > 0.0 { 2.0 * p * r / (p + r) } else { 0.0 };
+	(p, r, f, row)
+}
+
 /// Compute the full multiclass metric set for a fixed set of predictions.
 ///
 /// `scores_flat` is only consumed for the (decode-independent) K-class CE;
@@ -215,25 +231,9 @@ pub fn metrics_from_predictions(
 
 	for c in 0..num_classes
 	{
-		let tp = confusion[c * num_classes + c];
-		correct += tp;
-		let row: u64 = (0..num_classes)
-			.map(|p| confusion[c * num_classes + p])
-			.sum();
-		let col: u64 = (0..num_classes)
-			.map(|t| confusion[t * num_classes + c])
-			.sum();
+		correct += confusion[c * num_classes + c];
+		let (p, r, f, row) = class_prf(&confusion, num_classes, c);
 		support[c] = row;
-		let p = if col > 0 { tp as f64 / col as f64 } else { 0.0 };
-		let r = if row > 0 { tp as f64 / row as f64 } else { 0.0 };
-		let f = if p + r > 0.0
-		{
-			2.0 * p * r / (p + r)
-		}
-		else
-		{
-			0.0
-		};
 		precision[c] = p;
 		recall[c] = r;
 		f1[c] = f;

@@ -108,6 +108,7 @@ struct Case
 	balance: bool,
 	coverage_aware: bool,
 	rate: f32,
+	attack_f1: bool, // ids_two_cluster_fitness_f1="attack" (binary two-cluster only)
 }
 
 impl Case
@@ -148,6 +149,7 @@ impl Case
 			run_seed: RUN_SEED,
 			coverage_aware: self.coverage_aware,
 			write_vote: self.vote,
+			fitness_attack_f1: self.attack_f1,
 		}
 	}
 
@@ -176,6 +178,7 @@ impl Case
 		cache.run_seed = s.run_seed;
 		cache.coverage_aware = s.coverage_aware;
 		cache.write_vote = s.write_vote;
+		cache.fitness_attack_f1 = s.fitness_attack_f1;
 		cache
 	}
 
@@ -319,7 +322,11 @@ fn cases() -> Vec<Case>
 					{
 						for rate in [1.0f32, 0.5]
 						{
-							out.push(Case { mode, vote, clusters, bits, balance, coverage_aware, rate });
+							out.push(Case { mode, vote, clusters, bits, balance, coverage_aware, rate, attack_f1: false });
+							if clusters == 2
+							{
+								out.push(Case { mode, vote, clusters, bits, balance, coverage_aware, rate, attack_f1: true });
+							}
 						}
 					}
 				}
@@ -359,7 +366,7 @@ fn streamer_parity_every_mode_rule_and_cluster_layout()
 #[test]
 fn streamer_refuses_vote_on_four_state_and_unknown_modes()
 {
-	let case = Case { mode: QUAD_WEIGHTED, vote: false, clusters: 1, bits: 8, balance: false, coverage_aware: false, rate: 1.0 };
+	let case = Case { mode: QUAD_WEIGHTED, vote: false, clusters: 1, bits: 8, balance: false, coverage_aware: false, rate: 1.0, attack_f1: false };
 	let (bits, npc, conns) = case.genome();
 	let build = |settings: EvalSettings| {
 		IDSGenomeStreamer::new(bits.clone(), npc.clone(), conns.clone(), 2, 1, true, settings, 1.0, 0, None).err()
@@ -384,11 +391,50 @@ fn streamer_mode_reaches_the_cells()
 {
 	let data = Dataset::new(2);
 	let score = |mode: u8| {
-		let case = Case { mode, vote: false, clusters: 1, bits: 8, balance: false, coverage_aware: false, rate: 1.0 };
+		let case = Case { mode, vote: false, clusters: 1, bits: 8, balance: false, coverage_aware: false, rate: 1.0, attack_f1: false };
 		let cache = case.cache(&data);
 		let mut s = case.streamer(&data, &cache);
 		bits_of(&stream_scores(&mut s, &data.eval))
 	};
 	assert_ne!(score(BINARY), score(QUAD_WEIGHTED));
 	assert_ne!(score(TERNARY), score(BINARY));
+}
+
+/// `ids_two_cluster_fitness_f1` (binary two-cluster): "attack" makes the
+/// search F1 the attack class's F1 — exactly the validation argmax decode's
+/// per-class F1 for that class — on the in-memory AND the streaming path;
+/// "macro" (default) is the 2-class macro F1, unchanged. FPR / acc / CE do not
+/// depend on the selector. The streamer refuses "attack" off K = 2.
+#[test]
+fn two_cluster_fitness_f1_attack_and_macro()
+{
+	let data = Dataset::new(2);
+	let mode = if ram_core::neuron_memory::order_independent_training_enabled() { QUAD_WEIGHTED } else { TERNARY };
+	for bits in [8usize, 14]
+	{
+		let search = |attack_f1: bool| {
+			let case = Case { mode, vote: false, clusters: 2, bits, balance: false, coverage_aware: false, rate: 1.0, attack_f1 };
+			let cache = case.cache(&data);
+			let (b, npc, conns) = case.genome();
+			let mem = evaluate_genomes_ids_cached_full_hybrid(&cache, &b, &npc, &conns, 1, 0.5, 1.0, 0, None)[0];
+			let mut s = case.streamer(&data, &cache);
+			stream_scores_into(&mut s, &data.eval);
+			let streamed = s.finalize_metrics(None).expect("K=2 finalize");
+			assert_eq!((streamed.1, streamed.2, streamed.3), (mem.1, mem.2, mem.3), "bits {bits} attack {attack_f1}: streaming != in-memory");
+			let (_, modes, _) = evaluate_multiclass_at_thresholds_ids_cached(&cache, &b, &npc, &conns, 0.5, 1.0, 0);
+			let argmax = modes.into_iter().find(|m| m.mode == "argmax").expect("argmax mode").metrics;
+			(mem, argmax)
+		};
+		let (macro_run, argmax) = search(false);
+		let (attack_run, _) = search(true);
+		assert_eq!(macro_run.2, argmax.macro_f1, "bits {bits}: macro fitness F1 != argmax macro F1");
+		assert_eq!(attack_run.2, argmax.f1[1], "bits {bits}: attack fitness F1 != argmax attack-class F1");
+		assert_ne!(attack_run.2, macro_run.2, "bits {bits}: the selector must change the F1 here");
+		assert_eq!((attack_run.0, attack_run.1, attack_run.3), (macro_run.0, macro_run.1, macro_run.3), "bits {bits}: only F1 moves");
+	}
+	let (b, npc, conns) = Case { mode, vote: false, clusters: 1, bits: 8, balance: false, coverage_aware: false, rate: 1.0, attack_f1: false }.genome();
+	let attack = EvalSettings { fitness_attack_f1: true, ..EvalSettings::default() };
+	assert!(IDSGenomeStreamer::new(b.clone(), npc.clone(), conns.clone(), 2, 1, true, attack, 1.0, 0, None).is_err(), "single-cluster");
+	let (b3, npc3, conns3) = Case { mode, vote: false, clusters: 3, bits: 8, balance: false, coverage_aware: false, rate: 1.0, attack_f1: false }.genome();
+	assert!(IDSGenomeStreamer::new(b3, npc3, conns3, 3, 2, false, attack, 1.0, 0, None).is_err(), "multiclass");
 }

@@ -289,6 +289,11 @@ pub struct EvalSettings
 	/// TRUE-wins lattice. Ignored by the 4-state family. `false` is bit-exact
 	/// today's behaviour.
 	pub write_vote: bool,
+	/// Two-cluster binary GA fitness (`ids_two_cluster_fitness_f1="attack"`):
+	/// the K = 2 search reports the ATTACK class's F1 instead of the 2-class
+	/// macro F1 (`adaptive::search_f1_fpr`). Ignored for K != 2; `false` is
+	/// bit-exact today's behaviour.
+	pub fitness_attack_f1: bool,
 }
 
 impl EvalSettings
@@ -313,6 +318,7 @@ impl Default for EvalSettings
 			run_seed: 0,
 			coverage_aware: false,
 			write_vote: false,
+			fitness_attack_f1: false,
 		}
 	}
 }

@@ -90,7 +90,10 @@ import os
 #   invariant, equal to the in-memory pass), and CPU-trained dense groups carry a
 #   coverage bitmap (coverage-aware was inert on them). In-memory results are
 #   bit-identical to ABI 19 except the classic CPU fallback under
-#   ids_coverage_aware=True. IDSEvaluator lands with this wheel at worker idle.
+#   ids_coverage_aware=True. Also additive: IDSCacheWrapper.set_two_cluster_fitness_f1
+#   ("macro"|"attack") + the streamer's two_cluster_fitness_f1 kwarg (binary
+#   two-cluster search F1; default "macro" bit-identical). IDSEvaluator lands with
+#   this wheel at worker idle.
 #   The validation cache pins worker_abi, so this bump re-validates.
 EXPECTED_ABI = 20
 

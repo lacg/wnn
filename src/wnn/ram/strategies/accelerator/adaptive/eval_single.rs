@@ -139,12 +139,7 @@ pub fn evaluate_genome_hybrid(
 
 					if let Ok((ce, acc, predictions)) = result
 					{
-						let (f1, fpr) = compute_f1_fpr_with_normal_class(
-							&predictions,
-							eval_targets,
-							num_clusters,
-							settings.normal_class,
-						);
+						let (f1, fpr) = search_f1_fpr(&predictions, eval_targets, num_clusters, &settings);
 						if timing_enabled
 						{
 							let elapsed = call_start.elapsed().as_millis();
@@ -358,12 +353,7 @@ pub fn evaluate_genome_hybrid(
 
 					if let Ok((ce, acc, predictions)) = result
 					{
-						let (f1, fpr) = compute_f1_fpr_with_normal_class(
-							&predictions,
-							eval_targets,
-							num_clusters,
-							settings.normal_class,
-						);
+						let (f1, fpr) = search_f1_fpr(&predictions, eval_targets, num_clusters, &settings);
 						if timing_enabled
 						{
 							let elapsed = gpu_start.elapsed().as_millis();
@@ -412,12 +402,7 @@ pub fn evaluate_genome_hybrid(
 	}
 
 	let (avg_ce, accuracy, predictions) = multiclass_ce_acc(&all_scores, eval_targets);
-	let (f1, fpr) = compute_f1_fpr_with_normal_class(
-		&predictions,
-		eval_targets,
-		num_clusters,
-		settings.normal_class,
-	);
+	let (f1, fpr) = search_f1_fpr(&predictions, eval_targets, num_clusters, &settings);
 
 	(avg_ce, accuracy, f1, fpr, 0.5)
 }

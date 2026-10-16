@@ -2864,6 +2864,7 @@ pub mod batched_path
 				run_seed: 0,
 				coverage_aware: false,
 				write_vote: false,
+				fitness_attack_f1: false,
 			};
 			for n in [7usize, 37, 64]
 			{

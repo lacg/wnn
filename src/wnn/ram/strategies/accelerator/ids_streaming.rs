@@ -78,7 +78,7 @@
 //! chunk offset — stream order == materialization order by construction).
 
 use crate::adaptive::{
-	build_groups, build_neuron_metadata, compute_binary_metrics_at_threshold, compute_f1_fpr_with_normal_class,
+	build_groups, build_neuron_metadata, compute_binary_metrics_at_threshold, search_f1_fpr,
 	compute_per_example_scores_at, export_genome_for_gpu, find_optimal_threshold_auto,
 	get_metal_evaluator, get_sparse_metal_evaluator, per_cluster_max_bits,
 	reorganize_connections_for_gpu, train_genome_in_slot_range, ConfigGroup, GenomeExport, GroupMemory,
@@ -163,6 +163,10 @@ impl IDSGenomeStreamer
 	) -> Result<Self, String>
 	{
 		let write_rule = Self::validated_write_rule(&settings)?;
+		if settings.fitness_attack_f1 && (single_cluster || num_classes != 2)
+		{
+			return Err("IDSGenomeStreamer: the attack-F1 fitness applies to binary two-cluster evaluation only".into());
+		}
 		let memory_mode = settings.memory_mode;
 		let (bits_flat, neurons_flat, connections, logical) =
 			PhysicalGenomeOf::trained_genome(bits_flat, neurons_flat, connections, neuron_sample_rate, memory_mode);
@@ -481,7 +485,7 @@ impl IDSGenomeStreamer
 	}
 
 	/// K-cluster finalize: argmax predictions + softmax CE + accuracy +
-	/// macro-F1/benign-FPR via `compute_f1_fpr_with_normal_class`. Mirrors
+	/// macro-F1 (or the attack F1, `search_f1_fpr`)/benign-FPR. Mirrors
 	/// the K-cluster CPU path of `evaluate_genome_hybrid` (eval_single.rs),
 	/// including its tie-breaking (last of equal maxima, max_by semantics).
 	fn finalize_metrics_multiclass(&self) -> (f64, f64, f64, f64, f64)
@@ -535,8 +539,7 @@ impl IDSGenomeStreamer
 
 		let ce = total_ce / num_eval as f64;
 		let acc = correct as f64 / num_eval as f64;
-		let (f1, fpr) =
-			compute_f1_fpr_with_normal_class(&predictions, &self.eval_labels, k, self.settings.normal_class);
+		let (f1, fpr) = search_f1_fpr(&predictions, &self.eval_labels, k, &self.settings);
 		(ce, acc, f1, fpr, 0.5)
 	}
 

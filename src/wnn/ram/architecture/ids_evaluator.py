@@ -100,6 +100,7 @@ class IDSEvaluator(BaseEvaluator):
 		memory_mode: int = 2,  # TERNARY=0/QUAD_BINARY=1/QUAD_WEIGHTED=2/BINARY=3/QSR=4/PLN=5
 		coverage_aware: bool = False,  # sparse miss scores 0.0, not the mode empty cell
 		write_rule: str = "lattice",  # "lattice" (mode's own writer) | "vote" (majority vote; BINARY/TERNARY/PLN)
+		two_cluster_fitness_f1: str = "macro",  # binary two-cluster search F1: "macro" (2-class) | "attack"
 		run_seed: int = 0,     # QSR/PLN stochastic-coin seed (ignored by deterministic modes)
 		seed: Optional[int] = None,
 		log_path: Optional[str] = None,
@@ -274,6 +275,9 @@ class IDSEvaluator(BaseEvaluator):
 		self._memory_mode = memory_mode
 		self._coverage_aware = coverage_aware
 		self._write_rule = write_rule
+		self._two_cluster_fitness_f1 = self._validated_two_cluster_fitness_f1(
+			two_cluster_fitness_f1, classification, single_cluster,
+		)
 		self._run_seed = run_seed
 		self._normal_class = 1 if flip_labels else 0
 
@@ -430,6 +434,18 @@ class IDSEvaluator(BaseEvaluator):
 					f"ids_write_rule={write_rule!r} needs a rebuilt ram_accelerator "
 					"(IDSCacheWrapper.set_write_rule is missing, ABI < 19). Rebuild the "
 					"worker wheel and swap it at worker-idle via scripts/worker_swap.py."
+				)
+
+			# Two-cluster fitness F1 (worker ABI 20). Same skew discipline: the
+			# default never needs the setter; "attack" on a stale wheel refuses.
+			_set_tf = getattr(self._cache, "set_two_cluster_fitness_f1", None)
+			if _set_tf is not None:
+				_set_tf(self._two_cluster_fitness_f1)
+			elif self._two_cluster_fitness_f1 != "macro":
+				raise RuntimeError(
+					"ids_two_cluster_fitness_f1='attack' needs a rebuilt ram_accelerator "
+					"(IDSCacheWrapper.set_two_cluster_fitness_f1 is missing, ABI < 20). Rebuild "
+					"the worker wheel and swap it at worker-idle via scripts/worker_swap.py."
 				)
 
 		# Store fitness weights for potential threshold optimization
@@ -642,6 +658,21 @@ class IDSEvaluator(BaseEvaluator):
 			genome.metrics = IDSMetrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=threshold, eval_time_ms=int(ms))
 			results.append(genome.metrics)
 		return results
+
+	@staticmethod
+	def _validated_two_cluster_fitness_f1(value: str, classification: str, single_cluster: bool) -> str:
+		"""The search F1 selector for binary two-cluster evaluation: "macro"
+		(the 2-class macro F1 — today's value) or "attack" (the attack class's
+		F1). Anything else, or "attack" where it would do nothing (single-cluster
+		/ multiclass), raises — Rust refuses the same, this fails before a build."""
+		if value not in ("macro", "attack"):
+			raise ValueError(f"two_cluster_fitness_f1={value!r}: expected 'macro' or 'attack'")
+		if value == "attack" and (classification != "binary" or single_cluster):
+			raise ValueError(
+				"two_cluster_fitness_f1='attack' applies to binary two-cluster evaluation only "
+				f"(classification={classification!r}, single_cluster={single_cluster})"
+			)
+		return value
 
 	def set_fitness_weights(self, w_ce: float, w_f1: float, w_fpr: float, w_acc: float):
 		"""Set fitness weights for threshold optimization.
@@ -978,6 +1009,7 @@ class IDSEvaluator(BaseEvaluator):
 			coverage_aware=self._coverage_aware,
 			write_rule=self._write_rule,
 			fitness_weights=self._fitness_weights,
+			two_cluster_fitness_f1=self._two_cluster_fitness_f1,
 		)
 
 	def _streaming_score_stream(self, streamer, stream, labels=None) -> list[float]:

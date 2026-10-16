@@ -464,7 +464,7 @@ pub(crate) fn evaluate_genomes_parallel_legacy(
 
         let avg_ce = total_ce / num_eval as f64;
         let accuracy = total_correct as f64 / num_eval as f64;
-        let (f1, fpr) = compute_f1_fpr_with_normal_class(&predictions, eval_targets, num_clusters, settings.normal_class);
+        let (f1, fpr) = search_f1_fpr(&predictions, eval_targets, num_clusters, &settings);
 
         // Progress logging (to log file if WNN_LOG_PATH set, otherwise stderr)
         // Format matches Python's format_genome_log for consistency

@@ -56,6 +56,38 @@ def resolve_write_rule(params: dict) -> str:
 	return rule
 
 
+# ids_two_cluster_fitness_f1 values (IDSCacheWrapper.set_two_cluster_fitness_f1):
+# which F1 a binary TWO-cluster search reports to the GA fitness calculators and
+# the patience tracker. "macro" = the 2-class macro F1 (today, bit-identical);
+# "attack" = the attack class's F1.
+TWO_CLUSTER_FITNESS_F1 = frozenset({"macro", "attack"})
+DEFAULT_TWO_CLUSTER_FITNESS_F1 = "macro"
+
+
+def resolve_two_cluster_fitness_f1(params: dict) -> str:
+	"""Canonical ids_two_cluster_fitness_f1. Absent/None -> "macro". Unknown
+	values raise; so does any non-default value on a flow that is not binary
+	two-cluster (ids_classification='binary', ids_single_cluster=false) — there
+	the selector would silently do nothing and mislabel the arm."""
+	value = params.get("ids_two_cluster_fitness_f1") or DEFAULT_TWO_CLUSTER_FITNESS_F1
+	if value not in TWO_CLUSTER_FITNESS_F1:
+		raise ValueError(
+			f"ids_two_cluster_fitness_f1={value!r}: expected one of {sorted(TWO_CLUSTER_FITNESS_F1)}"
+		)
+	two_cluster_binary = (
+		params.get("ids_classification", "binary") == "binary"
+		and not bool(params.get("ids_single_cluster", False))
+	)
+	if value != DEFAULT_TWO_CLUSTER_FITNESS_F1 and not two_cluster_binary:
+		raise ValueError(
+			f"ids_two_cluster_fitness_f1={value!r} applies to binary two-cluster flows only "
+			"(ids_classification='binary', ids_single_cluster=false); got "
+			f"ids_classification={params.get('ids_classification', 'binary')!r}, "
+			f"ids_single_cluster={bool(params.get('ids_single_cluster', False))}"
+		)
+	return value
+
+
 def memory_mode_code(mode: str) -> int:
 	"""EvalSettings code for a canonical mode name (from resolve_memory_mode)."""
 	return IDS_MEMORY_MODE_CODES[mode]
