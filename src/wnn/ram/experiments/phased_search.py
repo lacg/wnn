@@ -1058,7 +1058,8 @@ class PhasedSearchRunner:
 		self.log(f"  Type: {'GA' if strategy_type == OptimizerStrategyType.ARCHITECTURE_GA else 'TS'}")
 		self.log(f"  optimize_bits={optimize_bits}, optimize_neurons={optimize_neurons}")
 		self.log(f"  optimize_connections={optimize_connections}")
-		self.log(f"  Train subset: {train_subset_idx} (of {self.evaluator.num_parts})")
+		_describe = getattr(self.evaluator, "describe_fitness_folds", None)
+		self.log(f"  Fitness folds: {_describe(train_subset_idx)}" if _describe else f"  Train subset: {train_subset_idx} (of {self.evaluator.num_parts})")
 		if initial_genome:
 			self.log(f"  Starting from previous best: {initial_genome}")
 		if initial_population:

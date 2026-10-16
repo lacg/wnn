@@ -101,12 +101,13 @@ class IDSEvaluator(BaseEvaluator):
 		coverage_aware: bool = False,  # sparse miss scores 0.0, not the mode empty cell
 		write_rule: str = "lattice",  # "lattice" (mode's own writer) | "vote" (majority vote; BINARY/TERNARY/PLN)
 		two_cluster_fitness_f1: str = "macro",  # binary two-cluster search F1: "macro" (2-class) | "attack"
+		offspring_folds: str = "all",  # GA/TS fitness folds: "all" (K-fold CV mean for every genome) | "phase" (legacy)
 		run_seed: int = 0,     # QSR/PLN stochastic-coin seed (ignored by deterministic modes)
 		seed: Optional[int] = None,
 		log_path: Optional[str] = None,
 		neuron_sample_rate: float = 0.25,
 		k_folds: int = 1,  # 1 = no k-fold (original behavior), >1 = K-fold CV
-		kfold_per_gen: int = 1,  # How many folds to eval per generation (1..k_folds)
+		kfold_per_gen: Optional[int] = None,  # folds per generation; None = k_folds under offspring_folds="all", else 1
 		balance_classes: bool = False,
 		single_cluster: bool = False,  # Single-cluster discriminator mode
 		undersample_majority: bool = False,  # Undersample majority class to match minority
@@ -453,6 +454,9 @@ class IDSEvaluator(BaseEvaluator):
 
 		self._train_call_count = 0
 		self._k_folds = k_folds
+		self._offspring_folds = self._validated_offspring_folds(offspring_folds, k_folds, kfold_per_gen)
+		if kfold_per_gen is None:
+			kfold_per_gen = k_folds if offspring_folds == "all" else 1
 		self._kfold_per_gen = min(kfold_per_gen, k_folds) if k_folds > 1 else 1
 		self._kfold_rotation_offset = 0  # tracks which folds to use next
 		if k_folds > 1 and k_folds != num_parts:
@@ -473,6 +477,44 @@ class IDSEvaluator(BaseEvaluator):
 		self._kfold_perm = np.random.RandomState(fold_seed).permutation(n_train)
 		self._kfold_n_train = n_train
 		self._kfold_fold_size = n_train // max(k_folds, 1)
+
+	@staticmethod
+	def _validated_offspring_folds(value: str, k_folds: int, kfold_per_gen: Optional[int]) -> str:
+		"""ids_offspring_folds: "all" (strict: every GA/TS genome — offspring,
+		immigrants, TS neighbours included — is scored as the K-fold CV mean over
+		ALL k folds, exactly what evaluate_batch gives the rest of the pool) or
+		"phase" (legacy, bit-identical: bred genomes on ONE phase-fixed fold).
+		"all" with an explicit kfold_per_gen < k_folds raises: evaluate_batch
+		would then average a rotating subset and the pool would mix again."""
+		if value not in ("all", "phase"):
+			raise ValueError(f"offspring_folds={value!r}: expected 'all' or 'phase'")
+		if value == "all" and k_folds > 1 and kfold_per_gen is not None and kfold_per_gen != k_folds:
+			raise ValueError(
+				f"offspring_folds='all' scores every genome as the {k_folds}-fold CV mean; "
+				f"kfold_per_gen={kfold_per_gen} would average a subset (use offspring_folds='phase')"
+			)
+		return value
+
+	def ga_fitness_folds(self) -> Optional[list[int]]:
+		"""The folds a bred / immigrant / neighbour genome's fitness averages
+		over: every fold under "all" (K-fold CV), None under "phase" (the legacy
+		single phase-fixed fold) or without K-fold."""
+		if self._offspring_folds == "all" and self._k_folds > 1:
+			return list(range(self._k_folds))
+		return None
+
+	def describe_fitness_folds(self, train_subset_idx: Optional[int]) -> str:
+		"""What a GA/grid/TS fitness evaluation actually trains and scores on
+		(for the phase logs — the 'fixed train subset' line used to claim one
+		subset even when evaluate_batch averaged every fold)."""
+		if self._k_folds > 1 and self._kfold_per_gen > 1:
+			folds = f"{self._kfold_per_gen} of {self._k_folds}" if self._kfold_per_gen < self._k_folds else f"all {self._k_folds}"
+			bred = "same mean" if self.ga_fitness_folds() is not None else f"held-out fold {train_subset_idx} only"
+			return (f"{self._k_folds}-fold CV mean over {folds} folds for evaluated genomes "
+				f"(train on {self._k_folds - 1}, score the held-out one); offspring/immigrants/neighbours: {bred}")
+		if self._k_folds > 1:
+			return f"single K-fold fold {train_subset_idx} (train on the other {self._k_folds - 1}, score it)"
+		return f"train subset {train_subset_idx}, scored on the full eval set"
 
 	def get_fold_indices(self, fold_idx: int) -> "tuple[np.ndarray, np.ndarray]":
 		"""Return (train_idx, val_idx) for fold `fold_idx` as np.ndarrays.
@@ -601,41 +643,13 @@ class IDSEvaluator(BaseEvaluator):
 				fold_indices.append((self._kfold_rotation_offset + i) % self._k_folds)
 			self._kfold_rotation_offset = (self._kfold_rotation_offset + self._kfold_per_gen) % self._k_folds
 
-			# Evaluate on each fold
-			n_genomes = len(genomes)
-			accum_ce = [0.0] * n_genomes
-			accum_acc = [0.0] * n_genomes
-			accum_f1 = [0.0] * n_genomes
-			accum_fpr = [0.0] * n_genomes
-			accum_threshold = [0.0] * n_genomes
-
-			# Accumulate eval_time_ms across folds (sum, then represents
-			# total train+eval ms for this genome over all evaluated folds).
-			accum_ms = [0] * n_genomes
-			for fold_idx in fold_indices:
-				fold_results = self._cache.evaluate_genomes_kfold_hybrid(
-					bits_flat, neurons_flat, connections_flat,
-					n_genomes, fold_idx,
-					self._empty_value, self._neuron_sample_rate, 0,
-				)
-				for g_idx, (ce, acc, f1, fpr, threshold, ms) in enumerate(fold_results):
-					accum_ce[g_idx] += ce
-					accum_acc[g_idx] += acc
-					accum_f1[g_idx] += f1
-					accum_fpr[g_idx] += fpr
-					accum_threshold[g_idx] += threshold
-					accum_ms[g_idx] += ms
-
-			# Average metrics across folds; eval_time_ms is summed (total
-			# time spent on this genome across all folds).
-			n_folds = len(fold_indices)
-			raw_results = [
-				(accum_ce[i] / n_folds, accum_acc[i] / n_folds,
-				 accum_f1[i] / n_folds, accum_fpr[i] / n_folds,
-				 accum_threshold[i] / n_folds,
-				 accum_ms[i])
-				for i in range(n_genomes)
-			]
+			# K-fold CV mean over the window, in Rust (the same function the
+			# strict offspring path uses — one averaging implementation).
+			raw_results = self._cache.evaluate_genomes_kfold_mean_hybrid(
+				bits_flat, neurons_flat, connections_flat,
+				len(genomes), fold_indices,
+				self._empty_value, self._neuron_sample_rate, 0,
+			)
 
 		elif self._k_folds > 1:
 			# Single fold per generation (original k-fold behavior)
@@ -1336,6 +1350,12 @@ class IDSEvaluator(BaseEvaluator):
 			return_best_n=return_best_n,
 			mutable_clusters=mutable_clusters,
 			phase_type=phase_type,
+			# ids_offspring_folds="all": the K-fold CV mean at the evaluator's
+			# sample rate; legacy (None, 1.0): train subset -> this evaluator's
+			# eval set at rate 1.0, bit-identical (that legacy TS scoring read the
+			# optimizer's eval partition, not a train fold).
+			train_folds=self.ga_fitness_folds(),
+			neuron_sample_rate=self._neuron_sample_rate if self.ga_fitness_folds() is not None else 1.0,
 		)
 
 		genomes = []
@@ -1441,6 +1461,8 @@ class IDSEvaluator(BaseEvaluator):
 			# IDS-26 P1: distinct neurons per child (default False = ABI-14 operators).
 			dedupe_neurons=dedupe_neurons,
 			dedupe_fill=dedupe_fill,
+			# ids_offspring_folds="all": the K-fold CV mean (None = legacy fold).
+			train_folds=self.ga_fitness_folds(),
 		)
 
 		genomes = []
@@ -1456,19 +1478,27 @@ class IDSEvaluator(BaseEvaluator):
 		return OffspringSearchResult(genomes=genomes, evaluated=evaluated, viable=viable)
 
 	def evaluate_offspring_batch(self, genomes: list[ClusterGenome], train_subset_idx: int) -> list[Metrics]:
-		"""Score genomes EXACTLY as Rust search_offspring scores its offspring:
-		evaluate_genomes_kfold_hybrid on the ONE fold `train_subset_idx`, the
-		cache's neuron_sample_rate, rng_seed 0 (pyapi/ids_cache_api.rs eval_fn).
-		Used for GA immigrants so they compete with bred offspring on the same
-		footing. Not evaluate_batch: that averages kfold_per_gen folds and
+		"""Score genomes EXACTLY as Rust search_offspring scores its offspring
+		(pyapi/ids_cache_api.rs eval_fn), the cache's neuron_sample_rate,
+		rng_seed 0: the K-fold CV mean over every fold under
+		ids_offspring_folds="all" (= evaluate_batch's fitness), else the legacy
+		ONE fold `train_subset_idx`. Used for GA immigrants so they compete with
+		bred offspring on the same footing. Not evaluate_batch itself: that also
 		advances the fold rotation."""
 		if self._cache is None:
 			raise RuntimeError("evaluate_offspring_batch needs the in-memory IDS cache (not the streaming path)")
 		bits_flat, neurons_flat, connections_flat = self._flatten_genomes(genomes)
-		raw = self._cache.evaluate_genomes_kfold_hybrid(
-			bits_flat, neurons_flat, connections_flat, len(genomes),
-			train_subset_idx, self._empty_value, self._neuron_sample_rate, 0,
-		)
+		folds = self.ga_fitness_folds()
+		if folds is None:
+			raw = self._cache.evaluate_genomes_kfold_hybrid(
+				bits_flat, neurons_flat, connections_flat, len(genomes),
+				train_subset_idx, self._empty_value, self._neuron_sample_rate, 0,
+			)
+		else:
+			raw = self._cache.evaluate_genomes_kfold_mean_hybrid(
+				bits_flat, neurons_flat, connections_flat, len(genomes),
+				folds, self._empty_value, self._neuron_sample_rate, 0,
+			)
 		for genome, (ce, acc, f1, fpr, _threshold, _ms) in zip(genomes, raw):
 			genome.metrics = IDSMetrics(ce=ce, acc=acc, f1=f1, fpr=fpr)
 		return [g.metrics for g in genomes]

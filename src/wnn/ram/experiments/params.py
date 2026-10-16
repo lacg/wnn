@@ -35,6 +35,12 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	# feeds the GA fitness + patience of a binary TWO-cluster search. Rejected
 	# (non-default) on single-cluster, multiclass and hierarchical flows.
 	"ids_two_cluster_fitness_f1",
+	# ids_offspring_folds (16/10/2026, worker ABI 20): "all" (default — every GA /
+	# TS genome, offspring and immigrants included, is scored as the K-fold CV
+	# mean, the paper's protocol; needs ids_kfold_per_gen == ids_k_folds) |
+	# "phase" (legacy, bit-identical: offspring/immigrants/neighbours on ONE
+	# phase-fixed fold; hierarchical stages single-fold).
+	"ids_offspring_folds",
 	"min_bits", "max_bits", "min_neurons", "max_neurons", "max_bit_delta",
 	"neuron_sample_rate", "sparse_threshold", "seed",
 	# GA / TS / SA / grid

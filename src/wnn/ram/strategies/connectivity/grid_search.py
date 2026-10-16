@@ -486,7 +486,12 @@ class _IDSGridSearchCore(GenericGridSearch):
 			idx = be.random_train_idx(self._s._rng)
 		self._grid_train_idx = idx
 		if idx is not None:
-			self._log(f"  Using fixed train subset {idx} for all {len(self._config_list)} configs")
+			# Say what evaluate_batch really does: under K-fold with
+			# kfold_per_gen > 1 the drawn index is unused and every config gets
+			# the K-fold CV mean (the old line claimed one fixed subset).
+			describe = getattr(be, 'describe_fitness_folds', None)
+			how = describe(idx) if describe else f"fixed train subset {idx}"
+			self._log(f"  Fitness for all {len(self._config_list)} configs: {how}")
 
 	def _eval_one(self, i: int, genome, is_expansion: bool):
 		"""(idx, genome, Metrics|None, elapsed). None metric = shutdown sentinel."""

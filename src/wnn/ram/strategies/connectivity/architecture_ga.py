@@ -484,7 +484,9 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			else:
 				self._ensure_rng()
 				self._phase_train_idx = self._cached_evaluator.random_train_idx(self._rng)
-			self._log.info(f"[{self.name}] Using train subset {self._phase_train_idx}")
+			_describe = getattr(self._cached_evaluator, 'describe_fitness_folds', None)
+			_folds = _describe(self._phase_train_idx) if _describe else f"train subset {self._phase_train_idx}"
+			self._log.info(f"[{self.name}] Fitness: {_folds}")
 			cfg = self._config
 
 			# Ensure all seed genomes have connections

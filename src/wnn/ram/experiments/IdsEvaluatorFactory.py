@@ -111,13 +111,14 @@ class IdsEvaluatorFactory:
 	@staticmethod
 	def _evaluator(dataset, s: IdsEvaluatorSettings, num_parts: int, k_folds: int, kfold_per_gen: int, reuse_cache):
 		"""One flat IDSEvaluator with the flow's training settings (k_folds=1,
-		kfold_per_gen=1, reuse_cache=None are IDSEvaluator's own defaults)."""
+		kfold_per_gen=1, reuse_cache=None for the test evaluator; the GA-fitness fold
+		rule ids_offspring_folds rides along)."""
 		from wnn.ram.architecture.ids_evaluator import IDSEvaluator
 		return IDSEvaluator(
 			dataset=dataset, classification=s.classification, num_parts=num_parts,
 			empty_value=s.empty_value, memory_mode=s.memory_mode, seed=s.seed, run_seed=s.run_seed,
 			coverage_aware=s.coverage_aware, write_rule=s.write_rule, num_negatives=s.num_negatives,
-			two_cluster_fitness_f1=s.two_cluster_fitness_f1,
+			two_cluster_fitness_f1=s.two_cluster_fitness_f1, offspring_folds=s.offspring_folds,
 			neuron_sample_rate=s.neuron_sample_rate, k_folds=k_folds, kfold_per_gen=kfold_per_gen,
 			balance_classes=s.balance_classes, single_cluster=s.single_cluster,
 			undersample_majority=s.undersample_majority, flip_labels=s.flip_labels,
@@ -152,10 +153,11 @@ class IdsEvaluatorFactory:
 		train_val, test_ds = split_train_validation(dataset, val_fraction=s.val_fraction, seed=s.seed)
 		kfold = f", k_folds={s.k_folds}" if s.k_folds > 1 else ""
 		self._log(f"  {label} optimizer: {len(train_val.X_train):,} train / {len(train_val.X_test):,} eval, {s.num_parts} parts{kfold}")
-		opt = self._stage_evaluator(train_val, s, classification, s.num_parts, s.k_folds)
+		opt = self._stage_evaluator(train_val, s, classification, s.num_parts, s.k_folds,
+			self._stage_kfold_per_gen(s))
 		classes = f", Classes: {len(dataset.category_names)}" if classification == "multi" else ""
 		self._log(f"  {label} test: {len(test_ds.X_train):,} train / {len(test_ds.X_test):,} eval{classes}")
-		return opt, self._stage_evaluator(test_ds, s, classification, 1, 1)
+		return opt, self._stage_evaluator(test_ds, s, classification, 1, 1, 1)
 
 	def _s1_route(self, dataset, s: IdsEvaluatorSettings):
 		"""Same attack-only TRAIN, full test partition: its own eval metrics are
@@ -165,16 +167,27 @@ class IdsEvaluatorFactory:
 		_, route_ds = split_train_validation(route, val_fraction=s.val_fraction, seed=s.seed)
 		self._log(f"  S1 route: {len(route_ds.X_train):,} train / {len(route_ds.X_test):,} eval "
 			f"(full test partition, for S0-routed scoring)")
-		return self._stage_evaluator(route_ds, s, "multi", 1, 1)
+		return self._stage_evaluator(route_ds, s, "multi", 1, 1, 1)
 
 	@staticmethod
-	def _stage_evaluator(dataset, s: IdsEvaluatorSettings, classification: str, num_parts: int, k_folds: int):
+	def _stage_kfold_per_gen(s: IdsEvaluatorSettings) -> int:
+		"""Folds per generation of a hierarchical stage optimizer: the flow's
+		(== k_folds, every fold) under the strict ids_offspring_folds='all'; the
+		historical single fold under 'phase' (stages never got kfold_per_gen
+		before 16/10/2026, so they ran IDSEvaluator's default of 1)."""
+		return s.kfold_per_gen if s.offspring_folds == "all" else 1
+
+	@staticmethod
+	def _stage_evaluator(dataset, s: IdsEvaluatorSettings, classification: str, num_parts: int, k_folds: int,
+			kfold_per_gen: int):
 		"""Hierarchical stages take only the shared training settings (no
-		single-cluster / undersample / class-weight knobs — as before)."""
+		single-cluster / undersample / class-weight knobs — as before) plus
+		the GA-fitness fold rule (ids_offspring_folds)."""
 		from wnn.ram.architecture.ids_evaluator import IDSEvaluator
 		return IDSEvaluator(
 			dataset=dataset, classification=classification, num_parts=num_parts,
 			empty_value=s.empty_value, memory_mode=s.memory_mode, seed=s.seed, run_seed=s.run_seed,
 			coverage_aware=s.coverage_aware, write_rule=s.write_rule, num_negatives=s.num_negatives,
 			neuron_sample_rate=s.neuron_sample_rate, k_folds=k_folds, balance_classes=s.balance_classes,
+			kfold_per_gen=kfold_per_gen, offspring_folds=s.offspring_folds,
 		)

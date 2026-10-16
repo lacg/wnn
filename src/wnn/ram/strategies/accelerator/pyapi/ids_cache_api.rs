@@ -474,6 +474,47 @@ impl IDSCacheWrapper
 		})
 	}
 
+	/// The K-fold CV mean over `folds` (`ids_cache::evaluate_genomes_ids_kfold_
+	/// mean_hybrid`): per-genome (ce, acc, f1, fpr, threshold) averaged over the
+	/// folds, eval_time_ms summed. IDSEvaluator.evaluate_batch's multi-fold
+	/// path and the strict GA offspring/immigrant scoring (worker ABI 20).
+	#[allow(clippy::too_many_arguments)]
+	fn evaluate_genomes_kfold_mean_hybrid(
+		&self,
+		py: Python<'_>,
+		genomes_bits_flat: Vec<usize>,
+		genomes_neurons_flat: Vec<usize>,
+		genomes_connections_flat: Vec<i64>,
+		num_genomes: usize,
+		folds: Vec<usize>,
+		empty_value: f32,
+		neuron_sample_rate: f32,
+		rng_seed: u64,
+	) -> PyResult<Vec<(f64, f64, f64, f64, f64, u32)>>
+	{
+		validate_flat_genomes_py(
+			&genomes_bits_flat,
+			&genomes_neurons_flat,
+			&genomes_connections_flat,
+			num_genomes,
+			self.inner.num_genome_clusters(),
+		)?;
+		validate_folds(&folds, self.inner.num_parts())?;
+		py.allow_threads(|| {
+			Ok(ids_cache::evaluate_genomes_ids_kfold_mean_hybrid(
+				&self.inner,
+				&genomes_bits_flat,
+				&genomes_neurons_flat,
+				&genomes_connections_flat,
+				num_genomes,
+				&folds,
+				empty_value,
+				neuron_sample_rate,
+				rng_seed,
+			))
+		})
+	}
+
 	/// Evaluate genomes with training-time adaptation (*genesis).
 	///
 	/// Returns (ce, acc, f1, adapted_bits, adapted_neurons, adapted_conns,
@@ -849,7 +890,9 @@ impl IDSCacheWrapper
         total_generations = None,
         return_best_n = true,
         mutable_clusters = None,
-        phase_type = 0
+        phase_type = 0,
+        train_folds = None,
+        neuron_sample_rate = 1.0
     ))]
 	fn search_neighbors(
 		&self,
@@ -875,8 +918,17 @@ impl IDSCacheWrapper
 		return_best_n: bool,
 		mutable_clusters: Option<Vec<usize>>,
 		phase_type: u8,
+		// ABI 20 (`ids_offspring_folds="all"`): score each neighbour as the K-fold
+		// CV mean over these folds at `neuron_sample_rate` — the elites' fitness.
+		// None = legacy (train subset -> full_eval at rate 1.0, bit-identical).
+		train_folds: Option<Vec<usize>>,
+		neuron_sample_rate: f32,
 	) -> PyResult<Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64, f64)>>
 	{
+		if let Some(folds) = &train_folds
+		{
+			validate_folds(folds, self.inner.num_parts())?;
+		}
 		let num_clusters = base_neurons.len();
 		let total_input_bits = self.inner.total_features();
 		let phase = match phase_type
@@ -911,17 +963,31 @@ impl IDSCacheWrapper
 			               conns: &[i64],
 			               count: usize|
 			 -> Vec<(f64, f64, f64, f64)> {
-				ids_cache::evaluate_genomes_ids_cached_hybrid(
-					cache,
-					bits,
-					neurons,
-					conns,
-					count,
-					train_subset_idx,
-					empty_value,
-					1.0,
-					0,
-				)
+				match &train_folds
+				{
+					Some(folds) => ids_cache::evaluate_genomes_ids_kfold_mean_hybrid(
+						cache,
+						bits,
+						neurons,
+						conns,
+						count,
+						folds,
+						empty_value,
+						neuron_sample_rate,
+						0,
+					),
+					None => ids_cache::evaluate_genomes_ids_cached_hybrid(
+						cache,
+						bits,
+						neurons,
+						conns,
+						count,
+						train_subset_idx,
+						empty_value,
+						1.0,
+						0,
+					),
+				}
 				.into_iter()
 				.map(|(ce, acc, f1, fpr, _, _)| (ce, acc, f1, fpr))
 				.collect()
@@ -1022,7 +1088,8 @@ impl IDSCacheWrapper
         pool_shuffle_ratio = 0.0,
         assortative_mating_ratio = 0.0,
         dedupe_neurons = false,
-        dedupe_fill = true
+        dedupe_fill = true,
+        train_folds = None
     ))]
 	fn search_offspring(
 		&self,
@@ -1066,12 +1133,20 @@ impl IDSCacheWrapper
 		// Flow param `ga_dedupe_fill` (ABI 16): false = deduped children keep only
 		// their distinct neurons (may shrink; floored at min_neurons).
 		dedupe_fill: bool,
+		// ABI 20 (`ids_offspring_folds="all"`): score every offspring as the
+		// K-fold CV mean over these folds — the fitness the rest of the pool
+		// carries. None = legacy: the ONE phase-fixed fold `train_subset_idx`.
+		train_folds: Option<Vec<usize>>,
 	) -> PyResult<(
 		Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64, f64)>,
 		usize,
 		usize,
 	)>
 	{
+		if let Some(folds) = &train_folds
+		{
+			validate_folds(folds, self.inner.num_parts())?;
+		}
 		let num_clusters = if !population.is_empty()
 		{
 			population[0].1.len()
@@ -1131,17 +1206,31 @@ impl IDSCacheWrapper
 			               conns: &[i64],
 			               count: usize|
 			 -> Vec<(f64, f64, f64, f64)> {
-				ids_cache::evaluate_genomes_ids_kfold_hybrid(
-					cache,
-					bits,
-					neurons,
-					conns,
-					count,
-					train_subset_idx,
-					empty_value,
-					neuron_sample_rate,
-					0,
-				)
+				match &train_folds
+				{
+					Some(folds) => ids_cache::evaluate_genomes_ids_kfold_mean_hybrid(
+						cache,
+						bits,
+						neurons,
+						conns,
+						count,
+						folds,
+						empty_value,
+						neuron_sample_rate,
+						0,
+					),
+					None => ids_cache::evaluate_genomes_ids_kfold_hybrid(
+						cache,
+						bits,
+						neurons,
+						conns,
+						count,
+						train_subset_idx,
+						empty_value,
+						neuron_sample_rate,
+						0,
+					),
+				}
 				.into_iter()
 				.map(|(ce, acc, f1, fpr, _, _)| (ce, acc, f1, fpr))
 				.collect()
@@ -1289,4 +1378,25 @@ pub(crate) fn parse_two_cluster_fitness_f1(
 			"unknown two_cluster_fitness_f1 {other:?} (expected \"macro\" or \"attack\")"
 		))),
 	}
+}
+
+/// K-fold indices for a CV-mean evaluation: non-empty, each a valid fold of a
+/// cache with `num_parts` folds, no repeats (a repeat would weight a fold twice).
+pub(crate) fn validate_folds(folds: &[usize], num_parts: usize) -> PyResult<()>
+{
+	let mut seen = vec![false; num_parts];
+	if folds.is_empty()
+	{
+		return Err(pyo3::exceptions::PyValueError::new_err("folds must not be empty"));
+	}
+	for &f in folds
+	{
+		if f >= num_parts || std::mem::replace(&mut seen[f], true)
+		{
+			return Err(pyo3::exceptions::PyValueError::new_err(format!(
+				"invalid fold list {folds:?} for a cache with {num_parts} folds"
+			)));
+		}
+	}
+	Ok(())
 }

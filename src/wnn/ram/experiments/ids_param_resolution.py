@@ -88,6 +88,44 @@ def resolve_two_cluster_fitness_f1(params: dict) -> str:
 	return value
 
 
+# ids_offspring_folds values (IDSEvaluator offspring_folds). "all" = every GA/TS
+# genome's fitness is the K-fold CV mean (train on K-1 folds, score the held-out
+# one, rotate, average) — the paper's protocol (sp2027 main.tex). "phase" = the
+# pre-16/10/2026 behaviour, bit-identical: Rust offspring, IDS-26 immigrants and
+# TS neighbours scored on ONE fold fixed for the whole phase while grid/init/
+# re-eval genomes carried the mean; hierarchical stages ran single-fold.
+OFFSPRING_FOLDS = frozenset({"all", "phase"})
+DEFAULT_OFFSPRING_FOLDS = "all"
+
+
+def resolve_offspring_folds(params: dict) -> str:
+	"""Canonical ids_offspring_folds. Absent/None -> "all" (strict). Unknown
+	values raise; so does "all" with an explicit ids_kfold_per_gen below
+	ids_k_folds — the GA fitness would then not be the full CV mean, and
+	silently widening an explicit setting would mislabel the run."""
+	value = params.get("ids_offspring_folds") or DEFAULT_OFFSPRING_FOLDS
+	if value not in OFFSPRING_FOLDS:
+		raise ValueError(f"ids_offspring_folds={value!r}: expected one of {sorted(OFFSPRING_FOLDS)}")
+	k_folds = params.get("ids_k_folds", 5)
+	per_gen = params.get("ids_kfold_per_gen")
+	if value == "all" and k_folds > 1 and per_gen is not None and per_gen != k_folds:
+		raise ValueError(
+			f"ids_offspring_folds='all' scores every genome as the {k_folds}-fold CV mean, "
+			f"but ids_kfold_per_gen={per_gen}; set ids_kfold_per_gen={k_folds} (or "
+			"ids_offspring_folds='phase' for the legacy single-fold search)"
+		)
+	return value
+
+
+def resolve_kfold_per_gen(params: dict) -> int:
+	"""ids_kfold_per_gen: explicit value, else k_folds under the strict "all"
+	rule (every fold, every generation) and the historical 1 under "phase"."""
+	per_gen = params.get("ids_kfold_per_gen")
+	if per_gen is not None:
+		return per_gen
+	return params.get("ids_k_folds", 5) if resolve_offspring_folds(params) == "all" else 1
+
+
 def memory_mode_code(mode: str) -> int:
 	"""EvalSettings code for a canonical mode name (from resolve_memory_mode)."""
 	return IDS_MEMORY_MODE_CODES[mode]

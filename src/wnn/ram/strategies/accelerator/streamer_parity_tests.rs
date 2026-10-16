@@ -27,8 +27,8 @@
 //!   WNN_ORDER_INDEPENDENT_TRAIN=1 cargo test -p ram_accelerator --lib --no-default-features streamer_parity
 
 use crate::ids_cache::{
-	evaluate_at_thresholds_ids_cached, evaluate_genomes_ids_cached_full_hybrid,
-	evaluate_multiclass_at_thresholds_ids_cached, IDSCache,
+	evaluate_at_thresholds_ids_cached, evaluate_genomes_ids_cached_full_hybrid, evaluate_genomes_ids_kfold_hybrid,
+	evaluate_genomes_ids_kfold_mean_hybrid, evaluate_multiclass_at_thresholds_ids_cached, IDSCache,
 };
 use crate::ids_streaming::IDSGenomeStreamer;
 use ram_core::cell_mode::{CellMode, WriteRule};
@@ -437,4 +437,40 @@ fn two_cluster_fitness_f1_attack_and_macro()
 	assert!(IDSGenomeStreamer::new(b.clone(), npc.clone(), conns.clone(), 2, 1, true, attack, 1.0, 0, None).is_err(), "single-cluster");
 	let (b3, npc3, conns3) = Case { mode, vote: false, clusters: 3, bits: 8, balance: false, coverage_aware: false, rate: 1.0, attack_f1: false }.genome();
 	assert!(IDSGenomeStreamer::new(b3, npc3, conns3, 3, 2, false, attack, 1.0, 0, None).is_err(), "multiclass");
+}
+
+/// The K-fold CV mean (strict GA fitness, ids_offspring_folds="all") is
+/// exactly the per-fold kfold_hybrid results summed in fold order from 0.0
+/// and divided by the fold count — the arithmetic IDSEvaluator.evaluate_batch
+/// used in Python — bit for bit, ms summed; for 1 fold it IS kfold_hybrid.
+#[test]
+fn kfold_mean_is_the_per_fold_average_bit_for_bit()
+{
+	let data = Dataset::new(2);
+	for clusters in [1usize, 2]
+	{
+		let case = Case { mode: TERNARY, vote: false, clusters, bits: 8, balance: false, coverage_aware: false, rate: 1.0, attack_f1: false };
+		let cache = case.cache(&data);
+		let (b, npc, conns) = case.genome();
+		// Two genomes in one batch (the offspring path scores batches).
+		let (b2, npc2, conns2) = (b.repeat(2), npc.repeat(2), conns.repeat(2));
+		let folds: Vec<usize> = (0..5).collect();
+		let mean = evaluate_genomes_ids_kfold_mean_hybrid(&cache, &b2, &npc2, &conns2, 2, &folds, 0.5, 1.0, 0);
+		let mut want = vec![(0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0u32); 2];
+		for &f in &folds
+		{
+			for (w, r) in want.iter_mut().zip(evaluate_genomes_ids_kfold_hybrid(&cache, &b2, &npc2, &conns2, 2, f, 0.5, 1.0, 0))
+			{
+				(w.0, w.1, w.2, w.3, w.4) = (w.0 + r.0, w.1 + r.1, w.2 + r.2, w.3 + r.3, w.4 + r.4);
+			}
+		}
+		for (m, w) in mean.iter().zip(&want)
+		{
+			let bits = |t: (f64, f64, f64, f64, f64)| [t.0, t.1, t.2, t.3, t.4].map(f64::to_bits);
+			assert_eq!(bits((m.0, m.1, m.2, m.3, m.4)), bits((w.0 / 5.0, w.1 / 5.0, w.2 / 5.0, w.3 / 5.0, w.4 / 5.0)), "K={clusters}");
+		}
+		let one = evaluate_genomes_ids_kfold_mean_hybrid(&cache, &b, &npc, &conns, 1, &[3], 0.5, 1.0, 0)[0];
+		let direct = evaluate_genomes_ids_kfold_hybrid(&cache, &b, &npc, &conns, 1, 3, 0.5, 1.0, 0)[0];
+		assert_eq!((one.0, one.1, one.2, one.3, one.4), (direct.0, direct.1, direct.2, direct.3, direct.4));
+	}
 }

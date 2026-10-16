@@ -446,7 +446,9 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 			else:
 				self._ensure_rng()
 				self._phase_train_idx = self._cached_evaluator.random_train_idx(self._rng)
-			self._log.info(f"[{self.name}] Using train subset {self._phase_train_idx}")
+			_describe = getattr(self._cached_evaluator, 'describe_fitness_folds', None)
+			_folds = _describe(self._phase_train_idx) if _describe else f"train subset {self._phase_train_idx}"
+			self._log.info(f"[{self.name}] Fitness: {_folds}")
 			# Offspring seeds derive from counter_rng per iteration (WNN-1); the
 			# wall-clock _seed_offset made IDS TS runs unreproducible from their seed.
 

@@ -25,7 +25,8 @@ INCLUDED (changes the trained memory or the reported score of a fixed genome):
                     evaluator (fitness_weight_*, default 0); the experiment's own
                     fitness weights are appended by the Experiment (empirical_cumulative)
 EXCLUDED (steer the search only): fitness aggregation/calculator/anchors,
-  ids_two_cluster_fitness_f1 (the search F1; validation decodes are unaffected), GA/TS
+  ids_two_cluster_fitness_f1 (the search F1; validation decodes are unaffected),
+  ids_offspring_folds (which folds a search genome's fitness averages), GA/TS
   budgets, patience, grids, ids_k_folds / ids_num_parts / ids_kfold_per_gen
   (the validation evaluator is num_parts=1, no K-fold), storage/prefetch and
   performance knobs (memmap, HSR, threads, no_metal, batch size), ids_arch_type

@@ -59,7 +59,7 @@ def test_flat_binary_matches_the_worker(captured):
 	assert name == "unsw-nb15" and load["split"] == "temporal_3way" and load["n_bits"] == 16
 	assert load["feature_selection"] == "top20" and load["encoded_storage"] == "memory"
 	common = dict(classification="binary", empty_value=0.0, memory_mode=2, seed=20419, run_seed=20419,
-		coverage_aware=False, write_rule="lattice", two_cluster_fitness_f1="macro", num_negatives=None, neuron_sample_rate=1.0, balance_classes=True,
+		coverage_aware=False, write_rule="lattice", two_cluster_fitness_f1="macro", offspring_folds="all", num_negatives=None, neuron_sample_rate=1.0, balance_classes=True,
 		single_cluster=True, undersample_majority=False, flip_labels=False, class_weight_multiplier=1.0)
 	assert optimizer.args == {**common, "dataset": optimizer.args["dataset"], "num_parts": 5, "k_folds": 5,
 		"kfold_per_gen": 5, "reuse_cache": None}
@@ -82,3 +82,36 @@ def test_oi_env(monkeypatch, value, enabled):
 	previous, on = IdsEvaluatorSettings.apply_oi_env({"wnn_order_independent_train": value})
 	assert (previous, on) == (None, enabled)
 	assert (os.environ.get(OI_ENV) == "1") == enabled
+
+
+@pytest.mark.parametrize("folds, per_gen", [("all", 5), ("phase", 1)])
+def test_hierarchical_stages_follow_the_offspring_fold_rule(monkeypatch, captured, folds, per_gen):
+	"""Hierarchical stage OPTIMIZERS get every fold per generation under the
+	strict ids_offspring_folds='all' (they used to run IDSEvaluator's default
+	single fold) and keep that legacy single fold under 'phase'; stage TEST
+	evaluators stay flat (k_folds=1). Both carry the fold rule."""
+	import wnn.ids
+	monkeypatch.setattr(wnn.ids, "split_train_validation", lambda ds, **kw: (ds, ds), raising=False)
+	params = {**SR1, "ids_classification": "hierarchical", "ids_offspring_folds": folds}
+	s = IdsEvaluatorSettings.from_params(params)
+	factory = IdsEvaluatorFactory(lambda m: None)
+	_Evaluator.built = []
+	opt, test = factory._stage_pair(_Dataset(), s, "binary", "S0")
+	assert (opt.args["k_folds"], opt.args["kfold_per_gen"], opt.args["offspring_folds"]) == (5, per_gen, folds)
+	assert (test.args["k_folds"], test.args["kfold_per_gen"], test.args["offspring_folds"]) == (1, 1, folds)
+
+
+def test_offspring_folds_resolution():
+	from wnn.ram.experiments.ids_param_resolution import resolve_kfold_per_gen, resolve_offspring_folds
+	from wnn.ram.experiments.params import KNOWN_PARAMS
+	assert "ids_offspring_folds" in KNOWN_PARAMS
+	assert resolve_offspring_folds({}) == "all"
+	assert resolve_offspring_folds({"ids_offspring_folds": "phase", "ids_kfold_per_gen": 1}) == "phase"
+	with pytest.raises(ValueError, match="expected one of"):
+		resolve_offspring_folds({"ids_offspring_folds": "some"})
+	with pytest.raises(ValueError, match="ids_kfold_per_gen=1"):
+		resolve_offspring_folds({"ids_k_folds": 5, "ids_kfold_per_gen": 1})
+	# Absent kfold_per_gen: every fold under strict, the historical 1 under phase.
+	assert resolve_kfold_per_gen({"ids_k_folds": 5}) == 5
+	assert resolve_kfold_per_gen({"ids_k_folds": 5, "ids_offspring_folds": "phase"}) == 1
+	assert resolve_kfold_per_gen({"ids_k_folds": 5, "ids_kfold_per_gen": 5}) == 5

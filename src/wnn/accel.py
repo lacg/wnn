@@ -96,6 +96,11 @@ import os
 #   this wheel at worker idle. Same ABI: binary two-cluster margin_train_f1 /
 #   margin_val_f1 sweep the 2-class MACRO F1 (true train_cal / val_cal twins; they
 #   swept attack F1 in ABI 19) and the 'f1' alias is the macro F1 (attack_f1 kept).
+#   Same ABI: IDSCacheWrapper.evaluate_genomes_kfold_mean_hybrid (the K-fold CV
+#   mean, now also evaluate_batch's averaging — bit-identical) and search_offspring
+#   / search_neighbors `train_folds` (+ search_neighbors `neuron_sample_rate`):
+#   ids_offspring_folds="all" (default) scores offspring, immigrants and TS
+#   neighbours as the CV mean; "phase" passes None = the legacy single fold.
 #   The validation cache pins worker_abi, so this bump re-validates.
 EXPECTED_ABI = 20
 

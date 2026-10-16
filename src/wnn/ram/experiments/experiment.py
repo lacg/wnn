@@ -640,7 +640,8 @@ class Experiment:
 		self.log(f"  Cluster: {cfg.cluster_type.name}")
 		self.log(f"  Optimize: bits={cfg.optimize_bits}, neurons={cfg.optimize_neurons}, connections={cfg.optimize_connections}")
 		if train_subset_idx is not None:
-			self.log(f"  Train subset: {train_subset_idx} (of {self.evaluator.num_parts})")
+			_describe = getattr(self.evaluator, "describe_fitness_folds", None)
+			self.log(f"  Fitness folds: {_describe(train_subset_idx)}" if _describe else f"  Train subset: {train_subset_idx} (of {self.evaluator.num_parts})")
 		if initial_genome:
 			self.log(f"  Starting from: {initial_genome}")
 		if initial_population:

@@ -16,7 +16,9 @@ from wnn.ram.experiments.ids_param_resolution import (
 	empty_value_for,
 	memory_mode_code,
 	resolve_invalid_encoding,
+	resolve_kfold_per_gen,
 	resolve_memory_mode,
+	resolve_offspring_folds,
 	resolve_two_cluster_fitness_f1,
 	resolve_write_rule,
 )
@@ -46,6 +48,7 @@ class IdsEvaluatorSettings:
 	coverage_aware: bool
 	write_rule: str
 	two_cluster_fitness_f1: str
+	offspring_folds: str
 	num_negatives: Optional[int]
 	feature_selection: str
 	rest_bits: Optional[int]
@@ -70,7 +73,7 @@ class IdsEvaluatorSettings:
 			val_fraction=params.get("ids_val_fraction", 0.25),
 			num_parts=params.get("ids_num_parts", 5),
 			k_folds=params.get("ids_k_folds", 5),
-			kfold_per_gen=params.get("ids_kfold_per_gen", 1),
+			kfold_per_gen=resolve_kfold_per_gen(params),
 			split=params.get("ids_split", "standard"),
 			seed=int(params.get("seed", 42)),
 			neuron_sample_rate=params.get("neuron_sample_rate", 0.25),
@@ -85,6 +88,7 @@ class IdsEvaluatorSettings:
 			coverage_aware=bool(params.get("ids_coverage_aware", False)),
 			write_rule=resolve_write_rule(params),
 			two_cluster_fitness_f1=resolve_two_cluster_fitness_f1(params),
+			offspring_folds=resolve_offspring_folds(params),
 			num_negatives=0 if bool(params.get("ids_suppress_negatives", False)) else None,
 			feature_selection=params.get("ids_feature_selection", "all"),
 			rest_bits=params.get("ids_rest_bits", None),

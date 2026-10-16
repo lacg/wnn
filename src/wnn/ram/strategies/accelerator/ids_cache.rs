@@ -859,6 +859,56 @@ pub fn evaluate_genomes_ids_kfold_hybrid(
 	)
 }
 
+/// The K-fold CV mean: `evaluate_genomes_ids_kfold_hybrid` on every fold in
+/// `folds` (train on the others, score the held-out one), then each metric
+/// averaged over the folds — summed in `folds` order from 0.0 and divided by
+/// `folds.len()`, the exact arithmetic `IDSEvaluator.evaluate_batch` used in
+/// Python, so the two are bit-identical. `eval_time_ms` is the SUM over folds
+/// (total cost, as before). THE GA fitness for every IDS genome (evaluate_batch,
+/// Rust-bred offspring, immigrants, TS neighbours) under
+/// `ids_offspring_folds="all"` — before 16/10/2026 offspring and immigrants were
+/// scored on ONE phase-fixed fold while the rest of the pool had the mean.
+pub fn evaluate_genomes_ids_kfold_mean_hybrid(
+	cache: &IDSCache,
+	genomes_bits_flat: &[usize],
+	genomes_neurons_flat: &[usize],
+	genomes_connections_flat: &[i64],
+	num_genomes: usize,
+	folds: &[usize],
+	empty_value: f32,
+	neuron_sample_rate: f32,
+	rng_seed: u64,
+) -> Vec<(f64, f64, f64, f64, f64, u32)>
+{
+	assert!(!folds.is_empty(), "evaluate_genomes_ids_kfold_mean_hybrid: no folds");
+	let mut acc = vec![(0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0u32); num_genomes];
+	for &fold in folds
+	{
+		let per_fold = evaluate_genomes_ids_kfold_hybrid(
+			cache,
+			genomes_bits_flat,
+			genomes_neurons_flat,
+			genomes_connections_flat,
+			num_genomes,
+			fold,
+			empty_value,
+			neuron_sample_rate,
+			rng_seed,
+		);
+		for (a, (ce, ac, f1, fpr, thr, ms)) in acc.iter_mut().zip(per_fold)
+		{
+			a.0 += ce;
+			a.1 += ac;
+			a.2 += f1;
+			a.3 += fpr;
+			a.4 += thr;
+			a.5 = a.5.saturating_add(ms);
+		}
+	}
+	let n = folds.len() as f64;
+	acc.into_iter().map(|(ce, ac, f1, fpr, thr, ms)| (ce / n, ac / n, f1 / n, fpr / n, thr / n, ms)).collect()
+}
+
 /// Evaluate genomes using full cached IDS data (for final evaluation).
 pub fn evaluate_genomes_ids_cached_full_hybrid(
 	cache: &IDSCache,

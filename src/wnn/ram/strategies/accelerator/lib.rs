@@ -388,6 +388,10 @@ use pyapi::*;
 /// | "attack": a binary two-cluster search reports the attack class's F1), and
 /// the K = 2 decode modes margin_train_f1 / margin_val_f1 sweep the 2-class
 /// MACRO F1 (true train_cal / val_cal twins; ABI 19 swept the attack F1).
+/// And: IDSCacheWrapper.evaluate_genomes_kfold_mean_hybrid + search_offspring /
+/// search_neighbors `train_folds` — ids_offspring_folds="all" scores every GA/TS
+/// genome as the K-fold CV mean (offspring/immigrants were on ONE phase-fixed
+/// fold since 28/05); None = the legacy fold, bit-identical.
 pub const ABI_VERSION: u32 = 20;
 
 #[pymodule]

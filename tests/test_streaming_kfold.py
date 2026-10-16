@@ -136,7 +136,7 @@ def test_streaming_kfold_runs_when_threshold_low():
 
 	evaluator = IDSEvaluator(
 		ds_stream, classification="binary", num_parts=5, k_folds=5,
-		kfold_per_gen=1, single_cluster=True, seed=42,
+		kfold_per_gen=1, single_cluster=True, seed=42, offspring_folds="phase",  # explicit fold subset = the legacy rule
 	)
 	assert evaluator._streaming_mode is True, \
 		"threshold=0 should force streaming K-fold (no materialization)"
@@ -165,13 +165,13 @@ def test_streaming_kfold_vs_in_memory_kfold():
 	# In-memory K-fold (default path)
 	ev_inmem = IDSEvaluator(
 		ds_inmem, classification="binary", num_parts=5, k_folds=5,
-		kfold_per_gen=1, single_cluster=True, seed=42,
+		kfold_per_gen=1, single_cluster=True, seed=42, offspring_folds="phase",  # explicit fold subset = the legacy rule
 	)
 	# Force streaming K-fold path
 	ds_stream.streaming_materialize_threshold_gb = 0.0
 	ev_stream = IDSEvaluator(
 		ds_stream, classification="binary", num_parts=5, k_folds=5,
-		kfold_per_gen=1, single_cluster=True, seed=42,
+		kfold_per_gen=1, single_cluster=True, seed=42, offspring_folds="phase",  # explicit fold subset = the legacy rule
 	)
 
 	g1 = _make_genome(); g2 = _make_genome()
@@ -197,7 +197,7 @@ def test_streaming_kfold_multi_fold_per_gen():
 	ds_stream.streaming_materialize_threshold_gb = 0.0
 	evaluator = IDSEvaluator(
 		ds_stream, classification="binary", num_parts=5, k_folds=5,
-		kfold_per_gen=3, single_cluster=True, seed=42,
+		kfold_per_gen=3, single_cluster=True, seed=42, offspring_folds="phase",  # explicit fold subset = the legacy rule
 	)
 
 	results = evaluator.evaluate_batch([_make_genome()])
@@ -221,7 +221,7 @@ def test_streaming_balance_classes_supported():
 	# This used to raise; now should succeed.
 	evaluator = IDSEvaluator(
 		ds_stream, classification="binary", num_parts=5, k_folds=5,
-		kfold_per_gen=1, single_cluster=True, seed=42,
+		kfold_per_gen=1, single_cluster=True, seed=42, offspring_folds="phase",  # explicit fold subset = the legacy rule
 		balance_classes=True, class_weight_multiplier=1.0,
 	)
 	assert evaluator._streaming_mode is True
