@@ -110,6 +110,25 @@ def test_streaming_evaluator_constructs_without_cache():
 	assert evaluator._eval_stream is not None
 
 
+def test_streaming_evaluator_refuses_unimplemented_memory_modes():
+	"""IDSGenomeStreamer trains QUAD_WEIGHTED only (ids_streaming.rs hardcodes
+	it). Every other memory_mode — and the vote writer — must raise at
+	construction, naming the mode, instead of silently training as QUAD."""
+	_importorskip("ram_accelerator")
+	import pytest
+	from wnn.ram.architecture.ids_evaluator import IDSEvaluator
+
+	_, dataset_stream, _ = _make_dataset()
+	ok = IDSEvaluator(dataset_stream, classification="binary", num_parts=5, single_cluster=True, seed=42, memory_mode=2)
+	assert ok._streaming_mode is True
+	for code, name in ((0, "TERNARY"), (1, "QUAD_BINARY"), (3, "BINARY"), (4, "QSR"), (5, "PLN")):
+		with pytest.raises(NotImplementedError, match=f"memory_mode={name} \\(code {code}\\)"):
+			IDSEvaluator(dataset_stream, classification="binary", num_parts=5, single_cluster=True, seed=42, memory_mode=code)
+	with pytest.raises(NotImplementedError, match="ids_write_rule='vote'"):
+		IDSEvaluator(dataset_stream, classification="binary", num_parts=5, single_cluster=True, seed=42,
+			memory_mode=2, write_rule="vote")
+
+
 def test_streaming_evaluator_balance_classes_supported_undersample_raises():
 	"""Phase F9: balance_classes works (materialized-labels pre-pass);
 	undersample_majority still raises (would require streaming row rejection)."""
