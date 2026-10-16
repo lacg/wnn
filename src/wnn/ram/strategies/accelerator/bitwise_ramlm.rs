@@ -993,6 +993,7 @@ fn gpu_forward_heterogeneous(
 			memory_mode,
 			empty_value,
 			0, // run_seed: LM dense forward is never QSR/PLN
+			0, // example_offset: the whole scored set
 			&[],   // coverage: LM dense forward, not the IDS scorer
 			false,
 			None, // actual_neurons: uniform clusters
@@ -1065,6 +1066,7 @@ fn gpu_forward_heterogeneous(
 					memory_mode,
 					empty_value,
 					0, // run_seed: LM bitwise path is never QSR
+					0, // example_offset: the whole scored set
 					None, // actual_neurons: uniform clusters
 				)
 				{
@@ -1117,7 +1119,7 @@ fn for_each_example<F>(
 ) where
 	F: FnMut(usize, usize), // (example_idx, address)
 {
-	let mut neuron_rng = (rng_seed as u32).wrapping_add(global_neuron as u32 * 1000003);
+	let mut neuron_rng = (rng_seed as u32).wrapping_add((global_neuron as u32).wrapping_mul(1000003));
 	if neuron_rng == 0
 	{
 		neuron_rng = 1;
@@ -1562,6 +1564,7 @@ pub(crate) fn forward_eval_into(
 					memory_mode,
 					empty_value,
 					0, // run_seed: LM dense forward is never QSR/PLN
+					0, // example_offset: the whole scored set
 					&[],   // coverage: LM dense forward, not the IDS scorer
 					false,
 					None, // actual_neurons: uniform clusters

@@ -455,7 +455,7 @@ pub fn bitwise_train_batch_nudge(
 
 				// Per-thread PRNG seeded from (rng_seed, cluster, ex_idx)
 				let mut rng_state = (rng_seed as u32)
-					.wrapping_add(cluster as u32 * 1000003)
+					.wrapping_add((cluster as u32).wrapping_mul(1000003))
 					.wrapping_add(ex_idx as u32 * 999983);
 				if rng_state == 0
 				{
@@ -557,7 +557,7 @@ pub fn bitwise_train_neuron_parallel(
 			let cluster = neuron_idx / neurons_per_cluster;
 
 			// Per-neuron PRNG for sampling
-			let mut rng_state = (rng_seed as u32).wrapping_add(neuron_idx as u32 * 1000003);
+			let mut rng_state = (rng_seed as u32).wrapping_add((neuron_idx as u32).wrapping_mul(1000003));
 			if rng_state == 0
 			{
 				rng_state = 1;

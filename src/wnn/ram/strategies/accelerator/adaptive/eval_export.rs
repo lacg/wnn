@@ -552,8 +552,8 @@ pub(crate) fn train_genome_in_slot_range(
 				if use_sampling
 				{
 					let mut rng = (rng_seed as u32)
-						.wrapping_add(global_n as u32 * 1000003)
-						.wrapping_add(ex_idx as u32 * 2654435761);
+						.wrapping_add((global_n as u32).wrapping_mul(1000003))
+						.wrapping_add((ex_idx as u32).wrapping_mul(2654435761));
 					if rng == 0
 					{
 						rng = 1;
@@ -670,8 +670,8 @@ pub(crate) fn train_genome_in_slot_range(
 				if use_sampling
 				{
 					let mut rng = (rng_seed as u32)
-						.wrapping_add(global_n as u32 * 1000003)
-						.wrapping_add(ex_idx as u32 * 2654435761);
+						.wrapping_add((global_n as u32).wrapping_mul(1000003))
+						.wrapping_add((ex_idx as u32).wrapping_mul(2654435761));
 					if rng == 0
 					{
 						rng = 1;
@@ -748,6 +748,7 @@ pub(crate) fn export_genome_for_gpu(
 ) -> GenomeExport
 {
 	let mut dense_exports = Vec::new();
+	let mut dense_coverage = Vec::new();
 	let mut sparse_exports = Vec::new();
 	let mut group_info = Vec::new();
 
@@ -786,6 +787,7 @@ pub(crate) fn export_genome_for_gpu(
 			{
 				dense_exports.push(vec![]);
 			}
+			dense_coverage.push(memory.export_dense_coverage().unwrap_or_default());
 		}
 	}
 
@@ -793,11 +795,9 @@ pub(crate) fn export_genome_for_gpu(
 		connections: connections_flat.to_vec(),
 		group_info,
 		dense_exports,
-		// The classic path's GroupDenseMemory carries no coverage bitmap. It is
-		// the marker path's error fallback and has not fired in production
-		// (PATH2_FALLBACK=0); the guard at the top of compute_per_example_scores
-		// says so loudly if it ever runs with coverage_aware on.
-		dense_coverage: Vec::new(),
+		// GroupDenseMemory tracks the training-visit bitmap (16/10/2026), the
+		// marker path's densified coverage twin.
+		dense_coverage,
 		sparse_exports,
 		groups: groups.to_vec(),
 		grouping: ram_core::unit_grouping::UnitGrouping::identity(
@@ -823,7 +823,34 @@ thread_local! {
 ///
 /// Shared by `evaluate_genome_hybrid` (CE/accuracy) and `predict_genome_hybrid` (argmax).
 /// Tries GPU evaluation (sparse + dense) for each group, falling back to CPU binary search.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn compute_per_example_scores(
+	export: &GenomeExport,
+	eval_input_bits: &ram_core::packed_bits::PackedBits,
+	num_eval: usize,
+	num_clusters: usize,
+	total_input_bits: usize,
+	empty_value: f32,
+	memory_mode: u8,
+	run_seed: u64,
+	coverage_aware: bool,
+	metal: Option<&crate::metal_ramlm::MetalRAMLMEvaluator>,
+	sparse_metal: Option<&ram_core::metal_sparse::MetalSparseEvaluator>,
+) -> Vec<Vec<f64>>
+{
+	compute_per_example_scores_at(
+		export, eval_input_bits, num_eval, num_clusters, total_input_bits, empty_value, memory_mode, run_seed,
+		coverage_aware, 0, metal, sparse_metal,
+	)
+}
+
+/// `compute_per_example_scores` for rows that are a slice of a larger scored
+/// set: `example_offset` is the global index of row 0, which keys the QSR/PLN
+/// coin (`qsr_key`'s example index) on CPU and GPU alike — so a set scored in
+/// chunks (IDSGenomeStreamer) draws exactly the coins one whole-set pass does.
+/// Deterministic modes ignore it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compute_per_example_scores_at(
 	export: &GenomeExport,
 	eval_input_bits: &ram_core::packed_bits::PackedBits,
 	num_eval: usize,
@@ -833,6 +860,7 @@ pub(crate) fn compute_per_example_scores(
 	memory_mode: u8,
 	run_seed: u64,
 	coverage_aware: bool,
+	example_offset: u32,
 	metal: Option<&crate::metal_ramlm::MetalRAMLMEvaluator>,
 	sparse_metal: Option<&ram_core::metal_sparse::MetalSparseEvaluator>,
 ) -> Vec<Vec<f64>>
@@ -902,6 +930,7 @@ pub(crate) fn compute_per_example_scores(
 					memory_mode,
 					empty_value,
 					run_seed,
+					example_offset,
 				)
 				{
 					Ok(group_scores) =>
@@ -967,7 +996,7 @@ pub(crate) fn compute_per_example_scores(
 									run_seed,
 									(neuron_base + n) as u64,
 									address as u64,
-									ex_idx as u64,
+									ex_idx as u64 + example_offset as u64,
 								);
 								sum += cell_to_weight_rng(cell as i64, memory_mode, empty_value, rng);
 							}
@@ -998,6 +1027,7 @@ pub(crate) fn compute_per_example_scores(
 					memory_mode,
 					empty_value,
 					run_seed,
+					example_offset,
 				)
 				{
 					Ok(group_scores) =>
@@ -1081,7 +1111,7 @@ pub(crate) fn compute_per_example_scores(
 									run_seed,
 									(neuron_base + n) as u64,
 									address as u64,
-									ex_idx as u64,
+									ex_idx as u64 + example_offset as u64,
 								);
 								sum += cell_to_weight_rng(cell, memory_mode, empty_value, rng);
 							}

@@ -4179,6 +4179,7 @@ pub fn train_and_get_tiered_scores(
 						memory_mode,
 						empty_value,
 						0, // run_seed: LM multistage is never QSR/PLN
+						0, // example_offset: the whole scored set
 					)
 					{
 						for ex_idx in 0..num_eval
@@ -4213,6 +4214,7 @@ pub fn train_and_get_tiered_scores(
 						memory_mode,
 						empty_value,
 						0, // run_seed: LM multistage is never QSR/PLN
+						0, // example_offset: the whole scored set
 					)
 					{
 						for ex_idx in 0..num_eval
@@ -4496,6 +4498,7 @@ mod cpu_gpu_parity_tests
 					memory_mode,
 					empty_value,
 					0, // run_seed: LM multistage is never QSR/PLN
+					0, // example_offset: the whole scored set
 				)
 				.expect("Metal dense evaluation failed")
 			}
@@ -4514,6 +4517,7 @@ mod cpu_gpu_parity_tests
 					memory_mode,
 					empty_value,
 					0, // run_seed: LM multistage is never QSR/PLN
+					0, // example_offset: the whole scored set
 				)
 				.expect("Metal sparse evaluation failed")
 			};

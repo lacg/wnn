@@ -694,6 +694,13 @@ impl IDSCache
 		self.full_val.as_ref()
 	}
 
+	/// Per-class repetition weights (balance_classes), None when unweighted —
+	/// what the streaming path must be handed to train like this cache.
+	pub fn class_weights(&self) -> Option<&[u32]>
+	{
+		self.class_weights.as_deref()
+	}
+
 	pub fn total_features(&self) -> usize
 	{
 		self.total_features

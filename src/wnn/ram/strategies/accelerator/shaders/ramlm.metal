@@ -37,7 +37,7 @@ struct RAMLMParams
 	uint memory_mode;	 // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED, 4=QSR, 5=PLN
 	uint coverage_aware;			// 1 = an unaddressed cell contributes NOTHING
 	uint addresses_per_neuron;	// 1 << bits_per_neuron; strides the coverage bitmap
-	uint _pad;								// keep run_seed 8B-aligned
+	uint example_offset;			// global index of row 0 for the QSR/PLN coin (a streamed chunk's start; else 0); keeps run_seed 8B-aligned
 	ulong run_seed;		 // QSR/PLN per-run seed; ignored by other modes (8B-aligned)
 };
 
@@ -172,7 +172,7 @@ kernel void ramlm_forward_pass(
 			start_neuron, cluster_neurons[cluster_idx],
 			params.bits_per_neuron, params.words_per_neuron,
 			params.memory_mode, params.empty_value,
-			params.run_seed, example_idx);
+			params.run_seed, example_idx + params.example_offset);
 
 	uint output_idx = example_idx * params.num_clusters + cluster_idx;
 	probs_out[output_idx] = prob;
@@ -211,7 +211,7 @@ kernel void ramlm_forward_pass_per_example(
 				start_neuron, cluster_neurons[cluster_idx],
 				params.bits_per_neuron, params.words_per_neuron,
 				params.memory_mode, params.empty_value,
-				params.run_seed, example_idx);
+				params.run_seed, example_idx + params.example_offset);
 	}
 }
 

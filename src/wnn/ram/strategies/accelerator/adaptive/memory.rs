@@ -283,9 +283,18 @@ pub(crate) struct GroupDenseMemory
 	/// not share the 31-cells-per-word packing.
 	addresses_per_neuron: usize,
 	/// Order-independent training counter buffer. Allocated by
-	/// `init_oi_counters()`, consumed and dropped by `commit_oi()`.
+	/// `init_oi_counters()`, consumed and dropped by `commit_counters()`.
 	/// None outside of an OI training pass.
 	counters: Option<Vec<std::sync::atomic::AtomicU32>>,
+	/// Coverage bitmap, one bit per (neuron, address), bit index
+	/// `neuron * addresses_per_neuron + address`: set by every training visit
+	/// (`write` / `nudge` / `nudge_oi`), cleared at commit for a cell the
+	/// export drops (`SlotMerge::keeps`). Exported as `GenomeExport::
+	/// dense_coverage` — the same "addressed by training" bitmap the marker
+	/// path densifies — so coverage-aware scoring works on CPU-trained dense
+	/// groups (IDSGenomeStreamer, the classic fallback). Before 16/10/2026
+	/// this path exported no bitmap and coverage-aware was inert for it.
+	coverage: Vec<std::sync::atomic::AtomicU64>,
 }
 
 impl GroupDenseMemory
@@ -303,7 +312,22 @@ impl GroupDenseMemory
 			words_per_neuron,
 			addresses_per_neuron,
 			counters: None,
+			coverage: (0..(num_neurons * addresses_per_neuron).div_ceil(64)).map(|_| std::sync::atomic::AtomicU64::new(0)).collect(),
 		}
+	}
+
+	/// Record a training visit to (neuron, address) in the coverage bitmap.
+	#[inline]
+	fn mark_covered(&self, neuron_idx: usize, address: usize)
+	{
+		let bit = neuron_idx * self.addresses_per_neuron + address;
+		self.coverage[bit / 64].fetch_or(1u64 << (bit % 64), Ordering::Relaxed);
+	}
+
+	/// The coverage bitmap (the `densify_sparse_export` layout).
+	fn export_coverage(&self) -> Vec<u64>
+	{
+		self.coverage.iter().map(|w| w.load(Ordering::Relaxed)).collect()
 	}
 
 	fn num_neurons(&self) -> usize
@@ -331,7 +355,7 @@ impl GroupDenseMemory
 	}
 
 	/// Order-independent nudge: accumulates ±weight into the per-cell counter.
-	/// Must be called between `init_oi_counters()` and `commit_oi()`.
+	/// Must be called between `init_oi_counters()` and `commit_counters()`.
 	#[inline]
 	pub fn nudge_oi(&self, neuron_idx: usize, address: usize, target_true: bool, weight: u32)
 		-> bool
@@ -340,6 +364,7 @@ impl GroupDenseMemory
 			.counters
 			.as_ref()
 			.expect("nudge_oi called without init_oi_counters");
+		self.mark_covered(neuron_idx, address);
 		let idx = neuron_idx * self.addresses_per_neuron + address;
 		let delta: i32 = if target_true
 		{
@@ -364,6 +389,12 @@ impl GroupDenseMemory
 		{
 			return;
 		};
+		// The export's keep rule (marker twin: SlotMerge::apply): a dropped
+		// cell reads as the miss default and is not covered.
+		let merge = crate::atomic_hashtable::SlotMerge::of_counters(
+			bin,
+			crate::train_knobs::TrainKnobs::from_env().export_skip_wf,
+		);
 		let n = self.num_neurons();
 		for neuron_idx in 0..n
 		{
@@ -378,6 +409,11 @@ impl GroupDenseMemory
 					continue;
 				}
 				let cell = bin.cell(packed) as i64;
+				if !merge.keeps(cell as u8)
+				{
+					let bit = n_base + address;
+					self.coverage[bit / 64].fetch_and(!(1u64 << (bit % 64)), Ordering::Relaxed);
+				}
 				let word_idx = address / CELLS_PER_WORD;
 				let cell_idx = address % CELLS_PER_WORD;
 				let word_offset = neuron_idx * self.words_per_neuron + word_idx;
@@ -419,6 +455,7 @@ impl GroupDenseMemory
 	#[inline]
 	fn write(&self, neuron_idx: usize, address: usize, value: i64, allow_override: bool) -> bool
 	{
+		self.mark_covered(neuron_idx, address);
 		let word_idx = address / CELLS_PER_WORD;
 		let cell_idx = address % CELLS_PER_WORD;
 		let word_offset = neuron_idx * self.words_per_neuron + word_idx;
@@ -467,6 +504,7 @@ impl GroupDenseMemory
 	#[inline]
 	fn nudge(&self, neuron_idx: usize, address: usize, target_true: bool) -> bool
 	{
+		self.mark_covered(neuron_idx, address);
 		let word_idx = address / CELLS_PER_WORD;
 		let cell_idx = address % CELLS_PER_WORD;
 		let word_offset = neuron_idx * self.words_per_neuron + word_idx;
@@ -945,6 +983,16 @@ impl GroupMemory
 		}
 	}
 
+	/// Dense coverage bitmap (None for Sparse): see `GroupDenseMemory::coverage`.
+	pub(crate) fn export_dense_coverage(&self) -> Option<Vec<u64>>
+	{
+		match self
+		{
+			GroupMemory::Dense(m) => Some(m.export_coverage()),
+			GroupMemory::Sparse(_) | GroupMemory::SparseAtomic(_) => None,
+		}
+	}
+
 	/// Export sparse memory for GPU binary search (returns None for Dense)
 	pub(crate) fn export_for_gpu_sparse(&self) -> Option<SparseGpuExport>
 	{
@@ -1007,7 +1055,7 @@ impl GroupMemory
 	}
 
 	/// Order-independent training: allocate per-cell counter buffers.
-	/// Must be called before any `nudge_oi` and matched by `commit_oi`.
+	/// Must be called before any `nudge_oi` and matched by `commit_counters`.
 	pub(crate) fn init_oi_counters(&mut self)
 	{
 		match self
@@ -1048,12 +1096,6 @@ impl GroupMemory
 			GroupMemory::SparseAtomic(m) => m.commit_counters(bin),
 		}
 	}
-
-	/// QUAD OI commit (`commit_counters(CounterBin::Oi)`).
-	pub(crate) fn commit_oi(&mut self)
-	{
-		self.commit_counters(ram_core::cell_mode::CounterBin::Oi);
-	}
 }
 
 /// Evaluate a dense config group using Metal GPU.
@@ -1072,6 +1114,9 @@ pub(crate) fn evaluate_group_metal(
 	memory_mode: u8,
 	empty_value: f32,
 	run_seed: u64,
+	// Global index of row 0 in the QSR/PLN coin key (0 = whole set; a
+	// streamed chunk's start row otherwise).
+	example_offset: u32,
 ) -> Result<Vec<f32>, String>
 {
 	let num_clusters = group.cluster_count();
@@ -1095,6 +1140,7 @@ pub(crate) fn evaluate_group_metal(
 		memory_mode,
 		empty_value,
 		run_seed,
+		example_offset,
 		coverage,
 		coverage_aware,
 		group.actual_neurons.as_deref(),
@@ -1116,6 +1162,9 @@ pub(crate) fn evaluate_group_sparse_gpu(
 	memory_mode: u8,
 	empty_value: f32,
 	run_seed: u64,
+	// Global index of row 0 in the QSR/PLN coin key (0 = whole set; a
+	// streamed chunk's start row otherwise).
+	example_offset: u32,
 ) -> Result<Vec<f32>, String>
 {
 	let num_clusters = group.cluster_count();
@@ -1141,6 +1190,7 @@ pub(crate) fn evaluate_group_sparse_gpu(
 		memory_mode,
 		empty_value,
 		run_seed,
+		example_offset,
 		group.actual_neurons.as_deref(),
 	)
 }

@@ -1468,13 +1468,37 @@ impl SlotMerge
 	/// (`CounterBin::for_training`), else the direct writer's merge.
 	pub fn for_batch(rule: ram_core::cell_mode::WriteRule, memory_mode: u8, skip_wf: bool) -> SlotMerge
 	{
-		use ram_core::cell_mode::{CounterBin, WriteRule};
-		match (CounterBin::for_training(rule, memory_mode), rule)
+		use ram_core::cell_mode::WriteRule;
+		match (ram_core::cell_mode::CounterBin::for_training(rule, memory_mode), rule)
 		{
-			(Some(CounterBin::Oi), _) => SlotMerge::OiCounters { skip_wf },
-			(Some(CounterBin::Vote { tie }), _) => SlotMerge::Votes { tie },
+			(Some(bin), _) => SlotMerge::of_counters(bin, skip_wf),
 			(None, WriteRule::Lattice | WriteRule::Set) => SlotMerge::Lattice,
 			(None, _) => SlotMerge::Unmerged,
+		}
+	}
+
+	/// The merge for a counter-accumulated pass (`bin`).
+	pub fn of_counters(bin: ram_core::cell_mode::CounterBin, skip_wf: bool) -> SlotMerge
+	{
+		match bin
+		{
+			ram_core::cell_mode::CounterBin::Oi => SlotMerge::OiCounters { skip_wf },
+			ram_core::cell_mode::CounterBin::Vote { tie } => SlotMerge::Votes { tie },
+		}
+	}
+
+	/// Whether the export KEEPS a committed `cell` (a dropped cell reads as the
+	/// sparse-miss default and is NOT covered — the densified export's coverage
+	/// bitmap is exactly the kept entries). THE rule for both the marker
+	/// export and the CPU dense trainer's coverage bitmap.
+	pub fn keeps(self, cell: u8) -> bool
+	{
+		const QUAD_WEAK_FALSE_CELL: u8 = 1;
+		match self
+		{
+			SlotMerge::OiCounters { skip_wf } => !(skip_wf && cell == QUAD_WEAK_FALSE_CELL),
+			SlotMerge::Votes { tie } => cell != tie,
+			SlotMerge::Lattice | SlotMerge::Unmerged => true,
 		}
 	}
 
@@ -1482,18 +1506,17 @@ impl SlotMerge
 	{
 		match self
 		{
-			SlotMerge::OiCounters { skip_wf } =>
+			SlotMerge::OiCounters { .. } =>
 			{
 				log_oi_net_sum(neuron, &raw);
-				const QUAD_WEAK_FALSE_CELL: u8 = 1;
 				fold_duplicates(&raw, ram_core::neuron_memory::oi_merge, |acc| {
 					let cell = ram_core::neuron_memory::oi_bin_to_cell(acc) as u8;
-					(!(skip_wf && cell == QUAD_WEAK_FALSE_CELL)).then_some(cell)
+					self.keeps(cell).then_some(cell)
 				})
 			}
 			SlotMerge::Votes { tie } => fold_duplicates(&raw, ram_core::neuron_memory::oi_merge, |acc| {
 				let cell = ram_core::neuron_memory::vote_bin_to_cell(acc, tie);
-				(cell != tie).then_some(cell)
+				self.keeps(cell).then_some(cell)
 			}),
 			SlotMerge::Lattice => fold_duplicates(
 				&raw,

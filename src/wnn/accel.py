@@ -81,7 +81,18 @@ import os
 #   margin_val_f1 (attack-F1 tau) for binary two-cluster validation. IDSEvaluator +
 #   experiment.py land with this wheel at worker idle. The validation cache pins
 #   worker_abi, so this bump re-validates.
-EXPECTED_ABI = 19
+# 20 (16/10/2026): IDSGenomeStreamerWrapper takes memory_mode / run_seed /
+#   coverage_aware / write_rule / fitness_weights and gains calibrate_threshold();
+#   finalize_metrics takes override_threshold. Streaming flows now train and score
+#   their own memory_mode (they were QUAD_WEIGHTED whatever the label), calibrate
+#   the search threshold on TRAIN scores (they swept it on the scored fold), key
+#   the neuron-sampling mask and the QSR/PLN coin on the global row (chunk-
+#   invariant, equal to the in-memory pass), and CPU-trained dense groups carry a
+#   coverage bitmap (coverage-aware was inert on them). In-memory results are
+#   bit-identical to ABI 19 except the classic CPU fallback under
+#   ids_coverage_aware=True. IDSEvaluator lands with this wheel at worker idle.
+#   The validation cache pins worker_abi, so this bump re-validates.
+EXPECTED_ABI = 20
 
 BUILD_HINT = (
 	"Rebuild the accelerator: cd src/wnn/ram/strategies/accelerator && "

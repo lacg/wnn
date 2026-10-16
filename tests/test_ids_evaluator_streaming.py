@@ -110,23 +110,22 @@ def test_streaming_evaluator_constructs_without_cache():
 	assert evaluator._eval_stream is not None
 
 
-def test_streaming_evaluator_refuses_unimplemented_memory_modes():
-	"""IDSGenomeStreamer trains QUAD_WEIGHTED only (ids_streaming.rs hardcodes
-	it). Every other memory_mode — and the vote writer — must raise at
-	construction, naming the mode, instead of silently training as QUAD."""
+def test_streaming_evaluator_accepts_every_memory_mode():
+	"""IDSGenomeStreamer implements every memory_mode and the vote writer
+	(worker ABI 20); construction no longer refuses any of them (7040bcf1 did,
+	as a stop-gap for the QUAD-only streamer). Parity with the in-memory path
+	lives in tests/test_ids_streaming_parity.py."""
 	_importorskip("ram_accelerator")
-	import pytest
 	from wnn.ram.architecture.ids_evaluator import IDSEvaluator
 
 	_, dataset_stream, _ = _make_dataset()
-	ok = IDSEvaluator(dataset_stream, classification="binary", num_parts=5, single_cluster=True, seed=42, memory_mode=2)
-	assert ok._streaming_mode is True
-	for code, name in ((0, "TERNARY"), (1, "QUAD_BINARY"), (3, "BINARY"), (4, "QSR"), (5, "PLN")):
-		with pytest.raises(NotImplementedError, match=f"memory_mode={name} \\(code {code}\\)"):
-			IDSEvaluator(dataset_stream, classification="binary", num_parts=5, single_cluster=True, seed=42, memory_mode=code)
-	with pytest.raises(NotImplementedError, match="ids_write_rule='vote'"):
-		IDSEvaluator(dataset_stream, classification="binary", num_parts=5, single_cluster=True, seed=42,
-			memory_mode=2, write_rule="vote")
+	for code in (0, 1, 2, 3, 4, 5):
+		ev = IDSEvaluator(dataset_stream, classification="binary", num_parts=5, single_cluster=True, seed=42, memory_mode=code)
+		assert ev._streaming_mode is True and ev._memory_mode == code
+	for code in (0, 3, 5):
+		ev = IDSEvaluator(dataset_stream, classification="binary", num_parts=5, single_cluster=True, seed=42,
+			memory_mode=code, write_rule="vote")
+		assert ev._write_rule == "vote"
 
 
 def test_streaming_evaluator_balance_classes_supported_undersample_raises():

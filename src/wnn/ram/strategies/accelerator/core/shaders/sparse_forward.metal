@@ -35,6 +35,7 @@ struct SparseParams
 	float empty_value;			 // Value for EMPTY cells (0.0 = abstain, 0.5 = uncertain)
 	uint memory_mode;				 // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED, 3=BINARY, 4=QSR
 	uint default_cell_value; // Default for missing cells (TERNARY:2=EMPTY, QUAD:1=WEAK_FALSE, BINARY:0=FALSE)
+	uint example_offset;		 // global index of row 0 for the QSR/PLN coin (a streamed chunk's start; else 0)
 	ulong run_seed;					 // QSR per-run seed for the stochastic coin; ignored by other modes
 };
 
@@ -203,7 +204,7 @@ kernel void sparse_forward_pass(
 			packed_input, connections_flat, keys_flat, values_flat, offsets, counts,
 			start_neuron, params.neurons_per_cluster, params.bits_per_neuron,
 			params.memory_mode, params.empty_value, params.default_cell_value,
-			params.run_seed, example_idx);
+			params.run_seed, example_idx + params.example_offset);
 
 	uint output_idx = example_idx * params.num_clusters + cluster_idx;
 	probs_out[output_idx] = prob;
@@ -241,7 +242,7 @@ kernel void sparse_forward_pass_per_example(
 				packed_input, connections_flat, keys_flat, values_flat, offsets, counts,
 				start_neuron, params.neurons_per_cluster, params.bits_per_neuron,
 				params.memory_mode, params.empty_value, params.default_cell_value,
-				params.run_seed, example_idx);
+				params.run_seed, example_idx + params.example_offset);
 	}
 }
 
@@ -311,6 +312,8 @@ struct SparseToBufferMaskedParams
 	float empty_value;
 	uint memory_mode;				 // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED, 4=QSR
 	uint default_cell_value; // Default for missing cells
+	uint example_offset;		 // global index of row 0 for the QSR/PLN coin (a streamed chunk's start; else 0)
+	uint _pad;							 // keep run_seed 8B-aligned
 	ulong run_seed;					 // QSR per-run seed; ignored by other modes
 };
 
@@ -391,7 +394,7 @@ kernel void sparse_forward_to_buffer_masked(
 			packed_input, connections_flat, keys_flat, values_flat, offsets, counts,
 			start_neuron, actual_neuron_count, params.bits_per_neuron,
 			params.memory_mode, params.empty_value, params.default_cell_value,
-			params.run_seed, example_idx);
+			params.run_seed, example_idx + params.example_offset);
 
 	uint global_cluster = cluster_ids[local_cluster];
 	uint output_idx = example_idx * params.total_clusters + global_cluster;

@@ -104,6 +104,10 @@ impl MetalRAMLMEvaluator
 		memory_mode: u8,
 		empty_value: f32,
 		run_seed: u64,
+		// Global index of row 0 in the QSR/PLN coin key: 0 for a whole set, a
+		// streamed chunk's start row otherwise (see MetalSparseEvaluator::
+		// forward_batch_sparse). Ignored by the deterministic modes.
+		example_offset: u32,
 		// coverage: dense bitmap (GenomeExport::dense_coverage); EMPTY when not
 		// tracked, in which case every cell reads as covered.
 		coverage: &[u64],
@@ -135,11 +139,11 @@ impl MetalRAMLMEvaluator
 			words_per_neuron: u32,
 			empty_value: f32,
 			memory_mode: u32,
-			// Mirrors RAMLMParams in shaders/ramlm.metal EXACTLY — the two _pad
-			// bytes keep run_seed 8B-aligned on both sides.
+			// Mirrors RAMLMParams in shaders/ramlm.metal EXACTLY — example_offset
+			// also keeps run_seed 8B-aligned on both sides.
 			coverage_aware: u32,
 			addresses_per_neuron: u32,
-			_pad: u32,
+			example_offset: u32,
 			run_seed: u64,
 		}
 
@@ -159,7 +163,7 @@ impl MetalRAMLMEvaluator
 			// Only meaningful for dense groups (bits <= SPARSE_THRESHOLD); a
 			// sparse width would overflow the shift, so clamp rather than UB.
 			addresses_per_neuron: 1u32.checked_shl(bits_per_neuron as u32).unwrap_or(0),
-			_pad: 0,
+			example_offset,
 			run_seed,
 		};
 

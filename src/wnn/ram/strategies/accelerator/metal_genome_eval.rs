@@ -70,8 +70,12 @@ struct CEBufferCache
 	ce_buffer: Option<CachedBuffer>,
 	correct_buffer: Option<CachedBuffer>,
 	predicted_buffer: Option<CachedBuffer>,
-	// Track the targets data to know if we need to update
-	cached_targets_hash: u64,
+	// The targets the cached buffer holds. Compared IN FULL: the old
+	// (first, last, len) hash collided whenever two target vectors of one
+	// length shared their end labels (equal-size K-fold folds, a binary and a
+	// multiclass label set over the same rows), so the GPU CE/accuracy of a
+	// K-cluster evaluation was scored against the PREVIOUS call's labels.
+	cached_targets: Vec<i32>,
 }
 
 impl CEBufferCache
@@ -83,7 +87,7 @@ impl CEBufferCache
 			ce_buffer: None,
 			correct_buffer: None,
 			predicted_buffer: None,
-			cached_targets_hash: 0,
+			cached_targets: Vec::new(),
 		}
 	}
 }
@@ -503,6 +507,9 @@ struct SparseToBufferMaskedParams
 	empty_value: f32,
 	memory_mode: u32,
 	default_cell_value: u32,
+	/// Global index of row 0 for the QSR/PLN coin (0: rows are the whole set).
+	example_offset: u32,
+	_pad: u32,
 	run_seed: u64,
 }
 
@@ -736,6 +743,8 @@ impl MetalGroupEvaluator
 					empty_value,
 					memory_mode: eval_memory_mode,
 					default_cell_value: default_cell,
+					example_offset: 0,
+					_pad: 0,
 					run_seed,
 				};
 				ParamsBytes::Masked(unsafe {
@@ -1106,18 +1115,6 @@ impl MetalGroupEvaluator
 	{
 		let current_gen = get_sparse_cache_generation();
 
-		// Simple hash of targets for cache invalidation (first + last + len)
-		let targets_hash = if targets.is_empty()
-		{
-			0u64
-		}
-		else
-		{
-			(targets[0] as u64)
-				.wrapping_add((targets[targets.len() - 1] as u64).wrapping_mul(31))
-				.wrapping_add((targets.len() as u64).wrapping_mul(997))
-		};
-
 		// Get or create cached buffers
 		let (targets_buffer, ce_buffer, correct_buffer, predicted_buffer) =
 			CE_BUFFER_CACHE.with(|cache| {
@@ -1133,7 +1130,7 @@ impl MetalGroupEvaluator
 				let can_reuse = cache.targets_buffer.as_ref().map_or(false, |cached| {
 					cached.cache_gen == current_gen
 						&& cached.capacity_bytes >= required_targets_bytes
-						&& cache.cached_targets_hash == targets_hash
+						&& cache.cached_targets == targets_i32
 				});
 
 				let tgt_buf = if can_reuse
@@ -1154,7 +1151,7 @@ impl MetalGroupEvaluator
 						capacity_bytes: required_targets_bytes,
 						cache_gen: current_gen,
 					});
-					cache.cached_targets_hash = targets_hash;
+					cache.cached_targets = targets_i32.clone();
 					buf
 				};
 
@@ -1327,6 +1324,34 @@ mod tests
 	fn metal_present() -> bool
 	{
 		metal::Device::system_default().is_some()
+	}
+
+	/// Two K-cluster CE reductions over the SAME length of targets with equal
+	/// first/last labels but different middles: the second must score against
+	/// ITS targets. The CE buffer cache keyed the targets on (first, last, len)
+	/// until 16/10/2026 and reused the first call's labels (a binary
+	/// two-cluster then a multiclass evaluation over the same rows; equal-size
+	/// K-fold folds).
+	#[test]
+	fn ce_from_buffer_never_reuses_stale_targets()
+	{
+		if !metal_present()
+		{
+			return;
+		}
+		let eval = MetalGroupEvaluator::new().expect("group evaluator");
+		let (n, k) = (6usize, 3usize);
+		// Row r scores class r % 3 highest.
+		let scores: Vec<f32> = (0..n).flat_map(|r| (0..k).map(move |c| if c == r % k { 0.9 } else { 0.1 })).collect();
+		let buffer = eval.create_scores_buffer(n, k);
+		unsafe { std::ptr::copy_nonoverlapping(scores.as_ptr(), buffer.contents() as *mut f32, scores.len()) };
+		let first: Vec<i64> = vec![0, 0, 0, 0, 0, 2];
+		let second: Vec<i64> = vec![0, 1, 2, 0, 1, 2];
+		let (_, acc_a, pred_a) = eval.compute_ce_from_buffer(&buffer, &first, n, k).expect("ce a");
+		let (_, acc_b, pred_b) = eval.compute_ce_from_buffer(&buffer, &second, n, k).expect("ce b");
+		assert_eq!(pred_a, pred_b, "same scores, same argmax");
+		assert!((acc_a - 0.5).abs() < 1e-9, "acc a {acc_a}"); // rows 0, 3, 5
+		assert!((acc_b - 1.0).abs() < 1e-9, "second call scored stale targets: acc {acc_b}");
 	}
 
 	#[test]

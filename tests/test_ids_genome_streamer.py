@@ -115,6 +115,14 @@ def _eval_via_streaming(train_bool, train_labels, eval_bool, eval_labels, total_
 
 	streamer.seal_for_scoring()
 
+	# Threshold calibration on the TRAIN rows (the in-memory default, ABI 20)
+	for chunk_bool, chunk_lbl in zip(
+		np.array_split(train_bool, n_chunks, axis=0),
+		np.array_split(train_labels, n_chunks),
+	):
+		streamer.score_chunk(_pack(chunk_bool).ravel(), chunk_lbl.tolist(), total_features)
+	streamer.calibrate_threshold()
+
 	# Score phase
 	for chunk_bool, chunk_lbl in zip(
 		np.array_split(eval_bool, n_chunks, axis=0),
@@ -243,9 +251,9 @@ def test_streaming_finalize_one_shot():
 	s.seal_for_scoring()
 	s.score_chunk(_pack(eval_bool).ravel(), eval_labels.tolist(), 16)
 
-	s.finalize_metrics()
+	s.finalize_metrics(0.5)
 	try:
-		s.finalize_metrics()
+		s.finalize_metrics(0.5)
 	except RuntimeError:
 		return
 	raise AssertionError("second finalize_metrics() should raise")
@@ -310,3 +318,26 @@ if __name__ == "__main__":
 			failed += 1
 	print(f"\n{passed} passed, {failed} failed, {skipped} skipped of {len(tests)}")
 	sys.exit(0 if failed == 0 else 1)
+
+
+def test_streaming_finalize_needs_a_threshold():
+	"""Single-cluster finalize without calibrate_threshold or an override
+	raises (ABI 20): the streamer used to sweep the threshold on the very
+	rows it reported."""
+	_importorskip("ram_accelerator")
+	import pytest
+	import ram_accelerator
+
+	train_bool, train_labels, eval_bool, eval_labels = _make_dataset(n_train=50, n_eval=10)
+	s = ram_accelerator.IDSGenomeStreamerWrapper(
+		bits_flat=[4, 4, 4, 4], neurons_flat=[4],
+		connections=[0, 1, 2, 3, 0, 5, 7, 9, 0, 2, 4, 8, 1, 3, 5, 11],
+		num_classes=2, num_negatives=1, single_cluster=True, total_features=16,
+	)
+	s.train_chunk(_pack(train_bool).ravel(), train_labels.tolist(), 16)
+	s.seal_for_scoring()
+	with pytest.raises(ValueError, match="no calibration scores"):
+		s.calibrate_threshold()
+	s.score_chunk(_pack(eval_bool).ravel(), eval_labels.tolist(), 16)
+	with pytest.raises(ValueError, match="no decision threshold"):
+		s.finalize_metrics()

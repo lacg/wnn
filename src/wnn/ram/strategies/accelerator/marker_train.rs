@@ -3598,6 +3598,7 @@ pub mod batched_path
 				2,
 				0.5,
 				0,
+				0, // example_offset: the whole scored set
 			)
 			.expect("export-path eval failed");
 			let export_eval_ms = t_score.elapsed().as_secs_f64() * 1000.0;

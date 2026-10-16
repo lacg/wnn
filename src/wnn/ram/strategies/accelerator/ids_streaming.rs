@@ -18,9 +18,11 @@
 //! 4. Score phase: stream the eval source chunk-by-chunk, calling
 //!    `score_chunk(packed, labels)`. Per-row scores are accumulated in
 //!    a small `eval_scores: Vec<f64>` buffer.
-//! 5. `finalize_metrics() → (ce, acc, f1, fpr, threshold)` — runs the
-//!    same threshold/metric logic as `evaluate_genome_hybrid`'s
-//!    single-cluster path on the accumulated scores.
+//! 5. Single-cluster: score the TRAIN rows, `calibrate_threshold()` (the
+//!    in-memory search path's train-calibrated threshold), then score eval.
+//! 6. `finalize_metrics(override) → (ce, acc, f1, fpr, threshold)` — the
+//!    same threshold/metric logic as the in-memory search path
+//!    (`evaluate_genomes_parallel_hybrid_with_override`).
 //!
 //! ## What this doesn't (yet) support
 //!
@@ -41,6 +43,29 @@
 //!   per-row on the CPU. Eval scoring still uses GPU dispatch via the
 //!   already-existing per-chunk path in `compute_per_example_scores`.
 //!
+//! ## Memory modes and write rules
+//!
+//! Every `memory_mode` (TERNARY / QUAD_BINARY / QUAD_WEIGHTED / BINARY / QSR /
+//! PLN) and both write rules (`EvalSettings::write_vote`: the mode's own
+//! Set / TRUE-wins lattice / nudge, or the per-flow MAJORITY VOTE) stream,
+//! since 16/10/2026. The streamer holds the same `EvalSettings` the in-memory
+//! `IDSCache` builds (`IDSCache::eval_settings`) and calls the same shared
+//! functions with them: the trainer resolves its writer through
+//! `EvalSettings::write_rule` and its counter buffer through
+//! `CounterBin::for_training` (opened in `new`, committed once in
+//! `seal_for_scoring`), and scoring passes `memory_mode` / `run_seed` /
+//! `coverage_aware` to `compute_per_example_scores` (cell_to_weight / QSR /
+//! PLN decode / common.metal on GPU). Before this the streamer hardcoded
+//! QUAD_WEIGHTED, so a non-QUAD streaming flow trained and scored as QUAD
+//! under its own label.
+//!
+//! Neuron sampling (`neuron_sample_rate < 1`) is keyed on the GLOBAL training
+//! row: chunk `c` passes `seed + train_seen * 2654435761` (u32-wrapping), which
+//! makes the chunk-local index `i` hash exactly as global row
+//! `train_seen + i` does in the in-memory trainer (`train_genome_in_slot_range`
+//! hashes `seed + n * 1000003 + ex * 2654435761`). Chunking is therefore
+//! invisible to the mask too, and the mask equals the in-memory one.
+//!
 //! Multi-cluster (K-class) mode IS supported (since 11/07/2026): with
 //! `single_cluster=false`, `score_chunk` accumulates all K per-cluster
 //! scores per row (flat row-major) and `finalize_metrics` returns the
@@ -53,11 +78,13 @@
 //! chunk offset — stream order == materialization order by construction).
 
 use crate::adaptive::{
-	build_groups, build_neuron_metadata, compute_f1_fpr_with_normal_class,
-	compute_per_example_scores, export_genome_for_gpu, find_optimal_threshold_auto,
+	build_groups, build_neuron_metadata, compute_binary_metrics_at_threshold, compute_f1_fpr_with_normal_class,
+	compute_per_example_scores_at, export_genome_for_gpu, find_optimal_threshold_auto,
 	get_metal_evaluator, get_sparse_metal_evaluator, per_cluster_max_bits,
 	reorganize_connections_for_gpu, train_genome_in_slot_range, ConfigGroup, GenomeExport, GroupMemory,
 };
+use ram_core::cell_mode::{CounterBin, WriteRule};
+use ram_core::neuron_memory::EvalSettings;
 use ram_core::packed_bits::PackedBits;
 use ram_core::physical_genome::PhysicalGenome;
 
@@ -72,13 +99,15 @@ pub struct IDSGenomeStreamer
 	num_classes: usize,
 	num_negatives: usize,
 	num_genome_clusters: usize,
-	normal_class: usize,
-	/// (w_ce, w_f1, w_fpr, w_acc) — when Some, threshold sweep maximizes fitness.
-	pub fitness_weights: Option<(f32, f32, f32, f32)>,
-	empty_value: f32,
+	/// The per-call scoring/training settings — the same struct
+	/// `IDSCache::eval_settings` hands the in-memory paths (empty_value,
+	/// memory_mode, normal_class, fitness_weights, run_seed, coverage_aware,
+	/// write_vote).
+	settings: EvalSettings,
+	/// The resolved writer (`settings.write_rule()`).
+	write_rule: WriteRule,
 	neuron_sample_rate: f32,
 	rng_seed: u64,
-	memory_mode: u8,
 	/// Per-class repetition weights for balance_classes=True. None = no balancing.
 	/// Computed by the caller (Python) from materialized y_train labels.
 	class_weights: Option<Vec<u32>>,
@@ -100,16 +129,19 @@ pub struct IDSGenomeStreamer
 
 	// ── Training phase state ────────────────────────────────────────────
 	memories: Vec<GroupMemory>,
-	/// Order-independent training: the OI counters are opened ONCE in `new`
-	/// and committed ONCE in `seal_for_scoring`, so every chunk's evidence
+	/// Counter-accumulated training (`CounterBin::for_training`: the QUAD OI
+	/// nudge or the majority vote): the counters are opened ONCE in `new` and
+	/// committed ONCE in `seal_for_scoring`, so every chunk's evidence
 	/// tallies together (as the in-memory one-shot trainer does). They used
 	/// to be opened and committed per `train_chunk`, so a later chunk
 	/// overwrote the cells it touched with ITS tallies only.
-	oi: bool,
+	counters: Option<CounterBin>,
 	train_seen: usize, // count of rows seen during training (for stats)
 
 	// ── Scoring phase state ─────────────────────────────────────────────
 	export: Option<GenomeExport>,
+	/// Single-cluster decision threshold from `calibrate_threshold` (train scores).
+	calibrated_threshold: Option<f64>,
 	eval_scores: Vec<f64>,
 	eval_labels: Vec<i64>,
 }
@@ -124,15 +156,14 @@ impl IDSGenomeStreamer
 		num_classes: usize,
 		num_negatives: usize,
 		single_cluster: bool,
-		normal_class: usize,
-		empty_value: f32,
+		settings: EvalSettings,
 		neuron_sample_rate: f32,
 		rng_seed: u64,
 		class_weights: Option<Vec<u32>>,
-	) -> Self
+	) -> Result<Self, String>
 	{
-		// Streamer is QUAD-only (Option F shipped after the QUAD mandate).
-		let memory_mode = ram_core::neuron_memory::QUAD_WEIGHTED;
+		let write_rule = Self::validated_write_rule(&settings)?;
+		let memory_mode = settings.memory_mode;
 		let (bits_flat, neurons_flat, connections, logical) =
 			PhysicalGenomeOf::trained_genome(bits_flat, neurons_flat, connections, neuron_sample_rate, memory_mode);
 		let bits_per_cluster = per_cluster_max_bits(&bits_flat, &neurons_flat);
@@ -157,22 +188,20 @@ impl IDSGenomeStreamer
 			.iter()
 			.map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
 			.collect();
-		let oi = ram_core::neuron_memory::order_independent_training_active(memory_mode);
-		if oi
+		let counters = CounterBin::for_training(write_rule, memory_mode);
+		if counters.is_some()
 		{
 			memories.iter_mut().for_each(GroupMemory::init_oi_counters);
 		}
 
-		Self {
+		Ok(Self {
 			num_classes,
 			num_negatives: actual_negatives,
 			num_genome_clusters,
-			normal_class,
-			fitness_weights: None,
-			empty_value,
+			settings,
+			write_rule,
 			neuron_sample_rate,
 			rng_seed,
-			memory_mode,
 			class_weights,
 			bits_flat,
 			neurons_flat,
@@ -183,12 +212,44 @@ impl IDSGenomeStreamer
 			cluster_neuron_starts,
 			neuron_conn_offsets,
 			memories,
-			oi,
+			counters,
 			train_seen: 0,
 			export: None,
+			calibrated_threshold: None,
 			eval_scores: Vec::new(),
 			eval_labels: Vec::new(),
+		})
+	}
+
+	/// The writer `settings` trains with, or why the streamer refuses them:
+	/// an unknown memory_mode code, or `write_vote` on a 4-state mode (whose
+	/// OI counters already tally — `IDSCacheWrapper.set_write_rule` refuses
+	/// the same combination, so neither path silently no-ops it).
+	fn validated_write_rule(settings: &EvalSettings) -> Result<WriteRule, String>
+	{
+		if ram_core::cell_mode::CellMode::from_u8(settings.memory_mode).is_none()
+		{
+			return Err(format!("IDSGenomeStreamer: unknown memory_mode code {}", settings.memory_mode));
 		}
+		let rule = settings.write_rule();
+		if settings.write_vote && rule != WriteRule::Vote
+		{
+			return Err(format!(
+				"IDSGenomeStreamer: write_rule=\"vote\" applies to BINARY/TERNARY/PLN only; \
+				 memory_mode {} trains through the 4-state nudge",
+				settings.memory_mode
+			));
+		}
+		Ok(rule)
+	}
+
+	/// The sampling seed for the next chunk: aligns the chunk-local row index
+	/// with the global training row (see the module header), so the
+	/// `neuron_sample_rate` mask is chunk-invariant and equals the in-memory
+	/// trainer's. Only the low 32 bits feed the hash.
+	fn chunk_rng_seed(&self) -> u64
+	{
+		(self.rng_seed as u32).wrapping_add((self.train_seen as u32).wrapping_mul(2654435761)) as u64
 	}
 
 	/// Train on a single chunk. Writes to memory cells in-place.
@@ -235,9 +296,9 @@ impl IDSGenomeStreamer
 			0..num_train,
 			num_train,
 			self.neuron_sample_rate,
-			self.rng_seed.wrapping_add(self.train_seen as u64),
-			self.memory_mode,
-			ram_core::cell_mode::WriteRule::of_code(self.memory_mode),
+			self.chunk_rng_seed(),
+			self.settings.memory_mode,
+			self.write_rule,
 			self.class_weights.as_deref(),
 			true, // parallel
 		);
@@ -253,9 +314,9 @@ impl IDSGenomeStreamer
 		{
 			panic!("seal_for_scoring called twice");
 		}
-		if self.oi
+		if let Some(bin) = self.counters
 		{
-			self.memories.iter_mut().for_each(GroupMemory::commit_oi);
+			self.memories.iter_mut().for_each(|m| m.commit_counters(bin));
 		}
 		let gpu_connections = reorganize_connections_for_gpu(
 			&self.original_connections,
@@ -267,7 +328,7 @@ impl IDSGenomeStreamer
 		self.export = Some(match &self.logical
 		{
 			None => trained,
-			Some(logical) => logical.logical_export(&trained, &self.neurons_flat, self.memory_mode),
+			Some(logical) => logical.logical_export(&trained, &self.neurons_flat, self.settings.memory_mode),
 		});
 	}
 
@@ -303,16 +364,21 @@ impl IDSGenomeStreamer
 		let metal = metal_arc.as_ref().map(|a| a.as_ref());
 		let sparse_metal = sparse_metal_arc.as_ref().map(|a| a.as_ref());
 
-		let chunk_scores = compute_per_example_scores(
+		// The coin index is the GLOBAL row of this scoring pass (rows scored
+		// since the last `take_scores`), so chunking never changes a QSR/PLN
+		// draw and the scores equal the in-memory whole-set pass.
+		let example_offset = u32::try_from(self.eval_scored()).expect("scoring pass exceeds u32 rows");
+		let chunk_scores = compute_per_example_scores_at(
 			export,
 			packed,
 			num_eval,
 			self.num_genome_clusters,
 			total_input_bits,
-			self.empty_value,
-			self.memory_mode,
-			0, // run_seed: streaming QSR/PLN not yet wired (46M path, not the abl cohorts)
-			false, // coverage_aware: streaming not wired (MCST uses ids_encoded_storage=memory)
+			self.settings.empty_value,
+			self.settings.memory_mode,
+			self.settings.run_seed,
+			self.settings.coverage_aware,
+			example_offset,
 			metal,
 			sparse_metal,
 		);
@@ -338,57 +404,80 @@ impl IDSGenomeStreamer
 		self.eval_labels.extend_from_slice(labels);
 	}
 
-	/// Compute final metrics from the accumulated eval scores.
-	///
-	/// Returns (ce, acc, f1, fpr, threshold). Single-cluster: threshold is
-	/// auto-selected on the eval data (matches `evaluate_genome_hybrid`'s
-	/// single-cluster path when override_threshold=None). Multi-cluster
-	/// (K-class): argmax decode + softmax CE + macro-F1/benign-FPR —
-	/// mirrors `evaluate_genome_hybrid`'s K-cluster CPU path exactly
-	/// (search-comparable; threshold is the 0.5 placeholder). NOTE: this
-	/// softmax search CE is NOT numerically comparable with the
-	/// sum-normalized validation CE of `multiclass_metrics` — see that
-	/// module's header.
-	pub fn finalize_metrics(&self) -> (f64, f64, f64, f64, f64)
+	/// Single-cluster: turn the accumulated scores into the DECISION
+	/// threshold and clear the buffer. Score the TRAINING rows first (the
+	/// same rows `train_chunk` saw), then call this, then score the eval rows
+	/// and `finalize_metrics(None)`. This is the in-memory search path's
+	/// default calibration (`evaluate_genomes_parallel_hybrid_with_override`
+	/// with no override: `find_optimal_threshold_auto` on the TRAIN scores).
+	/// Before 16/10/2026 the streamer had no calibration step and swept the
+	/// threshold on the EVAL scores it then reported — on streaming K-fold
+	/// that tuned the GA-fitness threshold on the held-out fold. Returns the
+	/// threshold. Errors on a K-cluster streamer (argmax decode, no threshold).
+	pub fn calibrate_threshold(&mut self) -> Result<f64, String>
 	{
 		if self.num_genome_clusters > 1
 		{
-			return self.finalize_metrics_multiclass();
+			return Err("calibrate_threshold: a K-cluster streamer decodes by argmax (no threshold)".into());
 		}
-		let epsilon = 1e-10f64;
-		let num_eval = self.eval_scores.len();
-		assert!(num_eval > 0, "finalize_metrics: no scores accumulated");
-
-		// BCE loss (threshold-independent)
-		let mut total_ce = 0.0f64;
-		for (i, &s) in self.eval_scores.iter().enumerate()
+		if self.eval_scores.is_empty()
 		{
-			let s = s.clamp(epsilon, 1.0 - epsilon);
-			let y = self.eval_labels[i] as f64;
-			total_ce += -(y * s.ln() + (1.0 - y) * (1.0 - s).ln());
+			return Err("calibrate_threshold: no calibration scores accumulated (score the train rows first)".into());
 		}
-		let ce = total_ce / num_eval as f64;
+		let (t, _f1, _fpr) =
+			find_optimal_threshold_auto(&self.eval_scores, &self.eval_labels, self.settings.fitness_weights);
+		self.calibrated_threshold = Some(t);
+		self.take_scores();
+		Ok(t)
+	}
 
-		// Auto-find threshold + compute predictions/metrics at it
-		let (threshold, _f1_at_thr, _fpr_at_thr) =
-			find_optimal_threshold_auto(&self.eval_scores, &self.eval_labels, self.fitness_weights);
-
-		let mut correct = 0u64;
-		let mut predictions = Vec::with_capacity(num_eval);
-		for (i, &s) in self.eval_scores.iter().enumerate()
+	/// Compute final metrics from the accumulated eval scores.
+	///
+	/// Returns (ce, acc, f1, fpr, threshold). Single-cluster: the decision
+	/// threshold follows `evaluate_genomes_parallel_hybrid_with_override`:
+	/// `override_threshold = Some(t >= 0)` is fixed, `Some(< 0)` (the -1.0
+	/// oracle sentinel) sweeps the eval scores, and `None` uses the
+	/// `calibrate_threshold` result (an error when it was never called).
+	/// Metrics come from `compute_binary_metrics_at_threshold` (the shared
+	/// BCE/acc/F1/FPR math). Multi-cluster (K-class): argmax decode +
+	/// softmax CE + macro-F1/benign-FPR — mirrors `evaluate_genome_hybrid`'s
+	/// K-cluster CPU path exactly (search-comparable; threshold is the 0.5
+	/// placeholder; `override_threshold` is ignored as there). NOTE: this
+	/// softmax search CE is NOT numerically comparable with the
+	/// sum-normalized validation CE of `multiclass_metrics` — see that
+	/// module's header.
+	pub fn finalize_metrics(&self, override_threshold: Option<f64>) -> Result<(f64, f64, f64, f64, f64), String>
+	{
+		if self.num_genome_clusters > 1
 		{
-			let pred = if s >= threshold { 1u32 } else { 0u32 };
-			predictions.push(pred);
-			if pred as i64 == self.eval_labels[i]
+			return Ok(self.finalize_metrics_multiclass());
+		}
+		if self.eval_scores.is_empty()
+		{
+			return Err("finalize_metrics: no scores accumulated".into());
+		}
+		let threshold = match (override_threshold, self.calibrated_threshold)
+		{
+			(Some(t), _) if t >= 0.0 => t,
+			(Some(_), _) =>
 			{
-				correct += 1;
+				find_optimal_threshold_auto(&self.eval_scores, &self.eval_labels, self.settings.fitness_weights).0
 			}
-		}
-		let acc = correct as f64 / num_eval as f64;
-		let (f1, fpr) =
-			compute_f1_fpr_with_normal_class(&predictions, &self.eval_labels, 2, self.normal_class);
-
-		(ce, acc, f1, fpr, threshold)
+			(None, Some(t)) => t,
+			(None, None) =>
+			{
+				return Err("finalize_metrics: no decision threshold — call calibrate_threshold after scoring \
+				            the train rows, or pass override_threshold"
+					.into())
+			}
+		};
+		let (ce, acc, f1, fpr) = compute_binary_metrics_at_threshold(
+			&self.eval_scores,
+			&self.eval_labels,
+			threshold,
+			self.settings.normal_class,
+		);
+		Ok((ce, acc, f1, fpr, threshold))
 	}
 
 	/// K-cluster finalize: argmax predictions + softmax CE + accuracy +
@@ -447,7 +536,7 @@ impl IDSGenomeStreamer
 		let ce = total_ce / num_eval as f64;
 		let acc = correct as f64 / num_eval as f64;
 		let (f1, fpr) =
-			compute_f1_fpr_with_normal_class(&predictions, &self.eval_labels, k, self.normal_class);
+			compute_f1_fpr_with_normal_class(&predictions, &self.eval_labels, k, self.settings.normal_class);
 		(ce, acc, f1, fpr, 0.5)
 	}
 
@@ -550,12 +639,12 @@ mod tests
 			3,     // num_classes
 			2,     // num_negatives (exhaustive for K=3)
 			false, // single_cluster
-			0,     // normal_class
-			0.5,
+			EvalSettings { empty_value: 0.5, ..EvalSettings::default() },
 			1.0,
 			42,
 			None,
 		)
+		.expect("QUAD streamer")
 	}
 
 	#[test]
@@ -570,7 +659,7 @@ mod tests
 			0.1, 0.6, 0.3, // → 1 (true 0) ✗ = benign false alarm
 		];
 		s.eval_labels = vec![0, 1, 2, 0];
-		let (ce, acc, f1, fpr, threshold) = s.finalize_metrics();
+		let (ce, acc, f1, fpr, threshold) = s.finalize_metrics(None).expect("K-cluster finalize");
 		assert!((acc - 0.75).abs() < 1e-12, "acc {acc}");
 		// per-class F1: c0 (p=1, r=.5) = 2/3; c1 (p=.5, r=1) = 2/3; c2 = 1
 		assert!(
@@ -647,7 +736,7 @@ mod tests
 
 		// Score pass 3 + finalize: perfectly separable ⇒ acc = macro-F1 = 1.
 		s.score_chunk(&all, &labels);
-		let (_ce, acc, f1, fpr, _t) = s.finalize_metrics();
+		let (_ce, acc, f1, fpr, _t) = s.finalize_metrics(None).expect("K-cluster finalize");
 		assert_eq!(acc, 1.0, "separable data must decode perfectly");
 		assert_eq!(f1, 1.0);
 		assert_eq!(fpr, 0.0);
@@ -684,10 +773,17 @@ mod tests
 		(PackedBits::from_bool_slice(&bools, 24), (0..n).map(|_| rng.gen_range(0..2)).collect())
 	}
 
+	/// Single-cluster QUAD_WEIGHTED streamer, rate 1.0, seed 7.
+	fn quad_streamer(bits: Vec<usize>, npc: Vec<usize>, conns: Vec<i64>) -> IDSGenomeStreamer
+	{
+		let settings = EvalSettings { empty_value: 0.0, ..EvalSettings::default() };
+		IDSGenomeStreamer::new(bits, npc, conns, 2, 1, true, settings, 1.0, 7, None).expect("QUAD streamer")
+	}
+
 	fn streamed_scores(twin: bool) -> (Vec<f64>, ram_core::footprint::Footprint)
 	{
 		let (bits, npc, conns) = twin_genome(twin, 14);
-		let mut s = IDSGenomeStreamer::new(bits, npc, conns, 2, 1, true, 0, 0.0, 1.0, 7, None);
+		let mut s = quad_streamer(bits, npc, conns);
 		for seed in [1u64, 2]
 		{
 			let (x, y) = rows(150, seed);
@@ -720,6 +816,62 @@ mod tests
 		}
 	}
 
+	/// The QSR/PLN coin is keyed on the GLOBAL row: scoring rows [k..n) with
+	/// `example_offset = k` reproduces the whole-set pass's scores for those
+	/// rows, on the CPU scorer AND the Metal kernels (dense and sparse); the
+	/// GPU draws the CPU's coins (scores within Metal's 1-ulp fast-math mean).
+	#[test]
+	fn coin_offset_matches_whole_set_cpu_and_gpu()
+	{
+		use ram_core::neuron_memory::{PLN, QSR};
+		let metal_arc = get_metal_evaluator();
+		let sparse_arc = get_sparse_metal_evaluator();
+		for mode in [PLN, QSR]
+		{
+			for bits in [8usize, 14]
+			{
+				let (b, npc, conns) = twin_genome(true, bits);
+				let settings = EvalSettings { empty_value: 0.5, memory_mode: mode, run_seed: 5, ..EvalSettings::default() };
+				let mut s = IDSGenomeStreamer::new(b, npc, conns, 2, 1, true, settings, 1.0, 0, None).expect("streamer");
+				let (x, y) = rows(200, 21);
+				s.train_chunk(&x, &y);
+				s.seal_for_scoring();
+				let export = s.export.as_ref().expect("sealed");
+				let (ex, _) = rows(90, 22);
+				let k = 37usize;
+				let mut tail = PackedBits::empty(24);
+				(k..90).for_each(|r| tail.extend_row_from(&ex, r));
+				let score = |bits_in: &PackedBits, n: usize, offset: u32, gpu: bool| -> Vec<u64> {
+					let (m, sm) = if gpu
+					{
+						(metal_arc.as_ref().map(|a| a.as_ref()), sparse_arc.as_ref().map(|a| a.as_ref()))
+					}
+					else
+					{
+						(None, None)
+					};
+					compute_per_example_scores_at(export, bits_in, n, 1, 24, 0.5, mode, 5, false, offset, m, sm)
+						.iter()
+						.map(|v| (v[0] as f32).to_bits() as u64)
+						.collect()
+				};
+				let whole_cpu = score(&ex, 90, 0, false);
+				let tail_cpu = score(&tail, 90 - k, k as u32, false);
+				assert_eq!(tail_cpu, whole_cpu[k..].to_vec(), "mode {mode} bits {bits}: CPU offset");
+				if metal_arc.is_some() && sparse_arc.is_some()
+				{
+					let whole_gpu = score(&ex, 90, 0, true);
+					assert_eq!(score(&tail, 90 - k, k as u32, true), whole_gpu[k..].to_vec(), "mode {mode} bits {bits}: GPU offset");
+					// Same coins on both sides; Metal's fast-math mean may sit 1 ulp off.
+					let ulps = |a: &[u64], b: &[u64]| a.iter().zip(b).all(|(&x, &y)| (x as i64 - y as i64).abs() <= 1);
+					assert!(ulps(&whole_gpu, &whole_cpu), "mode {mode} bits {bits}: GPU != CPU beyond 1 ulp");
+				}
+				// A stochastic mode really draws per row: offset 0 on the tail differs.
+				assert_ne!(score(&tail, 90 - k, 0, false), tail_cpu, "mode {mode} bits {bits}: offset is not inert");
+			}
+		}
+	}
+
 	/// Chunking must not change what the streamer learns: 3 chunks vs one
 	/// chunk of the same rows, scores bit-identical (rate 1.0: no sampling).
 	/// 6-bit neurons so every cell is hit in every chunk. Failed under OI
@@ -730,7 +882,7 @@ mod tests
 		let (bits, npc, conns) = twin_genome(true, 6);
 		let (x, y) = rows(300, 9);
 		let score = |chunks: usize| {
-			let mut s = IDSGenomeStreamer::new(bits.clone(), npc.clone(), conns.clone(), 2, 1, true, 0, 0.0, 1.0, 7, None);
+			let mut s = quad_streamer(bits.clone(), npc.clone(), conns.clone());
 			let per = 300 / chunks;
 			for c in 0..chunks
 			{

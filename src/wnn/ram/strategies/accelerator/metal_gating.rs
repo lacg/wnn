@@ -51,7 +51,10 @@ struct GatingBufferCache
 {
 	// Static data (connections) - cached once
 	conn_buffer: Option<CachedBuffer>,
-	conn_data_hash: u64, // Hash to detect if connections changed
+	// The connections the cached buffer holds, compared IN FULL (16/10/2026):
+	// the old sampled hash (len + first/middle/last 8 bytes) reused a stale
+	// buffer for two gatings whose connections differed anywhere else.
+	conn_data: Vec<i32>,
 
 	// Memory data - cached with generation tracking
 	memory_buffer: Option<CachedBuffer>,
@@ -69,7 +72,7 @@ impl GatingBufferCache
 	{
 		Self {
 			conn_buffer: None,
-			conn_data_hash: 0,
+			conn_data: Vec::new(),
 			memory_buffer: None,
 			memory_generation: 0,
 			input_buffer: None,
@@ -82,29 +85,6 @@ impl GatingBufferCache
 thread_local! {
 		static GATING_BUFFER_CACHE: std::cell::RefCell<GatingBufferCache> =
 				std::cell::RefCell::new(GatingBufferCache::new());
-}
-
-/// Simple hash for detecting connection changes
-fn hash_slice<T: Copy>(data: &[T]) -> u64
-{
-	use std::collections::hash_map::DefaultHasher;
-	use std::hash::{Hash, Hasher};
-	let mut hasher = DefaultHasher::new();
-	data.len().hash(&mut hasher);
-	if !data.is_empty()
-	{
-		// Hash first, middle, last elements for quick detection
-		let bytes = unsafe {
-			std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * mem::size_of::<T>())
-		};
-		bytes[0..8.min(bytes.len())].hash(&mut hasher);
-		if bytes.len() > 16
-		{
-			bytes[bytes.len() / 2..bytes.len() / 2 + 8].hash(&mut hasher);
-			bytes[bytes.len() - 8..].hash(&mut hasher);
-		}
-	}
-	hasher.finish()
 }
 
 /// Get or create a cached buffer, updating contents if needed
@@ -293,7 +273,6 @@ impl MetalGatingEvaluator
 
 		// Get connections as i32
 		let connections: Vec<i32> = gating.get_connections().to_vec();
-		let conn_hash = hash_slice(&connections);
 
 		// Export memory as u8
 		let memory = gating.export_memory();
@@ -317,7 +296,7 @@ impl MetalGatingEvaluator
 			let mut cache = cache_cell.borrow_mut();
 
 			// Connections buffer: only update if hash changed
-			let conn_buffer = if cache.conn_data_hash == conn_hash
+			let conn_buffer = if cache.conn_data == connections
 			{
 				if let Some(ref cb) = cache.conn_buffer
 				{
@@ -331,7 +310,7 @@ impl MetalGatingEvaluator
 						&connections,
 						current_gen,
 					);
-					cache.conn_data_hash = conn_hash;
+					cache.conn_data = connections.clone();
 					buf
 				}
 			}
@@ -343,7 +322,7 @@ impl MetalGatingEvaluator
 					&connections,
 					current_gen,
 				);
-				cache.conn_data_hash = conn_hash;
+				cache.conn_data = connections.clone();
 				buf
 			};
 

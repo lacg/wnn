@@ -126,6 +126,7 @@ pub(crate) fn ramlm_forward_batch_metal_numpy<'py>(
 				ram_core::neuron_memory::TERNARY,
 				empty_value,
 				0, // run_seed: LM numpy forward is never QSR/PLN
+				0, // example_offset: the whole scored set
 				&[],   // coverage: LM numpy forward, not the IDS scorer
 				false,
 				None, // actual_neurons: uniform clusters
@@ -200,6 +201,7 @@ pub(crate) fn ramlm_forward_batch_metal_cached<'py>(
 				ram_core::neuron_memory::TERNARY,
 				empty_value,
 				0, // run_seed: LM numpy forward is never QSR/PLN
+				0, // example_offset: the whole scored set
 				&[],   // coverage: LM numpy forward, not the IDS scorer
 				false,
 				None, // actual_neurons: uniform clusters
@@ -293,6 +295,7 @@ pub(crate) fn ramlm_forward_batch_hybrid_numpy<'py>(
 						ram_core::neuron_memory::TERNARY,
 						empty_value,
 						0, // run_seed: LM numpy forward is never QSR/PLN
+						0, // example_offset: the whole scored set
 						&[],   // coverage: LM numpy forward, not the IDS scorer
 						false,
 						None, // actual_neurons: uniform clusters
@@ -325,6 +328,7 @@ pub(crate) fn ramlm_forward_batch_hybrid_numpy<'py>(
 				ram_core::neuron_memory::TERNARY,
 				empty_value,
 				0, // run_seed: LM numpy forward is never QSR/PLN
+				0, // example_offset: the whole scored set
 				&[],   // coverage: LM numpy forward, not the IDS scorer
 				false,
 				None, // actual_neurons: uniform clusters

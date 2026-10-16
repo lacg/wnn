@@ -19,6 +19,9 @@ use crate::*;
 ///     for packed_chunk, labels in train_stream:
 ///         s.train_chunk(packed_chunk.ravel(), labels)
 ///     s.seal_for_scoring()
+///     for packed_chunk, labels in train_stream:   # single-cluster only
+///         s.score_chunk(packed_chunk.ravel(), labels)
+///     s.calibrate_threshold()
 ///     for packed_chunk, labels in eval_stream:
 ///         s.score_chunk(packed_chunk.ravel(), labels)
 ///     ce, acc, f1, fpr, threshold = s.finalize_metrics()
@@ -31,9 +34,16 @@ pub(crate) struct IDSGenomeStreamerWrapper
 #[pymethods]
 impl IDSGenomeStreamerWrapper
 {
+	/// `memory_mode` / `run_seed` / `coverage_aware` / `write_rule` /
+	/// `fitness_weights` are the settings the in-memory `IDSCacheWrapper`
+	/// takes through `set_memory_mode` / `set_coverage_aware` /
+	/// `set_write_rule` / `set_fitness_weights` (worker ABI 20). They are
+	/// constructor arguments here because the streamer allocates its cells
+	/// and counters for the mode up front. Raises ValueError on an unknown
+	/// mode or `write_rule="vote"` on a 4-state mode.
 	#[new]
 	#[allow(clippy::too_many_arguments)]
-	#[pyo3(signature = (bits_flat, neurons_flat, connections, num_classes, num_negatives, single_cluster, total_features, empty_value=0.5, neuron_sample_rate=1.0, rng_seed=42, normal_class=0, class_weights=None))]
+	#[pyo3(signature = (bits_flat, neurons_flat, connections, num_classes, num_negatives, single_cluster, total_features, empty_value=0.5, neuron_sample_rate=1.0, rng_seed=42, normal_class=0, class_weights=None, memory_mode=ram_core::neuron_memory::QUAD_WEIGHTED, run_seed=0, coverage_aware=false, write_rule="lattice", fitness_weights=None))]
 	fn new(
 		bits_flat: Vec<usize>,
 		neurons_flat: Vec<usize>,
@@ -47,24 +57,37 @@ impl IDSGenomeStreamerWrapper
 		rng_seed: u64,
 		normal_class: usize,
 		class_weights: Option<Vec<u32>>,
-	) -> Self
+		memory_mode: u8,
+		run_seed: u64,
+		coverage_aware: bool,
+		write_rule: &str,
+		fitness_weights: Option<(f32, f32, f32, f32)>,
+	) -> PyResult<Self>
 	{
 		let _ = total_features; // used by Python-side validation; not needed in Rust ctor
-		Self {
-			inner: Some(ids_streaming::IDSGenomeStreamer::new(
-				bits_flat,
-				neurons_flat,
-				connections,
-				num_classes,
-				num_negatives,
-				single_cluster,
-				normal_class,
-				empty_value,
-				neuron_sample_rate,
-				rng_seed,
-				class_weights,
-			)),
-		}
+		let settings = ram_core::neuron_memory::EvalSettings {
+			empty_value,
+			memory_mode,
+			normal_class,
+			fitness_weights,
+			run_seed,
+			coverage_aware,
+			write_vote: parse_write_rule(write_rule)?,
+		};
+		let inner = ids_streaming::IDSGenomeStreamer::new(
+			bits_flat,
+			neurons_flat,
+			connections,
+			num_classes,
+			num_negatives,
+			single_cluster,
+			settings,
+			neuron_sample_rate,
+			rng_seed,
+			class_weights,
+		)
+		.map_err(pyo3::exceptions::PyValueError::new_err)?;
+		Ok(Self { inner: Some(inner) })
 	}
 
 	/// Train on a single chunk. Writes to memory cells in-place.
@@ -126,16 +149,30 @@ impl IDSGenomeStreamerWrapper
 		})
 	}
 
+	/// Single-cluster: the accumulated scores (score the TRAIN rows first)
+	/// become the decision threshold; the buffer is cleared. Returns it.
+	/// ValueError on a K-cluster streamer or with nothing scored (ABI 20).
+	fn calibrate_threshold(&mut self) -> PyResult<f64>
+	{
+		let inner = self.inner.as_mut().ok_or_else(|| {
+			pyo3::exceptions::PyRuntimeError::new_err("IDSGenomeStreamer already finalized")
+		})?;
+		inner.calibrate_threshold().map_err(pyo3::exceptions::PyValueError::new_err)
+	}
+
 	/// Compute final metrics. Consumes the inner state (one-shot).
-	/// Returns (ce, acc, f1, fpr, threshold).
-	fn finalize_metrics(&mut self) -> PyResult<(f64, f64, f64, f64, f64)>
+	/// Returns (ce, acc, f1, fpr, threshold). Single-cluster threshold:
+	/// `override_threshold` >= 0 fixed, < 0 eval-swept (oracle sentinel), None
+	/// = the `calibrate_threshold` result (ValueError if never calibrated).
+	#[pyo3(signature = (override_threshold=None))]
+	fn finalize_metrics(&mut self, override_threshold: Option<f64>) -> PyResult<(f64, f64, f64, f64, f64)>
 	{
 		let inner = self.inner.take().ok_or_else(|| {
 			pyo3::exceptions::PyRuntimeError::new_err(
 				"IDSGenomeStreamer already finalized — cannot finalize twice",
 			)
 		})?;
-		Ok(inner.finalize_metrics())
+		inner.finalize_metrics(override_threshold).map_err(pyo3::exceptions::PyValueError::new_err)
 	}
 
 	/// (logical_neurons, physical_neurons, logical_cells, physical_cells) of the

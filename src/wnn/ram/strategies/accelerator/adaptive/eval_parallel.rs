@@ -360,6 +360,7 @@ pub(crate) fn evaluate_genomes_parallel_legacy(
                         memory_mode,
                         empty_value,
                         run_seed,
+                        0, // example_offset: the whole scored set
                     ) {
                         Ok(group_scores) => {
                             for ex_idx in 0..num_eval {
@@ -390,6 +391,7 @@ pub(crate) fn evaluate_genomes_parallel_legacy(
                         memory_mode,
                         empty_value,
                         run_seed,
+                        0, // example_offset: the whole scored set
                     ) {
                         Ok(group_scores) => {
                             for ex_idx in 0..num_eval {

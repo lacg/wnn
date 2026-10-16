@@ -28,10 +28,6 @@ from wnn.ram.metrics import IDSMetrics, Metrics
 from wnn.ram.footprint import Footprint
 from wnn.ram.architecture.base_evaluator import BaseEvaluator, EvalResult, OffspringSearchResult
 
-# The ONLY memory_mode IDSGenomeStreamer implements (ids_streaming.rs hardcodes
-# QUAD_WEIGHTED = 2); the streaming path refuses every other mode.
-_STREAMER_MEMORY_MODE = 2
-
 
 def _compute_class_weights(labels: np.ndarray, num_classes: int, multiplier: float = 1.0) -> "list[int]":
 	"""Mirror of Rust adaptive::compute_class_weights_with_multiplier.
@@ -319,24 +315,11 @@ class IDSEvaluator(BaseEvaluator):
 				)
 			else:
 				self._streaming_class_weights = None
-			# IDSGenomeStreamer implements QUAD_WEIGHTED ONLY (ids_streaming.rs
-			# hardcodes it and the wrapper takes no mode), so any other
-			# memory_mode — or the vote writer — would silently train and score
-			# as QUAD under the flow's label. Refuse at construction instead.
-			if memory_mode != _STREAMER_MEMORY_MODE:
-				from wnn.ram.experiments.ids_param_resolution import IDS_MEMORY_MODE_CODES
-				name = next((n for n, c in IDS_MEMORY_MODE_CODES.items() if c == memory_mode), str(memory_mode))
-				raise NotImplementedError(
-					f"memory_mode={name} (code {memory_mode}) is not implemented on the "
-					"genome-streamer path (IDSGenomeStreamer trains QUAD_WEIGHTED only); "
-					"use an in-memory or materialized dataset, or memory_mode=QUAD_WEIGHTED."
-				)
-			if write_rule != "lattice":
-				raise NotImplementedError(
-					f"ids_write_rule={write_rule!r} is not supported on the genome-streamer "
-					"path (the streamer trains QUAD_WEIGHTED only); use an in-memory or "
-					"materialized dataset."
-				)
+			# Every memory_mode and write rule streams (worker ABI 20):
+			# IDSGenomeStreamer takes the same settings the in-memory cache gets
+			# through set_memory_mode / set_coverage_aware / set_write_rule (see
+			# _build_streamer). Before ABI 20 it hardcoded QUAD_WEIGHTED, so a
+			# non-QUAD streaming flow trained and scored as QUAD under its label.
 			self._train_stream = dataset.X_train
 			self._eval_stream = dataset.X_test
 			self._cache = None  # never built — direct genome-streamer path
@@ -664,7 +647,10 @@ class IDSEvaluator(BaseEvaluator):
 		"""Set fitness weights for threshold optimization.
 		When set, threshold sweep maximizes fitness instead of F1."""
 		self._fitness_weights = (w_ce, w_f1, w_fpr, w_acc)
-		self._cache.set_fitness_weights(w_ce, w_f1, w_fpr, w_acc)
+		# Streaming mode has no cache: the weights reach each streamer through
+		# _build_streamer (this call used to raise AttributeError on None).
+		if self._cache is not None:
+			self._cache.set_fitness_weights(w_ce, w_f1, w_fpr, w_acc)
 
 	def score_examples(self, genome) -> list[float]:
 		"""Get raw per-example scores for a single genome (no thresholding).
@@ -721,7 +707,10 @@ class IDSEvaluator(BaseEvaluator):
 		of decode modes — argmax / benign-margin — not the binary 4-tuple);
 		`thresholds` is ignored (taus are calibrated Rust-side).
 		"""
-		if self._classification == "multi" and not self._single_cluster:
+		if not self._single_cluster:
+			# K-cluster decode (multiclass AND binary two-cluster) — the same
+			# routing as experiment._uses_decode_modes; the single-cluster
+			# threshold sweep below would misread K scores per row.
 			return self.evaluate_multiclass_at_thresholds(genome)
 		if self._streaming_mode:
 			return self._evaluate_at_thresholds_streaming(genome, thresholds)
@@ -854,18 +843,20 @@ class IDSEvaluator(BaseEvaluator):
 		Each genome gets its own IDSGenomeStreamer instance:
 		  1. Stream train data → train_chunk per chunk
 		  2. seal_for_scoring
-		  3. Stream eval data → score_chunk per chunk
-		  4. finalize_metrics → (ce, acc, f1, fpr, threshold)
+		  3. Single-cluster, no override: stream the train data again →
+		     score_chunk, calibrate_threshold (the in-memory default)
+		  4. Stream eval data → score_chunk per chunk
+		  5. finalize_metrics(override_threshold) → (ce, acc, f1, fpr, threshold)
+
+		`override_threshold` follows evaluate_genomes_full_hybrid: None =
+		train-calibrated, >= 0 fixed, < 0 (the -1.0 sentinel) eval-swept.
 		"""
-		if override_threshold is not None:
-			raise NotImplementedError(
-				"override_threshold not supported in streaming mode yet"
-			)
 		return [
 			self._streaming_train_score_genome(
 				g, self._train_stream, self._eval_stream,
 				train_labels=self._stream_label_override(self._y_train),
 				eval_labels=self._stream_label_override(self._y_test),
+				override_threshold=override_threshold,
 			)
 			for g in genomes
 		]
@@ -889,27 +880,31 @@ class IDSEvaluator(BaseEvaluator):
 			return np.asarray(label_override[offset:offset + n], dtype=np.int64)
 		return labels_chunk
 
-	def _streaming_train_pass(self, streamer, train_stream, train_filter=None, train_labels=None):
-		"""Stream the train source through `streamer.train_chunk` (+ optional
-		row filter + optional label override), then seal for scoring."""
+	def _streaming_row_pass(self, stream, row_filter, labels, feed):
+		"""Stream (packed, labels) chunks through `feed(packed_flat, labels,
+		total_features)` — `streamer.train_chunk` or `streamer.score_chunk` —
+		after the optional row filter and label override (global-offset
+		slicing; see `_chunk_labels`)."""
 		global_offset = 0
-		for packed_chunk, labels_chunk in train_stream.iter_chunks():
+		for packed_chunk, labels_chunk in stream.iter_chunks():
 			n = packed_chunk.shape[0]
-			chunk_y = self._chunk_labels(labels_chunk, train_labels, global_offset, n)
-			if train_filter is not None:
-				row_indices = np.arange(global_offset, global_offset + n)
-				mask = train_filter(row_indices)
+			chunk_y = self._chunk_labels(labels_chunk, labels, global_offset, n)
+			if row_filter is not None:
+				mask = row_filter(np.arange(global_offset, global_offset + n))
 				if mask.sum() > 0:
-					filtered_packed = np.ascontiguousarray(packed_chunk[mask].ravel())
-					filtered_labels = chunk_y[mask].tolist()
-					streamer.train_chunk(filtered_packed, filtered_labels, self._total_features)
+					feed(np.ascontiguousarray(packed_chunk[mask].ravel()), chunk_y[mask].tolist(), self._total_features)
 			else:
-				streamer.train_chunk(
+				feed(
 					np.ascontiguousarray(packed_chunk.ravel()),
 					chunk_y.tolist() if hasattr(chunk_y, "tolist") else list(chunk_y),
 					self._total_features,
 				)
 			global_offset += n
+
+	def _streaming_train_pass(self, streamer, train_stream, train_filter=None, train_labels=None):
+		"""Stream the train source through `streamer.train_chunk` (+ optional
+		row filter + optional label override), then seal for scoring."""
+		self._streaming_row_pass(train_stream, train_filter, train_labels, streamer.train_chunk)
 		streamer.seal_for_scoring()
 
 	def _streaming_train_score_genome(
@@ -921,6 +916,7 @@ class IDSEvaluator(BaseEvaluator):
 		eval_filter=None,
 		train_labels=None,
 		eval_labels=None,
+		override_threshold: Optional[float] = None,
 	) -> Metrics:
 		"""Single-genome streaming evaluation primitive (Phase F + F7).
 
@@ -938,31 +934,20 @@ class IDSEvaluator(BaseEvaluator):
 		`_stream_label_override` — the multiclass path). They must pair with
 		their stream: K-fold passes the TRAIN label array for both, since
 		both passes read the train stream.
+
+		Single-cluster with no override: the decision threshold is calibrated
+		on the TRAINING rows' scores (one extra train-stream scoring pass), as
+		the in-memory search path does. Until worker ABI 20 the streamer swept
+		it on the EVAL rows it then reported — on streaming K-fold, the
+		held-out fold tuned its own GA-fitness threshold.
 		"""
 		streamer = self._build_streamer(genome)
 		self._streaming_train_pass(streamer, train_stream, train_filter, train_labels)
-
-		# Score pass — stream + optionally filter
-		global_offset = 0
-		for packed_chunk, labels_chunk in eval_stream.iter_chunks():
-			n = packed_chunk.shape[0]
-			chunk_y = self._chunk_labels(labels_chunk, eval_labels, global_offset, n)
-			if eval_filter is not None:
-				row_indices = np.arange(global_offset, global_offset + n)
-				mask = eval_filter(row_indices)
-				if mask.sum() > 0:
-					filtered_packed = np.ascontiguousarray(packed_chunk[mask].ravel())
-					filtered_labels = chunk_y[mask].tolist()
-					streamer.score_chunk(filtered_packed, filtered_labels, self._total_features)
-			else:
-				streamer.score_chunk(
-					np.ascontiguousarray(packed_chunk.ravel()),
-					chunk_y.tolist() if hasattr(chunk_y, "tolist") else list(chunk_y),
-					self._total_features,
-				)
-			global_offset += n
-
-		ce, acc, f1, fpr, threshold = streamer.finalize_metrics()
+		if self._single_cluster and override_threshold is None:
+			self._streaming_row_pass(train_stream, train_filter, train_labels, streamer.score_chunk)
+			streamer.calibrate_threshold()
+		self._streaming_row_pass(eval_stream, eval_filter, eval_labels, streamer.score_chunk)
+		ce, acc, f1, fpr, threshold = streamer.finalize_metrics(override_threshold)
 		genome.threshold = threshold
 		genome.metrics = IDSMetrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=threshold)
 		return genome.metrics
@@ -981,9 +966,18 @@ class IDSEvaluator(BaseEvaluator):
 			total_features=self._total_features,
 			empty_value=self._empty_value,
 			neuron_sample_rate=self._neuron_sample_rate,
-			rng_seed=self._seed,
+			# The in-memory paths train with rng_seed=0 (every _cache call
+			# below passes 0); the sampling mask must match them.
+			rng_seed=0,
 			normal_class=self._normal_class,
 			class_weights=getattr(self, "_streaming_class_weights", None),
+			# The in-memory cache's settings (set_memory_mode / set_coverage_aware
+			# / set_write_rule / set_fitness_weights), worker ABI 20.
+			memory_mode=self._memory_mode,
+			run_seed=self._run_seed,
+			coverage_aware=self._coverage_aware,
+			write_rule=self._write_rule,
+			fitness_weights=self._fitness_weights,
 		)
 
 	def _streaming_score_stream(self, streamer, stream, labels=None) -> list[float]:
@@ -993,16 +987,7 @@ class IDSEvaluator(BaseEvaluator):
 		slicing (multiclass — see `_stream_label_override`). Multi-cluster
 		streamers return the FLAT K-vector buffer (len = rows × K).
 		"""
-		global_offset = 0
-		for packed_chunk, labels_chunk in stream.iter_chunks():
-			n = packed_chunk.shape[0]
-			chunk_y = self._chunk_labels(labels_chunk, labels, global_offset, n)
-			streamer.score_chunk(
-				np.ascontiguousarray(packed_chunk.ravel()),
-				chunk_y.tolist() if hasattr(chunk_y, "tolist") else list(chunk_y),
-				self._total_features,
-			)
-			global_offset += n
+		self._streaming_row_pass(stream, None, labels, streamer.score_chunk)
 		return streamer.take_scores()
 
 	def _streaming_score_encoded(

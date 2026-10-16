@@ -331,17 +331,7 @@ impl IDSCacheWrapper
 	/// rather than silently ignored. Call after set_memory_mode.
 	fn set_write_rule(&mut self, write_rule: &str) -> PyResult<()>
 	{
-		let vote = match write_rule
-		{
-			"lattice" => false,
-			"vote" => true,
-			other =>
-			{
-				return Err(pyo3::exceptions::PyValueError::new_err(format!(
-					"unknown write_rule {other:?} (expected \"lattice\" or \"vote\")"
-				)))
-			}
-		};
+		let vote = parse_write_rule(write_rule)?;
 		if vote
 			&& ram_core::cell_mode::WriteRule::resolve(self.inner.memory_mode, true)
 				!= ram_core::cell_mode::WriteRule::Vote
@@ -1246,4 +1236,19 @@ fn trained_layer_to_py(layer: crate::trained_layer::TrainedLayer) -> TrainedLaye
 		layer.eval_scores,
 		layer.val_scores,
 	)
+}
+
+/// The `ids_write_rule` wire string → `EvalSettings::write_vote`. Shared by
+/// `IDSCacheWrapper.set_write_rule` and the `IDSGenomeStreamerWrapper`
+/// constructor so both surfaces accept exactly the same values.
+pub(crate) fn parse_write_rule(write_rule: &str) -> PyResult<bool>
+{
+	match write_rule
+	{
+		"lattice" => Ok(false),
+		"vote" => Ok(true),
+		other => Err(pyo3::exceptions::PyValueError::new_err(format!(
+			"unknown write_rule {other:?} (expected \"lattice\" or \"vote\")"
+		))),
+	}
 }

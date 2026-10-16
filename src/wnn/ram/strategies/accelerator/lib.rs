@@ -297,6 +297,9 @@ mod pln_writer_tests;
 // Per-flow MAJORITY-VOTE writer (ids_write_rule="vote", 16/10/2026).
 #[cfg(all(test, target_os = "macos"))]
 mod vote_writer_tests;
+// IDSGenomeStreamer == in-memory IDSCache for every memory_mode × write rule (16/10/2026).
+#[cfg(all(test, target_os = "macos"))]
+mod streamer_parity_tests;
 // CPU scorers skip the -1 prefix-pad connections like the GPU kernels (12/10/2026).
 #[cfg(all(test, target_os = "macos"))]
 mod mixed_bits_scorer_tests;
@@ -373,7 +376,15 @@ use pyapi::*;
 /// "lattice" is bit-identical to ABI 18. Plus, for K = 2 only, the decode modes
 /// margin_train_f1 / margin_val_f1 (attack-class-F1 tau — binary two-cluster
 /// validation's train_cal / val_cal twins); K >= 3 mode lists are unchanged.
-pub const ABI_VERSION: u32 = 19;
+/// 20 (16/10/2026): IDSGenomeStreamerWrapper takes memory_mode / run_seed /
+/// coverage_aware / write_rule / fitness_weights (kwargs; defaults = the old
+/// hardcoded QUAD_WEIGHTED behaviour). The streamer used to train and score
+/// QUAD_WEIGHTED whatever the flow's memory_mode. Also: the streamer's
+/// neuron-sampling mask is keyed on the GLOBAL train row (chunk-invariant, equal
+/// to the in-memory trainer's) and its rng_seed is the in-memory 0 — a
+/// rate < 1.0 streaming genome's mask changes from ABI 19 (QUAD at rate 1.0 is
+/// bit-identical).
+pub const ABI_VERSION: u32 = 20;
 
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()>

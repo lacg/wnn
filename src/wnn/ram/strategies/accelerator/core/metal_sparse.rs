@@ -86,6 +86,9 @@ struct SparseMaskedParams
 	empty_value: f32,
 	memory_mode: u32,
 	default_cell_value: u32,
+	/// Global index of row 0 for the QSR/PLN coin (see `forward_batch_sparse`).
+	example_offset: u32,
+	_pad: u32,
 	run_seed: u64,
 }
 
@@ -227,6 +230,11 @@ impl MetalSparseEvaluator
 		memory_mode: u8,
 		empty_value: f32,
 		run_seed: u64,
+		// Global index of row 0 in the QSR/PLN coin key (`qsr_key`'s example
+		// index): 0 when `packed_input` is the whole scored set; a streamed
+		// chunk's start row otherwise, so chunked scoring draws the coins an
+		// unchunked pass would. Ignored by the deterministic modes.
+		example_offset: u32,
 		// Neurons SCORED per cluster (a coalesced group's actual_neurons);
 		// None = every cluster scores all `neurons_per_cluster`.
 		actual_neurons: Option<&[u32]>,
@@ -256,6 +264,8 @@ impl MetalSparseEvaluator
 				empty_value,
 				memory_mode: memory_mode as u32,
 				default_cell_value: default_cell_for_coverage(memory_mode, coverage_aware),
+				example_offset,
+				_pad: 0,
 				run_seed,
 			};
 			let input = packed_input.upload(&self.device);
@@ -282,6 +292,7 @@ impl MetalSparseEvaluator
 			empty_value: f32,
 			memory_mode: u32,
 			default_cell_value: u32,
+			example_offset: u32,
 			run_seed: u64,
 		}
 
@@ -295,6 +306,7 @@ impl MetalSparseEvaluator
 			empty_value,
 			memory_mode: memory_mode as u32,
 			default_cell_value: default_cell_for_coverage(memory_mode, coverage_aware),
+			example_offset,
 			run_seed,
 		};
 
