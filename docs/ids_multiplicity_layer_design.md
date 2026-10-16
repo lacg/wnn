@@ -571,7 +571,7 @@ breaking tuple change) and there are additive PyO3 functions
    - Smoke one SR1 genome in a scratch venv: metrics identical to the recorded row,
      lower `eval_time_ms`, footprint logical = genome, physical < logical.
 2. At worker idle, run
-   `python scripts/detach_launch.py -- python scripts/worker_swap.py --auto-detect-running --install-wheel <whl> --rayon-threads N`.
+   `python scripts/detach_launch.py <logfile> <cwd> -- python scripts/worker_swap.py --auto-detect-running --install-wheel <whl> --rayon-threads N`.
    - The Python changes (accel ABI 17, the ids_evaluator / experiment.py footprint
      plumbing, `IdsEvaluatorFactory` extraction, core classes) merge into the
      worker's tree **at the same moment**.

@@ -17,7 +17,7 @@ Examples
   python scripts/worker_swap.py --watch-flow 4321 --no-restart
 
 Detach it (survives the launching session):
-  python scripts/detach_launch.py -- python scripts/worker_swap.py ...
+  python scripts/detach_launch.py <logfile> <cwd> -- python scripts/worker_swap.py ...
 
   Do NOT use `setsid nohup ... &` — macOS ships no setsid(1), so the shell
   fails with 127 and `&` swallows the error: you get no process at all, and
@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import signal
 import sqlite3
 import ssl
@@ -132,16 +133,36 @@ def install_wheel(venv: Path, wheel: Path) -> None:
 		raise SystemExit(3)
 
 
+# Env vars of the OLD worker that the relaunch must keep (WNN_EVAL_IN_PLACE,
+# RAYON_NUM_THREADS, ...). Without this a swap launched from a plain shell
+# silently dropped them (the relaunch only inherited the swap script's env).
+CARRIED_ENV_PREFIXES = ("WNN_", "RAYON_")
+
+
+def worker_env(pid: int) -> dict[str, str]:
+	"""The running worker's WNN_*/RAYON_* environment (ps -E), captured before stop."""
+	r = subprocess.run(["ps", "-E", "-p", str(pid), "-o", "command="], capture_output=True, text=True)
+	env = {}
+	for tok in r.stdout.split():
+		key, sep, val = tok.partition("=")
+		if sep and key.startswith(CARRIED_ENV_PREFIXES) and key.replace("_", "").isalnum():
+			env[key] = val
+	return env
+
+
 def relaunch_worker(project: Path, venv: Path, rayon: str | None, worker_args: str,
-                    log: Path) -> int | None:
+                    log: Path, carry_env: dict[str, str]) -> int | None:
 	env_lines = [
 		f"cd {project}",
 		"unset CONDA_PREFIX",
 		f"source {venv}/bin/activate",
 		'export PYTHONPATH="$(pwd)/src/wnn:$PYTHONPATH"',
 	]
+	env = dict(carry_env)
 	if rayon:
-		env_lines.append(f"export RAYON_NUM_THREADS={rayon}")
+		env["RAYON_NUM_THREADS"] = rayon  # an explicit --rayon-threads wins
+	env_lines += [f"export {k}={shlex.quote(v)}" for k, v in sorted(env.items())]
+	rayon = env.get("RAYON_NUM_THREADS")
 	env_lines.append(
 		f"nohup python -u -B -m wnn.ram.experiments.worker {worker_args} "
 		f"</dev/null >>{log} 2>&1 &")
@@ -269,9 +290,12 @@ def main() -> int:
 
 	# 3) Stop the worker.
 	pid = find_worker_pid()
+	carry_env = {}
 	if pid is None:
 		print("[swap] no worker process found (already down).", flush=True)
 	else:
+		carry_env = worker_env(pid)
+		print(f"[swap] carrying worker env: {carry_env}", flush=True)
 		stop_worker(pid, args.grace_secs)
 
 	# 4) Optional wheel install (worker is down → safe to replace the shared .so).
@@ -294,7 +318,7 @@ def main() -> int:
 		print("[swap] --no-restart: leaving the worker DOWN.", flush=True)
 	else:
 		new_pid = relaunch_worker(args.project, args.venv, args.rayon_threads,
-		                          args.worker_args, args.worker_log)
+		                          args.worker_args, args.worker_log, carry_env)
 
 	write_marker(args.marker, {
 		"watched_flow": watch,
