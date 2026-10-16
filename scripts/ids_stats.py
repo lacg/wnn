@@ -40,8 +40,8 @@ MODES = (
 	"train_cal", "fixed_05", "platt", "beta", "empirical", "empirical_cumulative", "val_cal",
 	# multiclass decode modes (f1/fpr = macro-F1/benign-FPR aliases)
 	"argmax", "margin_fixed0", "margin_train_cal", "margin_val_cal",
-	# binary two-cluster (K=2) decode modes: f1 = attack-class F1; margin_val_f1
-	# is the val-calibrated twin of single-cluster val_cal
+	# binary two-cluster (K=2) decode modes: f1 = 2-class macro F1 (as
+	# single-cluster); margin_val_f1 is the val-calibrated twin of val_cal
 	"margin_train_f1", "margin_val_f1",
 )
 N_BOOT = 10_000

@@ -825,10 +825,11 @@ class IDSEvaluator(BaseEvaluator):
 				},
 			}
 			if self._classification == "binary" and num_classes == 2:
-				# Binary TWO-cluster: the comparable F1 is the attack-class F1
-				# (what single-cluster binary reports), not the 2-class macro.
+				# Binary TWO-cluster: 'f1' stays the 2-class MACRO F1 — exactly
+				# what single-cluster binary reports (compute_f1_fpr_with_normal_class
+				# with K=2) — so the arms compare (Luiz 16/10/2026; 65069baf had
+				# switched it to the attack-class F1). attack_f1 is reported alongside.
 				attack = 1 - self._normal_class
-				entry['f1'] = f1s[attack]
 				entry['attack_f1'] = f1s[attack]
 			if not math.isnan(tau):
 				entry['tau'] = tau

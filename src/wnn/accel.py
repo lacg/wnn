@@ -93,7 +93,9 @@ import os
 #   ids_coverage_aware=True. Also additive: IDSCacheWrapper.set_two_cluster_fitness_f1
 #   ("macro"|"attack") + the streamer's two_cluster_fitness_f1 kwarg (binary
 #   two-cluster search F1; default "macro" bit-identical). IDSEvaluator lands with
-#   this wheel at worker idle.
+#   this wheel at worker idle. Same ABI: binary two-cluster margin_train_f1 /
+#   margin_val_f1 sweep the 2-class MACRO F1 (true train_cal / val_cal twins; they
+#   swept attack F1 in ABI 19) and the 'f1' alias is the macro F1 (attack_f1 kept).
 #   The validation cache pins worker_abi, so this bump re-validates.
 EXPECTED_ABI = 20
 

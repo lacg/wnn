@@ -348,7 +348,8 @@ export interface MulticlassPerClassEntry
 // carries f1/fpr compat aliases (f1 == macro_f1, fpr == benign_fpr) so the
 // generic threshold-cell accessors keep working. Binary TWO-cluster rows
 // (ids_classification='binary', ids_single_cluster=false; 16/10/2026) use the
-// same payload but f1 == attack_f1 (the attack-class F1 single-cluster reports).
+// same payload; f1 stays the 2-class macro F1 (what single-cluster reports) and
+// attack_f1 carries the attack-class F1.
 export interface MulticlassModeResult
 {
 	acc: number
@@ -381,8 +382,9 @@ export interface ThresholdMetadata
 	margin_fixed0?: MulticlassModeResult
 	margin_train_cal?: MulticlassModeResult
 	margin_val_cal?: MulticlassModeResult
-	// Binary two-cluster (K=2) only: attack-F1-optimal tau on train / val —
-	// the single-cluster train_cal / val_cal twins (margin_val_f1 = val-calibrated).
+	// Binary two-cluster (K=2) only: macro-F1-optimal tau on train / val —
+	// the single-cluster train_cal / val_cal twins (margin_val_f1 = val-calibrated;
+	// at K=2 identical to margin_train_cal / margin_val_cal).
 	margin_train_f1?: MulticlassModeResult
 	margin_val_f1?: MulticlassModeResult
 	// Per-class one-vs-rest calibrated argmax (fit on val under Protocol v2)

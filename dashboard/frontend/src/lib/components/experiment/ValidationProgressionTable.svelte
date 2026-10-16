@@ -12,8 +12,9 @@
 	export let isMulticlass: boolean = false
 	// Metric labels: macro-F1/benign-FPR for real multiclass flows. Binary
   // TWO-cluster flows (ids_single_cluster=false) carry the same decode-mode
-  // keys (isMulticlass via the metadata fallback) but their 'f1' alias is the
-  // attack-class F1 — so they keep the binary labels. null = follow isMulticlass.
+  // keys (isMulticlass via the metadata fallback); their 'f1' alias is the
+  // 2-class macro F1, the number single-cluster rows show under the binary
+  // labels — so they keep the binary labels. null = follow isMulticlass.
 	export let macroLabels: boolean | null = null
 	export let currentExperimentId: number
 	// Per-class drill-down selection — bound through to the page so the choice
@@ -31,7 +32,7 @@
 			{ key: 'margin_fixed0', label: '┣ Margin τ=0', cls: 'threshold-train-row' },
 			{ key: 'margin_train_cal', label: '┣ Margin train-cal', cls: 'threshold-platt-row' },
 			{ key: 'margin_val_cal', label: '┣ Margin val-cal', cls: 'threshold-oracle-row' },
-			// Binary two-cluster only (K=2): attack-F1 tau, the train_cal/val_cal twins.
+			// Binary two-cluster only (K=2): macro-F1 tau, the train_cal/val_cal twins.
 			{ key: 'margin_train_f1', label: '┣ Margin train-F1', cls: 'threshold-train-row' },
 			{ key: 'margin_val_f1', label: '┣ Margin val-F1', cls: 'threshold-oracle-row' },
 			{ key: 'argmax_platt', label: '┣ Argmax platt', cls: 'threshold-platt-row' },

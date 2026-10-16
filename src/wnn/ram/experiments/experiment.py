@@ -1432,8 +1432,8 @@ class Experiment:
 							 f"test partition is report-only")
 				# Headline metrics = argmax decode (the same rule the
 				# GA-search fitness used). Binary two-cluster: F1 is the
-				# attack-class F1 (the 'f1' alias IDSEvaluator sets), the
-				# number single-cluster arms report; FPR = benign FPR.
+				# 2-class macro F1 (the 'f1' alias), the number single-cluster
+				# arms report; FPR = benign FPR. attack_f1 is logged alongside.
 				_am = threshold_metadata['argmax']
 				_f1_key = 'f1' if is_binary_k2 else 'macro_f1'
 				ce, acc, f1, fpr_val = _am['ce'], _am['acc'], _am[_f1_key], _am['benign_fpr']
@@ -1443,7 +1443,7 @@ class Experiment:
 				_f1_name = "F1" if is_binary_k2 else "MacroF1"
 				self.log(f"  {genome_type.value}: CE={ce:.4f}, Acc={acc:.4%}, {_f1_name}={f1:.4%}, BenignFPR={fpr_val:.4%} (validated, argmax)")
 				if is_binary_k2 and 'margin_val_f1' in threshold_metadata:
-					self.log(f"    [BINARY-K2] margin_val_f1 = val-calibrated attack-F1 decode "
+					self.log(f"    [BINARY-K2] margin_val_f1 = val-calibrated macro-F1 decode "
 							 f"(the single-cluster val_cal twin)")
 				for _mode in ('argmax', 'margin_fixed0', 'margin_train_cal', 'margin_val_cal',
 				              'margin_train_f1', 'margin_val_f1',
@@ -1453,7 +1453,7 @@ class Experiment:
 					if not isinstance(_md, dict):
 						continue
 					_tau_str = f", tau={_md['tau']:.4f}" if 'tau' in _md else ""
-					_bin_str = f", F1={_md['f1']:.4%}" if is_binary_k2 else ""
+					_bin_str = f", AttackF1={_md['attack_f1']:.4%}" if is_binary_k2 and 'attack_f1' in _md else ""
 					self.log(f"    {_mode + ':':<17}MacroF1={_md['macro_f1']:.4%}{_bin_str}, BenignFPR={_md['benign_fpr']:.4%}, "
 							 f"Acc={_md['acc']:.4%}, wF1={_md['weighted_f1']:.4%}{_tau_str}")
 				self.log(f"    Scoring:     {len(threshold_metadata)} decode modes from one training pass "

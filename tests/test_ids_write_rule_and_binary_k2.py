@@ -10,8 +10,9 @@ Two things land together (16/10/2026):
    the multiclass decode block (no threshold modes, no val-calibrated decode).
    It now takes the K-cluster decode block: argmax headline (what the GA
    fitness used) + margin_* modes, with K=2-only margin_train_f1 /
-   margin_val_f1 (attack-F1 tau; margin_val_f1 is single-cluster val_cal's twin)
-   and an 'f1' alias = attack-class F1.
+   margin_val_f1 (macro-F1 tau — since ABI 20 the true twins of single-cluster
+   train_cal / val_cal, identical to margin_train_cal / margin_val_cal at K=2),
+   'f1' = the 2-class macro F1 (what single-cluster reports) and attack_f1.
 
 Accelerator-backed tests skip unless the installed ram_accelerator is ABI >= 19.
 """
@@ -40,6 +41,8 @@ def _abi() -> int:
 
 
 needs_abi19 = pytest.mark.skipif(_abi() < 19, reason="needs ram_accelerator ABI >= 19")
+# ABI 20: binary two-cluster *_f1 modes sweep the 2-class macro F1.
+needs_abi20 = pytest.mark.skipif(_abi() < 20, reason="needs ram_accelerator ABI >= 20")
 
 
 # ---- params / resolution / cache key (pure Python) ---------------------------
@@ -125,8 +128,8 @@ def _genome(num_clusters: int, neurons=6, bits=6, total_bits=24, seed=5):
 TERNARY, BINARY, QUAD_WEIGHTED = 0, 3, 2
 
 
-@needs_abi19
-def test_binary_two_cluster_decode_modes_have_val_calibrated_attack_f1():
+@needs_abi20
+def test_binary_two_cluster_decode_modes_report_macro_f1():
 	ds = _dataset()
 	ev = _evaluator(ds, single_cluster=False, memory_mode=QUAD_WEIGHTED)
 	out = ev.evaluate_multiclass_at_thresholds(_genome(2))
@@ -135,10 +138,14 @@ def test_binary_two_cluster_decode_modes_have_val_calibrated_attack_f1():
 		assert key in modes, key
 	attack = "Attack"
 	for key, m in modes.items():
-		assert m["f1"] == pytest.approx(m["per_class"][attack]["f1"]), key  # attack-class F1, not macro
-		assert m["attack_f1"] == m["f1"]
+		assert m["f1"] == m["macro_f1"], key  # 2-class macro F1, as single-cluster
+		assert m["attack_f1"] == m["per_class"][attack]["f1"], key
 		assert 0.0 <= m["fpr"] <= 1.0
 	assert "tau" in modes["margin_val_f1"] and "tau" not in modes["argmax"]
+	# The *_f1 modes are the macro-F1 train_cal / val_cal twins: at K=2 they
+	# are the margin_train_cal / margin_val_cal sweep itself.
+	assert modes["margin_train_f1"] == modes["margin_train_cal"]
+	assert modes["margin_val_f1"] == modes["margin_val_cal"]
 	# argmax decode == the legacy evaluate_batch_full decision (same acc/FPR);
 	# the legacy 'f1' there is the 2-class MACRO F1, kept here as macro_f1.
 	full = ev.evaluate_batch_full([_genome(2)])[0]
@@ -147,7 +154,7 @@ def test_binary_two_cluster_decode_modes_have_val_calibrated_attack_f1():
 	assert modes["argmax"]["macro_f1"] == pytest.approx(full.f1)
 
 
-@needs_abi19
+@needs_abi20
 def test_experiment_validates_binary_two_cluster_through_decode_modes():
 	"""The experiment-level validation writes a decode-mode threshold_metadata
 	(argmax headline + margin_val_f1) for a binary two-cluster evaluator."""
@@ -173,7 +180,8 @@ def test_experiment_validates_binary_two_cluster_through_decode_modes():
 	tm = json.loads(captured["threshold_metadata"])
 	assert "argmax" in tm and "margin_val_f1" in tm and "margin_val_cal" in tm
 	r = results[GenomeType.BEST_F1.value]
-	assert r["f1"] == pytest.approx(tm["argmax"]["f1"])        # headline = argmax, attack F1
+	assert r["f1"] == pytest.approx(tm["argmax"]["f1"])        # headline = argmax, macro F1
+	assert tm["argmax"]["f1"] == tm["argmax"]["macro_f1"]
 	assert r["fpr"] == pytest.approx(tm["argmax"]["benign_fpr"])
 
 

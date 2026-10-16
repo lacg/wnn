@@ -324,25 +324,6 @@ pub fn find_optimal_margin_tau(
 	})
 }
 
-/// Binary (K = 2) analogue of `find_optimal_margin_tau`: τ swept for the
-/// ATTACK-class F1 (benign = `benign_class`, attack = the other cluster) — the
-/// same objective as the single-cluster `train_cal` / `val_cal` threshold
-/// (`find_optimal_threshold_f1`), so a two-cluster binary genome's calibrated
-/// decode is comparable to a one-cluster one. Returns (tau, attack_f1).
-pub fn find_optimal_margin_tau_binary_f1(
-	margins: &[f64],
-	attack_argmax: &[u32],
-	targets: &[i64],
-	benign_class: usize,
-) -> (f64, f64)
-{
-	let attack = 1 - benign_class.min(1);
-	find_optimal_margin_tau_by(margins, attack_argmax, targets, 2, benign_class, &|tp, fp, fn_| {
-		let denom = 2 * tp[attack] + fp[attack] + fn_[attack];
-		if denom == 0 { 0.0 } else { 2.0 * tp[attack] as f64 / denom as f64 }
-	})
-}
-
 /// Macro-F1 from per-class counters; classes with no support are skipped
 /// (tp + fn, the support, is invariant under prediction flips, so the rule is
 /// stable along a sweep).
@@ -552,28 +533,34 @@ pub fn modes_from_scores(
 	modes.push(margin_mode("margin_train_cal", train_tau));
 
 	// 4. val-calibrated τ (Protocol v2 — only when a val partition exists)
-	if let (Some(vs), Some(vt)) = (val_scores, val_targets)
+	let val_tau = match (val_scores, val_targets)
 	{
-		let (val_margins, val_attack) = benign_margins(vs, num_classes, benign_class);
-		let (val_tau, _val_f1) =
-			find_optimal_margin_tau(&val_margins, &val_attack, vt, num_classes, benign_class);
-		modes.push(margin_mode("margin_val_cal", val_tau));
-	}
-
-	// 4b. Binary two-cluster (K = 2, 16/10/2026): τ swept for the ATTACK-class
-	// F1 — the single-cluster train_cal / val_cal objective — so a two-memory
-	// binary genome reports a calibrated decode comparable to one-memory arms.
-	// `margin_val_f1` is its Protocol-v2 val-calibrated mode (`val_cal`'s twin).
-	// Additive: K >= 3 flows never see these keys.
-	if num_classes == 2
-	{
-		let (t_tau, _) = find_optimal_margin_tau_binary_f1(&train_margins, &train_attack, train_targets, benign_class);
-		modes.push(margin_mode("margin_train_f1", t_tau));
-		if let (Some(vs), Some(vt)) = (val_scores, val_targets)
+		(Some(vs), Some(vt)) =>
 		{
 			let (val_margins, val_attack) = benign_margins(vs, num_classes, benign_class);
-			let (v_tau, _) = find_optimal_margin_tau_binary_f1(&val_margins, &val_attack, vt, benign_class);
-			modes.push(margin_mode("margin_val_f1", v_tau));
+			Some(find_optimal_margin_tau(&val_margins, &val_attack, vt, num_classes, benign_class).0)
+		}
+		_ => None,
+	};
+	if let Some(tau) = val_tau
+	{
+		modes.push(margin_mode("margin_val_cal", tau));
+	}
+
+	// 4b. Binary two-cluster (K = 2): the TRUE twins of single-cluster
+	// train_cal / val_cal — τ swept for the 2-class MACRO F1 on train / val,
+	// the objective `find_optimal_threshold_f1` maximizes for one memory
+	// (Luiz 16/10/2026; until then they swept the attack-class F1, which no
+	// single-cluster mode optimizes). At K = 2 that is exactly the
+	// margin_train_cal / margin_val_cal sweep, so these rows are identical to
+	// those; the names stay so binary two-cluster reports line up with the
+	// single-cluster train_cal / val_cal rows. K >= 3 flows never see these keys.
+	if num_classes == 2
+	{
+		modes.push(margin_mode("margin_train_f1", train_tau));
+		if let Some(tau) = val_tau
+		{
+			modes.push(margin_mode("margin_val_f1", tau));
 		}
 	}
 
@@ -1112,10 +1099,11 @@ mod tests
 		assert_eq!(preds, vec![0, 0, 1, 2]);
 	}
 
-	/// K = 2: the binary-F1 sweep returns the attack-F1 optimum (brute force
-	/// over every candidate τ), for either benign index (flip_labels).
+	/// K = 2: the macro-F1 margin sweep returns the brute-force macro-F1
+	/// optimum (every candidate τ), for either benign index (flip_labels) —
+	/// the objective margin_train_f1 / margin_val_f1 calibrate for.
 	#[test]
-	fn test_binary_f1_margin_tau_matches_brute_force()
+	fn test_two_cluster_margin_tau_is_the_macro_f1_optimum()
 	{
 		use rand::prelude::*;
 		let mut rng = rand::rngs::StdRng::seed_from_u64(16);
@@ -1130,25 +1118,51 @@ mod tests
 				.map(|&t| rng.gen_range(-1.0..1.0) + if t as usize == attack { 0.4 } else { 0.0 })
 				.collect();
 			let attack_argmax = vec![attack as u32; n];
-			let (tau, f1) = find_optimal_margin_tau_binary_f1(&margins, &attack_argmax, &targets, benign);
-			let attack_f1 = |tau: f64| {
+			let (tau, f1) = find_optimal_margin_tau(&margins, &attack_argmax, &targets, 2, benign);
+			let macro_f1 = |tau: f64| {
 				let preds = margin_decode(&margins, &attack_argmax, tau, benign);
-				metrics_from_predictions(&vec![0.0; 2 * n], &preds, &targets, 2, benign).f1[attack]
+				metrics_from_predictions(&vec![0.5; 2 * n], &preds, &targets, 2, benign).macro_f1
 			};
 			let mut sorted = margins.clone();
 			sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
-			let mut best = attack_f1(f64::NEG_INFINITY);
+			let mut best = macro_f1(f64::NEG_INFINITY);
 			for w in sorted.windows(2)
 			{
-				best = best.max(attack_f1((w[0] + w[1]) / 2.0));
+				best = best.max(macro_f1((w[0] + w[1]) / 2.0));
 			}
-			best = best.max(attack_f1(sorted[n - 1] + 1e-6));
-			assert_close(f1, best, "binary F1 optimum");
-			assert_close(attack_f1(tau), f1, "decode at tau reproduces the optimum");
+			best = best.max(macro_f1(sorted[n - 1] + 1e-6));
+			assert_close(f1, best, "macro F1 optimum");
+			assert_close(macro_f1(tau), f1, "decode at tau reproduces the optimum");
 		}
 	}
 
-	/// The binary-F1 modes exist for K = 2 only (val variant only with a val
+	/// margin_train_f1 / margin_val_f1 are the macro-F1 twins: at K = 2 they
+	/// equal margin_train_cal / margin_val_cal exactly (τ and every metric).
+	#[test]
+	fn test_two_cluster_f1_modes_equal_the_macro_calibrated_modes()
+	{
+		use rand::prelude::*;
+		let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+		let n = 200usize;
+		let set = |rng: &mut rand::rngs::StdRng| {
+			let t: Vec<i64> = (0..n).map(|_| rng.gen_range(0..2) as i64).collect();
+			let s: Vec<f64> = t.iter().flat_map(|&y| [rng.gen_range(0.0..1.0), rng.gen_range(0.0..1.0) + 0.3 * y as f64]).collect();
+			(s, t)
+		};
+		let ((es, et), (ts, tt), (vs, vt)) = (set(&mut rng), set(&mut rng), set(&mut rng));
+		for benign in [0usize, 1]
+		{
+			let modes = modes_from_scores(&es, &et, &ts, &tt, Some(&vs), Some(&vt), 2, benign);
+			let get = |name: &str| format!("{:?}", modes.iter().find(|m| m.mode == name).expect(name).metrics);
+			let tau = |name: &str| modes.iter().find(|m| m.mode == name).expect(name).tau;
+			assert_eq!(get("margin_train_f1"), get("margin_train_cal"));
+			assert_eq!(get("margin_val_f1"), get("margin_val_cal"));
+			assert_eq!(tau("margin_train_f1").to_bits(), tau("margin_train_cal").to_bits());
+			assert_eq!(tau("margin_val_f1").to_bits(), tau("margin_val_cal").to_bits());
+		}
+	}
+
+	/// The two-cluster *_f1 modes exist for K = 2 only (val variant only with a val
 	/// partition); K >= 3 mode lists are unchanged.
 	#[test]
 	fn test_binary_f1_modes_only_for_two_clusters()
