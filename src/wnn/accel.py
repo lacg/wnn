@@ -75,7 +75,13 @@ import os
 #   is identifiable. Bit-identical results, smaller working set (packed rows in
 #   the GPU word layout, no-copy Metal input, folds as row indices, chunk table
 #   <= 4 GiB). The validation cache pins worker_abi, so this bump re-validates.
-EXPECTED_ABI = 18
+# 19 (16/10/2026): additive — IDSCacheWrapper.set_write_rule("lattice"|"vote"), the
+#   per-flow MAJORITY-VOTE writer for BINARY/TERNARY/PLN (ids_write_rule); default
+#   "lattice" is bit-identical to ABI 18. Also: K=2 decode modes margin_train_f1 /
+#   margin_val_f1 (attack-F1 tau) for binary two-cluster validation. IDSEvaluator +
+#   experiment.py land with this wheel at worker idle. The validation cache pins
+#   worker_abi, so this bump re-validates.
+EXPECTED_ABI = 19
 
 BUILD_HINT = (
 	"Rebuild the accelerator: cd src/wnn/ram/strategies/accelerator && "

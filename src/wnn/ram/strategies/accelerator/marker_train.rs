@@ -95,6 +95,11 @@ pub mod metal_impl
 		/// GLOBAL neuron index as an unchunked dispatch — keeping chunked output
 		/// bit-exact vs unchunked (and vs the CPU path). 0 for unchunked calls.
 		pub neuron_index_offset: u32,
+		/// 16/10/2026: per-flow MAJORITY-VOTE selector — 1 iff the resolved
+		/// writer is `WriteRule::Vote` (the kernel re-derives it through
+		/// common.metal `wnn_write_rule(memory_mode, vote_write)`). 0 keeps the
+		/// mode's own writer, bit-identical to before.
+		pub vote_write: u32,
 	}
 
 	pub struct MarkerTrainer
@@ -554,6 +559,7 @@ pub mod batched_path
 		rng_seed: u64,
 		class_weights: Option<&[u32]>,
 		memory_mode: u8,
+		write_rule: ram_core::cell_mode::WriteRule,
 	) -> Result<Vec<GenomeExport>, String>
 	{
 		let plain = |bits: &[usize], neurons: &[usize], conns: &[i64], g: usize| {
@@ -574,6 +580,7 @@ pub mod batched_path
 				rng_seed,
 				class_weights,
 				memory_mode,
+				write_rule,
 			)
 		};
 		if !multiplicity_selected(neuron_sample_rate, memory_mode, genomes_connections_flat)
@@ -622,6 +629,7 @@ pub mod batched_path
 				class_weights,
 				0,
 				memory_mode,
+				write_rule,
 			)?)
 		};
 		let single = |s: &ram_core::super_genome::SuperGenome| one_export(plain(&s.bits, &s.neurons_per_cluster, &s.connections, 1)?);
@@ -673,6 +681,7 @@ pub mod batched_path
 		rng_seed: u64,
 		class_weights: Option<&[u32]>,
 		memory_mode: u8,
+		write_rule: ram_core::cell_mode::WriteRule,
 	) -> Result<Vec<GenomeExport>, String>
 	{
 		let result = batched_train_core(
@@ -693,6 +702,7 @@ pub mod batched_path
 			class_weights,
 			0,
 			memory_mode,
+			write_rule,
 		);
 		match result
 		{
@@ -717,6 +727,7 @@ pub mod batched_path
 					class_weights,
 					chunk_memory_budget(),
 					memory_mode,
+					write_rule,
 				)
 			}
 			other => other,
@@ -807,6 +818,7 @@ pub mod batched_path
 		class_weights: Option<&[u32]>,
 		chunk_budget_bytes: usize,
 		memory_mode: u8,
+		write_rule: ram_core::cell_mode::WriteRule,
 	) -> Result<Vec<GenomeExport>, String>
 	{
 		let n_total = genomes_bits_flat.len();
@@ -870,6 +882,7 @@ pub mod batched_path
 				class_weights,
 				start as u32,
 				memory_mode,
+				write_rule,
 				crate::train_knobs::TrainKnobs::from_env(),
 			)?;
 			// The chunk's RAW per-neuron ranges, straight off its table. Until
@@ -1145,6 +1158,7 @@ pub mod batched_path
 				class_weights,
 				start as u32,
 				memory_mode,
+				ram_core::cell_mode::WriteRule::Nudge,
 				crate::train_knobs::TrainKnobs::from_env(),
 			)?;
 			t_train_ms += t0.elapsed().as_secs_f64() * 1000.0;
@@ -1213,7 +1227,6 @@ pub mod batched_path
 	struct TrainedBatch
 	{
 		gpu_table: MarkerHashTable,
-		use_oi: bool,
 		/// Per-(genome, neuron) training metadata — the probe kernel reuses it
 		/// verbatim (bits / conn_offset / slot_offset / slot_capacity / cluster_idx),
 		/// so probe addressing + table regions are identical to training by
@@ -1235,6 +1248,9 @@ pub mod batched_path
 		/// Needed by the export step: densifying a low-bits group must
 		/// initialise untouched cells to the mode's empty word.
 		memory_mode: u8,
+		/// The resolved writer (`WriteRule::resolve`): the export merges
+		/// duplicate slots per it (`SlotMerge::for_batch`).
+		write_rule: ram_core::cell_mode::WriteRule,
 		/// The knobs this batch trained under (the export reads the wF filter).
 		knobs: crate::train_knobs::TrainKnobs,
 	}
@@ -1250,7 +1266,7 @@ pub mod batched_path
 			let cap = self.cluster_capacity[0] as u32;
 			let base = self.cluster_offset_in_genome[0] as u32;
 			let slot_offsets: Vec<u32> = (0..n as u32).map(|i| base + i * cap).collect();
-			let merge = crate::atomic_hashtable::SlotMerge::for_batch(self.use_oi, self.memory_mode, self.knobs.export_skip_wf);
+			let merge = crate::atomic_hashtable::SlotMerge::for_batch(self.write_rule, self.memory_mode, self.knobs.export_skip_wf);
 			self.gpu_table.export_per_neuron(&slot_offsets, &vec![cap; n], merge)
 		}
 	}
@@ -1279,6 +1295,7 @@ pub mod batched_path
 		class_weights: Option<&[u32]>,
 		neuron_index_offset: u32,
 		memory_mode: u8,
+		write_rule: ram_core::cell_mode::WriteRule,
 	) -> Result<Vec<GenomeExport>, String>
 	{
 		if num_genomes == 0
@@ -1305,6 +1322,7 @@ pub mod batched_path
 			class_weights,
 			neuron_index_offset,
 			memory_mode,
+			write_rule,
 			crate::train_knobs::TrainKnobs::from_env(),
 		)?;
 		let t_after_train = t_phase.elapsed().as_secs_f64() * 1000.0;
@@ -1343,6 +1361,7 @@ pub mod batched_path
 		class_weights: Option<&[u32]>,
 		neuron_index_offset: u32,
 		memory_mode: u8,
+		write_rule: ram_core::cell_mode::WriteRule,
 		knobs: crate::train_knobs::TrainKnobs,
 	) -> Result<TrainedBatch, String>
 	{
@@ -1494,7 +1513,9 @@ pub mod batched_path
 			// Sizing capacity on all num_train (legacy) over-allocated the marker
 			// table ~1/positive_rate (single) / ~1+num_negatives (multi) — the
 			// BINARY GPU-buffer bloat. Safe: distinct written addrs ≤ positives.
-			let is_binary = memory_mode == ram_core::neuron_memory::BINARY;
+			// Keyed on the WRITER, not the mode: BINARY under the per-flow vote
+			// selector writes BOTH directions (a −w tally) and needs full sizing.
+			let is_binary = write_rule == ram_core::cell_mode::WriteRule::Set;
 			if num_clusters == 1
 			{
 				counts[0] = if is_binary
@@ -1593,7 +1614,11 @@ pub mod batched_path
 		// pre-claim), QUAD_*/QSR legacy → WEAK_FALSE(1). Before 16/09/2026 the
 		// OI arm keyed on the env var alone while the trainer gate below keyed on
 		// `== QUAD_WEIGHTED`, so QSR got OI_INITIAL slots under a legacy trainer.
-		let default_value: u8 = if ram_core::neuron_memory::order_independent_training_active(memory_mode)
+		// 16/10/2026: the per-flow vote writer also accumulates in the packed
+		// counters (`CounterBin::for_training`), so its slots start at
+		// OI_INITIAL too — a ternary EMPTY(2) default would read as net=+2.
+		let counters = ram_core::cell_mode::CounterBin::for_training(write_rule, memory_mode);
+		let default_value: u8 = if counters.is_some()
 		{
 			ram_core::neuron_memory::OI_INITIAL as u8
 		}
@@ -1845,7 +1870,10 @@ pub mod batched_path
 		// (12/07/2026 GPU-train generalization). 16/09/2026: was a literal
 		// `== QUAD_WEIGHTED`, which dropped QSR to the legacy clamped-nudge
 		// trainer and its z<=8 / z=1 chunk policy (~12x slower).
-		let use_oi = ram_core::neuron_memory::order_independent_training_active(memory_mode);
+		let use_oi = counters == Some(ram_core::cell_mode::CounterBin::Oi);
+		// The vote tally is the same commutative counter (merged at export by
+		// `SlotMerge::Votes`), so it takes the high-z OI chunk policy too.
+		let use_counters = counters.is_some();
 		// WNN_EXAMPLE_CHUNKS (via `knobs`) overrides the z heuristic.
 		let env_chunks = knobs.example_chunks;
 		// Occupancy fix 07/07/2026: the old MAX_EXAMPLE_CHUNKS=8 cap left the
@@ -1861,7 +1889,7 @@ pub mod batched_path
 		{
 			z
 		}
-		else if use_oi
+		else if use_counters
 		{
 			if ng_n_product == 0 || ng_n_product >= OI_TARGET_THREADS
 			{
@@ -1927,6 +1955,7 @@ pub mod batched_path
 			example_offset: 0,
 			examples_in_dispatch: num_train as u32,
 			neuron_index_offset,
+			vote_write: (write_rule == ram_core::cell_mode::WriteRule::Vote) as u32,
 		};
 
 		let t_pre_train = t_phase.elapsed().as_secs_f64() * 1000.0;
@@ -1962,8 +1991,8 @@ pub mod batched_path
 
 		Ok(TrainedBatch {
 			gpu_table,
-			use_oi,
 			memory_mode,
+			write_rule,
 			neuron_meta,
 			conn_buf,
 			connections_i32,
@@ -1992,7 +2021,6 @@ pub mod batched_path
 	{
 		let TrainedBatch {
 			gpu_table,
-			use_oi,
 			connections_i32,
 			num_genomes,
 			num_clusters,
@@ -2005,23 +2033,23 @@ pub mod batched_path
 			max_bits_in_batch,
 			conn_per_genome,
 			memory_mode,
+			write_rule,
 			knobs,
 			..
 		} = tb;
 		let (num_genomes, num_clusters, num_neurons_per_genome) =
 			(*num_genomes, *num_clusters, *num_neurons_per_genome);
 		let memory_mode = *memory_mode;
-		let (slots_per_genome, has_heterogeneous_bpn, max_bits_in_batch, conn_per_genome, use_oi) = (
+		let (slots_per_genome, has_heterogeneous_bpn, max_bits_in_batch, conn_per_genome) = (
 			*slots_per_genome,
 			*has_heterogeneous_bpn,
 			*max_bits_in_batch,
 			*conn_per_genome,
-			*use_oi,
 		);
 
 		// Duplicate-key slots (concurrent GPU claims) merge per the writer:
 		// OI counters, the lattice join (TERNARY/PLN/BINARY), or unmerged.
-		let merge = crate::atomic_hashtable::SlotMerge::for_batch(use_oi, memory_mode, knobs.export_skip_wf);
+		let merge = crate::atomic_hashtable::SlotMerge::for_batch(*write_rule, memory_mode, knobs.export_skip_wf);
 
 		// Build per-genome GenomeExport from the flat buffer
 		let mut exports: Vec<GenomeExport> = Vec::with_capacity(num_genomes);
@@ -2295,6 +2323,7 @@ pub mod batched_path
 				42,
 				None,
 				memory_mode,
+				ram_core::cell_mode::WriteRule::of_code(memory_mode),
 			)
 			.expect("batched multi-group train failed");
 			assert_eq!(batched.len(), 1);
@@ -2363,6 +2392,7 @@ pub mod batched_path
 				1.0,
 				42,
 				memory_mode,
+				ram_core::cell_mode::WriteRule::of_code(memory_mode),
 				None,
 				false,
 			);
@@ -2492,12 +2522,12 @@ pub mod batched_path
 			let conns: Vec<i64> = bits_flat.iter().enumerate().flat_map(|(n, &b)| (0..b).map(move |k| ((3 * k + n) % tib) as i64)).collect();
 			let mode = ram_core::neuron_memory::TERNARY;
 			let unchunked = batched_train_offspring(
-				&bits_flat, &[bits_flat.len()], &conns, 1, 1, &packed, &targets, &[], num_train, 0, tib, 0.5, 0.5, 42, None, mode,
+				&bits_flat, &[bits_flat.len()], &conns, 1, 1, &packed, &targets, &[], num_train, 0, tib, 0.5, 0.5, 42, None, mode, ram_core::cell_mode::WriteRule::of_code(mode),
 			)
 			.expect("unchunked train failed");
 			let cap = marker_capacity_for_train(num_train, 10, 0.5);
 			let chunked = train_single_genome_neuron_chunked(
-				&bits_flat, &conns, &packed, &targets, &[], num_train, 0, tib, 0.5, 0.5, 42, None, cap * 16 * 2, mode,
+				&bits_flat, &conns, &packed, &targets, &[], num_train, 0, tib, 0.5, 0.5, 42, None, cap * 16 * 2, mode, ram_core::cell_mode::WriteRule::of_code(mode),
 			)
 			.expect("chunked train failed");
 			let (a, b) = (&unchunked[0], &chunked[0]);
@@ -2568,6 +2598,7 @@ pub mod batched_path
 				42,
 				None,
 				ram_core::neuron_memory::QUAD_WEIGHTED,
+				ram_core::cell_mode::WriteRule::of_code(ram_core::neuron_memory::QUAD_WEIGHTED),
 			)
 			.expect("unchunked train failed");
 
@@ -2589,6 +2620,7 @@ pub mod batched_path
 				None,
 				cap * 16 * 2,
 				ram_core::neuron_memory::QUAD_WEIGHTED,
+				ram_core::cell_mode::WriteRule::of_code(ram_core::neuron_memory::QUAD_WEIGHTED),
 			)
 			.expect("chunked train failed");
 
@@ -2640,6 +2672,7 @@ pub mod batched_path
 				None,
 				2,
 				ram_core::neuron_memory::QUAD_WEIGHTED,
+				ram_core::cell_mode::WriteRule::of_code(ram_core::neuron_memory::QUAD_WEIGHTED),
 			)
 			.expect("offset chunk failed");
 			let without_offset = batched_train_core(
@@ -2660,6 +2693,7 @@ pub mod batched_path
 				None,
 				0,
 				ram_core::neuron_memory::QUAD_WEIGHTED,
+				ram_core::cell_mode::WriteRule::of_code(ram_core::neuron_memory::QUAD_WEIGHTED),
 			)
 			.expect("no-offset chunk failed");
 			assert_ne!(
@@ -2706,7 +2740,7 @@ pub mod batched_path
 				let per_neuron = marker_capacity_for_train(num_train, 16, rate) * 16;
 				let train = |chunk: usize| {
 					train_single_genome_neuron_chunked(
-						&bits_flat, &conns, &packed, &targets, &[], num_train, 0, 16, 0.5, rate, 42, None, per_neuron * chunk, mode,
+						&bits_flat, &conns, &packed, &targets, &[], num_train, 0, 16, 0.5, rate, 42, None, per_neuron * chunk, mode, ram_core::cell_mode::WriteRule::of_code(mode),
 					)
 					.expect("chunked train failed")
 					.remove(0)
@@ -2829,6 +2863,7 @@ pub mod batched_path
 				fitness_weights: None,
 				run_seed: 0,
 				coverage_aware: false,
+				write_vote: false,
 			};
 			for n in [7usize, 37, 64]
 			{
@@ -2836,7 +2871,7 @@ pub mod batched_path
 				let eval = packed.gather_rows(700, |k| (k * 13) % num_train);
 				let eval_targets: Vec<i64> = (0..700).map(|k| targets[(k * 13) % num_train]).collect();
 				let export = batched_train_offspring(
-					&bits_flat, &[n], &conns, 1, 1, &packed, &targets, &[], num_train, 0, 18, 0.5, 1.0, 42, None, mode,
+					&bits_flat, &[n], &conns, 1, 1, &packed, &targets, &[], num_train, 0, 18, 0.5, 1.0, 42, None, mode, ram_core::cell_mode::WriteRule::of_code(mode),
 				)
 				.expect("export path train failed")
 				.remove(0);
@@ -2877,7 +2912,7 @@ pub mod batched_path
 			let npc = [bits_flat.len()];
 			let tb = train_batch_to_table(
 				bits_flat, &npc, conns, 1, 1, packed, targets, &[], targets.len(), 0, total_input_bits, 0.5,
-				sample_rate, 42, None, 0, memory_mode, knobs,
+				sample_rate, 42, None, 0, memory_mode, ram_core::cell_mode::WriteRule::of_code(memory_mode), knobs,
 			)
 			.expect("train_one_with: train failed");
 			export_trained_batch(&tb, bits_flat, &npc).expect("train_one_with: export failed").remove(0)
@@ -3335,6 +3370,7 @@ pub mod batched_path
 					None,
 					start as u32,
 					ram_core::neuron_memory::QUAD_WEIGHTED,
+					ram_core::cell_mode::WriteRule::Nudge,
 					knobs,
 				)
 				.expect("chunk train failed");
@@ -3543,6 +3579,7 @@ pub mod batched_path
 				42,
 				None,
 				ram_core::neuron_memory::QUAD_WEIGHTED,
+				ram_core::cell_mode::WriteRule::of_code(ram_core::neuron_memory::QUAD_WEIGHTED),
 			)
 			.expect("bench_prod train failed");
 			let export_train_ms = t0.elapsed().as_secs_f64() * 1000.0;

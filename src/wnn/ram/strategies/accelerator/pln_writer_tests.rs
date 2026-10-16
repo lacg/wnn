@@ -76,7 +76,7 @@ fn cpu_train(g: &Genome, data: &Data, mode: u8) -> (Vec<GroupMemory>, GenomeExpo
 	let n = data.targets.len();
 	train_genome_in_slot(
 		&mut memories, &groups, &g.conns, &g.bits, &cluster_starts, &conn_offsets, &[(0, 0)], &data.train, &data.targets,
-		&[], n, 0, TIB, None, 1.0, 42, mode, None, false,
+		&[], n, 0, TIB, None, 1.0, 42, mode, ram_core::cell_mode::WriteRule::of_code(mode), None, false,
 	);
 	let export = export_genome_for_gpu(&memories, &groups, &reorganize_connections_for_gpu(&g.conns, &g.bits, &g.npc, &groups));
 	(memories, export)
@@ -143,7 +143,7 @@ fn gpu_train(g: &Genome, data: &Data, mode: u8) -> GenomeExport
 {
 	let n = data.targets.len();
 	crate::marker_train::batched_path::batched_train_offspring_plain(
-		&g.bits, &g.npc, &g.conns, 1, 1, &data.train, &data.targets, &[], n, 0, TIB, 0.5, 1.0, 42, None, mode,
+		&g.bits, &g.npc, &g.conns, 1, 1, &data.train, &data.targets, &[], n, 0, TIB, 0.5, 1.0, 42, None, mode, ram_core::cell_mode::WriteRule::of_code(mode),
 	)
 	.expect("gpu train")
 	.remove(0)

@@ -237,6 +237,7 @@ impl IDSGenomeStreamer
 			self.neuron_sample_rate,
 			self.rng_seed.wrapping_add(self.train_seen as u64),
 			self.memory_mode,
+			ram_core::cell_mode::WriteRule::of_code(self.memory_mode),
 			self.class_weights.as_deref(),
 			true, // parallel
 		);

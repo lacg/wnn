@@ -804,7 +804,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
 				num_clusters,
 			);
 			let budget_gb = get_available_memory_gb() * 0.4;
-			budget_batch_size(&genomes, budget_gb, rayon::current_num_threads(), num_train, neuron_sample_rate, memory_mode)
+			budget_batch_size(&genomes, budget_gb, rayon::current_num_threads(), num_train, neuron_sample_rate, memory_mode, settings.write_rule())
 		});
 
 	let mut all_results: Vec<(usize, f64, f64, f64, f64, f64)> = Vec::with_capacity(num_genomes);
@@ -906,6 +906,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
 					rng_seed.wrapping_add(genome_idx as u64),
 					None, // class_weights: adaptive path doesn't use class balancing
 					memory_mode,
+					settings.write_rule(),
 				)
 				{
 					Ok(e) => e,
@@ -946,6 +947,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
 							neuron_sample_rate,
 							rng_seed.wrapping_add(genome_idx as u64),
 							memory_mode,
+							settings.write_rule(),
 							None,
 							true,
 						);
@@ -1161,6 +1163,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
 						rng_seed.wrapping_add(adapted.genome_idx as u64),
 						None, // class_weights
 						memory_mode,
+						settings.write_rule(),
 					)
 					.unwrap_or_else(|reason| {
 						eprintln!(
@@ -1209,6 +1212,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
 							neuron_sample_rate,
 							rng_seed.wrapping_add(adapted.genome_idx as u64),
 							memory_mode,
+							settings.write_rule(),
 							None,
 							true,
 						);

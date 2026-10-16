@@ -171,6 +171,9 @@ struct HybridBatchConfig<'a>
 	total_input_bits: usize,
 	use_provided_connections: bool,
 	memory_mode: u8,
+	/// The resolved writer (`EvalSettings::write_rule`): every training route
+	/// of this call (batched GPU, shape groups, per-genome CPU, chunked CPU).
+	write_rule: ram_core::cell_mode::WriteRule,
 	train_input_bits: &'a ram_core::packed_bits::PackedBits,
 	train_targets: &'a [i64],
 	train_negatives: &'a [i64],
@@ -246,6 +249,7 @@ impl<'a> HybridBatchConfig<'a>
 			self.num_train,
 			self.neuron_sample_rate,
 			self.memory_mode,
+			self.write_rule,
 		)
 	}
 }
@@ -356,6 +360,7 @@ fn train_one_genome_cpu(
 		cfg.train_seed(),
 		cfg.class_weights,
 		cfg.memory_mode,
+		cfg.write_rule,
 	)
 	{
 		Ok(e) => e,
@@ -397,16 +402,18 @@ fn train_one_genome_cpu(
 					cfg.neuron_sample_rate,
 					cfg.train_seed(),
 					cfg.memory_mode,
+					cfg.write_rule,
 					cfg.class_weights,
 					true,
 				);
 			}
 			else
 			{
-				// OI orchestration brackets the entire chunked loop:
-				// counters accumulate across chunks, then commit once.
-				let oi_chunked = ram_core::neuron_memory::order_independent_training_active(cfg.memory_mode);
-				if oi_chunked
+				// Counter orchestration (QUAD OI or the vote tally) brackets the
+				// entire chunked loop: counters accumulate across chunks, then
+				// commit once.
+				let counters = ram_core::cell_mode::CounterBin::for_training(cfg.write_rule, cfg.memory_mode);
+				if counters.is_some()
 				{
 					for m in memories.iter_mut()
 					{
@@ -449,16 +456,17 @@ fn train_one_genome_cpu(
 						cfg.neuron_sample_rate,
 						cfg.train_seed(),
 						cfg.memory_mode,
+						cfg.write_rule,
 						cfg.class_weights,
 						true,
 					);
 					chunk_start = chunk_end;
 				}
-				if oi_chunked
+				if let Some(bin) = counters
 				{
 					for m in memories.iter_mut()
 					{
-						m.commit_oi();
+						m.commit_counters(bin);
 					}
 				}
 			}
@@ -530,7 +538,10 @@ fn try_eval_in_place_batch(
 	}
 	// The probe merges OI counters — only meaningful when this mode trains
 	// through them (env AND `CellMode::uses_oi_counters`).
-	if !ram_core::neuron_memory::order_independent_training_active(cfg.memory_mode)
+	// The per-flow vote writer also uses counters but bins by sign — the probe
+	// kernel only knows the QUAD OI binning, so vote keeps the export path.
+	if ram_core::cell_mode::CounterBin::for_training(cfg.write_rule, cfg.memory_mode)
+		!= Some(ram_core::cell_mode::CounterBin::Oi)
 	{
 		return None;
 	}
@@ -1065,6 +1076,7 @@ fn train_batch(
 					cfg.train_seed(),
 					class_weights,
 					cfg.memory_mode,
+					cfg.write_rule,
 				)
 				{
 					Ok(g_exports) =>
@@ -1156,6 +1168,7 @@ fn train_batch(
 					cfg.train_seed(),
 					class_weights,
 					cfg.memory_mode,
+					cfg.write_rule,
 				)
 				{
 					Ok(exports) => Some(exports),
@@ -1271,6 +1284,7 @@ fn train_batch(
 						cfg.train_seed(),
 						class_weights,
 						cfg.memory_mode,
+						cfg.write_rule,
 					);
 					(t.elapsed(), r)
 				});
@@ -1469,6 +1483,7 @@ fn evaluate_genomes_parallel_hybrid_impl(
 		total_input_bits,
 		use_provided_connections,
 		memory_mode,
+		write_rule: settings.write_rule(),
 		train_input_bits,
 		train_targets,
 		train_negatives,
@@ -1843,6 +1858,7 @@ mod tests
 			total_input_bits: 32,
 			use_provided_connections: !conns.is_empty(),
 			memory_mode: ram_core::neuron_memory::QUAD_WEIGHTED,
+			write_rule: ram_core::cell_mode::WriteRule::Nudge,
 			train_input_bits: input,
 			train_targets: &[],
 			train_negatives: &[],
@@ -1931,6 +1947,7 @@ mod tests
 			fitness_weights: None,
 			run_seed: 0,
 			coverage_aware: false,
+			write_vote: false,
 		};
 		std::env::set_var("WNN_BATCH_SIZE", batch_size);
 		let out = evaluate_genomes_parallel_hybrid(

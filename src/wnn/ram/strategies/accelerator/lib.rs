@@ -294,6 +294,9 @@ mod multiplicity_parity_tests;
 // PLN trains through TERNARY's lattice on both IDS trainers (12/10/2026).
 #[cfg(all(test, target_os = "macos"))]
 mod pln_writer_tests;
+// Per-flow MAJORITY-VOTE writer (ids_write_rule="vote", 16/10/2026).
+#[cfg(all(test, target_os = "macos"))]
+mod vote_writer_tests;
 // CPU scorers skip the -1 prefix-pad connections like the GPU kernels (12/10/2026).
 #[cfg(all(test, target_os = "macos"))]
 mod mixed_bits_scorer_tests;
@@ -365,7 +368,12 @@ use pyapi::*;
 /// derived), and eval-in-place (WNN_EVAL_IN_PLACE=1, still default OFF) also
 /// serves rate-1.0 genomes without duplicate neurons, its scores now normalized
 /// on the GPU (they were an ulp off the export path's in CE).
-pub const ABI_VERSION: u32 = 18;
+/// 19 (16/10/2026): IDSCacheWrapper.set_write_rule("lattice"|"vote") — the per-flow
+/// MAJORITY-VOTE writer for BINARY/TERNARY/PLN (`WriteRule::Vote`). Default
+/// "lattice" is bit-identical to ABI 18. Plus, for K = 2 only, the decode modes
+/// margin_train_f1 / margin_val_f1 (attack-class-F1 tau — binary two-cluster
+/// validation's train_cal / val_cal twins); K >= 3 mode lists are unchanged.
+pub const ABI_VERSION: u32 = 19;
 
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()>

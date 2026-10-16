@@ -910,6 +910,7 @@
 				points={cumulativeValidationProgression}
 				{isIDS}
 				{isMulticlass}
+				macroLabels={flow ? isMulticlassFlow(flow) : null}
 				currentExperimentId={experiment.id}
 				bind:perClassPointChoice
 				bind:perClassThresholdChoice

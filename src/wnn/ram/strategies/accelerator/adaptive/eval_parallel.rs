@@ -320,6 +320,7 @@ pub(crate) fn evaluate_genomes_parallel_legacy(
             neuron_sample_rate,
             rng_seed.wrapping_add(genome_idx as u64),
             memory_mode,
+            settings.write_rule(),
             None, // class_weights: only used by IDS via evaluate_genomes_parallel_hybrid
             true, // parallel: safe here, not inside outer par_iter
         );

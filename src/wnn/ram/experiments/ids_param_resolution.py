@@ -31,6 +31,31 @@ def resolve_memory_mode(params: dict) -> str:
 	return mode if mode in IDS_MEMORY_MODE_CODES else DEFAULT_MEMORY_MODE
 
 
+# ids_write_rule values (IDSCacheWrapper.set_write_rule). "lattice" = each
+# mode's own writer (BINARY Set, TERNARY/PLN TRUE-wins lattice); "vote" = the
+# majority-vote writer, which exists only for those three modes.
+WRITE_RULES = frozenset({"lattice", "vote"})
+DEFAULT_WRITE_RULE = "lattice"
+VOTE_MODES = frozenset({"BINARY", "TERNARY", "PLN"})
+
+
+def resolve_write_rule(params: dict) -> str:
+	"""Canonical ids_write_rule. Absent/None -> "lattice" (bit-identical to every
+	flow queued before ABI 19). Unknown values and "vote" on a mode without a
+	vote writer (the QUAD family tallies through its own OI counters) raise —
+	a typo or a silently ignored selector would mislabel an A/B arm."""
+	rule = params.get("ids_write_rule") or DEFAULT_WRITE_RULE
+	if rule not in WRITE_RULES:
+		raise ValueError(f"ids_write_rule={rule!r}: expected one of {sorted(WRITE_RULES)}")
+	mode = resolve_memory_mode(params)
+	if rule == "vote" and mode not in VOTE_MODES:
+		raise ValueError(
+			f"ids_write_rule='vote' needs memory_mode in {sorted(VOTE_MODES)}; got {mode} "
+			"(the 4-state modes already train through vote-tallying OI counters)"
+		)
+	return rule
+
+
 def memory_mode_code(mode: str) -> int:
 	"""EvalSettings code for a canonical mode name (from resolve_memory_mode)."""
 	return IDS_MEMORY_MODE_CODES[mode]

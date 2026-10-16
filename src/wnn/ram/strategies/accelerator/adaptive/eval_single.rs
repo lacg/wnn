@@ -546,6 +546,7 @@ pub fn train_single_via_marker(
 	rng_seed: u64,
 	class_weights: Option<&[u32]>,
 	memory_mode: u8,
+	write_rule: ram_core::cell_mode::WriteRule,
 ) -> Result<GenomeExport, String>
 {
 	#[cfg(target_os = "macos")]
@@ -567,6 +568,7 @@ pub fn train_single_via_marker(
 			rng_seed,
 			class_weights,
 			memory_mode,
+			write_rule,
 		)?;
 		exports
 			.pop()
@@ -644,6 +646,7 @@ pub fn train_and_predict_single(
 		rng_seed,
 		class_weights,
 		memory_mode,
+		settings.write_rule(),
 	)
 	{
 		Ok(e) => e,
@@ -693,6 +696,7 @@ pub fn train_and_predict_single(
 				neuron_sample_rate,
 				rng_seed,
 				memory_mode,
+				settings.write_rule(),
 				class_weights,
 				true, // parallel: standalone call, safe to use par_iter
 			);
@@ -807,6 +811,7 @@ pub fn train_and_score_single(
 		rng_seed,
 		class_weights,
 		memory_mode,
+		settings.write_rule(),
 	)
 	{
 		Ok(e) => e,
@@ -856,6 +861,7 @@ pub fn train_and_score_single(
 				neuron_sample_rate,
 				rng_seed,
 				memory_mode,
+				settings.write_rule(),
 				class_weights,
 				true,
 			);
@@ -953,6 +959,7 @@ pub fn train_genome_export(
 		rng_seed,
 		class_weights,
 		memory_mode,
+		settings.write_rule(),
 	)
 	{
 		Ok(e) => e,
@@ -1000,6 +1007,7 @@ pub fn train_genome_export(
 				neuron_sample_rate,
 				rng_seed,
 				memory_mode,
+				settings.write_rule(),
 				class_weights,
 				true,
 			);
@@ -1167,6 +1175,7 @@ pub fn train_and_score_sets_flat(
 		rng_seed,
 		class_weights,
 		memory_mode,
+		settings.write_rule(),
 	)
 	{
 		Ok(e) => e,
@@ -1214,6 +1223,7 @@ pub fn train_and_score_sets_flat(
 				neuron_sample_rate,
 				rng_seed,
 				memory_mode,
+				settings.write_rule(),
 				class_weights,
 				true,
 			);

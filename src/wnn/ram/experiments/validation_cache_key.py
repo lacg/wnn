@@ -16,6 +16,7 @@ INCLUDED (changes the trained memory or the reported score of a fixed genome):
                     (+ chunk size: the streaming encoder fits by t-digest)
   model/training    ids_classification, ids_single_cluster, memory_mode (resolved),
                     seed (QSR/PLN coin run_seed; hierarchical split seed),
+                    ids_write_rule (only when "vote"; lattice keys unchanged),
                     neuron_sample_rate, ids_coverage_aware, ids_suppress_negatives,
                     balance_classes, undersample_majority, flip_labels,
                     class_weight_multiplier, ids_val_fraction (hierarchical only),
@@ -36,8 +37,10 @@ semantics change without an accelerator ABI bump — it invalidates every row.
 import json
 
 from wnn.ram.experiments.ids_param_resolution import (
+	DEFAULT_WRITE_RULE,
 	resolve_invalid_encoding,
 	resolve_memory_mode,
+	resolve_write_rule,
 )
 
 VALIDATION_CACHE_VERSION = 2
@@ -90,9 +93,16 @@ def _model_parts(params: dict) -> list:
 		("nsr", float(params.get("neuron_sample_rate", 0.25))),
 		("cov", bool(params.get("ids_coverage_aware", False))),
 		("negs", bool(params.get("ids_suppress_negatives", False))),
-	] + _sampling_parts(params) + [
+	] + _write_rule_parts(params) + _sampling_parts(params) + [
 		("hvf", float(params.get("ids_val_fraction", 0.25)) if hierarchical else None),
 	]
+
+
+def _write_rule_parts(params: dict) -> list:
+	"""ids_write_rule changes the trained cells. Emitted ONLY when non-default,
+	so every pre-ABI-19 (lattice) key stays byte-identical."""
+	rule = resolve_write_rule(params)
+	return [] if rule == DEFAULT_WRITE_RULE else [("wr", rule)]
 
 
 def _sampling_parts(params: dict) -> list:

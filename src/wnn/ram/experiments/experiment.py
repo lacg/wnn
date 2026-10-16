@@ -41,6 +41,20 @@ def _phase_defaults(
 	        mode_or_midpoint(neurons, min_neurons, max_neurons))
 
 
+def _uses_decode_modes(evaluator) -> bool:
+	"""K-cluster IDS validation: one memory PER CLASS, decoded by argmax /
+	benign-margin from a single training pass (evaluate_multiclass_at_thresholds).
+	Multiclass AND binary two-cluster (ids_classification='binary',
+	ids_single_cluster=false — two memories, attack vs normal). Before
+	16/10/2026 binary two-cluster fell through both the single-cluster and the
+	multiclass branches: no threshold modes and no val-calibrated decode, so it
+	was not comparable to the single-cluster arms."""
+	return (
+		getattr(evaluator, '_classification', None) in ('multi', 'binary')
+		and not getattr(evaluator, '_single_cluster', False)
+	)
+
+
 def _compute_per_class_breakdown(predictions, y_test_multi, class_names):
 	"""Compute per-attack-class detection rate from binary predictions + multi-class labels.
 
@@ -1337,10 +1351,7 @@ class Experiment:
 					pass
 			# Multiclass: invalidate caches written before the K-class
 			# metrics stage (plain CE/acc path — no decode modes).
-			_is_mc_cached = (
-				getattr(val_evaluator, '_classification', None) == 'multi'
-				and not getattr(val_evaluator, '_single_cluster', False)
-			)
+			_is_mc_cached = _uses_decode_modes(val_evaluator)
 			if _is_mc_cached and cached is not None:
 				_mc_cached_ok = False
 				if cached_threshold_metadata is not None:
@@ -1362,10 +1373,7 @@ class Experiment:
 			val_evaluator = self.full_evaluator or self.evaluator
 			self.log(f"  {genome_type.value}: Running full validation...")
 			_is_sc = hasattr(val_evaluator, '_single_cluster') and val_evaluator._single_cluster
-			_is_mc = (
-				getattr(val_evaluator, '_classification', None) == 'multi'
-				and not getattr(val_evaluator, '_single_cluster', False)
-			)
+			_is_mc = _uses_decode_modes(val_evaluator)
 			if _is_sc or _is_mc:
 				# IDS single-cluster: defer the headline f1/fpr_val/acc to the
 				# threshold-sweep block below so that train_cal metrics, the
@@ -1394,10 +1402,9 @@ class Experiment:
 		is_single_cluster = (
 			hasattr(val_evaluator, '_single_cluster') and val_evaluator._single_cluster
 		)
-		is_multiclass = (
-			getattr(val_evaluator, '_classification', None) == 'multi'
-			and not getattr(val_evaluator, '_single_cluster', False)
-		)
+		# K-cluster decode modes: multiclass AND binary two-cluster.
+		is_multiclass = _uses_decode_modes(val_evaluator)
+		is_binary_k2 = is_multiclass and getattr(val_evaluator, '_classification', None) == 'binary'
 
 		# Use cached threshold_metadata if available (avoids re-running expensive 4-threshold eval)
 		if cached_threshold_metadata is not None and (is_single_cluster or is_multiclass):
@@ -1424,21 +1431,30 @@ class Experiment:
 					self.log(f"    [PROTOCOL-V2] margin_val_cal tau calibrated on val partition; "
 							 f"test partition is report-only")
 				# Headline metrics = argmax decode (the same rule the
-				# GA-search fitness used).
+				# GA-search fitness used). Binary two-cluster: F1 is the
+				# attack-class F1 (the 'f1' alias IDSEvaluator sets), the
+				# number single-cluster arms report; FPR = benign FPR.
 				_am = threshold_metadata['argmax']
-				ce, acc, f1, fpr_val = _am['ce'], _am['acc'], _am['macro_f1'], _am['benign_fpr']
+				_f1_key = 'f1' if is_binary_k2 else 'macro_f1'
+				ce, acc, f1, fpr_val = _am['ce'], _am['acc'], _am[_f1_key], _am['benign_fpr']
 				_tc_tau = threshold_metadata.get('margin_train_cal', {}).get('tau')
 				if _tc_tau is not None:
 					genome.threshold = _tc_tau
-				self.log(f"  {genome_type.value}: CE={ce:.4f}, Acc={acc:.4%}, MacroF1={f1:.4%}, BenignFPR={fpr_val:.4%} (validated, argmax)")
+				_f1_name = "F1" if is_binary_k2 else "MacroF1"
+				self.log(f"  {genome_type.value}: CE={ce:.4f}, Acc={acc:.4%}, {_f1_name}={f1:.4%}, BenignFPR={fpr_val:.4%} (validated, argmax)")
+				if is_binary_k2 and 'margin_val_f1' in threshold_metadata:
+					self.log(f"    [BINARY-K2] margin_val_f1 = val-calibrated attack-F1 decode "
+							 f"(the single-cluster val_cal twin)")
 				for _mode in ('argmax', 'margin_fixed0', 'margin_train_cal', 'margin_val_cal',
+				              'margin_train_f1', 'margin_val_f1',
 				              'argmax_platt', 'argmax_beta',
 				              'argmax_classnorm', 'margin_classnorm'):
 					_md = threshold_metadata.get(_mode)
 					if not isinstance(_md, dict):
 						continue
 					_tau_str = f", tau={_md['tau']:.4f}" if 'tau' in _md else ""
-					self.log(f"    {_mode + ':':<17}MacroF1={_md['macro_f1']:.4%}, BenignFPR={_md['benign_fpr']:.4%}, "
+					_bin_str = f", F1={_md['f1']:.4%}" if is_binary_k2 else ""
+					self.log(f"    {_mode + ':':<17}MacroF1={_md['macro_f1']:.4%}{_bin_str}, BenignFPR={_md['benign_fpr']:.4%}, "
 							 f"Acc={_md['acc']:.4%}, wF1={_md['weighted_f1']:.4%}{_tau_str}")
 				self.log(f"    Scoring:     {len(threshold_metadata)} decode modes from one training pass "
 						 f"({_time.time() - _t0:.1f}s)")

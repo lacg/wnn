@@ -50,7 +50,7 @@ fn train(bits: [usize; K], npc: [usize; K], data: &Data, mode: u8, rng: &mut Sma
 	let conns: Vec<i64> = bits_flat.iter().flat_map(|&b| (0..b).map(|_| rng.gen_range(0..TIB as i64)).collect::<Vec<_>>()).collect();
 	let n = data.targets.len();
 	batched_train_offspring_plain(
-		&bits_flat, &npc, &conns, 1, K, &data.train, &data.targets, &data.negatives, n, K - 1, TIB, 0.5, 1.0, 42, None, mode,
+		&bits_flat, &npc, &conns, 1, K, &data.train, &data.targets, &data.negatives, n, K - 1, TIB, 0.5, 1.0, 42, None, mode, ram_core::cell_mode::WriteRule::of_code(mode),
 	)
 	.expect("train")
 	.remove(0)

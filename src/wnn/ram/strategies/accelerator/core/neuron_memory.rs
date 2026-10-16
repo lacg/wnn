@@ -284,6 +284,21 @@ pub struct EvalSettings
 	/// docs/COVERAGE_AWARE_SCORER_SPEC.md. Dense groups are unaffected by
 	/// construction. `false` is bit-exact today's behaviour.
 	pub coverage_aware: bool,
+	/// Per-flow MAJORITY-VOTE write rule (`ids_write_rule="vote"`): BINARY /
+	/// TERNARY / PLN train through `WriteRule::Vote` instead of Set / the
+	/// TRUE-wins lattice. Ignored by the 4-state family. `false` is bit-exact
+	/// today's behaviour.
+	pub write_vote: bool,
+}
+
+impl EvalSettings
+{
+	/// The writer every trainer under these settings applies.
+	#[inline]
+	pub fn write_rule(&self) -> crate::cell_mode::WriteRule
+	{
+		crate::cell_mode::WriteRule::resolve(self.memory_mode, self.write_vote)
+	}
 }
 
 impl Default for EvalSettings
@@ -297,6 +312,7 @@ impl Default for EvalSettings
 			fitness_weights: None,
 			run_seed: 0,
 			coverage_aware: false,
+			write_vote: false,
 		}
 	}
 }
@@ -1533,6 +1549,23 @@ pub fn oi_bin_to_cell(packed: u32) -> i64
 	}
 }
 
+/// Bin a packed counter accumulated under `WriteRule::Vote` (the net field is
+/// the signed vote tally; the obs bits are ignored): net > 0 → TRUE, net < 0
+/// → FALSE, net == 0 → `tie_cell` (the mode's untrained cell: EMPTY for
+/// TERNARY/PLN, FALSE for BINARY). Ternary cell codes (FALSE=0, TRUE=1),
+/// which BINARY shares. Twin of `train::SparseTrainer`'s TERNARY commit.
+#[inline]
+pub fn vote_bin_to_cell(packed: u32, tie_cell: u8) -> u8
+{
+	let (net, _, _) = oi_unpack(packed);
+	match net.signum()
+	{
+		1 => TRUE_U8,
+		-1 => FALSE_U8,
+		_ => tie_cell,
+	}
+}
+
 /// Returns true iff order-independent training is enabled via env var.
 ///
 /// Gated by `WNN_ORDER_INDEPENDENT_TRAIN=1`. Default off until the cohort delta
@@ -1572,7 +1605,9 @@ pub fn training_is_order_independent(memory_mode: u8) -> bool
 	use crate::cell_mode::{CellMode, WriteRule};
 	match CellMode::from_u8(memory_mode).map(|m| m.write_rule())
 	{
-		Some(WriteRule::Lattice) | Some(WriteRule::Set) => true,
+		// Vote is never returned by `CellMode::write_rule` (it is selected per
+		// flow) but is commutative too: an integer tally.
+		Some(WriteRule::Lattice) | Some(WriteRule::Set) | Some(WriteRule::Vote) => true,
 		Some(WriteRule::Nudge) => order_independent_training_active(memory_mode),
 		None => false,
 	}

@@ -45,6 +45,68 @@ pub enum WriteRule
 	/// QUAD_WEIGHTED / QUAD_BINARY / QSR: the 4-state nudge (OI packed
 	/// counters when active, else the order-dependent clamped nudge).
 	Nudge,
+	/// MAJORITY VOTE (opt-in per flow, `ids_write_rule="vote"`; BINARY /
+	/// TERNARY / PLN only): every visit adds ±w to a signed per-(neuron,
+	/// address) tally (+w own-class / attack, −w otherwise; w = the example's
+	/// class weight), held in the OI packed counter's `net` field (the same
+	/// buffers, merges and atomics as the QUAD OI path). Commit: tally > 0 →
+	/// TRUE, < 0 → FALSE, 0 → the mode's untrained cell (TERNARY/PLN EMPTY,
+	/// BINARY FALSE). Integer sums commute, so order-independent. Same
+	/// semantics as `train::SparseTrainer`'s TERNARY votes. Fixes the
+	/// TRUE-wins floor: one attack on an address no longer outvotes any
+	/// number of normals.
+	Vote,
+}
+
+/// How a counter-accumulated training pass bins each packed counter into a
+/// 2-bit cell at commit. The counters (`neuron_memory::OI_*`) are shared by
+/// the QUAD OI nudge and the vote rule; only the binning differs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CounterBin
+{
+	/// QUAD OI: `oi_bin_to_cell` (obs-aware 4-state binning).
+	Oi,
+	/// `WriteRule::Vote`: sign of the net tally; a tie bins to `tie` (the
+	/// mode's untrained cell, so a tied cell is indistinguishable from an
+	/// unvisited one).
+	Vote
+	{
+		tie: u8,
+	},
+}
+
+impl CounterBin
+{
+	/// The committed cell for one (possibly merged) packed counter.
+	#[inline]
+	pub fn cell(self, packed: u32) -> u8
+	{
+		match self
+		{
+			CounterBin::Oi => crate::neuron_memory::oi_bin_to_cell(packed) as u8,
+			CounterBin::Vote { tie } => crate::neuron_memory::vote_bin_to_cell(packed, tie),
+		}
+	}
+
+	/// The counter buffer a training pass under (`rule`, `memory_mode`) needs:
+	/// `Vote` always (its tally IS the counter), `Nudge` only when the OI
+	/// trainer is active (`order_independent_training_active`), `None` for the
+	/// direct writers (Set / Lattice / legacy clamped nudge). THE gate every
+	/// trainer uses for init/accumulate/commit.
+	pub fn for_training(rule: WriteRule, memory_mode: u8) -> Option<CounterBin>
+	{
+		match rule
+		{
+			WriteRule::Vote => Some(CounterBin::Vote {
+				tie: CellMode::from_u8(memory_mode).map_or(EMPTY_U8, |m| m.default_cell()),
+			}),
+			WriteRule::Nudge if crate::neuron_memory::order_independent_training_active(memory_mode) =>
+			{
+				Some(CounterBin::Oi)
+			}
+			_ => None,
+		}
+	}
 }
 
 impl WriteRule
@@ -54,6 +116,34 @@ impl WriteRule
 	pub fn of_code(code: u8) -> WriteRule
 	{
 		CellMode::from_u8(code).map_or(WriteRule::Nudge, |m| m.write_rule())
+	}
+
+	/// The rule a trainer applies for `memory_mode` under the per-flow
+	/// selector: `vote == false` is EXACTLY `of_code` (bit-identical default);
+	/// `vote == true` swaps the direct writers (BINARY Set, TERNARY/PLN
+	/// Lattice) for `Vote`. The 4-state family keeps its nudge either way
+	/// (its OI counters already tally votes; the Python facade refuses
+	/// `ids_write_rule="vote"` on those modes so it never silently no-ops).
+	/// GPU twin: common.metal `wnn_write_rule(memory_mode, vote)`.
+	pub fn resolve(memory_mode: u8, vote: bool) -> WriteRule
+	{
+		match WriteRule::of_code(memory_mode)
+		{
+			WriteRule::Set | WriteRule::Lattice if vote => WriteRule::Vote,
+			rule => rule,
+		}
+	}
+
+	/// The GPU wire code (common.metal `WNN_WRITE_*`).
+	pub fn code(self) -> u32
+	{
+		match self
+		{
+			WriteRule::Set => 0,
+			WriteRule::Lattice => 1,
+			WriteRule::Nudge => 2,
+			WriteRule::Vote => 3,
+		}
 	}
 
 	/// The lattice join of two ternary cells (EMPTY < FALSE < TRUE) — what
@@ -378,6 +468,64 @@ mod tests
 			}
 		}
 		assert_eq!(WriteRule::lattice_join(FALSE_U8, EMPTY_U8), FALSE_U8);
+	}
+
+	/// The per-flow selector: unset (`vote=false`) is EXACTLY the mode's own
+	/// writer (default bit-identity); `vote=true` swaps only the direct
+	/// writers; the 4-state family keeps its nudge.
+	#[test]
+	fn resolve_default_is_of_code_and_vote_swaps_direct_writers()
+	{
+		for mode in CellMode::ALL
+		{
+			let code = mode.as_u8();
+			assert_eq!(WriteRule::resolve(code, false), WriteRule::of_code(code), "{mode}");
+			let expected = match mode.write_rule()
+			{
+				WriteRule::Set | WriteRule::Lattice => WriteRule::Vote,
+				other => other,
+			};
+			assert_eq!(WriteRule::resolve(code, true), expected, "{mode}");
+		}
+		assert!(!crate::neuron_memory::EvalSettings::default().write_vote);
+		assert_eq!(crate::neuron_memory::EvalSettings::default().write_rule(), WriteRule::Nudge);
+	}
+
+	/// Vote binning: sign of the net tally, tie → the mode's untrained cell;
+	/// `for_training` always gives Vote a counter (no env gate) with that tie.
+	#[test]
+	fn vote_counter_bins_by_sign()
+	{
+		use crate::neuron_memory::{oi_apply_nudge, OI_INITIAL, TRUE_U8};
+		let tally = |deltas: &[i32]| deltas.iter().fold(OI_INITIAL, |acc, &d| oi_apply_nudge(acc, d));
+		for mode in [CellMode::Binary, CellMode::Ternary, CellMode::Pln]
+		{
+			let bin = CounterBin::for_training(WriteRule::Vote, mode.as_u8()).expect("vote always counts");
+			assert_eq!(bin, CounterBin::Vote { tie: mode.default_cell() });
+			assert_eq!(bin.cell(tally(&[1, -1, -1, -1])), FALSE_U8, "{mode}: 1 vs 3");
+			assert_eq!(bin.cell(tally(&[3, -1, -1])), TRUE_U8, "{mode}: weighted 3 vs 2");
+			assert_eq!(bin.cell(tally(&[1, -1])), mode.default_cell(), "{mode}: tie");
+			assert_eq!(CounterBin::for_training(mode.write_rule(), mode.as_u8()), None, "{mode}: direct writer");
+		}
+		assert_eq!(CounterBin::Vote { tie: EMPTY_U8 }.cell(tally(&[1, -1])), EMPTY_U8);
+	}
+
+	/// `WriteRule::code` is the GPU wire code: the constants in common.metal
+	/// (the single source of shader cell semantics) must match.
+	#[test]
+	fn write_rule_codes_match_common_metal()
+	{
+		let src = include_str!("shaders/common.metal");
+		for (rule, name) in [
+			(WriteRule::Set, "WNN_WRITE_SET"),
+			(WriteRule::Lattice, "WNN_WRITE_LATTICE"),
+			(WriteRule::Nudge, "WNN_WRITE_NUDGE"),
+			(WriteRule::Vote, "WNN_WRITE_VOTE"),
+		]
+		{
+			let decl = format!("constant uint {name} = {};", rule.code());
+			assert!(src.contains(&decl), "common.metal lacks `{decl}`");
+		}
 	}
 
 	#[test]

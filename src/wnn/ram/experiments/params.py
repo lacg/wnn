@@ -25,6 +25,11 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	# Core architecture/search
 	"architecture_type", "num_clusters", "context_size", "memory_mode",
 	"ids_coverage_aware", "ids_tier_bits_rule", "ids_suppress_negatives",
+	# ids_write_rule (16/10/2026, worker ABI 19): "lattice" (default — BINARY
+	# one-shot Set / TERNARY-PLN TRUE-wins lattice, bit-identical) | "vote"
+	# (MAJORITY VOTE: signed class-weighted tally per cell, committed by sign).
+	# BINARY/TERNARY/PLN only — "vote" on a QUAD-family mode is rejected.
+	"ids_write_rule",
 	"min_bits", "max_bits", "min_neurons", "max_neurons", "max_bit_delta",
 	"neuron_sample_rate", "sparse_threshold", "seed",
 	# GA / TS / SA / grid

@@ -43,17 +43,25 @@ constant uint WNN_MODE_PLN = 5; // stochastic TERNARY (u-state read → fair coi
 // SET: BINARY one-shot TRUE. LATTICE: TERNARY/PLN TRUE-wins join (PLN shares
 // TERNARY's cells AND writer). NUDGE: the 4-state family. Trainers dispatch on
 // this, never on a mode literal (PLN fell to the QUAD nudge until 12/10/2026).
+// VOTE (opt-in per flow, twin of WriteRule::resolve): BINARY/TERNARY/PLN
+// accumulate a signed +-w majority tally in the OI packed counter (slot_nudge_oi)
+// and the host bins its sign at export (vote_bin_to_cell). The 4-state family
+// ignores the selector.
 constant uint WNN_WRITE_SET = 0;
 constant uint WNN_WRITE_LATTICE = 1;
 constant uint WNN_WRITE_NUDGE = 2;
+constant uint WNN_WRITE_VOTE = 3;
 
-inline uint wnn_write_rule(uint memory_mode)
+inline uint wnn_write_rule(uint memory_mode, uint vote)
 {
+	uint rule = WNN_WRITE_NUDGE;
 	if (memory_mode == WNN_MODE_BINARY)
-		return WNN_WRITE_SET;
-	if (memory_mode == WNN_MODE_TERNARY || memory_mode == WNN_MODE_PLN)
-		return WNN_WRITE_LATTICE;
-	return WNN_WRITE_NUDGE;
+		rule = WNN_WRITE_SET;
+	else if (memory_mode == WNN_MODE_TERNARY || memory_mode == WNN_MODE_PLN)
+		rule = WNN_WRITE_LATTICE;
+	if (vote != 0u && rule != WNN_WRITE_NUDGE)
+		return WNN_WRITE_VOTE;
+	return rule;
 }
 
 // --- QUAD_WEIGHTED forward weights: FALSE, WEAK_FALSE, WEAK_TRUE, TRUE ---

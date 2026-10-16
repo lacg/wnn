@@ -335,7 +335,7 @@ fn train_plain_batched(batch: &Batch, data: &Data, mode: u8, rate: f32) -> Vec<G
 {
 	batched_train_offspring_plain(
 		&batch.bits, &batch.npc, &batch.conns, batch.num_genomes, data.num_clusters, &data.train, &data.targets,
-		&data.negatives, data.num_train(), data.num_negatives, TIB, EMPTY_VALUE, rate, 42, None, mode,
+		&data.negatives, data.num_train(), data.num_negatives, TIB, EMPTY_VALUE, rate, 42, None, mode, ram_core::cell_mode::WriteRule::of_code(mode),
 	)
 	.expect("plain train")
 }
@@ -344,7 +344,7 @@ fn train_factory(batch: &Batch, data: &Data, mode: u8, rate: f32) -> Vec<GenomeE
 {
 	batched_train_offspring(
 		&batch.bits, &batch.npc, &batch.conns, batch.num_genomes, data.num_clusters, &data.train, &data.targets,
-		&data.negatives, data.num_train(), data.num_negatives, TIB, EMPTY_VALUE, rate, 42, None, mode,
+		&data.negatives, data.num_train(), data.num_negatives, TIB, EMPTY_VALUE, rate, 42, None, mode, ram_core::cell_mode::WriteRule::of_code(mode),
 	)
 	.expect("factory train")
 }
@@ -500,7 +500,7 @@ fn chunked(bits: &[usize], conns: &[i64], data: &Data, mode: u8, budget: usize) 
 	one_export(
 		train_single_genome_neuron_chunked(
 			bits, conns, &data.train, &data.targets, &data.negatives, data.num_train(), data.num_negatives, TIB,
-			EMPTY_VALUE, 1.0, 42, None, budget, mode,
+			EMPTY_VALUE, 1.0, 42, None, budget, mode, ram_core::cell_mode::WriteRule::of_code(mode),
 		)
 		.expect("chunked train"),
 	)
@@ -683,7 +683,7 @@ fn cpu_export(bits: &[usize], npc: &[usize], conns: &[i64], data: &Data, mode: u
 		groups.iter().map(|gr| GroupMemory::new(gr.total_neurons(), gr.bits, mode)).collect();
 	train_genome_in_slot(
 		&mut memories, &groups, conns, bits, &cluster_starts, &conn_offsets, &cluster_to_group, &data.train,
-		&data.targets, &data.negatives, data.num_train(), data.num_negatives, TIB, None, 1.0, 42, mode, None, false,
+		&data.targets, &data.negatives, data.num_train(), data.num_negatives, TIB, None, 1.0, 42, mode, ram_core::cell_mode::WriteRule::of_code(mode), None, false,
 	);
 	export_genome_for_gpu(&memories, &groups, &reorganize_connections_for_gpu(conns, bits, npc, &groups))
 }

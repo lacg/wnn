@@ -4145,6 +4145,7 @@ pub fn train_and_get_tiered_scores(
 		neuron_sample_rate,
 		rng_seed,
 		memory_mode,
+		ram_core::cell_mode::WriteRule::of_code(memory_mode),
 		None, // class_weights: multi-stage LM path doesn't use class balancing
 		true, // parallel: standalone call, safe to use par_iter
 	);
@@ -4463,6 +4464,7 @@ mod cpu_gpu_parity_tests
 			1.0,  // neuron_sample_rate
 			42,   // rng_seed
 			memory_mode,
+			ram_core::cell_mode::WriteRule::of_code(memory_mode),
 			None,  // class_weights
 			false, // parallel: sequential for determinism
 		);

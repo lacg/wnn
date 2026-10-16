@@ -353,10 +353,11 @@ impl GroupDenseMemory
 		true
 	}
 
-	/// Commit pass: bin every touched counter into its 2-bit cell, then free
-	/// the counter buffer. After commit, the dense memory is identical in
-	/// shape to a normally-trained memory (`forward`, exports, etc. unchanged).
-	pub fn commit_oi(&mut self)
+	/// Commit pass: bin every touched counter into its 2-bit cell (`bin`: QUAD
+	/// OI or vote sign), then free the counter buffer. After commit, the dense
+	/// memory is identical in shape to a normally-trained memory (`forward`,
+	/// exports, etc. unchanged).
+	pub fn commit_counters(&mut self, bin: ram_core::cell_mode::CounterBin)
 	{
 		let Some(counters) = self.counters.take()
 		else
@@ -371,12 +372,12 @@ impl GroupDenseMemory
 			{
 				let packed = counters[n_base + address].load(Ordering::Relaxed);
 				// Skip cells that were never touched: they keep their initial
-				// (QUAD_WEAK_FALSE) value from `empty_word_for_mode`.
+				// value from `empty_word_for_mode` (QUAD_WEAK_FALSE / EMPTY / FALSE).
 				if packed == ram_core::neuron_memory::OI_INITIAL
 				{
 					continue;
 				}
-				let cell = ram_core::neuron_memory::oi_bin_to_cell(packed);
+				let cell = bin.cell(packed) as i64;
 				let word_idx = address / CELLS_PER_WORD;
 				let cell_idx = address % CELLS_PER_WORD;
 				let word_offset = neuron_idx * self.words_per_neuron + word_idx;
@@ -581,11 +582,11 @@ impl GroupSparseMemory
 		true
 	}
 
-	/// Commit pass: bin each counter to its 2-bit cell value, write into
-	/// the cell map, then drop the counter maps. Entries that bin back to
+	/// Commit pass: bin each counter to its 2-bit cell value (`bin`), write
+	/// into the cell map, then drop the counter maps. Entries that bin back to
 	/// the default_empty value are not inserted (matches existing convention
 	/// that absent entries == default_empty).
-	pub fn commit_oi(&mut self)
+	pub fn commit_counters(&mut self, bin: ram_core::cell_mode::CounterBin)
 	{
 		let Some(counter_maps) = self.counter_maps.take()
 		else
@@ -602,7 +603,7 @@ impl GroupSparseMemory
 				{
 					continue;
 				}
-				let cell = ram_core::neuron_memory::oi_bin_to_cell(packed) as u8;
+				let cell = bin.cell(packed);
 				if cell == self.default_empty
 				{
 					cell_map.remove(&addr);
@@ -827,12 +828,12 @@ impl GroupSparseMemoryAtomic
 	/// inside each AtomicHashTable, then drop the counter buffers. Entries
 	/// with counter == OI_INITIAL are untouched. No DashMap layer needed —
 	/// the AtomicHashTable provides lock-free atomic storage throughout.
-	pub fn commit_oi(&mut self)
+	pub fn commit_counters(&mut self, bin: ram_core::cell_mode::CounterBin)
 	{
-		let _ = self.default_empty; // value used inside AtomicHashTable::commit_oi
+		let _ = self.default_empty; // value used inside AtomicHashTable::commit_counters
 		for table in &self.neurons
 		{
-			table.commit_oi();
+			table.commit_counters(bin);
 		}
 	}
 
@@ -1037,14 +1038,21 @@ impl GroupMemory
 	}
 
 	/// Commit pass: bin counters to 2-bit cells and free counter buffers.
-	pub(crate) fn commit_oi(&mut self)
+	/// `bin` is the training pass's `CounterBin` (QUAD OI or vote sign).
+	pub(crate) fn commit_counters(&mut self, bin: ram_core::cell_mode::CounterBin)
 	{
 		match self
 		{
-			GroupMemory::Dense(m) => m.commit_oi(),
-			GroupMemory::Sparse(m) => m.commit_oi(),
-			GroupMemory::SparseAtomic(m) => m.commit_oi(),
+			GroupMemory::Dense(m) => m.commit_counters(bin),
+			GroupMemory::Sparse(m) => m.commit_counters(bin),
+			GroupMemory::SparseAtomic(m) => m.commit_counters(bin),
 		}
+	}
+
+	/// QUAD OI commit (`commit_counters(CounterBin::Oi)`).
+	pub(crate) fn commit_oi(&mut self)
+	{
+		self.commit_counters(ram_core::cell_mode::CounterBin::Oi);
 	}
 }
 

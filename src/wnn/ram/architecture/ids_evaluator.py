@@ -99,6 +99,7 @@ class IDSEvaluator(BaseEvaluator):
 		empty_value: float = 0.0,
 		memory_mode: int = 2,  # TERNARY=0/QUAD_BINARY=1/QUAD_WEIGHTED=2/BINARY=3/QSR=4/PLN=5
 		coverage_aware: bool = False,  # sparse miss scores 0.0, not the mode empty cell
+		write_rule: str = "lattice",  # "lattice" (mode's own writer) | "vote" (majority vote; BINARY/TERNARY/PLN)
 		run_seed: int = 0,     # QSR/PLN stochastic-coin seed (ignored by deterministic modes)
 		seed: Optional[int] = None,
 		log_path: Optional[str] = None,
@@ -272,6 +273,7 @@ class IDSEvaluator(BaseEvaluator):
 		self._empty_value = empty_value
 		self._memory_mode = memory_mode
 		self._coverage_aware = coverage_aware
+		self._write_rule = write_rule
 		self._run_seed = run_seed
 		self._normal_class = 1 if flip_labels else 0
 
@@ -313,6 +315,15 @@ class IDSEvaluator(BaseEvaluator):
 				)
 			else:
 				self._streaming_class_weights = None
+			if write_rule != "lattice":
+				# IDSGenomeStreamer is QUAD-only by construction (ids_streaming.rs
+				# hardcodes QUAD_WEIGHTED), so a vote arm would silently train as
+				# QUAD. Refuse instead of mislabelling the run.
+				raise NotImplementedError(
+					f"ids_write_rule={write_rule!r} is not supported on the genome-streamer "
+					"path (the streamer trains QUAD_WEIGHTED only); use an in-memory or "
+					"materialized dataset."
+				)
 			self._train_stream = dataset.X_train
 			self._eval_stream = dataset.X_test
 			self._cache = None  # never built — direct genome-streamer path
@@ -409,6 +420,20 @@ class IDSEvaluator(BaseEvaluator):
 					"(IDSCacheWrapper.set_coverage_aware is missing). Rebuild the "
 					"worker wheel and swap it at worker-idle via "
 					"scripts/worker_swap.py; see docs/COVERAGE_AWARE_SCORER_SPEC.md §8."
+				)
+			# Write rule (worker ABI 19). Same skew discipline as above: the
+			# default ("lattice") never needs the setter, so a stale wheel keeps
+			# running every existing flow; "vote" on a wheel without the setter
+			# refuses LOUDLY. Set after set_memory_mode (the setter validates
+			# the mode) and on a reused cache too (idempotent).
+			_set_wr = getattr(self._cache, "set_write_rule", None)
+			if _set_wr is not None:
+				_set_wr(write_rule)
+			elif write_rule != "lattice":
+				raise RuntimeError(
+					f"ids_write_rule={write_rule!r} needs a rebuilt ram_accelerator "
+					"(IDSCacheWrapper.set_write_rule is missing, ABI < 19). Rebuild the "
+					"worker wheel and swap it at worker-idle via scripts/worker_swap.py."
 				)
 
 		# Store fitness weights for potential threshold optimization
@@ -766,6 +791,12 @@ class IDSEvaluator(BaseEvaluator):
 					for c in range(num_classes)
 				},
 			}
+			if self._classification == "binary" and num_classes == 2:
+				# Binary TWO-cluster: the comparable F1 is the attack-class F1
+				# (what single-cluster binary reports), not the 2-class macro.
+				attack = 1 - self._normal_class
+				entry['f1'] = f1s[attack]
+				entry['attack_f1'] = f1s[attack]
 			if not math.isnan(tau):
 				entry['tau'] = tau
 			modes[mode] = entry

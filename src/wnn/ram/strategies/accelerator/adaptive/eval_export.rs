@@ -237,6 +237,7 @@ pub(crate) fn calculate_pool_size(
 	cpu_cores: usize,
 	num_train: usize,
 	neuron_sample_rate: f32,
+	vote_tallies: bool,
 ) -> (usize, usize)
 {
 	// Estimate memory per genome (use same grouping strategy as actual training)
@@ -245,7 +246,9 @@ pub(crate) fn calculate_pool_size(
 
 	// OI QUAD training holds per-address vote tallies alongside the cells
 	// (tally-then-commit), roughly doubling the per-entry cost while training.
-	let oi_factor: usize = if ram_core::neuron_memory::order_independent_training_enabled()
+	// The per-flow vote writer (`vote_tallies`) holds the same counters
+	// regardless of the env gate.
+	let oi_factor: usize = if ram_core::neuron_memory::order_independent_training_enabled() || vote_tallies
 	{
 		2
 	}
@@ -322,15 +325,17 @@ pub(crate) fn budget_batch_size(
 	num_train: usize,
 	neuron_sample_rate: f32,
 	memory_mode: u8,
+	write_rule: ram_core::cell_mode::WriteRule,
 ) -> usize
 {
+	let vote_tallies = write_rule == ram_core::cell_mode::WriteRule::Vote;
 	genomes
 		.iter()
 		.map(|g| {
 			let trained = crate::multiplicity_batch::trained_neurons_per_cluster(g, neuron_sample_rate, memory_mode);
 			let bits_per_cluster = per_cluster_max_bits(g.bits, g.neurons_per_cluster);
 			let n = trained.len();
-			calculate_pool_size(&bits_per_cluster, &trained, n, budget_gb, cpu_cores, num_train, neuron_sample_rate).1
+			calculate_pool_size(&bits_per_cluster, &trained, n, budget_gb, cpu_cores, num_train, neuron_sample_rate, vote_tallies).1
 		})
 		.min()
 		.unwrap_or(1)
@@ -396,14 +401,16 @@ pub(crate) fn train_genome_in_slot(
 	neuron_sample_rate: f32,
 	rng_seed: u64,
 	memory_mode: u8,
+	write_rule: ram_core::cell_mode::WriteRule,
 	class_weights: Option<&[u32]>,
 	parallel: bool,
 )
 {
-	// OI orchestration: init counter buffers (when enabled), train, then commit.
-	// Gate = env AND `CellMode::uses_oi_counters` (QUAD_WEIGHTED/QUAD_BINARY/QSR).
-	let oi = ram_core::neuron_memory::order_independent_training_active(memory_mode);
-	if oi
+	// Counter orchestration: init counter buffers, train, then commit. The gate
+	// is `CounterBin::for_training`: the QUAD OI nudge (env AND
+	// `CellMode::uses_oi_counters`) or the per-flow majority vote (always).
+	let counters = ram_core::cell_mode::CounterBin::for_training(write_rule, memory_mode);
+	if counters.is_some()
 	{
 		for m in memories.iter_mut()
 		{
@@ -431,14 +438,15 @@ pub(crate) fn train_genome_in_slot(
 		neuron_sample_rate,
 		rng_seed,
 		memory_mode,
+		write_rule,
 		class_weights,
 		parallel,
 	);
-	if oi
+	if let Some(bin) = counters
 	{
 		for m in memories.iter_mut()
 		{
-			m.commit_oi();
+			m.commit_counters(bin);
 		}
 	}
 }
@@ -469,6 +477,7 @@ pub(crate) fn train_genome_in_slot_range(
 	neuron_sample_rate: f32,
 	rng_seed: u64,
 	memory_mode: u8,
+	write_rule: ram_core::cell_mode::WriteRule,
 	class_weights: Option<&[u32]>,
 	parallel: bool,
 )
@@ -482,13 +491,16 @@ pub(crate) fn train_genome_in_slot_range(
 	// visits are IGNORED (per-discriminator classical training). No nudging,
 	// no OI (a set is commutative — order-independent by construction).
 	// TERNARY / PLN: the TRUE-wins lattice write (`GroupMemory::write`).
-	let write_rule = ram_core::cell_mode::WriteRule::of_code(memory_mode);
+	// `write_rule` is resolved by the caller (`WriteRule::resolve` /
+	// `EvalSettings::write_rule`): the per-flow VOTE selector swaps Set /
+	// Lattice for a signed ±w tally in the OI counters (committed by sign).
 	let is_binary = write_rule == ram_core::cell_mode::WriteRule::Set;
 	let use_nudge = write_rule == ram_core::cell_mode::WriteRule::Nudge;
-	// OI is only meaningful for the 4-state nudging family (QUAD_WEIGHTED /
-	// QUAD_BINARY / QSR — the modes whose clamped nudge has order-dependence to
-	// fix); the gate is `CellMode::uses_oi_counters`, never a mode literal.
-	let use_oi = ram_core::neuron_memory::order_independent_training_active(memory_mode);
+	// Counters: the QUAD OI nudge (env AND `CellMode::uses_oi_counters`, never
+	// a mode literal) or the vote tally — both accumulate ±weight per visit
+	// through `nudge_oi`; only the commit binning differs. The caller
+	// (`train_genome_in_slot` or a chunked driver) owns init/commit.
+	let use_oi = ram_core::cell_mode::CounterBin::for_training(write_rule, memory_mode).is_some();
 	let chunk_start = example_range.start;
 
 	let train_one_example = |ex_idx: usize| {
@@ -1098,7 +1110,7 @@ mod pool_size_tests
 	{
 		let bits = vec![96usize];
 		let neurons = vec![250usize];
-		let (_, batch) = calculate_pool_size(&bits, &neurons, 1, 23.0, 10, 37_000_000, 0.25);
+		let (_, batch) = calculate_pool_size(&bits, &neurons, 1, 23.0, 10, 37_000_000, 0.25, false);
 		assert!(batch <= 2, "46M-scale batch must be 1-2, got {}", batch);
 	}
 
@@ -1109,7 +1121,7 @@ mod pool_size_tests
 	{
 		let bits = vec![16usize];
 		let neurons = vec![250usize];
-		let (_, batch) = calculate_pool_size(&bits, &neurons, 1, 23.0, 10, 100_000, 0.25);
+		let (_, batch) = calculate_pool_size(&bits, &neurons, 1, 23.0, 10, 100_000, 0.25, false);
 		assert!(
 			batch >= 4,
 			"100K-scale batch should stay multi-genome, got {}",
@@ -1123,7 +1135,7 @@ mod pool_size_tests
 	{
 		let bits = vec![100usize];
 		let neurons = vec![250usize];
-		let (_, batch) = calculate_pool_size(&bits, &neurons, 1, 0.5, 10, 46_000_000, 1.0);
+		let (_, batch) = calculate_pool_size(&bits, &neurons, 1, 0.5, 10, 46_000_000, 1.0, false);
 		assert_eq!(batch.max(1), batch, "batch must never be 0");
 		assert!(batch >= 1);
 	}

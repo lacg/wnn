@@ -54,7 +54,7 @@ mod tests
 		{
 			mem.nudge_oi(n, a, t, w);
 		}
-		mem.commit_oi();
+		mem.commit_counters(ram_core::cell_mode::CounterBin::Oi);
 		// Snapshot cell values for every (neuron, address).
 		let n_addrs = 1usize << bits;
 		let mut snap = Vec::with_capacity(num_neurons * n_addrs);
@@ -204,7 +204,7 @@ mod tests
 		let mut mem = Arc::try_unwrap(mem)
 			.map_err(|_| "Arc still has refs")
 			.unwrap();
-		mem.commit_oi();
+		mem.commit_counters(ram_core::cell_mode::CounterBin::Oi);
 		let mut parallel = Vec::with_capacity(num_neurons * n_addrs);
 		for n in 0..num_neurons
 		{
@@ -235,7 +235,7 @@ mod tests
 		{
 			mem.nudge_oi(n, a, t, w);
 		}
-		mem.commit_oi();
+		mem.commit_counters(ram_core::cell_mode::CounterBin::Oi);
 		// Snapshot eval-visible state: filter out default_empty values so
 		// results are comparable across sparse backends (DashMap removes
 		// default_empty entries; atomic-HT keeps them as default_empty in
@@ -379,7 +379,7 @@ mod tests
 		let mut mem = Arc::try_unwrap(mem)
 			.map_err(|_| "Arc still has refs")
 			.unwrap();
-		mem.commit_oi();
+		mem.commit_counters(ram_core::cell_mode::CounterBin::Oi);
 		let mut parallel: Vec<(usize, u64, u8)> = Vec::new();
 		for (n, map) in mem.neurons.iter().enumerate()
 		{
@@ -416,7 +416,7 @@ mod tests
 		{
 			mem.nudge_oi(n, a, t, w);
 		}
-		mem.commit_oi();
+		mem.commit_counters(ram_core::cell_mode::CounterBin::Oi);
 		// Same eval-visible-state filter as sparse_train_oi: skip default_empty.
 		let default_empty = mem.default_empty;
 		let mut snap: Vec<(usize, u64, u8)> = Vec::new();

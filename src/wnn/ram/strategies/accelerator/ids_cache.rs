@@ -90,6 +90,10 @@ pub struct IDSCache
 	/// of the mode's empty cell. See docs/COVERAGE_AWARE_SCORER_SPEC.md.
 	/// Default false = bit-exact today's behaviour.
 	pub coverage_aware: bool,
+	/// Per-flow MAJORITY-VOTE write rule (`ids_write_rule="vote"`, via
+	/// set_write_rule): BINARY/TERNARY/PLN train through `WriteRule::Vote`.
+	/// Default false = bit-exact today's Set / TRUE-wins lattice.
+	pub write_vote: bool,
 
 	// Live progress for observer thread
 	pub live_progress: Arc<RwLock<Option<LiveProgress>>>,
@@ -246,6 +250,7 @@ impl IDSCache
 			memory_mode: self.memory_mode,
 			run_seed: self.run_seed,
 			coverage_aware: self.coverage_aware,
+			write_vote: self.write_vote,
 		}
 	}
 
@@ -416,6 +421,7 @@ impl IDSCache
 			memory_mode: ram_core::neuron_memory::QUAD_WEIGHTED,
 			run_seed: 0,
 			coverage_aware: false,
+			write_vote: false,
 		}
 	}
 

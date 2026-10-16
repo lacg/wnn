@@ -103,9 +103,9 @@ impl Inner
 	}
 
 	/// Commit pass: for every claimed slot, bin its counter into the 2-bit
-	/// value field, then drop the counter buffer. Slots with counter ==
-	/// OI_INITIAL (untouched during OI) leave their existing value alone.
-	fn commit_oi(&mut self)
+	/// value field (`bin`: QUAD OI or vote sign), then drop the counter buffer.
+	/// Slots with counter == OI_INITIAL (untouched) leave their value alone.
+	fn commit_counters(&mut self, bin: ram_core::cell_mode::CounterBin)
 	{
 		let Some(counters) = self.counters.take()
 		else
@@ -124,8 +124,7 @@ impl Inner
 			{
 				continue;
 			}
-			let cell = ram_core::neuron_memory::oi_bin_to_cell(packed) as u8;
-			self.values[slot].store(cell, Ordering::Relaxed);
+			self.values[slot].store(bin.cell(packed), Ordering::Relaxed);
 		}
 	}
 
@@ -436,12 +435,12 @@ impl AtomicHashTable
 		}
 	}
 
-	/// Commit pass: bin per-slot counters into the 2-bit value field and
-	/// drop the counter buffer. Takes the write lock once.
-	pub fn commit_oi(&self)
+	/// Commit pass: bin per-slot counters into the 2-bit value field (`bin`)
+	/// and drop the counter buffer. Takes the write lock once.
+	pub fn commit_counters(&self, bin: ram_core::cell_mode::CounterBin)
 	{
 		let mut guard = self.inner.write().expect("AtomicHashTable RwLock poisoned");
-		guard.commit_oi();
+		guard.commit_counters(bin);
 	}
 
 	pub fn read(&self, key: u64) -> u8
@@ -1448,6 +1447,16 @@ pub enum SlotMerge
 	/// BINARY): `WriteRule::lattice_join` — what the two writes leave in
 	/// either order, so the merge is exact.
 	Lattice,
+	/// Slots hold RAW packed counters whose `net` is a `WriteRule::Vote`
+	/// tally (BINARY/TERNARY/PLN under the per-flow vote selector):
+	/// `oi_merge` (exact — the tally is a sum), then `vote_bin_to_cell`. A cell
+	/// that bins to `tie` (the mode's untrained cell) is dropped: it reads as
+	/// the sparse-miss default, exactly like the CPU sparse commit, which
+	/// never stores the default.
+	Votes
+	{
+		tie: u8,
+	},
 	/// Legacy clamped QUAD nudge: cells exported as-is. Duplicates hold split
 	/// tallies that no merge can reconstruct (order-dependent by design).
 	Unmerged,
@@ -1455,18 +1464,17 @@ pub enum SlotMerge
 
 impl SlotMerge
 {
-	/// The rule for a trained batch: OI counters, else the mode's writer.
-	pub fn for_batch(use_oi: bool, memory_mode: u8, skip_wf: bool) -> SlotMerge
+	/// The rule for a trained batch: the counter binning the trainer used
+	/// (`CounterBin::for_training`), else the direct writer's merge.
+	pub fn for_batch(rule: ram_core::cell_mode::WriteRule, memory_mode: u8, skip_wf: bool) -> SlotMerge
 	{
-		use ram_core::cell_mode::WriteRule;
-		if use_oi
+		use ram_core::cell_mode::{CounterBin, WriteRule};
+		match (CounterBin::for_training(rule, memory_mode), rule)
 		{
-			return SlotMerge::OiCounters { skip_wf };
-		}
-		match WriteRule::of_code(memory_mode)
-		{
-			WriteRule::Lattice | WriteRule::Set => SlotMerge::Lattice,
-			WriteRule::Nudge => SlotMerge::Unmerged,
+			(Some(CounterBin::Oi), _) => SlotMerge::OiCounters { skip_wf },
+			(Some(CounterBin::Vote { tie }), _) => SlotMerge::Votes { tie },
+			(None, WriteRule::Lattice | WriteRule::Set) => SlotMerge::Lattice,
+			(None, _) => SlotMerge::Unmerged,
 		}
 	}
 
@@ -1483,6 +1491,10 @@ impl SlotMerge
 					(!(skip_wf && cell == QUAD_WEAK_FALSE_CELL)).then_some(cell)
 				})
 			}
+			SlotMerge::Votes { tie } => fold_duplicates(&raw, ram_core::neuron_memory::oi_merge, |acc| {
+				let cell = ram_core::neuron_memory::vote_bin_to_cell(acc, tie);
+				(cell != tie).then_some(cell)
+			}),
 			SlotMerge::Lattice => fold_duplicates(
 				&raw,
 				|a, b| ram_core::cell_mode::WriteRule::lattice_join(a as u8, b as u8) as u32,

@@ -321,6 +321,41 @@ impl IDSCacheWrapper
 		self.inner.coverage_aware = coverage_aware;
 	}
 
+	/// Training write rule (16/10/2026, worker ABI 19): "lattice" (default —
+	/// BINARY one-shot Set, TERNARY/PLN TRUE-wins lattice; bit-exact today) or
+	/// "vote" (MAJORITY VOTE: a signed ±class-weight tally per (neuron,
+	/// address), committed by sign; tie → the mode's untrained cell). Applies
+	/// to every train path of this cache (GA fitness AND the final decode, CPU
+	/// and Metal). The 4-state family (QUAD_*/QSR) already tallies through
+	/// its OI counters, so "vote" on those modes is REJECTED (ValueError)
+	/// rather than silently ignored. Call after set_memory_mode.
+	fn set_write_rule(&mut self, write_rule: &str) -> PyResult<()>
+	{
+		let vote = match write_rule
+		{
+			"lattice" => false,
+			"vote" => true,
+			other =>
+			{
+				return Err(pyo3::exceptions::PyValueError::new_err(format!(
+					"unknown write_rule {other:?} (expected \"lattice\" or \"vote\")"
+				)))
+			}
+		};
+		if vote
+			&& ram_core::cell_mode::WriteRule::resolve(self.inner.memory_mode, true)
+				!= ram_core::cell_mode::WriteRule::Vote
+		{
+			return Err(pyo3::exceptions::PyValueError::new_err(format!(
+				"write_rule=\"vote\" applies to BINARY/TERNARY/PLN only; memory_mode {} trains \
+				 through the 4-state nudge (call set_memory_mode first)",
+				self.inner.memory_mode
+			)));
+		}
+		self.inner.write_vote = vote;
+		Ok(())
+	}
+
 	/// Evaluate genomes using hybrid CPU+GPU with a specific train subset.
 	#[allow(clippy::too_many_arguments)]
 	fn evaluate_genomes_hybrid(

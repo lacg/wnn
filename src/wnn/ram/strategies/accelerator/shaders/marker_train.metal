@@ -81,6 +81,9 @@ struct TrainParams
 														 // chunked dispatch samples with the GLOBAL
 														 // neuron index (bit-exact vs unchunked and
 														 // vs CPU). 0 for unchunked dispatches.
+	uint vote_write;					 // 16/10/2026: 1 = per-flow MAJORITY-VOTE selector
+														 // (wnn_write_rule(memory_mode, vote_write)).
+														 // 0 = the mode's own writer (bit-identical).
 };
 
 // xorshift32-based per-(neuron, example) sampling decision. Matches CPU
@@ -259,7 +262,7 @@ kernel void marker_train(
 			continue;
 		// BINARY (classical): own-class one-shot — FALSE-direction participants
 		// write nothing; skip BEFORE claiming so they don't burn slot capacity.
-		uint write_rule = wnn_write_rule(params.memory_mode);
+		uint write_rule = wnn_write_rule(params.memory_mode, params.vote_write);
 		if (write_rule == WNN_WRITE_SET && !nudge_true)
 			continue;
 
@@ -291,6 +294,17 @@ kernel void marker_train(
 				// weights moot — the CPU write path ignores repeats too). PLN
 				// fell through to slot_nudge here until 12/10/2026.
 				slot_write_ternary(slot_values, slot, nudge_true);
+			}
+			else if (write_rule == WNN_WRITE_VOTE)
+			{
+				// Majority vote (BINARY/TERNARY/PLN, per-flow selector): +-weight
+				// into the signed tally of the OI packed counter - the SAME
+				// commutative atomic as the QUAD OI path, so exact at any z. The
+				// host bins the sign at export (SlotMerge::Votes ->
+				// vote_bin_to_cell); FALSE-direction visits vote too (BINARY
+				// included), so no pre-claim skip.
+				int delta = nudge_true ? int(weight) : -int(weight);
+				slot_nudge_oi(slot_values, slot, delta);
 			}
 			else if (params.oi_mode == 1u)
 			{

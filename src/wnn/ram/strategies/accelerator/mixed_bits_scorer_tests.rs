@@ -77,7 +77,7 @@ fn train(g: &(Vec<usize>, Vec<usize>, Vec<i64>), data: &Data, mode: u8) -> Genom
 	let n = data.targets.len();
 	batched_train_offspring_plain(
 		&g.0, &g.1, &g.2, 1, data.num_clusters, &data.train, &data.targets, &data.negatives, n,
-		data.num_negatives(), TIB, 0.5, 1.0, 42, None, mode,
+		data.num_negatives(), TIB, 0.5, 1.0, 42, None, mode, ram_core::cell_mode::WriteRule::of_code(mode),
 	)
 	.expect("gpu train")
 	.remove(0)

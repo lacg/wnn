@@ -10,6 +10,11 @@
   // of binary threshold modes; f1/fpr cells then read macro-F1/benign-FPR
   // (the worker writes them as compat aliases on each mode).
 	export let isMulticlass: boolean = false
+	// Metric labels: macro-F1/benign-FPR for real multiclass flows. Binary
+  // TWO-cluster flows (ids_single_cluster=false) carry the same decode-mode
+  // keys (isMulticlass via the metadata fallback) but their 'f1' alias is the
+  // attack-class F1 — so they keep the binary labels. null = follow isMulticlass.
+	export let macroLabels: boolean | null = null
 	export let currentExperimentId: number
 	// Per-class drill-down selection — bound through to the page so the choice
   // survives in-page navigation (state lives in the page).
@@ -26,6 +31,9 @@
 			{ key: 'margin_fixed0', label: '┣ Margin τ=0', cls: 'threshold-train-row' },
 			{ key: 'margin_train_cal', label: '┣ Margin train-cal', cls: 'threshold-platt-row' },
 			{ key: 'margin_val_cal', label: '┣ Margin val-cal', cls: 'threshold-oracle-row' },
+			// Binary two-cluster only (K=2): attack-F1 tau, the train_cal/val_cal twins.
+			{ key: 'margin_train_f1', label: '┣ Margin train-F1', cls: 'threshold-train-row' },
+			{ key: 'margin_val_f1', label: '┣ Margin val-F1', cls: 'threshold-oracle-row' },
 			{ key: 'argmax_platt', label: '┣ Argmax platt', cls: 'threshold-platt-row' },
 			{ key: 'argmax_beta', label: '┣ Argmax beta', cls: 'threshold-beta-row' },
 			{ key: 'argmax_classnorm', label: '┣ Argmax classnorm', cls: 'threshold-empirical-row' },
@@ -39,8 +47,9 @@
 			{ key: 'empirical_cumulative', label: '┣ Emp-cumul', cls: 'threshold-empirical-row' },
 			{ key: 'val_cal', label: '┗ Oracle', cls: 'threshold-oracle-row' },
 		]
-	$: f1Label = isMulticlass ? 'mF1' : 'F1'
-	$: fprLabel = isMulticlass ? 'bFPR' : 'FPR'
+	$: useMacroLabels = macroLabels ?? isMulticlass
+	$: f1Label = useMacroLabels ? 'mF1' : 'F1'
+	$: fprLabel = useMacroLabels ? 'bFPR' : 'FPR'
 </script>
 
 <div class="validation-section">
