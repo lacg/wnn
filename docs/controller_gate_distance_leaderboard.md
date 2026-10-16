@@ -63,14 +63,14 @@ selection ran on) and never the during-search gen lines (anti-predictive, repeat
 ## Coverage
 
 ```
-markers with a headline held-out : 300
-  altitude regimen (alt= present) : 216
+markers with a headline held-out : 301
+  altitude regimen (alt= present) : 217
   attitude-only                   : 84
   state-neuron count unreadable   : 0  (no .out on disk)
   h743 keys counted exactly       : 75  (experiments/h743_keys.json)
   h743 fits, exact / bound        : 133 / 0
   h743 off-chip (16 MB QSPI) tier : 53 / 0
-  first-seed alignment (14/09)    : headline re-scored 4, arch-only headline NOT re-scorable 40  (rows marked in the tag column: [unfixed])
+  first-seed alignment (14/09)    : headline re-scored 4, arch-only headline NOT re-scorable 41  (rows marked in the tag column: [unfixed])
   stage-select recalc (15-17/09)  : headline re-selected on the fixed trainer 145  (headline_holdout_recalc takes precedence over _aligned / original)
 ```
 
@@ -78,7 +78,7 @@ markers with a headline held-out : 300
 
 ```
                  attitude-only   altitude
-  sn = 0                78          216
+  sn = 0                78          217
   sn > 0                 6            0
 ```
 
@@ -230,18 +230,18 @@ same-rule rank: a large value means that row owes its placing to the draw.
      6     0.0960  CRN   99.6%    1.31    0.88  0.449  qspi      0.1064    +16  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_bd
      7     0.0971  CRN   99.4%    1.29    0.77  0.211  qspi      0.0949     -1  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_op30
      8     0.0978  CRN   99.4%    1.30    0.70  0.342  qspi      0.0896     -5  SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_op30
-     9     0.0988  CRN   99.6%    1.35    0.63  0.173  qspi?     0.1197    +34  SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_tw15
+     9     0.0988  CRN   99.6%    1.35    0.63  0.173  qspi?     0.1197    +35  SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_tw15
     10     0.0990  CRN   99.8%    1.39    0.89  0.159  qspi      0.1011     +6  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_op30
     11     0.1000  CRN  100.0%    1.44    1.00  0.473  fits      0.1000     +1  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_l090_l
     12     0.1000  CRN   99.0%    1.26    0.69  0.174  qspi?     0.1000     +1  SL_C_b24n256_cf21_brushless_L4C_g10_s31337006_op31
     13     0.1001  CRN   99.6%    1.37    0.86  0.401  qspi      0.1001     +1  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_ls2
-    14     0.1002  CRN   98.6%    1.19    0.76  0.440  qspi      0.1870    +88  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_bd
+    14     0.1002  CRN   98.6%    1.19    0.76  0.440  qspi      0.1870    +89  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_bd
     15     0.1006  CRN   99.4%    1.34    0.70  0.197  qspi      0.1021     +2  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_pipeN3
     16     0.1029  CRN   99.6%    1.41    0.85  0.300  fits      0.1029     +3  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_crn
     17     0.1036  CRN   99.6%    1.42    0.96  0.195  qspi      0.1096     +8  TAB_on_b32n256_cf21_brushless_L4C_s31337005
     18     0.1038  CRN   99.2%    1.35    0.66  0.433  qspi      0.1038     +2  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_bd
     19     0.1038  CRN   99.2%    1.35    0.83  0.255  fits      0.1038     +2  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_pipeN
-    20     0.1047  CRN   99.4%    1.40    1.03  0.494  fits      0.1317    +41  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_l090_l
+    20     0.1047  CRN   99.4%    1.40    1.03  0.494  fits      0.1317    +42  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_l090_l
     21     0.1065  CRN   99.2%    1.39    1.02  0.194  qspi?     0.1068     +2  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_tw20
     22     0.1070  CRN   99.0%    1.36    0.83  0.223  qspi?     0.1104     +7  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_tw20
     23     0.1079  CRN   99.2%    1.41    0.76  0.264  fits      0.1079     +1  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_pipeN
