@@ -17,6 +17,8 @@ IDS_MEMORY_MODE_CODES = MappingProxyType({
 	"TERNARY": 0, "QUAD_BINARY": 1, "QUAD_WEIGHTED": 2, "BINARY": 3, "QSR": 4, "PLN": 5,
 })
 DEFAULT_MEMORY_MODE = "QUAD_WEIGHTED"
+# Modes the LM evaluators (BitwiseEvaluator / MultiStageEvaluator) implement.
+LM_MEMORY_MODES = frozenset({"TERNARY", "QUAD_BINARY", "QUAD_WEIGHTED", "BINARY"})
 
 # Datasets that are raw by construction: their invalid-encoding default is single_bit.
 RAW_BY_CONSTRUCTION_DATASETS = frozenset({
@@ -24,11 +26,20 @@ RAW_BY_CONSTRUCTION_DATASETS = frozenset({
 })
 
 
-def resolve_memory_mode(params: dict) -> str:
-	"""Canonical memory-mode name. Absent, None or unrecognised -> QUAD_WEIGHTED
-	(exactly the worker's historical `map.get(mode_str, 2)` fallback)."""
-	mode = params.get("memory_mode", DEFAULT_MEMORY_MODE)
-	return mode if mode in IDS_MEMORY_MODE_CODES else DEFAULT_MEMORY_MODE
+def resolve_memory_mode(params: dict, allowed: "frozenset[str] | None" = None) -> str:
+	"""Canonical memory-mode name. Absent or None -> QUAD_WEIGHTED.
+
+	An unrecognised name (a typo, wrong case) RAISES. The historical
+	`map.get(mode_str, 2)` fallback silently trained QUAD under the flow's own
+	label; no flow in the DB ever relied on it (16/10/2026 check). `allowed`
+	narrows the set for paths that implement only some modes (LM evaluators)."""
+	mode = params.get("memory_mode")
+	if mode is None:
+		return DEFAULT_MEMORY_MODE
+	valid = IDS_MEMORY_MODE_CODES.keys() if allowed is None else allowed
+	if mode not in valid:
+		raise ValueError(f"memory_mode={mode!r} is not one of {sorted(valid)}")
+	return mode
 
 
 # ids_write_rule values (IDSCacheWrapper.set_write_rule). "lattice" = each

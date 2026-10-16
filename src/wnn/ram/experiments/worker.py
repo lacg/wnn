@@ -28,6 +28,7 @@ from wnn.ram.experiments.flow import Flow, FlowConfig
 from wnn.ram.experiments.experiment import ExperimentConfig, ExperimentType, GridSource
 from wnn.ram.experiments.tracker import create_tracker, ExperimentTracker
 from wnn.ram.experiments import scheduler
+from wnn.ram.experiments.ids_param_resolution import LM_MEMORY_MODES, memory_mode_code, resolve_memory_mode
 
 # How often to send heartbeats (seconds)
 HEARTBEAT_INTERVAL = 30
@@ -815,7 +816,7 @@ class FlowWorker:
     def _apply_bitwise_config(self, flow_config: FlowConfig, params: dict):
         """Add bitwise-specific config."""
         flow_config.num_clusters = params.get("num_clusters", 16)
-        flow_config.memory_mode = params.get("memory_mode", "QUAD_WEIGHTED")
+        flow_config.memory_mode = resolve_memory_mode(params, LM_MEMORY_MODES)
         flow_config.neuron_sample_rate = params.get("neuron_sample_rate", 0.25)
         flow_config.min_bits = params.get("min_bits", 10)
         flow_config.max_bits = params.get("max_bits", 24)
@@ -847,7 +848,7 @@ class FlowWorker:
         stage_mode = self._parse_stage_mode_param(params.get("stage_mode"))
         if stage_mode is not None:
             flow_config.stage_mode = stage_mode
-        flow_config.memory_mode = params.get("memory_mode", "QUAD_WEIGHTED")
+        flow_config.memory_mode = resolve_memory_mode(params, LM_MEMORY_MODES)
         flow_config.neuron_sample_rate = params.get("neuron_sample_rate", 0.25)
         flow_config.min_bits = params.get("min_bits", 4)
         flow_config.max_bits = params.get("max_bits", 24)
@@ -1123,13 +1124,7 @@ class FlowWorker:
         from wnn.ram.architecture.bitwise_evaluator import BitwiseEvaluator
 
         # Map memory mode string to integer
-        memory_mode_map = {
-            "TERNARY": 0,
-            "QUAD_BINARY": 1,
-            "QUAD_WEIGHTED": 2,
-            "BINARY": 3,   # classical WiSARD 1-bit (granularity-ablation arm)
-        }
-        memory_mode = memory_mode_map.get(params.get("memory_mode", "QUAD_WEIGHTED"), 2)
+        memory_mode = memory_mode_code(resolve_memory_mode(params, LM_MEMORY_MODES))
         neuron_sample_rate = params.get("neuron_sample_rate", 0.25)
         train_parts = params.get("train_parts", 4)
         eval_parts = params.get("eval_parts", 1)
@@ -1164,8 +1159,7 @@ class FlowWorker:
 
         from wnn.ram.architecture.multistage_evaluator import MultiStageEvaluator
 
-        memory_mode_map = {"TERNARY": 0, "QUAD_BINARY": 1, "QUAD_WEIGHTED": 2, "BINARY": 3}
-        memory_mode = memory_mode_map.get(params.get("memory_mode", "QUAD_WEIGHTED"), 2)
+        memory_mode = memory_mode_code(resolve_memory_mode(params, LM_MEMORY_MODES))
         neuron_sample_rate = params.get("neuron_sample_rate", 0.25)
         train_parts = params.get("train_parts", 4)
         eval_parts = params.get("eval_parts", 1)
@@ -1255,8 +1249,7 @@ class FlowWorker:
         self._ensure_lm_cache()
         from wnn.ram.architecture.bitwise_evaluator import BitwiseEvaluator
 
-        memory_mode_map = {"TERNARY": 0, "QUAD_BINARY": 1, "QUAD_WEIGHTED": 2, "BINARY": 3}
-        memory_mode = memory_mode_map.get(params.get("memory_mode", "QUAD_WEIGHTED"), 2)
+        memory_mode = memory_mode_code(resolve_memory_mode(params, LM_MEMORY_MODES))
         neuron_sample_rate = params.get("neuron_sample_rate", 0.25)
         full_train_parts = params.get("full_train_parts", 1)
         full_eval_parts = params.get("full_eval_parts", 1)

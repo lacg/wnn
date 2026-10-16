@@ -60,11 +60,27 @@ def test_fixture_cases_are_distinct_except_documented_aliases():
 
 # ---- memory mode ------------------------------------------------------------
 
-def test_absent_explicit_and_unrecognised_mode_all_resolve_to_quad():
+def test_absent_and_explicit_quad_resolve_to_quad():
 	assert resolve_memory_mode({}) == "QUAD_WEIGHTED"
 	assert resolve_memory_mode({"memory_mode": None}) == "QUAD_WEIGHTED"
-	assert resolve_memory_mode({"memory_mode": "quad_weighted"}) == "QUAD_WEIGHTED"
-	assert _key({}) == _key({"memory_mode": "QUAD_WEIGHTED"}) == _key({"memory_mode": "bogus"})
+	assert _key({}) == _key({"memory_mode": "QUAD_WEIGHTED"})
+
+
+def test_unrecognised_mode_raises_instead_of_training_quad():
+	"""The old fallback trained QUAD under the flow's own label (16/10/2026)."""
+	import pytest
+	for bad in ("bogus", "quad_weighted", "QUAD", "PLM"):
+		with pytest.raises(ValueError, match="memory_mode="):
+			resolve_memory_mode({"memory_mode": bad})
+
+
+def test_lm_paths_refuse_modes_they_do_not_implement():
+	import pytest
+	from wnn.ram.experiments.ids_param_resolution import LM_MEMORY_MODES
+	assert resolve_memory_mode({"memory_mode": "BINARY"}, LM_MEMORY_MODES) == "BINARY"
+	for ids_only in ("QSR", "PLN"):
+		with pytest.raises(ValueError, match="memory_mode="):
+			resolve_memory_mode({"memory_mode": ids_only}, LM_MEMORY_MODES)
 
 
 def test_every_distinct_trainer_mode_gets_its_own_key():
