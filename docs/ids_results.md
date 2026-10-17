@@ -14274,3 +14274,26 @@ unsw-nb15 temporal_3way 16b) and it has been the IDS default since.
 fitness has no analogous hard constraint. So the controller's GATE-vs-DESIR
 ladder has **no IDS counterpart** — the IDS A/B was aggregation-only
 (desirability vs zscore). Do not read the two comparisons as the same question.
+
+## IDS-41 — strict 5-fold offspring scoring vs legacy single-fold (17/10/2026, n=10 paired)
+
+unswt (UNSW-NB15 temporal_3way), QUAD, 16b-Wb, rate 1.0, worker ABI 20. Arms differ ONLY in
+`ids_offspring_folds`: `phase` = legacy (offspring/immigrants scored on one fixed fold per phase, the
+bug since 28/05), `all` = every genome scored on the 5-fold CV mean (the paper's protocol, new default).
+Held-out val_cal, final GA checkpoint, Δ = all − phase, pp. Flows 7002–7021.
+
+```
+genome_type   | ΔF1 mean  sd    t      median  wins | ΔFPR mean  t     | ΔAcc
+best_fitness  |  -0.70   3.23  -0.69   +0.09   6/10 |  -2.12   -1.12  | -0.71
+best_f1       |  +0.70   2.39  +0.93   +0.82   6/10 |  +1.29   +0.52  | +0.74
+best_fpr      |  +0.10   0.83  +0.40   -0.03   4/10 |  +2.34   +1.79  | +0.10
+best_acc      |  +0.72   2.51  +0.91   +0.82   6/10 |  +0.38   +0.14  | +0.74
+best_ce       |  -0.02   0.24  -0.25   -0.00   5/10 |  -0.32   -0.55  | -0.02
+```
+best_fitness mean is driven by one seed (67145: the strict GA crowned a 0.96%-FPR / 76.73-F1 genome;
+median +0.09). Cost: phase 8.1 min, all 30.1 min per flow = 3.71x.
+
+Reading: no genome type shows a detectable held-out shift (|t| < 1.8 everywhere; best_ce, the
+tightest, is −0.02 ± 0.08 pp SE vs σ_seed 0.228 pp). The single-fold bug changed WHICH genome won,
+not how good the winners were on held-out data → past cohorts' held-out numbers stand; no rerun on
+this evidence. All new runs use strict 5-fold (the paper's protocol) regardless.
