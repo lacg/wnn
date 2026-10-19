@@ -13,6 +13,11 @@ Examples
   python scripts/worker_swap.py --auto-detect-running \
       --install-wheel /path/to/ram_accelerator-*.whl --rayon-threads 10
 
+# Wheel + its matching Python (staged as a git patch) in ONE step, so no flow
+# ever starts on half the change (feedback: stage the Python with the wheel):
+  python scripts/worker_swap.py --auto-detect-running \
+      --install-wheel /path/to/ram_accelerator-*.whl --apply-patch staged/x.patch
+
 # Watch a specific flow, stop only (no relaunch — manual control afterwards):
   python scripts/worker_swap.py --watch-flow 4321 --no-restart
 
@@ -120,6 +125,23 @@ def stop_worker(pid: int, grace_secs: int) -> None:
 		if cpid in children:
 			print(f"[swap] reaping orphaned flow_runner {cpid}", flush=True)
 			_kill_pid(cpid, grace_secs, "flow_runner")
+
+
+def patch_applies(project: Path, patch: Path) -> bool:
+	r = subprocess.run(["git", "-C", str(project), "apply", "--check", str(patch.resolve())],
+	                   capture_output=True, text=True)
+	if r.returncode != 0:
+		print(f"[swap] ⚠️ patch does not apply: {r.stderr.strip()[-600:]}", flush=True)
+	return r.returncode == 0
+
+
+def apply_patch(project: Path, patch: Path) -> bool:
+	"""git apply the staged Python (worker DOWN). False = nothing applied."""
+	if not patch_applies(project, patch):
+		return False
+	r = subprocess.run(["git", "-C", str(project), "apply", str(patch.resolve())], capture_output=True, text=True)
+	print(f"[swap] git apply {patch.name}: rc={r.returncode} {r.stderr.strip()[-400:]}", flush=True)
+	return r.returncode == 0
 
 
 def install_wheel(venv: Path, wheel: Path) -> None:
@@ -247,6 +269,10 @@ def main() -> int:
 	                    "interrupted flows are re-queued from checkpoint.")
 	ap.add_argument("--install-wheel", type=Path, default=None,
 	                help="Wheel to pip-install --force-reinstall after stopping (optional).")
+	ap.add_argument("--apply-patch", type=Path, default=None,
+	                help="git patch of the Python that matches --install-wheel; applied while the worker "
+	                     "is down, BEFORE the wheel. If it no longer applies, the wheel is NOT installed "
+	                     "and the worker relaunches on the old state.")
 	ap.add_argument("--rayon-threads", type=str, default=None,
 	                help="RAYON_NUM_THREADS for the relaunched worker (optional).")
 	ap.add_argument("--no-restart", action="store_true",
@@ -268,6 +294,10 @@ def main() -> int:
 
 	if args.install_wheel is not None and not args.install_wheel.exists():
 		print(f"[swap] ERROR: --install-wheel not found: {args.install_wheel}", file=sys.stderr)
+		return 2
+
+	if args.apply_patch is not None and not patch_applies(args.project, args.apply_patch):
+		print(f"[swap] ERROR: --apply-patch does not apply to {args.project}", file=sys.stderr)
 		return 2
 
 	watch = resolve_watch_flow(args, args.db)
@@ -298,9 +328,18 @@ def main() -> int:
 		print(f"[swap] carrying worker env: {carry_env}", flush=True)
 		stop_worker(pid, args.grace_secs)
 
-	# 4) Optional wheel install (worker is down → safe to replace the shared .so).
-	if args.install_wheel is not None:
-		install_wheel(args.venv, args.install_wheel)
+	# 4) Optional Python patch, then wheel install (worker is down → safe to replace
+	# the shared .so). Patch first: if it fails, skip the wheel too, so the tree and
+	# the wheel never disagree (an ABI-mismatched pair fails every flow).
+	patched = None
+	install = args.install_wheel
+	if args.apply_patch is not None:
+		patched = apply_patch(args.project, args.apply_patch)
+		if not patched:
+			print("[swap] ⚠️ patch failed — NOT installing the wheel; relaunching on the old state.", flush=True)
+			install = None
+	if install is not None:
+		install_wheel(args.venv, install)
 
 	# 5) Re-queue interrupted flows via the API (keep checkpoints) BEFORE the relaunch.
 	# A flow_runner stopped by SIGTERM normally re-queues ITSELF ('queued'); calling
@@ -324,12 +363,14 @@ def main() -> int:
 		"watched_flow": watch,
 		"interrupted": interrupted,
 		"requeued": requeued,
-		"installed_wheel": str(args.install_wheel) if args.install_wheel else None,
+		"installed_wheel": str(install) if install else None,
+		"applied_patch": str(args.apply_patch) if patched else None,
+		"patch_failed": patched is False,
 		"new_worker_pid": new_pid,
 		"restarted": not args.no_restart,
 	})
 	print(f"[swap] DONE — watched={watch} interrupted={interrupted} requeued={requeued} "
-	      f"wheel={'yes' if args.install_wheel else 'no'} new_pid={new_pid}", flush=True)
+	      f"wheel={'yes' if install else 'no'} patch={patched} new_pid={new_pid}", flush=True)
 	return 0
 
 

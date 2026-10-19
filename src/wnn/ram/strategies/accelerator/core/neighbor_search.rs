@@ -1010,6 +1010,9 @@ pub struct GAConfig
 	/// deduped cluster back up to its count with fresh neurons; false = keep only
 	/// the distinct neurons (the child may SHRINK), refilling only up to min_neurons.
 	pub dedupe_fill: bool,
+	/// Flow param `ga_crossover_bits`: width rule for every crossover child
+	/// (`Inherit` = each neuron keeps its parent's width, the original behaviour).
+	pub crossover_bits: crate::crossover_bits::CrossoverBits,
 }
 
 /// Neuron-crossover options. `dedupe` false = the original operators, same RNG draws.
@@ -1282,6 +1285,18 @@ fn crossover_ps_neurons(
 }
 
 type Child = (Vec<usize>, Vec<usize>, Vec<i64>);
+
+/// Apply the flow's crossover bit-width rule (`ga_crossover_bits`) to one child.
+fn blend_bits(
+	child: Child,
+	p1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+	p2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+	config: &GAConfig,
+	rng: &mut impl Rng,
+) -> Child
+{
+	crate::crossover_bits::apply(config.crossover_bits, child, p1, p2, config.total_input_bits, rng)
+}
 
 /// Per cluster, the mode bits over BOTH parents' neurons (0 if both are empty;
 /// an empty cluster is never filled).
@@ -2107,14 +2122,14 @@ where
 					// 2→1: pool-shuffle produces complementary pair, keep only child1
 					let (child1, _child2) =
 						crossover_pool_shuffle(p1, p2, ga_config.num_clusters, xo_phase, NeuronXo::from_config(ga_config), &mut rng);
-					vec![child1]
+					vec![blend_bits(child1, p1, p2, ga_config, &mut rng)]
 				}
 				else
 				{
 					// 2→2: uniform crossover produces both children
 					let (child1, child2) =
 						crossover2(p1, p2, ga_config.num_clusters, xo_phase, NeuronXo::from_config(ga_config), &mut rng);
-					vec![child1, child2]
+					vec![blend_bits(child1, p1, p2, ga_config, &mut rng), blend_bits(child2, p1, p2, ga_config, &mut rng)]
 				};
 
 				for child in &children

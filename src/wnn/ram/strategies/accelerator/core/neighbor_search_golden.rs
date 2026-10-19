@@ -110,6 +110,7 @@ pub(super) fn ga_config(pop: &[Genome], phase: PhaseType, tib: usize, ratios: (f
 		assortative_mating_ratio: ratios.2,
 		dedupe_neurons: false,
 		dedupe_fill: true,
+		crossover_bits: crate::crossover_bits::CrossoverBits::Inherit,
 	}
 }
 

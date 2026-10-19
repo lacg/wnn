@@ -1089,7 +1089,8 @@ impl IDSCacheWrapper
         assortative_mating_ratio = 0.0,
         dedupe_neurons = false,
         dedupe_fill = true,
-        train_folds = None
+        train_folds = None,
+        crossover_bits = "inherit"
     ))]
 	fn search_offspring(
 		&self,
@@ -1137,6 +1138,9 @@ impl IDSCacheWrapper
 		// K-fold CV mean over these folds — the fitness the rest of the pool
 		// carries. None = legacy: the ONE phase-fixed fold `train_subset_idx`.
 		train_folds: Option<Vec<usize>>,
+		// ABI 21 (flow param `ga_crossover_bits`): crossover child width rule —
+		// "inherit" (default, bit-identical) | "blend_neuron" | "blend_cluster".
+		crossover_bits: &str,
 	) -> PyResult<(
 		Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64, f64)>,
 		usize,
@@ -1182,6 +1186,8 @@ impl IDSCacheWrapper
 			assortative_mating_ratio,
 			dedupe_neurons,
 			dedupe_fill,
+			crossover_bits: ram_core::crossover_bits::CrossoverBits::parse(crossover_bits)
+				.map_err(pyo3::exceptions::PyValueError::new_err)?,
 		};
 
 		let lp_arc = self.inner.live_progress.clone();

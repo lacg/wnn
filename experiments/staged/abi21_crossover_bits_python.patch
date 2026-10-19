@@ -1,0 +1,243 @@
+diff --git a/src/wnn/accel.py b/src/wnn/accel.py
+index 3ffe89e5..5e7be942 100644
+--- a/src/wnn/accel.py
++++ b/src/wnn/accel.py
+@@ -102,7 +102,12 @@ import os
+ #   ids_offspring_folds="all" (default) scores offspring, immigrants and TS
+ #   neighbours as the CV mean; "phase" passes None = the legacy single fold.
+ #   The validation cache pins worker_abi, so this bump re-validates.
+-EXPECTED_ABI = 20
++# 21 (19/10/2026): additive — search_offspring takes crossover_bits ("inherit"
++#   default, bit-identical | "blend_neuron" | "blend_cluster": the child's width is
++#   drawn U[min,max] of the parents', per neuron or once per cluster). Flow param
++#   ga_crossover_bits. The GA always passes it, so wheel + Python land together
++#   at idle. The validation cache pins worker_abi, so this bump re-validates.
++EXPECTED_ABI = 21
+ 
+ BUILD_HINT = (
+ 	"Rebuild the accelerator: cd src/wnn/ram/strategies/accelerator && "
+diff --git a/src/wnn/ram/architecture/base_evaluator.py b/src/wnn/ram/architecture/base_evaluator.py
+index 5b2fcad5..7c58ff3f 100644
+--- a/src/wnn/ram/architecture/base_evaluator.py
++++ b/src/wnn/ram/architecture/base_evaluator.py
+@@ -556,6 +556,7 @@ class BaseEvaluator(ABC):
+ 		assortative_mating_ratio: float = 0.0,
+ 		dedupe_neurons: bool = False,
+ 		dedupe_fill: bool = True,
++		crossover_bits: str = "inherit",
+ 	) -> OffspringSearchResult:
+ 		"""Search for GA offspring above accuracy threshold.
+ 
+@@ -571,6 +572,8 @@ class BaseEvaluator(ABC):
+ 		"""
+ 		if dedupe_neurons:
+ 			raise NotImplementedError("ga_dedupe_neurons lives in the Rust IDS offspring path (IDSEvaluator) only")
++		if crossover_bits != "inherit":
++			raise NotImplementedError("ga_crossover_bits lives in the Rust IDS offspring path (IDSEvaluator) only")
+ 		if not population:
+ 			return OffspringSearchResult(genomes=[], evaluated=0, viable=0)
+ 
+diff --git a/src/wnn/ram/architecture/ids_evaluator.py b/src/wnn/ram/architecture/ids_evaluator.py
+index 75efc95a..db1bd2be 100644
+--- a/src/wnn/ram/architecture/ids_evaluator.py
++++ b/src/wnn/ram/architecture/ids_evaluator.py
+@@ -1399,6 +1399,7 @@ class IDSEvaluator(BaseEvaluator):
+ 		assortative_mating_ratio: float = 0.0,
+ 		dedupe_neurons: bool = False,
+ 		dedupe_fill: bool = True,
++		crossover_bits: str = "inherit",
+ 	) -> OffspringSearchResult:
+ 		if not population:
+ 			return OffspringSearchResult(genomes=[], evaluated=0, viable=0)
+@@ -1461,6 +1462,8 @@ class IDSEvaluator(BaseEvaluator):
+ 			# IDS-26 P1: distinct neurons per child (default False = ABI-14 operators).
+ 			dedupe_neurons=dedupe_neurons,
+ 			dedupe_fill=dedupe_fill,
++			# ga_crossover_bits: crossover child width rule (default = ABI-20 operators).
++			crossover_bits=crossover_bits,
+ 			# ids_offspring_folds="all": the K-fold CV mean (None = legacy fold).
+ 			train_folds=self.ga_fitness_folds(),
+ 		)
+diff --git a/src/wnn/ram/architecture/tiered_evaluator.py b/src/wnn/ram/architecture/tiered_evaluator.py
+index 71837396..347c83cc 100644
+--- a/src/wnn/ram/architecture/tiered_evaluator.py
++++ b/src/wnn/ram/architecture/tiered_evaluator.py
+@@ -542,6 +542,7 @@ class TieredEvaluator(BaseEvaluator):
+         assortative_mating_ratio: float = 0.0,
+         dedupe_neurons: bool = False,
+         dedupe_fill: bool = True,
++        crossover_bits: str = "inherit",
+     ) -> OffspringSearchResult:
+         """
+         Search for GA offspring above accuracy threshold, entirely in Rust.
+@@ -578,8 +579,8 @@ class TieredEvaluator(BaseEvaluator):
+ 
+         # The LM token cache has no dedupe operator and maps phase 5 (JOINT) to
+         # NEURONS silently — refuse both rather than run a different GA.
+-        if dedupe_neurons or phase_type == 5:
+-            raise NotImplementedError("ga_dedupe_neurons / ga_joint_mutation are IDS-only (IDSEvaluator)")
++        if dedupe_neurons or phase_type == 5 or crossover_bits != "inherit":
++            raise NotImplementedError("ga_dedupe_neurons / ga_joint_mutation / ga_crossover_bits are IDS-only (IDSEvaluator)")
+         if not population:
+             return []
+ 
+diff --git a/src/wnn/ram/experiments/experiment.py b/src/wnn/ram/experiments/experiment.py
+index 38454840..c8f2cf49 100644
+--- a/src/wnn/ram/experiments/experiment.py
++++ b/src/wnn/ram/experiments/experiment.py
+@@ -241,6 +241,8 @@ class ExperimentConfig:
+ 	# With ga_dedupe_neurons: True = refill to the full count (default); False =
+ 	# keep only the distinct neurons (child may shrink, floored at max(min_neurons, 1)).
+ 	ga_dedupe_fill: bool = True
++	# Crossover child width rule: "inherit" (default) | "blend_neuron" | "blend_cluster".
++	ga_crossover_bits: str = "inherit"
+ 	# Fraction of each generation's offspring slots given to fresh immigrants (P2).
+ 	immigrant_fraction: float = 0.0
+ 	# PhaseType.JOINT: neurons crossover + neurons → bits → connections mutation.
+@@ -737,6 +739,7 @@ class Experiment:
+ 			assortative_mating_ratio=cfg.assortative_mating_ratio,
+ 			dedupe_neurons=cfg.ga_dedupe_neurons,
+ 			dedupe_fill=cfg.ga_dedupe_fill,
++			crossover_bits=cfg.ga_crossover_bits,
+ 			joint_mutation=cfg.ga_joint_mutation,
+ 			neuron_bounds_per_cluster=(
+ 				[(max(1, int(c * 0.5 + 0.5)), max(1, int(c * 1.5 + 0.5))) for c in tier[0]]
+diff --git a/src/wnn/ram/experiments/params.py b/src/wnn/ram/experiments/params.py
+index 3e764d22..239862a2 100644
+--- a/src/wnn/ram/experiments/params.py
++++ b/src/wnn/ram/experiments/params.py
+@@ -55,6 +55,9 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
+ 	# ga_dedupe_fill (bool, default True): False = deduped children keep only their
+ 	# distinct neurons (may shrink, floored at max(min_neurons, 1)). Needs ga_dedupe_neurons.
+ 	"ga_dedupe_fill",
++	# ga_crossover_bits (str, default "inherit"): crossover child width rule —
++	# "blend_neuron" / "blend_cluster" draw the width U[min, max] of the parents'.
++	"ga_crossover_bits",
+ 	"adaptation_iterations", "genesis_mode", "start_from_experiment",
+ 	# Fitness
+ 	"fitness_calculator", "fitness_percentile", "min_accuracy_floor",
+diff --git a/src/wnn/ram/experiments/worker.py b/src/wnn/ram/experiments/worker.py
+index 2c2aa201..f447128a 100644
+--- a/src/wnn/ram/experiments/worker.py
++++ b/src/wnn/ram/experiments/worker.py
+@@ -36,6 +36,18 @@ HEARTBEAT_INTERVAL = 30
+ # Consider a flow stale if no heartbeat for this many seconds
+ STALE_THRESHOLD = 90
+ 
++# ga_crossover_bits values (ram_core crossover_bits.rs CrossoverBits::parse)
++CROSSOVER_BITS_RULES = ("inherit", "blend_neuron", "blend_cluster")
++
++
++def _crossover_bits_param(params: dict) -> str:
++    """Flow param ga_crossover_bits, validated at ingestion (a typo would otherwise
++    only fail at the first GA offspring call, after the whole grid phase)."""
++    rule = str(params.get("ga_crossover_bits", "inherit"))
++    if rule not in CROSSOVER_BITS_RULES:
++        raise ValueError(f"ga_crossover_bits={rule!r}: expected one of {CROSSOVER_BITS_RULES}")
++    return rule
++
+ 
+ class FlowWorker:
+     """
+@@ -1576,6 +1588,7 @@ class FlowWorker:
+                 # IDS-26 GA knobs — all default OFF (absent = bit-identical GA)
+                 ga_dedupe_neurons=bool(params.get("ga_dedupe_neurons", False)),
+                 ga_dedupe_fill=bool(params.get("ga_dedupe_fill", True)),
++                ga_crossover_bits=_crossover_bits_param(params),
+                 immigrant_fraction=float(params.get("immigrant_fraction", 0.0)),
+                 ga_joint_mutation=bool(params.get("ga_joint_mutation", False)),
+             )
+diff --git a/src/wnn/ram/strategies/connectivity/architecture_config.py b/src/wnn/ram/strategies/connectivity/architecture_config.py
+index 4bdcaf23..4d46069f 100644
+--- a/src/wnn/ram/strategies/connectivity/architecture_config.py
++++ b/src/wnn/ram/strategies/connectivity/architecture_config.py
+@@ -96,6 +96,12 @@ class ArchitectureConfig:
+ 	# back up to its count with fresh neurons; False = keep only its distinct
+ 	# neurons — the child may SHRINK — refilling only up to max(min_neurons, 1).
+ 	dedupe_fill: bool = True
++	# Flow param ga_crossover_bits (19/10/2026): width rule for every crossover
++	# child — "inherit" (each neuron keeps its parent's width; mixed parents give
++	# mixed clusters), "blend_neuron" (per position, width ~ U[min, max] of the two
++	# parents' widths there) or "blend_cluster" (one width per cluster ~ U[min, max]
++	# of both parents' cluster widths). Rust offspring path (IDS) only.
++	crossover_bits: str = "inherit"
+ 	# IDS-26 (flow param ga_joint_mutation): the GA runs PhaseType.JOINT —
+ 	# NEURONS crossover + neurons → bits → connections mutation on every child.
+ 	# Chosen ONLY by this flag; _derive_phase_type's mapping is untouched.
+diff --git a/src/wnn/ram/strategies/connectivity/architecture_ga.py b/src/wnn/ram/strategies/connectivity/architecture_ga.py
+index 668a83de..e32794bb 100644
+--- a/src/wnn/ram/strategies/connectivity/architecture_ga.py
++++ b/src/wnn/ram/strategies/connectivity/architecture_ga.py
+@@ -271,6 +271,8 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
+ 			# immigrant_fraction both work on this path.
+ 			if self._arch_config.dedupe_neurons:
+ 				raise NotImplementedError("ga_dedupe_neurons needs the Rust offspring path (a cached IDS evaluator)")
++			if self._arch_config.crossover_bits != "inherit":
++				raise NotImplementedError("ga_crossover_bits needs the Rust offspring path (a cached IDS evaluator)")
+ 			return super()._generate_offspring(population, n_needed, threshold, generation)
+ 		n_immigrants = round(self._config.immigrant_fraction * n_needed)
+ 		offspring = self._rust_offspring(population, n_needed - n_immigrants, threshold, generation)
+@@ -343,6 +345,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
+ 			assortative_mating_ratio=arch_cfg.assortative_mating_ratio,
+ 			dedupe_neurons=arch_cfg.dedupe_neurons,
+ 			dedupe_fill=arch_cfg.dedupe_fill,
++			crossover_bits=arch_cfg.crossover_bits,
+ 		)
+ 
+ 		# Convert to (genome, Metrics) tuples, rank by fitness, return best n_needed
+diff --git a/tests/test_ids_ga_knobs.py b/tests/test_ids_ga_knobs.py
+index 66d754f7..a72cdcf3 100644
+--- a/tests/test_ids_ga_knobs.py
++++ b/tests/test_ids_ga_knobs.py
+@@ -34,10 +34,11 @@ class RecordingEvaluator:
+ 	                     tournament_size, train_subset_idx, eval_subset_idx, seed, logger, generation,
+ 	                     total_generations, return_best_n, mutable_clusters, phase_type, fitness_scores,
+ 	                     cluster_crossover_ratio, pool_shuffle_ratio, assortative_mating_ratio, dedupe_neurons,
+-	                     dedupe_fill):
++	                     dedupe_fill, crossover_bits="inherit"):
+ 		self.search_calls.append(dict(target_count=target_count, phase_type=phase_type,
+ 		                              bits_rate=bits_mutation_rate, neurons_rate=neurons_mutation_rate,
+-		                              dedupe=dedupe_neurons, fill=dedupe_fill, train_idx=train_subset_idx))
++		                              dedupe=dedupe_neurons, fill=dedupe_fill, train_idx=train_subset_idx,
++		                              crossover_bits=crossover_bits))
+ 		genomes = [_with_metrics(self._strategy.create_random_genome()) for _ in range(target_count)]
+ 		return type("R", (), {"genomes": genomes})()
+ 
+@@ -51,12 +52,13 @@ def _with_metrics(genome):
+ 	return genome
+ 
+ 
+-def _strategy(immigrant_fraction=0.0, dedupe=False, joint=False, opt=(True, True, False), fill=True):
++def _strategy(immigrant_fraction=0.0, dedupe=False, joint=False, opt=(True, True, False), fill=True,
++              crossover_bits="inherit"):
+ 	arch = ArchitectureConfig(
+ 		num_clusters=1, min_bits=4, max_bits=34, min_neurons=5, max_neurons=500,
+ 		default_bits=10, default_neurons=20, total_input_bits=32,
+ 		optimize_neurons=opt[0], optimize_bits=opt[1], optimize_connections=opt[2],
+-		dedupe_neurons=dedupe, dedupe_fill=fill, joint_mutation=joint,
++		dedupe_neurons=dedupe, dedupe_fill=fill, joint_mutation=joint, crossover_bits=crossover_bits,
+ 	)
+ 	cfg = GAConfig(population_size=10, generations=3, immigrant_fraction=immigrant_fraction, mutation_rate=0.1)
+ 	s = ArchitectureGAStrategy(arch_config=arch, ga_config=cfg, seed=42)
+@@ -180,6 +182,21 @@ def test_dedupe_fill_reaches_rust(fill):
+ 	assert s._cached_evaluator.search_calls[0]["fill"] is fill
+ 
+ 
++@pytest.mark.parametrize("rule", ["inherit", "blend_neuron", "blend_cluster"])
++def test_crossover_bits_reaches_rust(rule):
++	s = _strategy(crossover_bits=rule)
++	s._generate_offspring(_population(s), n_needed=8, threshold=0.0, generation=0)
++	assert s._cached_evaluator.search_calls[0]["crossover_bits"] == rule
++
++
++def test_crossover_bits_refused_on_python_fallback():
++	"""No cached evaluator → Python breeding, which has no width-blend operator."""
++	s = _strategy(crossover_bits="blend_neuron")
++	s._cached_evaluator = None
++	with pytest.raises(NotImplementedError):
++		s._generate_offspring(_population(s), n_needed=4, threshold=0.0, generation=0)
++
++
+ def test_dedupe_refused_on_python_fallback():
+ 	"""No cached evaluator → Python breeding, which has no dedupe operator."""
+ 	s = _strategy(dedupe=True)

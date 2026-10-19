@@ -505,6 +505,7 @@ impl BitwiseCacheWrapper
 			assortative_mating_ratio,
 			dedupe_neurons: false,
 			dedupe_fill: true,
+			crossover_bits: ram_core::crossover_bits::CrossoverBits::Inherit,
 		};
 
 		let override_val = self.sparse_threshold_override;

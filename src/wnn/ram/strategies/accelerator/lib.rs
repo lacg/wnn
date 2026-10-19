@@ -392,7 +392,11 @@ use pyapi::*;
 /// search_neighbors `train_folds` — ids_offspring_folds="all" scores every GA/TS
 /// genome as the K-fold CV mean (offspring/immigrants were on ONE phase-fixed
 /// fold since 28/05); None = the legacy fold, bit-identical.
-pub const ABI_VERSION: u32 = 20;
+/// 21 (19/10/2026): additive — IDSCacheWrapper.search_offspring takes
+/// `crossover_bits` ("inherit" default = bit-identical to ABI 20 | "blend_neuron"
+/// | "blend_cluster"): BLX-0 width rule on every crossover child (flow param
+/// ga_crossover_bits, ram_core crossover_bits.rs).
+pub const ABI_VERSION: u32 = 21;
 
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()>

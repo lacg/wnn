@@ -659,6 +659,7 @@ impl TokenCacheWrapper
 			assortative_mating_ratio,
 			dedupe_neurons: false,
 			dedupe_fill: true,
+			crossover_bits: ram_core::crossover_bits::CrossoverBits::Inherit,
 		};
 
 		// Set up live progress for observer thread

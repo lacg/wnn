@@ -313,3 +313,59 @@ fn nofill_search_offspring_shrinks_and_respects_min()
 		}
 	}
 }
+
+// ---- ga_crossover_bits (19/10/2026) ------------------------------------------
+
+/// 10 single-cluster genomes, 12 neurons each, ONE width per genome: 30 or 34.
+fn two_width_population() -> Vec<Genome>
+{
+	let mut rng = StdRng::seed_from_u64(19);
+	(0..10)
+		.map(|i| {
+			let b = if i % 2 == 0 { 30 } else { 34 };
+			let conns: Vec<i64> = (0..12 * b).map(|_| rng.gen_range(0..200)).collect();
+			(vec![b; 12], vec![12], conns, 0.5 + i as f64 * 0.03)
+		})
+		.collect()
+}
+
+/// Offspring of the two-width population under `rule`.
+fn blend_offspring(rule: crate::crossover_bits::CrossoverBits, ps_ratio: f64) -> Vec<Child>
+{
+	let pop = two_width_population();
+	let mut cfg = ga_config(&pop, PhaseType::Neurons, 200, (0.0, ps_ratio, 0.0));
+	(cfg.crossover_rate, cfg.neurons_mutation_rate, cfg.crossover_bits) = (1.0, 0.0, rule);
+	let res = search_offspring(&pop, 20, 60, 0.0, &cfg, &fake_eval, 5, None, None, None, true, None);
+	res.candidates.iter().map(|c| (c.bits_per_neuron.clone(), c.neurons_per_cluster.clone(), c.connections.clone())).collect()
+}
+
+#[test]
+fn search_offspring_blend_cluster_keeps_one_width_per_cluster()
+{
+	for ps_ratio in [0.0, 1.0]
+	{
+		let kids = blend_offspring(crate::crossover_bits::CrossoverBits::BlendCluster, ps_ratio);
+		assert!(!kids.is_empty());
+		for k in &kids
+		{
+			assert_eq!(k.2.len(), k.0.iter().sum::<usize>(), "conns vs bits");
+			assert!(k.0.iter().all(|&b| b == k.0[0]), "one width in the cluster: {:?}", k.0);
+		}
+	}
+}
+
+#[test]
+fn search_offspring_inherit_mixes_and_blend_neuron_reaches_new_widths()
+{
+	let parents: HashSet<usize> = [30, 34].into();
+	let mixed = |kids: &[Child]| kids.iter().any(|k| k.0.iter().any(|&b| b != k.0[0]));
+	let inherit = blend_offspring(crate::crossover_bits::CrossoverBits::Inherit, 0.0);
+	assert!(mixed(&inherit), "inherit mixes parent widths (the original behaviour)");
+	assert!(inherit.iter().all(|k| k.0.iter().all(|b| parents.contains(b))), "inherit never invents a width");
+	let blend = blend_offspring(crate::crossover_bits::CrossoverBits::BlendNeuron, 0.0);
+	assert!(blend.iter().any(|k| k.0.iter().any(|b| !parents.contains(b))), "blend_neuron reaches in-between widths");
+	for k in &blend
+	{
+		assert_eq!(k.2.len(), k.0.iter().sum::<usize>());
+	}
+}

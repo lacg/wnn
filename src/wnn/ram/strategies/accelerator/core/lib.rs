@@ -43,6 +43,9 @@ pub mod fitness;
 // Python implementation instead (control/arch_strategy.py:201 opted out
 // explicitly). Self-contained — no crate:: refs — so the move is mechanical.
 pub mod neighbor_search;
+// Crossover bit-width rule (flow param ga_crossover_bits): inherit / BLX-0 blend
+// per neuron or per cluster, applied to every neighbor_search crossover child.
+pub mod crossover_bits;
 // Counter-based RNG shared by both substrates AND both languages (Python
 // mirror: src/wnn/ram/counter_rng.py). Order-independent by construction,
 // so genome operators can move to Rust and run under rayon without the
