@@ -84,6 +84,9 @@ pub struct MutationConfig
 	pub neurons_mutation_rate: f64,
 	pub total_input_bits: usize,
 	pub phase_type: PhaseType,
+	/// Flow param `max_neurons_total`: cap on the genome's SUM of neurons
+	/// (`max_neurons` caps each cluster). None = no total cap (original).
+	pub max_neurons_total: Option<usize>,
 }
 
 impl MutationConfig
@@ -292,6 +295,24 @@ fn mutable_clusters(config: &MutationConfig) -> Vec<usize>
 /// - Bits: change bit counts, add/remove connections (no drift on existing)
 /// - Connections: perturb connection targets, preserve architecture
 pub fn mutate_genome(
+	bits_per_neuron: &[usize],
+	neurons_per_cluster: &[usize],
+	connections: &[i64],
+	config: &MutationConfig,
+	rng: &mut impl Rng,
+) -> (Vec<usize>, Vec<usize>, Vec<i64>)
+{
+	let g = mutate_genome_phase(bits_per_neuron, neurons_per_cluster, connections, config, rng);
+	// Every GA child and TS neighbour passes through here: the one place the
+	// whole-genome budget is enforced in Rust (no RNG → default bit-identical).
+	match config.max_neurons_total
+	{
+		Some(total) => crate::neuron_budget::fit_genome(&g.0, &g.1, &g.2, total, config.min_neurons),
+		None => g,
+	}
+}
+
+fn mutate_genome_phase(
 	bits_per_neuron: &[usize],
 	neurons_per_cluster: &[usize],
 	connections: &[i64],
@@ -1013,6 +1034,8 @@ pub struct GAConfig
 	/// Flow param `ga_crossover_bits`: width rule for every crossover child
 	/// (`Inherit` = each neuron keeps its parent's width, the original behaviour).
 	pub crossover_bits: crate::crossover_bits::CrossoverBits,
+	/// Flow param `max_neurons_total` (see MutationConfig).
+	pub max_neurons_total: Option<usize>,
 }
 
 /// Neuron-crossover options. `dedupe` false = the original operators, same RNG draws.
@@ -1984,6 +2007,7 @@ fn mutate_ga(
 		neurons_mutation_rate: config.neurons_mutation_rate,
 		total_input_bits: config.total_input_bits,
 		phase_type: config.phase_type,
+		max_neurons_total: config.max_neurons_total,
 	};
 	mutate_genome(bits, neurons, connections, &mutation_config, rng)
 }
@@ -2327,6 +2351,7 @@ mod tests
 			neurons_mutation_rate: 0.05,
 			total_input_bits: 64,
 			phase_type: PhaseType::Bits,
+			max_neurons_total: None,
 		};
 
 		assert_eq!(config.bits_delta_max(), 2); // 10% of 24 = 2.4 -> 2
@@ -2348,6 +2373,7 @@ mod tests
 			neurons_mutation_rate: 1.0,
 			total_input_bits: 64,
 			phase_type: phase,
+			max_neurons_total: None,
 		}
 	}
 

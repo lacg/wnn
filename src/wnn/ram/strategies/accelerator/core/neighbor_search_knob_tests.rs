@@ -369,3 +369,26 @@ fn search_offspring_inherit_mixes_and_blend_neuron_reaches_new_widths()
 		assert_eq!(k.2.len(), k.0.iter().sum::<usize>());
 	}
 }
+
+// ---- max_neurons_total (19/10/2026) ------------------------------------------
+
+#[test]
+fn search_offspring_respects_the_total_neuron_budget()
+{
+	let pop = population_multi();
+	let largest = pop.iter().map(|g| g.1.iter().sum::<usize>()).max().unwrap();
+	let total = largest * 2 / 3;
+	for (phase, ps_ratio) in [(PhaseType::Neurons, 0.0), (PhaseType::Neurons, 1.0), (PhaseType::Joint, 0.0)]
+	{
+		let mut cfg = ga_config(&pop, phase, 200, (0.3, ps_ratio, 0.85));
+		(cfg.crossover_rate, cfg.neurons_mutation_rate, cfg.max_neurons_total) = (0.7, 1.0, Some(total));
+		let res = search_offspring(&pop, 20, 60, 0.0, &cfg, &fake_eval, 5, None, None, None, true, None);
+		assert!(!res.candidates.is_empty());
+		for c in &res.candidates
+		{
+			assert!(c.neurons_per_cluster.iter().sum::<usize>() <= total, "{:?} > {total}", c.neurons_per_cluster);
+			assert_eq!(c.bits_per_neuron.len(), c.neurons_per_cluster.iter().sum::<usize>());
+			assert_eq!(c.connections.len(), c.bits_per_neuron.iter().sum::<usize>());
+		}
+	}
+}

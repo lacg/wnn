@@ -40,3 +40,5 @@ mod counter_rng_api;
 pub(crate) use counter_rng_api::*;
 mod unit_grouping_api;
 pub(crate) use unit_grouping_api::*;
+mod neuron_budget_api;
+pub(crate) use neuron_budget_api::*;

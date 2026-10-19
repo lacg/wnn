@@ -46,6 +46,9 @@ pub mod neighbor_search;
 // Crossover bit-width rule (flow param ga_crossover_bits): inherit / BLX-0 blend
 // per neuron or per cluster, applied to every neighbor_search crossover child.
 pub mod crossover_bits;
+// Whole-genome neuron budget (flow param max_neurons_total), enforced in
+// neighbor_search::mutate_genome and exported for the Python grid/immigrants.
+pub mod neuron_budget;
 // Counter-based RNG shared by both substrates AND both languages (Python
 // mirror: src/wnn/ram/counter_rng.py). Order-independent by construction,
 // so genome operators can move to Rust and run under rayon without the

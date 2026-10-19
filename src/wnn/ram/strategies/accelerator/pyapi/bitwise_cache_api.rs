@@ -286,6 +286,7 @@ impl BitwiseCacheWrapper
 			neurons_mutation_rate,
 			total_input_bits,
 			phase_type: phase,
+			max_neurons_total: None,
 		};
 
 		let override_val = self.sparse_threshold_override;
@@ -506,6 +507,7 @@ impl BitwiseCacheWrapper
 			dedupe_neurons: false,
 			dedupe_fill: true,
 			crossover_bits: ram_core::crossover_bits::CrossoverBits::Inherit,
+			max_neurons_total: None,
 		};
 
 		let override_val = self.sparse_threshold_override;

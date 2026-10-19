@@ -1,8 +1,8 @@
 diff --git a/src/wnn/accel.py b/src/wnn/accel.py
-index 3ffe89e5..5e7be942 100644
+index 3ffe89e5..855f687e 100644
 --- a/src/wnn/accel.py
 +++ b/src/wnn/accel.py
-@@ -102,7 +102,12 @@ import os
+@@ -102,7 +102,15 @@ import os
  #   ids_offspring_folds="all" (default) scores offspring, immigrants and TS
  #   neighbours as the CV mean; "phase" passes None = the legacy single fold.
  #   The validation cache pins worker_abi, so this bump re-validates.
@@ -12,115 +12,235 @@ index 3ffe89e5..5e7be942 100644
 +#   drawn U[min,max] of the parents', per neuron or once per cluster). Flow param
 +#   ga_crossover_bits. The GA always passes it, so wheel + Python land together
 +#   at idle. The validation cache pins worker_abi, so this bump re-validates.
++#   Same ABI: search_offspring / search_neighbors take max_neurons_total (None =
++#   no total cap, bit-identical) + neuron_budget_counts / neuron_budget_fit_genome
++#   (flow param max_neurons_total; wnn/ram/strategies/connectivity/neuron_budget.py).
 +EXPECTED_ABI = 21
  
  BUILD_HINT = (
  	"Rebuild the accelerator: cd src/wnn/ram/strategies/accelerator && "
 diff --git a/src/wnn/ram/architecture/base_evaluator.py b/src/wnn/ram/architecture/base_evaluator.py
-index 5b2fcad5..7c58ff3f 100644
+index 5b2fcad5..93837bda 100644
 --- a/src/wnn/ram/architecture/base_evaluator.py
 +++ b/src/wnn/ram/architecture/base_evaluator.py
-@@ -556,6 +556,7 @@ class BaseEvaluator(ABC):
+@@ -434,6 +434,7 @@ class BaseEvaluator(ABC):
+ 		return_best_n: bool = True,
+ 		mutable_clusters: Optional[list[int]] = None,
+ 		phase_type: int = 0,
++		max_neurons_total: Optional[int] = None,
+ 	) -> list[ClusterGenome]:
+ 		"""Search for neighbor genomes above accuracy threshold.
+ 
+@@ -441,6 +442,8 @@ class BaseEvaluator(ABC):
+ 		self.evaluate_batch() for evaluation. Subclasses may override
+ 		to delegate to Rust fast paths.
+ 		"""
++		if max_neurons_total is not None:
++			raise NotImplementedError("max_neurons_total lives in the Rust IDS neighbour path (IDSEvaluator) only")
+ 		self._current_phase = "ts_neighbors"
+ 		if train_subset_idx is None:
+ 			train_subset_idx = self.next_train_idx()
+@@ -556,6 +559,8 @@ class BaseEvaluator(ABC):
  		assortative_mating_ratio: float = 0.0,
  		dedupe_neurons: bool = False,
  		dedupe_fill: bool = True,
 +		crossover_bits: str = "inherit",
++		max_neurons_total: Optional[int] = None,
  	) -> OffspringSearchResult:
  		"""Search for GA offspring above accuracy threshold.
  
-@@ -571,6 +572,8 @@ class BaseEvaluator(ABC):
+@@ -571,6 +576,10 @@ class BaseEvaluator(ABC):
  		"""
  		if dedupe_neurons:
  			raise NotImplementedError("ga_dedupe_neurons lives in the Rust IDS offspring path (IDSEvaluator) only")
 +		if crossover_bits != "inherit":
 +			raise NotImplementedError("ga_crossover_bits lives in the Rust IDS offspring path (IDSEvaluator) only")
++		if max_neurons_total is not None:
++			raise NotImplementedError("max_neurons_total lives in the Rust IDS offspring path (IDSEvaluator) only")
  		if not population:
  			return OffspringSearchResult(genomes=[], evaluated=0, viable=0)
  
+@@ -721,6 +730,7 @@ class BaseEvaluator(ABC):
+ 		logger: Optional[Callable[[str], None]] = None,
+ 		generation: Optional[int] = None,
+ 		total_generations: Optional[int] = None,
++		max_neurons_total: Optional[int] = None,
+ 	) -> list[list[ClusterGenome]]:
+ 		"""Search neighbors for multiple source genomes.
+ 
+@@ -741,6 +751,7 @@ class BaseEvaluator(ABC):
+ 				phase_type=phase_type,
+ 				logger=logger, generation=generation,
+ 				total_generations=total_generations,
++				max_neurons_total=max_neurons_total,
+ 			)
+ 			results.append(neighbors)
+ 		return results
 diff --git a/src/wnn/ram/architecture/ids_evaluator.py b/src/wnn/ram/architecture/ids_evaluator.py
-index 75efc95a..db1bd2be 100644
+index 75efc95a..238de8a2 100644
 --- a/src/wnn/ram/architecture/ids_evaluator.py
 +++ b/src/wnn/ram/architecture/ids_evaluator.py
-@@ -1399,6 +1399,7 @@ class IDSEvaluator(BaseEvaluator):
+@@ -1320,6 +1320,7 @@ class IDSEvaluator(BaseEvaluator):
+ 		return_best_n: bool = True,
+ 		mutable_clusters: Optional[list[int]] = None,
+ 		phase_type: int = 0,
++		max_neurons_total: Optional[int] = None,
+ 	) -> list[ClusterGenome]:
+ 		if train_subset_idx is None:
+ 			train_subset_idx = self.next_train_idx()
+@@ -1356,6 +1357,7 @@ class IDSEvaluator(BaseEvaluator):
+ 			# optimizer's eval partition, not a train fold).
+ 			train_folds=self.ga_fitness_folds(),
+ 			neuron_sample_rate=self._neuron_sample_rate if self.ga_fitness_folds() is not None else 1.0,
++			max_neurons_total=max_neurons_total,
+ 		)
+ 
+ 		genomes = []
+@@ -1399,6 +1401,8 @@ class IDSEvaluator(BaseEvaluator):
  		assortative_mating_ratio: float = 0.0,
  		dedupe_neurons: bool = False,
  		dedupe_fill: bool = True,
 +		crossover_bits: str = "inherit",
++		max_neurons_total: Optional[int] = None,
  	) -> OffspringSearchResult:
  		if not population:
  			return OffspringSearchResult(genomes=[], evaluated=0, viable=0)
-@@ -1461,6 +1462,8 @@ class IDSEvaluator(BaseEvaluator):
+@@ -1461,6 +1465,10 @@ class IDSEvaluator(BaseEvaluator):
  			# IDS-26 P1: distinct neurons per child (default False = ABI-14 operators).
  			dedupe_neurons=dedupe_neurons,
  			dedupe_fill=dedupe_fill,
 +			# ga_crossover_bits: crossover child width rule (default = ABI-20 operators).
 +			crossover_bits=crossover_bits,
++			# max_neurons_total: whole-genome neuron cap (None = per-cluster only).
++			max_neurons_total=max_neurons_total,
  			# ids_offspring_folds="all": the K-fold CV mean (None = legacy fold).
  			train_folds=self.ga_fitness_folds(),
  		)
+diff --git a/src/wnn/ram/architecture/multistage_evaluator.py b/src/wnn/ram/architecture/multistage_evaluator.py
+index 9c30c729..3574ce4a 100644
+--- a/src/wnn/ram/architecture/multistage_evaluator.py
++++ b/src/wnn/ram/architecture/multistage_evaluator.py
+@@ -794,6 +794,7 @@ class MultiStageEvaluator(BaseEvaluator):
+ 		logger: Optional[Callable[[str], None]] = None,
+ 		generation: Optional[int] = None,
+ 		total_generations: Optional[int] = None,
++		max_neurons_total: Optional[int] = None,
+ 	) -> list[list[ClusterGenome]]:
+ 		"""Search neighbors for multiple source genomes in a single eval call.
+ 
+@@ -808,6 +809,8 @@ class MultiStageEvaluator(BaseEvaluator):
+ 		Returns:
+ 			List of neighbor lists, one per source (same order as input)
+ 		"""
++		if max_neurons_total is not None:
++			raise NotImplementedError("max_neurons_total lives in the Rust IDS neighbour path (IDSEvaluator) only")
+ 		if train_subset_idx is None:
+ 			train_subset_idx = self.next_train_idx()
+ 		if eval_subset_idx is None:
 diff --git a/src/wnn/ram/architecture/tiered_evaluator.py b/src/wnn/ram/architecture/tiered_evaluator.py
-index 71837396..347c83cc 100644
+index 71837396..a760c12b 100644
 --- a/src/wnn/ram/architecture/tiered_evaluator.py
 +++ b/src/wnn/ram/architecture/tiered_evaluator.py
-@@ -542,6 +542,7 @@ class TieredEvaluator(BaseEvaluator):
+@@ -428,6 +428,7 @@ class TieredEvaluator(BaseEvaluator):
+         return_best_n: bool = True,
+         mutable_clusters: Optional[list[int]] = None,
+         phase_type: int = 0,
++        max_neurons_total: Optional[int] = None,
+     ) -> list[ClusterGenome]:
+         """
+         Search for neighbor genomes above accuracy threshold, entirely in Rust.
+@@ -542,6 +543,8 @@ class TieredEvaluator(BaseEvaluator):
          assortative_mating_ratio: float = 0.0,
          dedupe_neurons: bool = False,
          dedupe_fill: bool = True,
 +        crossover_bits: str = "inherit",
++        max_neurons_total: Optional[int] = None,
      ) -> OffspringSearchResult:
          """
          Search for GA offspring above accuracy threshold, entirely in Rust.
-@@ -578,8 +579,8 @@ class TieredEvaluator(BaseEvaluator):
+@@ -578,8 +581,8 @@ class TieredEvaluator(BaseEvaluator):
  
          # The LM token cache has no dedupe operator and maps phase 5 (JOINT) to
          # NEURONS silently — refuse both rather than run a different GA.
 -        if dedupe_neurons or phase_type == 5:
 -            raise NotImplementedError("ga_dedupe_neurons / ga_joint_mutation are IDS-only (IDSEvaluator)")
-+        if dedupe_neurons or phase_type == 5 or crossover_bits != "inherit":
-+            raise NotImplementedError("ga_dedupe_neurons / ga_joint_mutation / ga_crossover_bits are IDS-only (IDSEvaluator)")
++        if dedupe_neurons or phase_type == 5 or crossover_bits != "inherit" or max_neurons_total is not None:
++            raise NotImplementedError("ga_dedupe_neurons / ga_joint_mutation / ga_crossover_bits / max_neurons_total are IDS-only (IDSEvaluator)")
          if not population:
              return []
  
 diff --git a/src/wnn/ram/experiments/experiment.py b/src/wnn/ram/experiments/experiment.py
-index 38454840..c8f2cf49 100644
+index 38454840..204b4cab 100644
 --- a/src/wnn/ram/experiments/experiment.py
 +++ b/src/wnn/ram/experiments/experiment.py
-@@ -241,6 +241,8 @@ class ExperimentConfig:
+@@ -14,6 +14,7 @@ from typing import Any, Callable, Optional
+ 
+ from enum import IntEnum
+ 
++from wnn.ram.strategies.connectivity.neuron_budget import validate_budget
+ from wnn.ram.metrics import IDSMetrics, Metrics, GenomeType, FitnessWeights
+ from wnn.ram.fitness import FitnessCalculatorType, FitnessCalculatorFactory
+ from wnn.ram.strategies.factory import OptimizerStrategyFactory, OptimizerStrategyType
+@@ -241,6 +242,11 @@ class ExperimentConfig:
  	# With ga_dedupe_neurons: True = refill to the full count (default); False =
  	# keep only the distinct neurons (child may shrink, floored at max(min_neurons, 1)).
  	ga_dedupe_fill: bool = True
 +	# Crossover child width rule: "inherit" (default) | "blend_neuron" | "blend_cluster".
 +	ga_crossover_bits: str = "inherit"
++	# Whole-genome neuron budget (sum over clusters); max_neurons stays per cluster.
++	# None = no total cap. Enforced on grid cells, GA/TS genomes (Rust neuron_budget).
++	max_neurons_total: Optional[int] = None
  	# Fraction of each generation's offspring slots given to fresh immigrants (P2).
  	immigrant_fraction: float = 0.0
  	# PhaseType.JOINT: neurons crossover + neurons → bits → connections mutation.
-@@ -737,6 +739,7 @@ class Experiment:
+@@ -698,6 +704,7 @@ class Experiment:
+ 		min_neurons = cfg.bitwise_min_neurons if cfg.bitwise_min_neurons is not None else cfg.min_neurons
+ 		max_neurons = cfg.bitwise_max_neurons if cfg.bitwise_max_neurons is not None else cfg.max_neurons
+ 		min_accuracy_floor = cfg.min_accuracy_floor if cfg.min_accuracy_floor > 0 else 0.0
++		validate_budget(cfg.max_neurons_total, num_clusters, min_neurons)
+ 
+ 		# Support-tiered sizing (MCST): per-class centres from this stage's own
+ 		# train-label supports. Computed once here; feeds the tiered grid AND
+@@ -737,6 +744,8 @@ class Experiment:
  			assortative_mating_ratio=cfg.assortative_mating_ratio,
  			dedupe_neurons=cfg.ga_dedupe_neurons,
  			dedupe_fill=cfg.ga_dedupe_fill,
 +			crossover_bits=cfg.ga_crossover_bits,
++			max_neurons_total=cfg.max_neurons_total,
  			joint_mutation=cfg.ga_joint_mutation,
  			neuron_bounds_per_cluster=(
  				[(max(1, int(c * 0.5 + 0.5)), max(1, int(c * 1.5 + 0.5))) for c in tier[0]]
+@@ -774,6 +783,7 @@ class Experiment:
+ 				tier_neuron_centres=tier[0] if tier else None,
+ 				tier_bits_centres=tier[1] if tier else None,
+ 				tier_total_cap=tier[2] if tier else None,
++				max_neurons_total=cfg.max_neurons_total,
+ 				tier_bits_min=cfg.ids_tier_bits_min,
+ 				tier_bits_max=cfg.ids_tier_bits_max,
+ 			)
 diff --git a/src/wnn/ram/experiments/params.py b/src/wnn/ram/experiments/params.py
-index 3e764d22..239862a2 100644
+index 3e764d22..b1c5e374 100644
 --- a/src/wnn/ram/experiments/params.py
 +++ b/src/wnn/ram/experiments/params.py
-@@ -55,6 +55,9 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
+@@ -55,6 +55,13 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
  	# ga_dedupe_fill (bool, default True): False = deduped children keep only their
  	# distinct neurons (may shrink, floored at max(min_neurons, 1)). Needs ga_dedupe_neurons.
  	"ga_dedupe_fill",
 +	# ga_crossover_bits (str, default "inherit"): crossover child width rule —
 +	# "blend_neuron" / "blend_cluster" draw the width U[min, max] of the parents'.
 +	"ga_crossover_bits",
++	# max_neurons_total (int, default None): cap on the genome's SUM of neurons over
++	# all clusters (max_neurons caps each cluster). Over-budget grid cells are excluded;
++	# GA/TS genomes shrink every cluster in proportion (Rust neuron_budget.rs).
++	"max_neurons_total",
  	"adaptation_iterations", "genesis_mode", "start_from_experiment",
  	# Fitness
  	"fitness_calculator", "fitness_percentile", "min_accuracy_floor",
 diff --git a/src/wnn/ram/experiments/worker.py b/src/wnn/ram/experiments/worker.py
-index 2c2aa201..f447128a 100644
+index 2c2aa201..745e32b5 100644
 --- a/src/wnn/ram/experiments/worker.py
 +++ b/src/wnn/ram/experiments/worker.py
-@@ -36,6 +36,18 @@ HEARTBEAT_INTERVAL = 30
+@@ -36,6 +36,29 @@ HEARTBEAT_INTERVAL = 30
  # Consider a flow stale if no heartbeat for this many seconds
  STALE_THRESHOLD = 90
  
@@ -136,22 +256,34 @@ index 2c2aa201..f447128a 100644
 +        raise ValueError(f"ga_crossover_bits={rule!r}: expected one of {CROSSOVER_BITS_RULES}")
 +    return rule
 +
++
++def _max_neurons_total_param(params: dict) -> Optional[int]:
++    """Flow param max_neurons_total: positive int, or absent/None = no total cap."""
++    raw = params.get("max_neurons_total")
++    if raw is None:
++        return None
++    total = int(raw)
++    if total <= 0 or total != raw:
++        raise ValueError(f"max_neurons_total={raw!r}: expected a positive integer")
++    return total
++
  
  class FlowWorker:
      """
-@@ -1576,6 +1588,7 @@ class FlowWorker:
+@@ -1576,6 +1599,8 @@ class FlowWorker:
                  # IDS-26 GA knobs — all default OFF (absent = bit-identical GA)
                  ga_dedupe_neurons=bool(params.get("ga_dedupe_neurons", False)),
                  ga_dedupe_fill=bool(params.get("ga_dedupe_fill", True)),
 +                ga_crossover_bits=_crossover_bits_param(params),
++                max_neurons_total=_max_neurons_total_param(params),
                  immigrant_fraction=float(params.get("immigrant_fraction", 0.0)),
                  ga_joint_mutation=bool(params.get("ga_joint_mutation", False)),
              )
 diff --git a/src/wnn/ram/strategies/connectivity/architecture_config.py b/src/wnn/ram/strategies/connectivity/architecture_config.py
-index 4bdcaf23..4d46069f 100644
+index 4bdcaf23..80c5c974 100644
 --- a/src/wnn/ram/strategies/connectivity/architecture_config.py
 +++ b/src/wnn/ram/strategies/connectivity/architecture_config.py
-@@ -96,6 +96,12 @@ class ArchitectureConfig:
+@@ -96,6 +96,16 @@ class ArchitectureConfig:
  	# back up to its count with fresh neurons; False = keep only its distinct
  	# neurons — the child may SHRINK — refilling only up to max(min_neurons, 1).
  	dedupe_fill: bool = True
@@ -161,32 +293,235 @@ index 4bdcaf23..4d46069f 100644
 +	# parents' widths there) or "blend_cluster" (one width per cluster ~ U[min, max]
 +	# of both parents' cluster widths). Rust offspring path (IDS) only.
 +	crossover_bits: str = "inherit"
++	# Flow param max_neurons_total (19/10/2026): cap on the genome's SUM of neurons
++	# (max_neurons caps each cluster). Over budget = every cluster shrinks in
++	# proportion (Rust neuron_budget.rs). None = per-cluster cap only (original).
++	max_neurons_total: int | None = None
  	# IDS-26 (flow param ga_joint_mutation): the GA runs PhaseType.JOINT —
  	# NEURONS crossover + neurons → bits → connections mutation on every child.
  	# Chosen ONLY by this flag; _derive_phase_type's mapping is untouched.
 diff --git a/src/wnn/ram/strategies/connectivity/architecture_ga.py b/src/wnn/ram/strategies/connectivity/architecture_ga.py
-index 668a83de..e32794bb 100644
+index 668a83de..98348406 100644
 --- a/src/wnn/ram/strategies/connectivity/architecture_ga.py
 +++ b/src/wnn/ram/strategies/connectivity/architecture_ga.py
-@@ -271,6 +271,8 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
+@@ -15,6 +15,7 @@ from pathlib import Path
+ from typing import Any, Callable, Optional, Sequence, TYPE_CHECKING
+ 
+ from wnn.ram.genome import mode_or_midpoint
++from wnn.ram.strategies.connectivity.neuron_budget import fit_genome
+ from wnn.ram.strategies.connectivity.framework import GAConfig, OptimizerResult, StopReason
+ from wnn.ram.strategies.connectivity.generic_ga import GenericGAStrategy
+ from wnn.ram.strategies.connectivity.adaptive_cluster import PhaseType
+@@ -214,6 +215,12 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
+ 			n = self._new_cluster_neurons(c, ref, f)
+ 			neurons.append(n)
+ 			bits_per_neuron.extend(self._new_neuron_bits(c, n, ref, f))
++		if cfg.max_neurons_total is not None:
++			# Fit BEFORE drawing connections (same rule as Rust; no RNG, so the
++			# default path's draw order is untouched).
++			fitted = fit_genome(ClusterGenome(bits_per_neuron=bits_per_neuron, neurons_per_cluster=neurons),
++			                    cfg.max_neurons_total, cfg.min_neurons)
++			bits_per_neuron, neurons = fitted.bits_per_neuron, fitted.neurons_per_cluster
+ 
+ 		connections = None
+ 		if cfg.total_input_bits is not None:
+@@ -271,6 +278,10 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
  			# immigrant_fraction both work on this path.
  			if self._arch_config.dedupe_neurons:
  				raise NotImplementedError("ga_dedupe_neurons needs the Rust offspring path (a cached IDS evaluator)")
 +			if self._arch_config.crossover_bits != "inherit":
 +				raise NotImplementedError("ga_crossover_bits needs the Rust offspring path (a cached IDS evaluator)")
++			if self._arch_config.max_neurons_total is not None:
++				raise NotImplementedError("max_neurons_total needs the Rust offspring path (a cached IDS evaluator)")
  			return super()._generate_offspring(population, n_needed, threshold, generation)
  		n_immigrants = round(self._config.immigrant_fraction * n_needed)
  		offspring = self._rust_offspring(population, n_needed - n_immigrants, threshold, generation)
-@@ -343,6 +345,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
+@@ -343,6 +354,8 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
  			assortative_mating_ratio=arch_cfg.assortative_mating_ratio,
  			dedupe_neurons=arch_cfg.dedupe_neurons,
  			dedupe_fill=arch_cfg.dedupe_fill,
 +			crossover_bits=arch_cfg.crossover_bits,
++			max_neurons_total=arch_cfg.max_neurons_total,
  		)
  
  		# Convert to (genome, Metrics) tuples, rank by fitness, return best n_needed
+@@ -540,6 +553,12 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
+ 						expanded.append(mutated)
+ 					initial_population = expanded
+ 
++			if initial_population and self._arch_config.max_neurons_total is not None:
++				# Seeds (grid top-K, resumed or leaderboard pops) and their mutants
++				# join the GA inside the budget, like every Rust offspring.
++				initial_population = [fit_genome(g, self._arch_config.max_neurons_total, self._arch_config.min_neurons)
++				                      for g in initial_population]
++
+ 			if cfg.fresh_population:
+ 				initial_population = None
+ 
+diff --git a/src/wnn/ram/strategies/connectivity/architecture_ts.py b/src/wnn/ram/strategies/connectivity/architecture_ts.py
+index 2f8f7fc5..355696e4 100644
+--- a/src/wnn/ram/strategies/connectivity/architecture_ts.py
++++ b/src/wnn/ram/strategies/connectivity/architecture_ts.py
+@@ -219,6 +219,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
+ 				return_best_n=True,
+ 				mutable_clusters=arch_cfg.mutable_clusters,
+ 				phase_type=int(self._phase_type),
++				max_neurons_total=arch_cfg.max_neurons_total,
+ 			)
+ 
+ 			# Convert to (genome, Metrics) tuples, rank by fitness, return best n_neighbors
+@@ -336,6 +337,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
+ 				logger=self._log,
+ 				generation=iteration,
+ 				total_generations=cfg.iterations,
++				max_neurons_total=arch_cfg.max_neurons_total,
+ 			)
+ 		finally:
+ 			if hasattr(evaluator, 'set_progress_callback'):
+diff --git a/src/wnn/ram/strategies/connectivity/grid_search.py b/src/wnn/ram/strategies/connectivity/grid_search.py
+index ead4dbc5..ae30b1eb 100644
+--- a/src/wnn/ram/strategies/connectivity/grid_search.py
++++ b/src/wnn/ram/strategies/connectivity/grid_search.py
+@@ -60,6 +60,10 @@ class GridSearchConfig:
+ 	tier_bits_min: int = 10                           # band lower edge (per-class bits floor)
+ 	tier_bits_max: int = 34                           # band upper edge (per-class bits ceiling)
+ 	tier_tie_epsilon: float = 0.005                   # anti-lottery tiebreak band (relative fitness)
++	# Flow param max_neurons_total: cells whose genome total (clusters x neurons)
++	# exceeds it are EXCLUDED loudly, like tier_total_cap; leaderboard seeds are
++	# fitted (Rust neuron_budget). None = no total cap (original).
++	max_neurons_total: Optional[int] = None
+ 
+ 
+ class GridSearchStrategy:
+@@ -189,10 +193,12 @@ class GridSearchStrategy:
+ 	                       initial_population: Optional[list]) -> list:
+ 		"""[(neurons, bits, genome-or-None)] from the grid or a leaderboard pop."""
+ 		if cfg.grid_source == "leaderboard" and initial_population:
++			from wnn.ram.strategies.connectivity.neuron_budget import fit_genome
++			seeds = [fit_genome(g, cfg.max_neurons_total, 1) for g in initial_population]
+ 			config_list = [
+ 				(g.neurons_per_cluster[0] if g.neurons_per_cluster else 0,
+ 				 g.bits_per_neuron[0] if g.bits_per_neuron else 0, g)
+-				for g in initial_population
++				for g in seeds
+ 			]
+ 			self._log(f"\n{'='*70}")
+ 			self._log(f"Grid Search — Leaderboard ({len(config_list)} genomes)")
+@@ -202,14 +208,23 @@ class GridSearchStrategy:
+ 			return config_list
+ 		if cfg.tier_neuron_centres and cfg.tier_bits_centres:
+ 			return self._build_tiered_config_list(cfg)
++		total = cfg.max_neurons_total
++		fits = lambda n: total is None or n * cfg.num_clusters <= total
+ 		config_list = [(neurons, bits, None)
+-		               for neurons in cfg.neurons_grid for bits in cfg.bits_grid]
++		               for neurons in cfg.neurons_grid if fits(neurons) for bits in cfg.bits_grid]
+ 		self._log(f"\n{'='*70}")
+ 		self._log(f"Grid Search ({len(config_list)} configs)")
+ 		self._log(f"  neurons: {cfg.neurons_grid}")
+ 		self._log(f"  bits:    {cfg.bits_grid}")
+ 		self._log(f"  clusters: {cfg.num_clusters}")
++		excluded = [n for n in cfg.neurons_grid if not fits(n)]
++		if excluded:
++			self._log(f"  ⚠️ EXCLUDED neurons {excluded}: {cfg.num_clusters} clusters x n exceeds "
++			          f"max_neurons_total {total}")
+ 		self._log(f"{'='*70}")
++		if not config_list:
++			raise RuntimeError(f"Grid has 0 configs within max_neurons_total {total} "
++			                   f"({cfg.num_clusters} clusters, neurons {cfg.neurons_grid}) — refusing an empty grid")
+ 		return config_list
+ 
+ 	def _build_tiered_config_list(self, cfg: GridSearchConfig) -> list:
+@@ -223,12 +238,14 @@ class GridSearchStrategy:
+ 			f"tier centres ({len(cfg.tier_neuron_centres)}) != clusters ({cfg.num_clusters})"
+ 		config_list = []
+ 		skipped = []
++		caps = [c for c in (cfg.tier_total_cap, cfg.max_neurons_total) if c is not None]
++		cap = min(caps) if caps else None
+ 		for nm in cfg.tier_neuron_multipliers:
+ 			for bm in cfg.tier_bits_multipliers:
+ 				neurons, bits = scaled_shape(cfg.tier_neuron_centres, cfg.tier_bits_centres, nm, bm,
+ 				                             cfg.tier_bits_min, cfg.tier_bits_max)
+ 				total = sum(neurons)
+-				if cfg.tier_total_cap is not None and total > cfg.tier_total_cap:
++				if cap is not None and total > cap:
+ 					skipped.append((nm, bm, total))
+ 					continue
+ 				genome = self._create_genome_from_shape(neurons, bits)
+@@ -238,16 +255,16 @@ class GridSearchStrategy:
+ 		self._log(f"  neuron centres: {cfg.tier_neuron_centres} (Σ{sum(cfg.tier_neuron_centres)})")
+ 		self._log(f"  bits centres:   {cfg.tier_bits_centres}")
+ 		self._log(f"  multipliers:    n×{cfg.tier_neuron_multipliers}  b×{cfg.tier_bits_multipliers}")
+-		if cfg.tier_total_cap is not None:
+-			self._log(f"  total cap:      {cfg.tier_total_cap} neurons")
++		if cap is not None:
++			self._log(f"  total cap:      {cap} neurons")
+ 		for nm, bm, total in skipped:
+ 			self._log(f"  ⚠️ EXCLUDED (n×{nm}, b×{bm}): total {total} neurons exceeds cap "
+-			          f"{cfg.tier_total_cap} — the next stage could not pay its floors")
++			          f"{cap} — the next stage could not pay its floors")
+ 		self._log(f"  clusters: {cfg.num_clusters}")
+ 		self._log(f"{'='*70}")
+ 		if not config_list:
+ 			raise RuntimeError(
+-				f"Tiered grid produced 0 feasible configs (cap {cfg.tier_total_cap}, "
++				f"Tiered grid produced 0 feasible configs (cap {cap}, "
+ 				f"centres Σ{sum(cfg.tier_neuron_centres)}) — refusing to run an empty grid")
+ 		return config_list
+ 
+diff --git a/src/wnn/ram/strategies/connectivity/neuron_budget.py b/src/wnn/ram/strategies/connectivity/neuron_budget.py
+new file mode 100644
+index 00000000..a4502f78
+--- /dev/null
++++ b/src/wnn/ram/strategies/connectivity/neuron_budget.py
+@@ -0,0 +1,45 @@
++"""Whole-genome neuron budget (flow param max_neurons_total, worker ABI 21).
++
++`max_neurons` caps each cluster; `max_neurons_total` caps the genome's SUM. The
++rule lives in Rust (ram_core neuron_budget.rs): an over-budget genome shrinks
++every cluster in proportion, never below min_neurons, dropping neurons from the
++end of each cluster. Rust applies it to every GA child / TS neighbour; these
++helpers apply the SAME function to the genomes Python builds or already holds
++(grid cells, immigrants, seed populations). None = no total cap (original).
++"""
++from __future__ import annotations
++
++from typing import Optional, TYPE_CHECKING
++
++if TYPE_CHECKING:
++	from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
++
++
++def validate_budget(total: Optional[int], num_clusters: int, min_neurons: int) -> None:
++	"""Every cluster must be able to keep min_neurons inside the budget."""
++	if total is None:
++		return
++	if total < num_clusters * max(min_neurons, 1):
++		raise ValueError(
++			f"max_neurons_total={total} < {num_clusters} clusters x min_neurons {max(min_neurons, 1)}")
++
++
++def budget_counts(neurons: list[int], total: Optional[int], min_neurons: int) -> list[int]:
++	"""Per-cluster counts fitted to the budget (unchanged when within it)."""
++	if total is None or sum(neurons) <= total:
++		return list(neurons)
++	from wnn.accel import require_accel
++	return list(require_accel().neuron_budget_counts(list(neurons), int(total), int(min_neurons)))
++
++
++def fit_genome(genome: 'ClusterGenome', total: Optional[int], min_neurons: int) -> 'ClusterGenome':
++	"""The genome fitted to the budget (the SAME object when within it)."""
++	if total is None or sum(genome.neurons_per_cluster) <= total:
++		return genome
++	from wnn.accel import require_accel
++	from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
++	bits, neurons, conns = require_accel().neuron_budget_fit_genome(
++		list(genome.bits_per_neuron), list(genome.neurons_per_cluster),
++		list(genome.connections or []), int(total), int(min_neurons))
++	return ClusterGenome(bits_per_neuron=list(bits), neurons_per_cluster=list(neurons),
++	                     connections=list(conns) if genome.connections else None)
 diff --git a/tests/test_ids_ga_knobs.py b/tests/test_ids_ga_knobs.py
-index 66d754f7..a72cdcf3 100644
+index 66d754f7..8eeac986 100644
 --- a/tests/test_ids_ga_knobs.py
 +++ b/tests/test_ids_ga_knobs.py
 @@ -34,10 +34,11 @@ class RecordingEvaluator:
@@ -194,32 +529,34 @@ index 66d754f7..a72cdcf3 100644
  	                     total_generations, return_best_n, mutable_clusters, phase_type, fitness_scores,
  	                     cluster_crossover_ratio, pool_shuffle_ratio, assortative_mating_ratio, dedupe_neurons,
 -	                     dedupe_fill):
-+	                     dedupe_fill, crossover_bits="inherit"):
++	                     dedupe_fill, crossover_bits="inherit", max_neurons_total=None):
  		self.search_calls.append(dict(target_count=target_count, phase_type=phase_type,
  		                              bits_rate=bits_mutation_rate, neurons_rate=neurons_mutation_rate,
 -		                              dedupe=dedupe_neurons, fill=dedupe_fill, train_idx=train_subset_idx))
 +		                              dedupe=dedupe_neurons, fill=dedupe_fill, train_idx=train_subset_idx,
-+		                              crossover_bits=crossover_bits))
++		                              crossover_bits=crossover_bits, max_neurons_total=max_neurons_total))
  		genomes = [_with_metrics(self._strategy.create_random_genome()) for _ in range(target_count)]
  		return type("R", (), {"genomes": genomes})()
  
-@@ -51,12 +52,13 @@ def _with_metrics(genome):
+@@ -51,12 +52,14 @@ def _with_metrics(genome):
  	return genome
  
  
 -def _strategy(immigrant_fraction=0.0, dedupe=False, joint=False, opt=(True, True, False), fill=True):
 +def _strategy(immigrant_fraction=0.0, dedupe=False, joint=False, opt=(True, True, False), fill=True,
-+              crossover_bits="inherit"):
++              crossover_bits="inherit", max_neurons_total=None, num_clusters=1):
  	arch = ArchitectureConfig(
- 		num_clusters=1, min_bits=4, max_bits=34, min_neurons=5, max_neurons=500,
+-		num_clusters=1, min_bits=4, max_bits=34, min_neurons=5, max_neurons=500,
++		num_clusters=num_clusters, min_bits=4, max_bits=34, min_neurons=5, max_neurons=500,
  		default_bits=10, default_neurons=20, total_input_bits=32,
  		optimize_neurons=opt[0], optimize_bits=opt[1], optimize_connections=opt[2],
 -		dedupe_neurons=dedupe, dedupe_fill=fill, joint_mutation=joint,
 +		dedupe_neurons=dedupe, dedupe_fill=fill, joint_mutation=joint, crossover_bits=crossover_bits,
++		max_neurons_total=max_neurons_total,
  	)
  	cfg = GAConfig(population_size=10, generations=3, immigrant_fraction=immigrant_fraction, mutation_rate=0.1)
  	s = ArchitectureGAStrategy(arch_config=arch, ga_config=cfg, seed=42)
-@@ -180,6 +182,21 @@ def test_dedupe_fill_reaches_rust(fill):
+@@ -180,6 +183,21 @@ def test_dedupe_fill_reaches_rust(fill):
  	assert s._cached_evaluator.search_calls[0]["fill"] is fill
  
  
@@ -241,3 +578,180 @@ index 66d754f7..a72cdcf3 100644
  def test_dedupe_refused_on_python_fallback():
  	"""No cached evaluator → Python breeding, which has no dedupe operator."""
  	s = _strategy(dedupe=True)
+@@ -196,3 +214,31 @@ def test_joint_immigrants_sample_bits_in_band():
+ 	s._generate_offspring(pop, n_needed=8, threshold=0.0, generation=0)
+ 	immigrant_bits = {b for g in s._cached_evaluator.immigrant_calls[0][0] for b in g.bits_per_neuron}
+ 	assert len(immigrant_bits) > 1 and all(4 <= b <= 34 for b in immigrant_bits)
++
++
++# ---- max_neurons_total -------------------------------------------------------
++
++def test_max_neurons_total_reaches_rust():
++	s = _strategy(max_neurons_total=300)
++	s._generate_offspring(_population(s), n_needed=8, threshold=0.0, generation=0)
++	assert s._cached_evaluator.search_calls[0]["max_neurons_total"] == 300
++
++
++def test_max_neurons_total_refused_on_python_fallback():
++	s = _strategy(max_neurons_total=300)
++	s._cached_evaluator = None
++	with pytest.raises(NotImplementedError):
++		s._generate_offspring(_population(s), n_needed=4, threshold=0.0, generation=0)
++
++
++@pytest.mark.skipif(getattr(pytest.importorskip("ram_accelerator"), "ABI_VERSION", 0) < 21,
++                    reason="needs the ABI-21 neuron_budget exports")
++def test_immigrants_fit_the_total_budget():
++	"""2 clusters sampled up to 500 each would reach 1000; the budget holds them to 300."""
++	s = _strategy(max_neurons_total=300, num_clusters=2)
++	for _ in range(20):
++		g = s.create_random_genome()
++		assert sum(g.neurons_per_cluster) <= 300
++		assert all(n >= 5 for n in g.neurons_per_cluster)
++		assert len(g.bits_per_neuron) == sum(g.neurons_per_cluster)
++		assert len(g.connections) == sum(g.bits_per_neuron)
+diff --git a/tests/test_neuron_budget.py b/tests/test_neuron_budget.py
+new file mode 100644
+index 00000000..9bad13c4
+--- /dev/null
++++ b/tests/test_neuron_budget.py
+@@ -0,0 +1,69 @@
++"""max_neurons_total: the Python helpers (over the Rust neuron_budget exports),
++the flow-param validation and the grid exclusion rule."""
++
++import pytest
++
++ram_accelerator = pytest.importorskip("ram_accelerator")
++if getattr(ram_accelerator, "ABI_VERSION", 0) < 21:
++	pytest.skip("worker wheel predates max_neurons_total (ABI < 21)", allow_module_level=True)
++
++from wnn.ram.experiments.worker import _max_neurons_total_param  # noqa: E402
++from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome  # noqa: E402
++from wnn.ram.strategies.connectivity.grid_search import GridSearchConfig, GridSearchStrategy  # noqa: E402
++from wnn.ram.strategies.connectivity.neuron_budget import budget_counts, fit_genome, validate_budget  # noqa: E402
++
++
++def test_budget_counts_none_and_within_are_unchanged():
++	assert budget_counts([400, 400], None, 1) == [400, 400]
++	assert budget_counts([200, 250], 500, 1) == [200, 250]
++
++
++def test_budget_counts_shrinks_proportionally():
++	assert budget_counts([500, 500], 500, 1) == [250, 250]
++	assert budget_counts([600, 300], 500, 1) == [333, 167]
++
++
++def test_fit_genome_returns_same_object_within_budget_and_truncates_over():
++	g = ClusterGenome(bits_per_neuron=[2, 3, 2, 2, 1, 1, 1, 1], neurons_per_cluster=[4, 4], connections=list(range(13)))
++	assert fit_genome(g, 8, 1) is g
++	f = fit_genome(g, 4, 1)
++	assert f.neurons_per_cluster == [2, 2]
++	assert f.bits_per_neuron == [2, 3, 1, 1]
++	assert f.connections == [0, 1, 2, 3, 4, 9, 10]
++
++
++def test_validate_budget():
++	validate_budget(None, 2, 5)
++	validate_budget(10, 2, 5)
++	with pytest.raises(ValueError):
++		validate_budget(9, 2, 5)
++
++
++@pytest.mark.parametrize("raw,ok", [(None, None), (500, 500), (0, ValueError), (-3, ValueError), (2.5, ValueError)])
++def test_flow_param_validation(raw, ok):
++	params = {} if raw is None else {"max_neurons_total": raw}
++	if ok is ValueError:
++		with pytest.raises(ValueError):
++			_max_neurons_total_param(params)
++	else:
++		assert _max_neurons_total_param(params) == ok
++
++
++def _grid(total, clusters=2, neurons=(100, 250, 300, 500)):
++	cfg = GridSearchConfig(num_clusters=clusters, neurons_grid=list(neurons), bits_grid=[16, 32],
++	                       total_input_bits=64, max_neurons_total=total)
++	return GridSearchStrategy(cfg, seed=1), cfg
++
++
++def test_grid_excludes_cells_over_the_total():
++	s, cfg = _grid(500)
++	cells = s._build_config_list(cfg, None)
++	assert sorted({n for n, _, _ in cells}) == [100, 250]
++	s, cfg = _grid(None)
++	assert len(s._build_config_list(cfg, None)) == 8
++
++
++def test_grid_refuses_an_empty_grid():
++	s, cfg = _grid(100, neurons=(300, 500))
++	with pytest.raises(RuntimeError):
++		s._build_config_list(cfg, None)
+diff --git a/tests/test_neuron_budget_e2e.py b/tests/test_neuron_budget_e2e.py
+new file mode 100644
+index 00000000..154c65e2
+--- /dev/null
++++ b/tests/test_neuron_budget_e2e.py
+@@ -0,0 +1,64 @@
++"""max_neurons_total end-to-end through the REAL IDSEvaluator + Rust offspring /
++neighbour search: every returned genome sums to <= the budget (2m shape)."""
++
++import numpy as np
++import pytest
++
++ram_accelerator = pytest.importorskip("ram_accelerator")
++if getattr(ram_accelerator, "ABI_VERSION", 0) < 21:
++	pytest.skip("worker wheel predates max_neurons_total (ABI < 21)", allow_module_level=True)
++
++from test_ids_ga_knobs_e2e import _dataset  # noqa: E402
++from wnn.ram.architecture.ids_evaluator import IDSEvaluator  # noqa: E402
++from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome  # noqa: E402
++
++TOTAL = 30
++
++
++@pytest.fixture(autouse=True)
++def _order_independent_training(monkeypatch):
++	monkeypatch.setenv("WNN_ORDER_INDEPENDENT_TRAIN", "1")
++
++
++@pytest.fixture(scope="module")
++def evaluator():
++	return IDSEvaluator(_dataset(), classification="binary", num_parts=5, k_folds=5, seed=7, single_cluster=False)
++
++
++def _genome(ev, rng, n0, n1, b=6):
++	conns = rng.integers(0, ev.total_input_bits, size=(n0 + n1) * b).tolist()
++	return ClusterGenome(bits_per_neuron=[b] * (n0 + n1), neurons_per_cluster=[n0, n1], connections=conns)
++
++
++def _check(genomes):
++	assert genomes
++	for g in genomes:
++		assert sum(g.neurons_per_cluster) <= TOTAL, g.neurons_per_cluster
++		assert len(g.connections) == sum(g.bits_per_neuron)
++
++
++@pytest.mark.parametrize("phase_type", [0, 5])
++def test_offspring_fit_the_budget(evaluator, phase_type):
++	rng = np.random.default_rng(3)
++	# Parents straddle the budget split differently, so crossover alone can exceed it.
++	pop = [(_genome(evaluator, rng, 25 - i, 5 + i), 1.0 + i / 10) for i in range(6)]
++	res = evaluator.search_offspring(
++		population=pop, target_count=10, max_attempts=40, accuracy_threshold=0.0,
++		min_bits=4, max_bits=12, min_neurons=2, max_neurons=40,
++		bits_mutation_rate=0.1 if phase_type == 5 else 0.0, neurons_mutation_rate=0.5,
++		crossover_rate=1.0, tournament_size=3, train_subset_idx=1, seed=11,
++		phase_type=phase_type, pool_shuffle_ratio=1.0, assortative_mating_ratio=0.0,
++		max_neurons_total=TOTAL,
++	)
++	_check(res.genomes)
++
++
++def test_neighbours_fit_the_budget(evaluator):
++	rng = np.random.default_rng(4)
++	out = evaluator.search_neighbors(
++		genome=_genome(evaluator, rng, 15, 15), target_count=8, max_attempts=30, accuracy_threshold=0.0,
++		min_bits=4, max_bits=12, min_neurons=2, max_neurons=40,
++		bits_mutation_rate=0.0, neurons_mutation_rate=1.0, train_subset_idx=1, seed=5,
++		max_neurons_total=TOTAL,
++	)
++	_check(out)

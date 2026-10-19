@@ -111,6 +111,7 @@ pub(super) fn ga_config(pop: &[Genome], phase: PhaseType, tib: usize, ratios: (f
 		dedupe_neurons: false,
 		dedupe_fill: true,
 		crossover_bits: crate::crossover_bits::CrossoverBits::Inherit,
+		max_neurons_total: None,
 	}
 }
 

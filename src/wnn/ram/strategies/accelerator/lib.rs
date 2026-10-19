@@ -395,7 +395,11 @@ use pyapi::*;
 /// 21 (19/10/2026): additive — IDSCacheWrapper.search_offspring takes
 /// `crossover_bits` ("inherit" default = bit-identical to ABI 20 | "blend_neuron"
 /// | "blend_cluster"): BLX-0 width rule on every crossover child (flow param
-/// ga_crossover_bits, ram_core crossover_bits.rs).
+/// ga_crossover_bits, ram_core crossover_bits.rs). Same ABI: search_offspring /
+/// search_neighbors take `max_neurons_total` (None default = no total cap,
+/// bit-identical) and the module exports neuron_budget_counts /
+/// neuron_budget_fit_genome (ram_core neuron_budget.rs) for the Python grid,
+/// immigrants and seed genomes.
 pub const ABI_VERSION: u32 = 21;
 
 #[pymodule]
@@ -405,6 +409,9 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()>
 	m.add_function(wrap_pyfunction!(counter_rng_draw_u64, m)?)?;
 	m.add_function(wrap_pyfunction!(counter_rng_uniform, m)?)?;
 	m.add_function(wrap_pyfunction!(counter_rng_below, m)?)?;
+	// Whole-genome neuron budget (max_neurons_total, ABI 21) — pyapi/neuron_budget_api.rs.
+	m.add_function(wrap_pyfunction!(neuron_budget_counts, m)?)?;
+	m.add_function(wrap_pyfunction!(neuron_budget_fit_genome, m)?)?;
 	m.add_function(wrap_pyfunction!(metal_available, m)?)?;
 	m.add_function(wrap_pyfunction!(reset_metal_evaluators, m)?)?;
 	m.add_function(wrap_pyfunction!(cpu_cores, m)?)?;
