@@ -434,6 +434,7 @@ class BaseEvaluator(ABC):
 		return_best_n: bool = True,
 		mutable_clusters: Optional[list[int]] = None,
 		phase_type: int = 0,
+		max_neurons_total: Optional[int] = None,
 	) -> list[ClusterGenome]:
 		"""Search for neighbor genomes above accuracy threshold.
 
@@ -441,6 +442,8 @@ class BaseEvaluator(ABC):
 		self.evaluate_batch() for evaluation. Subclasses may override
 		to delegate to Rust fast paths.
 		"""
+		if max_neurons_total is not None:
+			raise NotImplementedError("max_neurons_total lives in the Rust IDS neighbour path (IDSEvaluator) only")
 		self._current_phase = "ts_neighbors"
 		if train_subset_idx is None:
 			train_subset_idx = self.next_train_idx()
@@ -556,6 +559,8 @@ class BaseEvaluator(ABC):
 		assortative_mating_ratio: float = 0.0,
 		dedupe_neurons: bool = False,
 		dedupe_fill: bool = True,
+		crossover_bits: str = "inherit",
+		max_neurons_total: Optional[int] = None,
 	) -> OffspringSearchResult:
 		"""Search for GA offspring above accuracy threshold.
 
@@ -571,6 +576,10 @@ class BaseEvaluator(ABC):
 		"""
 		if dedupe_neurons:
 			raise NotImplementedError("ga_dedupe_neurons lives in the Rust IDS offspring path (IDSEvaluator) only")
+		if crossover_bits != "inherit":
+			raise NotImplementedError("ga_crossover_bits lives in the Rust IDS offspring path (IDSEvaluator) only")
+		if max_neurons_total is not None:
+			raise NotImplementedError("max_neurons_total lives in the Rust IDS offspring path (IDSEvaluator) only")
 		if not population:
 			return OffspringSearchResult(genomes=[], evaluated=0, viable=0)
 
@@ -721,6 +730,7 @@ class BaseEvaluator(ABC):
 		logger: Optional[Callable[[str], None]] = None,
 		generation: Optional[int] = None,
 		total_generations: Optional[int] = None,
+		max_neurons_total: Optional[int] = None,
 	) -> list[list[ClusterGenome]]:
 		"""Search neighbors for multiple source genomes.
 
@@ -741,6 +751,7 @@ class BaseEvaluator(ABC):
 				phase_type=phase_type,
 				logger=logger, generation=generation,
 				total_generations=total_generations,
+				max_neurons_total=max_neurons_total,
 			)
 			results.append(neighbors)
 		return results

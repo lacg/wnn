@@ -219,6 +219,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				return_best_n=True,
 				mutable_clusters=arch_cfg.mutable_clusters,
 				phase_type=int(self._phase_type),
+				max_neurons_total=arch_cfg.max_neurons_total,
 			)
 
 			# Convert to (genome, Metrics) tuples, rank by fitness, return best n_neighbors
@@ -336,6 +337,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				logger=self._log,
 				generation=iteration,
 				total_generations=cfg.iterations,
+				max_neurons_total=arch_cfg.max_neurons_total,
 			)
 		finally:
 			if hasattr(evaluator, 'set_progress_callback'):

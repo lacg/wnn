@@ -96,6 +96,16 @@ class ArchitectureConfig:
 	# back up to its count with fresh neurons; False = keep only its distinct
 	# neurons — the child may SHRINK — refilling only up to max(min_neurons, 1).
 	dedupe_fill: bool = True
+	# Flow param ga_crossover_bits (19/10/2026): width rule for every crossover
+	# child — "inherit" (each neuron keeps its parent's width; mixed parents give
+	# mixed clusters), "blend_neuron" (per position, width ~ U[min, max] of the two
+	# parents' widths there) or "blend_cluster" (one width per cluster ~ U[min, max]
+	# of both parents' cluster widths). Rust offspring path (IDS) only.
+	crossover_bits: str = "inherit"
+	# Flow param max_neurons_total (19/10/2026): cap on the genome's SUM of neurons
+	# (max_neurons caps each cluster). Over budget = every cluster shrinks in
+	# proportion (Rust neuron_budget.rs). None = per-cluster cap only (original).
+	max_neurons_total: int | None = None
 	# IDS-26 (flow param ga_joint_mutation): the GA runs PhaseType.JOINT —
 	# NEURONS crossover + neurons → bits → connections mutation on every child.
 	# Chosen ONLY by this flag; _derive_phase_type's mapping is untouched.

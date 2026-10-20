@@ -102,7 +102,15 @@ import os
 #   ids_offspring_folds="all" (default) scores offspring, immigrants and TS
 #   neighbours as the CV mean; "phase" passes None = the legacy single fold.
 #   The validation cache pins worker_abi, so this bump re-validates.
-EXPECTED_ABI = 20
+# 21 (19/10/2026): additive — search_offspring takes crossover_bits ("inherit"
+#   default, bit-identical | "blend_neuron" | "blend_cluster": the child's width is
+#   drawn U[min,max] of the parents', per neuron or once per cluster). Flow param
+#   ga_crossover_bits. The GA always passes it, so wheel + Python land together
+#   at idle. The validation cache pins worker_abi, so this bump re-validates.
+#   Same ABI: search_offspring / search_neighbors take max_neurons_total (None =
+#   no total cap, bit-identical) + neuron_budget_counts / neuron_budget_fit_genome
+#   (flow param max_neurons_total; wnn/ram/strategies/connectivity/neuron_budget.py).
+EXPECTED_ABI = 21
 
 BUILD_HINT = (
 	"Rebuild the accelerator: cd src/wnn/ram/strategies/accelerator && "

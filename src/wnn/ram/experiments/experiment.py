@@ -14,6 +14,7 @@ from typing import Any, Callable, Optional
 
 from enum import IntEnum
 
+from wnn.ram.strategies.connectivity.neuron_budget import validate_budget
 from wnn.ram.metrics import IDSMetrics, Metrics, GenomeType, FitnessWeights
 from wnn.ram.fitness import FitnessCalculatorType, FitnessCalculatorFactory
 from wnn.ram.strategies.factory import OptimizerStrategyFactory, OptimizerStrategyType
@@ -241,6 +242,11 @@ class ExperimentConfig:
 	# With ga_dedupe_neurons: True = refill to the full count (default); False =
 	# keep only the distinct neurons (child may shrink, floored at max(min_neurons, 1)).
 	ga_dedupe_fill: bool = True
+	# Crossover child width rule: "inherit" (default) | "blend_neuron" | "blend_cluster".
+	ga_crossover_bits: str = "inherit"
+	# Whole-genome neuron budget (sum over clusters); max_neurons stays per cluster.
+	# None = no total cap. Enforced on grid cells, GA/TS genomes (Rust neuron_budget).
+	max_neurons_total: Optional[int] = None
 	# Fraction of each generation's offspring slots given to fresh immigrants (P2).
 	immigrant_fraction: float = 0.0
 	# PhaseType.JOINT: neurons crossover + neurons → bits → connections mutation.
@@ -698,6 +704,7 @@ class Experiment:
 		min_neurons = cfg.bitwise_min_neurons if cfg.bitwise_min_neurons is not None else cfg.min_neurons
 		max_neurons = cfg.bitwise_max_neurons if cfg.bitwise_max_neurons is not None else cfg.max_neurons
 		min_accuracy_floor = cfg.min_accuracy_floor if cfg.min_accuracy_floor > 0 else 0.0
+		validate_budget(cfg.max_neurons_total, num_clusters, min_neurons)
 
 		# Support-tiered sizing (MCST): per-class centres from this stage's own
 		# train-label supports. Computed once here; feeds the tiered grid AND
@@ -737,6 +744,8 @@ class Experiment:
 			assortative_mating_ratio=cfg.assortative_mating_ratio,
 			dedupe_neurons=cfg.ga_dedupe_neurons,
 			dedupe_fill=cfg.ga_dedupe_fill,
+			crossover_bits=cfg.ga_crossover_bits,
+			max_neurons_total=cfg.max_neurons_total,
 			joint_mutation=cfg.ga_joint_mutation,
 			neuron_bounds_per_cluster=(
 				[(max(1, int(c * 0.5 + 0.5)), max(1, int(c * 1.5 + 0.5))) for c in tier[0]]
@@ -774,6 +783,7 @@ class Experiment:
 				tier_neuron_centres=tier[0] if tier else None,
 				tier_bits_centres=tier[1] if tier else None,
 				tier_total_cap=tier[2] if tier else None,
+				max_neurons_total=cfg.max_neurons_total,
 				tier_bits_min=cfg.ids_tier_bits_min,
 				tier_bits_max=cfg.ids_tier_bits_max,
 			)

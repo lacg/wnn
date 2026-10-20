@@ -55,6 +55,13 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	# ga_dedupe_fill (bool, default True): False = deduped children keep only their
 	# distinct neurons (may shrink, floored at max(min_neurons, 1)). Needs ga_dedupe_neurons.
 	"ga_dedupe_fill",
+	# ga_crossover_bits (str, default "inherit"): crossover child width rule —
+	# "blend_neuron" / "blend_cluster" draw the width U[min, max] of the parents'.
+	"ga_crossover_bits",
+	# max_neurons_total (int, default None): cap on the genome's SUM of neurons over
+	# all clusters (max_neurons caps each cluster). Over-budget grid cells are excluded;
+	# GA/TS genomes shrink every cluster in proportion (Rust neuron_budget.rs).
+	"max_neurons_total",
 	"adaptation_iterations", "genesis_mode", "start_from_experiment",
 	# Fitness
 	"fitness_calculator", "fitness_percentile", "min_accuracy_floor",

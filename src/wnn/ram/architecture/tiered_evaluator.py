@@ -428,6 +428,7 @@ class TieredEvaluator(BaseEvaluator):
         return_best_n: bool = True,
         mutable_clusters: Optional[list[int]] = None,
         phase_type: int = 0,
+        max_neurons_total: Optional[int] = None,
     ) -> list[ClusterGenome]:
         """
         Search for neighbor genomes above accuracy threshold, entirely in Rust.
@@ -542,6 +543,8 @@ class TieredEvaluator(BaseEvaluator):
         assortative_mating_ratio: float = 0.0,
         dedupe_neurons: bool = False,
         dedupe_fill: bool = True,
+        crossover_bits: str = "inherit",
+        max_neurons_total: Optional[int] = None,
     ) -> OffspringSearchResult:
         """
         Search for GA offspring above accuracy threshold, entirely in Rust.
@@ -578,8 +581,8 @@ class TieredEvaluator(BaseEvaluator):
 
         # The LM token cache has no dedupe operator and maps phase 5 (JOINT) to
         # NEURONS silently — refuse both rather than run a different GA.
-        if dedupe_neurons or phase_type == 5:
-            raise NotImplementedError("ga_dedupe_neurons / ga_joint_mutation are IDS-only (IDSEvaluator)")
+        if dedupe_neurons or phase_type == 5 or crossover_bits != "inherit" or max_neurons_total is not None:
+            raise NotImplementedError("ga_dedupe_neurons / ga_joint_mutation / ga_crossover_bits / max_neurons_total are IDS-only (IDSEvaluator)")
         if not population:
             return []
 

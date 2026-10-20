@@ -60,6 +60,10 @@ class GridSearchConfig:
 	tier_bits_min: int = 10                           # band lower edge (per-class bits floor)
 	tier_bits_max: int = 34                           # band upper edge (per-class bits ceiling)
 	tier_tie_epsilon: float = 0.005                   # anti-lottery tiebreak band (relative fitness)
+	# Flow param max_neurons_total: cells whose genome total (clusters x neurons)
+	# exceeds it are EXCLUDED loudly, like tier_total_cap; leaderboard seeds are
+	# fitted (Rust neuron_budget). None = no total cap (original).
+	max_neurons_total: Optional[int] = None
 
 
 class GridSearchStrategy:
@@ -189,10 +193,12 @@ class GridSearchStrategy:
 	                       initial_population: Optional[list]) -> list:
 		"""[(neurons, bits, genome-or-None)] from the grid or a leaderboard pop."""
 		if cfg.grid_source == "leaderboard" and initial_population:
+			from wnn.ram.strategies.connectivity.neuron_budget import fit_genome
+			seeds = [fit_genome(g, cfg.max_neurons_total, 1) for g in initial_population]
 			config_list = [
 				(g.neurons_per_cluster[0] if g.neurons_per_cluster else 0,
 				 g.bits_per_neuron[0] if g.bits_per_neuron else 0, g)
-				for g in initial_population
+				for g in seeds
 			]
 			self._log(f"\n{'='*70}")
 			self._log(f"Grid Search — Leaderboard ({len(config_list)} genomes)")
@@ -202,14 +208,23 @@ class GridSearchStrategy:
 			return config_list
 		if cfg.tier_neuron_centres and cfg.tier_bits_centres:
 			return self._build_tiered_config_list(cfg)
+		total = cfg.max_neurons_total
+		fits = lambda n: total is None or n * cfg.num_clusters <= total
 		config_list = [(neurons, bits, None)
-		               for neurons in cfg.neurons_grid for bits in cfg.bits_grid]
+		               for neurons in cfg.neurons_grid if fits(neurons) for bits in cfg.bits_grid]
 		self._log(f"\n{'='*70}")
 		self._log(f"Grid Search ({len(config_list)} configs)")
 		self._log(f"  neurons: {cfg.neurons_grid}")
 		self._log(f"  bits:    {cfg.bits_grid}")
 		self._log(f"  clusters: {cfg.num_clusters}")
+		excluded = [n for n in cfg.neurons_grid if not fits(n)]
+		if excluded:
+			self._log(f"  ⚠️ EXCLUDED neurons {excluded}: {cfg.num_clusters} clusters x n exceeds "
+			          f"max_neurons_total {total}")
 		self._log(f"{'='*70}")
+		if not config_list:
+			raise RuntimeError(f"Grid has 0 configs within max_neurons_total {total} "
+			                   f"({cfg.num_clusters} clusters, neurons {cfg.neurons_grid}) — refusing an empty grid")
 		return config_list
 
 	def _build_tiered_config_list(self, cfg: GridSearchConfig) -> list:
@@ -223,12 +238,14 @@ class GridSearchStrategy:
 			f"tier centres ({len(cfg.tier_neuron_centres)}) != clusters ({cfg.num_clusters})"
 		config_list = []
 		skipped = []
+		caps = [c for c in (cfg.tier_total_cap, cfg.max_neurons_total) if c is not None]
+		cap = min(caps) if caps else None
 		for nm in cfg.tier_neuron_multipliers:
 			for bm in cfg.tier_bits_multipliers:
 				neurons, bits = scaled_shape(cfg.tier_neuron_centres, cfg.tier_bits_centres, nm, bm,
 				                             cfg.tier_bits_min, cfg.tier_bits_max)
 				total = sum(neurons)
-				if cfg.tier_total_cap is not None and total > cfg.tier_total_cap:
+				if cap is not None and total > cap:
 					skipped.append((nm, bm, total))
 					continue
 				genome = self._create_genome_from_shape(neurons, bits)
@@ -238,16 +255,16 @@ class GridSearchStrategy:
 		self._log(f"  neuron centres: {cfg.tier_neuron_centres} (Σ{sum(cfg.tier_neuron_centres)})")
 		self._log(f"  bits centres:   {cfg.tier_bits_centres}")
 		self._log(f"  multipliers:    n×{cfg.tier_neuron_multipliers}  b×{cfg.tier_bits_multipliers}")
-		if cfg.tier_total_cap is not None:
-			self._log(f"  total cap:      {cfg.tier_total_cap} neurons")
+		if cap is not None:
+			self._log(f"  total cap:      {cap} neurons")
 		for nm, bm, total in skipped:
 			self._log(f"  ⚠️ EXCLUDED (n×{nm}, b×{bm}): total {total} neurons exceeds cap "
-			          f"{cfg.tier_total_cap} — the next stage could not pay its floors")
+			          f"{cap} — the next stage could not pay its floors")
 		self._log(f"  clusters: {cfg.num_clusters}")
 		self._log(f"{'='*70}")
 		if not config_list:
 			raise RuntimeError(
-				f"Tiered grid produced 0 feasible configs (cap {cfg.tier_total_cap}, "
+				f"Tiered grid produced 0 feasible configs (cap {cap}, "
 				f"centres Σ{sum(cfg.tier_neuron_centres)}) — refusing to run an empty grid")
 		return config_list
 

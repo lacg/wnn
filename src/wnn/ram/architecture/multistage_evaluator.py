@@ -794,6 +794,7 @@ class MultiStageEvaluator(BaseEvaluator):
 		logger: Optional[Callable[[str], None]] = None,
 		generation: Optional[int] = None,
 		total_generations: Optional[int] = None,
+		max_neurons_total: Optional[int] = None,
 	) -> list[list[ClusterGenome]]:
 		"""Search neighbors for multiple source genomes in a single eval call.
 
@@ -808,6 +809,8 @@ class MultiStageEvaluator(BaseEvaluator):
 		Returns:
 			List of neighbor lists, one per source (same order as input)
 		"""
+		if max_neurons_total is not None:
+			raise NotImplementedError("max_neurons_total lives in the Rust IDS neighbour path (IDSEvaluator) only")
 		if train_subset_idx is None:
 			train_subset_idx = self.next_train_idx()
 		if eval_subset_idx is None:

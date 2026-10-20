@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Sequence, TYPE_CHECKING
 
 from wnn.ram.genome import mode_or_midpoint
+from wnn.ram.strategies.connectivity.neuron_budget import fit_genome
 from wnn.ram.strategies.connectivity.framework import GAConfig, OptimizerResult, StopReason
 from wnn.ram.strategies.connectivity.generic_ga import GenericGAStrategy
 from wnn.ram.strategies.connectivity.adaptive_cluster import PhaseType
@@ -214,6 +215,12 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			n = self._new_cluster_neurons(c, ref, f)
 			neurons.append(n)
 			bits_per_neuron.extend(self._new_neuron_bits(c, n, ref, f))
+		if cfg.max_neurons_total is not None:
+			# Fit BEFORE drawing connections (same rule as Rust; no RNG, so the
+			# default path's draw order is untouched).
+			fitted = fit_genome(ClusterGenome(bits_per_neuron=bits_per_neuron, neurons_per_cluster=neurons),
+			                    cfg.max_neurons_total, cfg.min_neurons)
+			bits_per_neuron, neurons = fitted.bits_per_neuron, fitted.neurons_per_cluster
 
 		connections = None
 		if cfg.total_input_bits is not None:
@@ -271,6 +278,10 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			# immigrant_fraction both work on this path.
 			if self._arch_config.dedupe_neurons:
 				raise NotImplementedError("ga_dedupe_neurons needs the Rust offspring path (a cached IDS evaluator)")
+			if self._arch_config.crossover_bits != "inherit":
+				raise NotImplementedError("ga_crossover_bits needs the Rust offspring path (a cached IDS evaluator)")
+			if self._arch_config.max_neurons_total is not None:
+				raise NotImplementedError("max_neurons_total needs the Rust offspring path (a cached IDS evaluator)")
 			return super()._generate_offspring(population, n_needed, threshold, generation)
 		n_immigrants = round(self._config.immigrant_fraction * n_needed)
 		offspring = self._rust_offspring(population, n_needed - n_immigrants, threshold, generation)
@@ -343,6 +354,8 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			assortative_mating_ratio=arch_cfg.assortative_mating_ratio,
 			dedupe_neurons=arch_cfg.dedupe_neurons,
 			dedupe_fill=arch_cfg.dedupe_fill,
+			crossover_bits=arch_cfg.crossover_bits,
+			max_neurons_total=arch_cfg.max_neurons_total,
 		)
 
 		# Convert to (genome, Metrics) tuples, rank by fitness, return best n_needed
@@ -539,6 +552,12 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 							known_fps.add(mutated.fingerprint())
 						expanded.append(mutated)
 					initial_population = expanded
+
+			if initial_population and self._arch_config.max_neurons_total is not None:
+				# Seeds (grid top-K, resumed or leaderboard pops) and their mutants
+				# join the GA inside the budget, like every Rust offspring.
+				initial_population = [fit_genome(g, self._arch_config.max_neurons_total, self._arch_config.min_neurons)
+				                      for g in initial_population]
 
 			if cfg.fresh_population:
 				initial_population = None

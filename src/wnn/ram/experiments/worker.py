@@ -36,6 +36,29 @@ HEARTBEAT_INTERVAL = 30
 # Consider a flow stale if no heartbeat for this many seconds
 STALE_THRESHOLD = 90
 
+# ga_crossover_bits values (ram_core crossover_bits.rs CrossoverBits::parse)
+CROSSOVER_BITS_RULES = ("inherit", "blend_neuron", "blend_cluster")
+
+
+def _crossover_bits_param(params: dict) -> str:
+    """Flow param ga_crossover_bits, validated at ingestion (a typo would otherwise
+    only fail at the first GA offspring call, after the whole grid phase)."""
+    rule = str(params.get("ga_crossover_bits", "inherit"))
+    if rule not in CROSSOVER_BITS_RULES:
+        raise ValueError(f"ga_crossover_bits={rule!r}: expected one of {CROSSOVER_BITS_RULES}")
+    return rule
+
+
+def _max_neurons_total_param(params: dict) -> Optional[int]:
+    """Flow param max_neurons_total: positive int, or absent/None = no total cap."""
+    raw = params.get("max_neurons_total")
+    if raw is None:
+        return None
+    total = int(raw)
+    if total <= 0 or total != raw:
+        raise ValueError(f"max_neurons_total={raw!r}: expected a positive integer")
+    return total
+
 
 class FlowWorker:
     """
@@ -1576,6 +1599,8 @@ class FlowWorker:
                 # IDS-26 GA knobs — all default OFF (absent = bit-identical GA)
                 ga_dedupe_neurons=bool(params.get("ga_dedupe_neurons", False)),
                 ga_dedupe_fill=bool(params.get("ga_dedupe_fill", True)),
+                ga_crossover_bits=_crossover_bits_param(params),
+                max_neurons_total=_max_neurons_total_param(params),
                 immigrant_fraction=float(params.get("immigrant_fraction", 0.0)),
                 ga_joint_mutation=bool(params.get("ga_joint_mutation", False)),
             )

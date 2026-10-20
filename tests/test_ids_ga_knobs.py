@@ -34,10 +34,11 @@ class RecordingEvaluator:
 	                     tournament_size, train_subset_idx, eval_subset_idx, seed, logger, generation,
 	                     total_generations, return_best_n, mutable_clusters, phase_type, fitness_scores,
 	                     cluster_crossover_ratio, pool_shuffle_ratio, assortative_mating_ratio, dedupe_neurons,
-	                     dedupe_fill):
+	                     dedupe_fill, crossover_bits="inherit", max_neurons_total=None):
 		self.search_calls.append(dict(target_count=target_count, phase_type=phase_type,
 		                              bits_rate=bits_mutation_rate, neurons_rate=neurons_mutation_rate,
-		                              dedupe=dedupe_neurons, fill=dedupe_fill, train_idx=train_subset_idx))
+		                              dedupe=dedupe_neurons, fill=dedupe_fill, train_idx=train_subset_idx,
+		                              crossover_bits=crossover_bits, max_neurons_total=max_neurons_total))
 		genomes = [_with_metrics(self._strategy.create_random_genome()) for _ in range(target_count)]
 		return type("R", (), {"genomes": genomes})()
 
@@ -51,12 +52,14 @@ def _with_metrics(genome):
 	return genome
 
 
-def _strategy(immigrant_fraction=0.0, dedupe=False, joint=False, opt=(True, True, False), fill=True):
+def _strategy(immigrant_fraction=0.0, dedupe=False, joint=False, opt=(True, True, False), fill=True,
+              crossover_bits="inherit", max_neurons_total=None, num_clusters=1):
 	arch = ArchitectureConfig(
-		num_clusters=1, min_bits=4, max_bits=34, min_neurons=5, max_neurons=500,
+		num_clusters=num_clusters, min_bits=4, max_bits=34, min_neurons=5, max_neurons=500,
 		default_bits=10, default_neurons=20, total_input_bits=32,
 		optimize_neurons=opt[0], optimize_bits=opt[1], optimize_connections=opt[2],
-		dedupe_neurons=dedupe, dedupe_fill=fill, joint_mutation=joint,
+		dedupe_neurons=dedupe, dedupe_fill=fill, joint_mutation=joint, crossover_bits=crossover_bits,
+		max_neurons_total=max_neurons_total,
 	)
 	cfg = GAConfig(population_size=10, generations=3, immigrant_fraction=immigrant_fraction, mutation_rate=0.1)
 	s = ArchitectureGAStrategy(arch_config=arch, ga_config=cfg, seed=42)
@@ -180,6 +183,21 @@ def test_dedupe_fill_reaches_rust(fill):
 	assert s._cached_evaluator.search_calls[0]["fill"] is fill
 
 
+@pytest.mark.parametrize("rule", ["inherit", "blend_neuron", "blend_cluster"])
+def test_crossover_bits_reaches_rust(rule):
+	s = _strategy(crossover_bits=rule)
+	s._generate_offspring(_population(s), n_needed=8, threshold=0.0, generation=0)
+	assert s._cached_evaluator.search_calls[0]["crossover_bits"] == rule
+
+
+def test_crossover_bits_refused_on_python_fallback():
+	"""No cached evaluator → Python breeding, which has no width-blend operator."""
+	s = _strategy(crossover_bits="blend_neuron")
+	s._cached_evaluator = None
+	with pytest.raises(NotImplementedError):
+		s._generate_offspring(_population(s), n_needed=4, threshold=0.0, generation=0)
+
+
 def test_dedupe_refused_on_python_fallback():
 	"""No cached evaluator → Python breeding, which has no dedupe operator."""
 	s = _strategy(dedupe=True)
@@ -196,3 +214,31 @@ def test_joint_immigrants_sample_bits_in_band():
 	s._generate_offspring(pop, n_needed=8, threshold=0.0, generation=0)
 	immigrant_bits = {b for g in s._cached_evaluator.immigrant_calls[0][0] for b in g.bits_per_neuron}
 	assert len(immigrant_bits) > 1 and all(4 <= b <= 34 for b in immigrant_bits)
+
+
+# ---- max_neurons_total -------------------------------------------------------
+
+def test_max_neurons_total_reaches_rust():
+	s = _strategy(max_neurons_total=300)
+	s._generate_offspring(_population(s), n_needed=8, threshold=0.0, generation=0)
+	assert s._cached_evaluator.search_calls[0]["max_neurons_total"] == 300
+
+
+def test_max_neurons_total_refused_on_python_fallback():
+	s = _strategy(max_neurons_total=300)
+	s._cached_evaluator = None
+	with pytest.raises(NotImplementedError):
+		s._generate_offspring(_population(s), n_needed=4, threshold=0.0, generation=0)
+
+
+@pytest.mark.skipif(getattr(pytest.importorskip("ram_accelerator"), "ABI_VERSION", 0) < 21,
+                    reason="needs the ABI-21 neuron_budget exports")
+def test_immigrants_fit_the_total_budget():
+	"""2 clusters sampled up to 500 each would reach 1000; the budget holds them to 300."""
+	s = _strategy(max_neurons_total=300, num_clusters=2)
+	for _ in range(20):
+		g = s.create_random_genome()
+		assert sum(g.neurons_per_cluster) <= 300
+		assert all(n >= 5 for n in g.neurons_per_cluster)
+		assert len(g.bits_per_neuron) == sum(g.neurons_per_cluster)
+		assert len(g.connections) == sum(g.bits_per_neuron)

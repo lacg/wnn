@@ -1320,6 +1320,7 @@ class IDSEvaluator(BaseEvaluator):
 		return_best_n: bool = True,
 		mutable_clusters: Optional[list[int]] = None,
 		phase_type: int = 0,
+		max_neurons_total: Optional[int] = None,
 	) -> list[ClusterGenome]:
 		if train_subset_idx is None:
 			train_subset_idx = self.next_train_idx()
@@ -1356,6 +1357,7 @@ class IDSEvaluator(BaseEvaluator):
 			# optimizer's eval partition, not a train fold).
 			train_folds=self.ga_fitness_folds(),
 			neuron_sample_rate=self._neuron_sample_rate if self.ga_fitness_folds() is not None else 1.0,
+			max_neurons_total=max_neurons_total,
 		)
 
 		genomes = []
@@ -1399,6 +1401,8 @@ class IDSEvaluator(BaseEvaluator):
 		assortative_mating_ratio: float = 0.0,
 		dedupe_neurons: bool = False,
 		dedupe_fill: bool = True,
+		crossover_bits: str = "inherit",
+		max_neurons_total: Optional[int] = None,
 	) -> OffspringSearchResult:
 		if not population:
 			return OffspringSearchResult(genomes=[], evaluated=0, viable=0)
@@ -1461,6 +1465,10 @@ class IDSEvaluator(BaseEvaluator):
 			# IDS-26 P1: distinct neurons per child (default False = ABI-14 operators).
 			dedupe_neurons=dedupe_neurons,
 			dedupe_fill=dedupe_fill,
+			# ga_crossover_bits: crossover child width rule (default = ABI-20 operators).
+			crossover_bits=crossover_bits,
+			# max_neurons_total: whole-genome neuron cap (None = per-cluster only).
+			max_neurons_total=max_neurons_total,
 			# ids_offspring_folds="all": the K-fold CV mean (None = legacy fold).
 			train_folds=self.ga_fitness_folds(),
 		)
