@@ -11,7 +11,7 @@ chain is live, which arms have landed, the current results, what counts as an
 escalation today. Refresh the STATE block here whenever the programme moves, and
 re-arm the cron from it.
 
-**Currently armed:** job `7f271521`, schedule `13,43 * * * *` (off the :00/:30 marks on purpose).
+**Currently armed:** HOURLY `13 * * * *` (re-armed 20/10/2026 06:3x EDT after a CLI restart; Luiz: 1h ticks for controller + IDS). Armed text = the short pointer prompt in the 20/10 STATE block. Older: job `7f271521`, `13,43 * * * *`.
 Re-armed 15/09/2026 16:05 EDT (Luiz: the box is NOT idle while the recalc/probe run — lines 2/3 now
 report those controller-side jobs with progress + ETA; STATE block refreshed for the repair sequence,
 the offline-connectivity probe and the post-repair queue). Previous: `82aa3883` (10:20), `5ed39033` (13/09).
@@ -184,6 +184,17 @@ MISSING VALUES — never invent one, never print 0.000 for "not measured" (a zer
 If NO chain and NO controller are running, say so plainly on lines 2-3 and name what is pending.
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
+
+AS OF 20/10/2026 06:30 EDT — LEVELS FLYING (CTRL-18, `_Lop31`, curriculum 8->30 stays). Lever = scripts/queue_2009c_obs_pwm_recipe.sh (pid 47639, PPID 1) -> seed_arm_chain. n384 s2-s6 then n512 s2-s6 = 10 markers, glob `*_Lop31.json`; banked 3/10 (s2, s3, s4). Line 2: "`_Lop31` nNNN sN  (LEVELS: does nNNN beat the n256 anchor at 8->30)". AFTER LEVELS: queue ONE `_tw15` arm at the LEVELS-winning size, same seeds (Luiz's tilt plan #2); seeds s6-s9 at n256 only if still unresolved (#3).
+IDS (worker ABI 21 since 19/10, PID 48705): IDS-40 cohort (60 flows, IDS40-*) running FIFO, then IDS-44 ga_crossover_bits A/B flows 7082-7090 (IDS44-*, 3 rules x 3 seeds). When the last IDS40 flow completes: the IDS-40 readout goes to docs/ids_results.md (Rule 7) + Plane IDS-40 comment — say so on the IDS block, do not write it inside a tick.
+
+IDS BLOCK (Luiz 20/10: "status of the controller AND ids runs"). After the six controller lines (and after any NEW-MARKER tables), print a blank line then EXACTLY these lines:
+  [ids] worker <up PID|DOWN> · ABI <n> · completed <c> · running <r> · queued <q>
+  running: <id> <name> · <phase> gen G · elapsed <h>h  (one line per running flow; phase/gen from the latest iterations row of its running experiment)
+  cohorts: <PFX> <done>/<total> (<run> run, <queued> q) · ...   (every prefix with queued or running flows; total = all non-cancelled flows of that prefix)
+  last done: <id> <name> at DD/MM HH:MM EDT · <dur>h   (most recent completed flow)
+  ETA <PFX>: DD/MM HH:MM EDT   (latest_done + remaining x avg duration of that prefix's completed flows; per active prefix)
+Sources: sqlite3 on the read-only db URI; ABI via `wnn/bin/python -c "import ram_accelerator as a;print(a.ABI_VERSION)"` is too slow per tick — read experiments/staged/swap_abi21.json or print the last known ABI (21). Escalate (one extra line starting `!!`) if the worker is DOWN while flows are queued, or any flow failed since the last tick.
 
 AS OF 07/10/2026 14:30 EDT — CTRL-24 (b20) CLOSED: NOT ADOPTED, b24 stays (experiments/ctrl_b20_verdict.json; n=4 mean headline delta stable −1.45 pp [CI −2.55,−0.35] · err +0.17° · steady +0.23° · alt +0.16 m [CI +0.01,+0.30], fails every margin; keys clause moot). queue_b20 exited ('b20 DONE 4/4'). TILT-WIDTH LADDER FLYING since 13:47 EDT (_tw7 s2 first). Line 2 for a `_tw` run per the 05/10 block. LEVELS flies at b24.
 
