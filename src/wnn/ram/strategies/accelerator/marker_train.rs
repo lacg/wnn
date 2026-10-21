@@ -1871,9 +1871,14 @@ pub mod batched_path
 		// `== QUAD_WEIGHTED`, which dropped QSR to the legacy clamped-nudge
 		// trainer and its z<=8 / z=1 chunk policy (~12x slower).
 		let use_oi = counters == Some(ram_core::cell_mode::CounterBin::Oi);
-		// The vote tally is the same commutative counter (merged at export by
-		// `SlotMerge::Votes`), so it takes the high-z OI chunk policy too.
-		let use_counters = counters.is_some();
+		// High z is exact whenever the export MERGES duplicate-key claims:
+		// OI counters, the vote tally (`SlotMerge::Votes`) AND the lattice/set
+		// writers (TERNARY/PLN/BINARY, `SlotMerge::Lattice` since 12/10/2026 —
+		// `lattice_z_parity_with_collisions`). 21/10/2026: this was
+		// `counters.is_some()`, so lattice/set never got the high-z policy and
+		// ran at z = 1 (one thread per neuron walking all examples: ~1.16 s per
+		// 500-neuron genome vs ~0.12 s for QUAD at 900 neurons, IDS-40).
+		let high_z_exact = crate::atomic_hashtable::SlotMerge::for_batch(write_rule, memory_mode, knobs.export_skip_wf).merges_duplicates();
 		// WNN_EXAMPLE_CHUNKS (via `knobs`) overrides the z heuristic.
 		let env_chunks = knobs.example_chunks;
 		// Occupancy fix 07/07/2026: the old MAX_EXAMPLE_CHUNKS=8 cap left the
@@ -1882,14 +1887,15 @@ pub mod batched_path
 		// exact in OI mode AND for the lattice/set writers (TERNARY/PLN/BINARY):
 		// duplicate-key claims from concurrent inserts are merged at export
 		// (oi_merge / lattice join — `SlotMerge`, since 12/10/2026 for the
-		// lattice). Non-OI modes keep the old tuned heuristic (z <= 8).
+		// lattice). Only the unmerged legacy clamped nudge keeps the old tuned
+		// heuristic (z <= 8).
 		const OI_TARGET_THREADS: u64 = 32768;
 		const OI_MAX_EXAMPLE_CHUNKS: u64 = 1024;
 		let num_example_chunks: u32 = if let Some(z) = env_chunks
 		{
 			z
 		}
-		else if use_counters
+		else if high_z_exact
 		{
 			if ng_n_product == 0 || ng_n_product >= OI_TARGET_THREADS
 			{

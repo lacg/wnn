@@ -1487,6 +1487,15 @@ impl SlotMerge
 		}
 	}
 
+	/// Whether concurrent duplicate-key claims are merged exactly at export —
+	/// i.e. the trainer may split one neuron's example loop across threads
+	/// (high z) without changing the trained memory. False only for the legacy
+	/// clamped nudge, whose split tallies no merge can reconstruct.
+	pub fn merges_duplicates(self) -> bool
+	{
+		!matches!(self, SlotMerge::Unmerged)
+	}
+
 	/// Whether the export KEEPS a committed `cell` (a dropped cell reads as the
 	/// sparse-miss default and is NOT covered — the densified export's coverage
 	/// bitmap is exactly the kept entries). THE rule for both the marker
@@ -1543,6 +1552,25 @@ fn log_oi_net_sum(neuron: usize, raw: &[(u64, u32)])
 mod tests
 {
 	use super::*;
+
+	/// The trainer's high-z gate (`marker_train` chunk policy): every writer
+	/// whose duplicates merge exactly may split the example loop. Lattice/set
+	/// (TERNARY/PLN/BINARY) were left at z = 1 until 21/10/2026.
+	#[test]
+	fn merges_duplicates_covers_every_order_independent_writer()
+	{
+		use ram_core::cell_mode::{CounterBin, WriteRule};
+		use ram_core::neuron_memory::{BINARY, PLN, QUAD_WEIGHTED, TERNARY};
+		for mode in [TERNARY, PLN, BINARY]
+		{
+			let rule = if mode == BINARY { WriteRule::Set } else { WriteRule::Lattice };
+			assert!(SlotMerge::for_batch(rule, mode, false).merges_duplicates(), "mode {mode} {rule:?}");
+			assert!(SlotMerge::for_batch(WriteRule::Vote, mode, false).merges_duplicates(), "mode {mode} vote");
+		}
+		// The nudge merges only through OI counters (env-gated); the legacy clamped nudge never.
+		let oi = CounterBin::for_training(WriteRule::Nudge, QUAD_WEIGHTED).is_some();
+		assert_eq!(SlotMerge::for_batch(WriteRule::Nudge, QUAD_WEIGHTED, false).merges_duplicates(), oi);
+	}
 
 	#[test]
 	fn test_basic_write_read()
