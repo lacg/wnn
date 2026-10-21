@@ -956,6 +956,11 @@ ANYTHING A RECORD: on 01/09 the ladder's hd 0.4034 was called a programme best
 and is 38th, because the chain's own STATE table lists only that chain's runs.
 Gate-distance, the scale sweep_ladder_gamma.sh ranks on:
     hd = 0.5556*(err/8.0) + 0.4444*min(K*-log2(stable), 20.0),  K = log0.5/log0.70
+    ALTITUDE ROWS SINCE 21/10/2026 (Luiz): the leaderboard adds an alt term —
+    hd = 0.4445*(err/8.0) + 0.3555*min(K*-log2(stable), 20.0) + 0.20*(alt/1.0 m)
+    (ALT_W/ALT_BAR_M in gate_distance_leaderboard.py; attitude-only rows keep the line
+    above). Quote the LEADERBOARD's hd in PAIR tables. A chain's own log still prints
+    the old two-term hd: don't mix the two. The GA fitness still has alt=0.0 (CTRL-19 open).
 hd 1.0 is ON the gate (stable>=0.70 AND err<=8.0°). It is the GATE's geometry, not
 a neutral summary — stable enters through a log, so points near 70% are worth far
 more than the same pp down at 30%. RANK on hd; REPORT the triple.

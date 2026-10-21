@@ -28,7 +28,8 @@ it only engages below stable = 0.08%, i.e. never):
     weights err SQUARED, so the two disagree on how hard a large error is punished.
   · at the population's operating point (~98%, ~1.6 deg) the exchange rate is
     1pp stable == 0.18 deg of err; at the gate (71%, 7.9 deg) it is 0.25 deg.
-  · NO steady, NO jerk, NO mono, NO alt term — two of the five reported metrics.
+  · NO steady, NO jerk, NO mono term. ALT term added 21/10/2026 for altitude rows
+    (0.20 x alt/1.0 m, err/stable renormalised) — see ALT_W below.
     steady is the FITNESS's heaviest weight (0.4375) and hd cannot see it at all.
 THIS IS A YARDSTICK, NOT AN OBJECTIVE. It stays honest for cross-run comparison
 only because nothing optimises it; making it the fitness would turn a rank on it
@@ -70,9 +71,21 @@ H743_FLASH_BYTES = 2 * 1024 * 1024
 KEYS_CACHE = os.path.join(ROOT, 'experiments', 'h743_keys.json')
 
 
-def gate_distance(stable_pct, err_deg):
+# Altitude term (21/10/2026, Luiz): hd was blind to altitude, so n384 s6 "won" its pair
+# holding 0.395 m against the anchor's 0.174 m. An altitude-regimen row now pays
+# ALT_W * (alt / ALT_BAR_M); err and stable keep their 5:4 ratio, renormalised so the
+# three weights sum to 1. With alt AT the 1.0 m bar, a run sitting on the gate still
+# scores exactly 1.0. Attitude-only rows (no z plant) keep the two-term formula.
+ALT_W, ALT_BAR_M = 0.20, 1.0
+
+
+def gate_distance(stable_pct, err_deg, alt_m=None):
 	s = max(stable_pct / 100.0, 1e-6)
-	return 0.5556 * (err_deg / 8.0) + 0.4444 * min(K * -math.log2(s), 20.0)
+	stab = min(K * -math.log2(s), 20.0)
+	if alt_m is None:
+		return 0.5556 * (err_deg / 8.0) + 0.4444 * stab
+	w_err, w_stab = 0.5556 * (1 - ALT_W), 0.4444 * (1 - ALT_W)
+	return w_err * (err_deg / 8.0) + w_stab * stab + ALT_W * (alt_m / ALT_BAR_M)
 
 
 def out_files():
@@ -134,6 +147,11 @@ def stage_triple(line):
 	            alt=float(ma.group(1)) if ma else None)
 
 
+def alt_of(ma):
+	"""Altitude for the hd term: only a genuine altitude run (alt > 0, see `altitude=`)."""
+	return float(ma.group(1)) if ma is not None and float(ma.group(1)) > 0.0 else None
+
+
 def parse_marker(path, outs):
 	try:
 		d = json.load(open(path))
@@ -183,10 +201,10 @@ def parse_marker(path, outs):
 		stage=stage.group(1) if stage else '?',
 		teacher=teacher_of(tag),
 		date=(d.get('done') or '')[:10],
-		hd=gate_distance(float(ms.group(1)), float(me.group(1))),
+		hd=gate_distance(float(ms.group(1)), float(me.group(1)), alt_of(ma)),
 		fit=scorer_era(outs.get(tag)),
 		mem=mem,
-		hd_mem=gate_distance(mem['stable'], mem['err']) if mem else None,
+		hd_mem=gate_distance(mem['stable'], mem['err'], mem['alt'] if alt_of(ma) is not None else None) if mem else None,
 		# 'fixed'  = headline re-scored aligned; 'unfixed' = an arch-only headline with
 		# no checkpoint to re-score from (its first report seed is still misaligned);
 		# ''       = MEMORY headline (score-only, never misaligned) or pre-15/07 run.
@@ -249,9 +267,12 @@ LEGEND = """  COLUMNS
     gate-dist   distance to the viability gate, from the run's PUBLISHED headline —
                 the candidate stage-select crowned. Lower is better; 1.0 sits ON the
                 gate (stable >= 70% AND err <= 8.0 deg).
+                  altitude rows (21/10/2026):
+                  gate-dist = 0.4445*(err/8.0) + 0.3555*min(K*-log2(stable), 20.0)
+                              + 0.20*(alt/1.0 m)
+                  attitude-only rows (no z plant):
                   gate-dist = 0.5556*(err/8.0) + 0.4444*min(K*-log2(stable), 20.0)
-                It uses ONLY stable and err — not steady, not alt. Rank on it, report
-                all four columns.
+                It does NOT see steady. Rank on it, report all four columns.
     same-rule   the SAME formula computed from the MEMORY stage instead of the
                 headline. One fixed stage for every run, so it carries no
                 stage-select draw and two runs are actually comparable.
