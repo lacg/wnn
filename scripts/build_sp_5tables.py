@@ -33,14 +33,26 @@ DB_URI = "file:/Volumes/20260401-WDBlack-SN850X-2TB/wnn/db/wnn.db?mode=ro"
 
 GENOMES = ["best_f1", "best_fpr", "best_acc", "best_ce", "best_fitness"]
 MODES = ["train_cal", "fixed_05", "platt", "beta", "empirical", "empirical_cumulative", "val_cal"]
+# Multi-cluster (ids_single_cluster=False, e.g. IDS-40 "-2m") flows are scored with the
+# margin/argmax decode modes instead of the 7 binary threshold modes; margin_val_cal is the
+# val-calibrated one (the analogue of val_cal), so it closes the table the same way.
+MODES_MULTI = ["argmax", "margin_fixed0", "margin_train_cal", "margin_train_f1", "argmax_platt",
+               "argmax_beta", "argmax_classnorm", "margin_classnorm", "margin_val_f1", "margin_val_cal"]
+
+
+def modes_of(tm):
+	return MODES_MULTI if "margin_val_cal" in tm else MODES
 METRIC_TO_GENOME = {"fitness": "best_fitness", "f1_macro": "best_f1",
                     "fpr": "best_fpr", "accuracy": "best_acc", "ce": "best_ce"}
-SEED_RE = re.compile(r"-r(\d+)$")
+# The seed is `-r<digits>`, either last or followed by a `-rate<x>` suffix (IDS-38+ names,
+# e.g. `IDS40-unswt-QUAD-2m-16bWb-r98954-rate0.25`). 22/10/2026: this anchored on `$` only,
+# so every `-rate` flow became its own one-seed family. The suffix stays in the family name.
+SEED_RE = re.compile(r"-r(\d+)(-rate[\d.]+)?$")
 
 
 def fam_of(name):
 	m = SEED_RE.search(name)
-	return (name[: m.start()], int(m.group(1))) if m else (name, 0)
+	return (name[: m.start()] + (m.group(2) or ""), int(m.group(1))) if m else (name, 0)
 
 
 def fmt_pair(values):
@@ -102,7 +114,7 @@ def load(cur, like, exclude):
 		phase = "GS" if r["phase_type"] == "grid_search" else "GA"
 		seeds[(fam, phase, gt)].add(seed)
 		tm = json.loads(r["threshold_metadata"])
-		for mode in MODES:
+		for mode in modes_of(tm):
 			md = tm.get(mode, {})
 			if not isinstance(md, dict):
 				continue
@@ -248,7 +260,7 @@ def main():
 			out.append("")
 			out.append("    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA")
 			out.append("    ---------------------+---------------------+---------------------+--------------------")
-			for mode in MODES:
+			for mode in (MODES_MULTI if any(m in data[fam]["GA"][gt] for m in MODES_MULTI) else MODES):
 				g = data[fam]["GS"][gt][mode]
 				a = data[fam]["GA"][gt][mode]
 				out.append(
