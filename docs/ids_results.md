@@ -197,6 +197,62 @@ WHAT CHANGED
   inert on UNSW-random/CICIDS (thr 0.43-0.56, ≤0.3pp) = prior correction, not VAL overfit.
   Every CIC-IoT row in the next paper comes from the Kaggle/Neto copies; every table pairs modes.
 
+## IDS-46 RATE DECISION (23/10/2026) — neuron sample rate 1.0 DROPPED for BINARY-lattice-2m; rate 0.25 stays
+
+**Decision (Luiz, 23/10/2026 09:37 EDT, "go with A, cancel the 42 and document it").** IDS-46 keeps the
+rate-1.0 arm ONLY for the 3 IDS-44 seeds (r98954/r77715/r25052, flows 7106-7123, 18 pairs = the full
+6-arm x 3-seed design). The 42 rate-1.0 flows for the 7 new seeds (r20419-r20425, flows 7130-7207,
+6 per seed) were **cancelled while queued** (dashboard PATCH, all 42 verified `cancelled`; no running
+flow touched). The 42 rate-0.25 flows of the new seeds are unchanged, so the size/blend decision still
+gets 10 seeds at rate 0.25. Saved ~61 h of worker time (measured: rate 1.0 = 0.99 h max250 / 1.91 h
+max500 per flow vs 0.42 / 0.53 h at rate 0.25). Supersedes the 22/10 "run all 102".
+
+**Evidence at the decision (14 of 18 pairs finished).** GA Neurons `best_f1`, `margin_val_cal` (val-calibrated,
+scored on the held-out TEST partition), same seed + same arm, rate 1.0 minus its rate-0.25 twin:
+
+```
+pair       size    rule           seed    F1(0.25->1.0)  dF1    dFPR   dRec   dPrec  cells/neuron  hours
+7106/7091  max250  inherit        r98954  91.07->89.05   -2.01  +1.87  -2.12  -1.67  439->560      0.41->0.97
+7107/7092  max250  blend_neuron   r98954  90.64->89.09   -1.55  +0.36  -2.54  -0.47  433->549      0.49->1.13
+7108/7093  max250  blend_cluster  r98954  90.58->89.40   -1.18  -0.32  -2.43  +0.15  434->579      0.48->0.86
+7109/7023  max500  inherit        r98954  90.67->89.48   -1.18  +2.23  -0.31  -1.92  415->543      6.05->1.75
+7110/7100  max500  blend_neuron   r98954  90.64->89.28   -1.36  +1.81  -0.98  -1.58  416->556      0.86->1.95
+7111/7101  max500  blend_cluster  r98954  90.85->89.60   -1.24  +2.84  +0.10  -2.38  405->573      0.96->1.51
+7112/7094  max250  inherit        r77715  90.55->89.13   -1.42  +0.92  -1.84  -0.89  425->588      0.40->0.94
+7113/7095  max250  blend_neuron   r77715  90.83->89.13   -1.70  +0.28  -2.89  -0.41  427->584      0.37->1.02
+7114/7096  max250  blend_cluster  r77715  90.82->89.32   -1.50  +1.83  -1.23  -1.65  441->560      0.48->1.01
+7115/7039  max500  inherit        r77715  91.01->89.79   -1.22  +0.91  -1.47  -0.85  409->547      6.26->2.07
+7116/7102  max500  blend_neuron   r77715  90.83->89.34   -1.50  +1.14  -1.79  -1.08  417->558      0.69->2.30
+7117/7103  max500  blend_cluster  r77715  90.66->89.78   -0.88  +0.01  -1.61  -0.08  398->574      0.72->2.02
+7118/7097  max250  inherit        r25052  90.69->89.31   -1.38  +1.08  -1.63  -1.02  433->571      0.41->0.86
+7119/7098  max250  blend_neuron   r25052  91.00->89.49   -1.51  +3.84  +0.44  -3.21  422->599      0.40->0.75
+```
+(Twin hours 6.05/6.26 h are IDS-40 flows on the older, slower wheel — not a rate effect.)
+
+```
+mean dF1   -1.40 ± 0.27 pp (SD, n=14)  rate 1.0 worse in 14/14   (sign test p ≈ 1e-4)
+mean dAcc  -1.40 ± 0.27 pp             worse in 14/14
+mean dFPR  +1.34 ± 1.15 pp             worse in 13/14
+mean dRec  -1.45 ± 0.98 pp             worse in 12/14
+mean dPrec -1.22 ± 0.92 pp             worse in 13/14
+cells/neuron  +33% (398-441 -> 543-599); rate 1.0 = 4x the examples per neuron
+```
+
+**Why it is enough.** The F1 loss is 5x its own pair-to-pair SD and 6-10x the seed spread IDS-44 saw between
+GA rules (all within ±0.25 pp). It holds on every size x rule x seed cell measured. Rate 1.0 also costs ~2-4x the
+time and ~33% more stored addresses per neuron, so nothing argues for keeping it.
+
+**Mechanism (reading, not tested).** Each neuron sees 4x the examples but stores only ~33% more addresses: most
+extra writes land on addresses it already holds. In BINARY lattice an address once written TRUE stays TRUE (TRUE wins
+the conflict), so the extra writes spread "attack" over addresses benign traffic also uses. That would raise FPR
+— it does in 13/14. But recall ALSO falls in 12/14, which a pure "more TRUE" effect would not do: the memory
+separates the classes less well, and the F1-optimal val threshold pays for the overlap with both FPs and FNs. The
+"too many TRUE cells" story is the dominant part (7119: FPR 3.93 -> 7.77, recall +0.44), not the whole.
+
+**Scope.** BINARY-lattice-2m, UNSW temporal_3way, 16b-Wb, unsw-t (worker ABI 21). Does NOT revisit SR1 (rate 1.0
+accepted for QUAD, 16/10) — this is a BINARY-lattice finding. The 4 remaining pairs (7120-7123) land in the IDS-46
+readout; the claim is restated there at n=18.
+
 ## IDS-44 READOUT (22/10/2026) — GA crossover bit-width rule (`ga_crossover_bits`), UNSW temporal_3way (worker ABI 21)
 
 **Goal.** GA crossover and BITS mutation are per-NEURON, so a child cluster can mix widths (e.g. 281×34b + 219×32b).
