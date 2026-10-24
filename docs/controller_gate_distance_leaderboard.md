@@ -64,8 +64,8 @@ selection ran on) and never the during-search gen lines (anti-predictive, repeat
 ## Coverage
 
 ```
-markers with a headline held-out : 314
-  altitude regimen (alt= present) : 230
+markers with a headline held-out : 315
+  altitude regimen (alt= present) : 231
   attitude-only                   : 84
   state-neuron count unreadable   : 0  (no .out on disk)
   h743 keys counted exactly       : 75  (experiments/h743_keys.json)
@@ -79,7 +79,7 @@ markers with a headline held-out : 314
 
 ```
                  attitude-only   altitude
-  sn = 0                78          230
+  sn = 0                78          231
   sn > 0                 6            0
 ```
 
@@ -232,7 +232,7 @@ same-rule rank: a large value means that row owes its placing to the draw.
      1     0.0951  CRN   99.8%    1.01    0.48  0.185  qspi?     0.0951     +0  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_tw15
      2     0.0968  CRN   99.6%    1.13    0.62  0.150  qspi?     0.0968     +0  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_tw15
      3     0.1039  CRN   99.6%    1.23    0.55  0.158  qspi?     0.1039     +0  SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_tw35
-     4     0.1091  CRN   99.8%    1.28    0.82  0.180  qspi?     0.1680    +62  SL_C_b24n384_cf21_brushless_L4C_g10_s31337002_Lop31
+     4     0.1091  CRN   99.8%    1.28    0.82  0.180  qspi?     0.1680    +63  SL_C_b24n384_cf21_brushless_L4C_g10_s31337002_Lop31
      5     0.1108  CRN   99.8%    1.27    0.75  0.191  qspi?     0.1361    +27  SL_C_b24n384_cf21_brushless_L4C_g10_s31337003_Lop31
      6     0.1110  CRN   99.8%    1.39    0.89  0.159  qspi      0.1273    +14  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_op30
      7     0.1123  CRN   99.0%    1.20    0.62  0.178  qspi      0.1123     -1  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_op30
@@ -247,7 +247,7 @@ same-rule rank: a large value means that row owes its placing to the draw.
     16     0.1240  CRN   99.2%    1.39    1.02  0.194  qspi?     0.1208     -4  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_tw20
     17     0.1243  CRN   99.2%    1.47    0.70  0.173  qspi?     0.1098    -12  SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_op31
     18     0.1263  CRN   98.6%    1.33    0.65  0.192  qspi?     0.1263     +1  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_tw515
-    19     0.1278  CRN   99.2%    1.45    0.87  0.196  qspi?     0.1775    +66  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_tw15
+    19     0.1278  CRN   99.2%    1.45    0.87  0.196  qspi?     0.1775    +67  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_tw15
     20     0.1302  CRN   99.0%    1.36    0.83  0.223  qspi?     0.1319     +9  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_tw20
     21     0.1316  CRN   98.0%    1.42    0.89  0.163  qspi?     0.1316     +7  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_tw515
     22     0.1324  CRN   99.6%    1.57    1.00  0.206  qspi      0.1288     +2  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_hd30
