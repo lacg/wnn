@@ -197,6 +197,28 @@ WHAT CHANGED
   inert on UNSW-random/CICIDS (thr 0.43-0.56, ≤0.3pp) = prior correction, not VAL overfit.
   Every CIC-IoT row in the next paper comes from the Kaggle/Neto copies; every table pairs modes.
 
+## IDS-47 CROSS-DATASET A/B QUEUED (24/10/2026) — BINARY lattice 2m vs QUAD 1m, gates the tandem config
+
+The IDS-46 config choice (max250 + blend_neuron) is UNSW-NB15 TEMPORAL ONLY — IDS-40/44/46 never ran
+BINARY lattice 2m on any other dataset. Luiz 24/10: test it on the other datasets as an A/B before it
+becomes the tandem config ("this will take most likely more than a week and I am ok with that").
+
+```
+datasets  CICIDS2017 random_3way 96b CE20-zscore      (IDS-4 cohort fitness)
+          CIC-IoT-2023 subsample random_3way 96b B15-AC desir (IDS-5)  — its winner also goes to the 46M
+          UNSW-NB15 random_3way 64b Wb-CTRL desir      (IDS-7)
+arms      QUAD 1m  = the original tandem config (1 cluster, rate 1.0, max_n as the cohort)
+          BINARY lattice 2m max250 rate 0.25 x {inherit, blend_neuron, blend_cluster}
+seeds     r20419-r20428 (n=10), SEED-MAJOR interleave — Luiz may stop at n=5 or 7
+flows     7218-7332 (115 new: 25 QUAD + 90 BINARY); 5 QUAD seeds reused from the tandem
+          (6431/6436 cicids, 6432/6437 ciciot, 6434 unswr). Clones, never unpaused → no FIFO jump.
+```
+Read: per dataset, each BINARY arm − QUAD 1m, paired per seed (best_f1 genome, GA final,
+margin_val_cal, all 7 modes), plus blend rules vs inherit. The 396 paused QUAD tandem flows and the
+11 old IDS-6 flows STAY PAUSED until this reads out; then the tandem (4 x 100 interleaved + 5 46M last)
+is created with each dataset's winner. Plane: IDS-47 (IDS-46 = the unswt seed extension).
+Script: scratchpad queue_ids47_xds.py.
+
 ## IDS-46 CONFIG DECISION (24/10/2026) — BINARY-lattice-2m **max250 + blend_neuron**, rate 0.25
 
 Luiz 24/10: "fix max250 + blend neuron (it's best genome with fpr and in all honesty, when you say
