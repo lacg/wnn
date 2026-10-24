@@ -197,6 +197,17 @@ WHAT CHANGED
   inert on UNSW-random/CICIDS (thr 0.43-0.56, ≤0.3pp) = prior correction, not VAL overfit.
   Every CIC-IoT row in the next paper comes from the Kaggle/Neto copies; every table pairs modes.
 
+## IDS-45 tot250 ARM + IDS-47 PAUSED (24/10/2026 09:05 EDT)
+
+Luiz: the CIC-IoT QUAD cohort is max 250 neurons TOTAL (1 cluster), but BINARY 2m max250 allows 250
+PER cluster (500 total) — test a 250 total cap on unswt before IDS-47 ("250n and 500n is not that
+different, maybe the other way around isn't either and we can even improve duration and memory").
+Queued flows 7333-7342: IDS45-unswt-BINARY-lattice-2m-tot250-xo_blend_neuron, max_neurons 250 +
+max_neurons_total 250 (free split), 10 seeds, paired vs max250 blend_neuron (and vs tot500 7208-7217).
+To run it BEFORE IDS-47 (FIFO by id), all 115 IDS-47 flows were PAUSED; watcher
+logs/ids/unpause_ids47_quad_after_ids45.sh un-pauses ONLY the 25 QUAD 1m flows when every IDS45-% flow
+is terminal. The 90 BINARY flows stay paused for Luiz's cap decision (max250/cluster vs tot250 vs tot500).
+
 ## IDS-47 CROSS-DATASET A/B QUEUED (24/10/2026) — BINARY lattice 2m vs QUAD 1m, gates the tandem config
 
 The IDS-46 config choice (max250 + blend_neuron) is UNSW-NB15 TEMPORAL ONLY — IDS-40/44/46 never ran
