@@ -199,9 +199,46 @@ WHAT CHANGED
 
 ## IDS-46 FINAL n=10 (24/10/2026 17:40 EDT) — unswt BINARY lattice 2m, rate 0.25, 3 xo rules x max250/max500
 
-All 60 live flows completed (42 rate-1.0 flows cancelled per Luiz 23/10; 7071/75/79 excluded as in the partial). best_f1 genome, GA Neurons final, margin_val_cal (held-out). Reading: no crossover rule and no size separates on F1 — every paired dF1 CI straddles 0 (largest |dF1| 0.14). The blends cost FPR only at max500 (+0.77±0.59 blend_neuron, CI excludes 0; +0.69±0.68 blend_cluster). At max250 blend_neuron vs inherit is +0.08 F1 / +0.19 FPR (both CIs straddle 0). max500 inherit hours (2.44) include the older long IDS-40/44 runs; current max500 flows take ~0.8-1.1 h vs max250 0.42 h. The 24/10 config (max250 + blend_neuron) stands; the cap for IDS-47 is decided by the pre-registered IDS-45 rule (logs/ids/ids45_decide.py).
+All 60 live flows completed (42 rate-1.0 flows cancelled per Luiz 23/10; 7071/75/79 excluded as in the partial). best_f1 genome, GA Neurons final, margin_val_cal (held-out). Reading: no crossover rule and no size separates on F1 — every paired dF1 CI straddles 0 (largest |dF1| 0.14). The blends cost FPR only at max500 (+0.77±0.59 blend_neuron, CI excludes 0; +0.69±0.68 blend_cluster). At max250 blend_neuron vs inherit is +0.08 F1 / +0.19 FPR (both CIs straddle 0). max500 inherit hours (2.44) include the older long IDS-40/44 runs; current max500 flows take ~0.8-1.1 h vs max250 0.42 h. The 24/10 config (max250 + blend_neuron) stands; the IDS-47 cap is decided by the pre-registered IDS-45 rule (logs/ids/ids45_decide.py).
 
+```
+config               n   F1           FPR          Acc          neurons     cells(M)    hours
+max250 inherit        10   90.74±0.23    5.20±0.88   90.77±0.24     486      0.21    0.42
+max250 blend_neuron   10   90.82±0.11    5.39±1.26   90.86±0.10     492      0.21    0.42
+max250 blend_cluster  10   90.79±0.17    5.37±1.18   90.82±0.17     496      0.21    0.41
+max500 inherit        10   90.88±0.14    4.43±0.52   90.91±0.14     976      0.41    2.44
+max500 blend_neuron   10   90.91±0.20    5.19±0.85   90.94±0.20     885      0.38    0.73
+max500 blend_cluster  10   90.84±0.16    5.12±0.94   90.87±0.16     998      0.42    0.83
 
+PAIRED (same seed; ± = 95% CI half-width)
+max250 blend_neuron − inherit            n=10  dF1 +0.08±0.20 (7/10 +)  dFPR +0.19±0.79 (4/10 better)  dAcc +0.09±0.20
+max250 blend_cluster − inherit           n=10  dF1 +0.05±0.18 (6/10 +)  dFPR +0.16±0.83 (4/10 better)  dAcc +0.05±0.19
+max500 blend_neuron − inherit            n=10  dF1 +0.02±0.15 (4/10 +)  dFPR +0.77±0.59 (2/10 better)  dAcc +0.03±0.15
+max500 blend_cluster − inherit           n=10  dF1 -0.05±0.15 (3/10 +)  dFPR +0.69±0.68 (2/10 better)  dAcc -0.04±0.15
+max250 − max500 (inherit)                n=10  dF1 -0.14±0.22 (4/10 +)  dFPR +0.78±0.82 (3/10 better)  dAcc -0.14±0.22
+max250 − max500 (blend_neuron)           n=10  dF1 -0.08±0.15 (1/10 +)  dFPR +0.20±0.92 (6/10 better)  dAcc -0.08±0.15
+max250 − max500 (blend_cluster)          n=10  dF1 -0.05±0.18 (6/10 +)  dFPR +0.25±1.21 (4/10 better)  dAcc -0.05±0.19
+
+BEST SINGLE GENOME per config (best_f1 genome, GA final, margin_val_cal)
+  max250 inherit       best F1 : flow 7091 r98954  F1 91.07  FPR 5.96  Acc 91.11  445n
+  max250 inherit       best FPR: flow 7124 r20419  F1 90.92  FPR 3.63  Acc 90.93  498n
+  max250 inherit       best Acc: flow 7091 r98954  F1 91.07  FPR 5.96  Acc 91.11  445n
+  max250 blend_neuron  best F1 : flow 7098 r25052  F1 91.00  FPR 3.93  Acc 91.02  490n
+  max250 blend_neuron  best FPR: flow 7125 r20419  F1 90.91  FPR 3.77  Acc 90.93  498n
+  max250 blend_neuron  best Acc: flow 7098 r25052  F1 91.00  FPR 3.93  Acc 91.02  490n
+  max250 blend_cluster best F1 : flow 7162 r20422  F1 91.07  FPR 5.16  Acc 91.10  499n
+  max250 blend_cluster best FPR: flow 7096 r77715  F1 90.82  FPR 3.65  Acc 90.83  492n
+  max250 blend_cluster best Acc: flow 7162 r20422  F1 91.07  FPR 5.16  Acc 91.10  499n
+  max500 inherit       best F1 : flow 7055 r25052  F1 91.12  FPR 4.43  Acc 91.15  997n
+  max500 inherit       best FPR: flow 7139 r20420  F1 90.95  FPR 3.65  Acc 90.97  999n
+  max500 inherit       best Acc: flow 7055 r25052  F1 91.12  FPR 4.43  Acc 91.15  997n
+  max500 blend_neuron  best F1 : flow 7200 r20425  F1 91.25  FPR 4.84  Acc 91.28  991n
+  max500 blend_neuron  best FPR: flow 7128 r20419  F1 90.92  FPR 3.96  Acc 90.94  999n
+  max500 blend_neuron  best Acc: flow 7200 r20425  F1 91.25  FPR 4.84  Acc 91.28  991n
+  max500 blend_cluster best F1 : flow 7201 r20425  F1 91.15  FPR 4.74  Acc 91.18  995n
+  max500 blend_cluster best FPR: flow 7141 r20420  F1 90.86  FPR 3.97  Acc 90.88  999n
+  max500 blend_cluster best Acc: flow 7201 r20425  F1 91.15  FPR 4.74  Acc 91.18  995n
+```
 
 ## IDS-45 tot250 ARM + IDS-47 PAUSED (24/10/2026 09:05 EDT)
 
