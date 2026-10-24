@@ -197,6 +197,39 @@ WHAT CHANGED
   inert on UNSW-random/CICIDS (thr 0.43-0.56, ≤0.3pp) = prior correction, not VAL overfit.
   Every CIC-IoT row in the next paper comes from the Kaggle/Neto copies; every table pairs modes.
 
+## IDS-46 CONFIG DECISION (24/10/2026) — BINARY-lattice-2m **max250 + blend_neuron**, rate 0.25
+
+Luiz 24/10: "fix max250 + blend neuron (it's best genome with fpr and in all honesty, when you say
+crossover, that is what I expect, it's the most logical to me, if they all seem similar, let's use the
+simpler to explain then)". Taken on the PARTIAL IDS-46 (n=8 max250 / n=7 max500, rate 0.25, best_f1
+genome, GA final, held-out margin_val_cal); the last 3 seeds finish ~24/10 16:30 EDT.
+
+```
+config                 n   F1           FPR          Acc          neurons  cells(M)
+max250 inherit         8   90.80±0.16   5.11±0.87    90.83±0.16     484     0.21
+max250 blend_neuron    8   90.82±0.13   5.65±1.28    90.86±0.12     490     0.21
+max250 blend_cluster   8   90.81±0.18   5.24±1.27    90.84±0.19     496     0.21
+max500 inherit         7   90.88±0.16   4.42±0.52    90.90±0.16     996     0.41
+max500 blend_neuron    7   90.84±0.20   5.12±1.07    90.87±0.20     993     0.42
+max500 blend_cluster   7   90.83±0.11   5.10±1.13    90.86±0.11     998     0.42
+
+paired, same seed (± = 95% CI half-width)
+max250 blend_neuron - inherit  n=8  dF1 +0.02±0.19  dFPR +0.54±0.71 (2/8 better)
+max250 - max500 (blend_neuron) n=7  dF1 -0.00±0.18  dFPR +0.33±1.40 (4/7 better)
+```
+Reading: no blend rule and no size separates on F1 (every |dF1| <= 0.08, every CI straddles 0); the
+blends lean +0.5..+0.7 pp FPR vs inherit, also inside the CI. Chosen on interpretability (crossover
+that blends the parents' widths is what "crossover" means) and memory (max250 = half the cells and
+time of max500). Best single max250 genome: 7098 blend_neuron r25052 GA 91.00 / 3.93 / 91.02, 490n.
+Scratchpad generator: ids46_partial.py. IDS-43 (classic WiSARD rate 1.0) CANCELLED the same day —
+superseded by the rate decision below and by IDS-47.
+
+**IDS-45 queued the same day (flows 7208-7217, after IDS-46, before the tandem):** the one equal-budget
+arm that can change the 2m config — max_neurons 500 per cluster + max_neurons_total 500 (GA free to
+move the 250/250 split), blend_neuron, 10 seeds, paired per seed vs max250 blend_neuron. The 1m arm is
+NOT run: BINARY-lattice 1m sits at the 79/42 collapse floor (IDS-40). First production use of
+max_neurons_total.
+
 ## IDS-46 RATE DECISION (23/10/2026) — neuron sample rate 1.0 DROPPED for BINARY-lattice-2m; rate 0.25 stays
 
 **Decision (Luiz, 23/10/2026 09:37 EDT, "go with A, cancel the 42 and document it").** IDS-46 keeps the
