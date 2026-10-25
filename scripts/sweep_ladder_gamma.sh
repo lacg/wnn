@@ -143,9 +143,16 @@ run_point() {
 		--report-seeds $REPORT_SEEDS \
 		--base-seed "$SEED" \
 		${SL_EXTRA_ARGS:-}
-	log "$tag finished rc=$?"
+	local rc=$?
+	log "$tag finished rc=$rc"
+	# 25/10/2026: a failed point used to vanish here — the script still logged "STAGE C
+	# COMPLETE" and exited 0 (CTRL-19 s4 died ENOSPC, the chain read "ladder exited rc=0").
+	# Count it so the end of the script can say INCOMPLETE and exit non-zero.
+	[ "$rc" != "0" ] && FAILED_POINTS="${FAILED_POINTS}${FAILED_POINTS:+ }${tag}(rc=${rc})"
+	return "$rc"
 }
 
+FAILED_POINTS=""
 log "########## ARMED — STAGE C: gamma A/B (n=32) then the levels ladder ##########"
 log "widths=[$WIDTHS] gamma=$GAMMA phase2_neurons=[$PHASE2_NEURONS] seed=$SEED arm=GATE budget=5/3"
 
@@ -215,4 +222,8 @@ for n in $PHASE2_NEURONS; do
 		run_point "$b" "$n" "$PHASE2_GAMMA"
 	done
 done
+if [ -n "$FAILED_POINTS" ]; then
+	log "########## STAGE C INCOMPLETE — failed point(s): ${FAILED_POINTS} — NO marker for them ##########"
+	exit 1
+fi
 log "########## STAGE C COMPLETE (phase 2 ran at gamma=${PHASE2_GAMMA}) — rank on gate-distance against the SL_A n=32 gamma=1 controls ##########"

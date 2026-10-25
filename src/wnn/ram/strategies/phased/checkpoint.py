@@ -16,6 +16,7 @@ The loader also accepts both legacy formats:
 - legacy controller pickle: {"spec", "best_genome", "population", ...}
 """
 
+import contextlib
 import gzip
 import os
 import pickle
@@ -119,6 +120,21 @@ def _dump_yaml_flow(obj) -> str:
 	return yaml.dump(obj, Dumper=_YamlDumper, default_flow_style=True, sort_keys=False).strip()
 
 
+@contextlib.contextmanager
+def _unlink_on_error(tmp: Path):
+	"""Remove a half-written temp file when the write raises, then re-raise.
+
+	25/10/2026: a full disk (ENOSPC) killed CTRL-19 s4 mid crash-save and left a
+	155 MB ``emergency_stage4_memory.yaml.gz.tmp.<pid>`` behind — on a full disk the
+	orphan is itself part of the problem. SIGKILL still cannot be caught; the
+	resume picker ignores ``.tmp.*`` files either way."""
+	try:
+		yield
+	except BaseException:
+		tmp.unlink(missing_ok=True)
+		raise
+
+
 def _write_payload(p: Path, payload: dict) -> None:
 	"""Atomically write the yaml.gz envelope (temp file + os.replace), so a crash
 	mid-write leaves any prior checkpoint at ``p`` intact rather than truncated.
@@ -132,7 +148,7 @@ def _write_payload(p: Path, payload: dict) -> None:
 	p.parent.mkdir(parents=True, exist_ok=True)
 	tmp = Path(str(p) + f".tmp.{os.getpid()}")
 	pop = payload.get("final_population")
-	with _WRITE_LOCK:
+	with _WRITE_LOCK, _unlink_on_error(tmp):
 		# compresslevel 6: ~3× faster than the default 9 on multi-100MB base64
 		# payloads for a ~1-2% size cost — checkpoints are written far more often
 		# than they are stored long-term.
@@ -426,9 +442,10 @@ def extract_checkpoint_head(src: "str | Path", dst: "str | Path",
 	dstp = Path(dst)
 	dstp.parent.mkdir(parents=True, exist_ok=True)
 	tmp = Path(str(dstp) + f".tmp.{os.getpid()}")
-	with gzip.open(tmp, "wt", encoding="utf-8") as f:
-		f.write(head)
-	os.replace(tmp, dstp)
+	with _unlink_on_error(tmp):
+		with gzip.open(tmp, "wt", encoding="utf-8") as f:
+			f.write(head)
+		os.replace(tmp, dstp)
 	return dstp
 
 
