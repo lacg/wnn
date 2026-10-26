@@ -197,6 +197,27 @@ WHAT CHANGED
   inert on UNSW-random/CICIDS (thr 0.43-0.56, ≤0.3pp) = prior correction, not VAL overfit.
   Every CIC-IoT row in the next paper comes from the Kaggle/Neto copies; every table pairs modes.
 
+## IDS-45 FINAL n=10 (25/10/2026, rule applied automatically; written up 26/10) — neuron budget: per-cluster vs total cap
+
+Question (Luiz 24/10): BINARY 2m max250 allows 250 neurons PER cluster (up to 500 total), while QUAD 1m
+is 250 total — does a TOTAL cap (GA free to split it between the 2 clusters) lose anything, and is it
+cheaper? unswt, BINARY lattice 2m, blend_neuron, rate 0.25, same 10 seeds, best_f1 genome, GA final,
+margin_val_cal (held-out), paired per seed vs max250. Pre-registered rule: logs/ids/ids45_decide.py.
+
+```
+arm      n   F1            FPR           Acc           neurons  cells(M)  hours
+max250  10   90.82±0.11    5.39±1.26   90.86±0.10      492      0.21   0.42
+tot250  10   90.52±0.19    4.89±0.88   90.55±0.18      219      0.10   0.24
+tot500  10   90.78±0.16    4.90±0.72   90.81±0.16      444      0.19   0.40
+
+tot250 - max250  n=10  dF1 -0.30±0.13  dFPR -0.50±0.92  dAcc -0.31  dNeurons -273  dHours -0.18
+tot500 - max250  n=10  dF1 -0.04±0.16  dFPR -0.49±1.13  dAcc -0.05  dNeurons -48  dHours -0.02
+DECISION max250 rule 3: neither budget arm qualified — keep max250
+```
+Reading: halving the budget (tot250) costs a real -0.30 pp F1 (CI excludes 0) for ~45% less memory and
+time; tot500 is a tie with max250. Both total caps lean -0.5 pp FPR, inside the CI. IDS-47 un-paused at
+max250 (watcher ids47_after_ids45.sh).
+
 ## IDS-46 FINAL n=10 (24/10/2026 17:40 EDT) — unswt BINARY lattice 2m, rate 0.25, 3 xo rules x max250/max500
 
 All 60 live flows completed (42 rate-1.0 flows cancelled per Luiz 23/10; 7071/75/79 excluded as in the partial). best_f1 genome, GA Neurons final, margin_val_cal (held-out). Reading: no crossover rule and no size separates on F1 — every paired dF1 CI straddles 0 (largest |dF1| 0.14). The blends cost FPR only at max500 (+0.77±0.59 blend_neuron, CI excludes 0; +0.69±0.68 blend_cluster). At max250 blend_neuron vs inherit is +0.08 F1 / +0.19 FPR (both CIs straddle 0). max500 inherit hours (2.44) include the older long IDS-40/44 runs; current max500 flows take ~0.8-1.1 h vs max250 0.42 h. The 24/10 config (max250 + blend_neuron) stands; the IDS-47 cap is decided by the pre-registered IDS-45 rule (logs/ids/ids45_decide.py).
