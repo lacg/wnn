@@ -1,228 +1,108 @@
-"""True held-out validation of a saved Plan A genome (stage checkpoint or final winner).
-
-The phased-GA's per-gen "best" and "stage done" numbers are measured on folds
-the GA itself trained on (K-fold rotation prevents single-pool overfit but
-doesn't equal held-out). This script measures the genome's performance on a
-COMPLETELY FRESH seed pool that the GA never saw — the honest generalization
-number.
-
-How it works:
-  1. Load a pickle written by `tests/run_phased_ga.py --save-winner` or
-     `--save-stage-checkpoints DIR`. The pickle has: spec, best_genome,
-     population, metrics (training-side), fitness_weights, meta.
-  2. Build a new ControllerEvaluator with a DIFFERENT base seed (default:
-     pickle's saved_at hash + a magic offset, or user-specified --base-seed).
-     With --num-eval-folds 1, this evaluator uses a single fresh pool.
-  3. Re-evaluate the winning genome:
-       - Arch-stage genomes (Stage 1/2/3) have cells=None → use
-         `evaluate_batch` (trains cells via reward-gated adaptation, then scores).
-       - Memory-stage genomes (Stage 4) have cells populated → use
-         `score_genomes` (no training; just write cells + score).
-  4. Print: pickle metrics (training-side) | held-out metrics | gap.
+"""True held-out validation of a saved controller stage checkpoint — through the
+pipeline's OWN held-out code, never a private copy of it.
 
 Usage:
-  # Stage 1 winner held-out:
-  python3 scripts/evaluate_winner_holdout.py \\
-    --winner logs/controller/planAB/v3_stages_20260530_220000/stage1_neurons.pkl
+  python scripts/evaluate_winner_holdout.py \\
+    --winner logs/controller/sweep_ladder/ckpt/<TAG>/stage1_neurons.yaml.gz \\
+    [--report-seeds 99990101 99990102 ...]
 
-  # Stage 4 / final winner held-out with explicit seed:
-  python3 scripts/evaluate_winner_holdout.py \\
-    --winner logs/controller/planAB/winner_planAv3_<TS>.pkl \\
-    --base-seed 20260601 --eval-episodes 200
+What it does:
+  1. Re-parse the run's EXACT command line — the checkpoint's meta["argv"], else
+     the `[argv]` line of the run's .out (both recorded since 26/10/2026) — and
+     build its EpisodeConfig with phased_ga.episode_config_from_args, the plant the
+     run actually flew. A run without a recorded argv is REFUSED: rebuilding its
+     flags from the .out header guesses, and the guess silently drops recipe flags
+     such as --obs-pwm (measured 26/10 on CTRL-19 s5).
+  2. Load the checkpoint's population; the published genome is population[0].
+  3. Score it on each report seed with phased_ga._holdout_report: K=5 training
+     for an arch-only genome, cells read under TRAIN-seed thresholds
+     (_report_thresholds), the same code that writes every marker's held-out rows.
+  4. Print the checkpoint's training-side metrics next to the held-out mean±SD.
 
-A 5-15 min run for typical stage genomes (depends on arch size + eval-episodes).
+Rewritten 26/10/2026 (Luiz: "touch it just in case"). The old version kept its own
+copy of the held-out: num_eval_folds=1, thresholds re-fit on the held-out seed (the
+01/08 threshold-misalignment bug, docs/threshold_misalignment_finding.md), and a
+hand-built EpisodeConfig (no airframe/obs/translation, tilt 15) — three ways to
+report a number for a controller other than the one the run built.
 """
 from __future__ import annotations
 
 import argparse
-import math
-import pickle
+import shlex
+import statistics
 import sys
-import time
 from pathlib import Path
 
-# Reach run_phased_ga.py's helpers + the evaluator/eval_closed_loop_reset path.
-_THIS_DIR = Path(__file__).parent
-_TESTS_DIR = _THIS_DIR.parent / "tests"
-if str(_TESTS_DIR) not in sys.path:
-	sys.path.insert(0, str(_TESTS_DIR))
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "scripts"))
 
-# _rg_config / _pid_baseline moved from tests/run_phased_ga.py into the
-# control package (commit splitting phased_ga helpers); import from there.
-from wnn.control.phased_ga import _rg_config, _pid_baseline   # noqa: E402
-from wnn.control.evaluator import ControllerEvaluator, fit_thresholds_from_pid_rollouts  # noqa: E402
-from wnn.control.training import EpisodeConfig  # noqa: E402
-
-from wnn.control.checkpoint_io import load_controller_checkpoint as _load_ctl_checkpoint
+from rescore_first_report_seed import _find_out, parse_out  # noqa: E402
+from wnn.control.phased_ga import (_ctl_load, _holdout_report, build_arg_parser,  # noqa: E402
+                                   episode_config_from_args)
 
 
+def _recorded_argv(payload: dict, out_path: str) -> list[str] | None:
+	"""The run's command line: checkpoint meta first, then the .out's `[argv]` line."""
+	argv = (payload.get("meta") or {}).get("argv")
+	if argv:
+		return list(argv)
+	for line in open(out_path, errors="replace"):
+		if line.startswith("[argv] "):
+			return shlex.split(line[len("[argv] "):])
+	return None
 
 
-def _derive_holdout_seed(payload: dict) -> int:
-	"""Pick a fresh-seed default — bump the pickle's saved_at_unix hash so it's
-	deterministic per-pickle but distinct from anything used during training."""
-	import hashlib
-	saved = payload.get("meta", {}).get("saved_at_unix", 0)
-	# Magic offset: 0xDEADBEEF as decimal — keeps the seed legible in logs
-	# and small enough to feed numpy/Python RNGs without truncation drama.
-	digest = hashlib.sha1(f"holdout-{saved}".encode()).hexdigest()[:8]
-	return int(digest, 16) & 0xFFFFFFFF
+def _mean_sd(xs: list[float]) -> str:
+	return f"{statistics.mean(xs):.2f}±{statistics.pstdev(xs) if len(xs) > 1 else 0.0:.2f}"
 
 
-def main():
-	ap = argparse.ArgumentParser(description=__doc__,
-		formatter_class=argparse.RawDescriptionHelpFormatter)
-	ap.add_argument("--winner", type=str, required=True,
-	                help="Path to pickled winner / stage checkpoint.")
-	ap.add_argument("--base-seed", type=int, default=None,
-	                help="Held-out base seed (default: derived from pickle meta).")
-	ap.add_argument("--eval-episodes", type=int, default=100,
-	                help="Episodes for held-out scoring (default 100 = 1%% granularity).")
-	ap.add_argument("--steps", type=int, default=None,
-	                help="Steps per episode (default: from pickle meta, fallback 500).")
-	ap.add_argument("--tilt", type=float, default=None,
-	                help="Initial tilt bound in degrees (default: from pickle, fallback 15).")
-	# Inner-train knobs — only used for arch-stage (cells=None) genomes. For
-	# memory-stage genomes (cells present), training is skipped.
-	ap.add_argument("--rg-rounds", type=int, default=3)
-	ap.add_argument("--rg-episodes-per-round", type=int, default=6)
-	ap.add_argument("--rg-eval-episodes", type=int, default=5)
-	ap.add_argument("--train-workers", type=int, default=3)
-	ap.add_argument("--universe-episodes", type=int, default=3)
-	args = ap.parse_args()
+def main() -> int:
+	ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+	ap.add_argument("--winner", required=True, help="ckpt/<TAG>/stageN_<name>.yaml.gz")
+	ap.add_argument("--report-seeds", type=int, nargs="+", default=None,
+	                help="Held-out seeds (default: the run's own --report-seeds from its .out).")
+	a = ap.parse_args()
 
-	# Load the pickle.
-	payload_path = Path(args.winner)
-	if not payload_path.exists():
-		print(f"ERROR: --winner path does not exist: {payload_path}", file=sys.stderr)
+	path = Path(a.winner)
+	tag = path.parent.name
+	out = _find_out(tag)
+	if out is None:
+		print(f"ERROR: no .out for {tag} — cannot rebuild the run's recipe", file=sys.stderr)
 		return 1
-	with open(payload_path, "rb") as f:
-		payload = _load_ctl_checkpoint(f.name)
-	spec        = payload["spec"]
-	# The published genome is population[0] (fitness-sorted), and the stage
-	# checkpoint's `metrics` describe it (_print_stage_result, 26/10/2026).
-	# `best_genome` is the GA's frozen incumbent, which can lag pool[0] — the
-	# fallback only for checkpoints saved without a population.
-	best_genome = (payload.get("population") or [None])[0] or payload.get("best_genome")
-	prev_metrics = payload.get("metrics")
-	prev_weights = payload.get("fitness_weights", {})
-	meta        = payload.get("meta", {})
-
-	# Schema-2 yaml.gz checkpoints store metrics as a DICT; old .pkl stored a
-	# Metrics object. Normalize a dict to attribute access so the printouts below
-	# work for both formats (field names match the Metrics dataclass).
-	if isinstance(prev_metrics, dict):
-		from types import SimpleNamespace
-		prev_metrics = SimpleNamespace(
-			mean_attitude_error_deg=prev_metrics.get("mean_attitude_error_deg", float("nan")),
-			acc=prev_metrics.get("acc", float("nan")),
-			fitness=prev_metrics.get("fitness", float("nan")),
-			ce=prev_metrics.get("ce", float("nan")),
-		)
-
-	if best_genome is None:
-		print(f"ERROR: pickle has no best_genome", file=sys.stderr)
+	facts = parse_out(out)
+	seeds = a.report_seeds or facts.get("report_seeds")
+	if not seeds or "train" not in facts or "steps" not in facts:
+		print(f"ERROR: {out} header incomplete (seed set / recipe line / report seeds)", file=sys.stderr)
 		return 1
+	payload = _ctl_load(str(path))
+	argv = _recorded_argv(payload, out)
+	if argv is None:
+		print(f"ERROR: {tag} recorded no command line (run predates 26/10/2026). Its flags cannot "
+		      f"be rebuilt exactly, and a guessed recipe scores a different controller. Refused.",
+		      file=sys.stderr)
+		return 1
+	args = build_arg_parser().parse_args(argv)
+	ec = episode_config_from_args(args)
+	pop = list(payload.get("population") or [])
+	genome = pop[0] if pop else payload.get("best_genome")
+	if genome is None:
+		print("ERROR: checkpoint has neither population nor best_genome", file=sys.stderr)
+		return 1
+	stage = payload.get("stage_name") or path.stem
+	rows = [_holdout_report(args, ec, payload["spec"], genome, pop or None, s, facts["train"], stage_label=stage)
+	        for s in seeds]
 
-	# Resolve held-out seed.
-	holdout_seed = args.base_seed if args.base_seed is not None else _derive_holdout_seed(payload)
-
-	# Resolve episode-config knobs (prefer pickle's recorded values; fall back to args).
-	steps = args.steps if args.steps is not None else meta.get("steps", 500)
-	tilt  = args.tilt  if args.tilt  is not None else meta.get("tilt_deg", 15.0)
-	levels = spec.levels_per_motor
-
-	# Genome paradigm: arch-stage (cells=None → train) vs memory-stage (cells present → score-only).
-	has_cells = getattr(best_genome, "cells", None) is not None
-	paradigm = "MEMORY (paradigm B, score-only)" if has_cells else "ARCH (paradigm A, reward-gated train)"
-
-	print(f"\n{'='*72}\n  HELD-OUT VALIDATION\n{'='*72}")
-	print(f"  Pickle:        {payload_path}")
-	print(f"  Spec:          sn={spec.state_neurons} sb={spec.state_bits_per_neuron} "
-	      f"ob={spec.output_bits_per_neuron} levels={levels}")
-	print(f"  Paradigm:      {paradigm}")
-	print(f"  Held-out seed: {holdout_seed}  (different from training base seed)")
-	print(f"  Eval episodes: {args.eval_episodes}  (1% stability granularity)")
-	print(f"  K-folds:       1  (single fresh pool — no rotation, this IS the held-out test)")
-	print(f"  Steps/ep:      {steps}  Tilt: {tilt}°")
-	if prev_metrics is not None:
-		print(f"\n  TRAINING-SIDE (from pickle): "
-		      f"err={prev_metrics.mean_attitude_error_deg:.2f}°  "
-		      f"stable={prev_metrics.acc*100:.1f}%  "
-		      f"reward={prev_metrics.fitness:.2f}")
-	print(f"\n  Re-evaluating on held-out seed...")
-
-	# Build episode config + threshold fit (uses the held-out seed throughout).
-	ec = EpisodeConfig(
-		dt=0.001, steps_per_episode=steps,
-		max_initial_tilt_rad=math.radians(tilt),
-		max_initial_yaw_rad=math.radians(tilt),
-		max_initial_body_rate=0.5, max_initial_yaw_rate=0.3,
-	)
-	# PID thresholds: re-fit on held-out seed so the scorer's thresholds are
-	# matched to held-out distribution rather than carrying training thresholds.
-	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=holdout_seed)
-
-	# Build the held-out evaluator. num_eval_folds=1: pure single fresh pool.
-	# rg_config needs the same args struct shape as run_phased_ga; we forge it.
-	class _ArgsForRG: pass
-	a = _ArgsForRG()
-	for k, v in vars(args).items(): setattr(a, k, v)
-	rg = _rg_config(a, ec, holdout_seed)
-
-	ev = ControllerEvaluator(
-		spec,
-		num_eval_episodes=args.eval_episodes,
-		seed=holdout_seed,
-		episode_config=ec,
-		thresholds=thresholds,
-		rg_config=rg,
-		max_train_workers=args.train_workers,
-		num_eval_folds=1,           # ← key: no K-fold rotation; pure held-out
-	)
-
-	t0 = time.time()
-	if has_cells:
-		metrics = ev.score_genomes([best_genome])[0]
-	else:
-		metrics = ev.evaluate_batch([best_genome])[0]
-	dt = time.time() - t0
-
-	# PID held-out baseline for direct comparison on the same fresh seed.
-	pid_m = _pid_baseline(ec, args.eval_episodes, holdout_seed + 7777)
-
-	print(f"\n{'='*72}\n  RESULTS\n{'='*72}")
-	print(f"  HELD-OUT (fresh seed {holdout_seed}):")
-	print(f"     err    = {metrics.mean_attitude_error_deg:.2f}°")
-	print(f"     stable = {metrics.acc*100:.1f}%")
-	print(f"     reward = {metrics.fitness:.2f}")
-	print(f"     CE     = {metrics.ce:.2f}")
-	if prev_metrics is not None:
-		dErr = metrics.mean_attitude_error_deg - prev_metrics.mean_attitude_error_deg
-		dSt  = (metrics.acc - prev_metrics.acc) * 100
-		print(f"\n  Δ TRAINING → HELD-OUT (>0 means held-out is WORSE):")
-		print(f"     Δ err    = {dErr:+.2f}°   ({'overfit' if dErr > 1 else 'generalizes' if abs(dErr) < 1 else 'underfit?'})")
-		print(f"     Δ stable = {dSt:+.1f}pp  ({'overfit' if dSt < -3 else 'generalizes' if abs(dSt) < 3 else 'gained on held-out'})")
-	if pid_m is not None:
-		print(f"\n  vs PID baseline (same held-out distribution, seed offset):")
-		print(f"     err    = {pid_m['mean_attitude_error_deg']:.2f}°  "
-		      f"(WNN delta {metrics.mean_attitude_error_deg - pid_m['mean_attitude_error_deg']:+.2f}°)")
-		print(f"     stable = {pid_m['stable_rate']*100:.1f}%       "
-		      f"(WNN delta {(metrics.acc - pid_m['stable_rate'])*100:+.1f}pp)")
-	print(f"\n  Wall time: {dt/60:.1f} min")
-
-	# Honest reading per the gap interpretation:
-	if prev_metrics is not None:
-		gap = metrics.mean_attitude_error_deg - prev_metrics.mean_attitude_error_deg
-		if abs(gap) < 0.5:
-			print(f"\n  Verdict: GENERALIZES — held-out matches training within 0.5°.")
-		elif gap < -1:
-			print(f"\n  Verdict: SURPRISING WIN — held-out is BETTER than training.")
-		elif gap < 1:
-			print(f"\n  Verdict: SLIGHT GAP ({gap:+.2f}°) — mild overfit but acceptable.")
-		else:
-			print(f"\n  Verdict: REAL OVERFIT — held-out is {gap:.2f}° worse than training.")
-
+	prev = payload.get("metrics") or {}
+	prev = prev if isinstance(prev, dict) else vars(prev)
+	print(f"\n{'=' * 72}\n  {tag}  [{stage}]  population[0], {len(seeds)} report seeds\n{'=' * 72}")
+	if prev:
+		print(f"  training-side (checkpoint): stable={prev.get('acc', float('nan')) * 100:.1f}%  "
+		      f"err={prev.get('mean_attitude_error_deg', float('nan')):.2f}°  "
+		      f"steady={prev.get('mean_steady_error_deg') or float('nan'):.2f}°")
+	print(f"  held-out:                   stable={_mean_sd([m.acc * 100 for m in rows])}%  "
+	      f"err={_mean_sd([m.mean_attitude_error_deg for m in rows])}°  "
+	      f"steady={_mean_sd([m.mean_steady_error_deg for m in rows if m.mean_steady_error_deg is not None])}°  "
+	      f"alt={_mean_sd([m.mean_altitude_error_m for m in rows if getattr(m, 'mean_altitude_error_m', None) is not None])}m")
 	return 0
 
 

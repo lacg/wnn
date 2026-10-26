@@ -1315,6 +1315,7 @@ def _save_winner(path: str, args, spec: ControllerSpec,
 			"tilt_deg":      args.tilt,
 			"steps":         args.steps,
 			"eval_episodes": args.eval_episodes,
+			"argv":          getattr(args, "cli_argv", None),   # None = not launched from the CLI
 		},
 	}
 	if stage_num is not None:
@@ -3419,6 +3420,10 @@ def episode_config_from_args(args) -> EpisodeConfig:
 
 def main():
 	args = build_arg_parser().parse_args()
+	# The exact command line, kept so a saved genome can be re-scored under the
+	# flags its run actually used (26/10/2026): before this, an offline re-score had
+	# to GUESS the recipe from the .out header and silently dropped --obs-pwm & co.
+	args.cli_argv = list(sys.argv[1:])
 	_validate_rank_weights(args)
 
 	# Option A: enable the learned-integral state target in the Rust trainer
@@ -3659,6 +3664,8 @@ def main():
 	# R9 (multi-axis spec): one greppable line the ladder copies into the marker —
 	# wheel, ABI, .so hash, git HEAD, pool scheme. Fail-safe by construction.
 	print(collect_provenance(fitness_pools_label(args)).line())
+	import shlex
+	print(f"[argv] {shlex.join(args.cli_argv)}", flush=True)
 
 	# REPORT-ONLY re-selection: no search, no writes — rebuild the candidates from
 	# the saved stage checkpoints and re-run the val-based headline selection.
