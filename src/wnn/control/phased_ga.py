@@ -687,8 +687,15 @@ def _log_split_pressure(res, label: str):
 
 def _print_stage_result(idx: int, name: str, res, gens: int, dt: float, ev: ControllerEvaluator):
 	"""Re-evaluate the winning genome so we can report the full metric tuple
-	(CE, err, stable_rate) using the evaluator that drove the stage."""
-	best = res.best_genome
+	(CE, err, stable_rate) using the evaluator that drove the stage.
+
+	The winner is final_population[0] — the genome the gen line, held-out report
+	and stage-select all publish. NOT res.best_genome: that is the GA's frozen
+	incumbent, replaced only when a z-score beats one minted in an EARLIER
+	generation's frame, so it can lag pool[0] (CTRL-19 s4 NEURONS 25/10: gen 4
+	took rank 1, this line still printed the gen-1 genome)."""
+	pop = getattr(res, "final_population", None)
+	best = pop[0] if pop else res.best_genome
 	if best is None:
 		print(f"  STAGE {idx} ({name}): NO BEST GENOME (iter={res.iterations_run})")
 		return None

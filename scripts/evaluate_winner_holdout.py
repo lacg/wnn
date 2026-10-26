@@ -99,7 +99,11 @@ def main():
 	with open(payload_path, "rb") as f:
 		payload = _load_ctl_checkpoint(f.name)
 	spec        = payload["spec"]
-	best_genome = payload.get("best_genome")
+	# The published genome is population[0] (fitness-sorted), and the stage
+	# checkpoint's `metrics` describe it (_print_stage_result, 26/10/2026).
+	# `best_genome` is the GA's frozen incumbent, which can lag pool[0] — the
+	# fallback only for checkpoints saved without a population.
+	best_genome = (payload.get("population") or [None])[0] or payload.get("best_genome")
 	prev_metrics = payload.get("metrics")
 	prev_weights = payload.get("fitness_weights", {})
 	meta        = payload.get("meta", {})
