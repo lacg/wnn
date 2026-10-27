@@ -64,14 +64,14 @@ selection ran on) and never the during-search gen lines (anti-predictive, repeat
 ## Coverage
 
 ```
-markers with a headline held-out : 321
-  altitude regimen (alt= present) : 237
+markers with a headline held-out : 322
+  altitude regimen (alt= present) : 238
   attitude-only                   : 84
   state-neuron count unreadable   : 0  (no .out on disk)
   h743 keys counted exactly       : 75  (experiments/h743_keys.json)
   h743 fits, exact / bound        : 133 / 0
   h743 off-chip (16 MB QSPI) tier : 53 / 0
-  first-seed alignment (14/09)    : headline re-scored 4, arch-only headline NOT re-scorable 46  (rows marked in the tag column: [unfixed])
+  first-seed alignment (14/09)    : headline re-scored 4, arch-only headline NOT re-scorable 47  (rows marked in the tag column: [unfixed])
   stage-select recalc (15-17/09)  : headline re-selected on the fixed trainer 145  (headline_holdout_recalc takes precedence over _aligned / original)
 ```
 
@@ -79,7 +79,7 @@ markers with a headline held-out : 321
 
 ```
                  attitude-only   altitude
-  sn = 0                78          237
+  sn = 0                78          238
   sn > 0                 6            0
 ```
 
@@ -153,19 +153,19 @@ moved the ceiling, with the caveat that no run has ever changed only that one fl
     10     0.1175     0.1198  CRN   99.0%    1.29    0.60  0.179  qspi     0  NEURONS      2026-09-21  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_pipeN3 [unfixed]
     11     0.1175     0.1368  CRN   99.0%    1.29    0.60  0.179  qspi     0  NEURONS      2026-09-28  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_full30 [unfixed]
     12     0.1183     0.1183  CRN   99.0%    1.46    0.88  0.136  qspi?~    0  NEURONS      2026-10-09  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_tw10
-    13     0.1208     0.1240  CRN   99.4%    1.43    1.01  0.177  qspi?~    0  NEURONS      2026-10-13  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_tw20
-    14     0.1225     0.1442  CRN   99.0%    1.43    0.93  0.165  qspi?~    0  NEURONS      2026-10-22  sweepladder      SL_C_b24n512_cf21_brushless_L4C_g10_s31337003_Lop31 [unfixed]
-    15     0.1225     0.1466  CRN  100.0%    1.29    0.77  0.254  qspi     0  GRID         2026-09-23  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_op30 [unfixed]
-    16     0.1225     0.1136  CRN   98.6%    1.47    0.85  0.134  qspi?~    0  GRID         2026-10-11  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_tw15 [unfixed]
-    17     0.1240     0.1631  CRN   99.6%    1.34    0.68  0.228  qspi     0  NEURONS      2026-09-30  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_full30
-    18     0.1245     0.1058  CRN   98.6%    1.35    0.78  0.177  qspi?~    0  MEMORY       2026-10-26  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_alt31
-    19     0.1249     0.1565  CRN   98.2%    1.45    0.82  0.131  qspi?~    0  NEURONS      2026-10-18  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_tw35
-    20     0.1251     0.1199  CRN   99.8%    1.33    0.78  0.246  qspi     0  GRID         2026-09-22  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_op30 [unfixed]
-    21     0.1263     0.1263  CRN   98.6%    1.33    0.65  0.192  qspi?~    0  NEURONS      2026-10-13  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_tw515 [unfixed]
-    22     0.1273     0.1110  CRN   99.8%    1.42    0.86  0.232  qspi     0  NEURONS      2026-09-24  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_op30 [unfixed]
-    23     0.1274     0.1482  CRN   99.4%    1.54    0.73  0.179  qspi?~    0  NEURONS      2026-10-20  sweepladder      SL_C_b24n384_cf21_brushless_L4C_g10_s31337004_Lop31
-    24     0.1275     0.1376  CRN   98.8%    1.51    0.80  0.158  qspi?~    0  NEURONS      2026-10-21  sweepladder      SL_C_b24n512_cf21_brushless_L4C_g10_s31337002_Lop31
-    25     0.1287     0.1219  CRN   99.4%    1.47    1.01  0.205  qspi~    0  MEMORY       2026-09-05  translationab    TAB_on_b32n256_cf21_brushless_L4C_s31337005
+    13     0.1202     0.1202  CRN   99.6%    1.27    0.72  0.228  qspi?~    0  NEURONS      2026-10-27  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_alt10x [unfixed]
+    14     0.1208     0.1240  CRN   99.4%    1.43    1.01  0.177  qspi?~    0  NEURONS      2026-10-13  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_tw20
+    15     0.1225     0.1442  CRN   99.0%    1.43    0.93  0.165  qspi?~    0  NEURONS      2026-10-22  sweepladder      SL_C_b24n512_cf21_brushless_L4C_g10_s31337003_Lop31 [unfixed]
+    16     0.1225     0.1466  CRN  100.0%    1.29    0.77  0.254  qspi     0  GRID         2026-09-23  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_op30 [unfixed]
+    17     0.1225     0.1136  CRN   98.6%    1.47    0.85  0.134  qspi?~    0  GRID         2026-10-11  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_tw15 [unfixed]
+    18     0.1240     0.1631  CRN   99.6%    1.34    0.68  0.228  qspi     0  NEURONS      2026-09-30  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_full30
+    19     0.1245     0.1058  CRN   98.6%    1.35    0.78  0.177  qspi?~    0  MEMORY       2026-10-26  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_alt31
+    20     0.1249     0.1565  CRN   98.2%    1.45    0.82  0.131  qspi?~    0  NEURONS      2026-10-18  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_tw35
+    21     0.1251     0.1199  CRN   99.8%    1.33    0.78  0.246  qspi     0  GRID         2026-09-22  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_op30 [unfixed]
+    22     0.1263     0.1263  CRN   98.6%    1.33    0.65  0.192  qspi?~    0  NEURONS      2026-10-13  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_tw515 [unfixed]
+    23     0.1273     0.1110  CRN   99.8%    1.42    0.86  0.232  qspi     0  NEURONS      2026-09-24  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_op30 [unfixed]
+    24     0.1274     0.1482  CRN   99.4%    1.54    0.73  0.179  qspi?~    0  NEURONS      2026-10-20  sweepladder      SL_C_b24n384_cf21_brushless_L4C_g10_s31337004_Lop31
+    25     0.1275     0.1376  CRN   98.8%    1.51    0.80  0.158  qspi?~    0  NEURONS      2026-10-21  sweepladder      SL_C_b24n512_cf21_brushless_L4C_g10_s31337002_Lop31
 ```
 
 ## Attitude-only — a DIFFERENT task, never a comparator
@@ -232,28 +232,28 @@ same-rule rank: a large value means that row owes its placing to the draw.
      1     0.0951  CRN   99.8%    1.01    0.48  0.185  qspi?     0.0951     +1  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_tw15
      2     0.0968  CRN   99.6%    1.13    0.62  0.150  qspi?     0.0968     +1  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_tw15
      3     0.1039  CRN   99.6%    1.23    0.55  0.158  qspi?     0.1039     +1  SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_tw35
-     4     0.1058  CRN   99.6%    1.25    0.73  0.162  qspi?     0.1245    +14  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_alt31
-     5     0.1091  CRN   99.8%    1.28    0.82  0.180  qspi?     0.1680    +68  SL_C_b24n384_cf21_brushless_L4C_g10_s31337002_Lop31
-     6     0.1108  CRN   99.8%    1.27    0.75  0.191  qspi?     0.1361    +32  SL_C_b24n384_cf21_brushless_L4C_g10_s31337003_Lop31
-     7     0.1110  CRN   99.8%    1.39    0.89  0.159  qspi      0.1273    +15  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_op30
+     4     0.1058  CRN   99.6%    1.25    0.73  0.162  qspi?     0.1245    +15  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_alt31
+     5     0.1091  CRN   99.8%    1.28    0.82  0.180  qspi?     0.1680    +69  SL_C_b24n384_cf21_brushless_L4C_g10_s31337002_Lop31
+     6     0.1108  CRN   99.8%    1.27    0.75  0.191  qspi?     0.1361    +33  SL_C_b24n384_cf21_brushless_L4C_g10_s31337003_Lop31
+     7     0.1110  CRN   99.8%    1.39    0.89  0.159  qspi      0.1273    +16  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_op30
      8     0.1123  CRN   99.0%    1.20    0.62  0.178  qspi      0.1123     -1  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_op30
-     9     0.1126  CRN   99.6%    1.27    0.72  0.190  qspi?     0.1368    +31  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_tw20
+     9     0.1126  CRN   99.6%    1.27    0.72  0.190  qspi?     0.1368    +32  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_tw20
     10     0.1129  CRN  100.0%    1.38    0.75  0.181  qspi?     0.1129     -2  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_op31
-    11     0.1136  CRN   99.6%    1.35    0.63  0.173  qspi?     0.1225     +5  SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_tw15
+    11     0.1136  CRN   99.6%    1.35    0.63  0.173  qspi?     0.1225     +6  SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_tw15
     12     0.1148  CRN   99.0%    1.26    0.69  0.174  qspi?     0.1148     -3  SL_C_b24n256_cf21_brushless_L4C_g10_s31337006_op31
-    13     0.1157  CRN  100.0%    1.33    0.71  0.209  qspi?     0.1329    +20  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_alt10x
+    13     0.1157  CRN  100.0%    1.33    0.71  0.209  qspi?     0.1329    +21  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_alt10x
     14     0.1183  CRN   99.0%    1.46    0.88  0.136  qspi?     0.1183     -2  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_tw10
     15     0.1198  CRN   99.4%    1.34    0.70  0.197  qspi      0.1175     -5  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_pipeN3
-    16     0.1199  CRN   99.4%    1.29    0.77  0.211  qspi      0.1251     +4  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_op30
-    17     0.1200  CRN   99.6%    1.36    0.74  0.202  qspi?     0.1361    +20  SL_C_b24n256_cf21_brushless_L4C_g10_s31337006_alt31
-    18     0.1217  CRN   99.6%    1.47    0.84  0.180  qspi?     0.1339    +16  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_alt31
-    19     0.1219  CRN   99.6%    1.42    0.96  0.195  qspi      0.1287     +6  TAB_on_b32n256_cf21_brushless_L4C_s31337005
-    20     0.1240  CRN   99.2%    1.39    1.02  0.194  qspi?     0.1208     -7  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_tw20
-    21     0.1243  CRN   99.2%    1.47    0.70  0.173  qspi?     0.1098    -15  SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_op31
-    22     0.1263  CRN   98.6%    1.33    0.65  0.192  qspi?     0.1263     -1  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_tw515
-    23     0.1276  CRN   98.8%    1.41    0.86  0.186  qspi?     0.1314     +6  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_alt31
-    24     0.1278  CRN   99.2%    1.45    0.87  0.196  qspi?     0.1775    +68  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_tw15
-    25     0.1302  CRN   99.0%    1.36    0.83  0.223  qspi?     0.1319     +7  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_tw20
+    16     0.1199  CRN   99.4%    1.29    0.77  0.211  qspi      0.1251     +5  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_op30
+    17     0.1200  CRN   99.6%    1.36    0.74  0.202  qspi?     0.1361    +21  SL_C_b24n256_cf21_brushless_L4C_g10_s31337006_alt31
+    18     0.1202  CRN   99.6%    1.27    0.72  0.228  qspi?     0.1202     -5  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_alt10x
+    19     0.1217  CRN   99.6%    1.47    0.84  0.180  qspi?     0.1339    +16  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_alt31
+    20     0.1219  CRN   99.6%    1.42    0.96  0.195  qspi      0.1287     +6  TAB_on_b32n256_cf21_brushless_L4C_s31337005
+    21     0.1240  CRN   99.2%    1.39    1.02  0.194  qspi?     0.1208     -7  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_tw20
+    22     0.1243  CRN   99.2%    1.47    0.70  0.173  qspi?     0.1098    -16  SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_op31
+    23     0.1263  CRN   98.6%    1.33    0.65  0.192  qspi?     0.1263     -1  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_tw515
+    24     0.1276  CRN   98.8%    1.41    0.86  0.186  qspi?     0.1314     +6  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_alt31
+    25     0.1278  CRN   99.2%    1.45    0.87  0.196  qspi?     0.1775    +68  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_tw15
 ```
 
 ## CRN vs rotation on the same rule
