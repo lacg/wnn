@@ -68,6 +68,12 @@ class OptimizationConfig:
 	f1_anchor: Optional[float] = None
 	acc_anchor: Optional[float] = None
 	zrank_clamp: float = 3.0
+	# MAD floor for the zscore robust scale (23/09/2026). The clamp bounds the
+	# TAIL; this bounds the DENOMINATOR, so a column whose candidates are all
+	# clustered inside measurement noise cannot dominate the combine. Floors are
+	# per metric and MEASURED (FitnessCalculatorControllerHarmonic.
+	# MEASURED_SCALE_FLOORS); False = legacy, byte-identical.
+	zrank_mad_floor: bool = False
 	min_accuracy_floor: float = 0.0
 	# Early stopping
 	patience: int = 5
@@ -137,6 +143,7 @@ class OptimizationConfig:
 			min_accuracy_floor=self.min_accuracy_floor if self.min_accuracy_floor > 0 else None,
 			aggregation=self.fitness_aggregation,
 			zrank_clamp=self.zrank_clamp,
+			zrank_mad_floor=self.zrank_mad_floor,
 			ce_anchor=self.ce_anchor,
 			f1_anchor=self.f1_anchor,
 			acc_anchor=self.acc_anchor,

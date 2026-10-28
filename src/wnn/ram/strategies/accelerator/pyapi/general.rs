@@ -38,10 +38,12 @@ pub(crate) fn fitness_combine(
 	higher_is_better: Vec<bool>,
 	mode: &str,
 	clamp: f64,
+	scale_floors: Option<Vec<f64>>,
 ) -> PyResult<Vec<f64>>
 {
 	ram_core::fitness::combine_flat(
-		&values_flat, num_candidates, &weights, &higher_is_better, mode, clamp)
+		&values_flat, num_candidates, &weights, &higher_is_better, mode, clamp,
+		scale_floors.as_deref())
 		.map_err(pyo3::exceptions::PyValueError::new_err)
 }
 

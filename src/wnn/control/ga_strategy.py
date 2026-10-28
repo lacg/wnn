@@ -98,6 +98,9 @@ def default_controller_ga_config(
 	# understands but a caller omits is a silent no-op for that caller.
 	aggregation:   str = "harmonic",
 	zrank_clamp:   float = 3.0,
+	# MAD floor for the zscore scale (23/09/2026) — forwarded like every knob,
+	# same 18/08 lesson. False = legacy.
+	zrank_mad_floor: bool = False,
 	# Viability gate (21/08/2026): forwarded like every weight — same lesson.
 	# stable is a FRACTION, err in DEGREES; None/None = off.
 	gate_stable_min: "float | None" = None,
@@ -145,6 +148,7 @@ def default_controller_ga_config(
 		fitness_gate_stable_min=gate_stable_min,
 		fitness_gate_err_max=gate_err_max,
 		zrank_clamp=zrank_clamp,
+		zrank_mad_floor=zrank_mad_floor,
 	)
 
 
