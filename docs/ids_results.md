@@ -169,7 +169,12 @@ WHAT CHANGED
       raw    XGBoost        val_cal    0.51   96.04    4.73   99.62
       raw    AdaBoost-100   fixed_05   0.50   94.94    7.58   99.52      0.05 MB
       raw    AdaBoost-100   val_cal    0.50   94.94    7.58   99.52
-      raw    MLP (128-64)   —          —         —       —       —      PENDING (Plane IDS-39, blocked by IDS-6)
+      raw    MLP (128-64)   fixed_05   0.50   94.05    9.52   99.44      0.13 MB
+      raw    MLP (128-64)   val_cal    0.53   94.04    8.64   99.43
+  MLP row measured 28/10/2026 (Plane IDS-39): StandardScaler + MLPClassifier(128,64) ReLU/adam, early
+  stopping, rs 42; train 671 s on 37,349,263 rows, peak RAM 20.3 GB (4 BLAS threads, niced, run while
+  the worker flew cicids BINARY 7227 — no 46M IDS flow live). Log: `logs/baselines_ciciot46m/mlp_random_3way_raw.log`.
+  The MLP is the weakest of the four on the 46M copy: −3.6pp F1 / +5.5pp FPR vs RF (val_cal).
 
   Reading: F1/FPR are the columns — Acc 99.5-99.8 is the 97.6%-attack base-rate artifact. Calibration
   moves FPR only (RF 3.57→3.11, XGB 4.98→4.73; thr 0.50-0.53 because train/test share the base rate).
@@ -182,6 +187,59 @@ WHAT CHANGED
   at gen 2, 14/10) are the during-search K-fold score, NOT comparable to this table — the comparable
   row is its held-out `val_cal` on the same 10% TEST. The legacy 2-way 46M WNN rows (§7) are not
   like-for-like.
+* **CLASSICAL COMPARATOR SET COMPLETE — RF / XGBoost / AdaBoost / MLP on every dataset (28/10/2026, Plane
+  IDS-39).** MLP added on UNSW-random and CICIDS (raw + thermo) and on the 46M (raw); the ciciot subsample MLP is the
+  07/10 run (§ caveat 8b). Same script, same random_3way TEST partition, same top-20 features as the WNN;
+  thermo = the WNN's thermometer encoding at the stated bits. `val_cal` (F1-optimal on the 10% VAL) for every
+  row — pair it with the WNN's val_cal / margin_val_cal. Train time = one fit (the WNN number is a full search).
+  Logs: `logs/baselines_{unsw,cicids,ciciot,ciciot46m}/{rf_xgb_ada,mlp}_random_3way_*.log`.
+
+      dataset          input  method     thr     F1     FPR     Acc      size     train
+      UNSW-random      raw    RF         0.47   95.82   0.34   99.38    88.53 MB    4.2 s
+      UNSW-random      raw    XGBoost    0.43   95.60   0.43   99.34     0.26 MB    0.7 s
+      UNSW-random      raw    AdaBoost   0.50   93.74   0.55   99.07     0.05 MB   63.7 s
+      UNSW-random      raw    MLP        0.43   95.20   0.45   99.28     0.13 MB   41.1 s
+      UNSW-random      8b     RF         0.43   95.04   0.47   99.26    51.81 MB    3.0 s
+      UNSW-random      8b     XGBoost    0.44   94.93   0.48   99.24     0.25 MB    2.5 s
+      UNSW-random      8b     AdaBoost   0.50   93.41   0.55   99.02     0.05 MB  134.6 s
+      UNSW-random      8b     MLP        0.44   95.00   0.46   99.25     0.65 MB   34.8 s
+      UNSW-random      16b    RF         0.47   95.30   0.36   99.31    90.27 MB    4.0 s
+      UNSW-random      16b    XGBoost    0.39   95.35   0.53   99.29     0.26 MB    3.9 s
+      UNSW-random      16b    AdaBoost   0.51   93.09   0.22   99.05     0.05 MB  253.7 s
+      UNSW-random      16b    MLP        0.46   95.45   0.47   99.32     1.05 MB   83.3 s
+      CICIDS2017       raw    RF         0.32   99.85   0.10   99.90    49.27 MB   26.6 s
+      CICIDS2017       raw    XGBoost    0.44   99.71   0.09   99.82     0.28 MB    1.4 s
+      CICIDS2017       raw    AdaBoost   0.49   97.69   1.20   98.53     0.05 MB  177.1 s
+      CICIDS2017       raw    MLP        0.42   97.98   0.87   98.72     0.14 MB  162.3 s
+      CICIDS2017       8b     RF         0.47   99.52   0.21   99.69    25.46 MB   12.8 s
+      CICIDS2017       8b     XGBoost    0.56   99.44   0.23   99.65     0.30 MB    5.9 s
+      CICIDS2017       8b     AdaBoost   0.50   96.28   1.87   97.62     0.05 MB  283.5 s
+      CICIDS2017       8b     MLP        0.47   99.50   0.21   99.69     0.67 MB   67.1 s
+      CIC-IoT subsample raw   RF         0.50   95.53   7.38   97.84   299.57 MB   13.0 s
+      CIC-IoT subsample raw   XGBoost    0.52   94.55   7.90   97.34     0.33 MB    0.8 s
+      CIC-IoT subsample raw   AdaBoost   0.50   93.02  10.07   96.58     0.05 MB  112.6 s
+      CIC-IoT subsample raw   MLP        0.56   90.91  13.41   95.53     0.14 MB  133.7 s
+      CIC-IoT subsample 8b    RF         0.59   88.69  14.99   94.31  1226.40 MB    6.6 s
+      CIC-IoT subsample 8b    XGBoost    0.57   88.85  15.10   94.42     0.39 MB    3.7 s
+      CIC-IoT subsample 8b    AdaBoost   0.51   83.87  21.62   91.73     0.05 MB  150.6 s
+      CIC-IoT subsample 8b    MLP        0.58   89.57  14.63   94.82     0.71 MB   74.7 s
+      CIC-IoT 46M      raw    RF         0.53   97.63   3.11   99.78  1008.55 MB  231 s
+      CIC-IoT 46M      raw    XGBoost    0.51   96.04   4.73   99.62     0.39 MB   19 s
+      CIC-IoT 46M      raw    AdaBoost   0.50   94.94   7.58   99.52     0.05 MB 2602 s
+      CIC-IoT 46M      raw    MLP        0.53   94.04   8.64   99.43     0.13 MB  671 s
+
+  WNN, IDS-47 seed r20419 (BINARY lattice 2m max250, best_f1 genome, GA final, margin_val_cal; 1 bit/cell):
+      UNSW-random   inherit 93.92/0.22/99.15 (488n, 0.08 MB, 3.38 h) · blend_neuron 94.22/0.24/99.19 (492n, 0.08 MB, 3.47 h)
+                    · blend_cluster 94.36/0.19/99.22 (496n, 0.09 MB, 3.95 h);  QUAD tandem 6434 93.50/1.12/98.92 (264n×12b, 0.77 h)
+      CICIDS2017    inherit 99.13/0.66/99.45 (382n, 0.06 MB, 5.61 h) · blend_neuron 99.12/0.67/99.44 (385n, 0.05 MB, 3.08 h)
+                    · blend_cluster 98.99/0.77/99.36 (392n, 0.06 MB, 6.59 h);  QUAD tandem 6431 99.52/0.09/99.70 (97n×34b, 1.44 h)
+      CIC-IoT sub   inherit 92.43/7.80/96.18 (391n, 1.49 MB, 16.47 h) · blend_neuron 91.94/8.63/95.93 (295n, 0.87 MB, 14.35 h)
+                    · blend_cluster 92.55/6.55/96.21 (422n, 1.24 MB, 12.99 h);  QUAD tandem 6432 92.89/7.22/96.42 (240n×80b, 5.25 h)
+  Reading (n=1 WNN seed — direction only; trees/MLP are single rs-42 fits): the MLP never leads. It ties RF/XGB on
+  thermo UNSW and CICIDS-8b and is the weakest non-boosting model on CIC-IoT (both copies). BINARY WNN has the lowest
+  FPR in the UNSW and CIC-IoT-subsample tables (0.19, 6.55) at 0.09 / 1.24 MB, but trails RF/XGB/MLP on UNSW F1 by
+  0.6-1.5pp; on CICIDS it trails QUAD and every non-AdaBoost comparator (FPR 0.66 vs 0.09-0.23). The QUAD tandem rows
+  are pre-ABI-20 runs; the like-for-like QUAD re-clones 7343-7345 sit at the tail of IDS-47.
 * **WHY THE RAID-2026 TABLES DISAGREE WITH THE ROWS ABOVE (13/09/2026 audit, Plane IDS-14).**
   (1) 46M "RF (ours) 92.64/13.48, XGB 91.67/14.80" = the 23/04 run on bencorn's re-merge
   (`canonical-neto`, 45.0M rows, 39 features, fabricated Time_To_Live; logs/canonical_baselines_
