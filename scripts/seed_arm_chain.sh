@@ -112,8 +112,27 @@ verdict() {
 		--base "SL_C_b${BITS}n${NEURONS}_${AIRFRAME}_${DIST}_g10_s{seed}" \
 		$(for s in $SEEDS; do printf -- '--seed %s ' "$s"; done) \
 		--control-suffix "$CTRL" 2>&1 | tee -a "$LOG"
-	log "CAVEAT: n=4 is under-powered for steady/stable; a null there is INDETERMINATE."
-	log "CAVEAT: controls ${CTRL} flew on the pre-ABI-28 trainer; the arm flies on the installed wheel — era differs, exactly as arm B's pair did."
+	log "CAVEAT: n=$(echo $SEEDS | wc -w | tr -d ' ') — read the MDE line above; a null below the MDE is INDETERMINATE, not 'no effect'."
+	era_caveat
+}
+
+# Era of arm vs control, from each marker's provenance (abi + wheel sha) — was a hard-coded
+# "pre-ABI-28" line from arm B (18/09) that every later arm printed regardless (fixed 28/10/2026).
+era_caveat() {
+	local s a c
+	for s in $SEEDS; do
+		a=$(_prov "${MARK}/SL_C_b${BITS}n${NEURONS}_${AIRFRAME}_${DIST}_g10_s${s}${SUFFIX}.json")
+		c=$(_prov "${MARK}/$(ctrl_tag "$s").json")
+		if [ -z "$a" ] || [ -z "$c" ]; then log "CAVEAT: s${s}: marker/provenance missing — era not checked"
+		elif [ "${a%% *}" != "${c%% *}" ]; then log "CAVEAT: s${s}: ERA DIFFERS — arm ABI ${a%% *} vs control ABI ${c%% *}"
+		elif [ "$a" != "$c" ]; then log "CAVEAT: s${s}: same ABI ${a%% *}, different wheel build (${a#* } vs ${c#* })"
+		fi
+	done
+}
+
+# "<abi> <wheel_sha256>" from a marker's provenance, empty if absent
+_prov() {
+	$VP -c 'import json,sys; p=json.load(open(sys.argv[1])).get("provenance") or {}; print(p["abi"], p.get("wheel_sha256")) if "abi" in p else None' "$1" 2>/dev/null
 }
 
 log "########## ARMED — ${ARM_LABEL} (${SUFFIX}) at b${BITS} n${NEURONS}, seeds [${SEEDS}], control ${CTRL} ##########"
