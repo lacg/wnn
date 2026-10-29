@@ -219,7 +219,9 @@ def parse_marker(path, outs):
 		       'fixed' if 'headline_holdout_aligned' in d else
 		       ('unfixed' if (stage and stage.group(1) in ('GRID', 'NEURONS', 'BITS')
 		                      and stage.group(2) in (stage.group(1), stage.group(1) + '#0')
-		                      and (d.get('done') or '') >= '2026-07-15'
+		                      # the misalignment window is 15/07 -> the 14/09 fix (b5bb4dd9); a run that
+		                      # finished by 16/09 may have started on the old code, later runs cannot
+		                      and '2026-07-15' <= (d.get('done') or '') < '2026-09-17'
 		                      and align.get(stage.group(1), {}).get('status', '') != 'already_aligned')
 		        else '')),
 	)
