@@ -64,8 +64,8 @@ selection ran on) and never the during-search gen lines (anti-predictive, repeat
 ## Coverage
 
 ```
-markers with a headline held-out : 328
-  altitude regimen (alt= present) : 244
+markers with a headline held-out : 329
+  altitude regimen (alt= present) : 245
   attitude-only                   : 84
   state-neuron count unreadable   : 0  (no .out on disk)
   h743 keys counted exactly       : 75  (experiments/h743_keys.json)
@@ -79,7 +79,7 @@ markers with a headline held-out : 328
 
 ```
                  attitude-only   altitude
-  sn = 0                78          244
+  sn = 0                78          245
   sn > 0                 6            0
 ```
 
@@ -233,11 +233,11 @@ same-rule rank: a large value means that row owes its placing to the draw.
      2     0.0968  CRN   99.6%    1.13    0.62  0.150  qspi?     0.0968     +1  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_tw15
      3     0.1039  CRN   99.6%    1.23    0.55  0.158  qspi?     0.1039     +1  SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_tw35
      4     0.1058  CRN   99.6%    1.25    0.73  0.162  qspi?     0.1245    +17  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_alt31
-     5     0.1091  CRN   99.8%    1.28    0.82  0.180  qspi?     0.1680    +74  SL_C_b24n384_cf21_brushless_L4C_g10_s31337002_Lop31
+     5     0.1091  CRN   99.8%    1.28    0.82  0.180  qspi?     0.1680    +75  SL_C_b24n384_cf21_brushless_L4C_g10_s31337002_Lop31
      6     0.1108  CRN   99.8%    1.27    0.75  0.191  qspi?     0.1361    +37  SL_C_b24n384_cf21_brushless_L4C_g10_s31337003_Lop31
      7     0.1110  CRN   99.8%    1.39    0.89  0.159  qspi      0.1273    +19  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_op30
      8     0.1123  CRN   99.0%    1.20    0.62  0.178  qspi      0.1123     -1  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_op30
-     9     0.1126  CRN   99.6%    1.27    0.72  0.190  qspi?     0.1368    +36  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_tw20
+     9     0.1126  CRN   99.6%    1.27    0.72  0.190  qspi?     0.1368    +37  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_tw20
     10     0.1129  CRN  100.0%    1.38    0.75  0.181  qspi?     0.1129     -2  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_op31
     11     0.1136  CRN   99.6%    1.35    0.63  0.173  qspi?     0.1225     +7  SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_tw15
     12     0.1148  CRN   99.0%    1.26    0.69  0.174  qspi?     0.1148     -3  SL_C_b24n256_cf21_brushless_L4C_g10_s31337006_op31
