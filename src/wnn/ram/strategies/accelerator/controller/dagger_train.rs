@@ -1712,7 +1712,38 @@ pub fn rollout_and_label_rs(
 	traj.mean_attitude_error_rad = sum_err / steps.max(1) as f64;
 	traj.diverged = diverged;
 	traj.steps = steps;
+	write_label_trace(&traj);
 	traj
+}
+
+/// CTRL-17 G6 probe: WNN_LABEL_TRACE=<path> appends one CSV row per step of every
+/// training rollout — episode key (init_yaw bits), t, horizontal obs (e_x, e_y,
+/// v_x, v_y), the recorded LABEL (4) and its delta baseline (4) — so the lateral
+/// content of the labels can be measured with xy on vs off. Read-only: draws no
+/// rng and touches no state, so every run is byte-identical with or without it.
+/// One write_all per episode on an O_APPEND file keeps parallel rollouts' rows whole.
+fn write_label_trace(traj: &TrajectoryRs)
+{
+	use std::fmt::Write as _;
+	use std::io::Write as _;
+	let Ok(path) = std::env::var("WNN_LABEL_TRACE") else { return };
+	let mut s = String::with_capacity(traj.steps * 96);
+	let ep = traj.init_yaw.to_bits();
+	for t in 0..traj.steps
+	{
+		let h = traj.horiz_obs[t];
+		let l = traj.pid_pwms[t];
+		let b = traj.label_base.get(t).copied().unwrap_or([f32::NAN; 4]);
+		let _ = writeln!(
+			s,
+			"{ep},{t},{},{},{},{},{},{},{},{},{},{},{},{}",
+			h[0], h[1], h[2], h[3], l[0], l[1], l[2], l[3], b[0], b[1], b[2], b[3]
+		);
+	}
+	if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path)
+	{
+		let _ = f.write_all(s.as_bytes());
+	}
 }
 
 // ----- Train on trajectory -------------------------------------------------
