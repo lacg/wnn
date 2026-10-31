@@ -180,6 +180,17 @@ fn rotate_world_to_body(q: [f32; 4], v: [f32; 3]) -> [f32; 3]
 	[res[1], res[2], res[3]]
 }
 
+/// Rotate a 3-vector v in BODY frame to WORLD frame using q (body-to-world).
+/// v_world = q · v_body · q*.
+#[inline]
+fn rotate_body_to_world(q: [f32; 4], v: [f32; 3]) -> [f32; 3]
+{
+	let v_q = [0.0, v[0], v[1], v[2]];
+	let tmp = q_multiply(q, v_q);
+	let res = q_multiply(tmp, q_conjugate(q));
+	[res[1], res[2], res[3]]
+}
+
 #[inline]
 fn vec_add3(a: [f32; 3], b: [f32; 3]) -> [f32; 3]
 {
@@ -439,6 +450,23 @@ pub struct AttitudeSim
 	y: f32,
 	vx: f32,
 	vy: f32,
+	// ABI 32 (31/10/2026, Luiz option A — "that is the real life"): the IMU's
+	// accelerometer reads SPECIFIC FORCE (thrust + drag over mass, body frame)
+	// instead of the ideal inclinometer −g_body. A free-flying quad's
+	// accelerometer carries NO tilt by itself (≈ (0, 0, T/m)); real flight
+	// controllers get tilt from gyro integration, corrected by the accelerometer
+	// on average (an attitude estimator). Only meaningful with translation on;
+	// OFF by default ⇒ every ABI ≤ 31 result reproduces bit-identically.
+	imu_specific_force: bool,
+	// Linear rotor drag coefficient k_d (1/s): body-frame horizontal force
+	// −k_d·m·v_body_xy (the blade-flapping / induced-drag term that gives a real
+	// quad's accelerometer its small velocity signal). Acts on TRANSLATION only,
+	// so the one-way coupling (attitude never depends on p, v) holds. 0 = off.
+	rotor_drag: f32,
+	// The specific force (m/s², body frame) produced by the LAST step's thrust +
+	// drag — what the accelerometer reads at the next read_imu. Hover (0, 0, g)
+	// before the first step of an episode.
+	spec_force_body: [f32; 3],
 
 	// --- W2 disturbances (None = bit-identical clean sim; the hot loops
 	//     branch on the Option BEFORE touching torque/IMU floats). ---
@@ -598,6 +626,11 @@ impl AttitudeSim
 	fn imu_base(&self) -> ([f32; 3], [f32; 3])
 	{
 		let gyro = self.omega;
+		// ABI 32: a free-flying vehicle's accelerometer reads specific force.
+		if self.imu_specific_force && self.translation_enabled
+		{
+			return (gyro, self.spec_force_body);
+		}
 		// gravity in WORLD frame points DOWN: (0, 0, -g)
 		let gravity_world = [0.0, 0.0, -self.gravity];
 		// rotate to body frame; specific force = -gravity_body (support force)
@@ -927,6 +960,9 @@ impl AttitudeSim
 			y: 0.0,
 			vx: 0.0,
 			vy: 0.0,
+			imu_specific_force: false,
+			rotor_drag: 0.0,
+			spec_force_body: [0.0, 0.0, gravity],
 			dist: None,
 			gust: [0.0, 0.0, 0.0],
 			gyro_bias: [0.0, 0.0, 0.0],
@@ -966,6 +1002,7 @@ impl AttitudeSim
 		self.y = 0.0;
 		self.vx = 0.0;
 		self.vy = 0.0;
+		self.spec_force_body = [0.0, 0.0, self.gravity];
 		// D5/D6 state is episode-scoped like gust/bias; torque_scale persists
 		// (a pure function of the persisting dist params — same seed, same scale).
 		self.clear_imu_obs_state();
@@ -989,6 +1026,28 @@ impl AttitudeSim
 	pub fn motor_lag(&self) -> f32
 	{
 		self.motor_settling_time_s
+	}
+
+	/// ABI 32: the accelerometer reads specific force (thrust + drag over mass,
+	/// body frame) while translation is on — what a real free-flying IMU reads.
+	/// false = the legacy ideal inclinometer −g_body (ABI ≤ 31, bit-identical).
+	pub fn set_imu_specific_force(&mut self, on: bool)
+	{
+		self.imu_specific_force = on;
+	}
+
+	/// ABI 32: linear rotor drag k_d (1/s) on the horizontal body-frame velocity
+	/// (translation only; no torque). 0.0 = off (bit-identical dynamics).
+	pub fn set_rotor_drag(&mut self, k_d: f32) -> PyResult<()>
+	{
+		if !k_d.is_finite() || k_d < 0.0
+		{
+			return Err(pyo3::exceptions::PyValueError::new_err(format!(
+				"set_rotor_drag: k_d must be finite and >= 0 (1/s), got {k_d}"
+			)));
+		}
+		self.rotor_drag = k_d;
+		Ok(())
 	}
 
 	/// STAGE 1 (scope C): enable vertical translation with the given vehicle
@@ -2523,6 +2582,24 @@ impl AttitudeSim
 		let r23 = 2.0 * (qy * qz - qw * qx);
 		let r33 = 1.0 - 2.0 * (qx * qx + qy * qy);
 		let a_over_m = total_thrust / self.mass;
+		if self.rotor_drag != 0.0
+		{
+			// ABI 32 rotor drag: f_body = −k_d·(v_bx, v_by, 0) per unit mass, rotated
+			// back to the world frame. Guarded so k_d = 0 keeps the legacy float ops.
+			let vb = rotate_world_to_body(self.q, [self.vx, self.vy, self.vz]);
+			let db = [-self.rotor_drag * vb[0], -self.rotor_drag * vb[1], 0.0];
+			let dw = rotate_body_to_world(self.q, db);
+			self.spec_force_body = [db[0], db[1], a_over_m];
+			let az = a_over_m * r33 + dw[2] - self.gravity;
+			self.vz += az * self.dt;
+			self.z += self.vz * self.dt;
+			self.vx += (a_over_m * r13 + dw[0]) * self.dt;
+			self.x += self.vx * self.dt;
+			self.vy += (a_over_m * r23 + dw[1]) * self.dt;
+			self.y += self.vy * self.dt;
+			return;
+		}
+		self.spec_force_body = [0.0, 0.0, a_over_m];
 		let az = a_over_m * r33 - self.gravity;
 		self.vz += az * self.dt;
 		self.z += self.vz * self.dt;
