@@ -102,13 +102,16 @@ class ControllerOrchestrator(PhasedOrchestrator):
 		stage_num, name, kind = p["stage_num"], spec.name, p["kind"]
 		cur_spec = carry.extra["spec"]
 
-		# --skip-stages neurons,bits,connections → skip (carry + spec pass
-		# through). MEMORY is never skippable. NEURONS became skippable 16/08/2026
-		# (Luiz's connectivity pipeline: grid → CONNECTIONS → MEMORY) — arch stages
-		# seed from carry.population exactly as NEURONS does, so CONNECTIONS-first
-		# is structurally the same handoff. Record a None-metrics placeholder row
-		# so the driver's ordered 5-row result keeps the stage.
-		if kind in ("arch", "neurons") and spec.key in self._skip_stages:
+		# --skip-stages neurons,bits,connections,memory → skip (carry + spec pass
+		# through). NEURONS became skippable 16/08/2026 (Luiz's connectivity
+		# pipeline: grid → CONNECTIONS → MEMORY) — arch stages seed from
+		# carry.population exactly as NEURONS does. MEMORY became skippable
+		# 31/10/2026 (Luiz: "if you pass it, it should skip"); it used to be dropped
+		# from the set SILENTLY, so a `memory` skip ran the stage anyway. With MEMORY
+		# skipped the run's final result is the last stage that ran (best_result).
+		# Record a None-metrics placeholder row so the driver's ordered 5-row result
+		# keeps the stage.
+		if spec.key in self._skip_stages:
 			print(f"[skip-stages] skipping Stage {stage_num} ({name}) — carrying population through")
 			self._row_by_stage[stage_num] = (name.title(), cur_spec, None, 0.0, 0)
 			return None
@@ -251,8 +254,13 @@ class ControllerOrchestrator(PhasedOrchestrator):
 				res.population_metrics = None
 
 	def best_result(self):
-		"""The MEMORY-stage result (final winner + population) for the caller."""
-		return self._res_by_stage.get(4)
+		"""The final result (winner + population) for the caller: the MEMORY stage's,
+		or — when MEMORY was skipped (--skip-stages memory) — the last stage that ran.
+		None only when no stage ran in this attempt (publish-only resume)."""
+		if 4 in self._res_by_stage:
+			return self._res_by_stage[4]
+		ran = [sn for sn, r in self._res_by_stage.items() if r is not None]
+		return self._res_by_stage[max(ran)] if ran else None
 
 	def result_for_stage(self, stage_num: int):
 		"""This stage's GAResult, or None if it never ran. Used by the val-based

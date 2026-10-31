@@ -2281,6 +2281,13 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 	# Arch stages to skip (--skip-stages bits,connections). A skipped stage leaves
 	# the carried population + prev_best untouched, so they flow to the next stage.
 	skip_stages = {s.strip().lower() for s in (getattr(args, "skip_stages", "") or "").split(",") if s.strip()}
+	_unknown_skip = skip_stages - {"neurons", "bits", "connections", "memory"}
+	if _unknown_skip:
+		# A typo used to be dropped silently, exactly as `memory` was before 31/10/2026.
+		raise SystemExit(f"--skip-stages: unknown stage(s) {sorted(_unknown_skip)} — "
+		                 "valid: neurons, bits, connections, memory")
+	if skip_stages >= {"neurons", "bits", "connections", "memory"}:
+		raise SystemExit("--skip-stages skips every GA stage — nothing would run after the grid.")
 
 	# Resume planning.
 	resume_start_stage = 1
@@ -2866,9 +2873,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	# --lamarckian the NEURONS stage already optimizes neurons+connections+memory
 	# jointly (grid covers bits), making BITS/CONNECTIONS ~28h of dead weight.
 	ap.add_argument("--skip-stages", type=str, default="",
-	                help="Comma-separated arch stages to SKIP: any of bits,connections "
-	                     "(neurons/memory/grid always run; grid skips only via --resume). "
-	                     "e.g. --skip-stages bits,connections → grid→neurons→memory.")
+	                help="Comma-separated stages to SKIP: any of neurons,bits,connections,memory "
+	                     "(grid always runs; it skips only via --resume). Unknown names are refused. "
+	                     "e.g. --skip-stages bits,connections → grid→neurons→memory; "
+	                     "--skip-stages bits,connections,memory → grid→neurons (the run's result = NEURONS).")
 	# Shared GA hyperparams.
 	ap.add_argument("--pop", type=int, default=200, help="per-stage population")
 	# elitism = fraction kept as elites (0.2 = 20%); formula int(pop*elitism), no hidden ×2.
