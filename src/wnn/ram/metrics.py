@@ -218,6 +218,8 @@ class ControllerMetrics(Metrics):
 	mean_effort: Optional[float] = None            # mean per-step Σ(PWM²) — allocation-effort proxy (Σu², Phase 3)
 	mean_position_error_m: Optional[float] = None  # stage 1+2: mean 3D position error (METRES, |alt err| when x/y frozen)
 	mean_altitude_error_m: Optional[float] = None  # stage 1+2: mean |altitude error| (METRES) — the vertical component of pos alone
+	mean_dx_m: Optional[float] = None  # ABI 32: mean |x error| (METRES), None unless the run translates
+	mean_dy_m: Optional[float] = None  # ABI 32: mean |y error| (METRES), None unless the run translates
 
 	@property
 	def acc(self) -> float:

@@ -212,6 +212,20 @@ struct Params
 	// ARM D (14/08/2026), appended in lockstep with the Rust twin.
 	uint out_full_window; // output layer samples the full K-frame window (sn=0 only)
 	uint frame_stride;		// ring shifts once every N pushes (1 = legacy)
+	// ABI 32 (31/10/2026), appended in lockstep with RolloutParams.
+	// Real-life plant: the accelerometer reads SPECIFIC FORCE (thrust + drag over
+	// mass, body frame) while translating; linear rotor drag k_d (1/s) on the
+	// horizontal body velocity. Twins of AttitudeSim::imu_base / step_translation.
+	uint imu_specific_force;
+	float rotor_drag;
+	// CTRL-17 G5: per-step attitude error vs the position loop's tilt reference
+	// (twin of att_err_ref.rs AttErrRef::error). 0 ⇒ identity target.
+	uint att_ref_on;
+	float att_ref_bxy, att_ref_omega, att_ref_zeta, att_ref_max_tilt;
+	// WNN attitude features from a per-thread Mahony estimator (twin of
+	// estimator.rs MahonyFilter, f32 here). 0 ⇒ accel-only attitude features.
+	uint att_est_on;
+	float est_kp, est_ki;
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -299,6 +313,85 @@ inline float3 rotate_world_to_body(float4 q, float3 v)
 	float4 r = q_mul(t, q);
 	return float3(r.y, r.z, r.w);
 }
+// v_world = q·v_body·q* — twin of controller.rs rotate_body_to_world (ABI 32
+// rotor drag). Same (w,x,y,z)-in-.xyzw storage as rotate_world_to_body.
+inline float3 rotate_body_to_world(float4 q, float3 v)
+{
+	float4 conj = float4(q.x, -q.y, -q.z, -q.w);
+	float4 vq = float4(0.0f, v.x, v.y, v.z);
+	float4 t = q_mul(q, vq);
+	float4 r = q_mul(t, conj);
+	return float3(r.y, r.z, r.w);
+}
+
+// CTRL-17 G5: the position loop's tilt reference as a quaternion (w,x,y,z) in
+// .xyzw — twin of PositionLoop::tilt_ref + att_err_ref.rs rp_to_quat (yaw 0).
+// Target is the origin ⇒ e = −position. f32 here, f64 on the CPU.
+inline float4 tilt_ref_quat(float xp, float yp, float vxp, float vyp, constant Params &P)
+{
+	float w2 = P.att_ref_omega * P.att_ref_omega;
+	float c2 = 2.0f * P.att_ref_zeta * P.att_ref_omega;
+	float pitch = clamp((w2 * (-xp) - c2 * vxp) / P.att_ref_bxy, -P.att_ref_max_tilt, P.att_ref_max_tilt);
+	float roll = clamp(-(w2 * (-yp) - c2 * vyp) / P.att_ref_bxy, -P.att_ref_max_tilt, P.att_ref_max_tilt);
+	float cr = cos(roll * 0.5f), sr = sin(roll * 0.5f);
+	float cp = cos(pitch * 0.5f), sp = sin(pitch * 0.5f);
+	return float4(cr * cp, sr * cp, cr * sp, -sr * sp);
+}
+
+// Mahony complementary filter — f32 twin of estimator.rs MahonyFilter::update
+// (same operation order). State: q (w,x,y,z) in .xyzw + the integral term.
+// Returns nothing; the caller reads the predicted body "up" via mahony_up.
+inline void mahony_update(thread float4 &mq, thread float *mint, float3 gyro, float3 acc,
+                          float kp, float ki, float dt)
+{
+	float w = mq.x, x = mq.y, y = mq.z, z = mq.w;
+	float gx = gyro.x, gy = gyro.y, gz = gyro.z;
+	float ax = acc.x, ay = acc.y, az = acc.z;
+	float nrm = sqrt(ax * ax + ay * ay + az * az);
+	if (nrm > 1e-9f)
+	{
+		ax /= nrm;
+		ay /= nrm;
+		az /= nrm;
+		float vx = 2.0f * (x * z - w * y);
+		float vy = 2.0f * (w * x + y * z);
+		float vz = w * w - x * x - y * y + z * z;
+		float ex = ay * vz - az * vy;
+		float ey = az * vx - ax * vz;
+		float ez = ax * vy - ay * vx;
+		if (ki > 0.0f)
+		{
+			mint[0] += ki * ex * dt;
+			mint[1] += ki * ey * dt;
+			mint[2] += ki * ez * dt;
+		}
+		gx += kp * ex + mint[0];
+		gy += kp * ey + mint[1];
+		gz += kp * ez + mint[2];
+	}
+	float hdt = 0.5f * dt;
+	float dw = (-x * gx - y * gy - z * gz) * hdt;
+	float dx = (w * gx + y * gz - z * gy) * hdt;
+	float dy = (w * gy - x * gz + z * gx) * hdt;
+	float dz = (w * gz + x * gy - y * gx) * hdt;
+	w += dw;
+	x += dx;
+	y += dy;
+	z += dz;
+	float n = sqrt(w * w + x * x + y * y + z * z);
+	n = (n > 0.0f) ? n : 1.0f;
+	mq = float4(w / n, x / n, y / n, z / n);
+}
+
+// The estimate's predicted body-frame "up" (world +z in the body frame) — the
+// vector the WNN's attitude features read in place of the accelerometer when
+// the estimator is on (twin of WnnController::att_up_from_quat).
+inline float3 mahony_up(float4 mq)
+{
+	float w = mq.x, x = mq.y, y = mq.z, z = mq.w;
+	return float3(2.0f * (x * z - w * y), 2.0f * (w * x + y * z), w * w - x * x - y * y + z * z);
+}
+
 // Yaw-anchor: ZYX (Tait-Bryan) yaw angle (rad) from a (w,x,y,z) quaternion —
 // the bit-for-bit twin of controller.rs `yaw_from_quat`. q stored (w,x,y,z) in
 // .xyzw ⇒ w=q.x, x=q.y, y=q.z, z=q.w. Seeds the GPU yaw heading from q0.
@@ -549,6 +642,14 @@ struct FwdParams
 	float integral_leak, integral_scale, target0, target1, target2, dt;
 	uint memory_mode;		// ABI 12: cell decode/fire-bit semantics
 	uint output_decode; // WNN_DECODE_* topology (03/08/2026)
+	// ABI 32: the attitude estimator's predicted body "up" for THIS step — what
+	// derive_features reads in place of the accelerometer when att_est_on (twin
+	// of WnnController's att-estimator path). Score kernel: from its per-thread
+	// Mahony filter. Train/record kernels: from the recorded stream (the replay
+	// re-applies exactly what deploy saw). APPENDED LAST so the positional
+	// initializers that predate it zero-fill (att_est_on = 0 ⇒ legacy).
+	uint att_est_on;
+	float att_up_x, att_up_y, att_up_z;
 };
 
 // TERNARY untrained-cell decode weight — the controller's fixed PLN convention
@@ -596,7 +697,12 @@ inline void derive_features(
 	// H2 derived features — MUST mirror controller.rs compute_features() exactly.
 	if (P.num_features > NUM_FEATURES)
 	{
-		float ax = sensors[3], ay = sensors[4], az = sensors[5];
+		// ABI 32: with the estimator on, attitude comes from its predicted "up"
+		// (same formulas — atan2 is scale-free), never the raw accelerometer.
+		bool est = (P.att_est_on != 0u);
+		float ax = est ? P.att_up_x : sensors[3];
+		float ay = est ? P.att_up_y : sensors[4];
+		float az = est ? P.att_up_z : sensors[5];
 		float tilt = atan2(sqrt(ax * ax + ay * ay), az);
 		float roll_est = atan2(ay, az);
 		float pitch_est = atan2(-ax, sqrt(ay * ay + az * az));
@@ -965,6 +1071,7 @@ kernel void controller_rollout(
 	uint jerk_count = 0u;
 	float sum_effort = 0.0f;
 	float sum_alterr = 0.0f; // stage 1+2: Σ |altitude error| (m)
+	float sum_dx = 0.0f, sum_dy = 0.0f; // ABI 32: Σ |x|, Σ |y| (m)
 	float sum_poserr = 0.0f; // stage 1+2: Σ 3D position error (m)   // Σ_t Σ_m pwm² (allocation-effort proxy)
 	float mono_last = 0.0f;
 	// Transient-speed tracking (mirrors run_episode). initial_err/band_rel set on
@@ -1016,6 +1123,14 @@ kernel void controller_rollout(
 	float xpos = (P.translation_on != 0u) ? ep_vert[e * 6u + 4u] : 0.0f;
 	float ypos = (P.translation_on != 0u) ? ep_vert[e * 6u + 5u] : 0.0f;
 	float vxh = 0.0f, vyh = 0.0f;
+	// ABI 32: the specific force the LAST step produced (body frame) — what the
+	// accelerometer reads under imu_specific_force. Hover (0,0,g) at reset, twin
+	// of AttitudeSim::spec_force_body.
+	float3 sf_body = float3(0.0f, 0.0f, P.gravity);
+	// ABI 32: the WNN's Mahony attitude estimator, warm-started from the
+	// episode's initial attitude (the rivals' converged-filter assumption).
+	float4 mq = q;
+	float mint[3] = {0.0f, 0.0f, 0.0f};
 	// Per-episode PLANT draw (never a feature) and commanded collective.
 	float ep_mass_kg = (P.translation_on != 0u) ? ep_vert[e * 6u + 2u] : P.mass;
 	float ep_coll_frac = (P.translation_on != 0u) ? ep_vert[e * 6u + 3u] : 0.0f;
@@ -1127,6 +1242,13 @@ kernel void controller_rollout(
 		sensors[3] = -grav_body.x;
 		sensors[4] = -grav_body.y;
 		sensors[5] = -grav_body.z;
+		// ABI 32: a free-flying IMU reads specific force (imu_base twin).
+		if (P.imu_specific_force != 0u && P.translation_on != 0u)
+		{
+			sensors[3] = sf_body.x;
+			sensors[4] = sf_body.y;
+			sensors[5] = sf_body.z;
+		}
 		sensors[6] = P.target0;
 		sensors[7] = P.target1;
 		sensors[8] = P.target2;
@@ -1219,6 +1341,20 @@ kernel void controller_rollout(
 			F.horiz_err_y = -ypos;
 			F.horiz_vx = vxh;
 			F.horiz_vy = vyh;
+		}
+
+		// ABI 32: tick the WNN's attitude estimator ONCE per physical step on the
+		// observed (noisy/latent) IMU — twin of compute_features' update, which
+		// also runs on hold steps.
+		if (P.att_est_on != 0u)
+		{
+			mahony_update(mq, mint, float3(sensors[0], sensors[1], sensors[2]),
+			              float3(sensors[3], sensors[4], sensors[5]), P.est_kp, P.est_ki, P.dt);
+			float3 up = mahony_up(mq);
+			F.att_est_on = 1u;
+			F.att_up_x = up.x;
+			F.att_up_y = up.y;
+			F.att_up_z = up.z;
 		}
 
 		// Action-repeat: hold steps tick ONLY the physical-time accumulators
@@ -1588,9 +1724,6 @@ kernel void controller_rollout(
 			// the two-sided parity test caught exactly that on 13/08/2026.
 			float cos_tilt = 1.0f - 2.0f * (q.y * q.y + q.z * q.z);
 			float a_over_m = total_thrust / ep_mass_kg;
-			float az_ = a_over_m * cos_tilt - P.gravity;
-			vz += az_ * P.dt;
-			zpos += vz * P.dt;
 			// STAGE 2: the horizontal components of the rotated thrust vector,
 			// r13 = 2(qx·qz + qw·qy), r23 = 2(qy·qz − qw·qx) — CPU twin
 			// step_translation. SAME COMPONENT-ORDER TRAP as cos_tilt above:
@@ -1598,10 +1731,35 @@ kernel void controller_rollout(
 			// (w,x,y,z) = (q.x, q.y, q.z, q.w).
 			float r13 = 2.0f * (q.y * q.w + q.x * q.z);
 			float r23 = 2.0f * (q.z * q.w - q.x * q.y);
-			vxh += a_over_m * r13 * P.dt;
-			xpos += vxh * P.dt;
-			vyh += a_over_m * r23 * P.dt;
-			ypos += vyh * P.dt;
+			if (P.rotor_drag != 0.0f)
+			{
+				// ABI 32 rotor drag — twin of step_translation's guarded branch:
+				// f_body = −k_d·(v_bx, v_by, 0) per unit mass on the PRE-step
+				// velocity, rotated back to world. k_d = 0 never enters here, so
+				// the legacy float ops below stay bit-identical.
+				float3 vb = rotate_world_to_body(q, float3(vxh, vyh, vz));
+				float3 db = float3(-P.rotor_drag * vb.x, -P.rotor_drag * vb.y, 0.0f);
+				float3 dw = rotate_body_to_world(q, db);
+				sf_body = float3(db.x, db.y, a_over_m);
+				float azd = a_over_m * cos_tilt + dw.z - P.gravity;
+				vz += azd * P.dt;
+				zpos += vz * P.dt;
+				vxh += (a_over_m * r13 + dw.x) * P.dt;
+				xpos += vxh * P.dt;
+				vyh += (a_over_m * r23 + dw.y) * P.dt;
+				ypos += vyh * P.dt;
+			}
+			else
+			{
+				sf_body = float3(0.0f, 0.0f, a_over_m);
+				float az_ = a_over_m * cos_tilt - P.gravity;
+				vz += az_ * P.dt;
+				zpos += vz * P.dt;
+				vxh += a_over_m * r13 * P.dt;
+				xpos += vxh * P.dt;
+				vyh += a_over_m * r23 * P.dt;
+				ypos += vyh * P.dt;
+			}
 		}
 		float dt = P.dt;
 		float3 k1o, k2o, k3o, k4o;
@@ -1633,7 +1791,12 @@ kernel void controller_rollout(
 			}
 		}
 
-		// attitude_error (post-step) + reward (lambdas 0 in the eval path)
+		// attitude_error (post-step) + reward (lambdas 0 in the eval path).
+		// G5 (ABI 32): vs the position loop's tilt reference at the post-step
+		// state when att_ref_on (q_norm = attitude_error's normalize); identity
+		// otherwise (the legacy target, untouched).
+		if (P.att_ref_on != 0u)
+			tgt = q_norm(tilt_ref_quat(xpos, ypos, vxh, vyh, P));
 		float dot = q.x * tgt.x + q.y * tgt.y + q.z * tgt.z + q.w * tgt.w;
 		float dot_abs = min(fabs(dot), 1.0f);
 		float err = 2.0f * acos(dot_abs);
@@ -1661,6 +1824,10 @@ kernel void controller_rollout(
 			// be decomposed, so a drifting run could not be told apart from a
 			// falling one. The rivals have had this column since chunk D.
 			sum_alterr += fabs(ae_);
+			// ABI 32 (Luiz 31/10): the HORIZONTAL components on their own too —
+			// mean |dx|, |dy| (target = origin), alongside |dz| = alt.
+			sum_dx += fabs(xpos);
+			sum_dy += fabs(ypos);
 		}
 		sum_err += err;
 		if (t >= tail_start)
@@ -1701,9 +1868,12 @@ kernel void controller_rollout(
 	// Widened 14/08/2026, again 15/08/2026 (buffer table is full at 31 slots):
 	// slot 0 = effort, slot 1 = mean 3D position error (m), slot 2 = mean
 	// |altitude error| (m). Slots 1-2 are 0 when translation is off.
-	out_effort[idx * 3u] = steps > 0u ? (sum_effort / (float)steps) : 0.0f;
-	out_effort[idx * 3u + 1u] = steps > 0u ? (sum_poserr / (float)steps) : 0.0f;
-	out_effort[idx * 3u + 2u] = steps > 0u ? (sum_alterr / (float)steps) : 0.0f;
+	// Widened again 31/10/2026 (ABI 32): slots 3-4 = mean |x|, mean |y| (m).
+	out_effort[idx * 5u] = steps > 0u ? (sum_effort / (float)steps) : 0.0f;
+	out_effort[idx * 5u + 1u] = steps > 0u ? (sum_poserr / (float)steps) : 0.0f;
+	out_effort[idx * 5u + 2u] = steps > 0u ? (sum_alterr / (float)steps) : 0.0f;
+	out_effort[idx * 5u + 3u] = steps > 0u ? (sum_dx / (float)steps) : 0.0f;
+	out_effort[idx * 5u + 4u] = steps > 0u ? (sum_dy / (float)steps) : 0.0f;
 	out_mono[idx] = mono_last;
 	// Diverged before reaching the tail window → no settled samples; fall back to
 	// the whole-episode mean (already a failing episode, just keep it finite).
@@ -1805,6 +1975,9 @@ struct TrainParams
 	// the vertical/horizontal flags and read the per-step observation buffers.
 	uint obs_collective_cmd, obs_alt_err, obs_vz;
 	uint obs_pos_err_xy, obs_vel_xy;
+	// ABI 32 (obs_att_estimator), appended in lockstep with the Rust twin: the
+	// replay kernels read the recorded attitude-estimate stream (att_up_rec).
+	uint att_est_on;
 };
 
 // Mirror of WnnController::output_decode_target (controller.rs): map a per-motor
@@ -1888,6 +2061,7 @@ kernel void controller_train(
 		device const float *vert_obs [[buffer(23)]], // stale-altitude-features fix: [total_steps*3]
 		device const float *horiz_obs [[buffer(24)]], // [total_steps*4]
 		device const float *pwm_dev_rec [[buffer(25)]], // obs_pwm replay fix: pwm FEATURE values [total_steps*4]
+		device const float *att_up_rec [[buffer(26)]],  // ABI 32: attitude-estimate "up" [total_steps*3]
 		uint gid [[thread_position_in_grid]])
 {
 	uint g = gid;
@@ -1983,6 +2157,14 @@ kernel void controller_train(
 				{
 					for (uint m = 0u; m < P.num_motors && m < 4u; ++m)
 						pwm_acc[m] = pwm_dev_rec[s4o + m];
+				}
+				// ABI 32: the recorded attitude estimate (no live filter in a replay).
+				if (P.att_est_on != 0u)
+				{
+					F.att_est_on = 1u;
+					F.att_up_x = att_up_rec[s3 + 0];
+					F.att_up_y = att_up_rec[s3 + 1];
+					F.att_up_z = att_up_rec[s3 + 2];
 				}
 			}
 
@@ -2092,6 +2274,7 @@ kernel void controller_record(
 		device const float *vert_obs [[buffer(20)]], // stale-altitude-features fix: [total_steps*3]
 		device const float *horiz_obs [[buffer(21)]], // [total_steps*4]
 		device const float *pwm_dev_rec [[buffer(22)]], // obs_pwm replay fix: pwm FEATURE values [total_steps*4]
+		device const float *att_up_rec [[buffer(23)]],  // ABI 32: attitude-estimate "up" [total_steps*3]
 		uint2 tid [[thread_position_in_grid]])
 {
 	uint g = tid.x, ej = tid.y;
@@ -2182,6 +2365,14 @@ kernel void controller_record(
 			{
 				for (uint m = 0u; m < P.num_motors && m < 4u; ++m)
 					pwm_acc[m] = pwm_dev_rec[s4o + m];
+			}
+			// ABI 32: the recorded attitude estimate (no live filter in a replay).
+			if (P.att_est_on != 0u)
+			{
+				F.att_est_on = 1u;
+				F.att_up_x = att_up_rec[s3 + 0];
+				F.att_up_y = att_up_rec[s3 + 1];
+				F.att_up_z = att_up_rec[s3 + 2];
 			}
 		}
 

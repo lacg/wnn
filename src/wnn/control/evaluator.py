@@ -208,6 +208,12 @@ class ControllerSpec:
 	# one-axis controller would be an artifact (decision 5, chunk-B/C doc).
 	obs_pos_err_xy: bool = False
 	obs_vel_xy: bool = False
+	# ABI 32 (31/10/2026): the attitude features (tilt / per-axis roll-pitch) read
+	# a Mahony estimate (kp 2.0, ki 0.1 — the rivals' TeacherFeed defaults, warm-
+	# started from the episode's initial attitude like them) instead of the raw
+	# accelerometer. Needed under the specific-force IMU, where the accelerometer
+	# carries no tilt. Changes feature VALUES, not the layout (num_features).
+	obs_att_estimator: bool = False
 	integral_leak: float = 0.99   # leaky-integral decay for "_i" (≠ delta_leak)
 	integral_scale: float = 1.0   # pre-threshold scale for integral features
 	dt: float = 0.001             # physics step (s); MUST match episode/plant dt (yaw integ.)
@@ -513,6 +519,7 @@ def _feature_controller(spec: ControllerSpec) -> WnnController:
 		obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i,
 		obs_collective_cmd=spec.obs_collective_cmd, obs_alt_err=spec.obs_alt_err, obs_vz=spec.obs_vz,
 			obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
+		obs_att_estimator=getattr(spec, 'obs_att_estimator', False),
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 		dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
@@ -883,6 +890,8 @@ def collect_student_feature_samples(genome, episode_config, num_episodes: int,
 	import numpy as np
 	from .training import _sample_initial_state, apply_disturbance
 
+	from .training import refuse_python_abi32_plant
+	refuse_python_abi32_plant(episode_config, "collect_student_feature_samples")
 	ctl = build_controller(genome)
 	# Same plant gate as the teacher fit (19/09/2026): a refit on the synthetic
 	# plant under an airframe run would re-fit the ladder on the wrong aircraft.
@@ -912,6 +921,7 @@ def collect_student_feature_samples(genome, episode_config, num_episodes: int,
 		else:
 			sim.clear_disturbance()
 		ctl.reset()
+		ctl.seed_att_estimator(list(init_q))  # ABI 32: no-op unless obs_att_estimator
 		for _step in range(episode_config.steps_per_episode):
 			gyro, accel = sim.read_imu()
 			pwm = ctl.step(list(gyro), list(accel), target)
@@ -998,6 +1008,10 @@ def reference_packed_config(ec, teacher: str = "pid", teacher_hover_mode: str = 
 		teacher_hover_mode=_TEACHER_HOVER_MODES[teacher_hover_mode],
 		**_plant_train_kwargs(ec),
 		**ec.motor_lag_kwargs(),
+		# ABI 32: the calibration sampler + MEMORY recorder fly the real-life
+		# plant too (AirframeRs::from_cfg arms it). Nothing is SCORED here, so
+		# the G5 reference is not passed.
+		**ec.imu_kwargs(),
 	)
 
 
@@ -1100,6 +1114,7 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i,
 		obs_collective_cmd=spec.obs_collective_cmd, obs_alt_err=spec.obs_alt_err, obs_vz=spec.obs_vz,
 			obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
+		obs_att_estimator=getattr(spec, 'obs_att_estimator', False),
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
@@ -1203,6 +1218,7 @@ def spec_from_arch(genome: "RecurrentArchGenome", base: ControllerSpec) -> Contr
 		obs_peraxis_i=base.obs_peraxis_i, obs_peraxis_yaw=base.obs_peraxis_yaw, obs_pwm=base.obs_pwm, obs_yaw_err=base.obs_yaw_err, obs_yaw_err_i=base.obs_yaw_err_i,
 		obs_collective_cmd=base.obs_collective_cmd, obs_alt_err=base.obs_alt_err, obs_vz=base.obs_vz,
 		obs_pos_err_xy=getattr(base, 'obs_pos_err_xy', False), obs_vel_xy=getattr(base, 'obs_vel_xy', False),
+		obs_att_estimator=getattr(base, 'obs_att_estimator', False),
 		output_full_window=getattr(base, 'output_full_window', False),
 		frame_stride=int(getattr(base, 'frame_stride', 1)),
 		target_levels=int(getattr(base, 'target_levels', 0)),
@@ -1664,6 +1680,8 @@ class ControllerEvaluator:
 			# AXIS F: the TRAINING rollout + per-round eval fly the same lagged
 			# plant the scorers and baselines do (empty when the axis is off).
 			**rg.episode_config.motor_lag_kwargs(),
+			# ABI 32: real-life plant (AirframeRs) + G5 gate/checkpoint reference.
+			**rg.episode_config.imu_kwargs(), **rg.episode_config.att_ref_kwargs(),
 		)
 		target_rpy = list(rg.target_rpy) if rg.target_rpy is not None else [0.0, 0.0, 0.0]
 
@@ -1710,6 +1728,9 @@ class ControllerEvaluator:
 			obs_vz=first_spec.obs_vz,
 			obs_pos_err_xy=getattr(first_spec, 'obs_pos_err_xy', False),
 			obs_vel_xy=getattr(first_spec, 'obs_vel_xy', False),
+			# ABI 32: same estimator as the scorer's controllers, or the trainer
+			# would label on accel-only features while deploy flies estimated ones.
+			obs_att_estimator=getattr(first_spec, 'obs_att_estimator', False),
 			output_full_window=getattr(first_spec, 'output_full_window', False),
 			frame_stride=int(getattr(first_spec, 'frame_stride', 1)),
 			**_target_levels_kwarg(ra, first_spec),
@@ -1796,6 +1817,8 @@ class ControllerEvaluator:
 			# AXIS F: the TRAINING rollout + per-round eval fly the same lagged
 			# plant the scorers and baselines do (empty when the axis is off).
 			**rg.episode_config.motor_lag_kwargs(),
+			# ABI 32: real-life plant (AirframeRs) + G5 gate/checkpoint reference.
+			**rg.episode_config.imu_kwargs(), **rg.episode_config.att_ref_kwargs(),
 		)
 		controller = ra.WnnController(
 			num_motors=spec.num_motors, levels_per_motor=spec.levels_per_motor,
@@ -1811,6 +1834,7 @@ class ControllerEvaluator:
 			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i,
 			obs_collective_cmd=spec.obs_collective_cmd, obs_alt_err=spec.obs_alt_err, obs_vz=spec.obs_vz,
 			obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
+		obs_att_estimator=getattr(spec, 'obs_att_estimator', False),
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
@@ -1993,6 +2017,7 @@ class ControllerEvaluator:
 					controllers, q0, omega0, self.num_eval, ec.steps_per_episode,
 					geometry=geo_rows, rotor_asym=geo_asym,
 					**ec.sim_kwargs(), **ec.motor_lag_kwargs(),
+					**ec.imu_kwargs(), **ec.att_ref_kwargs(),
 					**alloc_kwargs, **stage1_kwargs)
 			else:
 				# W2: weather-on scoring. Base seed = dist.seed XOR the active
@@ -2019,6 +2044,7 @@ class ControllerEvaluator:
 					dist_torque_scale_jitter=float(dist.torque_scale_jitter),
 					geometry=geo_rows, rotor_asym=geo_asym,
 					**ec.sim_kwargs(), **ec.motor_lag_kwargs(),
+					**ec.imu_kwargs(), **ec.att_ref_kwargs(),
 					**alloc_kwargs, **stage1_kwargs)
 		except Exception:
 			return None
@@ -2051,6 +2077,11 @@ class ControllerEvaluator:
 			# same pos= number. Tolerate a 14-row wheel exactly as above, so the
 			# Python can land before the wheel does.
 			alt_err_m = row[14] if len(row) > 14 else None
+			# 16th/17th (ABI 32, Luiz 31/10): mean |dx|, |dy| in METRES — the
+			# horizontal components. None (not 0.0) unless the run translates, so
+			# attitude-only report lines stay exactly as they were.
+			dx_m = row[15] if (s1_on and len(row) > 16) else None
+			dy_m = row[16] if (s1_on and len(row) > 16) else None
 			out.append((float(mean_reward), {
 				"mean_reward": float(mean_reward),
 				"mean_attitude_error_rad": float(mean_err_rad),
@@ -2074,6 +2105,8 @@ class ControllerEvaluator:
 				# thrashing attitude must stay visible).
 				"mean_position_error_m": (float(pos_err_m) if pos_err_m is not None else None),
 				"mean_altitude_error_m": (float(alt_err_m) if alt_err_m is not None else None),
+				"mean_dx_m": (float(dx_m) if dx_m is not None else None),
+				"mean_dy_m": (float(dy_m) if dy_m is not None else None),
 				"mean_ise": float(ise),
 				# Allocation-effort proxy (Σu², Phase 3): the Σu² fitness input.
 				"mean_effort": (float(effort) if effort is not None else None),
@@ -2462,6 +2495,7 @@ class ControllerEvaluator:
 			_effort = m.get("mean_effort")
 			_pem = m.get("mean_position_error_m")
 			_aem = m.get("mean_altitude_error_m")
+			_dx, _dy = m.get("mean_dx_m"), m.get("mean_dy_m")
 			metrics = Metrics(
 				reward=float(reward), stable_rate=stable, fitness=float(reward),
 				mean_attitude_error_deg=err,
@@ -2471,6 +2505,8 @@ class ControllerEvaluator:
 				mean_effort=(float(_effort) if _effort is not None else None),
 				mean_position_error_m=(float(_pem) if _pem is not None else None),
 				mean_altitude_error_m=(float(_aem) if _aem is not None else None),
+				mean_dx_m=(float(_dx) if _dx is not None else None),
+				mean_dy_m=(float(_dy) if _dy is not None else None),
 			)
 			if write_back or return_stats:
 				# Fill counts straight from Rust; the old _cell_stats ALSO called
@@ -2594,7 +2630,9 @@ class ControllerEvaluator:
 		                mean_position_error_m=(float(m["mean_position_error_m"])
 		                                       if m.get("mean_position_error_m") is not None else None),
 		                mean_altitude_error_m=(float(m["mean_altitude_error_m"])
-		                                       if m.get("mean_altitude_error_m") is not None else None))
+		                                       if m.get("mean_altitude_error_m") is not None else None),
+		                mean_dx_m=(float(m["mean_dx_m"]) if m.get("mean_dx_m") is not None else None),
+		                mean_dy_m=(float(m["mean_dy_m"]) if m.get("mean_dy_m") is not None else None))
 		        for (r, m) in scored]
 
 	def _score_grouped(self, controllers: list, shape_keys: list) -> list:

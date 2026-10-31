@@ -21,6 +21,7 @@
 
 use pyo3::prelude::*;
 
+#[derive(Clone)]
 pub struct MahonyFilter
 {
 	dt: f64,

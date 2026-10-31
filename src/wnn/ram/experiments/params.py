@@ -131,6 +131,13 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	"controller_obs_vel_xy",          # feature: horizontal velocity
 	"controller_xy_offset",           # plant: max |initial xy offset| in m (0 ⇒ axis disarmed)
 	"controller_fit_weight_pos",      # reward weight on radial position error (sweep, never guessed)
+	# ABI 32 (31/10/2026): the real-life plant + G5, same knobs as phased_ga
+	# --imu-specific-force/--imu-inclinometer, --rotor-drag/--no-rotor-drag,
+	# --obs-att-estimator, --att-err-ref.
+	"controller_imu_specific_force",  # plant: accelerometer reads specific force (default with translation)
+	"controller_rotor_drag",          # plant: linear rotor drag k_d (1/s)
+	"controller_obs_att_estimator",   # feature source: Mahony-estimated attitude (default with specific force)
+	"controller_att_err_ref",         # scoring: attitude error vs level | tilt (position-loop reference)
 	# Specialist programme (14/08/2026)
 	"controller_conn_policy",         # connection-creation policy: spread | min2 | min3
 	"controller_output_full_window",  # arm D: output layer samples ALL k frames, not just t-0

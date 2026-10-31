@@ -214,6 +214,8 @@ fn recorder_draws(xy: Option<(f32, f32)>) -> Stage1Cfg
 		lambda_pos: 0.0,
 		init_x: xy.map(|p| vec![p.0]).unwrap_or_default(),
 		init_y: xy.map(|p| vec![p.1]).unwrap_or_default(),
+		plant: crate::plant_opts::PlantOpts::OFF,
+		att_ref: crate::att_err_ref::AttErrRef::LEVEL,
 	}
 }
 

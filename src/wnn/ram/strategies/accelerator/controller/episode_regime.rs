@@ -15,6 +15,7 @@
 //! the sim or controller. Attitude-only runs are therefore byte-identical.
 
 use crate::altitude_pd::AltitudePd;
+use crate::att_err_ref::AttErrRef;
 use crate::controller::{compute_reward, compute_reward_stage2, AttitudeSim, WnnController};
 use crate::dagger_train::RewardGatedConfigPacked;
 use crate::optimal::Teacher;
@@ -202,6 +203,40 @@ impl OuterLoops
 			(None, Some(pd)) => teacher.step_with_collective(q, gyro, target, pd, alt_err, vz),
 			_ => teacher.step_rs(q, gyro, target),
 		}
+	}
+}
+
+/// G5 (ABI 32): the attitude-error reference a config scores against — the
+/// position loop's tilt reference (the teacher's own loop, pos_loop_for) when
+/// cfg.att_err_tilt_ref, else LEVEL. validate_abi32 guarantees the horizontal
+/// channel is armed whenever the flag is on.
+pub(crate) fn att_err_ref_for(cfg: &RewardGatedConfigPacked) -> AttErrRef
+{
+	if !cfg.att_err_tilt_ref
+	{
+		return AttErrRef::LEVEL;
+	}
+	AttErrRef::tilt(
+		cfg.af_gravity as f64,
+		cfg.pos_omega as f64,
+		cfg.pos_zeta as f64,
+		cfg.pos_max_tilt_rad as f64,
+	)
+	.expect("att_err_tilt_ref: the position-loop shape must derive from the config's plant")
+}
+
+/// G5: the per-step attitude error (rad) the gate, checkpoint and L4 priority
+/// read. LEVEL is the legacy `sim.attitude_error(None)`, bit-for-bit.
+#[inline]
+pub(crate) fn scored_att_err(sim: &AttitudeSim, cfg: &RewardGatedConfigPacked) -> f32
+{
+	if cfg.att_err_tilt_ref
+	{
+		att_err_ref_for(cfg).error(sim)
+	}
+	else
+	{
+		sim.attitude_error(None)
 	}
 }
 

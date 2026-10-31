@@ -86,13 +86,20 @@ pub(crate) fn rollout_one(
 	// rollout, bit-identical to every pre-13/08 result. Caller has validated it
 	// against num_eps before the rayon fan-out.
 	stage1: Option<&crate::stage1::Stage1Cfg>,
-) -> [f64; 15]
+) -> [f64; 17]
 {
 	let mut sim = AttitudeSim::new(dt, arm, k_thrust, k_drag, inertia, gravity);
 	if motor_lag_s > 0.0
 	{
 		sim.set_motor_lag(motor_lag_s);
 	}
+	// ABI 32: real-life plant options ride the translation config (OFF calls nothing).
+	if let Some(s1) = stage1
+	{
+		s1.plant.apply(&mut sim);
+	}
+	// G5: what the per-step attitude error is measured against (LEVEL = legacy).
+	let att_ref = stage1.map_or(crate::att_err_ref::AttErrRef::LEVEL, |s| s.att_ref);
 	if let Some(rows) = geometry
 	{
 		// Validated in score_controllers_cpu before the rayon fan-out; these
@@ -139,6 +146,8 @@ pub(crate) fn rollout_one(
 	let mut sum_effort = 0.0f64;
 	let mut sum_poserr = 0.0f64; // stage 1+2: mean 3D position error (m)
 	let mut sum_alterr = 0.0f64; // stage 1+2: mean |altitude error| (m)
+	let mut sum_dx = 0.0f64; // ABI 32: mean |x error| (m)
+	let mut sum_dy = 0.0f64; // ABI 32: mean |y error| (m)
 	let mut n_stable = 0usize;
 	// Transient/display metrics (20/07/2026): previously hardcoded 0.0 on this
 	// path, so any run with WNN_CONTROLLER_GPU_EVAL=0 reported steady=0.00° and
@@ -175,6 +184,7 @@ pub(crate) fn rollout_one(
 		let q = [q0[ep * 4], q0[ep * 4 + 1], q0[ep * 4 + 2], q0[ep * 4 + 3]];
 		let om = [omega0[ep * 3], omega0[ep * 3 + 1], omega0[ep * 3 + 2]];
 		c.reset(yaw_from_quat_rs(q)); // yaw-anchor: seed heading from the episode's true yaw
+		c.seed_att_estimator(q); // ABI 32: warm-start like the rivals (no-op when off)
 																// QSR/PLN decode coin: seed per-episode with the SAME channel-15 derivation
 																// the Metal scorer uses, so the stochastic decode is reproducible AND bit-
 																// identical to score_controllers_metal. Unconditional (pure fn of the seed);
@@ -222,6 +232,7 @@ pub(crate) fn rollout_one(
 		let mut ep_sum_err = 0.0f64;
 		let mut ep_sum_poserr = 0.0f64;
 		let mut ep_sum_alterr = 0.0f64;
+		let (mut ep_sum_dx, mut ep_sum_dy) = (0.0f64, 0.0f64);
 		let mut ep_jerk = 0.0f64;
 		let mut ep_jerk_count = 0usize;
 		let mut ep_effort = 0.0f64;
@@ -388,7 +399,7 @@ pub(crate) fn rollout_one(
 				// Legacy quad path — the EXACT pre-geometry call (bit-identical).
 				sim.step([pwm[0], pwm[1], pwm[2], pwm[3]]);
 			}
-			let err = sim.attitude_error(None);
+			let err = att_ref.error(&sim);
 			// STAGE 1 reward term — lambda_alt == 0 short-circuits to the exact
 			// attitude-only expression (compute_reward_stage1 guarantees it).
 			sum_reward += match stage1
@@ -421,6 +432,9 @@ pub(crate) fn rollout_one(
 				// The VERTICAL component alone (15/08/2026) — pos_err cannot be
 				// decomposed, so drifting and falling looked identical in a table.
 				ep_sum_alterr += ae.abs();
+				// ABI 32: the horizontal components on their own (kernel twin).
+				ep_sum_dx += (hx as f64).abs();
+				ep_sum_dy += (hy as f64).abs();
 			}
 			ep_sum_err += err as f64;
 			if trace.is_some()
@@ -493,6 +507,11 @@ pub(crate) fn rollout_one(
 		{
 			0.0
 		};
+		if ep_steps > 0
+		{
+			sum_dx += ep_sum_dx / ep_steps as f64;
+			sum_dy += ep_sum_dy / ep_steps as f64;
+		}
 		sum_mono += mono_last;
 		// Steady: mean err over the tail-20% window. Diverged before reaching it
 		// ⇒ no samples ⇒ fall back to the whole-episode mean (kernel's else-branch).
@@ -560,6 +579,9 @@ pub(crate) fn rollout_one(
 		sum_effort / n,
 		sum_poserr / n,
 		sum_alterr / n,
+		// ABI 32 (Luiz 31/10): appended — mean |dx|, mean |dy| (m).
+		sum_dx / n,
+		sum_dy / n,
 	]
 }
 
@@ -620,6 +642,14 @@ pub(crate) fn rollout_one(
 	lambda_pos = 0.0,
 	init_x = vec![],
 	init_y = vec![],
+	// ABI 32: real-life plant options + the G5 attitude-error reference (all
+	// translation-only; defaults = the ABI ≤ 31 plant and the level reference).
+	imu_specific_force = false,
+	rotor_drag = 0.0,
+	att_err_tilt_ref = false,
+	pos_omega = 1.0,
+	pos_zeta = 1.0,
+	pos_max_tilt_rad = 0.5236,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_controllers_cpu(
@@ -671,11 +701,33 @@ pub fn score_controllers_cpu(
 	lambda_pos: f32,
 	init_x: Vec<f32>,
 	init_y: Vec<f32>,
+	imu_specific_force: bool,
+	rotor_drag: f32,
+	att_err_tilt_ref: bool,
+	pos_omega: f32,
+	pos_zeta: f32,
+	pos_max_tilt_rad: f32,
 ) -> PyResult<Vec<Vec<f64>>>
 {
 	if controllers.is_empty()
 	{
 		return Ok(vec![]);
+	}
+	let verr = pyo3::exceptions::PyValueError::new_err;
+	let (plant, att_ref) = crate::stage1::stage1_extras(
+		imu_specific_force,
+		rotor_drag,
+		att_err_tilt_ref,
+		gravity,
+		pos_omega,
+		pos_zeta,
+		pos_max_tilt_rad,
+	)
+	.map_err(verr)?;
+	plant.require_translation(translation, "score_controllers_cpu").map_err(verr)?;
+	if att_ref.is_tilt() && !translation
+	{
+		return Err(verr("score_controllers_cpu: att_err_tilt_ref needs translation=True".to_string()));
 	}
 	// STAGE 1: build + validate ONCE, before the rayon fan-out, so the workers
 	// can index the per-episode vectors unconditionally (the geometry idiom).
@@ -691,6 +743,8 @@ pub fn score_controllers_cpu(
 			lambda_pos,
 			init_x,
 			init_y,
+			plant,
+			att_ref,
 		};
 		cfg
 			.validate(num_episodes)

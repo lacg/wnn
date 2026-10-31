@@ -52,7 +52,10 @@ use crate::position_loop::PositionLoop;
 	af_pid_att = [0.0; 12], af_pid_rate = [0.0; 12], af_pid_out_limit_n = 0.0,
 	af_pid_hover_n = 0.0, af_pid_attitude_hz = 0.0, af_pid_lpf_hz = 0.0,
 	use_estimator = false, est_kp = 2.0, est_ki = 0.1,
-	motor_lag_s = 0.0))]
+	motor_lag_s = 0.0,
+	// ABI 32: the real-life plant + the G5 attitude-error reference (this scorer
+	// always flies translation with displaced starts). OFF ⇒ ABI 31.
+	imu_specific_force = false, rotor_drag = 0.0, att_err_tilt_ref = false))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_position_teacher(
 	teacher_id: u8,
@@ -98,9 +101,22 @@ pub fn score_position_teacher(
 	est_ki: f64,
 	// AXIS F: motor lag (2% settling time T, s); 0.0 = OFF, bit-identical.
 	motor_lag_s: f32,
+	imu_specific_force: bool,
+	rotor_drag: f32,
+	att_err_tilt_ref: bool,
 ) -> PyResult<(f64, f64, f64, f64, f64)>
 {
 	let err = |m: String| pyo3::exceptions::PyValueError::new_err(m);
+	let (plant, att_ref) = crate::stage1::stage1_extras(
+		imu_specific_force,
+		rotor_drag,
+		att_err_tilt_ref,
+		af_gravity,
+		pos_omega_n as f32,
+		pos_zeta as f32,
+		pos_max_tilt_deg.to_radians() as f32,
+	)
+	.map_err(err)?;
 	if init_qs.len() % 4 != 0 || init_omegas.len() % 3 != 0 || init_p.len() % 3 != 0
 	{
 		return Err(err(
@@ -164,6 +180,7 @@ pub fn score_position_teacher(
 		// airframe's teacher_hover is not consulted here.
 		teacher_hover: None,
 		motor_lag_s,
+		plant,
 	};
 	let mut sim = af.sim();
 	// ANCHOR AT TRUE HOVER, not the attitude teachers' legacy 0.5 neutral. With
@@ -285,7 +302,8 @@ pub fn score_position_teacher(
 			last_applied = cmd;
 			let (x, y) = sim.position_xy();
 			let pe = ((x * x + y * y + sim.altitude_rs() * sim.altitude_rs()) as f64).sqrt();
-			let ae = sim.attitude_error(None) as f64;
+			// G5: LEVEL = the legacy call; TILT = vs the position loop's reference.
+			let ae = att_ref.error(&sim) as f64;
 			ep_pos += pe;
 			ep_att += ae;
 			if t >= tail_start

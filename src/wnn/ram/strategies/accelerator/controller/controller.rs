@@ -1046,7 +1046,7 @@ impl AttitudeSim
 				"set_rotor_drag: k_d must be finite and >= 0 (1/s), got {k_d}"
 			)));
 		}
-		self.rotor_drag = k_d;
+		self.set_rotor_drag_core(k_d);
 		Ok(())
 	}
 
@@ -1734,6 +1734,27 @@ impl WnnController
 		(self.obs_collective_cmd, self.obs_alt_err, self.obs_vz)
 	}
 
+	/// ABI 32: turn on obs_att_estimator (Mahony, kp/ki = the rivals' defaults
+	/// unless overridden). Refused when no feature reads the derived attitude —
+	/// the flag would be silently inert.
+	pub(crate) fn enable_att_estimator(&mut self, kp: f32, ki: f32) -> Result<(), String>
+	{
+		if !(self.obs_tilt_p || self.obs_tilt_i || self.obs_peraxis_p || self.obs_peraxis_i)
+		{
+			return Err("obs_att_estimator needs an attitude feature (obs_tilt_p/i or \
+			            obs_peraxis_p/i) — no feature reads the estimate otherwise"
+				.into());
+		}
+		self.att_est = Some(crate::att_estimator::AttEstimator::new(self.dt, kp, ki)?);
+		Ok(())
+	}
+
+	/// ABI 32: (kp, ki) of the attitude estimator, None when off — the GPU twin.
+	pub(crate) fn att_estimator_gains(&self) -> Option<(f32, f32)>
+	{
+		self.att_est.as_ref().map(|e| e.gains())
+	}
+
 	/// STAGE 2 horizontal feature flags (pos_err_xy, vel_xy) — the GPU twin.
 	pub(crate) fn horiz_params(&self) -> (bool, bool)
 	{
@@ -1815,14 +1836,14 @@ impl WnnController
 	/// True when any feature that needs a per-step replay stream is on.
 	fn replay_obs_required(&self) -> bool
 	{
-		self.vert_horiz_obs_required() || self.obs_pwm
+		self.vert_horiz_obs_required() || self.obs_pwm || self.att_est.is_some()
 	}
 
 	/// Fail-LOUD guard (Fix A shape): a controller whose vertical/horizontal
 	/// features are on must never replay `w` steps without a stream of exactly
 	/// `w` observations — that is the stale-altitude-features bug, and it
 	/// completes cleanly while measuring nothing.
-	fn replay_obs_guard(&self, obs: Option<&ReplayObs>, w: usize, site: &str)
+	pub(crate) fn replay_obs_guard(&self, obs: Option<&ReplayObs>, w: usize, site: &str)
 	{
 		if !self.replay_obs_required()
 		{
@@ -1850,11 +1871,20 @@ impl WnnController
 			obs.map(|o| o.pwm_dev.len()),
 			w
 		);
+		let att_ok = self.att_est.is_none() || obs.map(|o| o.att_up.len() == w).unwrap_or(false);
+		assert!(
+			att_ok,
+			"{site}: obs_att_estimator is on but the replay attitude-estimate stream is \
+			 missing or misaligned (got att_up {:?}, need {} steps) — the replay has no \
+			 live filter and would run one from identity",
+			obs.map(|o| o.att_up.len()),
+			w
+		);
 	}
 
 	/// Re-apply step `t`'s recorded observation before compute_features(t), so the
 	/// replayed frame carries the SAME vertical/horizontal bits deploy addressed.
-	fn apply_replay_obs(&mut self, obs: Option<&ReplayObs>, t: usize)
+	pub(crate) fn apply_replay_obs(&mut self, obs: Option<&ReplayObs>, t: usize)
 	{
 		if let Some(o) = obs
 		{
@@ -1878,6 +1908,11 @@ impl WnnController
 				{
 					self.pwm_feat_override = Some(*p);
 				}
+			}
+			// ABI 32: the recorded attitude estimate (no live filter in a replay).
+			if let (Some(e), Some(u)) = (self.att_est.as_mut(), o.att_up.get(t))
+			{
+				e.set_override(*u);
 			}
 		}
 	}
@@ -2265,6 +2300,7 @@ impl WnnController
 			frame_pushes: 0,
 			vert_obs: [0.0f32; 3],
 			horiz_obs: [0.0f32; 4],
+			att_est: None,
 			collective_anchor: 0.5,
 		})
 	}
@@ -2511,6 +2547,14 @@ impl WnnController
 
 impl AttitudeSim
 {
+	/// ABI 32: rotor-drag setter for Rust hosts (PlantOpts::apply). The caller
+	/// has validated k_d (PlantOpts::new); the pymethod twin validates itself.
+	pub(crate) fn set_rotor_drag_core(&mut self, k_d: f32)
+	{
+		debug_assert!(k_d.is_finite() && k_d >= 0.0);
+		self.rotor_drag = k_d;
+	}
+
 	/// Body-frame torque vector from 4-motor PWM. See top-of-file convention.
 	#[inline]
 	/// Molchanov eq. (7) — first-order motor lag, applied to the COMMANDED
@@ -2697,16 +2741,21 @@ pub struct ReplayObs
 	// ready-made and applied as an override (apply_replay_obs); deploy computes
 	// the same expression live. Recorded from the same code path ⇒ bit-identical.
 	pub pwm_dev: Vec<[f32; 4]>,
+	// ABI 32 (obs_att_estimator): the body "up" the attitude estimator produced
+	// at rollout, per step (WnnController::att_up_obs, recorded right after the
+	// step). The replay has no live filter, so it applies this as an override
+	// (apply_replay_obs). Empty on a trajectory without the estimator.
+	pub att_up: Vec<[f32; 3]>,
 }
 
 #[pymethods]
 impl ReplayObs
 {
 	#[new]
-	#[pyo3(signature = (vert, horiz, pwm_dev = vec![]))]
-	fn new(vert: Vec<[f32; 3]>, horiz: Vec<[f32; 4]>, pwm_dev: Vec<[f32; 4]>) -> Self
+	#[pyo3(signature = (vert, horiz, pwm_dev = vec![], att_up = vec![]))]
+	fn new(vert: Vec<[f32; 3]>, horiz: Vec<[f32; 4]>, pwm_dev: Vec<[f32; 4]>, att_up: Vec<[f32; 3]>) -> Self
 	{
-		Self { vert, horiz, pwm_dev }
+		Self { vert, horiz, pwm_dev, att_up }
 	}
 }
 
@@ -2720,6 +2769,7 @@ impl ReplayObs
 		vert: &[[f32; 3]],
 		horiz: &[[f32; 4]],
 		pwm_dev: &[[f32; 4]],
+		att_up: &[[f32; 3]],
 		start: usize,
 		end: usize,
 	) -> Option<Self>
@@ -2727,7 +2777,8 @@ impl ReplayObs
 		if vert.len() >= end && horiz.len() >= end
 		{
 			let pwm_dev = if pwm_dev.len() >= end { pwm_dev[start..end].to_vec() } else { Vec::new() };
-			Some(Self { vert: vert[start..end].to_vec(), horiz: horiz[start..end].to_vec(), pwm_dev })
+			let att_up = if att_up.len() >= end { att_up[start..end].to_vec() } else { Vec::new() };
+			Some(Self { vert: vert[start..end].to_vec(), horiz: horiz[start..end].to_vec(), pwm_dev, att_up })
 		}
 		else
 		{
@@ -2952,6 +3003,10 @@ pub struct WnnController
 	// Zeros while the flags are off, so a caller that never sets them is
 	// bit-identical to a pre-stage-2 controller.
 	horiz_obs: [f32; 4],
+	// ABI 32 (obs_att_estimator): the WNN's attitude features read a Mahony
+	// estimate (att_estimator.rs) instead of the raw accelerometer. None ⇒ the
+	// legacy accel-only features, bit-identical.
+	att_est: Option<crate::att_estimator::AttEstimator>,
 	// L1 (06/08/2026) — d̂ disturbance observer, the mpcof teacher's instrument moved
 	// into the student. Some(b) ⇒ 3 extra features (roll/pitch/yaw estimated external
 	// angular acceleration). The screen's D2 decomposition showed the student's error
@@ -3099,6 +3154,9 @@ impl WnnController
 		frame_stride = 1,
 		delta_label_scale = 1.0,
 		dagger_label_delta = false,
+		obs_att_estimator = false,
+		est_kp = 2.0,
+		est_ki = 0.1,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -3144,6 +3202,9 @@ impl WnnController
 		frame_stride: usize,
 		delta_label_scale: f32,
 		dagger_label_delta: bool,
+		obs_att_estimator: bool,
+		est_kp: f32,
+		est_ki: f32,
 	) -> PyResult<Self>
 	{
 		let mut c = Self::new_core(
@@ -3192,7 +3253,39 @@ impl WnnController
 		c.set_delta_label_scale_core(delta_label_scale)
 			.map_err(pyo3::exceptions::PyValueError::new_err)?;
 		c.dagger_label_delta = dagger_label_delta;
+		if obs_att_estimator
+		{
+			c.enable_att_estimator(est_kp, est_ki)
+				.map_err(pyo3::exceptions::PyValueError::new_err)?;
+		}
 		Ok(c)
+	}
+
+	/// ABI 32: warm-start the attitude estimator from the episode's initial
+	/// attitude q0 = (w, x, y, z) — call AFTER reset(), before the first step,
+	/// exactly like the rivals' estimator reset. No-op when obs_att_estimator is
+	/// off (so hosts may call it unconditionally).
+	pub fn seed_att_estimator(&mut self, q0: [f32; 4])
+	{
+		if let Some(e) = self.att_est.as_mut()
+		{
+			e.seed(q0);
+		}
+	}
+
+	/// ABI 32: whether the attitude features read the Mahony estimate.
+	#[getter]
+	pub fn obs_att_estimator(&self) -> bool
+	{
+		self.att_est.is_some()
+	}
+
+	/// ABI 32: the body "up" the LAST compute_features read (the estimator's
+	/// output) — what a rollout records per step for the replay (ReplayObs.att_up).
+	/// [0, 0, 0] when the estimator is off.
+	pub fn att_up_obs(&self) -> [f32; 3]
+	{
+		self.att_est.as_ref().map_or([0.0; 3], |e| e.last_up())
 	}
 
 	/// SCOPE C STAGE 1: hand the controller its vertical observation for THIS
@@ -3304,6 +3397,11 @@ impl WnnController
 	#[pyo3(signature = (init_yaw = 0.0))]
 	pub fn reset(&mut self, init_yaw: f32)
 	{
+		// ABI 32: the estimator forgets the episode; the host re-seeds it.
+		if let Some(e) = self.att_est.as_mut()
+		{
+			e.unseed();
+		}
 		for v in self.prev_state.iter_mut()
 		{
 			*v = 0;
@@ -5679,7 +5777,14 @@ impl WnnController
 			return feats;
 		}
 		// Derived errors from the IMU (accel-only attitude; yaw dead-reckoned).
-		let (ax, ay, az) = (accel[0], accel[1], accel[2]);
+		// ABI 32: with obs_att_estimator the attitude reads the estimator's body
+		// "up" instead (same formulas — atan2 is scale-free).
+		let src = match self.att_est.as_mut()
+		{
+			Some(e) => e.up(gyro, accel),
+			None => accel,
+		};
+		let (ax, ay, az) = (src[0], src[1], src[2]);
 		let tilt = (ax * ax + ay * ay).sqrt().atan2(az); // angle-to-up, 0 at level
 		let roll_est = ay.atan2(az);
 		let pitch_est = (-ax).atan2((ay * ay + az * az).sqrt());
@@ -7943,7 +8048,7 @@ mod sn0_tests
 			dep_feats.push(deploy.compute_features(g[t], a[t], tg[t]));
 			deploy.set_pwm_accumulator(pp[t]);
 		}
-		let ro = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev };
+		let ro = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev, att_up: vec![] };
 		// REPLAY with the stream restored.
 		let mut replay = sn0_controller_obs_pwm();
 		replay.reset(0.0);
@@ -7987,7 +8092,7 @@ mod sn0_tests
 		);
 		// The guard is the fail-LOUD half: an obs_pwm controller must refuse a
 		// stream without the accumulator.
-		let short = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![] };
+		let short = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![] };
 		let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
 			sn0_controller_obs_pwm().replay_obs_guard(Some(&short), n, "test")
 		}));
@@ -9123,12 +9228,12 @@ mod sn0_tests
 	fn vertical_stream(n: usize) -> ReplayObs
 	{
 		let vert: Vec<[f32; 3]> = (0..n).map(|t| [0.7, -4.0 + 0.5 * t as f32, 4.0 - 0.5 * t as f32]).collect();
-		ReplayObs { vert, horiz: vec![[0.0; 4]; n], pwm_dev: vec![] }
+		ReplayObs { vert, horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![] }
 	}
 
 	fn constant_stream(n: usize, v: [f32; 3]) -> ReplayObs
 	{
-		ReplayObs { vert: vec![v; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![] }
+		ReplayObs { vert: vec![v; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![] }
 	}
 
 	fn distinct_output_addresses_per_neuron(c: &WnnController) -> Vec<usize>

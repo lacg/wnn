@@ -84,7 +84,15 @@ import os
 # RewardGatedConfigPacked.lambda_alt + lambda_pos READ by gate/checkpoint (G4).
 # Python side: evaluator.reference_packed_config / _gate_lambda_kwargs,
 # gate_lambdas.py, ga_memory reference_cfg. STAGE THIS FILE WITH THE WHEEL.
-EXPECTED_ABI = 31
+# 32 (31/10/2026): the real-life plant + stage-2 scoring (Luiz option A) —
+# imu_specific_force / rotor_drag on every sim host (RewardGatedConfigPacked,
+# both scorers, rivals, position scorer); G5 att_err_tilt_ref (+ pos_* shape on
+# the scorers); WnnController(obs_att_estimator=) + seed_att_estimator +
+# ReplayObs.att_up; dagger_train_batch_inplace(obs_att_estimator=); scorer rows
+# 15 → 17 (dx_m, dy_m appended). OFF is bit-identical to 31. Python source:
+# EpisodeConfig.imu_specific_force / rotor_drag / att_err_ref and
+# ControllerSpec.obs_att_estimator (phased_ga). STAGE THIS FILE WITH THE WHEEL.
+EXPECTED_ABI = 32
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

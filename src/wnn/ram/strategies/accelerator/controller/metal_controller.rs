@@ -323,6 +323,25 @@ struct RolloutParams
 	// layer samples the full K-frame window (sn=0 only).
 	out_full_window: u32,
 	frame_stride: u32,
+	// + 10 (ABI 32, 31/10/2026), appended in lockstep with the shader twin.
+	// Real-life plant: imu_specific_force=1 ⇒ sensors[3..5] read the per-thread
+	// specific force (thrust + drag over mass, body frame) while translating;
+	// rotor_drag = linear k_d (1/s) on the horizontal body velocity (0 ⇒ the
+	// legacy translation ops, bit-identical).
+	imu_specific_force: u32,
+	rotor_drag: f32,
+	// CTRL-17 G5: attitude error vs the position loop's tilt reference
+	// (att_ref_on=0 ⇒ the legacy identity target). Shape = PositionLoop::shape.
+	att_ref_on: u32,
+	att_ref_bxy: f32,
+	att_ref_omega: f32,
+	att_ref_zeta: f32,
+	att_ref_max_tilt: f32,
+	// WNN attitude features from a per-thread Mahony estimator (twin of
+	// estimator.rs MahonyFilter; warm-started from q0 like the rivals).
+	att_est_on: u32,
+	est_kp: f32,
+	est_ki: f32,
 }
 
 pub struct ControllerRolloutEvaluator
@@ -701,6 +720,10 @@ impl ControllerRolloutEvaluator
 		}
 
 		let (dt, arm, k_thrust, inertia, gravity) = sim;
+		// ABI 32: G5 reference shape (None ⇒ LEVEL) and the WNN's attitude
+		// estimator gains (None ⇒ accel-only attitude features, the legacy path).
+		let att_ref_shape = stage1.and_then(|s| s.att_ref.gpu_shape());
+		let att_est: Option<(f32, f32)> = controllers[0].att_estimator_gains();
 
 		// Pipeline: legacy quad (function constants undefined → generic path
 		// dead-stripped, bit-identical pre-geometry kernel) or the N-rotor
@@ -761,6 +784,8 @@ impl ControllerRolloutEvaluator
 		let mut sum_effort_per_g = vec![0.0f64; g];
 		let mut sum_poserr_per_g = vec![0.0f64; g]; // stage 1+2: mean 3D pos err (m), summed
 		let mut sum_alterr_per_g = vec![0.0f64; g]; // stage 1+2: mean |alt err| (m), summed
+		let mut sum_dx_per_g = vec![0.0f64; g]; // ABI 32: mean |dx| (m), summed
+		let mut sum_dy_per_g = vec![0.0f64; g]; // ABI 32: mean |dy| (m), summed
 		let stable_thresh = (5.0_f64).to_radians();
 
 		let chunk_size = episodes_per_chunk();
@@ -931,6 +956,16 @@ impl ControllerRolloutEvaluator
 					0
 				},
 				dhat_ff_clamp: controllers[0].dhat_ff_params().1,
+				imu_specific_force: stage1.map_or(0, |s| s.plant.imu_specific_force as u32),
+				rotor_drag: stage1.map_or(0.0, |s| s.plant.rotor_drag),
+				att_ref_on: att_ref_shape.is_some() as u32,
+				att_ref_bxy: att_ref_shape.map_or(0.0, |v| v[0]),
+				att_ref_omega: att_ref_shape.map_or(0.0, |v| v[1]),
+				att_ref_zeta: att_ref_shape.map_or(0.0, |v| v[2]),
+				att_ref_max_tilt: att_ref_shape.map_or(0.0, |v| v[3]),
+				att_est_on: att_est.is_some() as u32,
+				est_kp: att_est.map_or(0.0, |(kp, _)| kp),
+				est_ki: att_est.map_or(0.0, |(_, ki)| ki),
 			};
 
 			let b_q0 = self.buf(q0_chunk);
@@ -968,7 +1003,8 @@ impl ControllerRolloutEvaluator
 			// Widened to 2 floats/idx (14/08/2026): [effort, mean position error m]
 			// — the Metal buffer table is full at 31 slots, so the new metric
 			// rides in this buffer instead of a new binding.
-			let b_effort = mk_out(n_out_chunk * 3 * mem::size_of::<f32>());
+			// ABI 32: 5 floats/idx — [effort, pos_err, alt_err, |dx|, |dy|].
+			let b_effort = mk_out(n_out_chunk * 5 * mem::size_of::<f32>());
 
 			let cmd = self.queue.new_command_buffer();
 			let enc = cmd.new_compute_command_encoder();
@@ -1062,7 +1098,7 @@ impl ControllerRolloutEvaluator
 			let iaev = unsafe { std::slice::from_raw_parts(b_iae.contents() as *const f32, n_out_chunk) };
 			let isev = unsafe { std::slice::from_raw_parts(b_ise.contents() as *const f32, n_out_chunk) };
 			let effortv =
-				unsafe { std::slice::from_raw_parts(b_effort.contents() as *const f32, n_out_chunk * 3) };
+				unsafe { std::slice::from_raw_parts(b_effort.contents() as *const f32, n_out_chunk * 5) };
 			for gi in 0..g
 			{
 				for ce in 0..chunk_ep_count
@@ -1081,9 +1117,11 @@ impl ControllerRolloutEvaluator
 					sum_itae_per_g[gi] += itaev[idx] as f64;
 					sum_iae_per_g[gi] += iaev[idx] as f64;
 					sum_ise_per_g[gi] += isev[idx] as f64;
-					sum_effort_per_g[gi] += effortv[idx * 3] as f64;
-					sum_poserr_per_g[gi] += effortv[idx * 3 + 1] as f64;
-					sum_alterr_per_g[gi] += effortv[idx * 3 + 2] as f64;
+					sum_effort_per_g[gi] += effortv[idx * 5] as f64;
+					sum_poserr_per_g[gi] += effortv[idx * 5 + 1] as f64;
+					sum_alterr_per_g[gi] += effortv[idx * 5 + 2] as f64;
+					sum_dx_per_g[gi] += effortv[idx * 5 + 3] as f64;
+					sum_dy_per_g[gi] += effortv[idx * 5 + 4] as f64;
 					let is_stable = divv[idx] == 0 && mean_err <= stable_thresh;
 					if is_stable
 					{
@@ -1098,11 +1136,14 @@ impl ControllerRolloutEvaluator
 							if divv[idx] != 0 { 1.0 } else { 0.0 },
 							mean_err,
 							steadyv[idx] as f64,
-							effortv[idx * 3 + 2] as f64,
-							effortv[idx * 3 + 1] as f64,
-							effortv[idx * 3] as f64,
+							effortv[idx * 5 + 2] as f64,
+							effortv[idx * 5 + 1] as f64,
+							effortv[idx * 5] as f64,
 							jerkv[idx] as f64,
 							stepsv[idx] as f64,
+							// ABI 32: appended — mean |dx|, |dy| (m).
+							effortv[idx * 5 + 3] as f64,
+							effortv[idx * 5 + 4] as f64,
 						]);
 					}
 				}
@@ -1113,7 +1154,8 @@ impl ControllerRolloutEvaluator
 
 		// Aggregate per-genome over completed episodes only. Each row is 14 metrics:
 		// [reward, err_rad, stable, jerk, mono, steady_rad, rise_s, settle_abs_s,
-		//  settle_rel_s, itae, iae, ise, effort, pos_err_m, alt_err_m]. Vec<Vec>
+		//  settle_rel_s, itae, iae, ise, effort, pos_err_m, alt_err_m, dx_m, dy_m].
+		// (dx_m/dy_m appended by ABI 32 = mean |x|, |y| error.) Vec<Vec>
 		// (not a tuple)
 		// so more metrics can be appended without hitting PyO3's 12-arity ceiling.
 		// pos_err_m (14/08/2026) = mean 3D Euclidean position error in METRES —
@@ -1124,7 +1166,7 @@ impl ControllerRolloutEvaluator
 		{
 			for _ in 0..g
 			{
-				out.push(vec![0.0_f64; 15]);
+				out.push(vec![0.0_f64; 17]);
 			}
 		}
 		else
@@ -1148,6 +1190,9 @@ impl ControllerRolloutEvaluator
 					sum_effort_per_g[gi] / n,
 					sum_poserr_per_g[gi] / n,
 					sum_alterr_per_g[gi] / n,
+					// ABI 32 (Luiz 31/10): appended — mean |dx|, mean |dy| (m).
+					sum_dx_per_g[gi] / n,
+					sum_dy_per_g[gi] / n,
 				]);
 			}
 		}
@@ -1226,6 +1271,14 @@ impl ControllerRolloutEvaluator
 	lambda_pos = 0.0,
 	init_x = vec![],
 	init_y = vec![],
+	// ABI 32: same kwargs as score_controllers_cpu (real-life plant + the G5
+	// attitude-error reference; translation-only, defaults = ABI 31).
+	imu_specific_force = false,
+	rotor_drag = 0.0,
+	att_err_tilt_ref = false,
+	pos_omega = 1.0,
+	pos_zeta = 1.0,
+	pos_max_tilt_rad = 0.5236,
 	// 14/09/2026: true ⇒ the returned list is the g aggregate rows FOLLOWED BY
 	// g*num_episodes per-episode rows (see score_with_episodes). false ⇒
 	// exactly the pre-14/09 return. The aggregate rows are identical either way.
@@ -1292,9 +1345,31 @@ pub fn score_controllers_metal(
 	lambda_pos: f32,
 	init_x: Vec<f32>,
 	init_y: Vec<f32>,
+	imu_specific_force: bool,
+	rotor_drag: f32,
+	att_err_tilt_ref: bool,
+	pos_omega: f32,
+	pos_zeta: f32,
+	pos_max_tilt_rad: f32,
 	per_episode: bool,
 ) -> PyResult<Vec<Vec<f64>>>
 {
+	let verr = pyo3::exceptions::PyValueError::new_err;
+	let (plant, att_ref) = crate::stage1::stage1_extras(
+		imu_specific_force,
+		rotor_drag,
+		att_err_tilt_ref,
+		gravity,
+		pos_omega,
+		pos_zeta,
+		pos_max_tilt_rad,
+	)
+	.map_err(verr)?;
+	plant.require_translation(translation, "score_controllers_metal").map_err(verr)?;
+	if att_ref.is_tilt() && !translation
+	{
+		return Err(verr("score_controllers_metal: att_err_tilt_ref needs translation=True".to_string()));
+	}
 	// STAGE 1: built here, validated inside score() against num_episodes.
 	let stage1_cfg = if translation
 	{
@@ -1308,6 +1383,8 @@ pub fn score_controllers_metal(
 			lambda_pos,
 			init_x,
 			init_y,
+			plant,
+			att_ref,
 		})
 	}
 	else
@@ -1742,6 +1819,9 @@ struct TrainParams
 	obs_vz: u32,
 	obs_pos_err_xy: u32,
 	obs_vel_xy: u32,
+	// ABI 32 (obs_att_estimator), appended at END of BOTH structs in lockstep:
+	// the replay kernels read the recorded attitude-estimate stream (att_up).
+	att_est_on: u32,
 }
 
 /// Per-genome recorded trajectory batch, flat across genomes (matches the kernel's
@@ -1769,6 +1849,9 @@ pub struct TrainBatch<'a>
 	// accumulator − anchor) the student's compute_features produced at rollout
 	// (ReplayObs.pwm_dev twin). The kernels feed them to derive_features as-is.
 	pub pwm_dev: &'a [f32],
+	// ABI 32: per-step attitude-estimate "up" (*3) the student's estimator
+	// produced at rollout (ReplayObs.att_up twin). Zeros when the estimator is off.
+	pub att_up: &'a [f32],
 	pub selective: bool,
 	pub target_rpy: [f32; 3],
 }
@@ -1793,6 +1876,13 @@ fn replay_obs_batch_guard(batch: &TrainBatch, site: &str)
 		"{site}: replay pwm-feature buffer misaligned (pwm_dev {} floats for {} steps) — \
 		 an obs_pwm student would train on a frozen accumulator (obs_pwm replay bug, 13/09/2026)",
 		batch.pwm_dev.len(),
+		total_steps
+	);
+	assert!(
+		batch.att_up.len() == total_steps * 3,
+		"{site}: replay attitude-estimate buffer misaligned (att_up {} floats for {} steps) — \
+		 an obs_att_estimator student would replay a wrong or zero attitude",
+		batch.att_up.len(),
 		total_steps
 	);
 }
@@ -2724,6 +2814,7 @@ impl ControllerTrainer
 			obs_vz: controllers[0].vert_params().2 as u32,
 			obs_pos_err_xy: controllers[0].horiz_params().0 as u32,
 			obs_vel_xy: controllers[0].horiz_params().1 as u32,
+			att_est_on: controllers[0].att_estimator_gains().is_some() as u32,
 		};
 
 		let b_sc = self.buf(&state_conns);
@@ -2758,14 +2849,15 @@ impl ControllerTrainer
 		let b_vo = self.buf(batch.vert_obs); // stale-altitude-features fix (buffer 23)
 		let b_ho = self.buf(batch.horiz_obs); // (buffer 24)
 		let b_pa = self.buf(batch.pwm_dev); // obs_pwm replay fix (buffer 25)
+		let b_au = self.buf(batch.att_up); // ABI 32 attitude estimate (buffer 26)
 
 		let cmd = self.queue.new_command_buffer();
 		let enc = cmd.new_compute_command_encoder();
 		enc.set_compute_pipeline_state(&self.pipeline);
-		let bufs: [&Buffer; 26] = [
+		let bufs: [&Buffer; 27] = [
 			&b_sc, &b_oc, &b_sk, &b_sv, &b_so, &b_scn, &b_th, &b_epb, &b_epc, &b_stb, &b_stc, &b_gy,
 			&b_ac, &b_tg, &b_pp, &b_mk, &b_ky, &b_vl, &b_soff, &b_scap, &b_par, &b_wr, &b_iy, &b_vo,
-			&b_ho, &b_pa,
+			&b_ho, &b_pa, &b_au,
 		];
 		for (i, b) in bufs.iter().enumerate()
 		{
@@ -2930,6 +3022,7 @@ impl ControllerTrainer
 			obs_vz: controllers[0].vert_params().2 as u32,
 			obs_pos_err_xy: controllers[0].horiz_params().0 as u32,
 			obs_vel_xy: controllers[0].horiz_params().1 as u32,
+			att_est_on: controllers[0].att_estimator_gains().is_some() as u32,
 		};
 
 		let rec_out = vec![0u32; total_records * out_words];
@@ -2964,13 +3057,14 @@ impl ControllerTrainer
 		let b_vo = self.buf(batch.vert_obs); // stale-altitude-features fix (buffer 20)
 		let b_ho = self.buf(batch.horiz_obs); // (buffer 21)
 		let b_pa = self.buf(batch.pwm_dev); // obs_pwm replay fix (buffer 22)
+		let b_au = self.buf(batch.att_up); // ABI 32 attitude estimate (buffer 23)
 
 		let cmd = self.queue.new_command_buffer();
 		let enc = cmd.new_compute_command_encoder();
 		enc.set_compute_pipeline_state(&self.record_pipeline);
-		let bufs: [&Buffer; 23] = [
+		let bufs: [&Buffer; 24] = [
 			&b_sc, &b_sk, &b_sv, &b_so, &b_scn, &b_th, &b_epb, &b_epc, &b_stb, &b_stc, &b_gy, &b_ac,
-			&b_tg, &b_pp, &b_ro, &b_rs, &b_rp, &b_par, &b_iy, &b_rb, &b_vo, &b_ho, &b_pa,
+			&b_tg, &b_pp, &b_ro, &b_rs, &b_rp, &b_par, &b_iy, &b_rb, &b_vo, &b_ho, &b_pa, &b_au,
 		];
 		for (i, b) in bufs.iter().enumerate()
 		{
@@ -4479,6 +4573,7 @@ struct ParityFixture
 	vert_obs: Vec<f32>,
 	horiz_obs: Vec<f32>,
 	pwm_dev: Vec<f32>, // obs_pwm replay fix: zeros (fixtures run obs_pwm OFF)
+	att_up: Vec<f32>,  // ABI 32: zeros (fixtures run obs_att_estimator OFF)
 	cpu_obs: Vec<ReplayObs>, // nested twin, per episode
 }
 
@@ -4565,6 +4660,7 @@ fn build_parity_fixture_mode(
 		1,     // frame_stride = 1 (legacy every-step window)
 		1.0,   // delta_label_scale = 1 (legacy label)
 		false, // dagger_label_delta OFF (legacy absolute label)
+		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 	)
 	.map_err(|e| format!("{e}"))?;
 	for _ in 0..(n_state * 4)
@@ -4622,7 +4718,7 @@ fn build_parity_fixture_mode(
 	let total_steps = gyros.len() / 3;
 	let cpu_obs: Vec<ReplayObs> = cpu_g
 		.iter()
-		.map(|g| ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![] })
+		.map(|g| ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![], att_up: vec![] })
 		.collect();
 	Ok(ParityFixture {
 		c,
@@ -4643,6 +4739,7 @@ fn build_parity_fixture_mode(
 		vert_obs: vec![0.0; total_steps * 3],
 		horiz_obs: vec![0.0; total_steps * 4],
 		pwm_dev: vec![0.0; total_steps * 4],
+		att_up: vec![0.0; total_steps * 3],
 		cpu_obs,
 	})
 }
@@ -4668,6 +4765,7 @@ fn controller_train_parity_once(selective: bool) -> Result<(usize, usize, usize)
 		vert_obs: &f.vert_obs,
 		horiz_obs: &f.horiz_obs,
 		pwm_dev: &f.pwm_dev,
+		att_up: &f.att_up,
 		selective,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -4770,6 +4868,7 @@ fn controller_train_seeded_parity_once(
 		vert_obs: &f.vert_obs,
 		horiz_obs: &f.horiz_obs,
 		pwm_dev: &f.pwm_dev,
+		att_up: &f.att_up,
 		selective,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -6042,6 +6141,7 @@ fn controller_split_train_loop_parity_once(
 		vert_obs: &f_gpu.vert_obs,
 		horiz_obs: &f_gpu.horiz_obs,
 		pwm_dev: &f_gpu.pwm_dev,
+		att_up: &f_gpu.att_up,
 		selective,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -6170,6 +6270,7 @@ fn controller_record_parity_once() -> Result<(usize, usize, usize, usize), Strin
 		vert_obs: &f.vert_obs,
 		horiz_obs: &f.horiz_obs,
 		pwm_dev: &f.pwm_dev,
+		att_up: &f.att_up,
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -6779,6 +6880,7 @@ fn controller_plant_latch_parity_once(high_on: bool) -> Result<(usize, usize, us
 		1,     // frame_stride = 1 (legacy every-step window)
 		1.0,   // delta_label_scale = 1 (legacy label)
 		false, // dagger_label_delta OFF (legacy absolute label)
+		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -6970,6 +7072,7 @@ fn controller_plant_counter_parity_once() -> Result<(usize, usize, usize), Strin
 		1,     // frame_stride = 1 (legacy every-step window)
 		1.0,   // delta_label_scale = 1 (legacy label)
 		false, // dagger_label_delta OFF (legacy absolute label)
+		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7149,6 +7252,7 @@ fn controller_plant_bidir_parity_once() -> Result<(usize, usize, usize), String>
 		1,     // frame_stride = 1 (legacy every-step window)
 		1.0,   // delta_label_scale = 1 (legacy label)
 		false, // dagger_label_delta OFF (legacy absolute label)
+		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7294,6 +7398,7 @@ fn controller_record_and_scan_parity_once() -> Result<(usize, usize, usize, usiz
 		vert_obs: &f.vert_obs,
 		horiz_obs: &f.horiz_obs,
 		pwm_dev: &f.pwm_dev,
+		att_up: &f.att_up,
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -7397,6 +7502,7 @@ fn controller_record_search_parity_once() -> Result<(usize, usize, usize), Strin
 		vert_obs: &f.vert_obs,
 		horiz_obs: &f.horiz_obs,
 		pwm_dev: &f.pwm_dev,
+		att_up: &f.att_up,
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -7816,7 +7922,7 @@ fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool)
 		2, None, None, 0.05, false, 0.30,
 		false, false, false,
 		false, false,
-		false, 1, 1.0, false,
+		false, 1, 1.0, false, false, 2.0, 0.1,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7839,7 +7945,7 @@ fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool)
 		{
 			pwm_flat.extend_from_slice(v);
 		}
-		cpu_obs.push(ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev });
+		cpu_obs.push(ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev, att_up: vec![] });
 	}
 	let (tau, target_min) = (0.05f32, 2usize);
 	let trainer = ControllerTrainer::new()?;
@@ -7856,6 +7962,7 @@ fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool)
 		vert_obs: &vert_flat,
 		horiz_obs: &horiz_flat,
 		pwm_dev: &pwm_flat,
+		att_up: &vec![0.0f32; f.gyros.len()],
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -7893,7 +8000,159 @@ fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool)
 	let const_obs: Vec<ReplayObs> = f
 		.cpu_g
 		.iter()
-		.map(|g| ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![[0.0; 4]; g.len()] })
+		.map(|g| ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![[0.0; 4]; g.len()], att_up: vec![] })
+		.collect();
+	let mut c2 = c.clone();
+	let (rows_const, ..) = c2.split_record_pub(
+		f.cpu_g.clone(), f.cpu_a.clone(), f.cpu_t.clone(), f.cpu_p.clone(), Some(&const_obs),
+	);
+	let sensitive = rows_const != out_ins;
+	Ok((mism, cpu_conf.len(), gpu_conf.len(), sensitive))
+}
+
+/// ABI 32 obs_att_estimator replay parity (31/10/2026): the record kernel reads
+/// the per-step attitude-estimate "up" from the `att_up` buffer (buffer 23)
+/// exactly as the CPU split_record applies it from ReplayObs.att_up. Same shape
+/// as the obs_pwm test: zero mismatch AND stream-sensitive (a constant level
+/// stream must change the CPU rows, else the attitude bits never reached the
+/// comparison).
+pub fn run_controller_record_att_est_parity_test() -> Vec<(String, bool, String)>
+{
+	let mut results = Vec::new();
+	if Device::system_default().is_none()
+	{
+		results.push(("controller_record_att_est_parity".to_string(), true, "skipped: no Metal device".to_string()));
+		return results;
+	}
+	match controller_record_att_est_parity_once()
+	{
+		Ok((mism, n_cpu, n_gpu, sensitive)) => results.push((
+			"controller_record_att_est_parity".to_string(),
+			mism == 0 && sensitive,
+			format!("cpu_conflicts={n_cpu} gpu_conflicts={n_gpu} mismatch={mism} stream_sensitive={sensitive}"),
+		)),
+		Err(e) => results.push(("controller_record_att_est_parity".to_string(), false, e)),
+	}
+	results
+}
+
+fn controller_record_att_est_parity_once() -> Result<(usize, usize, usize, bool), String>
+{
+	let f = build_parity_fixture(0xA7E5_7001u64)?;
+	let (num_motors, levels, n_state, sbpn, obpn, bpf, window) =
+		(4usize, 8usize, 8usize, 12usize, 12usize, 4usize, 4usize);
+	let num_features = 11usize; // 9 base + roll_err + pitch_err (peraxis_p, yaw dropped)
+	let frame_bits = num_features * bpf;
+	let sensor_total = window * frame_bits;
+	let total_state_in = sensor_total + n_state;
+	let num_out = num_motors * levels;
+	let total_out_in = frame_bits + n_state;
+	let mut rng = 0x9E3779B97F4A7C15u64 ^ 0xA7E5_7001u64.wrapping_mul(0xD1B54A32D192ED03);
+	let mut thresholds: Vec<f32> = (0..frame_bits).map(|_| xf(&mut rng) - 0.5).collect();
+	for fi in 9..11
+	{
+		for b in 0..bpf
+		{
+			thresholds[fi * bpf + b] = -0.3 + 0.2 * b as f32; // ±0.3 rad ladder
+		}
+	}
+	let state_conns: Vec<i64> = (0..n_state * sbpn)
+		.map(|_| (xs(&mut rng) % total_state_in as u64) as i64)
+		.collect();
+	let output_conns: Vec<i64> = (0..num_out * obpn)
+		.map(|_| (xs(&mut rng) % total_out_in as u64) as i64)
+		.collect();
+	let c = WnnController::new(
+		num_motors, levels, bpf, window, n_state, sbpn, obpn, thresholds, state_conns, output_conns,
+		true, 0.05, 0.95, 1.0,
+		false, false, true, false, false, false, false, false, // obs_peraxis_p ON, yaw dropped
+		0.99, 1.0, 0.001, false, 1,
+		2, None, None, 0.05, false, 0.30,
+		false, false, false,
+		false, false,
+		false, 1, 1.0, false,
+		true, 2.0, 0.1, // obs_att_estimator ON
+	)
+	.map_err(|e| format!("{e}"))?;
+
+	// Per-step "up" stream: a slow roll/pitch sweep through the ladder.
+	let total_steps = f.gyros.len() / 3;
+	let vert_flat = vec![0.0f32; total_steps * 3];
+	let horiz_flat = vec![0.0f32; total_steps * 4];
+	let pwm_flat = vec![0.0f32; total_steps * 4];
+	let mut up_flat = Vec::with_capacity(total_steps * 3);
+	let mut cpu_obs: Vec<ReplayObs> = Vec::with_capacity(f.cpu_g.len());
+	for g in &f.cpu_g
+	{
+		let n = g.len().max(1);
+		let att_up: Vec<[f32; 3]> = (0..g.len())
+			.map(|t| {
+				let u = t as f32 / n as f32;
+				let (r, p) = (-0.35 + 0.7 * u, 0.25 * ((t % 7) as f32 - 3.0) / 3.0);
+				crate::att_estimator::up_from_quat([
+					(r * 0.5).cos() * (p * 0.5).cos(),
+					(r * 0.5).sin() * (p * 0.5).cos(),
+					(r * 0.5).cos() * (p * 0.5).sin(),
+					-(r * 0.5).sin() * (p * 0.5).sin(),
+				])
+			})
+			.collect();
+		for v in &att_up
+		{
+			up_flat.extend_from_slice(v);
+		}
+		cpu_obs.push(ReplayObs {
+			vert: vec![[0.0; 3]; g.len()],
+			horiz: vec![[0.0; 4]; g.len()],
+			pwm_dev: vec![],
+			att_up,
+		});
+	}
+	let (tau, target_min) = (0.05f32, 2usize);
+	let trainer = ControllerTrainer::new()?;
+	let batch = TrainBatch {
+		ep_base: &f.ep_base,
+		ep_count: &f.ep_count,
+		step_base: &f.step_base,
+		step_count: &f.step_count,
+		gyros: &f.gyros,
+		accels: &f.accels,
+		targets: &f.targets,
+		pid_pwms: &f.pids,
+		init_q: &f.init_q,
+		vert_obs: &vert_flat,
+		horiz_obs: &horiz_flat,
+		pwm_dev: &pwm_flat,
+		att_up: &up_flat,
+		selective: false,
+		target_rpy: [0.0, 0.0, 0.0],
+	};
+	let (gpu_conf, _gpu_k) =
+		trainer.record_and_scan(&c, &batch, tau, bpf, num_features, frame_bits, target_min)?;
+	let mut c1 = c.clone();
+	let (out_ins, pwms, _sf, _sl) = c1.split_record_pub(
+		f.cpu_g.clone(), f.cpu_a.clone(), f.cpu_t.clone(), f.cpu_p.clone(), Some(&cpu_obs),
+	);
+	let (cpu_conf, _cpu_k) = crate::controller_split::scan_conflicts_coarse(
+		&out_ins, &pwms, tau, bpf, num_features, frame_bits, target_min,
+	);
+	let cpu_set: std::collections::HashMap<Vec<usize>, u32> = cpu_conf
+		.iter()
+		.map(|c| (c.instances.clone(), c.spread.to_bits()))
+		.collect();
+	let gpu_set = conflict_set(&gpu_conf);
+	let mism = cpu_set.iter().filter(|(k, v)| gpu_set.get(*k) != Some(*v)).count()
+		+ gpu_set.iter().filter(|(k, v)| cpu_set.get(*k) != Some(*v)).count();
+	// Sensitivity: a CONSTANT level stream must change the CPU rows.
+	let const_obs: Vec<ReplayObs> = f
+		.cpu_g
+		.iter()
+		.map(|g| ReplayObs {
+			vert: vec![[0.0; 3]; g.len()],
+			horiz: vec![[0.0; 4]; g.len()],
+			pwm_dev: vec![],
+			att_up: vec![[0.0, 0.0, 1.0]; g.len()],
+		})
 		.collect();
 	let mut c2 = c.clone();
 	let (rows_const, ..) = c2.split_record_pub(
@@ -7944,7 +8203,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 		2, None, None, 0.05, false, 0.30,
 		true, true, true, // stage-1 vertical channel ON
 		false, false,     // stage-2 horizontal OFF
-		false, 1, 1.0, false,
+		false, 1, 1.0, false, false, 2.0, 0.1,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7965,7 +8224,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 		{
 			vert_flat.extend_from_slice(v);
 		}
-		cpu_obs.push(ReplayObs { vert, horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![] });
+		cpu_obs.push(ReplayObs { vert, horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![], att_up: vec![] });
 	}
 	let (tau, target_min) = (0.05f32, 2usize);
 	let trainer = ControllerTrainer::new()?;
@@ -7982,6 +8241,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 		vert_obs: &vert_flat,
 		horiz_obs: &horiz_flat,
 		pwm_dev: &pwm_flat,
+		att_up: &vec![0.0f32; f.gyros.len()],
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -8020,7 +8280,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 	let const_obs: Vec<ReplayObs> = f
 		.cpu_g
 		.iter()
-		.map(|g| ReplayObs { vert: vec![[0.7, 0.0, 0.0]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![] })
+		.map(|g| ReplayObs { vert: vec![[0.7, 0.0, 0.0]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![], att_up: vec![] })
 		.collect();
 	let mut c2 = c.clone();
 	let (rows_const, ..) = c2.split_record_pub(
@@ -8092,6 +8352,7 @@ mod tests
 		run_controller_record_vertical_obs_parity_test
 	);
 	parity_sweep_test!(parity_record_obs_pwm, run_controller_record_obs_pwm_parity_test);
+	parity_sweep_test!(parity_record_att_est, run_controller_record_att_est_parity_test);
 	parity_sweep_test!(parity_state_commit, run_controller_state_commit_parity_test);
 	parity_sweep_test!(
 		parity_nudge_distance,
@@ -8544,7 +8805,10 @@ mod tests
 		// + 3 (scope C stage 2, 14/08/2026) = 131: obs_pos_err_xy(1) +
 		// obs_vel_xy(1) + lambda_pos(1). Same lockstep rule; the per-step
 		// horizontal obs lives in FwdParams like the vertical one.
-		assert_eq!(mem::size_of::<RolloutParams>(), 133 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
+		// + 10 (ABI 32, 31/10/2026) = 143: imu_specific_force(1) + rotor_drag(1) +
+		// att_ref_on(1) + att_ref_bxy/omega/zeta/max_tilt(4) + att_est_on(1) +
+		// est_kp(1) + est_ki(1). Same lockstep rule.
+		assert_eq!(mem::size_of::<RolloutParams>(), 143 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============
@@ -9781,7 +10045,7 @@ mod tests
 	/// this pins the PLUMBING at the two values the axis flies:
 	/// T = 0.15 (nominal, τ = 37.5 ms) and T = 0.0375 (a 4x faster actuator, the
 	/// value a τ/T confusion would pass), against the SAME kernel argument.
-	fn cpu_scorer_row(c: &mut WnnController, q0: &[f32], w0: &[f32], eps: usize, steps: usize, lag: f32) -> [f64; 15]
+	fn cpu_scorer_row(c: &mut WnnController, q0: &[f32], w0: &[f32], eps: usize, steps: usize, lag: f32) -> [f64; 17]
 	{
 		let (num_motors, levels, ..) = c.gpu_dims();
 		crate::cpu_score::rollout_one(
@@ -9898,6 +10162,8 @@ mod tests
 			lambda_pos: 0.0,
 			init_x: vec![],
 			init_y: vec![],
+			plant: crate::plant_opts::PlantOpts::OFF,
+			att_ref: crate::att_err_ref::AttErrRef::LEVEL,
 		};
 		s1.validate(num_eps).expect("fixture config must validate");
 
@@ -9978,6 +10244,8 @@ mod tests
 			lambda_pos: 0.0,
 			init_x: vec![],
 			init_y: vec![],
+			plant: crate::plant_opts::PlantOpts::OFF,
+			att_ref: crate::att_err_ref::AttErrRef::LEVEL,
 		};
 		let gpu_noalt = ev
 			.score(
@@ -10066,6 +10334,8 @@ mod tests
 			lambda_pos: 2.0,
 			init_x: (0..num_eps).map(|e| 0.4 - 0.2 * e as f32).collect(),
 			init_y: (0..num_eps).map(|e| -0.5 + 0.25 * e as f32).collect(),
+			plant: crate::plant_opts::PlantOpts::OFF,
+			att_ref: crate::att_err_ref::AttErrRef::LEVEL,
 		};
 		s2.validate(num_eps).expect("stage-2 fixture must validate");
 
@@ -10179,6 +10449,8 @@ mod tests
 			lambda_pos: 0.0,
 			init_x: s2.init_x.clone(),
 			init_y: s2.init_y.clone(),
+			plant: crate::plant_opts::PlantOpts::OFF,
+			att_ref: crate::att_err_ref::AttErrRef::LEVEL,
 		};
 		let gpu_nopos = ev
 			.score(
@@ -10491,6 +10763,7 @@ mod tests
 			vert_obs: &f.vert_obs,
 			horiz_obs: &f.horiz_obs,
 			pwm_dev: &f.pwm_dev,
+			att_up: &f.att_up,
 			selective: false,
 			target_rpy: [0.0, 0.0, 0.0],
 		};

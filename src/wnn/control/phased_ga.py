@@ -407,6 +407,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                obs_collective_cmd: bool = False, obs_alt_err: bool = False,
                obs_vz: bool = False,
                obs_pos_err_xy: bool = False, obs_vel_xy: bool = False,
+               obs_att_estimator: bool = False,
                integral_leak: float = 0.99, integral_scale: float = 1.0,
                dt: float = 0.001,
                decouple_outputs: bool = False, bits_per_feature: int = 8,
@@ -456,6 +457,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		dhat_b=dhat_b, dhat_l_gain=dhat_l_gain, dhat_ff=dhat_ff, dhat_ff_clamp=dhat_ff_clamp,
 		obs_collective_cmd=obs_collective_cmd, obs_alt_err=obs_alt_err, obs_vz=obs_vz,
 		obs_pos_err_xy=obs_pos_err_xy, obs_vel_xy=obs_vel_xy,
+		obs_att_estimator=obs_att_estimator,
 		integral_leak=integral_leak, integral_scale=integral_scale,
 		dt=dt,
 		decouple_outputs=decouple_outputs,
@@ -1396,6 +1398,7 @@ def _pid_baseline(ec: EpisodeConfig, episodes: int, seed: int, folds: int = 5) -
 			residual_clamp=float(ar.clamp) if ar else 0.15,
 			# AXIS F: the allocator baseline flies the run's lagged plant too.
 			**ec.motor_lag_kwargs(),
+			**ec.imu_kwargs(),  # ABI 32 (translation-only; empty on this quad path)
 		)[0]
 		return [{"stable_rate": row[2], "mean_attitude_error_deg": math.degrees(row[1]),
 		         "mean_reward": row[0], "label": "alloc-LQR",
@@ -1433,6 +1436,8 @@ def _baseline_row_str(row: dict, is_rival: bool) -> str:
 	        + (f"  steady={sty:.2f}°" if sty is not None else "")
 	        + (f"  alt={alt_m:.3f}m" if _ok(alt_m) else "")
 	        + (f"  pos={pos_m:.3f}m" if _ok(pos_m) else "")
+	        + (f"  dx={row['mean_dx_m']:.3f}m" if _ok(row.get("mean_dx_m")) else "")
+	        + (f"  dy={row['mean_dy_m']:.3f}m" if _ok(row.get("mean_dy_m")) else "")
 	        + (f"  effort={eff:.3f}" if eff is not None else ""))
 
 
@@ -1463,6 +1468,10 @@ _HELDOUT_ROW = (
 	("mono_violations_total",  "mono_viol", "",  0),
 	("mean_altitude_error_m",  "alt",       "m", 3),
 	("mean_position_error_m",  "pos",       "m", 3),
+	# ABI 32 (Luiz 31/10): the horizontal components of pos (alt above is |dz|).
+	# None unless the run translates ⇒ omitted, so attitude-only lines are unchanged.
+	("mean_dx_m",              "dx",        "m", 3),
+	("mean_dy_m",              "dy",        "m", 3),
 	("mean_effort",            "effort",    "",  3),
 )
 
@@ -1917,7 +1926,8 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 			# and the alt weight was discarded with a warning — the ONE site
 			# noisy enough to notice, which is how the whole gap surfaced.
 			mean_altitude_error_m=avg("mean_altitude_error_m"),
-			mean_position_error_m=avg("mean_position_error_m"))
+			mean_position_error_m=avg("mean_position_error_m"),
+			mean_dx_m=avg("mean_dx_m"), mean_dy_m=avg("mean_dy_m"))
 
 	# CANDIDATES = the top-K genomes of EVERY stage, ranked together in one population.
 	# `final_population` survives the orchestrator's release trimmed to K
@@ -2684,6 +2694,43 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "eval, both batch scorers, the classical baselines, the MEMORY-phase "
 	                     "address recorder and the thermometer calibration. Default 0.0 = OFF "
 	                     "= bit-identical to every run flown before ABI 30.")
+	# --- ABI 32 (31/10/2026, Luiz option A): the REAL-LIFE plant. Luiz: "we have
+	# the rotor drag in real life; make it off only if we actually do not want
+	# it" — so with --translation the specific-force IMU, rotor drag and the
+	# estimator-fed attitude features are the DEFAULTS. ABI-31 reproductions:
+	# pass --imu-inclinometer --no-rotor-drag (the estimator then defaults off).
+	ap.add_argument("--imu-specific-force", action="store_true", default=None,
+	                help="ABI 32: the accelerometer reads SPECIFIC FORCE (thrust + drag over "
+	                     "mass, body frame) — what a free-flying IMU reads. DEFAULT with "
+	                     "--translation; requires it. Mutually exclusive with --imu-inclinometer.")
+	ap.add_argument("--imu-inclinometer", action="store_true", default=False,
+	                help="ABI 32: LEGACY accelerometer = ideal inclinometer −g_body (every ABI "
+	                     "<= 31 run). Use with --no-rotor-drag to reproduce an ABI-31 run.")
+	ap.add_argument("--rotor-drag", type=float, default=None, metavar="K_D",
+	                help="ABI 32: linear rotor-drag coefficient k_d (1/s): body-frame horizontal "
+	                     "force −k_d·m·v_body_xy, translation only. Default with --translation: "
+	                     f"{DEFAULT_ROTOR_DRAG} 1/s (see DEFAULT_ROTOR_DRAG for the source and "
+	                     "its caveat). 0 = off. Requires --translation when > 0.")
+	ap.add_argument("--no-rotor-drag", action="store_true", default=False,
+	                help="ABI 32: turn rotor drag OFF (k_d = 0, the ABI <= 31 plant).")
+	ap.add_argument("--obs-att-estimator", action=argparse.BooleanOptionalAction, default=None,
+	                help="ABI 32: the WNN's attitude features (tilt / per-axis roll-pitch) read a "
+	                     "Mahony estimate (kp 2.0, ki 0.1 — the rivals' estimator, warm-started "
+	                     "from the episode's initial attitude like them) instead of the raw "
+	                     "accelerometer. DEFAULT ON whenever the specific-force IMU is on (the "
+	                     "accelerometer then carries no tilt); --no-obs-att-estimator with "
+	                     "specific force is REFUSED unless --force-blind-attitude.")
+	ap.add_argument("--force-blind-attitude", action="store_true", default=False,
+	                help="ABI 32: allow a specific-force run whose attitude features read the "
+	                     "raw accelerometer (or that has none). Refused by default — it flies a "
+	                     "controller that cannot see its own tilt.")
+	ap.add_argument("--att-err-ref", choices=("level", "tilt"), default="level",
+	                help="CTRL-17 G5 (ABI 32): what every scorer's per-step attitude error "
+	                     "(err/stable/steady, the DAgger gate + checkpoint, the rivals) is "
+	                     "measured against. level (default) = identity, the ABI <= 31 metric; "
+	                     "tilt = the position loop's tilt reference (the teacher's own loop) — "
+	                     "with displaced starts, tilting toward the target is CORRECT. Requires "
+	                     "--translation --xy-offset > 0.")
 	ap.add_argument("--alt-offset", type=float, default=0.3,
 	                help="Stage 1: initial altitude offset bound (m); z0 ~ U(-x, x).")
 	ap.add_argument("--init-vz", type=float, default=0.2,
@@ -3385,6 +3432,64 @@ def fitness_pools_label(args) -> str:
 	return "rotation(1 pool/gen)"
 
 
+# ABI 32 default linear rotor-drag coefficient k_d (1/s) for the ~39 g cf21_brushless.
+# SOURCE + CAVEAT: the model is the linear rotor-drag term of Faessler, Franchi &
+# Scaramuzza, "Differential Flatness of Quadrotor Dynamics Subject to Rotor Drag
+# for Accurate Tracking of High-Speed Trajectories" (RA-L 2018) and Svacha, Mohta &
+# Kumar, "Improving Quadrotor Trajectory Tracking by Compensating for Aerodynamic
+# Effects" (ICUAS 2017): a = −R·D·Rᵀ·v with D = diag(d_x, d_y, ~0), identified PER
+# VEHICLE. Those papers identify it on their own (larger) platforms; NO identification
+# exists for cf21_brushless in this repository, and the per-vehicle values for small
+# quads sit at a few tenths of 1/s. 0.3 is therefore a DISCLOSED PLACEHOLDER inside
+# that range, not a measured number — it is a sweep axis (--rotor-drag K, 0 = off)
+# until an identification for this airframe is sourced (docs/papers / paper-scout).
+DEFAULT_ROTOR_DRAG = 0.3
+
+
+def resolve_abi32_plant(args) -> None:
+	"""Resolve the ABI-32 real-life plant flags IN PLACE (idempotent): concrete
+	args.imu_specific_force (bool), args.rotor_drag (float), args.obs_att_estimator
+	(bool). Real-life defaults under --translation; legacy without. Refuses the
+	combinations that would be silently inert or fly a tilt-blind controller."""
+	tr = bool(getattr(args, "translation", False))
+	isf, incl = getattr(args, "imu_specific_force", None), bool(getattr(args, "imu_inclinometer", False))
+	if isf and incl:
+		raise SystemExit("--imu-specific-force and --imu-inclinometer are mutually exclusive.")
+	isf = (tr and not incl) if isf is None else bool(isf)
+	k_d = getattr(args, "rotor_drag", None)
+	if getattr(args, "no_rotor_drag", False):
+		if k_d not in (None, 0.0):
+			raise SystemExit("--no-rotor-drag contradicts --rotor-drag > 0.")
+		k_d = 0.0
+	k_d = (DEFAULT_ROTOR_DRAG if tr else 0.0) if k_d is None else float(k_d)
+	if not math.isfinite(k_d) or k_d < 0.0:
+		raise SystemExit(f"--rotor-drag must be finite and >= 0 (1/s), got {k_d}")
+	if (isf or k_d > 0.0) and not tr:
+		raise SystemExit("--imu-specific-force / --rotor-drag require --translation: both act "
+		                 "on the translational dynamics and would be silently inert without it.")
+	att_feats = any(getattr(args, n, False) for n in
+	                ("obs_tilt_p", "obs_tilt_i", "obs_peraxis_p", "obs_peraxis_i"))
+	est = getattr(args, "obs_att_estimator", None)
+	est = (isf and att_feats) if est is None else bool(est)
+	if est and not att_feats:
+		raise SystemExit("--obs-att-estimator needs an attitude feature (--obs-tilt-p/i or "
+		                 "--obs-peraxis-p/i): no feature would read the estimate.")
+	if isf and not est and not getattr(args, "force_blind_attitude", False):
+		raise SystemExit("the specific-force IMU carries no tilt, so a controller without "
+		                 "--obs-att-estimator cannot see its own attitude. Refusing to fly it; "
+		                 "pass --force-blind-attitude to override, or --imu-inclinometer "
+		                 "--no-rotor-drag for the ABI-31 plant.")
+	args.imu_specific_force, args.rotor_drag, args.obs_att_estimator = isf, k_d, est
+
+
+def _plant_header(args, ec) -> str:
+	"""One greppable line per run stating the plant mode (ABI 32)."""
+	return (f"[PLANT] imu={'specific-force' if ec.imu_specific_force else 'inclinometer'} "
+	        f"rotor_drag={ec.rotor_drag:g} "
+	        f"att_features={'estimator' if args.obs_att_estimator else 'accel'} "
+	        f"att_err_ref={ec.att_err_ref} translation={ec.translation}")
+
+
 def episode_config_from_args(args) -> EpisodeConfig:
 	"""The run's EpisodeConfig from its parsed flags — the ONE place the plant,
 	disturbance preset, airframe and stage-1/2 draws are assembled (moved out of
@@ -3394,6 +3499,7 @@ def episode_config_from_args(args) -> EpisodeConfig:
 	main() always printed."""
 	from wnn.control.training import DisturbanceConfig
 	from wnn.control.airframe import Airframe as _Airframe
+	resolve_abi32_plant(args)  # ABI 32 (idempotent): real-life defaults under translation
 	dist = DisturbanceConfig.preset(args.disturbance, seed=911)
 	if getattr(args, "motor_fault", None):
 		if dist is None:
@@ -3435,6 +3541,10 @@ def episode_config_from_args(args) -> EpisodeConfig:
 		calib_airframe=bool(getattr(args, "calib_airframe", False)),
 		# AXIS F: actuator lag, 0.0 = OFF (bit-identical).
 		motor_lag_s=float(getattr(args, "motor_lag_s", 0.0)),
+		# ABI 32: the real-life plant + the G5 reference (resolve_abi32_plant).
+		imu_specific_force=bool(args.imu_specific_force),
+		rotor_drag=float(args.rotor_drag),
+		att_err_ref=str(getattr(args, "att_err_ref", "level")),
 	)
 
 
@@ -3568,6 +3678,10 @@ def main():
 		                 "there is no horizontal error to reward without them.")
 	# CTRL-17 G4: one greppable line with the λ the DAgger gate + checkpoint rank on.
 	print(_gate_lambda_header(args, ec), flush=True)
+	# ABI 32: one greppable line stating the plant mode; validates the G5 reference
+	# (att_ref_kwargs refuses 'tilt' without the horizontal channel).
+	ec.imu_kwargs(), ec.att_ref_kwargs()
+	print(_plant_header(args, ec), flush=True)
 	# ARM D sanity gate: the Rust constructor refuses sn>0 + full window, but
 	# failing at arg-parse beats failing 30 min into the grid.
 	if getattr(args, "output_full_window", False):

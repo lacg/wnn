@@ -15,6 +15,9 @@
 // a controller observes that it is sinking, not its own mass). It is never a
 // feature — see docs/scope_c_full_controller_spec.md.
 
+use crate::att_err_ref::AttErrRef;
+use crate::plant_opts::PlantOpts;
+
 pub struct Stage1Cfg
 {
 	/// The altitude every episode is asked to hold (m). Episodes start at
@@ -40,6 +43,38 @@ pub struct Stage1Cfg
 	/// a new experiment, added when something needs it).
 	pub init_x: Vec<f32>,
 	pub init_y: Vec<f32>,
+	/// ABI 32: the real-life plant options (specific-force IMU, rotor drag).
+	/// PlantOpts::OFF ⇒ the ABI ≤ 31 plant, bit-identically.
+	pub plant: PlantOpts,
+	/// ABI 32 (CTRL-17 G5): what the per-step attitude error is measured
+	/// against. LEVEL ⇒ the legacy identity reference, bit-identically.
+	pub att_ref: AttErrRef,
+}
+
+/// ABI 32: the scorer kwargs (imu_specific_force, rotor_drag, att_err_tilt_ref +
+/// the position-loop shape) → the two Stage1Cfg extras, validated. Shared by
+/// every PyO3 entry point that builds a Stage1Cfg so the spelling and the
+/// checks cannot drift between hosts.
+#[allow(clippy::too_many_arguments)]
+pub fn stage1_extras(
+	imu_specific_force: bool,
+	rotor_drag: f32,
+	att_err_tilt_ref: bool,
+	gravity: f32,
+	pos_omega: f32,
+	pos_zeta: f32,
+	pos_max_tilt_rad: f32,
+) -> Result<(PlantOpts, AttErrRef), String>
+{
+	let plant = PlantOpts::new(imu_specific_force, rotor_drag)?;
+	let att_ref = AttErrRef::from_flag(
+		att_err_tilt_ref,
+		gravity as f64,
+		pos_omega as f64,
+		pos_zeta as f64,
+		pos_max_tilt_rad as f64,
+	)?;
+	Ok((plant, att_ref))
 }
 
 impl Stage1Cfg
@@ -96,7 +131,7 @@ impl Stage1Cfg
 		{
 			return Err("Stage1Cfg: target_altitude and lambda_alt must be finite".into());
 		}
-		Ok(())
+		self.att_ref.require_horizontal(self.has_horizontal(), "Stage1Cfg")
 	}
 
 	/// SCOPE C STAGE 1: this episode's commanded collective in ABSOLUTE PWM —
@@ -149,6 +184,8 @@ mod tests
 			lambda_pos: 0.0,
 			init_x: vec![],
 			init_y: vec![],
+			plant: PlantOpts::OFF,
+			att_ref: AttErrRef::LEVEL,
 		}
 	}
 
@@ -195,6 +232,8 @@ mod tests
 			lambda_pos: 0.0,
 			init_x: vec![],
 			init_y: vec![],
+			plant: PlantOpts::OFF,
+			att_ref: AttErrRef::LEVEL,
 		};
 		// Stage-1 (horizontal off): stride 6 with zero-padded x0/y0.
 		assert_eq!(

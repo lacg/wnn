@@ -147,6 +147,7 @@ impl CalibEpisode<'_>
 		apply_cfg_disturbance(sim, cfg, rng);
 		teacher.reset();
 		controller.reset(yaw_from_quat_rs(init_q));
+		controller.seed_att_estimator(init_q); // ABI 32 (no-op when off)
 		anchor_controller(controller, cfg, collective);
 		collective
 	}

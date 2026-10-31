@@ -180,6 +180,8 @@ class ControllerGridSearch(GenericGridSearch):
 			obs_collective_cmd=getattr(args, "obs_collective_cmd", False),
 			obs_pos_err_xy=getattr(args, "obs_pos_err_xy", False),
 			obs_vel_xy=getattr(args, "obs_vel_xy", False),
+			# ABI 32: resolved by phased_ga (real-life default ON with specific force).
+			obs_att_estimator=getattr(args, "obs_att_estimator", False),
 			obs_alt_err=getattr(args, "obs_alt_err", False),
 			obs_vz=getattr(args, "obs_vz", False),
 			integral_leak=args.integral_leak, integral_scale=args.integral_scale,

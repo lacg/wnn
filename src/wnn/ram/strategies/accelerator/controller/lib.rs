@@ -33,6 +33,11 @@ mod pid_firmware; // firmware-sourced cascaded attitude PID (twin of wnn/control
 mod position_loop; // scope C stage 2: outermost position loop handing a TILT REF to a teacher
 mod position_score; // scope C stage 2: score the full-state cascade in METRES
 mod record_ops; // reference-rollout recorders (address universe, input entropy)
+#[cfg(test)]
+mod abi32_tests; // ABI 32 behaviour + CPU/Metal parity (plant, G5, dx/dy, estimator)
+mod att_estimator; // ABI 32: the WNN's Mahony attitude estimate (obs_att_estimator)
+mod att_err_ref; // CTRL-17 G5 (ABI 32): attitude error vs the position loop tilt reference
+mod plant_opts; // ABI 32: specific-force IMU + rotor drag as ONE value every sim host applies
 mod stage1; // scope C stage 1 vertical-channel config (scorer parameter object) // Phase-0 N-rotor allocation substrate (not wired; docs/OVERACTUATED_RESIDUAL_DESIGN.md)
 
 // GPU-batched closed-loop controller eval (macOS/Metal only).
@@ -196,7 +201,23 @@ mod metal_controller;
 ///      ranks on the gate's weighted reward;
 ///   G4 RewardGatedConfigPacked.lambda_alt (new) and lambda_pos are READ by the
 ///      DAgger gate and the checkpoint (episode_regime::step_reward).
-pub const ABI_VERSION: u32 = 31;
+/// ABI 32 (31/10/2026): the real-life plant + stage-2 scoring (Luiz option A).
+///   - `imu_specific_force` / `rotor_drag` (PlantOpts) on every host that builds a
+///     sim: RewardGatedConfigPacked (→ AirframeRs: trainer, eval, calibration,
+///     recorder), score_controllers_cpu/metal (Stage1Cfg.plant + the Metal twin),
+///     score_classical_baseline, score_position_teacher. Translation-only.
+///   - G5 `att_err_tilt_ref` (+ pos_omega/zeta/max_tilt on the scorers): per-step
+///     attitude error vs the position loop's tilt reference (att_err_ref.rs) on
+///     both scorers, the rivals, the position scorer and the DAgger gate/checkpoint.
+///   - WnnController(obs_att_estimator=, est_kp=, est_ki=) + seed_att_estimator /
+///     att_up_obs: the attitude features read a Mahony estimate; ReplayObs.att_up
+///     (TrajectoryRs.att_up; Metal train/record buffers 26/23) replays it;
+///     dagger_train_batch_inplace(obs_att_estimator=).
+///   - scorer rows grow 15 → 17: [.., pos_err_m, alt_err_m, dx_m, dy_m]; the Metal
+///     per-episode rows gain dx_m, dy_m at the end.
+/// Every new option defaults OFF and the OFF path is bit-identical to ABI 31
+/// (ctrl17_pins + every parity anchor unchanged); only the row width moved.
+pub const ABI_VERSION: u32 = 32;
 
 /// Mode-aware untrained-cell decode anchor (ABI 12): QUAD→0.75, TERNARY→0.5
 /// (the fixed PLN empty_value), BINARY→0.5 (antagonist-pair effective neutral).
@@ -803,6 +824,11 @@ fn recorder_stage1_cfg(
 				lambda_pos: 0.0,
 				init_x: init_x.unwrap_or_default(),
 				init_y: init_y.unwrap_or_default(),
+				// ABI 32: the recorder's plant has ONE owner — reference_cfg
+				// (AirframeRs::from_cfg arms imu_specific_force / rotor_drag on the
+				// sim). The draws object carries neither; nothing is scored here.
+				plant: plant_opts::PlantOpts::OFF,
+				att_ref: att_err_ref::AttErrRef::LEVEL,
 			};
 			cfg
 				.validate(n_eps)

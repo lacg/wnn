@@ -153,6 +153,7 @@ def record_address_universe(
 		obs_alt_err=getattr(spec, 'obs_alt_err', False),
 		obs_vz=getattr(spec, 'obs_vz', False),
 		obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
+		obs_att_estimator=getattr(spec, 'obs_att_estimator', False),
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 		dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt, integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
@@ -320,6 +321,7 @@ def build_controller_from_memory(genome: MemoryGenome, thresholds: list[float]) 
 		obs_alt_err=getattr(spec, 'obs_alt_err', False),
 		obs_vz=getattr(spec, 'obs_vz', False),
 		obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
+		obs_att_estimator=getattr(spec, 'obs_att_estimator', False),
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 		dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt, integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
@@ -372,7 +374,7 @@ class ControllerMemoryEvaluator:
 		# metrics (rise/settle/ITAE) — carried but not yet part of fitness.
 		for row in agg:
 			(mean_reward, mean_err_rad, stable_rate, jerk, mono, steady_rad,
-			 _rise, _settle_abs, _settle_rel, _itae, _iae, _ise) = row
+			 _rise, _settle_abs, _settle_rel, _itae, _iae, _ise) = row[:12]
 			out.append(Metrics(reward=float(mean_reward), stable_rate=float(stable_rate),
 			                   fitness=float(mean_reward),
 			                   mean_attitude_error_deg=math.degrees(float(mean_err_rad)),

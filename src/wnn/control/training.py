@@ -501,6 +501,55 @@ class EpisodeConfig:
 			raise ValueError(f"EpisodeConfig.motor_lag_s must be >= 0 s, got {lag}")
 		return {"motor_lag_s": lag} if lag > 0.0 else {}
 
+	# --- ABI 32 (31/10/2026, Luiz option A): the real-life plant. Both act on the
+	# TRANSLATIONAL dynamics only, so both require `translation` (Rust refuses them
+	# otherwise). Dataclass defaults stay OFF (= the ABI ≤ 31 plant, bit-identical
+	# for every direct caller); the real-life DEFAULTS live in the phased_ga CLI
+	# (translation ⇒ specific force + rotor drag ON unless --imu-inclinometer /
+	# --no-rotor-drag).
+	# The accelerometer reads SPECIFIC FORCE (thrust + drag over mass, body frame)
+	# — what a free-flying IMU reads — instead of the ideal inclinometer −g_body.
+	imu_specific_force: bool = False
+	# Linear rotor-drag coefficient k_d (1/s) on the horizontal body velocity.
+	rotor_drag: float = 0.0
+	# CTRL-17 G5: what the per-step attitude error (err/stable/steady, the DAgger
+	# gate and checkpoint, the rivals) is measured against. "level" = identity
+	# (ABI ≤ 31); "tilt" = the position loop's tilt reference (the teacher's own
+	# loop), meaningful only with displaced horizontal starts.
+	att_err_ref: str = "level"
+
+	def imu_kwargs(self) -> dict:
+		"""The ABI-32 plant kwargs (`imu_specific_force=`, `rotor_drag=`) — the SAME
+		spelling on the trainer config, both batch scorers, the classical rivals
+		and the position scorer. Empty when both are off, so every existing call
+		stays byte-identical (the motor_lag_kwargs idiom)."""
+		k_d = float(self.rotor_drag)
+		if not math.isfinite(k_d) or k_d < 0.0:
+			raise ValueError(f"EpisodeConfig.rotor_drag must be finite and >= 0 (1/s), got {k_d}")
+		out = {}
+		if self.imu_specific_force:
+			out["imu_specific_force"] = True
+		if k_d > 0.0:
+			out["rotor_drag"] = k_d
+		if out and not self.translation:
+			raise ValueError("EpisodeConfig.imu_specific_force / rotor_drag require translation=True "
+			                 "(both act on the translational dynamics)")
+		return out
+
+	def att_ref_kwargs(self) -> dict:
+		"""CTRL-17 G5: `att_err_tilt_ref=True` when the tilt reference is armed, else
+		empty (byte-identical calls). The position-loop shape rides the Rust
+		defaults (omega 1.0, zeta 1.0, max tilt 30°) — the teacher's own loop."""
+		ref = str(self.att_err_ref)
+		if ref not in ("level", "tilt"):
+			raise ValueError(f"EpisodeConfig.att_err_ref must be 'level' or 'tilt', got {ref!r}")
+		if ref == "level":
+			return {}
+		if not self.translation or float(self.max_initial_xy_offset_m) <= 0.0:
+			raise ValueError("att_err_ref='tilt' needs translation with max_initial_xy_offset_m > 0 "
+			                 "(the stage-2 horizontal channel)")
+		return {"att_err_tilt_ref": True}
+
 	def airframe_kwargs(self) -> dict:
 		"""The af_* kwargs the Rust scorers/trainer take. Empty when no airframe
 		is set, which leaves the Rust-side defaults (the synthetic plant) in
@@ -587,6 +636,20 @@ class EpisodeConfig:
 			inertia=[float(x) for x in af.inertia],
 			gravity=float(af.gravity),
 		)
+
+
+def refuse_python_abi32_plant(config, site: str) -> None:
+	"""ABI 32: the Python per-step loops fly an ATTITUDE-ONLY sim (no translation
+	integrator), so the specific-force IMU / rotor drag cannot be honoured there.
+	Refuse loudly instead of flying the legacy plant under a real-life recipe —
+	the translating paths are all Rust (trainer, scorers, calibration, recorder)."""
+	if config is None:
+		return
+	if getattr(config, "imu_specific_force", False) or float(getattr(config, "rotor_drag", 0.0) or 0.0) > 0.0:
+		raise NotImplementedError(
+			f"{site}: the Python per-step loop has no translation integrator, so the ABI-32 "
+			"plant (imu_specific_force / rotor_drag) cannot be flown here — use the Rust path "
+			"(WNN_RUST_DAGGER / the batch scorers), or --imu-inclinometer --no-rotor-drag.")
 
 
 @dataclass
@@ -784,6 +847,7 @@ def run_episode(
 		getattr(config, "active_axes", (True, True, True)),
 	)
 	sim.reset(q=list(init_q), omega=list(init_omega))
+	refuse_python_abi32_plant(config, "run_episode")
 	# AXIS F: arm (or clear) the motor lag from the config, every episode, so a
 	# sim shared across configs cannot carry a stale lag — the disturbance idiom
 	# below. set_motor_lag(0.0) on a fresh reset is a no-op (filter already clear).

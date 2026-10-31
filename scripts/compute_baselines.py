@@ -68,7 +68,11 @@ def _score_seed(seed, a):
 		          .Airframe.preset(a.airframe)),
 		# AXIS F: the rivals fly the SAME lagged plant the WNN run flies
 		# (phased_ga --motor-lag-s). 0.0 = OFF, bit-identical to every earlier table.
-		motor_lag_s=float(a.motor_lag_s))
+		motor_lag_s=float(a.motor_lag_s),
+		# ABI 32: the SAME real-life plant + G5 reference as the WNN run (resolved
+		# in main() with phased_ga's defaults: translation ⇒ specific force + drag).
+		imu_specific_force=bool(a.imu_specific_force), rotor_drag=float(a.rotor_drag),
+		att_err_ref=str(a.att_err_ref))
 	# Motor-fault experiment: SAME injection as phased_ga (shared helper), or the
 	# baseline flies a healthy aircraft against a WNN trained on a broken one.
 	if a.motor_fault:
@@ -80,6 +84,21 @@ def _score_seed(seed, a):
 	for feed in _FEEDS:
 		out.update(score_all(ec, draw, feed))
 	return out
+
+
+def _resolve_plant(a) -> None:
+	"""ABI 32: phased_ga's real-life defaults (translation ⇒ specific force + drag)."""
+	from wnn.control.phased_ga import DEFAULT_ROTOR_DRAG
+	if a.imu_specific_force and a.imu_inclinometer:
+		raise SystemExit("--imu-specific-force and --imu-inclinometer are mutually exclusive.")
+	if a.imu_specific_force is None:
+		a.imu_specific_force = bool(a.translation) and not a.imu_inclinometer
+	if a.no_rotor_drag:
+		a.rotor_drag = 0.0
+	elif a.rotor_drag is None:
+		a.rotor_drag = DEFAULT_ROTOR_DRAG if a.translation else 0.0
+	if (a.imu_specific_force or a.rotor_drag > 0.0) and not a.translation:
+		raise SystemExit("--imu-specific-force / --rotor-drag require --translation.")
 
 
 def main():
@@ -99,6 +118,19 @@ def main():
 	                help="Max initial horizontal displacement (m). Mirrors phased_ga's "
 	                     "--xy-offset; x/y never leave the origin at 0.0, so pos3d is then "
 	                     "the vertical error alone. Requires --translation.")
+	from wnn.control.phased_ga import DEFAULT_ROTOR_DRAG
+	ap.add_argument("--imu-specific-force", action="store_true", default=None,
+	                help="ABI 32: specific-force accelerometer (DEFAULT with --translation).")
+	ap.add_argument("--imu-inclinometer", action="store_true", default=False,
+	                help="ABI 32: legacy inclinometer accelerometer (ABI <= 31 tables).")
+	ap.add_argument("--rotor-drag", type=float, default=None,
+	                help=f"ABI 32: linear rotor drag k_d (1/s); default {DEFAULT_ROTOR_DRAG} "
+	                     "with --translation, 0 without. Pass the WNN run's value.")
+	ap.add_argument("--no-rotor-drag", action="store_true", default=False,
+	                help="ABI 32: rotor drag off (ABI <= 31 tables: with --imu-inclinometer).")
+	ap.add_argument("--att-err-ref", choices=("level", "tilt"), default="level",
+	                help="CTRL-17 G5: attitude error vs level (default) or the position "
+	                     "loop's tilt reference — pass the WNN run's value.")
 	ap.add_argument("--motor-lag-s", type=float, default=0.0,
 	                help="AXIS F: Molchanov eq. 7 motor lag as the 2%% SETTLING TIME T (s), "
 	                     "tau = T/4 — pass the SAME value as the WNN run's --motor-lag-s "
@@ -139,6 +171,7 @@ def main():
 		raise SystemExit("--xy-offset requires --translation: x/y cannot move without it.")
 	if a.motor_lag_s < 0.0:
 		raise SystemExit(f"--motor-lag-s must be >= 0 s (got {a.motor_lag_s}).")
+	_resolve_plant(a)
 
 	seeds = a.report_seeds if a.report_seeds else [a.report_seed]
 
@@ -201,6 +234,9 @@ def main():
 	        "airframe": a.airframe,
 	        # AXIS F. A file without this key predates ABI 30 and is lag-free (0.0).
 	        "motor_lag_s": float(a.motor_lag_s),
+	        # ABI 32. A file without these keys predates ABI 32: inclinometer, no drag, level.
+	        "imu_specific_force": bool(a.imu_specific_force), "rotor_drag": float(a.rotor_drag),
+	        "att_err_ref": a.att_err_ref,
 	        "report_seed": seeds[0], "report_seeds": seeds,
 	        "report_episodes": a.report_episodes,
 	        "steps": a.steps, "stable_deg": a.stable_deg,

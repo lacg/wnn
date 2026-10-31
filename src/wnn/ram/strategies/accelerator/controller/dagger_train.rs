@@ -353,6 +353,20 @@ pub struct RewardGatedConfigPacked
 	// the stage-1 trainer-gap pattern, caught 19/09 before axis F flew.
 	#[pyo3(get, set)]
 	pub motor_lag_s: f32,
+	// --- ABI 32 (31/10/2026): the real-life plant (Luiz option A). Read by
+	// AirframeRs::from_cfg exactly like motor_lag_s, so the training rollout,
+	// per-round eval, calibration sampler and recorder fly the plant the scorers
+	// do. Translation-only (refused otherwise in validate_abi32). OFF ⇒ ABI 31.
+	#[pyo3(get, set)]
+	pub imu_specific_force: bool,
+	#[pyo3(get, set)]
+	pub rotor_drag: f32,
+	// CTRL-17 G5: the DAgger gate's step_reward and the checkpoint eval measure
+	// attitude error against the position loop's tilt reference (pos_omega /
+	// pos_zeta / pos_max_tilt_rad — the teacher's own loop) instead of level.
+	// Requires the horizontal channel (xy_offset > 0). false ⇒ legacy level.
+	#[pyo3(get, set)]
+	pub att_err_tilt_ref: bool,
 }
 
 #[pymethods]
@@ -395,6 +409,7 @@ impl RewardGatedConfigPacked
 		pos_omega = 1.0, pos_zeta = 1.0, pos_max_tilt_rad = 0.5236,
 		teacher_hover_mode = 0,
 		motor_lag_s = 0.0,
+		imu_specific_force = false, rotor_drag = 0.0, att_err_tilt_ref = false,
 ))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -478,9 +493,12 @@ impl RewardGatedConfigPacked
 		pos_max_tilt_rad: f32,
 		teacher_hover_mode: u8,
 		motor_lag_s: f32,
-	) -> Self
+		imu_specific_force: bool,
+		rotor_drag: f32,
+		att_err_tilt_ref: bool,
+	) -> PyResult<Self>
 	{
-		Self {
+		let cfg = Self {
 			num_rounds,
 			episodes_per_round,
 			steps_per_episode,
@@ -561,12 +579,39 @@ impl RewardGatedConfigPacked
 			pos_max_tilt_rad,
 			teacher_hover_mode,
 			motor_lag_s,
-		}
+			imu_specific_force,
+			rotor_drag,
+			att_err_tilt_ref,
+		};
+		cfg.validate_abi32().map_err(pyo3::exceptions::PyValueError::new_err)?;
+		Ok(cfg)
 	}
 }
 
 impl RewardGatedConfigPacked
 {
+	/// ABI 32: the real-life plant options, validated (finite k_d >= 0).
+	pub(crate) fn plant_opts(&self) -> crate::plant_opts::PlantOpts
+	{
+		crate::plant_opts::PlantOpts::new(self.imu_specific_force, self.rotor_drag)
+			.expect("RewardGatedConfigPacked: plant options validated at construction")
+	}
+
+	/// ABI 32 guards: the plant options and the G5 reference need the channels
+	/// they act on — refused loudly rather than silently inert.
+	pub(crate) fn validate_abi32(&self) -> Result<(), String>
+	{
+		crate::plant_opts::PlantOpts::new(self.imu_specific_force, self.rotor_drag)?
+			.require_translation(self.translation, "RewardGatedConfigPacked")?;
+		if self.att_err_tilt_ref && (!self.translation || self.xy_offset <= 0.0)
+		{
+			return Err("RewardGatedConfigPacked: att_err_tilt_ref needs translation with \
+			            xy_offset > 0 (the stage-2 horizontal channel)"
+				.into());
+		}
+		Ok(())
+	}
+
 	/// Hybrid-teacher selector — the roadmap's `teacher_for(round, episode)`.
 	/// Precedence: blend (per-episode round-robin) > schedule (per-round, last
 	/// entry extends) > scalar `teacher`. Deterministic: never touches the loop
@@ -641,6 +686,10 @@ pub struct TrajectoryRs
 	// bank anchor) compute_features produced at each step, snapshot BEFORE
 	// controller_step_4. ReplayObs.pwm_dev.
 	pub pwm_dev: Vec<[f32; 4]>,
+	// ABI 32 (obs_att_estimator): the body "up" the student's attitude estimator
+	// produced at each step (WnnController::att_up_obs, read right AFTER
+	// controller_step_4). ReplayObs.att_up. Zeros when the estimator is off.
+	pub att_up: Vec<[f32; 3]>,
 	pub cumulative_reward: f64,
 	pub mean_attitude_error_rad: f64,
 	pub diverged: bool,
@@ -780,6 +829,7 @@ use crate::controller::{
 #[cfg(test)]
 use crate::episode_regime::alt_pd_for;
 use crate::episode_regime::{
+	scored_att_err,
 	anchor_controller, draw_translation_episode, feed_live_obs, step_reward, OuterLoops,
 };
 use crate::optimal::Teacher;
@@ -955,6 +1005,10 @@ pub struct AirframeRs
 	/// EpisodeConfig.motor_lag_s, not an airframe constant. The teachers stay
 	/// lag-blind on purpose (the axis reads how much each controller degrades).
 	pub motor_lag_s: f32,
+	/// ABI 32: specific-force IMU + rotor drag — read by `sim()` like the lag,
+	/// so every sim built through it (trainer, eval, calibration, recorder,
+	/// baselines, position scorer) flies the same plant. OFF ⇒ ABI 31.
+	pub plant: crate::plant_opts::PlantOpts,
 }
 
 impl AirframeRs
@@ -969,6 +1023,7 @@ impl AirframeRs
 		pid_fw: None,
 		teacher_hover: None,
 		motor_lag_s: 0.0,
+		plant: crate::plant_opts::PlantOpts::OFF,
 	};
 	pub(crate) fn from_cfg(cfg: &RewardGatedConfigPacked) -> Self
 	{
@@ -991,6 +1046,7 @@ impl AirframeRs
 			),
 			teacher_hover: teacher_hover_for(cfg),
 			motor_lag_s: cfg.motor_lag_s,
+			plant: cfg.plant_opts(),
 		}
 	}
 	/// The plant, with the motor lag armed when the axis is on. `set_motor_lag`
@@ -1010,6 +1066,7 @@ impl AirframeRs
 		{
 			sim.set_motor_lag(self.motor_lag_s);
 		}
+		self.plant.apply(&mut sim);
 		sim
 	}
 	pub(crate) fn teacher(&self, id: u8) -> Teacher
@@ -1535,6 +1592,9 @@ pub fn rollout_and_label_rs(
 	// the GENERATING rollout's obs_yaw_err matches what training/scoring will see.
 	let init_yaw = yaw_from_quat_rs(init_q);
 	controller.reset(init_yaw);
+	// ABI 32: warm-start the student's attitude estimator from this episode's
+	// initial attitude, like the rivals' (no-op when obs_att_estimator is off).
+	controller.seed_att_estimator(init_q);
 	// STAGE 1: anchor the delta accumulator at the commanded collective AFTER
 	// reset (reset seeds from whatever anchor is current), so the episode opens
 	// at hover rather than free-falling from the legacy 0.5 neutral.
@@ -1567,6 +1627,7 @@ pub fn rollout_and_label_rs(
 	traj.att_errs = Vec::with_capacity(cfg.steps_per_episode);
 	traj.label_base = Vec::with_capacity(cfg.steps_per_episode);
 	traj.pwm_dev = Vec::with_capacity(cfg.steps_per_episode);
+	traj.att_up = Vec::with_capacity(cfg.steps_per_episode);
 
 	// Offset-free MPC observer state: the action ACTUALLY applied to the sim last
 	// step (the student's, under DAGGER). Hover default so step-0's observe() —
@@ -1590,7 +1651,7 @@ pub fn rollout_and_label_rs(
 		// L4: ground-truth |attitude err| at the state the controller is about to
 		// act on. A SEPARATE read from the post-step attitude_err below (which
 		// feeds the reward and stays untouched for parity).
-		let att_err_now = sim.attitude_error(None);
+		let att_err_now = scored_att_err(sim, cfg);
 
 		// Offset-free MPC observer: feed it (current gyro, action applied last
 		// step) so it estimates the input disturbance from the model residual
@@ -1675,6 +1736,8 @@ pub fn rollout_and_label_rs(
 		traj.vert_obs.push(controller.vert_obs());
 		traj.horiz_obs.push(controller.horiz_obs());
 		traj.pwm_dev.push(pwm_dev_now);
+		// ABI 32: what this step's compute_features read from the estimator.
+		traj.att_up.push(controller.att_up_obs());
 		// H3: when outputs are decoupled, the output banks are CONTROLS, so the
 		// training TARGETS (teacher + student MOTOR pwms) must be un-mixed into
 		// control space [T,τr,τp,τy]. Single point ⇒ all downstream paths (split /
@@ -1700,7 +1763,9 @@ pub fn rollout_and_label_rs(
 		controller.observe_applied(applied);
 		sim.step(applied);
 		last_applied = applied; // offset-free MPC observer: what the sim saw
-		let attitude_err = sim.attitude_error(None);
+		// G5 (ABI 32): vs the position loop's tilt reference when armed; else the
+		// legacy level call (episode_regime::scored_att_err).
+		let attitude_err = scored_att_err(sim, cfg);
 		// G4: the gate's score carries the run's altitude/position terms (both λ 0
 		// ⇒ the attitude-only reward, bit-identical).
 		cumulative += step_reward(sim, cfg, attitude_err);
@@ -1828,7 +1893,7 @@ pub fn train_on_trajectory_rs(
 		// Stale-altitude-features fix: the per-step observation streams, sliced
 		// exactly like gyros (None only for a pre-field trajectory; the replay's
 		// guard refuses that whenever the features are on).
-		let ro = ReplayObs::slice(&traj.vert_obs, &traj.horiz_obs, &traj.pwm_dev, start, end);
+		let ro = ReplayObs::slice(&traj.vert_obs, &traj.horiz_obs, &traj.pwm_dev, &traj.att_up, start, end);
 		let (sw, ow) = controller.bptt_train_window(
 			g,
 			a,
@@ -1936,6 +2001,7 @@ pub fn eval_closed_loop_rs(
 		apply_cfg_disturbance(sim, cfg, rng);
 		// Yaw-anchor: seed the eval rollout's heading from this episode's true initial yaw.
 		controller.reset(yaw_from_quat_rs(init_q));
+		controller.seed_att_estimator(init_q); // ABI 32 (no-op when off)
 		// STAGE 1: the episode opens at its commanded collective (after reset).
 		anchor_controller(controller, cfg, ep_collective_pwm);
 
@@ -1995,7 +2061,7 @@ pub fn eval_closed_loop_rs(
 				let d = controller.dhat_estimate();
 				let _ = writeln!(w, "{ep_idx},{_t},{},{},{}", d[0], d[1], d[2]);
 			}
-			let err = sim.attitude_error(None);
+			let err = scored_att_err(sim, cfg); // G5: same reference as the gate
 			// G3: the checkpoint ranks on the SAME weighted terms as the gate
 			// (attitude + λ_alt·alt² + λ_pos·radial², step_reward).
 			ep_reward += step_reward(sim, cfg, err);
@@ -2044,6 +2110,7 @@ struct GatedFlat
 	vert_obs: Vec<f32>,
 	horiz_obs: Vec<f32>,
 	pwm_dev: Vec<f32>, // obs_pwm replay fix: pwm feature values [total_steps*4]
+	att_up: Vec<f32>,  // ABI 32: attitude-estimate "up" per step [total_steps*3]
 }
 
 /// Flatten the gated (episode-major) trajectories into `GatedFlat`. All episodes
@@ -2067,6 +2134,7 @@ fn flatten_gated(gated: &[&TrajectoryRs]) -> GatedFlat
 		vert_obs: Vec::with_capacity(total_steps * 3),
 		horiz_obs: Vec::with_capacity(total_steps * 4),
 		pwm_dev: Vec::with_capacity(total_steps * 4),
+		att_up: Vec::with_capacity(total_steps * 3),
 	};
 	let mut sbase = 0u32;
 	for t in gated
@@ -2086,6 +2154,7 @@ fn flatten_gated(gated: &[&TrajectoryRs]) -> GatedFlat
 			f.vert_obs.extend_from_slice(&t.vert_obs.get(s).copied().unwrap_or([0.0; 3]));
 			f.horiz_obs.extend_from_slice(&t.horiz_obs.get(s).copied().unwrap_or([0.0; 4]));
 			f.pwm_dev.extend_from_slice(&t.pwm_dev.get(s).copied().unwrap_or([0.0; 4]));
+			f.att_up.extend_from_slice(&t.att_up.get(s).copied().unwrap_or([0.0; 3]));
 		}
 		let (sn, cs) = (0.5 * t.init_yaw).sin_cos();
 		f.init_q.extend_from_slice(&[cs, 0.0, 0.0, sn]);
@@ -2143,6 +2212,7 @@ fn try_gpu_split(
 		vert_obs: &fb.vert_obs,
 		horiz_obs: &fb.horiz_obs,
 		pwm_dev: &fb.pwm_dev,
+		att_up: &fb.att_up,
 		selective: cfg.split_selective_output,
 		target_rpy: target,
 	};
@@ -2369,6 +2439,7 @@ pub fn dagger_train_inplace_rs(
 							vert: t.vert_obs.clone(),
 							horiz: t.horiz_obs.clone(),
 							pwm_dev: t.pwm_dev.clone(),
+							att_up: t.att_up.clone(),
 						})
 						.collect();
 					let (_r, _cf, planted, _pr, saturation, wishes) = controller.split_train_loop(
@@ -2538,6 +2609,11 @@ pub fn dagger_train_inplace(
 	// above — pyo3 default + fn param + the set_target_levels_core call after
 	// construction. 0 = legacy.
 	target_levels = 0,
+	// ABI 32: the WNN's attitude features from the Mahony estimate — the SAME
+	// three-place invariant (pyo3 default + fn param + ::new forward). The
+	// estimator does not change the feature LAYOUT, only its values, which is
+	// exactly why a missing forward here would be silent.
+	obs_att_estimator = false,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn dagger_train_batch_inplace(
@@ -2615,6 +2691,7 @@ pub fn dagger_train_batch_inplace(
 	delta_label_scale: f32,
 	dagger_label_delta: bool,
 	target_levels: usize,
+	obs_att_estimator: bool,
 ) -> PyResult<Vec<(Py<WnnController>, TrainStats)>>
 {
 	use rayon::prelude::*;
@@ -2719,6 +2796,9 @@ pub fn dagger_train_batch_inplace(
 					frame_stride,
 					delta_label_scale,
 					dagger_label_delta,
+					obs_att_estimator,
+					2.0, // est_kp — the rivals' Mahony default (TeacherFeed / est_kp)
+					0.1, // est_ki
 				)?;
 				controller
 					.set_target_levels_core(target_levels)
@@ -2854,6 +2934,8 @@ pub fn eval_ensemble_closed_loop(
 		pid_fw: None,
 		teacher_hover: None,
 		motor_lag_s,
+		// Attitude-only ensemble scorer: no translation ⇒ the ABI-32 plant is moot.
+		plant: crate::plant_opts::PlantOpts::OFF,
 	};
 	let mut sim = af.sim();
 	let target = [0.0_f32, 0.0, 0.0];
@@ -2885,6 +2967,7 @@ pub fn eval_ensemble_closed_loop(
 		{
 			let mut cb = c.borrow_mut(py);
 			cb.reset(iy);
+			cb.seed_att_estimator(init_q); // ABI 32 (no-op when off)
 			cb.set_decode_seed(coin_seed);
 		}
 		sim.reset(Some(init_q), Some(init_omega));
@@ -3040,7 +3123,10 @@ pub fn eval_ensemble_closed_loop(
 	pos_omega_n = 1.0, pos_zeta = 1.0, pos_max_tilt_rad = 0.5236,
 	// AXIS F (19/09/2026): the rival flies the SAME lagged plant the WNN is
 	// trained and scored on. 0.0 = OFF, bit-identical.
-	motor_lag_s = 0.0))]
+	motor_lag_s = 0.0,
+	// ABI 32: the real-life plant + the G5 attitude-error reference — the rival
+	// flies and is scored exactly like the WNN (translation-only; OFF ⇒ ABI 31).
+	imu_specific_force = false, rotor_drag = 0.0, att_err_tilt_ref = false))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_classical_baseline(
 	teacher_id: u8,
@@ -3091,8 +3177,30 @@ pub fn score_classical_baseline(
 	pos_zeta: f64,
 	pos_max_tilt_rad: f64,
 	motor_lag_s: f32,
-) -> PyResult<(f64, f64, f64, f64, f64, f64)>
+	imu_specific_force: bool,
+	rotor_drag: f32,
+	att_err_tilt_ref: bool,
+) -> PyResult<(f64, f64, f64, f64, f64, f64, f64, f64)>
 {
+	let (plant, att_ref) = crate::stage1::stage1_extras(
+		imu_specific_force,
+		rotor_drag,
+		att_err_tilt_ref,
+		af_gravity,
+		pos_omega_n as f32,
+		pos_zeta as f32,
+		pos_max_tilt_rad as f32,
+	)
+	.map_err(pyo3::exceptions::PyValueError::new_err)?;
+	plant
+		.require_translation(translation, "score_classical_baseline")
+		.map_err(pyo3::exceptions::PyValueError::new_err)?;
+	if att_ref.is_tilt() && !translation
+	{
+		return Err(pyo3::exceptions::PyValueError::new_err(
+			"score_classical_baseline: att_err_tilt_ref needs translation=True",
+		));
+	}
 	if init_qs.len() % 4 != 0
 		|| init_omegas.len() % 3 != 0
 		|| init_qs.len() / 4 != init_omegas.len() / 3
@@ -3124,6 +3232,8 @@ pub fn score_classical_baseline(
 			lambda_pos: 0.0,
 			init_x: s2_init_x,
 			init_y: s2_init_y,
+			plant,
+			att_ref,
 		};
 		cfg
 			.validate(num_episodes)
@@ -3206,6 +3316,7 @@ pub fn score_classical_baseline(
 			nominal_hover_pwm(af_pid_hover_n, mean_mass(cfg), af_gravity, af_k_thrust)
 		}),
 		motor_lag_s,
+		plant,
 	};
 	let mut sim = af.sim();
 	let mut teacher = af.teacher(teacher_id);
@@ -3238,6 +3349,7 @@ pub fn score_classical_baseline(
 															 // the vehicle still drifts horizontally as it tilts to correct attitude, so
 															 // this is a genuinely different number even with no horizontal draws.
 	let mut sum_pos3d = 0.0_f64;
+	let (mut sum_dx, mut sum_dy) = (0.0_f64, 0.0_f64); // ABI 32: mean |dx|, |dy| (m)
 
 	for ep in 0..num_episodes
 	{
@@ -3311,6 +3423,7 @@ pub fn score_classical_baseline(
 		let mut ep_sum_err = 0.0_f64;
 		let mut ep_sum_poserr = 0.0_f64;
 		let mut ep_sum_pos3d = 0.0_f64;
+		let (mut ep_sum_dx, mut ep_sum_dy) = (0.0_f64, 0.0_f64); // ABI 32
 		let mut tail_sum = 0.0_f64;
 		let mut tail_cnt = 0_usize;
 		let mut steps_done = 0_usize;
@@ -3389,7 +3502,8 @@ pub fn score_classical_baseline(
 			has_prev_pwm = true;
 			sim.step(pwm);
 			last_applied = pwm;
-			let err = sim.attitude_error(None) as f64;
+			// G5: the same reference the WNN scorer uses (LEVEL = legacy call).
+			let err = att_ref.error(&sim) as f64;
 			ep_sum_err += err;
 			if let Some(cfg) = s1.as_ref()
 			{
@@ -3397,6 +3511,8 @@ pub fn score_classical_baseline(
 				ep_sum_poserr += dz.abs();
 				let (x, y) = sim.position_xy();
 				ep_sum_pos3d += ((x as f64).powi(2) + (y as f64).powi(2) + dz * dz).sqrt();
+				ep_sum_dx += (x as f64).abs();
+				ep_sum_dy += (y as f64).abs();
 			}
 			if t >= tail_start
 			{
@@ -3407,6 +3523,8 @@ pub fn score_classical_baseline(
 		}
 		sum_poserr += ep_sum_poserr / steps_done.max(1) as f64;
 		sum_pos3d += ep_sum_pos3d / steps_done.max(1) as f64;
+		sum_dx += ep_sum_dx / steps_done.max(1) as f64;
+		sum_dy += ep_sum_dy / steps_done.max(1) as f64;
 		if ep_jerk_cnt > 0
 		{
 			sum_jerk += ep_sum_jerk / ep_jerk_cnt as f64;
@@ -3467,6 +3585,11 @@ pub fn score_classical_baseline(
 		{
 			f64::NAN
 		},
+		// 7th/8th (ABI 32, Luiz 31/10): mean |dx|, mean |dy| in METRES — the
+		// horizontal components of the 3-D error (alt = |dz| is the 4th). NaN
+		// with translation off, like the 3-D column.
+		if s1.is_some() { sum_dx / n } else { f64::NAN },
+		if s1.is_some() { sum_dy / n } else { f64::NAN },
 	))
 }
 
@@ -3558,6 +3681,8 @@ pub fn trace_classical_baseline(
 		),
 		teacher_hover: None, // attitude-only baseline: legacy 0.5 teachers
 		motor_lag_s,
+		// Attitude-only trace diagnostic: no translation ⇒ the ABI-32 plant is moot.
+		plant: crate::plant_opts::PlantOpts::OFF,
 	};
 	let mut sim = af.sim();
 	let mut teacher = af.teacher(teacher_id);
@@ -3715,7 +3840,7 @@ mod rival_plant_tests
 	///   - translation ON   => Euclidean error >= its own vertical component;
 	///   - horizontal armed => strictly worse than undisplaced, which is only
 	///     true if the draws actually reached the sim.
-	fn score(s2: Option<(Vec<f32>, Vec<f32>)>, translation: bool) -> (f64, f64, f64, f64, f64, f64)
+	fn score(s2: Option<(Vec<f32>, Vec<f32>)>, translation: bool) -> (f64, f64, f64, f64, f64, f64, f64, f64)
 	{
 		let eps = 2usize;
 		let init_qs: Vec<f32> = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
@@ -3771,6 +3896,9 @@ mod rival_plant_tests
 			1.0,
 			0.5236,
 			0.0,
+			false,
+			0.0,
+			false,
 		)
 		.expect("scorer must accept a well-formed plant")
 	}
@@ -3778,7 +3906,7 @@ mod rival_plant_tests
 	#[test]
 	fn horizontal_draws_reach_the_rivals_plant()
 	{
-		let (_, _, _, alt_off, pos_off, _) = score(None, false);
+		let (_, _, _, alt_off, pos_off, _, ..) = score(None, false);
 		assert!(
 			pos_off.is_nan(),
 			"translation off must report NaN position error, not {pos_off} — a 0.0 \
@@ -3789,13 +3917,13 @@ mod rival_plant_tests
 			"altitude stays the benign 0.0 for attitude-only callers"
 		);
 
-		let (_, _, _, alt_flat, pos_flat, _) = score(None, true);
+		let (_, _, _, alt_flat, pos_flat, _, ..) = score(None, true);
 		assert!(
 			pos_flat >= alt_flat - 1e-9,
 			"Euclidean error {pos_flat} cannot be below its own vertical component {alt_flat}"
 		);
 
-		let (_, _, _, _, pos_disp, _) = score(Some((vec![1.0, -1.0], vec![-1.0, 1.0])), true);
+		let (_, _, _, _, pos_disp, _, ..) = score(Some((vec![1.0, -1.0], vec![-1.0, 1.0])), true);
 		assert!(
 			pos_disp > pos_flat + 0.1,
 			"a 1 m displaced start must cost the rival real position error: \
@@ -3971,6 +4099,7 @@ mod d0_hover_anchor_tests
 			pos_omega: 1.0, pos_zeta: 1.0, pos_max_tilt_rad: 0.5236,
 			teacher_hover_mode,
 			motor_lag_s: 0.0,
+			imu_specific_force: false, rotor_drag: 0.0, att_err_tilt_ref: false,
 		}
 	}
 
@@ -4497,6 +4626,7 @@ mod motor_lag_axis_f_tests
 			pos_omega: 1.0, pos_zeta: 1.0, pos_max_tilt_rad: 0.5236,
 			teacher_hover_mode: 0,
 			motor_lag_s,
+			imu_specific_force: false, rotor_drag: 0.0, att_err_tilt_ref: false,
 		}
 	}
 
@@ -4560,12 +4690,12 @@ mod motor_lag_axis_f_tests
 
 	/// Bit patterns of the 6-tuple — the position error is NaN off-translation
 	/// (by design: never a fake 0.0 hold), so `==` on the floats would fail.
-	fn bits6(t: (f64, f64, f64, f64, f64, f64)) -> [u64; 6]
+	fn bits6(t: (f64, f64, f64, f64, f64, f64, f64, f64)) -> [u64; 6]
 	{
 		[t.0.to_bits(), t.1.to_bits(), t.2.to_bits(), t.3.to_bits(), t.4.to_bits(), t.5.to_bits()]
 	}
 
-	fn baseline(teacher_id: u8, motor_lag_s: f32) -> (f64, f64, f64, f64, f64, f64)
+	fn baseline(teacher_id: u8, motor_lag_s: f32) -> (f64, f64, f64, f64, f64, f64, f64, f64)
 	{
 		// Tilted starts, so the rival has a transient the lag can shape.
 		let init_qs: Vec<f32> = vec![0.98, 0.15, 0.1, 0.0, 0.97, -0.12, 0.18, 0.05];
@@ -4579,7 +4709,7 @@ mod motor_lag_axis_f_tests
 			false, 2.0, 0.1,
 			false, 0.0, vec![], vec![], vec![], vec![],
 			2.0, 1.0, 0.25, vec![], vec![], 1.0, 1.0, 0.5236,
-			motor_lag_s,
+			motor_lag_s, false, 0.0, false,
 		)
 		.expect("baseline scores")
 	}

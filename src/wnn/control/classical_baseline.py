@@ -162,6 +162,13 @@ def _stage1_fields(ec, draw: HoldoutDraw) -> dict:
 	return fields
 
 
+def _abi32_fields(ec) -> dict:
+	"""ABI 32: the rival flies the WNN's real-life plant (specific-force IMU,
+	rotor drag) and is scored against the SAME attitude reference (G5). Empty
+	when all are off — the byte-identical ABI-31 call."""
+	return {**ec.imu_kwargs(), **ec.att_ref_kwargs()}
+
+
 def score_all(ec, draw: HoldoutDraw, feed: TeacherFeed = TeacherFeed()) -> dict:
 	"""{labelled_name: (stable%, err°, steady°)} for all 5 classical controllers.
 
@@ -174,7 +181,7 @@ def score_all(ec, draw: HoldoutDraw, feed: TeacherFeed = TeacherFeed()) -> dict:
 	# comparison is between two different aircraft. AXIS F: that includes the
 	# actuator lag (motor_lag_kwargs — empty when the axis is off).
 	fields = {**fields, **ec.airframe_kwargs(), **ec.motor_lag_kwargs(),
-	          **feed.fields(), **_stage1_fields(ec, draw)}
+	          **feed.fields(), **_stage1_fields(ec, draw), **_abi32_fields(ec)}
 	out = {}
 	for tid, name in _NAMES.items():
 		# Slice, don't destructure: the scorer gained a 6th value (jerk) on
@@ -196,7 +203,8 @@ def pid_metrics(ec, draw: HoldoutDraw, feed: TeacherFeed = TeacherFeed()) -> dic
 	from ._accel import score_classical_baseline
 	q0, w0, fields = _episode_fields(ec, draw)
 	s1 = _stage1_fields(ec, draw)
-	fields = {**fields, **ec.airframe_kwargs(), **ec.motor_lag_kwargs(), **feed.fields(), **s1}
+	fields = {**fields, **ec.airframe_kwargs(), **ec.motor_lag_kwargs(), **feed.fields(), **s1,
+	          **_abi32_fields(ec)}
 	# 6th value (21/08/2026): mean motor-command jerk, same definition as the
 	# WNN scorer's, so teacher and WNN jerk are directly comparable. Tolerate a
 	# 5-tuple wheel so this Python can land before the wheel does.
@@ -222,4 +230,8 @@ def pid_metrics(ec, draw: HoldoutDraw, feed: TeacherFeed = TeacherFeed()) -> dic
 	        # the Molchanov-comparable one — gets the position name it earns.
 	        "mean_altitude_error_m": (float(alt_m) if s1 else None),
 	        "mean_position_error_m": (float(pos3d_m) if s1 else None),
+	        # ABI 32 (Luiz 31/10): the horizontal components of the 3-D error
+	        # (7th/8th scorer values); None off translation or on an older wheel.
+	        "mean_dx_m": (float(_r[6]) if s1 and len(_r) > 7 else None),
+	        "mean_dy_m": (float(_r[7]) if s1 and len(_r) > 7 else None),
 	        "label": feed.label_for("PID")}

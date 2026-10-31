@@ -68,6 +68,18 @@ def _diag_label(m) -> str:
 	return "CE" if getattr(m, "ce", None) is not None else "-reward"
 
 
+def _pos_xy_str(m) -> str:
+	"""ABI 32 gen-line tail: `, pos=…m, dx=…m, dy=…m` for a translating controller
+	(mean 3-D position error and mean |x|, |y| error). Empty when the metrics carry
+	no horizontal components (attitude-only runs, IDS/LM) — lines stay unchanged."""
+	dx, dy = getattr(m, "mean_dx_m", None), getattr(m, "mean_dy_m", None)
+	if dx is None or dy is None:
+		return ""
+	pos = getattr(m, "mean_position_error_m", None)
+	pos_s = f"{pos:.3f}m" if pos is not None else "—"
+	return f", pos={pos_s}, dx={dx:.3f}m, dy={dy:.3f}m"
+
+
 class GenericGAStrategy(OptimizationTemplate[T]):
 	"""
 	Generic Genetic Algorithm strategy.
@@ -706,6 +718,10 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			_alt = _line_alt if best_err_deg is not None else None
 			alt_str = f", alt={_alt:.3f}m" if _alt is not None else (
 				", alt=—" if best_err_deg is not None else "")
+			# ABI 32 (Luiz 31/10): under translation also the 3-D position error and
+			# its horizontal components (alt above is |dz|). mean_dx_m is set ONLY
+			# when the run translates, so attitude-only lines stay unchanged.
+			alt_str += _pos_xy_str(_p0_m) if best_err_deg is not None else ""
 			# THIS GENERATION'S leader, printed BESIDE the incumbent rather than
 			# instead of it (Luiz, 19/08: "why choose? print both"). They answer
 			# different questions and neither is privileged — what actually gets
@@ -735,6 +751,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 						f", err={gm.mean_attitude_error_deg:.2f}°"
 						f", steady={f'{g_steady:.2f}°' if g_steady is not None else '—'}"
 						f", alt={f'{g_alt:.3f}m' if g_alt is not None else '—'}"
+						f"{_pos_xy_str(gm)}"
 					)
 				else:
 					gen_str = " | offspring: —"

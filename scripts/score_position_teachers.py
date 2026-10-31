@@ -53,6 +53,14 @@ def parse_args():
 	ap.add_argument("--pos-omega-n", type=float, default=1.0)
 	ap.add_argument("--pos-zeta", type=float, default=1.0)
 	ap.add_argument("--max-tilt-deg", type=float, default=30.0)
+	# ABI 32 real-life plant (this scorer always translates): specific-force IMU
+	# and rotor drag ON by default, like phased_ga --translation.
+	ap.add_argument("--imu-inclinometer", action="store_true",
+	                help="ABI 32: legacy inclinometer accelerometer (ABI <= 31 bar).")
+	ap.add_argument("--rotor-drag", type=float, default=None,
+	                help="ABI 32: linear rotor drag k_d (1/s); default phased_ga.DEFAULT_ROTOR_DRAG; 0 = off.")
+	ap.add_argument("--att-err-ref", choices=("level", "tilt"), default="level",
+	                help="CTRL-17 G5: attitude error vs level (default) or the position loop's tilt ref.")
 	return ap.parse_args()
 
 
@@ -104,8 +112,14 @@ def main():
 	a = parse_args()
 	af = Airframe.preset(a.airframe)
 	qs, oms, ps = draw_episodes(a)
+	from wnn.control.phased_ga import DEFAULT_ROTOR_DRAG
+	k_d = DEFAULT_ROTOR_DRAG if a.rotor_drag is None else float(a.rotor_drag)
 	kw = {**dist_kwargs(a), **airframe_kwargs(af),
-	      "use_estimator": bool(a.estimator)}
+	      "use_estimator": bool(a.estimator),
+	      "imu_specific_force": not a.imu_inclinometer, "rotor_drag": k_d,
+	      "att_err_tilt_ref": a.att_err_ref == "tilt"}
+	print(f"[PLANT] imu={'inclinometer' if a.imu_inclinometer else 'specific-force'} "
+	      f"rotor_drag={k_d:g} att_err_ref={a.att_err_ref}")
 
 	print(f"# full-state teacher (position cascade) — {a.airframe}, {a.disturbance}, "
 	      f"{a.episodes} eps × {a.steps} steps ({a.steps/1000:.0f} s), "

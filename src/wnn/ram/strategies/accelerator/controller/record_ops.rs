@@ -173,6 +173,7 @@ fn run_episode<F: FnMut(&WnnController)>(
 	// The cascade (translating) recorder seeds the heading from the episode's true
 	// yaw like the trainer and scorer; the legacy drivers keep the 0.0 seed.
 	c.reset(if driver.is_cascade() { yaw_from_quat_rs(q0) } else { 0.0 });
+	c.seed_att_estimator(q0); // ABI 32: warm-start like the rivals (no-op when off)
 	// STAGE 1: per-episode PLANT draw + vertical ICs, in cpu_score::score_one's
 	// EXACT order — set_translation AFTER reset (reset zeroes z/vz), then the
 	// anchor AFTER c.reset (which seeds the accumulators from the current
@@ -375,6 +376,8 @@ mod tests
 			lambda_pos: 0.0,
 			init_x: vec![],
 			init_y: vec![],
+			plant: crate::plant_opts::PlantOpts::OFF,
+			att_ref: crate::att_err_ref::AttErrRef::LEVEL,
 		};
 		cfg.validate(eps).expect("fixture must be well-formed");
 

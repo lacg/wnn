@@ -80,6 +80,13 @@ impl PositionLoop
 		})
 	}
 
+	/// (b_xy, omega_n, zeta, max_tilt) — the loop's shape, for the Metal twin of
+	/// tilt_ref (controller_rollout.metal, the G5 attitude-error reference).
+	pub fn shape(&self) -> (f64, f64, f64, f64)
+	{
+		(self.b_xy, self.omega_n, self.zeta, self.max_tilt)
+	}
+
 	/// Desired horizontal acceleration for one axis, from its error and velocity.
 	#[inline]
 	fn accel_des(&self, err: f64, vel: f64) -> f64
