@@ -44,6 +44,10 @@ def _regime(base_argv, xy, steps):
 	"""(args, ec) exactly as phased_ga would build them, with xy/steps overridden (argparse last-wins)."""
 	from wnn.control.phased_ga import build_arg_parser, episode_config_from_args
 	extra = ["--steps", str(steps), "--xy-offset", str(xy)]
+	if xy <= 0.0:
+		# ABI 32: the tilt reference needs the horizontal channel; the xy-0 control
+		# row is scored against level (with no horizontal start the reference IS level).
+		extra += ["--att-err-ref", "level"]
 	args = build_arg_parser().parse_args(base_argv + extra)
 	return args, episode_config_from_args(args)
 
