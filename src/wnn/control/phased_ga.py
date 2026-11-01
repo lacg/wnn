@@ -2930,12 +2930,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	# Neurons population into Memory. Motivated by the 07/06 finding that under
 	# --lamarckian the NEURONS stage already optimizes neurons+connections+memory
 	# jointly (grid covers bits), making BITS/CONNECTIONS ~28h of dead weight.
-	ap.add_argument("--eval-mem-budget", type=str, default=None,
+	ap.add_argument("--eval-mem-budget", type=str, default="auto",
 	                help="Memory budget for packing genomes into parallel train+score sub-batches: "
 	                     "'auto' (50%% of the memory available at each generation, 2-32 GB — shrinks "
-	                     "when the IDS worker grows) or a fixed size in GB. Default: the legacy fixed "
-	                     "6 GB. Results are identical for any budget; only speed and peak memory change. "
-	                     "WNN_CTRL_EVAL_BATCH (fixed width) still overrides it.")
+	                     "when the IDS worker grows) or a fixed size in GB (6 = the legacy budget). Results are identical for any budget; only speed and peak memory change. "
+	                     "WNN_CTRL_EVAL_BATCH (fixed width) still overrides it. Default auto (Luiz 01/11/2026).")
 	ap.add_argument("--skip-stages", type=str, default="",
 	                help="Comma-separated stages to SKIP: any of neurons,bits,connections,memory "
 	                     "(grid always runs; it skips only via --resume). Unknown names are refused. "
