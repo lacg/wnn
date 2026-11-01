@@ -2291,6 +2291,17 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 	# Arch stages to skip (--skip-stages bits,connections). A skipped stage leaves
 	# the carried population + prev_best untouched, so they flow to the next stage.
 	skip_stages = {s.strip().lower() for s in (getattr(args, "skip_stages", "") or "").split(",") if s.strip()}
+	if getattr(args, "eval_mem_budget", None):
+		_b = str(args.eval_mem_budget).strip().lower()
+		try:
+			_ok = _b == "auto" or float(_b) > 0
+		except ValueError:
+			_ok = False
+		if not _ok:
+			raise SystemExit(f"--eval-mem-budget must be 'auto' or a positive size in GB, got {args.eval_mem_budget!r}")
+		# Read by ControllerEvaluator._eval_budget_bytes at every packing (same
+		# env-override channel as WNN_CTRL_EVAL_BATCH).
+		os.environ["WNN_CTRL_EVAL_BUDGET"] = str(args.eval_mem_budget)
 	_unknown_skip = skip_stages - {"neurons", "bits", "connections", "memory"}
 	if _unknown_skip:
 		# A typo used to be dropped silently, exactly as `memory` was before 31/10/2026.
@@ -2919,6 +2930,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	# Neurons population into Memory. Motivated by the 07/06 finding that under
 	# --lamarckian the NEURONS stage already optimizes neurons+connections+memory
 	# jointly (grid covers bits), making BITS/CONNECTIONS ~28h of dead weight.
+	ap.add_argument("--eval-mem-budget", type=str, default=None,
+	                help="Memory budget for packing genomes into parallel train+score sub-batches: "
+	                     "'auto' (50%% of the memory available at each generation, 2-32 GB — shrinks "
+	                     "when the IDS worker grows) or a fixed size in GB. Default: the legacy fixed "
+	                     "6 GB. Results are identical for any budget; only speed and peak memory change. "
+	                     "WNN_CTRL_EVAL_BATCH (fixed width) still overrides it.")
 	ap.add_argument("--skip-stages", type=str, default="",
 	                help="Comma-separated stages to SKIP: any of neurons,bits,connections,memory "
 	                     "(grid always runs; it skips only via --resume). Unknown names are refused. "

@@ -2243,7 +2243,7 @@ class ControllerEvaluator:
 		fixed = self._eval_batch_override(N)
 		if fixed:
 			return [(s, min(s + fixed, N)) for s in range(0, N, fixed)]
-		cap = self.EVAL_BUDGET_BYTES // self.EVAL_BYTES_PER_CELL
+		cap = self._eval_budget_bytes() // self.EVAL_BYTES_PER_CELL
 		bounds, start, acc = [], 0, 0
 		for i, cells in enumerate(self._genome_cell_estimates(genomes)):
 			if i > start and acc + cells > cap:
@@ -2273,7 +2273,7 @@ class ControllerEvaluator:
 	def _eval_batch_ffd(self, genomes: list) -> list[list[int]]:
 		"""First-fit-decreasing into the same summed-cells budget. A genome bigger
 		than the whole budget still runs alone. Deterministic: ties keep index order."""
-		cap = self.EVAL_BUDGET_BYTES // self.EVAL_BYTES_PER_CELL
+		cap = self._eval_budget_bytes() // self.EVAL_BYTES_PER_CELL
 		est = self._genome_cell_estimates(genomes)
 		order = sorted(range(len(genomes)), key=lambda i: (-est[i], i))
 		bins: list[list[int]] = []
@@ -2288,6 +2288,36 @@ class ControllerEvaluator:
 				bins[slot].append(i)
 				loads[slot] += est[i]
 		return [sorted(b) for b in bins]
+
+	# Memory-aware budget (01/11/2026, Luiz: "make it configurable — if some IDS
+	# dataset uses more memory we decrease, or increase if there is room").
+	# WNN_CTRL_EVAL_BUDGET (set by phased_ga --eval-mem-budget): unset = the fixed
+	# EVAL_BUDGET_BYTES (legacy); "<GB>" = that fixed budget; "auto" = a FRACTION of
+	# the memory available RIGHT NOW, re-read at every packing (every generation),
+	# so the controller shrinks its batches when the IDS worker grows and widens
+	# them when the box is idle. Packing never changes results (global-index
+	# seeds), only peak memory and parallel width.
+	AUTO_BUDGET_FRACTION = 0.5
+	AUTO_BUDGET_MIN_BYTES = 2 * 1024 ** 3
+	AUTO_BUDGET_MAX_BYTES = 32 * 1024 ** 3
+
+	def _eval_budget_bytes(self) -> int:
+		import os
+		mode = (os.environ.get("WNN_CTRL_EVAL_BUDGET") or "").strip().lower()
+		if not mode:
+			return self.EVAL_BUDGET_BYTES
+		if mode != "auto":
+			gb = float(mode)
+			if not gb > 0:
+				raise ValueError(f"WNN_CTRL_EVAL_BUDGET must be 'auto' or a positive GB value, got {mode!r}")
+			return int(gb * 1024 ** 3)
+		import psutil
+		avail = psutil.virtual_memory().available
+		budget = int(min(self.AUTO_BUDGET_MAX_BYTES,
+		                 max(self.AUTO_BUDGET_MIN_BYTES, avail * self.AUTO_BUDGET_FRACTION)))
+		print(f"[ControllerEvaluator] eval memory budget auto: {budget / 1024 ** 3:.1f} GB "
+		      f"({self.AUTO_BUDGET_FRACTION:.0%} of {avail / 1024 ** 3:.1f} GB available)", flush=True)
+		return budget
 
 	@staticmethod
 	def _eval_batch_override(N: int) -> int:
