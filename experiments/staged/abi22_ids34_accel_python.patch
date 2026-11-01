@@ -1,0 +1,19 @@
+--- a/src/wnn/accel.py	2026-11-01 07:35:45
++++ b/src/wnn/accel.py	2026-11-01 07:35:45
+@@ -110,7 +110,15 @@
+ #   Same ABI: search_offspring / search_neighbors take max_neurons_total (None =
+ #   no total cap, bit-identical) + neuron_budget_counts / neuron_budget_fit_genome
+ #   (flow param max_neurons_total; wnn/ram/strategies/connectivity/neuron_budget.py).
+-EXPECTED_ABI = 21
++# 22 (01/11/2026, IDS-34): no surface change — a RESULTS change. The GPU marker
++#   trainer addresses a neuron's slot region directly (slot = key) when its whole
++#   key space fits (2^bits <= slot_capacity). The hashed claim there dropped writes
++#   once z-thread duplicate-key slots filled the region, so the same genome trained
++#   to a different memory on every call at b = 8 (and some b = 12, every writer).
++#   Exports are bit-identical wherever the hashed table never overflowed (b >= 16
++#   golden digests), so only low-bit results move. The validation cache pins
++#   worker_abi, so this bump re-validates.
++EXPECTED_ABI = 22
+ 
+ BUILD_HINT = (
+ 	"Rebuild the accelerator: cd src/wnn/ram/strategies/accelerator && "

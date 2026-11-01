@@ -291,6 +291,9 @@ mod multiplicity_batch;
 mod trained_layer;
 #[cfg(all(test, target_os = "macos"))]
 mod multiplicity_parity_tests;
+// IDS-34: same-genome GPU training is bit-identical at every bit width
+#[cfg(all(test, target_os = "macos"))]
+mod marker_repeatability_tests;
 // PLN trains through TERNARY's lattice on both IDS trainers (12/10/2026).
 #[cfg(all(test, target_os = "macos"))]
 mod pln_writer_tests;
@@ -400,7 +403,17 @@ use pyapi::*;
 /// bit-identical) and the module exports neuron_budget_counts /
 /// neuron_budget_fit_genome (ram_core neuron_budget.rs) for the Python grid,
 /// immigrants and seed genomes.
-pub const ABI_VERSION: u32 = 21;
+/// 22 (01/11/2026, IDS-34): no surface change — a RESULTS change. The GPU marker
+/// trainer addresses a neuron's slot region DIRECTLY (slot = key) when its whole
+/// key space fits (2^bits <= slot_capacity; shaders/marker_direct.metal, train +
+/// probe-eval). The hashed claim there let z-thread duplicate-key slots fill the
+/// 2 x 2^bits region and silently DROP writes, scheduling-dependent: the same
+/// genome trained to a different memory every call at b = 8 (and some b = 12, any
+/// writer). Exports are bit-identical wherever the hashed table never overflowed
+/// (marker_repeatability_tests golden: b >= 16, every writer, both rates), so a
+/// low-bit result from an ABI-21 wheel is not comparable — the stale wheel must
+/// fail loudly, and the validation cache (pins worker_abi) re-validates.
+pub const ABI_VERSION: u32 = 22;
 
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()>

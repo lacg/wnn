@@ -505,7 +505,9 @@ pub fn predict_genome_hybrid(
 /// `try_gpu_addresses_adaptive + train_genome_in_slot + export_genome_for_gpu`
 /// — bit-exact parity verified for b∈{16,32,48,64,96} × n∈{50,100,200,250}
 /// across 9 shape configurations (tests/path2_parity.py, all pass with 0
-/// drift on CE/Acc/F1/FPR).
+/// drift on CE/Acc/F1/FPR). Repeatability (same genome, same process) is
+/// pinned at b in {4, 8, 12, 16} by marker_repeatability_tests.rs (IDS-34:
+/// b = 8 / 12 dropped writes before ABI 22).
 ///
 /// Benefits over the dense path:
 ///   - No u32 truncation guard (Option B uses u64 keys natively).

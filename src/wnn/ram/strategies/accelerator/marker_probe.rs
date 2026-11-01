@@ -25,6 +25,8 @@ pub mod metal_impl
 		"\n",
 		include_str!("core/shaders/marker_slots.metal"),
 		"\n",
+		include_str!("shaders/marker_direct.metal"),
+		"\n", // IDS-34 direct-addressed slot regions
 		include_str!("shaders/marker_probe_eval.metal"),
 	);
 

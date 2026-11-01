@@ -138,6 +138,10 @@ affect the 6835/6836 grid winners (top-K is b ≥ 28), but it does affect any lo
 3. Optional hardening of the grid: key each expansion variant's connection seed by `(config, variant_idx)`
    (for example, pre-draw them in enumeration order). Then a near-tie rank swap can no longer re-randomise the other variants.
 4. Follow-up IDS-32b: find and fix the b ∈ {8, 12} engine nondeterminism (§4).
+   **FIXED 01/11/2026 (IDS-34, worker ABI 22):** root cause = table-full dropped writes. Where 2^bits <=
+   slot_capacity (capacity capped at 2 x 2^bits), z-thread duplicate-key claims filled the region and
+   `find_or_claim_slot` returned table-full. Such regions are now addressed directly (slot = key,
+   `shaders/marker_direct.metal`); b >= 16 exports are unchanged (golden digests, `marker_repeatability_tests.rs`).
 
 **Does it change results for future flows?** Yes, but only as a re-draw, not as a change in distribution.
 The partition becomes a deterministic function of the flow seed. It is still a seeded random stratified 5-fold

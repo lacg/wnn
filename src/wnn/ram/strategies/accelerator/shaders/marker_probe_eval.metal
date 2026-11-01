@@ -8,6 +8,7 @@
 // 250n × 48-64b genomes).
 //
 // Compiled with core/shaders/common.metal + core/shaders/marker_slots.metal
+// + shaders/marker_direct.metal (IDS-34 direct regions)
 // prepended (same include pattern as marker_train.metal) — slot_hash,
 // MARKER_* constants and the OI_* counter constants come from there.
 //
@@ -159,7 +160,16 @@ kernel void marker_probe_eval(
 	uint idx = slot_hash(addr, mask);
 	uint acc = 0u;
 	bool found = false;
-	for (uint probe = 0; probe < meta.slot_capacity; probe++)
+	// IDS-34: a direct region (marker_direct.metal) holds `addr` at
+	// slot_offset + addr, never duplicated — one load, no chain.
+	bool direct = marker_region_is_direct(meta.bits, meta.slot_capacity);
+	if (direct)
+	{
+		uint slot = meta.slot_offset + uint(addr);
+		found = slot_markers[slot] == MARKER_FINAL;
+		acc = found ? slot_values[slot] : 0u;
+	}
+	for (uint probe = 0; !direct && probe < meta.slot_capacity; probe++)
 	{
 		uint slot = meta.slot_offset + idx;
 		uint m = slot_markers[slot];

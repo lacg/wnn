@@ -279,8 +279,12 @@ kernel void marker_train(
 				weight = 1u;
 		}
 
-		uint slot = find_or_claim_slot(
-				slot_markers, slot_keys, meta.slot_offset, meta.slot_capacity, addr);
+		// IDS-34: a region that holds the whole key space is addressed
+		// directly (marker_direct.metal) — the hashed claim dropped writes
+		// there once z-thread duplicates filled the 2 x 2^bits region.
+		uint slot = marker_region_is_direct(meta.bits, meta.slot_capacity)
+				? claim_direct_slot(slot_markers, slot_keys, meta.slot_offset, addr)
+				: find_or_claim_slot(slot_markers, slot_keys, meta.slot_offset, meta.slot_capacity, addr);
 		if (slot != 0xFFFFFFFFu)
 		{
 			if (write_rule == WNN_WRITE_SET)

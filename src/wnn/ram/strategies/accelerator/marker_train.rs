@@ -26,6 +26,8 @@ pub mod metal_impl
 		"\n",
 		include_str!("core/shaders/marker_slots.metal"),
 		"\n", // shared GPU cell-write primitives
+		include_str!("shaders/marker_direct.metal"),
+		"\n", // IDS-34 direct-addressed slot regions
 		include_str!("shaders/marker_train.metal"),
 	);
 
@@ -2895,6 +2897,71 @@ pub mod batched_path
 					let via_probe = crate::adaptive::score_vote_sums(&votes, &eval_targets, &targets, settings, threshold);
 					let bits = |m: (f64, f64, f64, f64, f64)| [m.0.to_bits(), m.1.to_bits(), m.2.to_bits(), m.3.to_bits(), m.4.to_bits()];
 					assert_eq!(bits(via_export), bits(via_probe), "n={} threshold {:?}: export {:?} vs probe {:?}", n, threshold, via_export, via_probe);
+				}
+			}
+		}
+
+		/// IDS-34: eval-in-place vs the export path where the slot regions are
+		/// DIRECT-addressed (2^bits <= slot_capacity, marker_direct.metal) — the
+		/// probe kernel reads `slot_offset + addr` instead of the hash chain, so
+		/// it must agree with the export (dense at b <= 12, sparse above) bit for
+		/// bit. Random 64-bit rows at b = 8 / 12 (both rates) and b = 16 at rate
+		/// 1.0 (cap 2 x 2^16). OI only; skips otherwise.
+		#[test]
+		fn eval_in_place_matches_export_path_on_direct_regions()
+		{
+			if !ram_core::neuron_memory::order_independent_training_enabled() || get_trainer().is_err()
+			{
+				eprintln!("[eval_in_place_direct] needs WNN_ORDER_INDEPENDENT_TRAIN=1 + Metal — skipping");
+				return;
+			}
+			let (num_train, tib, n) = (40_000usize, 64usize, 24usize);
+			let mut st: u64 = 0x2545_F491_4F6C_DD1D;
+			let mut next = move || {
+				st ^= st << 13;
+				st ^= st >> 7;
+				st ^= st << 17;
+				st
+			};
+			let bools: Vec<bool> = (0..num_train * tib).map(|_| next() & 1 == 1).collect();
+			let packed = ram_core::packed_bits::PackedBits::from_bool_slice(&bools, tib);
+			let targets: Vec<i64> = (0..num_train).map(|ex| (bools[ex * tib] ^ bools[ex * tib + 5]) as i64).collect();
+			let eval = packed.gather_rows(900, |k| (k * 37) % num_train);
+			let eval_targets: Vec<i64> = (0..900).map(|k| targets[(k * 37) % num_train]).collect();
+			let mode = ram_core::neuron_memory::QUAD_WEIGHTED;
+			let settings = ram_core::neuron_memory::EvalSettings {
+				empty_value: 0.5,
+				memory_mode: mode,
+				normal_class: 0,
+				fitness_weights: None,
+				run_seed: 0,
+				coverage_aware: false,
+				write_vote: false,
+				fitness_attack_f1: false,
+			};
+			for (b, rate) in [(8usize, 0.25f32), (8, 1.0), (12, 0.25), (12, 1.0), (16, 1.0)]
+			{
+				let cap = marker_capacity_for_train(num_train, b, rate);
+				assert!(cap >= 1 << b, "b={b} rate={rate}: fixture must hit the direct regime (cap {cap})");
+				let bits_flat = vec![b; n];
+				let conns: Vec<i64> = (0..n * b).map(|_| (next() % tib as u64) as i64).collect();
+				let export = batched_train_offspring(
+					&bits_flat, &[n], &conns, 1, 1, &packed, &targets, &[], num_train, 0, tib, 0.5, rate, 42, None, mode,
+					ram_core::cell_mode::WriteRule::of_code(mode),
+				)
+				.expect("export path train failed")
+				.remove(0);
+				let votes = train_single_genome_chunked_scored_with_budget(
+					&bits_flat, &conns, &packed, &targets, &[], num_train, 0, tib, 0.5, rate, 42, None, &eval, 900, true,
+					cap * 16 * n.div_ceil(3), mode,
+				)
+				.expect("probe route failed");
+				for threshold in [Some(0.5), Some(-1.0), None]
+				{
+					let via_export = export_path_metrics(&export, &packed, &targets, &eval, &eval_targets, settings, threshold);
+					let via_probe = crate::adaptive::score_vote_sums(&votes, &eval_targets, &targets, settings, threshold);
+					let bits = |m: (f64, f64, f64, f64, f64)| [m.0.to_bits(), m.1.to_bits(), m.2.to_bits(), m.3.to_bits(), m.4.to_bits()];
+					assert_eq!(bits(via_export), bits(via_probe), "b={b} rate={rate} threshold {threshold:?}: export {via_export:?} vs probe {via_probe:?}");
 				}
 			}
 		}
