@@ -509,6 +509,7 @@ fn box_qp_matches_enumeration_on_random_qps()
 		assert!(kkt_residual(&h, &g, a, &u) < 1e-9);
 	}
 	eprintln!("[box-qp enumeration] 400 trials, {fallbacks} via primal fallback");
+	assert!(fallbacks > 0, "the primal active-set fallback must be exercised by this seed");
 }
 
 /// Brute force: every assignment of {−a, free, +a}, keep the feasible
@@ -561,7 +562,39 @@ fn enumerate_box_qp(h: &Mat, g: &[f64], a: f64) -> Vec<f64>
 
 // Label digests of the expert-driven (unconstrained-only) regimes, recorded on
 // the FISTA build (commit bec92960) by mpc_label_digest_print.
-const STAGE2_EXPERT_DIGEST: u64 = 0;
-const STAGE2_EXPERT_LABELS: usize = 0;
-const STAGE1_EXPERT_DIGEST: u64 = 0;
-const STAGE1_EXPERT_LABELS: usize = 0;
+const STAGE2_EXPERT_DIGEST: u64 = 0x275a32c8db2e539a;
+const STAGE2_EXPERT_LABELS: usize = 8000;
+const STAGE1_EXPERT_DIGEST: u64 = 0x742d27b2b0d20431;
+const STAGE1_EXPERT_LABELS: usize = 8000;
+// The student-driven digests on that build were 0x40d37f4d641d0bc5 (stage 2,
+// 5181 labels) and 0x3260c5b8e295378e (stage 1, 5731 labels); they CHANGE with
+// the exact solver by design (constrained-path labels).
+
+/// Teacher solve throughput (ignored — prints): replay the states a student-driven
+/// stage-2 rollout visited through a fresh teacher's step_axes_rs (same warm-start
+/// chain), best of 5. Run on both builds to compare.
+#[test]
+#[ignore]
+fn mpc_solver_timing()
+{
+	for (name, xy) in [("stage2", 0.5f32), ("stage1", 0.0)]
+	{
+		let cfg = regime(xy, 2000, false);
+		let xs: Vec<[f64; 6]> = collect(&cfg, 8, 0x71AE ^ xy.to_bits() as u64).iter().map(|p| p.x).collect();
+		let af = AirframeRs::from_cfg(&cfg);
+		let mut best = f64::INFINITY;
+		let mut sink = 0.0;
+		for _ in 0..5
+		{
+			let mut t = af.teacher(4);
+			let m = mpc_of(&mut t);
+			let t0 = std::time::Instant::now();
+			for x in &xs
+			{
+				sink += m.step_axes_rs(x)[0];
+			}
+			best = best.min(t0.elapsed().as_secs_f64());
+		}
+		eprintln!("[mpc-timing {name}] {} solves, best {:.1} us/solve (sink {sink:.3})", xs.len(), 1e6 * best / xs.len() as f64);
+	}
+}

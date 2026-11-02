@@ -218,7 +218,15 @@ mod metal_controller;
 ///     per-episode rows gain dx_m, dy_m at the end.
 /// Every new option defaults OFF and the OFF path is bit-identical to ABI 31
 /// (ctrl17_pins + every parity anchor unchanged); only the row width moved.
-pub const ABI_VERSION: u32 = 32;
+/// ABI 33 (01/11/2026): the mpc / mpcof teachers solve their box-constrained QP
+///   EXACTLY (box_qp.rs: primal-dual active set + primal active-set fallback),
+///   replacing projected FISTA capped at 200 iterations that exited AT the cap on
+///   93-95% of constrained solves (cond(H) ≈ 499). RESULTS-CHANGING for every
+///   mpc/mpcof run whose box binds (student-driven: ~99% of steps); label change
+///   |Δpwm| mean 6e-5, p99 7.5e-4, max 5.3e-3. Unconstrained-path labels are
+///   byte-identical (mpc_unconstrained_labels_bit_identical_to_fista_build); PID,
+///   LQR, LQI unaffected. Python surface unchanged. ~16x faster per solve.
+pub const ABI_VERSION: u32 = 33;
 
 /// Mode-aware untrained-cell decode anchor (ABI 12): QUAD→0.75, TERNARY→0.5
 /// (the fixed PLN empty_value), BINARY→0.5 (antagonist-pair effective neutral).

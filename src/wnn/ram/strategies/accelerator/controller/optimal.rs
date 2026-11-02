@@ -9,8 +9,11 @@
 //!     to a fixed point — the only inverse is 3×3 (no eigensolver, no LAPACK). It
 //!     yields BOTH the discrete-LQR gain and the MPC terminal cost-to-go;
 //!   * MPC QP: the horizon problem is condensed to 3N control vars with box bounds
-//!     and solved by projected FISTA, warm-started, with an unconstrained fast path
-//!     (when the ±authority box does not bind the solution is the LQR feedback).
+//!     and solved EXACTLY (box_qp.rs: primal-dual active set, primal active-set
+//!     fallback, Cholesky on the free block), warm-started, with an unconstrained
+//!     fast path (when the ±authority box does not bind the solution is the LQR
+//!     feedback). Until 01/11/2026 this was projected FISTA capped at 200
+//!     iterations, which exited at the cap on 93-95% of constrained solves.
 //!
 //! The teachers expose the same `step_rs(q, gyro, target) -> [f64;4]` interface as
 //! `AttitudePidRs`, so they drop into `rollout_and_label_rs` unchanged. Being
@@ -21,6 +24,7 @@ use crate::controller::{
 	calibrate_control_gains_rs, clamp_f64, mix_to_motors_f64, quat_to_euler_f64, wrap_angle_f64,
 	AttitudePidRs,
 };
+use crate::box_qp::BoxQpSolver;
 use pyo3::prelude::*;
 
 // ===========================================================================
@@ -141,8 +145,15 @@ impl Mat
 	/// Matrix × column vector (len = self.c) → column vector (len = self.r).
 	fn mul_vec(&self, v: &[f64]) -> Vec<f64>
 	{
-		assert_eq!(self.c, v.len(), "mul_vec shape");
 		let mut out = vec![0.0; self.r];
+		self.mul_vec_into(v, &mut out);
+		out
+	}
+	/// mul_vec into a caller buffer (len = self.r) — same arithmetic order.
+	fn mul_vec_into(&self, v: &[f64], out: &mut [f64])
+	{
+		assert_eq!(self.c, v.len(), "mul_vec shape");
+		assert_eq!(self.r, out.len(), "mul_vec out shape");
 		for i in 0..self.r
 		{
 			let mut acc = 0.0;
@@ -152,7 +163,6 @@ impl Mat
 			}
 			out[i] = acc;
 		}
-		out
 	}
 }
 
@@ -867,7 +877,7 @@ impl AllocLqrRs
 }
 
 // ===========================================================================
-// MPC teacher — condensed box-constrained QP solved per step by projected FISTA.
+// MPC teacher — condensed box-constrained QP solved EXACTLY per step (box_qp.rs).
 // ===========================================================================
 
 #[pyclass]
@@ -876,11 +886,16 @@ pub struct AttitudeMpcRs
 	n: usize, // horizon
 	hover: f64,
 	authority: f64,
-	h: Mat,         // condensed Hessian (3N×3N), cost = ½UᵀHU + gᵀU
+	/// condensed Hessian (3N×3N), cost = ½UᵀHU + gᵀU — the solver owns its own
+	/// copy; this one is kept only for the test-side reference solves.
+	#[cfg(test)]
+	h: Mat,
 	ustar_map: Mat, // −H⁻¹G (3N×6): unconstrained U* = ustar_map · x0
 	g_map: Mat,     // G (3N×6): g = g_map · x0
-	inv_l: f64,     // FISTA step = 1/L, L = spectral-radius upper bound of H
+	qp: BoxQpSolver, // exact solver for the constrained case (owns a copy of H)
 	warm: Vec<f64>, // warm-start U from the previous step (shifted)
+	u_buf: Vec<f64>, // scratch: unconstrained U* (3N)
+	g_buf: Vec<f64>, // scratch: linear term g (3N)
 	/// TEST-ONLY solver probe: when Some, every step records (x0, exit U,
 	/// iterations, converged). Read-only — never feeds back into a solve.
 	#[cfg(test)]
@@ -1003,35 +1018,20 @@ impl AttitudeMpcRs
 		let g_map = sutq.matmul(&sx).scale(2.0); // 3N×6
 		let h_inv = inverse(&h).expect("MPC: H singular");
 		let ustar_map = h_inv.matmul(&g_map).scale(-1.0); // −H⁻¹G
-
-		// L = spectral-radius upper bound of H via a few power iterations.
-		let mut v = vec![1.0f64; cols];
-		let mut l = 1.0f64;
-		for _ in 0..50
-		{
-			let hv = h.mul_vec(&v);
-			let norm = hv.iter().map(|x| x * x).sum::<f64>().sqrt();
-			if norm < 1e-30
-			{
-				break;
-			}
-			l = norm;
-			for i in 0..cols
-			{
-				v[i] = hv[i] / norm;
-			}
-		}
-		let inv_l = 1.0 / (l * 1.05); // 5% margin for safe descent
+		let qp = BoxQpSolver::new(cols, h.d.clone(), authority);
 
 		AttitudeMpcRs {
 			n,
 			hover,
 			authority,
+			#[cfg(test)]
 			h,
 			ustar_map,
 			g_map,
-			inv_l,
+			qp,
 			warm: vec![0.0; cols],
+			u_buf: vec![0.0; cols],
+			g_buf: vec![0.0; cols],
 			#[cfg(test)]
 			probe: None,
 		}
@@ -1060,85 +1060,37 @@ impl AttitudeMpcRs
 		let cols = self.n * 3;
 		// Unconstrained optimum U* = ustar_map · x0. If it satisfies the box for the
 		// whole horizon it IS the constrained optimum (fast path == LQR feedback).
-		let u_unc = self.ustar_map.mul_vec(x);
-		let feasible = u_unc.iter().all(|&ui| ui.abs() <= a + 1e-9);
-		let u = if feasible
+		self.ustar_map.mul_vec_into(x, &mut self.u_buf);
+		let feasible = self.u_buf.iter().all(|&ui| ui.abs() <= a + 1e-9);
+		if !feasible
 		{
-			u_unc
+			// The box binds: the exact optimum of ½UᵀHU + gᵀU s.t. |U| ≤ a, its
+			// active set seeded from the previous step's shifted solution.
+			self.g_map.mul_vec_into(x, &mut self.g_buf);
+			let u = self.qp.solve(&self.g_buf, &self.warm);
+			self.u_buf.copy_from_slice(u);
 		}
-		else
-		{
-			// Projected FISTA on ½UᵀHU + gᵀU s.t. |U| ≤ a. Warm-start from the
-			// previous shifted solution clamped into the box.
-			let g = self.g_map.mul_vec(x);
-			let mut uk: Vec<f64> = self.warm.iter().map(|&w| clamp_f64(w, -a, a)).collect();
-			let mut yk = uk.clone();
-			let mut t = 1.0f64;
-			#[cfg(test)]
-			let mut probe_iters = 0usize;
-			#[cfg(test)]
-			let mut probe_conv = false;
-			for _ in 0..200
-			{
-				#[cfg(test)]
-				{
-					probe_iters += 1;
-				}
-				let hy = self.h.mul_vec(&yk); // H y
-				let mut u_next = vec![0.0; cols];
-				for i in 0..cols
-				{
-					let grad = hy[i] + g[i];
-					u_next[i] = clamp_f64(yk[i] - self.inv_l * grad, -a, a);
-				}
-				let t_next = 0.5 * (1.0 + (1.0 + 4.0 * t * t).sqrt());
-				let beta = (t - 1.0) / t_next;
-				let mut max_step = 0.0f64;
-				for i in 0..cols
-				{
-					let step = u_next[i] - uk[i];
-					yk[i] = u_next[i] + beta * step;
-					if step.abs() > max_step
-					{
-						max_step = step.abs();
-					}
-				}
-				uk = u_next;
-				t = t_next;
-				if max_step < 1e-9
-				{
-					#[cfg(test)]
-					{
-						probe_conv = true;
-					}
-					break;
-				}
-			}
-			#[cfg(test)]
-			if let Some(p) = self.probe.as_mut()
-			{
-				p.push(MpcProbe { x: *x, u: uk.clone(), constrained: true, iters: probe_iters, converged: probe_conv });
-			}
-			uk
-		};
 		#[cfg(test)]
-		if feasible
-		{
-			if let Some(p) = self.probe.as_mut()
-			{
-				p.push(MpcProbe { x: *x, u: u.clone(), constrained: false, iters: 0, converged: true });
-			}
-		}
+		self.record_probe(x, !feasible);
 		// Warm start next step: shift U by one control (receding horizon).
-		for i in 0..(cols - 3)
+		self.warm[..cols - 3].copy_from_slice(&self.u_buf[3..]);
+		self.warm[cols - 3..].copy_from_slice(&self.u_buf[cols - 3..]);
+		[self.u_buf[0], self.u_buf[1], self.u_buf[2]]
+	}
+
+	#[cfg(test)]
+	fn record_probe(&mut self, x: &[f64; 6], constrained: bool)
+	{
+		if let Some(p) = self.probe.as_mut()
 		{
-			self.warm[i] = u[i + 3];
+			p.push(MpcProbe {
+				x: *x,
+				u: self.u_buf.clone(),
+				constrained,
+				iters: if constrained { self.qp.last_solves } else { 0 },
+				converged: !(constrained && self.qp.last_fallback),
+			});
 		}
-		for i in (cols - 3)..cols
-		{
-			self.warm[i] = u[i];
-		}
-		[u[0], u[1], u[2]]
 	}
 }
 
