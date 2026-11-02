@@ -41,6 +41,15 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	# "phase" (legacy, bit-identical: offspring/immigrants/neighbours on ONE
 	# phase-fixed fold; hierarchical stages single-fold).
 	"ids_offspring_folds",
+	# ids_calib_sample (02/11/2026, worker ABI 24): int rows. The single-cluster
+	# binary SEARCH fitness calibrates each genome x fold decision threshold on a
+	# FIXED stratified subsample of the fold's train rows (by target and, where
+	# the dataset has it, attack category; keyed on the flow seed + fold; drawn
+	# in Rust, adaptive/calib_sample.rs) instead of every row — ~72% of cicids
+	# scoring time. Absent / 0 / >= rows = every row (bit-identical). Validation
+	# thresholds (train_cal, val_cal, platt, beta, empirical*) never subsample.
+	# Rejected (non-zero) on two-cluster, multiclass and hierarchical flows.
+	"ids_calib_sample",
 	"min_bits", "max_bits", "min_neurons", "max_neurons", "max_bit_delta",
 	"neuron_sample_rate", "sparse_threshold", "seed",
 	# GA / TS / SA / grid

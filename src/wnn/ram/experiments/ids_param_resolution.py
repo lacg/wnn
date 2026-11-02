@@ -99,6 +99,32 @@ def resolve_two_cluster_fitness_f1(params: dict) -> str:
 	return value
 
 
+def resolve_calib_sample(params: dict) -> int:
+	"""Canonical ids_calib_sample: rows the single-cluster search threshold is
+	calibrated on (IDSCacheWrapper.set_calib_sample). Absent/None -> 0 (every
+	row, bit-identical). Negative or non-integer values raise; so does a
+	non-zero value on a flow that is not binary single-cluster
+	(ids_classification='binary', ids_single_cluster=true) — the search
+	threshold sweep only exists there, so the arm would be mislabelled."""
+	value = params.get("ids_calib_sample")
+	if value is None:
+		return 0
+	if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+		raise ValueError(f"ids_calib_sample={value!r}: expected a non-negative integer row count")
+	single_cluster_binary = (
+		params.get("ids_classification", "binary") == "binary"
+		and bool(params.get("ids_single_cluster", False))
+	)
+	if value > 0 and not single_cluster_binary:
+		raise ValueError(
+			f"ids_calib_sample={value} applies to binary single-cluster flows only "
+			"(ids_classification='binary', ids_single_cluster=true); got "
+			f"ids_classification={params.get('ids_classification', 'binary')!r}, "
+			f"ids_single_cluster={bool(params.get('ids_single_cluster', False))}"
+		)
+	return value
+
+
 # ids_offspring_folds values (IDSEvaluator offspring_folds). "all" = every GA/TS
 # genome's fitness is the K-fold CV mean (train on K-1 folds, score the held-out
 # one, rotate, average) — the paper's protocol (sp2027 main.tex). "phase" = the

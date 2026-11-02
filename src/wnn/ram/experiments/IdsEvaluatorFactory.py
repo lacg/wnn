@@ -97,7 +97,10 @@ class IdsEvaluatorFactory:
 		self._log(f"  neuron_sample_rate={s.neuron_sample_rate}, balance_classes={s.balance_classes}{sc}")
 		us = ", undersample" if s.undersample_majority else ""
 		self._log(f"  undersample_majority={s.undersample_majority}{us}")
-		return self._evaluator(dataset, s, s.num_parts, s.k_folds, s.kfold_per_gen, None)
+		if s.calib_sample > 0:
+			self._log(f"  ids_calib_sample={s.calib_sample:,}: search thresholds calibrate on a fixed stratified "
+				"train subsample (validation thresholds use every row)")
+		return self._evaluator(dataset, s, s.num_parts, s.k_folds, s.kfold_per_gen, None, s.calib_sample)
 
 	def _test(self, dataset, s: IdsEvaluatorSettings, shared_cache):
 		"""Full 80% train -> held-out report. Reuses the optimizer's Rust cache (M2:
@@ -109,10 +112,13 @@ class IdsEvaluatorFactory:
 		return self._evaluator(dataset, s, 1, 1, 1, shared_cache)
 
 	@staticmethod
-	def _evaluator(dataset, s: IdsEvaluatorSettings, num_parts: int, k_folds: int, kfold_per_gen: int, reuse_cache):
+	def _evaluator(dataset, s: IdsEvaluatorSettings, num_parts: int, k_folds: int, kfold_per_gen: int, reuse_cache,
+			calib_sample: int = 0):
 		"""One flat IDSEvaluator with the flow's training settings (k_folds=1,
 		kfold_per_gen=1, reuse_cache=None for the test evaluator; the GA-fitness fold
-		rule ids_offspring_folds rides along)."""
+		rule ids_offspring_folds rides along). `calib_sample` (ids_calib_sample) is
+		the OPTIMIZER's only: the test evaluator shares its cache but never sets it,
+		and its full-train validation calls ignore it in Rust anyway."""
 		from wnn.ram.architecture.ids_evaluator import IDSEvaluator
 		return IDSEvaluator(
 			dataset=dataset, classification=s.classification, num_parts=num_parts,
@@ -123,6 +129,7 @@ class IdsEvaluatorFactory:
 			balance_classes=s.balance_classes, single_cluster=s.single_cluster,
 			undersample_majority=s.undersample_majority, flip_labels=s.flip_labels,
 			class_weight_multiplier=s.class_weight_multiplier, reuse_cache=reuse_cache,
+			calib_sample=calib_sample,
 		)
 
 	def _set_fitness_weights(self, s: IdsEvaluatorSettings, *evaluators) -> None:

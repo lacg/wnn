@@ -60,12 +60,21 @@ def test_flat_binary_matches_the_worker(captured):
 	assert load["feature_selection"] == "top20" and load["encoded_storage"] == "memory"
 	common = dict(classification="binary", empty_value=0.0, memory_mode=2, seed=20419, run_seed=20419,
 		coverage_aware=False, write_rule="lattice", two_cluster_fitness_f1="macro", offspring_folds="all", num_negatives=None, neuron_sample_rate=1.0, balance_classes=True,
-		single_cluster=True, undersample_majority=False, flip_labels=False, class_weight_multiplier=1.0)
+		single_cluster=True, undersample_majority=False, flip_labels=False, class_weight_multiplier=1.0,
+		calib_sample=0)
 	assert optimizer.args == {**common, "dataset": optimizer.args["dataset"], "num_parts": 5, "k_folds": 5,
 		"kfold_per_gen": 5, "reuse_cache": None}
 	assert test.args == {**common, "dataset": optimizer.args["dataset"], "num_parts": 1, "k_folds": 1,
 		"kfold_per_gen": 1, "reuse_cache": optimizer._cache}
 	assert optimizer.weights == test.weights == (0.525, 0.15, 0.15, 0.175)
+
+
+def test_calib_sample_reaches_the_optimizer_only(captured):
+	"""ids_calib_sample is a SEARCH knob: the optimizer evaluator gets it; the
+	test (validation) evaluator, which shares the optimizer's cache, never does."""
+	optimizer, test = IdsEvaluatorFactory(lambda m: None).create({**SR1, "ids_calib_sample": 200_000})
+	assert optimizer.args["calib_sample"] == 200_000
+	assert test.args["calib_sample"] == 0
 
 
 def test_settings_defaults_are_the_workers():

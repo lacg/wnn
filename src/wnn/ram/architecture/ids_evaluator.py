@@ -114,6 +114,7 @@ class IDSEvaluator(BaseEvaluator):
 		flip_labels: bool = False,  # Swap normal↔attack labels (detect normals in attack-heavy data)
 		class_weight_multiplier: float = 1.0,  # Scale class balancing weights (>1 = stronger minority boost)
 		reuse_cache: Optional[Any] = None,  # M2: share an existing IDSCacheWrapper instead of building one
+		calib_sample: int = 0,  # ids_calib_sample: search-threshold calibration rows (0 = every train row)
 	):
 		if classification == "binary":
 			y_train = dataset.y_train_binary
@@ -449,6 +450,15 @@ class IDSEvaluator(BaseEvaluator):
 					"the worker wheel and swap it at worker-idle via scripts/worker_swap.py."
 				)
 
+			if calib_sample > 0:
+				self._set_calib_sample(dataset, calib_sample, classification, undersample_majority, len(y_train))
+
+		if calib_sample > 0 and self._cache is None:
+			raise NotImplementedError(
+				f"ids_calib_sample={calib_sample} needs the in-memory IDS cache; the streaming "
+				"path (IDSGenomeStreamer) calibrates on every train row and is not plumbed"
+			)
+
 		# Store fitness weights for potential threshold optimization
 		self._fitness_weights = None
 
@@ -672,6 +682,37 @@ class IDSEvaluator(BaseEvaluator):
 			genome.metrics = IDSMetrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=threshold, eval_time_ms=int(ms))
 			results.append(genome.metrics)
 		return results
+
+	def _set_calib_sample(self, dataset, calib_sample: int, classification: str, undersample_majority: bool,
+			num_train: int) -> None:
+		"""ids_calib_sample (worker ABI 24): the single-cluster SEARCH fitness
+		calibrates each genome x fold threshold on `calib_sample` fixed train rows,
+		drawn in Rust (adaptive/calib_sample.rs) stratified by the binary target
+		and, where the dataset carries it, the attack category (so rare attack
+		classes keep a row). Keyed on the flow seed + fold. Only called with
+		calib_sample > 0, so a stale wheel keeps running every default flow; a
+		requested subsample on a wheel without the setter refuses LOUDLY."""
+		set_calib = getattr(self._cache, "set_calib_sample", None)
+		if set_calib is None:
+			raise RuntimeError(
+				f"ids_calib_sample={calib_sample} needs a rebuilt ram_accelerator "
+				"(IDSCacheWrapper.set_calib_sample is missing, ABI < 24). Rebuild the worker "
+				"wheel and swap it at worker-idle via scripts/worker_swap.py."
+			)
+		set_calib(calib_sample, self._calib_seed(), self._calib_strata(dataset, classification, undersample_majority, num_train))
+
+	def _calib_seed(self) -> int:
+		return int(self._seed) if self._seed is not None else 42
+
+	@staticmethod
+	def _calib_strata(dataset, classification: str, undersample_majority: bool, num_train: int):
+		"""Attack category per train row (int64), or None: only for binary flows
+		whose dataset has y_train_multi aligned row-for-row with the cache's train
+		set (undersample_majority re-draws the rows in Rust, so not there)."""
+		strata = getattr(dataset, "y_train_multi", None)
+		if classification != "binary" or undersample_majority or strata is None or len(strata) != num_train:
+			return None
+		return np.ascontiguousarray(np.asarray(strata, dtype=np.int64))
 
 	@staticmethod
 	def _validated_two_cluster_fitness_f1(value: str, classification: str, single_cluster: bool) -> str:
