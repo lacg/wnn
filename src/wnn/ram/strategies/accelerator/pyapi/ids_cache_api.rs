@@ -359,6 +359,45 @@ impl IDSCacheWrapper
 		Ok(())
 	}
 
+	/// Search-time threshold calibration subsample (02/11/2026, worker ABI 24;
+	/// flow param `ids_calib_sample`). The single-cluster k-fold / train-subset
+	/// fitness calibrates each genome x fold threshold on min(sample, rows)
+	/// FIXED stratified train rows (keyed on `seed` + the fold) instead of
+	/// every row. 0 = every row (default, bit-identical). `strata` (int64, one
+	/// per train row, e.g. the attack category of a binary flow) refines the
+	/// stratification beyond the target. Validation calls (full_hybrid,
+	/// thresholds, scores) are unaffected. A non-zero sample on a multi-cluster
+	/// cache raises ValueError (it would do nothing).
+	#[pyo3(signature = (sample, seed, strata=None))]
+	fn set_calib_sample(
+		&mut self,
+		sample: usize,
+		seed: u64,
+		strata: Option<PyReadonlyArray1<'_, i64>>,
+	) -> PyResult<()>
+	{
+		if sample > 0 && self.inner.num_genome_clusters() != 1
+		{
+			return Err(pyo3::exceptions::PyValueError::new_err(format!(
+				"calib sample {} applies to single-cluster caches only (this cache has {} clusters)",
+				sample,
+				self.inner.num_genome_clusters()
+			)));
+		}
+		let strata: Option<Vec<i64>> = match strata
+		{
+			Some(a) => Some(a.as_slice().map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?.to_vec()),
+			None => None,
+		};
+		self.inner.set_calib_sample(sample, seed, strata).map_err(pyo3::exceptions::PyValueError::new_err)
+	}
+
+	/// The configured search-time calibration sample (0 = full set).
+	fn calib_sample(&self) -> usize
+	{
+		self.inner.calib_sample()
+	}
+
 	/// Evaluate genomes using hybrid CPU+GPU with a specific train subset.
 	#[allow(clippy::too_many_arguments)]
 	fn evaluate_genomes_hybrid(

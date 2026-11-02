@@ -37,6 +37,15 @@ pub struct IDSSubset
 ///
 /// Created once at session start, then used for all evaluations.
 /// Provides zero-copy subset selection via pre-computed indices.
+/// Search-time calibration subsample settings (see IDSCache::set_calib_sample).
+#[derive(Default)]
+struct CalibConfig
+{
+	sample: usize,
+	seed: u64,
+	strata: Option<Vec<i64>>,
+}
+
 pub struct IDSCache
 {
 	// Configuration
@@ -98,6 +107,11 @@ pub struct IDSCache
 	/// via set_two_cluster_fitness_f1): the K = 2 search reports the attack
 	/// class's F1. Default false = the 2-class macro F1 (bit-exact).
 	pub fitness_attack_f1: bool,
+	/// Search-time threshold calibration (`ids_calib_sample`, via
+	/// set_calib_sample): the single-cluster k-fold / train-subset fitness
+	/// calibrates on this many stratified train rows. 0 = every row (default,
+	/// bit-identical). Validation paths (full train/eval) never read it.
+	calib: CalibConfig,
 
 	// Live progress for observer thread
 	pub live_progress: Arc<RwLock<Option<LiveProgress>>>,
@@ -257,6 +271,60 @@ impl IDSCache
 			write_vote: self.write_vote,
 			fitness_attack_f1: self.fitness_attack_f1,
 		}
+	}
+
+	/// Search-time calibration subsample (flow param `ids_calib_sample`).
+	/// `sample` 0 = the full train set (bit-identical). `seed` is the flow
+	/// seed (each fold's draw is keyed on it + the fold). `strata` (one label
+	/// per full_train row, e.g. the multiclass attack category of a binary
+	/// flow) refines the stratification beyond the target; it must cover
+	/// full_train exactly.
+	pub fn set_calib_sample(&mut self, sample: usize, seed: u64, strata: Option<Vec<i64>>) -> Result<(), String>
+	{
+		if let Some(s) = &strata
+		{
+			if s.len() != self.full_train.num_examples
+			{
+				return Err(format!(
+					"calib strata length {} != train rows {} (undersample_majority reorders the train set; pass no strata there)",
+					s.len(),
+					self.full_train.num_examples
+				));
+			}
+		}
+		self.calib = CalibConfig { sample, seed, strata };
+		Ok(())
+	}
+
+	pub fn calib_sample(&self) -> usize
+	{
+		self.calib.sample
+	}
+
+	/// The calibration rows for a search train set built from `fold`'s rows
+	/// (train-set order) and already gathered into `train`; None = full set.
+	/// `fold_key` keys the draw (the held-out fold / train subset index).
+	pub fn calib_set(
+		&self,
+		fold: &crate::ids_fold::IDSFold,
+		train: &IDSSubset,
+		fold_key: usize,
+	) -> Option<crate::adaptive::CalibSet>
+	{
+		if self.calib.sample == 0 || self.num_genome_clusters != 1
+		{
+			return None;
+		}
+		let strata: Option<Vec<i64>> =
+			self.calib.strata.as_ref().map(|s| fold.rows.iter().map(|&r| s[r as usize]).collect());
+		crate::adaptive::CalibSet::build(
+			&train.input_bits,
+			&train.targets,
+			strata.as_deref(),
+			self.calib.sample,
+			self.calib.seed,
+			fold_key as u64,
+		)
 	}
 
 	/// Create a new IDS cache with stratified partitioning.
@@ -428,6 +496,7 @@ impl IDSCache
 			coverage_aware: false,
 			write_vote: false,
 			fitness_attack_f1: false,
+			calib: CalibConfig::default(),
 		}
 	}
 
@@ -665,13 +734,31 @@ impl IDSCache
 		self.subset_of(&self.train_folds[idx])
 	}
 
+	/// Train subset `idx` as (row list, materialised subset) — the row list
+	/// keys the calibration strata.
+	fn train_subset_with_rows(&self, idx: usize) -> (&crate::ids_fold::IDSFold, IDSSubset)
+	{
+		let fold = &self.train_folds[idx];
+		(fold, self.subset_of(fold))
+	}
+
+	/// `kfold_train_set` plus its row list (see train_subset_with_rows).
+	fn kfold_train_set_with_rows(&self, held_out: usize) -> (crate::ids_fold::IDSFold, IDSSubset)
+	{
+		let others = self.train_folds.iter().enumerate().filter(move |(i, _)| *i != held_out).map(|(_, f)| f);
+		let fold = crate::ids_fold::IDSFold::concat(others);
+		let subset = self.subset_of(&fold);
+		(fold, subset)
+	}
+
 	/// The k-fold training set: every fold except `held_out`, concatenated in
 	/// fold order and gathered straight into the GPU word layout (one copy;
 	/// was a merge copy + a u64 re-pack).
+	// KEPT-API: the k-fold train-set oracle the fold tests compare against
+	#[allow(dead_code)]
 	pub fn kfold_train_set(&self, held_out: usize) -> IDSSubset
 	{
-		let others = self.train_folds.iter().enumerate().filter(move |(i, _)| *i != held_out).map(|(_, f)| f);
-		self.subset_of(&crate::ids_fold::IDSFold::concat(others))
+		self.kfold_train_set_with_rows(held_out).1
 	}
 
 	/// A fold-shaped row list as a materialised IDSSubset.
@@ -782,10 +869,11 @@ pub fn evaluate_genomes_ids_cached_hybrid(
 	rng_seed: u64,
 ) -> Vec<(f64, f64, f64, f64, f64, u32)>
 {
-	let train = cache.train_subset(train_subset_idx);
+	let (fold, train) = cache.train_subset_with_rows(train_subset_idx);
 	let eval = cache.full_eval();
+	let calib = cache.calib_set(fold, &train, train_subset_idx);
 
-	crate::adaptive::evaluate_genomes_parallel_hybrid(
+	crate::adaptive::evaluate_genomes_parallel_hybrid_calibrated(
 		genomes_bits_flat,
 		genomes_neurons_flat,
 		genomes_connections_flat,
@@ -804,6 +892,7 @@ pub fn evaluate_genomes_ids_cached_hybrid(
 		neuron_sample_rate,
 		rng_seed,
 		cache.class_weights.as_deref(),
+		calib.as_ref(),
 	)
 }
 
@@ -832,12 +921,14 @@ pub fn evaluate_genomes_ids_kfold_hybrid(
 	);
 
 	// Train set: all folds except the held-out one, gathered once.
-	let train = cache.kfold_train_set(held_out_fold);
+	let (fold, train) = cache.kfold_train_set_with_rows(held_out_fold);
+	// ids_calib_sample: the search threshold's fixed stratified rows.
+	let calib = cache.calib_set(&fold, &train, held_out_fold);
 
 	// Use the held-out fold as eval
 	let eval = cache.train_subset(held_out_fold);
 
-	crate::adaptive::evaluate_genomes_parallel_hybrid(
+	crate::adaptive::evaluate_genomes_parallel_hybrid_calibrated(
 		genomes_bits_flat,
 		genomes_neurons_flat,
 		genomes_connections_flat,
@@ -856,6 +947,7 @@ pub fn evaluate_genomes_ids_kfold_hybrid(
 		neuron_sample_rate,
 		rng_seed,
 		cache.class_weights.as_deref(),
+		calib.as_ref(),
 	)
 }
 

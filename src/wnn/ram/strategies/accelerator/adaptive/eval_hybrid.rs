@@ -60,6 +60,59 @@ pub fn evaluate_genomes_parallel_hybrid(
 		rng_seed,
 		class_weights,
 		None, // override_threshold: default = calibrate on training data
+		None, // calib: the full train set
+	)
+}
+
+/// `evaluate_genomes_parallel_hybrid` with the single-cluster search threshold
+/// calibrated on `calib` (a fixed stratified subsample of the train rows,
+/// flow param `ids_calib_sample`) instead of every train row. `None` is
+/// `evaluate_genomes_parallel_hybrid` exactly. Only the threshold changes:
+/// training and the eval-set scoring are untouched.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_genomes_parallel_hybrid_calibrated(
+	genomes_bits_flat: &[usize],
+	genomes_neurons_flat: &[usize],
+	genomes_connections_flat: &[i64],
+	num_genomes: usize,
+	num_clusters: usize,
+	train_input_bits: &ram_core::packed_bits::PackedBits,
+	train_targets: &[i64],
+	train_negatives: &[i64],
+	num_train: usize,
+	num_negatives: usize,
+	eval_input_bits: &ram_core::packed_bits::PackedBits,
+	eval_targets: &[i64],
+	num_eval: usize,
+	total_input_bits: usize,
+	settings: ram_core::neuron_memory::EvalSettings,
+	neuron_sample_rate: f32,
+	rng_seed: u64,
+	class_weights: Option<&[u32]>,
+	calib: Option<&CalibSet>,
+) -> Vec<(f64, f64, f64, f64, f64, u32)>
+{
+	evaluate_genomes_parallel_hybrid_impl(
+		genomes_bits_flat,
+		genomes_neurons_flat,
+		genomes_connections_flat,
+		num_genomes,
+		num_clusters,
+		train_input_bits,
+		train_targets,
+		train_negatives,
+		num_train,
+		num_negatives,
+		eval_input_bits,
+		eval_targets,
+		num_eval,
+		total_input_bits,
+		settings,
+		neuron_sample_rate,
+		rng_seed,
+		class_weights,
+		None,
+		calib,
 	)
 }
 
@@ -516,6 +569,7 @@ fn try_eval_in_place_batch(
 	num_eval: usize,
 	settings: ram_core::neuron_memory::EvalSettings,
 	override_threshold: Option<f64>,
+	calib: Option<&CalibSet>,
 ) -> Option<Vec<(usize, f64, f64, f64, f64, f64, u32)>>
 {
 	if std::env::var("WNN_EVAL_IN_PLACE").ok().as_deref() != Some("1")
@@ -561,8 +615,15 @@ fn try_eval_in_place_batch(
 	}
 
 	// Train-set scores are only needed for the default train-calibrated
-	// threshold; fixed/oracle overrides probe the eval set only.
-	let score_train = override_threshold.is_none();
+	// threshold; fixed/oracle overrides probe the eval set only. Under
+	// ids_calib_sample the probe scores just the subsample's rows.
+	let train_probe: Option<&ram_core::packed_bits::PackedBits> = match (override_threshold, calib)
+	{
+		(Some(_), _) => None,
+		(None, Some(c)) => Some(&c.input_bits),
+		(None, None) => Some(cfg.train_input_bits),
+	};
+	let calib_targets: &[i64] = calib.map_or(cfg.train_targets, |c| &c.targets[..]);
 	let mut out: Vec<(usize, f64, f64, f64, f64, f64, u32)> =
 		Vec::with_capacity(batch_end - batch_start);
 	for g in batch_start..batch_end
@@ -576,7 +637,7 @@ fn try_eval_in_place_batch(
 		let conns =
 			&cfg.genomes_connections_flat[cfg.conn_offsets[g]..cfg.conn_offsets[g] + cfg.conn_sizes[g]];
 		// Same seed as every other route (HybridBatchConfig::train_seed).
-		let votes = match crate::marker_train::train_single_genome_chunked_scored(
+		let votes = match crate::marker_train::train_single_genome_chunked_scored_probe(
 			bits,
 			conns,
 			cfg.train_input_bits,
@@ -591,7 +652,7 @@ fn try_eval_in_place_batch(
 			cfg.class_weights,
 			eval_input_bits,
 			num_eval,
-			score_train,
+			train_probe,
 			cfg.memory_mode,
 		)
 		{
@@ -609,7 +670,7 @@ fn try_eval_in_place_batch(
 		let (ce, acc, f1, fpr, threshold) = score_vote_sums(
 			&votes,
 			eval_targets,
-			cfg.train_targets,
+			calib_targets,
 			settings,
 			override_threshold,
 		);
@@ -1385,6 +1446,7 @@ fn evaluate_genomes_parallel_hybrid_impl(
 	rng_seed: u64,
 	class_weights: Option<&[u32]>,
 	override_threshold: Option<f64>,
+	calib: Option<&CalibSet>,
 ) -> Vec<(f64, f64, f64, f64, f64, u32)>
 {
 	let empty_value = settings.empty_value;
@@ -1550,6 +1612,7 @@ fn evaluate_genomes_parallel_hybrid_impl(
 			num_eval,
 			settings,
 			override_threshold,
+			calib,
 		)
 		{
 			all_results.extend(fused);
@@ -1617,15 +1680,21 @@ fn evaluate_genomes_parallel_hybrid_impl(
 			}
 			else
 			{
-				// Default: calibrate on training data
+				// Default: calibrate on training data — every train row, or the
+				// fixed stratified subsample when the flow set ids_calib_sample.
+				let (calib_bits, calib_targets, num_calib) = match calib
+				{
+					Some(c) => (&c.input_bits, &c.targets[..], c.num_examples()),
+					None => (train_input_bits, train_targets, num_train),
+				};
 				let metal_arc = get_metal_evaluator();
 				let sparse_metal_arc = get_sparse_metal_evaluator();
 				for (_, export, threshold) in batch_exports.iter_mut()
 				{
 					let train_scores = compute_per_example_scores(
 						export,
-						train_input_bits,
-						num_train,
+						calib_bits,
+						num_calib,
 						num_clusters,
 						total_input_bits,
 						empty_value,
@@ -1637,7 +1706,7 @@ fn evaluate_genomes_parallel_hybrid_impl(
 					);
 					let flat_scores: Vec<f64> = train_scores.iter().map(|s| s[0]).collect();
 					let (t, _f1, _fpr) =
-						find_optimal_threshold_auto(&flat_scores, train_targets, settings.fitness_weights);
+						find_optimal_threshold_auto(&flat_scores, calib_targets, settings.fitness_weights);
 					*threshold = Some(t);
 				}
 			}
@@ -1827,6 +1896,7 @@ pub fn evaluate_genomes_parallel_hybrid_with_override(
 		rng_seed,
 		class_weights,
 		override_threshold,
+		None, // calib: validation/final calls always calibrate on the full set
 	)
 }
 

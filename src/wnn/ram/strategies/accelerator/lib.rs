@@ -331,6 +331,9 @@ mod mixed_bits_scorer_tests;
 // The multi-cluster GA fitness (CE) path vs the reference scorer (12/10/2026).
 #[cfg(all(test, target_os = "macos"))]
 mod ce_path_tests;
+// ids_calib_sample: search-time threshold calibration subsample (02/11/2026).
+#[cfg(all(test, target_os = "macos"))]
+mod calib_sample_tests;
 
 #[cfg(target_os = "macos")]
 mod marker_probe;
@@ -444,7 +447,14 @@ use pyapi::*;
 /// copies verified equal to their representative); QSR / PLN / a non-quarter
 /// TERNARY empty_value / every identity grouping score the logical export as
 /// before. Bumped so a flow cannot mix scorers mid-cohort (timings move).
-pub const ABI_VERSION: u32 = 23;
+/// 24 (02/11/2026): additive — IDSCacheWrapper.set_calib_sample(sample, seed,
+/// strata=None) / calib_sample() (flow param ids_calib_sample). The single-
+/// cluster SEARCH fitness (k-fold / train-subset hybrid eval, incl. Rust-bred
+/// offspring and TS neighbours) calibrates each genome x fold threshold on a
+/// FIXED stratified subsample of the train rows (adaptive/calib_sample.rs)
+/// instead of every row. Default 0 = every row, bit-identical to ABI 23;
+/// validation / final thresholds never use it.
+pub const ABI_VERSION: u32 = 24;
 
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()>

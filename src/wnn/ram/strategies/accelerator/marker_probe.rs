@@ -5,7 +5,7 @@
 //! the table (linear chain, inline oi_merge of duplicate-key slots, inline
 //! oi_bin_to_cell) and atomically accumulates integer vote sums (cell weight
 //! quantized ×4) into a persistent votes buffer. Used by
-//! `marker_train::train_single_genome_chunked_scored` to skip the sorted
+//! `marker_train::train_single_genome_chunked_scored_probe` to skip the sorted
 //! sparse export for fitness-only evaluations in the over-budget chunked
 //! regime. OI mode only — the caller gates.
 

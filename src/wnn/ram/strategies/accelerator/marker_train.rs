@@ -1009,8 +1009,13 @@ pub mod batched_path
 	/// (duplicates exist by design — concurrent find-or-claim races), which is
 	/// exact because OI counters are commutative. Legacy mode keeps the export
 	/// path.
+	///
+	/// The threshold-calibration rows are given explicitly: `train_probe` =
+	/// the rows whose scores come back as `train_scores` (the full train matrix for the default calibration,
+	/// the `ids_calib_sample` subsample — adaptive::CalibSet — otherwise), or
+	/// None for no train scores. Training always uses every train row.
 	#[allow(clippy::too_many_arguments)]
-	pub fn train_single_genome_chunked_scored(
+	pub fn train_single_genome_chunked_scored_probe(
 		genomes_bits_flat: &[usize],
 		genomes_connections_flat: &[i64],
 		train_input_bits: &ram_core::packed_bits::PackedBits,
@@ -1025,11 +1030,11 @@ pub mod batched_path
 		class_weights: Option<&[u32]>,
 		eval_input_bits: &ram_core::packed_bits::PackedBits,
 		num_eval: usize,
-		score_train: bool,
+		train_probe: Option<&ram_core::packed_bits::PackedBits>,
 		memory_mode: u8,
 	) -> Result<ChunkedVoteSums, String>
 	{
-		train_single_genome_chunked_scored_with_budget(
+		train_single_genome_chunked_scored_probe_with_budget(
 			genomes_bits_flat,
 			genomes_connections_flat,
 			train_input_bits,
@@ -1044,14 +1049,15 @@ pub mod batched_path
 			class_weights,
 			eval_input_bits,
 			num_eval,
-			score_train,
+			train_probe,
 			chunk_memory_budget(),
 			memory_mode,
 		)
 	}
 
-	/// Budget-parameterized body of `train_single_genome_chunked_scored`
-	/// (tests shrink the budget to force multiple chunks on small data).
+	/// Budget-parameterized, bool-probe form of `train_single_genome_chunked_scored_probe` (tests shrink
+	/// the budget to force multiple chunks on small data).
+	#[cfg(test)]
 	#[allow(clippy::too_many_arguments)]
 	fn train_single_genome_chunked_scored_with_budget(
 		genomes_bits_flat: &[usize],
@@ -1073,6 +1079,50 @@ pub mod batched_path
 		memory_mode: u8,
 	) -> Result<ChunkedVoteSums, String>
 	{
+		train_single_genome_chunked_scored_probe_with_budget(
+			genomes_bits_flat,
+			genomes_connections_flat,
+			train_input_bits,
+			train_targets,
+			train_negatives,
+			num_train,
+			num_negatives,
+			total_input_bits,
+			empty_value,
+			neuron_sample_rate,
+			rng_seed,
+			class_weights,
+			eval_input_bits,
+			num_eval,
+			score_train.then_some(train_input_bits),
+			chunk_budget_bytes,
+			memory_mode,
+		)
+	}
+
+	/// Body of the chunked eval-in-place trainer (see the wrappers above).
+	#[allow(clippy::too_many_arguments)]
+	fn train_single_genome_chunked_scored_probe_with_budget(
+		genomes_bits_flat: &[usize],
+		genomes_connections_flat: &[i64],
+		train_input_bits: &ram_core::packed_bits::PackedBits,
+		train_targets: &[i64],
+		train_negatives: &[i64],
+		num_train: usize,
+		num_negatives: usize,
+		total_input_bits: usize,
+		empty_value: f32,
+		neuron_sample_rate: f32,
+		rng_seed: u64,
+		class_weights: Option<&[u32]>,
+		eval_input_bits: &ram_core::packed_bits::PackedBits,
+		num_eval: usize,
+		train_probe_bits: Option<&ram_core::packed_bits::PackedBits>,
+		chunk_budget_bytes: usize,
+		memory_mode: u8,
+	) -> Result<ChunkedVoteSums, String>
+	{
+		let num_probe_train = train_probe_bits.map_or(0, |b| b.num_rows());
 		if !ram_core::neuron_memory::order_independent_training_enabled()
 		{
 			return Err(
@@ -1091,7 +1141,7 @@ pub mod batched_path
 		eprintln!(
 		"[MARKER_CHUNK_SCORED] eval-in-place: {} n × {:.0} MB/n — {} chunked dispatches of ≤{} neurons, probing {} eval{} examples per chunk (sorted export SKIPPED)",
 		n_total, bytes_per_neuron as f64 / 1e6, num_chunks, chunk_n, num_eval,
-		if score_train { format!(" + {} train", num_train) } else { String::new() },
+		if train_probe_bits.is_some() { format!(" + {} train", num_probe_train) } else { String::new() },
 	);
 
 		// Per-neuron connection prefix sums (same slicing as the export chunked path).
@@ -1119,16 +1169,11 @@ pub mod batched_path
 		let eval_input = ram_core::metal_input_buffer::NoCopyInputBuffer::new(device, eval_input_bits);
 		let (eval_buf, eval_words) = (eval_input.buffer(), eval_input_bits.words_per_row());
 		let eval_votes_buf = crate::marker_probe::new_zeroed_vote_buffer(device, num_eval);
-		let train_probe = if score_train
-		{
-			let train_input = ram_core::metal_input_buffer::NoCopyInputBuffer::new(device, train_input_bits);
-			let train_votes_buf = crate::marker_probe::new_zeroed_vote_buffer(device, num_train);
-			Some((train_input, train_votes_buf, train_input_bits.words_per_row()))
-		}
-		else
-		{
-			None
-		};
+		let train_probe = train_probe_bits.map(|probe_bits| {
+			let train_input = ram_core::metal_input_buffer::NoCopyInputBuffer::new(device, probe_bits);
+			let train_votes_buf = crate::marker_probe::new_zeroed_vote_buffer(device, num_probe_train);
+			(train_input, train_votes_buf, probe_bits.words_per_row())
+		});
 
 		// Chunk loop: train (table resident) → probe → free. Eval probes ALL
 		// (example, neuron) pairs — sampling is train-only by design.
@@ -1193,7 +1238,7 @@ pub mod batched_path
 					&keys_buf,
 					&values_buf,
 					train_votes_buf,
-					num_train,
+					num_probe_train,
 					*train_words,
 					1,
 				)?;
@@ -1210,13 +1255,15 @@ pub mod batched_path
 				t_eval_ms,
 				num_eval,
 				t_trainprobe_ms,
-				if score_train { num_train } else { 0 },
+				num_probe_train,
 			);
 		}
 
 		Ok(ChunkedVoteSums {
 			eval_scores: prober.votes_to_scores(&eval_votes_buf, num_eval, n_total),
-			train_scores: train_probe.as_ref().map(|(_, votes_buf, _)| prober.votes_to_scores(votes_buf, num_train, n_total)),
+			train_scores: train_probe
+				.as_ref()
+				.map(|(_, votes_buf, _)| prober.votes_to_scores(votes_buf, num_probe_train, n_total)),
 		})
 	}
 
@@ -1224,7 +1271,7 @@ pub mod batched_path
 	/// every piece of layout metadata the export loop (or the eval-in-place probe)
 	/// needs. Produced by `train_batch_to_table`; consumed either by
 	/// `export_trained_batch` (legacy sorted-export path) or by the probe-eval
-	/// dispatch in `train_single_genome_chunked_scored` (fused fitness path, which
+	/// dispatch in `train_single_genome_chunked_scored_probe` (fused fitness path, which
 	/// skips the export entirely).
 	struct TrainedBatch
 	{
@@ -3396,7 +3443,7 @@ pub mod batched_path
 			let device = trainer.device();
 			let prober = crate::marker_probe::get_prober(device).expect("prober");
 
-			// Persistent probe buffers (mirror train_single_genome_chunked_scored).
+			// Persistent probe buffers (mirror train_single_genome_chunked_scored_probe).
 			let (packed_eval_u64, eval_words) = ram_core::neuron_memory::pack_packed_to_u64(&packed_eval);
 			let eval_buf = device.new_buffer_with_data(
 				packed_eval_u64.as_ptr() as *const _,
@@ -3693,7 +3740,7 @@ pub mod batched_path
 				return;
 			}
 			let t1 = std::time::Instant::now();
-			let scored = train_single_genome_chunked_scored(
+			let scored = train_single_genome_chunked_scored_probe(
 				&bits_flat,
 				&conns,
 				&packed,
@@ -3708,7 +3755,7 @@ pub mod batched_path
 				None,
 				&packed_eval,
 				num_eval,
-				false,
+				None,
 				ram_core::neuron_memory::QUAD_WEIGHTED,
 			)
 			.expect("bench_prod fused failed");
@@ -3801,6 +3848,6 @@ pub mod batched_path
 
 #[cfg(target_os = "macos")]
 pub use batched_path::{
-	batched_train_offspring, single_genome_exceeds_batch_budget, train_single_genome_chunked_scored,
+	batched_train_offspring, single_genome_exceeds_batch_budget, train_single_genome_chunked_scored_probe,
 	ChunkedVoteSums,
 };

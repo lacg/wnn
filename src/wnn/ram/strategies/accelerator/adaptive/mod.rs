@@ -59,6 +59,8 @@ mod unit_table;
 pub use unit_table::{cell_weight_quarters, UnitTable};
 mod eval_single;
 pub use eval_single::*;
+mod calib_sample;
+pub use calib_sample::CalibSet;
 mod eval_hybrid;
 pub use eval_hybrid::*;
 mod adaptive_eval;
