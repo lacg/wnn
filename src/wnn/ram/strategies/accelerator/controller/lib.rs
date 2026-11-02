@@ -10,6 +10,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
 mod altitude_pd; // scope C stage 1: outer altitude loop handing a collective to a teacher
+mod box_qp; // exact box-QP solver for the MPC teachers (PDAS + primal active-set)
 mod arch_ops; // architecture (connectivity) operators (counter_rng, Rust-first)
 mod cell_mode;
 mod cell_remap; // cell ADDRESS remaps on architecture change (bit-exact port)

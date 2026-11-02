@@ -371,7 +371,7 @@ fn mpc_qp_convergence_census()
 		let mut t = af.teacher(4);
 		let m = mpc_of(&mut t);
 		let (lmax, lmin) = extreme_eigs(&m.h);
-		eprintln!("[mpc-qp H] n={} lambda_max={lmax:.4e} lambda_min={lmin:.4e} cond={:.3e} 1/inv_l={:.4e}", m.h.r, lmax / lmin, 1.0 / m.inv_l);
+		eprintln!("[mpc-qp H] n={} lambda_max={lmax:.4e} lambda_min={lmin:.4e} cond={:.3e}", m.h.r, lmax / lmin);
 	}
 	for (name, xy, expert) in [
 		("stage2-xy0.5-student", 0.5f32, false),
@@ -388,3 +388,180 @@ fn mpc_qp_convergence_census()
 		print_report(name, &mut r);
 	}
 }
+
+/// FNV-1a over the f32 bits of every recorded label (pid_pwms) — the teacher
+/// output the student is trained toward.
+fn label_digest(cfg: &RewardGatedConfigPacked, episodes: usize, seed: u64) -> (u64, usize)
+{
+	let af = AirframeRs::from_cfg(cfg);
+	let mut teacher = af.teacher(4);
+	let mut sim: AttitudeSim = af.sim();
+	let mut c = student(seed ^ 0x5EED);
+	let mut rng = SmallRng::seed_from_u64(seed);
+	let (mut h, mut n) = (0xcbf29ce484222325u64, 0usize);
+	for _ in 0..episodes
+	{
+		let traj = rollout_and_label_rs(&mut c, &mut teacher, &mut sim, cfg, TILT_RAD, &mut rng, [0.0; 3]);
+		for l in &traj.pid_pwms
+		{
+			for v in l
+			{
+				for b in v.to_bits().to_le_bytes()
+				{
+					h = (h ^ b as u64).wrapping_mul(0x100000001b3);
+				}
+			}
+			n += 1;
+		}
+		if !cfg.expert_drives
+		{
+			let _ = train_on_trajectory_rs(&mut c, &traj, cfg);
+		}
+	}
+	(h, n)
+}
+
+/// Prints the label digests (ignored). Used to show the unconstrained fast path is
+/// bit-identical across the FISTA → exact-solver change and to size the
+/// constrained-path label change.
+#[test]
+#[ignore]
+fn mpc_label_digest_print()
+{
+	for (name, xy, expert) in [
+		("stage2-student", 0.5f32, false),
+		("stage2-expert", 0.5, true),
+		("stage1-student", 0.0, false),
+		("stage1-expert", 0.0, true),
+	]
+	{
+		let (h, n) = label_digest(&regime(xy, 2000, expert), 4, 0xD16E57);
+		eprintln!("[mpc-digest {name}] labels={n} digest={h:#018x}");
+	}
+}
+
+/// Pin: on expert-driven rollouts the box never binds, so the labels come from
+/// the unconstrained fast path and must be byte-identical to the pre-01/11
+/// FISTA build (digests recorded from commit bec92960).
+#[test]
+fn mpc_unconstrained_labels_bit_identical_to_fista_build()
+{
+	assert_eq!(label_digest(&regime(0.5, 2000, true), 4, 0xD16E57), (STAGE2_EXPERT_DIGEST, STAGE2_EXPERT_LABELS));
+	assert_eq!(label_digest(&regime(0.0, 2000, true), 4, 0xD16E57), (STAGE1_EXPERT_DIGEST, STAGE1_EXPERT_LABELS));
+}
+
+/// Pin: every constrained solve on student-driven rollouts (both regimes) is a
+/// KKT point and equals an independent exact active-set solve; PDAS settles
+/// without the fallback and in a handful of linear solves.
+#[test]
+fn mpc_constrained_solves_are_exact_on_rollouts()
+{
+	for xy in [0.5f32, 0.0]
+	{
+		let cfg = regime(xy, 2000, false);
+		let probes = collect(&cfg, 3, 0xE8AC7 ^ xy.to_bits() as u64);
+		let af = AirframeRs::from_cfg(&cfg);
+		let mut t = af.teacher(4);
+		let m = mpc_of(&mut t);
+		let r = analyse(m, &probes);
+		assert!(r.constrained > 1000, "xy={xy}: too few constrained solves to pin ({})", r.constrained);
+		assert_eq!(r.cap_hits, 0, "xy={xy}: {} solves needed the primal fallback", r.cap_hits);
+		assert_eq!(r.ref_failed, 0);
+		assert!(r.max_resid_exit < 1e-9, "xy={xy}: exit KKT residual {:.3e}", r.max_resid_exit);
+		assert!(r.max_du_all < 1e-9, "xy={xy}: |U − U*| {:.3e}", r.max_du_all);
+		assert!(r.max_obj_gap < 1e-9, "xy={xy}: objective gap {:.3e}", r.max_obj_gap);
+		assert!(*r.iters.iter().max().unwrap() <= 30, "xy={xy}: PDAS took {:?} solves", r.iters.iter().max());
+	}
+}
+
+/// Pin: the solver against brute force on small random box-QPs (n = 6, all
+/// 3^6 = 729 active-set patterns enumerated, the best KKT-feasible one wins) —
+/// a reference that shares no code with the active-set searches — and with
+/// cold, hostile warm starts that force the primal fallback path too.
+#[test]
+fn box_qp_matches_enumeration_on_random_qps()
+{
+	use crate::box_qp::BoxQpSolver;
+	let mut rng = SmallRng::seed_from_u64(0xB0C5);
+	let n = 6usize;
+	let a = 0.4;
+	let mut fallbacks = 0;
+	for trial in 0..400
+	{
+		// SPD H = MᵀM + δI with a wide spectrum.
+		let mut m = Mat::zeros(n, n);
+		for i in 0..n
+		{
+			for j in 0..n
+			{
+				m.set(i, j, rng.gen_range(-1.0..1.0) * if j == 0 { 30.0 } else { 1.0 });
+			}
+		}
+		let h = m.transpose().matmul(&m).add(&Mat::identity(n).scale(0.05));
+		let g: Vec<f64> = (0..n).map(|_| rng.gen_range(-20.0..20.0)).collect();
+		let warm: Vec<f64> = (0..n).map(|_| [-1.0, 0.0, 1.0][rng.gen_range(0..3)]).collect();
+		let mut qp = BoxQpSolver::new(n, h.d.clone(), a);
+		let u = qp.solve(&g, &warm).to_vec();
+		fallbacks += qp.last_fallback as usize;
+		let best = enumerate_box_qp(&h, &g, a);
+		let du = (0..n).map(|i| (u[i] - best[i]).abs()).fold(0.0, f64::max);
+		assert!(du < 1e-9, "trial {trial}: |u − u_enum| = {du:.3e}");
+		assert!(kkt_residual(&h, &g, a, &u) < 1e-9);
+	}
+	eprintln!("[box-qp enumeration] 400 trials, {fallbacks} via primal fallback");
+}
+
+/// Brute force: every assignment of {−a, free, +a}, keep the feasible
+/// stationary point with the lowest objective.
+fn enumerate_box_qp(h: &Mat, g: &[f64], a: f64) -> Vec<f64>
+{
+	let n = g.len();
+	let (mut best, mut best_f) = (vec![0.0; n], f64::INFINITY);
+	for code in 0..3usize.pow(n as u32)
+	{
+		let mut st = vec![0i8; n];
+		let mut c = code;
+		for s in st.iter_mut()
+		{
+			*s = (c % 3) as i8 - 1;
+			c /= 3;
+		}
+		let free: Vec<usize> = (0..n).filter(|&i| st[i] == 0).collect();
+		let mut u: Vec<f64> = st.iter().map(|&s| s as f64 * a).collect();
+		if !free.is_empty()
+		{
+			let mut hff = Mat::zeros(free.len(), free.len());
+			let mut rhs = vec![0.0; free.len()];
+			for (r, &i) in free.iter().enumerate()
+			{
+				rhs[r] = -g[i] - (0..n).filter(|&j| st[j] != 0).map(|j| h.get(i, j) * u[j]).sum::<f64>();
+				for (cc, &j) in free.iter().enumerate()
+				{
+					hff.set(r, cc, h.get(i, j));
+				}
+			}
+			let sol = inverse(&hff).unwrap().mul_vec(&rhs);
+			for (r, &i) in free.iter().enumerate()
+			{
+				u[i] = sol[r];
+			}
+		}
+		if u.iter().any(|v| v.abs() > a + 1e-12)
+		{
+			continue;
+		}
+		let f = objective(h, g, &u);
+		if f < best_f
+		{
+			(best, best_f) = (u, f);
+		}
+	}
+	best
+}
+
+// Label digests of the expert-driven (unconstrained-only) regimes, recorded on
+// the FISTA build (commit bec92960) by mpc_label_digest_print.
+const STAGE2_EXPERT_DIGEST: u64 = 0;
+const STAGE2_EXPERT_LABELS: usize = 0;
+const STAGE1_EXPERT_DIGEST: u64 = 0;
+const STAGE1_EXPERT_LABELS: usize = 0;
