@@ -92,7 +92,8 @@ import os
 # 15 → 17 (dx_m, dy_m appended). OFF is bit-identical to 31. Python source:
 # EpisodeConfig.imu_specific_force / rotor_drag / att_err_ref and
 # ControllerSpec.obs_att_estimator (phased_ga). STAGE THIS FILE WITH THE WHEEL.
-EXPECTED_ABI = 32
+# ABI 33 (02/11/2026, 195563e9): exact box-QP MPC solver (active set + Cholesky) — new mpc/mpcof teacher lineage.
+EXPECTED_ABI = 33
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "
