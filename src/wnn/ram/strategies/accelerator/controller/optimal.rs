@@ -881,6 +881,22 @@ pub struct AttitudeMpcRs
 	g_map: Mat,     // G (3N×6): g = g_map · x0
 	inv_l: f64,     // FISTA step = 1/L, L = spectral-radius upper bound of H
 	warm: Vec<f64>, // warm-start U from the previous step (shifted)
+	/// TEST-ONLY solver probe: when Some, every step records (x0, exit U,
+	/// iterations, converged). Read-only — never feeds back into a solve.
+	#[cfg(test)]
+	probe: Option<Vec<MpcProbe>>,
+}
+
+/// One recorded horizon solve (test-only probe).
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct MpcProbe
+{
+	pub x: [f64; 6],
+	pub u: Vec<f64>,
+	pub constrained: bool,
+	pub iters: usize,
+	pub converged: bool,
 }
 
 impl AttitudeMpcRs
@@ -1016,6 +1032,8 @@ impl AttitudeMpcRs
 			g_map,
 			inv_l,
 			warm: vec![0.0; cols],
+			#[cfg(test)]
+			probe: None,
 		}
 	}
 
@@ -1056,8 +1074,16 @@ impl AttitudeMpcRs
 			let mut uk: Vec<f64> = self.warm.iter().map(|&w| clamp_f64(w, -a, a)).collect();
 			let mut yk = uk.clone();
 			let mut t = 1.0f64;
+			#[cfg(test)]
+			let mut probe_iters = 0usize;
+			#[cfg(test)]
+			let mut probe_conv = false;
 			for _ in 0..200
 			{
+				#[cfg(test)]
+				{
+					probe_iters += 1;
+				}
 				let hy = self.h.mul_vec(&yk); // H y
 				let mut u_next = vec![0.0; cols];
 				for i in 0..cols
@@ -1081,11 +1107,28 @@ impl AttitudeMpcRs
 				t = t_next;
 				if max_step < 1e-9
 				{
+					#[cfg(test)]
+					{
+						probe_conv = true;
+					}
 					break;
 				}
 			}
+			#[cfg(test)]
+			if let Some(p) = self.probe.as_mut()
+			{
+				p.push(MpcProbe { x: *x, u: uk.clone(), constrained: true, iters: probe_iters, converged: probe_conv });
+			}
 			uk
 		};
+		#[cfg(test)]
+		if feasible
+		{
+			if let Some(p) = self.probe.as_mut()
+			{
+				p.push(MpcProbe { x: *x, u: u.clone(), constrained: false, iters: 0, converged: true });
+			}
+		}
 		// Warm start next step: shift U by one control (receding horizon).
 		for i in 0..(cols - 3)
 		{
@@ -1816,3 +1859,7 @@ mod alloc_lqr_tests
 		);
 	}
 }
+
+#[cfg(test)]
+#[path = "mpc_solver_tests.rs"]
+mod mpc_solver_tests;
