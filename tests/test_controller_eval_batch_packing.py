@@ -14,6 +14,7 @@ import ram_accelerator
 from wnn.control import cancel_state
 from wnn.control.evaluator import ControllerEvaluator
 
+# The single-layer (sn=0, no split) cap — the path every _sizer() population takes.
 CAP = ControllerEvaluator.EVAL_BUDGET_BYTES // ControllerEvaluator.EVAL_BYTES_PER_CELL
 
 
@@ -67,6 +68,7 @@ def _sizer(mode=3):
 def _no_override(monkeypatch):
 	monkeypatch.delenv("WNN_CTRL_EVAL_BATCH", raising=False)
 	monkeypatch.delenv("WNN_STATE_SPLIT", raising=False)
+	monkeypatch.delenv("WNN_CTRL_EVAL_BUDGET", raising=False)
 
 
 def _check_contiguous(bounds, n):
@@ -81,7 +83,8 @@ def test_one_outlier_no_longer_pins_the_population():
 	bounds = _sizer()._eval_batch_bounds([_Genome(i, c) for i, c in enumerate(cells)])
 	_check_contiguous(bounds, 50)
 	widths = [e - s for s, e in bounds]
-	old_width = CAP // 3_264_079
+	# The 25/09 rule was budget / (800 B x largest): width 2.
+	old_width = (ControllerEvaluator.EVAL_BUDGET_BYTES // 800) // 3_264_079
 	assert old_width == 2
 	assert max(widths) >= 9, widths
 	assert len(bounds) <= 7, widths
@@ -115,16 +118,59 @@ def test_mode_floors():
 
 
 def test_whole_population_in_one_batch_when_it_fits():
-	"""Small genomes are charged the 200k light-mode floor: 40 fit, the 41st splits —
-	exactly the width the old N x max rule gave for a uniform population."""
-	gs = [_Genome(i, 100_000) for i in range(40)]
-	assert _sizer()._eval_batch_bounds(gs) == [(0, 40)]
-	gs.append(_Genome(40, 100_000))
-	assert _sizer()._eval_batch_bounds(gs) == [(0, 40), (40, 41)]
+	"""Small genomes are charged the 200k light-mode floor: CAP // 200k fit, the
+	next one splits — exactly the width the old N x max rule gave for a uniform
+	population."""
+	fit = CAP // 200_000
+	gs = [_Genome(i, 100_000) for i in range(fit)]
+	assert _sizer()._eval_batch_bounds(gs) == [(0, fit)]
+	gs.append(_Genome(fit, 100_000))
+	assert _sizer()._eval_batch_bounds(gs) == [(0, fit), (fit, fit + 1)]
 
 
 def test_empty_population():
 	assert len(_sizer()._eval_batch_bounds([])) <= 1
+
+
+class _StateGenome(_Genome):
+	"""A genome WITH a state layer — what the split trainer needs to run."""
+
+	def __init__(self, gid, cells=None, state_neurons=8):
+		super().__init__(gid, cells)
+		self.state_neurons = state_neurons
+
+
+def test_bytes_per_cell_is_path_aware(monkeypatch):
+	"""800 B/cell only when the state-splitting trainer actually runs (env switch
+	AND a state layer); the measured single-layer figure otherwise."""
+	ev = _sizer()
+	single, split = ev.EVAL_BYTES_PER_CELL, ev.EVAL_BYTES_PER_CELL_SPLIT
+	assert split == 800
+	assert single < split
+	sn0 = [_Genome(0, 1_000_000)]
+	sn8 = [_StateGenome(0, 1_000_000)]
+	assert ev._eval_bytes_per_cell(sn0) == single
+	assert ev._eval_bytes_per_cell(sn8) == single          # split switch off
+	monkeypatch.setenv("WNN_STATE_SPLIT", "1")
+	assert ev._eval_bytes_per_cell(sn0) == single          # no state layer: no split
+	assert ev._eval_bytes_per_cell(sn8) == split
+
+
+def test_live_shape_packs_wider_on_the_single_layer_path(monkeypatch):
+	"""The CTRL-8 pop-50 sweep shape (01/11/2026): ~4.77M cells per genome under a
+	15 GB auto budget. The 800 B/cell split charge allowed 4 per sub-batch; the
+	single-layer figure must allow strictly more, and the split path is unchanged."""
+	monkeypatch.setenv("WNN_CTRL_EVAL_BUDGET", "15")
+	gs = [_Genome(i, 4_771_000) for i in range(50)]
+	ev = _sizer()
+	budget = 15 * 1024 ** 3
+	single_w = budget // ev.EVAL_BYTES_PER_CELL // 4_771_000
+	widths = [len(g) for g in ev._eval_batch_ffd(gs)]
+	assert max(widths) == single_w > budget // 800 // 4_771_000 == 4
+	monkeypatch.setenv("WNN_STATE_SPLIT", "1")
+	gs8 = [_StateGenome(i, 4_771_000) for i in range(50)]
+	monkeypatch.setattr(ev, "_split_cell_floor", lambda genomes: 0)
+	assert max(len(g) for g in ev._eval_batch_ffd(gs8)) == 4
 
 
 def test_env_override_is_a_fixed_width(monkeypatch):

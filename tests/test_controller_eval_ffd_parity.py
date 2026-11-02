@@ -53,7 +53,9 @@ def _evaluator(packing: str, crn: bool, thr) -> ControllerEvaluator:
 		ev.EVAL_BUDGET_BYTES = 10 ** 15
 	else:
 		ev.EVAL_PACKING = packing
-		ev.EVAL_BUDGET_BYTES = CAP * ev.EVAL_BYTES_PER_CELL
+		# The path-aware per-cell charge (01/11/2026): split and single-layer
+		# trainers price a cell differently; the cap must be CAP either way.
+		ev.EVAL_BUDGET_BYTES = CAP * ev._eval_bytes_per_cell(_population())
 		ev._genome_cell_estimates = lambda gs: list(EST)
 	return ev
 
@@ -82,6 +84,7 @@ def _run(packing: str, crn: bool, thr):
 def _no_override(monkeypatch):
 	monkeypatch.delenv("WNN_CTRL_EVAL_BATCH", raising=False)
 	monkeypatch.delenv("WNN_STATE_SPLIT", raising=False)
+	monkeypatch.delenv("WNN_CTRL_EVAL_BUDGET", raising=False)
 
 
 @pytest.mark.parametrize("crn", [False, True])

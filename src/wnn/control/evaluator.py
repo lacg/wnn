@@ -2217,12 +2217,40 @@ class ControllerEvaluator:
 	# cpu_score.rs's BYTES_PER_CELL (160), which is clone-only: the DashMap
 	# entries a read-only rollout copy costs. Two different questions; neither
 	# used to say which, which is how they came to disagree 4x.
-	# Measured 20/07/2026, marginal batch=1 -> batch=8 under WNN_STATE_SPLIT=1:
+	#
+	# PATH-AWARE (01/11/2026): the two trainers have different working sets.
+	#
+	# State-splitting trainer (WNN_STATE_SPLIT=1 with a state layer) — measured
+	# 20/07/2026, marginal batch=1 -> batch=8:
 	#   1269 B/cell  original
 	#    985 B/cell  + pre-sized split_record buffers
 	#    758 B/cell  + state_ins_flat bit-packed to the Metal word layout
-	# 800 tracks the current build with ~5% headroom.
-	EVAL_BYTES_PER_CELL = 800
+	# 800 tracks that build with ~5% headroom.
+	EVAL_BYTES_PER_CELL_SPLIT = 800
+	# Single-layer / non-split trainer (sn=0, every run since the split was
+	# retired) — measured 01/11/2026 the same way, marginal batch=1 -> batch=6
+	# (WNN_CTRL_EVAL_BATCH), /usr/bin/time -l, at the CTRL-8 recipe shape (b24,
+	# 256 output neurons, BINARY, mpcof, cf21_brushless L4C, translation,
+	# xy 0.5 + pos/vel obs, rotor drag 0.78; pop 6, 1 NEURONS gen, rg 2x12 eps
+	# x 2000 steps), cells identical in both arms [1.46M-2.03M, mu 1.702M]:
+	#   peak RSS        971.9 MB -> 1642.2 MB  => +670.3 MB / (5 x 1.702M) = 78.8 B/cell
+	#   peak footprint 1074.5 MB -> 1594.0 MB  => 61 B/cell
+	# 95 = the RSS figure + 20% headroom. ~8x below the split charge: 800 had
+	# pinned the live pop-50 sweep (4.77M cells/genome) to widths 4-9 = ~4 of
+	# 16 cores at 4.7 GB RSS.
+	EVAL_BYTES_PER_CELL = 95
+
+	def _eval_bytes_per_cell(self, genomes: list) -> int:
+		"""The per-cell peak charge for THIS population's trainer: the split
+		figure only when the state-splitting trainer actually runs (the env switch
+		AND a state layer — the same test as _split_cell_floor), else the
+		single-layer figure."""
+		import os
+		if os.environ.get("WNN_STATE_SPLIT") == "1" and any(
+			getattr(g, "state_neurons", self.spec.state_neurons) > 0 for g in genomes
+		):
+			return self.EVAL_BYTES_PER_CELL_SPLIT
+		return self.EVAL_BYTES_PER_CELL
 
 	def _eval_batch_bounds(self, genomes: list) -> list[tuple[int, int]]:
 		"""Contiguous [start, end) train+score sub-batches whose SUMMED peak cells fit
@@ -2243,7 +2271,7 @@ class ControllerEvaluator:
 		fixed = self._eval_batch_override(N)
 		if fixed:
 			return [(s, min(s + fixed, N)) for s in range(0, N, fixed)]
-		cap = self._eval_budget_bytes() // self.EVAL_BYTES_PER_CELL
+		cap = self._eval_budget_bytes() // self._eval_bytes_per_cell(genomes)
 		bounds, start, acc = [], 0, 0
 		for i, cells in enumerate(self._genome_cell_estimates(genomes)):
 			if i > start and acc + cells > cap:
@@ -2273,7 +2301,7 @@ class ControllerEvaluator:
 	def _eval_batch_ffd(self, genomes: list) -> list[list[int]]:
 		"""First-fit-decreasing into the same summed-cells budget. A genome bigger
 		than the whole budget still runs alone. Deterministic: ties keep index order."""
-		cap = self._eval_budget_bytes() // self.EVAL_BYTES_PER_CELL
+		cap = self._eval_budget_bytes() // self._eval_bytes_per_cell(genomes)
 		est = self._genome_cell_estimates(genomes)
 		order = sorted(range(len(genomes)), key=lambda i: (-est[i], i))
 		bins: list[list[int]] = []
