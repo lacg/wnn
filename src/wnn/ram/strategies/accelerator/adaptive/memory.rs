@@ -1194,3 +1194,82 @@ pub(crate) fn evaluate_group_sparse_gpu(
 		group.actual_neurons.as_deref(),
 	)
 }
+
+/// `evaluate_group_metal` over a DISTINCT-slot group (duplicate-aware
+/// scoring, `adaptive::distinct_scoring`): `group` is the compact group
+/// (`neurons` = the slot stride), `weights` its multiplicities.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn evaluate_group_metal_weighted(
+	metal: &crate::metal_ramlm::MetalRAMLMEvaluator,
+	input: &ram_core::packed_bits::PackedBits,
+	connections_flat: &[i64],
+	memory_words: &[i64],
+	group: &ConfigGroup,
+	num_eval: usize,
+	coverage: &[u64],
+	coverage_aware: bool,
+	memory_mode: u8,
+	empty_value: f32,
+	run_seed: u64,
+	example_offset: u32,
+	weights: ram_core::slot_weights::SlotWeights<'_>,
+) -> Result<Vec<f32>, String>
+{
+	let group_connections = &connections_flat[group.conn_offset..group.conn_offset + group.conn_size()];
+	metal.forward_batch_weighted(
+		ram_core::metal_input_buffer::GpuInputRows::Packed(input),
+		group_connections,
+		memory_words,
+		num_eval,
+		input.words_per_row(),
+		group.bits,
+		group.neurons,
+		group.words_per_neuron,
+		memory_mode,
+		empty_value,
+		run_seed,
+		example_offset,
+		coverage,
+		coverage_aware,
+		weights,
+	)
+}
+
+/// `evaluate_group_sparse_gpu` over a DISTINCT-slot group (see
+/// `evaluate_group_metal_weighted`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn evaluate_group_sparse_gpu_weighted(
+	sparse_evaluator: &ram_core::metal_sparse::MetalSparseEvaluator,
+	input: &ram_core::packed_bits::PackedBits,
+	connections_flat: &[i64],
+	export: &SparseGpuExport,
+	group: &ConfigGroup,
+	num_eval: usize,
+	coverage_aware: bool,
+	memory_mode: u8,
+	empty_value: f32,
+	run_seed: u64,
+	example_offset: u32,
+	weights: ram_core::slot_weights::SlotWeights<'_>,
+) -> Result<Vec<f32>, String>
+{
+	let group_connections = &connections_flat[group.conn_offset..group.conn_offset + group.conn_size()];
+	sparse_evaluator.forward_batch_sparse_weighted(
+		ram_core::metal_input_buffer::GpuInputRows::Packed(input),
+		group_connections,
+		&export.keys,
+		&export.values,
+		&export.offsets,
+		&export.counts,
+		num_eval,
+		input.words_per_row(),
+		group.bits,
+		group.neurons,
+		coverage_aware,
+		memory_mode,
+		empty_value,
+		run_seed,
+		example_offset,
+		weights,
+	)
+}

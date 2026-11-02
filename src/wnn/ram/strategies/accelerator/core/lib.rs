@@ -25,6 +25,7 @@ pub mod distinct_fractions;
 pub mod footprint;
 pub mod neuron_key;
 pub mod physical_genome;
+pub mod slot_weights;
 pub mod sparse_gpu_export;
 pub mod super_genome;
 pub mod unit_grouping;
@@ -113,6 +114,29 @@ pub mod metal_sparse
 			_: f32,
 			_: u64,
 			_: Option<&[u32]>,
+		) -> Result<Vec<f32>, String>
+		{
+			Err("Metal not available on this platform".into())
+		}
+		#[allow(clippy::too_many_arguments)]
+		pub fn forward_batch_sparse_weighted(
+			&self,
+			_: &[u64],
+			_: &[i64],
+			_: &[u64],
+			_: &[u8],
+			_: &[u32],
+			_: &[u32],
+			_: usize,
+			_: usize,
+			_: usize,
+			_: usize,
+			_: bool,
+			_: u8,
+			_: f32,
+			_: u64,
+			_: u32,
+			_: crate::slot_weights::SlotWeights<'_>,
 		) -> Result<Vec<f32>, String>
 		{
 			Err("Metal not available on this platform".into())

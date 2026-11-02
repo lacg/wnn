@@ -82,8 +82,102 @@ inline uint binary_search_lookup(
 
 //
 // Mode-switched accumulation for sparse memory.
-// Returns probability based on memory_mode.
+// Returns probability based on memory_mode: the multiplicity-weighted sum over
+// `count` slots from `start_neuron`, divided by `norm` (the cluster's logical
+// neuron count; == count for the logical layout).
 //
+template <typename Mult>
+inline float accumulate_sparse_m(
+		device const ulong *packed_input,
+		device const int *connections_flat,
+		device const ulong *keys_flat,
+		device const uchar *values_flat,
+		device const uint *offsets,
+		device const uint *counts,
+		uint start_neuron,
+		uint count,
+		uint norm,
+		Mult mult,
+		uint bits_per_neuron,
+		uint memory_mode,
+		float empty_value,
+		uint default_cell_value,
+		ulong run_seed,
+		uint example_idx)
+{
+	// Generic stochastic-capable accumulation: QUAD_WEIGHTED (deterministic
+	// graded), QSR (QUAD + seeded coin), and PLN (TERNARY cells + fair u-coin)
+	// all reduce to sum(wnn_cell_weight_rng)/n — the helper dispatches per mode
+	// and default_cell_value is already mode-correct (QUAD→1, PLN→EMPTY 2).
+	if (memory_mode == WNN_MODE_QUAD_WEIGHTED || memory_mode == WNN_MODE_QSR || memory_mode == WNN_MODE_PLN)
+	{
+		float weighted_sum = 0.0f;
+		for (uint n = 0; n < count; n++)
+		{
+			uint neuron_idx = start_neuron + n;
+			device const int *connections = connections_flat + neuron_idx * bits_per_neuron;
+			ulong address = wnn_compute_address_u64(packed_input, connections, bits_per_neuron);
+			uint cell = binary_search_lookup(keys_flat, values_flat,
+																			 offsets[neuron_idx], counts[neuron_idx], address, default_cell_value);
+			ulong rng = wnn_qsr_key(run_seed, neuron_idx, address, example_idx);
+			weighted_sum += float(mult(neuron_idx)) * wnn_cell_weight_rng(cell, memory_mode, empty_value, rng);
+		}
+		return weighted_sum / float(norm);
+	}
+	else if (memory_mode == WNN_MODE_QUAD_BINARY)
+	{
+		uint fired = 0;
+		for (uint n = 0; n < count; n++)
+		{
+			uint neuron_idx = start_neuron + n;
+			device const int *connections = connections_flat + neuron_idx * bits_per_neuron;
+			ulong address = wnn_compute_address_u64(packed_input, connections, bits_per_neuron);
+			uint cell = binary_search_lookup(keys_flat, values_flat,
+																			 offsets[neuron_idx], counts[neuron_idx], address, default_cell_value);
+			if (cell >= 2)
+				fired += mult(neuron_idx);
+		}
+		return float(fired) / float(norm);
+	}
+	else if (memory_mode == WNN_MODE_BINARY)
+	{
+		// Classical 1-bit read: P = fraction of neurons whose addressed cell
+		// is TRUE(1); unwritten = FALSE = 0 (no empty term).
+		uint count_true = 0;
+		for (uint n = 0; n < count; n++)
+		{
+			uint neuron_idx = start_neuron + n;
+			device const int *connections = connections_flat + neuron_idx * bits_per_neuron;
+			ulong address = wnn_compute_address_u64(packed_input, connections, bits_per_neuron);
+			uint cell = binary_search_lookup(keys_flat, values_flat,
+																			 offsets[neuron_idx], counts[neuron_idx], address, default_cell_value);
+			if (cell == 1u)
+				count_true += mult(neuron_idx);
+		}
+		return float(count_true) / float(norm);
+	}
+	else
+	{
+		// TERNARY (default)
+		uint count_true = 0;
+		uint count_empty = 0;
+		for (uint n = 0; n < count; n++)
+		{
+			uint neuron_idx = start_neuron + n;
+			device const int *connections = connections_flat + neuron_idx * bits_per_neuron;
+			ulong address = wnn_compute_address_u64(packed_input, connections, bits_per_neuron);
+			uint cell = binary_search_lookup(keys_flat, values_flat,
+																			 offsets[neuron_idx], counts[neuron_idx], address, default_cell_value);
+			if (cell == WNN_CELL_TRUE)
+				count_true += mult(neuron_idx);
+			else if (cell == WNN_CELL_EMPTY)
+				count_empty += mult(neuron_idx);
+		}
+		return (float(count_true) + empty_value * float(count_empty)) / float(norm);
+	}
+}
+
+// The logical layout: every slot once, mean over `neurons_per_cluster`.
 inline float accumulate_sparse(
 		device const ulong *packed_input,
 		device const int *connections_flat,
@@ -100,76 +194,10 @@ inline float accumulate_sparse(
 		ulong run_seed,
 		uint example_idx)
 {
-	// Generic stochastic-capable accumulation: QUAD_WEIGHTED (deterministic
-	// graded), QSR (QUAD + seeded coin), and PLN (TERNARY cells + fair u-coin)
-	// all reduce to sum(wnn_cell_weight_rng)/n — the helper dispatches per mode
-	// and default_cell_value is already mode-correct (QUAD→1, PLN→EMPTY 2).
-	if (memory_mode == WNN_MODE_QUAD_WEIGHTED || memory_mode == WNN_MODE_QSR || memory_mode == WNN_MODE_PLN)
-	{
-		float weighted_sum = 0.0f;
-		for (uint n = 0; n < neurons_per_cluster; n++)
-		{
-			uint neuron_idx = start_neuron + n;
-			device const int *connections = connections_flat + neuron_idx * bits_per_neuron;
-			ulong address = wnn_compute_address_u64(packed_input, connections, bits_per_neuron);
-			uint cell = binary_search_lookup(keys_flat, values_flat,
-																			 offsets[neuron_idx], counts[neuron_idx], address, default_cell_value);
-			ulong rng = wnn_qsr_key(run_seed, neuron_idx, address, example_idx);
-			weighted_sum += wnn_cell_weight_rng(cell, memory_mode, empty_value, rng);
-		}
-		return weighted_sum / float(neurons_per_cluster);
-	}
-	else if (memory_mode == WNN_MODE_QUAD_BINARY)
-	{
-		uint count = 0;
-		for (uint n = 0; n < neurons_per_cluster; n++)
-		{
-			uint neuron_idx = start_neuron + n;
-			device const int *connections = connections_flat + neuron_idx * bits_per_neuron;
-			ulong address = wnn_compute_address_u64(packed_input, connections, bits_per_neuron);
-			uint cell = binary_search_lookup(keys_flat, values_flat,
-																			 offsets[neuron_idx], counts[neuron_idx], address, default_cell_value);
-			if (cell >= 2)
-				count++;
-		}
-		return float(count) / float(neurons_per_cluster);
-	}
-	else if (memory_mode == WNN_MODE_BINARY)
-	{
-		// Classical 1-bit read: P = fraction of neurons whose addressed cell
-		// is TRUE(1); unwritten = FALSE = 0 (no empty term).
-		uint count_true = 0;
-		for (uint n = 0; n < neurons_per_cluster; n++)
-		{
-			uint neuron_idx = start_neuron + n;
-			device const int *connections = connections_flat + neuron_idx * bits_per_neuron;
-			ulong address = wnn_compute_address_u64(packed_input, connections, bits_per_neuron);
-			uint cell = binary_search_lookup(keys_flat, values_flat,
-																			 offsets[neuron_idx], counts[neuron_idx], address, default_cell_value);
-			if (cell == 1u)
-				count_true++;
-		}
-		return float(count_true) / float(neurons_per_cluster);
-	}
-	else
-	{
-		// TERNARY (default)
-		uint count_true = 0;
-		uint count_empty = 0;
-		for (uint n = 0; n < neurons_per_cluster; n++)
-		{
-			uint neuron_idx = start_neuron + n;
-			device const int *connections = connections_flat + neuron_idx * bits_per_neuron;
-			ulong address = wnn_compute_address_u64(packed_input, connections, bits_per_neuron);
-			uint cell = binary_search_lookup(keys_flat, values_flat,
-																			 offsets[neuron_idx], counts[neuron_idx], address, default_cell_value);
-			if (cell == WNN_CELL_TRUE)
-				count_true++;
-			else if (cell == WNN_CELL_EMPTY)
-				count_empty++;
-		}
-		return (float(count_true) + empty_value * float(count_empty)) / float(neurons_per_cluster);
-	}
+	return accumulate_sparse_m(
+			packed_input, connections_flat, keys_flat, values_flat, offsets, counts,
+			start_neuron, neurons_per_cluster, neurons_per_cluster, WnnUnitMult(), bits_per_neuron,
+			memory_mode, empty_value, default_cell_value, run_seed, example_idx);
 }
 
 //
@@ -399,6 +427,52 @@ kernel void sparse_forward_to_buffer_masked(
 	uint global_cluster = cluster_ids[local_cluster];
 	uint output_idx = example_idx * params.total_clusters + global_cluster;
 	shared_buffer[output_idx] = prob;
+}
+
+//
+// Duplicate-aware (weighted) sparse forward — worker ABI 23.
+//
+// A DISTINCT-slot layout: cluster c lays out `max_neurons_per_cluster` slots,
+// scores the first `distinct[c]`, slot s counting `slot_mult[s]` times, and
+// divides by `norm[c]` (its LOGICAL neuron count). Equal, bit for bit, to the
+// masked kernel over the logical layout whenever the host gate holds
+// (deterministic mode, quarter weights, sums < 2^24 quarters).
+// Output: [num_examples * num_group_clusters] (total_clusters ==
+// num_group_clusters, identity cluster map).
+//
+kernel void sparse_forward_weighted(
+		device const ulong *packed_input_flat [[buffer(0)]],
+		device const int *connections_flat [[buffer(1)]],
+		device const ulong *keys_flat [[buffer(2)]],
+		device const uchar *values_flat [[buffer(3)]],
+		device const uint *offsets [[buffer(4)]],
+		device const uint *counts [[buffer(5)]],
+		device const uint *slot_mult [[buffer(6)]], // [num_neurons] copies per slot (0 = pad)
+		device const uint *distinct [[buffer(7)]],	 // [num_group_clusters] slots scored
+		device const uint *norm [[buffer(8)]],			 // [num_group_clusters] logical neurons
+		constant SparseToBufferMaskedParams &params [[buffer(9)]],
+		device float *probs_out [[buffer(10)]],
+		uint2 thread_pos [[thread_position_in_grid]])
+{
+	uint example_idx = thread_pos.x;
+	uint local_cluster = thread_pos.y;
+
+	if (example_idx >= params.num_examples)
+		return;
+	if (local_cluster >= params.num_group_clusters)
+		return;
+
+	device const ulong *packed_input = packed_input_flat + example_idx * params.words_per_example;
+	WnnSlotMult mult;
+	mult.m = slot_mult;
+
+	float prob = accumulate_sparse_m(
+			packed_input, connections_flat, keys_flat, values_flat, offsets, counts,
+			local_cluster * params.max_neurons_per_cluster, distinct[local_cluster], norm[local_cluster], mult,
+			params.bits_per_neuron, params.memory_mode, params.empty_value, params.default_cell_value,
+			params.run_seed, example_idx + params.example_offset);
+
+	probs_out[example_idx * params.num_group_clusters + local_cluster] = prob;
 }
 
 //

@@ -315,3 +315,26 @@ inline bool wnn_is_covered(
 	uint idx = neuron_idx * addresses_per_neuron + address;
 	return ((coverage[idx >> 6] >> (idx & 63u)) & 1ul) == 1ul;
 }
+
+// ---------------------------------------------------------------------------
+// Multiplicity sources for the accumulators (duplicate-aware scoring,
+// worker ABI 23). A slot counts `mult(neuron_idx)` times toward its cluster:
+// WnnUnitMult is the logical layout (every slot once; `float(1u) * w == w`
+// and `count += 1u`, so the plain kernels compute exactly what they always
+// did); WnnSlotMult reads a per-slot multiplicity buffer — a DISTINCT-slot
+// layout where a unit stands for its m logical copies. The host only takes
+// the weighted path for deterministic modes whose weights are exact quarters
+// (adaptive/distinct_scoring.rs), where every partial sum is exact in f32.
+// Used by accumulate_sparse_m (sparse_forward.metal) and accumulate_dense_m
+// (shaders/ramlm.metal).
+// ---------------------------------------------------------------------------
+struct WnnUnitMult
+{
+	inline uint operator()(uint) const { return 1u; }
+};
+
+struct WnnSlotMult
+{
+	device const uint *m;
+	inline uint operator()(uint i) const { return m[i]; }
+};

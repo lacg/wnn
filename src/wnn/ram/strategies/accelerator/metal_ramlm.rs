@@ -8,6 +8,27 @@
 use metal::*;
 use std::mem;
 
+/// Parameters struct (must match shader)
+#[repr(C)]
+struct RAMLMParams
+{
+	num_examples: u32,
+	words_per_example: u32,
+	num_neurons: u32,
+	bits_per_neuron: u32,
+	neurons_per_cluster: u32,
+	num_clusters: u32,
+	words_per_neuron: u32,
+	empty_value: f32,
+	memory_mode: u32,
+	// Mirrors RAMLMParams in shaders/ramlm.metal EXACTLY — example_offset
+	// also keeps run_seed 8B-aligned on both sides.
+	coverage_aware: u32,
+	addresses_per_neuron: u32,
+	example_offset: u32,
+	run_seed: u64,
+}
+
 /// Metal-based RAMLM evaluator
 pub struct MetalRAMLMEvaluator
 {
@@ -15,6 +36,9 @@ pub struct MetalRAMLMEvaluator
 	command_queue: CommandQueue,
 	forward_pipeline: ComputePipelineState,
 	forward_per_example_pipeline: ComputePipelineState,
+	/// `ramlm_forward_weighted`: distinct-slot layout with per-slot
+	/// multiplicities (duplicate-aware scoring, worker ABI 23).
+	weighted_pipeline: ComputePipelineState,
 }
 
 impl MetalRAMLMEvaluator
@@ -71,11 +95,17 @@ impl MetalRAMLMEvaluator
 			.new_compute_pipeline_state_with_function(&forward_per_example_kernel)
 			.map_err(|e| format!("Failed to create forward_per_example pipeline: {}", e))?;
 
+		let weighted_pipeline = library
+			.get_function("ramlm_forward_weighted", None)
+			.and_then(|f| device.new_compute_pipeline_state_with_function(&f))
+			.map_err(|e| format!("Failed to create weighted forward pipeline: {}", e))?;
+
 		Ok(Self {
 			device,
 			command_queue,
 			forward_pipeline,
 			forward_per_example_pipeline,
+			weighted_pipeline,
 		})
 	}
 
@@ -125,27 +155,6 @@ impl MetalRAMLMEvaluator
 
 		// Convert i64 connections to i32 for GPU
 		let connections_i32: Vec<i32> = connections_flat.iter().map(|&c| c as i32).collect();
-
-		// Parameters struct (must match shader)
-		#[repr(C)]
-		struct RAMLMParams
-		{
-			num_examples: u32,
-			words_per_example: u32,
-			num_neurons: u32,
-			bits_per_neuron: u32,
-			neurons_per_cluster: u32,
-			num_clusters: u32,
-			words_per_neuron: u32,
-			empty_value: f32,
-			memory_mode: u32,
-			// Mirrors RAMLMParams in shaders/ramlm.metal EXACTLY — example_offset
-			// also keeps run_seed 8B-aligned on both sides.
-			coverage_aware: u32,
-			addresses_per_neuron: u32,
-			example_offset: u32,
-			run_seed: u64,
-		}
 
 		let params = RAMLMParams {
 			num_examples: num_examples as u32,
@@ -266,6 +275,98 @@ impl MetalRAMLMEvaluator
 	}
 }
 
+impl MetalRAMLMEvaluator
+{
+	/// Duplicate-aware dense forward over a DISTINCT-slot layout (`stride`
+	/// slots per cluster; see `ram_core::slot_weights::SlotWeights`). Same
+	/// per-mode accumulation as `forward_batch` (one template,
+	/// `accumulate_dense_m`); output [num_examples * num_clusters]. Only under
+	/// the caller's exactness gate (deterministic mode, quarter weights).
+	#[allow(clippy::too_many_arguments)]
+	pub fn forward_batch_weighted(
+		&self,
+		packed_input: ram_core::metal_input_buffer::GpuInputRows<'_>,
+		connections_flat: &[i64],
+		memory_words: &[i64],
+		num_examples: usize,
+		words_per_example: usize,
+		bits_per_neuron: usize,
+		stride: usize,
+		words_per_neuron: usize,
+		memory_mode: u8,
+		empty_value: f32,
+		run_seed: u64,
+		example_offset: u32,
+		coverage: &[u64],
+		coverage_aware: bool,
+		weights: ram_core::slot_weights::SlotWeights<'_>,
+	) -> Result<Vec<f32>, String>
+	{
+		let num_clusters = weights.distinct.len();
+		weights.validate(num_clusters, stride)?;
+		if num_examples == 0
+		{
+			return Ok(vec![]);
+		}
+		let connections_i32: Vec<i32> = connections_flat.iter().map(|&c| c as i32).collect();
+		let params = RAMLMParams {
+			num_examples: num_examples as u32,
+			words_per_example: words_per_example as u32,
+			num_neurons: (num_clusters * stride) as u32,
+			bits_per_neuron: bits_per_neuron as u32,
+			neurons_per_cluster: stride as u32,
+			num_clusters: num_clusters as u32,
+			words_per_neuron: words_per_neuron as u32,
+			empty_value,
+			memory_mode: memory_mode as u32,
+			coverage_aware: u32::from(coverage_aware && !coverage.is_empty()),
+			addresses_per_neuron: 1u32.checked_shl(bits_per_neuron as u32).unwrap_or(0),
+			example_offset,
+			run_seed,
+		};
+		let coverage_src: &[u64] = if coverage.is_empty() { &[0u64] } else { coverage };
+		let input = packed_input.upload(&self.device);
+		let buffers = [
+			input.buffer(),
+			&self.buffer_of(&connections_i32),
+			&self.buffer_of(memory_words),
+			&self.buffer_of(std::slice::from_ref(&params)),
+		];
+		let (rows, cols) = (num_examples as u64, num_clusters as u64);
+		let output = self.device.new_buffer((rows * cols).max(1) * mem::size_of::<f32>() as u64, MTLResourceOptions::StorageModeShared);
+		let tail = [
+			&self.buffer_of(coverage_src),
+			&self.buffer_of(weights.distinct),
+			&self.buffer_of(weights.slot_mult),
+			&self.buffer_of(weights.norm),
+		];
+		let command_buffer = self.command_queue.new_command_buffer();
+		let encoder = command_buffer.new_compute_command_encoder();
+		encoder.set_compute_pipeline_state(&self.weighted_pipeline);
+		for (i, b) in buffers.iter().enumerate()
+		{
+			encoder.set_buffer(i as u64, Some(*b), 0);
+		}
+		encoder.set_buffer(4, Some(&output), 0);
+		for (i, b) in tail.iter().enumerate()
+		{
+			encoder.set_buffer(5 + i as u64, Some(*b), 0);
+		}
+		encoder.dispatch_threads(MTLSize::new(cols, rows, 1), MTLSize::new(32.min(cols).max(1), 8.min(rows), 1));
+		encoder.end_encoding();
+		command_buffer.commit();
+		command_buffer.wait_until_completed();
+		let ptr = output.contents() as *const f32;
+		Ok(unsafe { std::slice::from_raw_parts(ptr, (rows * cols) as usize).to_vec() })
+	}
+
+	fn buffer_of<T>(&self, data: &[T]) -> Buffer
+	{
+		// Metal refuses a zero-length buffer; an empty slice gets one dummy byte.
+		let bytes = std::mem::size_of_val(data).max(1) as u64;
+		self.device.new_buffer_with_data(data.as_ptr() as *const _, bytes, MTLResourceOptions::StorageModeShared)
+	}
+}
 
 /// Neurons SCORED per cluster, one u32 per cluster (the kernels' mean
 /// denominator). A coalesced group lays clusters out at its bucket MAX

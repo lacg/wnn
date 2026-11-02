@@ -1,0 +1,17 @@
+--- a/src/wnn/accel.py
++++ b/src/wnn/accel.py
+@@ -118,7 +118,13 @@
+ #   Exports are bit-identical wherever the hashed table never overflowed (b >= 16
+ #   golden digests), so only low-bit results move. The validation cache pins
+ #   worker_abi, so this bump re-validates.
+-EXPECTED_ABI = 22
++# 23 (01/11/2026): no surface change — duplicate-aware SCORING. A collapsed
++#   multiplicity export (rate 1.0, order-independent writer) is scored once per
++#   DISTINCT unit, weighted by its copies (Rust adaptive/distinct_scoring.rs).
++#   Bit-identical scores where admitted (QUAD / QUAD_BINARY / BINARY / TERNARY with
++#   a quarter empty_value); QSR, PLN and rate < 1.0 score as before. Only per-genome
++#   time moves (~83% of a 7237-shape genome was scoring). Supersedes 22.
++EXPECTED_ABI = 23
+ 
+ BUILD_HINT = (
+ 	"Rebuild the accelerator: cd src/wnn/ram/strategies/accelerator && "

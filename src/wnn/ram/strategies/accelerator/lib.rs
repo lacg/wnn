@@ -129,6 +129,28 @@ mod metal_ramlm
 		{
 			Err("Metal not available on this platform".into())
 		}
+		#[allow(clippy::too_many_arguments)]
+		pub fn forward_batch_weighted(
+			&self,
+			_: &[u64],
+			_: &[i64],
+			_: &[i64],
+			_: usize,
+			_: usize,
+			_: usize,
+			_: usize,
+			_: usize,
+			_: u8,
+			_: f32,
+			_: u64,
+			_: u32,
+			_: &[u64],
+			_: bool,
+			_: ram_core::slot_weights::SlotWeights<'_>,
+		) -> Result<Vec<f32>, String>
+		{
+			Err("Metal not available on this platform".into())
+		}
 		pub fn forward_batch(
 			&self,
 			_: &[u64],
@@ -413,7 +435,16 @@ use pyapi::*;
 /// (marker_repeatability_tests golden: b >= 16, every writer, both rates), so a
 /// low-bit result from an ABI-21 wheel is not comparable — the stale wheel must
 /// fail loudly, and the validation cache (pins worker_abi) re-validates.
-pub const ABI_VERSION: u32 = 22;
+/// 23 (01/11/2026): no surface change — duplicate-aware SCORING. A collapsed
+/// multiplicity export (rate 1.0, order-independent writer) is scored once per
+/// DISTINCT unit, weighted by its copies, mean over the logical neurons
+/// (adaptive/distinct_scoring.rs; kernels sparse_forward_weighted /
+/// ramlm_forward_weighted). Bit-identical scores by construction where admitted
+/// (deterministic modes with quarter weights, partial sums < 2^24 quarters,
+/// copies verified equal to their representative); QSR / PLN / a non-quarter
+/// TERNARY empty_value / every identity grouping score the logical export as
+/// before. Bumped so a flow cannot mix scorers mid-cohort (timings move).
+pub const ABI_VERSION: u32 = 23;
 
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()>

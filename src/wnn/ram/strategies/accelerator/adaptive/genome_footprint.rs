@@ -30,7 +30,7 @@ impl GenomeExport
 	}
 
 	/// Neurons per cluster, read back from the groups (cluster c's actual count).
-	fn logical_npc(&self) -> Vec<usize>
+	pub(super) fn logical_npc(&self) -> Vec<usize>
 	{
 		let num_clusters = self.groups.iter().flat_map(|g| g.cluster_ids.iter()).map(|&c| c + 1).max().unwrap_or(0);
 		let mut npc = vec![0usize; num_clusters];

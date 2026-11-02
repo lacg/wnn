@@ -70,6 +70,9 @@ pub struct MetalSparseEvaluator
 	/// `sparse_forward_to_buffer_masked`: coalesced groups (per-cluster
 	/// actual neuron counts inside a bucket-MAX layout).
 	masked_forward_pipeline: ComputePipelineState,
+	/// `sparse_forward_weighted`: distinct-slot layout with per-slot
+	/// multiplicities (duplicate-aware scoring, worker ABI 23).
+	weighted_forward_pipeline: ComputePipelineState,
 }
 
 /// Mirrors `SparseToBufferMaskedParams` in shaders/sparse_forward.metal.
@@ -144,6 +147,11 @@ impl MetalSparseEvaluator
 			.and_then(|f| device.new_compute_pipeline_state_with_function(&f))
 			.map_err(|e| format!("Failed to create sparse masked pipeline: {}", e))?;
 
+		let weighted_forward_pipeline = library
+			.get_function("sparse_forward_weighted", None)
+			.and_then(|f| device.new_compute_pipeline_state_with_function(&f))
+			.map_err(|e| format!("Failed to create sparse weighted pipeline: {}", e))?;
+
 		Ok(Self {
 			device,
 			command_queue,
@@ -151,6 +159,7 @@ impl MetalSparseEvaluator
 			sparse_forward_per_example_pipeline,
 			general_forward_pipeline,
 			masked_forward_pipeline,
+			weighted_forward_pipeline,
 		})
 	}
 
@@ -198,6 +207,91 @@ impl MetalSparseEvaluator
 		command_buffer.wait_until_completed();
 		let ptr = output.contents() as *const f32;
 		unsafe { std::slice::from_raw_parts(ptr, (num_examples * num_clusters) as usize).to_vec() }
+	}
+
+	/// Duplicate-aware forward over a DISTINCT-slot layout: cluster c lays out
+	/// `stride` slots, scores its first `weights.distinct[c]`, each counting
+	/// `weights.slot_mult[slot]` times, and divides by `weights.norm[c]`.
+	/// Same per-mode accumulation as `forward_batch_sparse` (one template,
+	/// `accumulate_sparse_m`); output is [num_examples * num_clusters].
+	/// Bit-identical to the logical layout only under the caller's exactness
+	/// gate (deterministic mode, quarter weights) — the QSR/PLN coin is keyed
+	/// by the slot index, so those modes must never come here.
+	#[allow(clippy::too_many_arguments)]
+	pub fn forward_batch_sparse_weighted(
+		&self,
+		packed_input: crate::metal_input_buffer::GpuInputRows<'_>,
+		connections_flat: &[i64],
+		keys_flat: &[u64],
+		values_flat: &[u8],
+		offsets: &[u32],
+		counts: &[u32],
+		num_examples: usize,
+		words_per_example: usize,
+		bits_per_neuron: usize,
+		stride: usize,
+		coverage_aware: bool,
+		memory_mode: u8,
+		empty_value: f32,
+		run_seed: u64,
+		example_offset: u32,
+		weights: crate::slot_weights::SlotWeights<'_>,
+	) -> Result<Vec<f32>, String>
+	{
+		let num_clusters = weights.distinct.len();
+		weights.validate(num_clusters, stride)?;
+		if num_examples == 0
+		{
+			return Ok(vec![]);
+		}
+		let connections_i32: Vec<i32> = connections_flat.iter().map(|&c| c as i32).collect();
+		let params = SparseMaskedParams {
+			num_examples: num_examples as u32,
+			words_per_example: words_per_example as u32,
+			num_neurons: (num_clusters * stride) as u32,
+			bits_per_neuron: bits_per_neuron as u32,
+			max_neurons_per_cluster: stride as u32,
+			num_group_clusters: num_clusters as u32,
+			total_clusters: num_clusters as u32,
+			empty_value,
+			memory_mode: memory_mode as u32,
+			default_cell_value: default_cell_for_coverage(memory_mode, coverage_aware),
+			example_offset,
+			_pad: 0,
+			run_seed,
+		};
+		let input = packed_input.upload(&self.device);
+		let buffers = [
+			input.buffer(),
+			&self.buffer_of(&connections_i32),
+			&self.buffer_of(keys_flat),
+			&self.buffer_of(values_flat),
+			&self.buffer_of(offsets),
+			&self.buffer_of(counts),
+			&self.buffer_of(weights.slot_mult),
+			&self.buffer_of(weights.distinct),
+			&self.buffer_of(weights.norm),
+			&self.buffer_of(std::slice::from_ref(&params)),
+		];
+		let (rows, cols) = (num_examples as u64, num_clusters as u64);
+		let output = self.device.new_buffer(
+			(rows * cols).max(1) * mem::size_of::<f32>() as u64,
+			MTLResourceOptions::StorageModeShared,
+		);
+		let command_buffer = self.command_queue.new_command_buffer();
+		let encoder = command_buffer.new_compute_command_encoder();
+		encoder.set_compute_pipeline_state(&self.weighted_forward_pipeline);
+		for (i, b) in buffers.iter().enumerate()
+		{
+			encoder.set_buffer(i as u64, Some(*b), 0);
+		}
+		encoder.set_buffer(buffers.len() as u64, Some(&output), 0);
+		encoder.dispatch_threads(MTLSize::new(rows, cols, 1), MTLSize::new(32.min(rows), 8.min(cols).max(1), 1));
+		encoder.end_encoding();
+		command_buffer.commit();
+		command_buffer.wait_until_completed();
+		let ptr = output.contents() as *const f32;
+		Ok(unsafe { std::slice::from_raw_parts(ptr, (rows * cols) as usize).to_vec() })
 	}
 
 	/// Forward pass using sparse memory with binary search on GPU

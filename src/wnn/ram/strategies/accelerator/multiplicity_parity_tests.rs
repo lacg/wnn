@@ -250,8 +250,14 @@ fn assert_storage_equal(a: &GenomeExport, b: &GenomeExport, what: &str)
 
 /// Scores bitwise equal on the CPU and GPU scorers, coverage-aware on and off.
 /// The CPU scorers handle mixed-bits (-1 prefix-pad) groups since 12/10/2026.
+///
+/// Duplicate-aware scoring (ABI 23): a collapsed `b` is scored through its
+/// DISTINCT view exactly when the mode's weights are exact quarters (asserted,
+/// so the fast path cannot silently stop engaging); then the distinct scores
+/// must equal BOTH the plain layer's and `b`'s own logical-path scores.
 fn assert_scores_equal(a: &GenomeExport, b: &GenomeExport, data: &Data, mode: u8, what: &str)
 {
+	assert_distinct_engagement(b, mode, EMPTY_VALUE, what);
 	let dense = crate::metal_ramlm::MetalRAMLMEvaluator::new().ok();
 	let sparse = ram_core::metal_sparse::MetalSparseEvaluator::new().ok();
 	let gpus: &[bool] = if dense.is_some() && sparse.is_some() { &[false, true] } else { &[false] };
@@ -262,8 +268,44 @@ fn assert_scores_equal(a: &GenomeExport, b: &GenomeExport, data: &Data, mode: u8
 			let score = |e: &GenomeExport| scores(e, data, mode, coverage_aware, gpu, &dense, &sparse);
 			let (sa, sb) = (score(a), score(b));
 			assert!(sa == sb, "{what}: scores differ (gpu={gpu}, coverage_aware={coverage_aware})");
+			let logical = logical_scores(b, data, mode, coverage_aware, gpu, &dense, &sparse);
+			assert!(sb == logical, "{what}: distinct != logical scores (gpu={gpu}, coverage_aware={coverage_aware})");
 		}
 	}
+}
+
+/// The distinct view is taken iff the export collapsed AND the mode's weights
+/// are exact quarters (QSR / PLN and a non-quarter empty_value never).
+pub(crate) fn assert_distinct_engagement(e: &GenomeExport, mode: u8, empty_value: f32, what: &str)
+{
+	let expect = !e.grouping.is_identity() && crate::adaptive::cell_weight_quarters(mode, empty_value).is_some();
+	let got = crate::adaptive::DistinctScoring::for_export(e, mode, empty_value).is_some();
+	assert_eq!(got, expect, "{what}: distinct scoring engaged={got}, expected {expect} (mode {mode})");
+}
+
+fn logical_scores(
+	e: &GenomeExport,
+	data: &Data,
+	mode: u8,
+	coverage_aware: bool,
+	gpu: bool,
+	dense: &Option<crate::metal_ramlm::MetalRAMLMEvaluator>,
+	sparse: &Option<ram_core::metal_sparse::MetalSparseEvaluator>,
+) -> Vec<u64>
+{
+	let rows = crate::adaptive::compute_per_example_scores_logical(
+		e,
+		&data.eval,
+		data.eval.num_rows(),
+		data.num_clusters,
+		EMPTY_VALUE,
+		mode,
+		RUN_SEED,
+		coverage_aware,
+		if gpu { dense.as_ref() } else { None },
+		if gpu { sparse.as_ref() } else { None },
+	);
+	rows.iter().flatten().map(|s| s.to_bits()).collect()
 }
 
 fn scores(
@@ -655,6 +697,7 @@ fn multiplicity_never_below_rate_one()
 			let plain = train_plain_batched(&batch, &data, mode, rate);
 			let factory = train_factory(&batch, &data, mode, rate);
 			assert!(factory[0].grouping.is_identity(), "rate {rate} mode {mode} selected the layer");
+			assert_distinct_engagement(&factory[0], mode, EMPTY_VALUE, &format!("rate {rate} mode {mode}"));
 			if !deterministic(mode)
 			{
 				continue;
@@ -721,4 +764,227 @@ fn from_physical_aliases_and_copies()
 			assert_scores_equal(&logical, &rebuilt, data, mode, &format!("cpu fixture {i} mode {mode}"));
 		}
 	}
+}
+
+// ------------------------------------------------- duplicate-aware scoring
+
+/// The IDS-47 shape at the multiplicities that stress the f32 argument: one
+/// cluster of 490 logical neurons over 3 units (200 / 170 / 120 copies,
+/// interleaved). CPU-trained (the sequential slot trainer writes copies
+/// identically in every mode), so it runs without the GPU trainer.
+fn heavy_duplicates(base_bits: [usize; 3], rng: &mut SmallRng) -> Batch
+{
+	let b = bases(&base_bits, rng);
+	let copies = [200usize, 170, 120];
+	let plan: Vec<usize> = (0..200).flat_map(|r| (0..3).filter(move |&u| copies[u] > r)).collect();
+	batch_of(vec![genome(&b, &[plan])])
+}
+
+/// K = 3 with heavy duplicates in every cluster, one dense cluster.
+fn heavy_multi_cluster(rng: &mut SmallRng) -> Batch
+{
+	let b = bases(&[14, 13, 14, 14, 10, 8], rng);
+	let rep = |units: &[usize], k: usize| -> Vec<usize> { (0..k).flat_map(|_| units.iter().copied()).collect() };
+	batch_of(vec![genome(&b, &[rep(&[0, 1], 60), rep(&[2, 3, 2], 40), rep(&[4, 5], 50)])])
+}
+
+/// Plain CPU export of the logical genome + the multiplicity layer's export
+/// over its physical genome (identical storage, asserted).
+fn cpu_pair(batch: &Batch, data: &Data, mode: u8) -> (GenomeExport, GenomeExport)
+{
+	let p = PhysicalGenome::collapse(&batch.bits, &batch.npc, &batch.conns);
+	assert!(!p.grouping.is_identity(), "fixture must carry duplicates");
+	let logical = cpu_export(&batch.bits, &batch.npc, &batch.conns, data, mode);
+	let physical = cpu_export(&p.bits, &p.neurons_per_cluster, &p.connections, data, mode);
+	let units = PhysicalUnits::new(&physical, &p.neurons_per_cluster);
+	let unit_of: Vec<u32> = (0..batch.bits.len()).map(|l| p.grouping.index_of(l)).collect();
+	let genome = FlatGenome { bits: &batch.bits, neurons_per_cluster: &batch.npc, connections: &batch.conns };
+	let mult = GenomeExport::from_physical(&units, &unit_of, p.grouping.clone(), genome, mode).expect("from_physical");
+	assert_storage_equal(&logical, &mult, "cpu pair");
+	(logical, mult)
+}
+
+/// Single-cluster metrics (CE, acc, F1, FPR, threshold) bit-equal: searched
+/// threshold (override None) and fixed 0.5, coverage-aware on and off.
+fn assert_binary_metrics_equal(a: &GenomeExport, b: &GenomeExport, data: &Data, eval_targets: &[i64], mode: u8, what: &str)
+{
+	let dense = crate::adaptive::get_metal_evaluator();
+	let sparse = crate::adaptive::get_sparse_metal_evaluator();
+	let n = eval_targets.len();
+	for coverage_aware in [false, true]
+	{
+		let settings = ram_core::neuron_memory::EvalSettings {
+			empty_value: EMPTY_VALUE,
+			memory_mode: mode,
+			coverage_aware,
+			run_seed: RUN_SEED,
+			..Default::default()
+		};
+		for over in [None, Some(0.5)]
+		{
+			let m = |e: &GenomeExport| {
+				let r = crate::adaptive::evaluate_genome_hybrid(
+					e, &data.eval, eval_targets, n, 1, TIB, settings, dense.as_deref(), sparse.as_deref(), over,
+				);
+				[r.0, r.1, r.2, r.3, r.4].map(f64::to_bits)
+			};
+			assert_eq!(m(a), m(b), "{what}: metrics differ (coverage_aware={coverage_aware}, override={over:?})");
+		}
+	}
+}
+
+/// ~490 logical neurons at multiplicity up to 200, sparse and dense, uniform
+/// and mixed bits, every mode: distinct scores == logical scores bit for bit
+/// on CPU and GPU, and so do the single-cluster metrics.
+#[test]
+fn distinct_scoring_heavy_multiplicity_bit_exact()
+{
+	let mut rng = SmallRng::seed_from_u64(0xD0_0B1E);
+	let data = Data::new(1, &mut rng);
+	let eval_targets: Vec<i64> = (0..data.eval.num_rows()).map(|_| rng.gen_range(0..2)).collect();
+	let fixtures = [
+		("sparse uniform", heavy_duplicates([14, 14, 14], &mut rng)),
+		("sparse hetero", heavy_duplicates([14, 12, 13], &mut rng)),
+		("dense uniform", heavy_duplicates([10, 10, 10], &mut rng)),
+		("dense hetero", heavy_duplicates([10, 8, 6], &mut rng)),
+	];
+	for mode in ALL_MODES
+	{
+		for (name, batch) in &fixtures
+		{
+			let what = format!("heavy {name} mode {mode}");
+			let (logical, mult) = cpu_pair(batch, &data, mode);
+			assert_scores_equal(&logical, &mult, &data, mode, &what);
+			assert_binary_metrics_equal(&logical, &mult, &data, &eval_targets, mode, &what);
+		}
+	}
+}
+
+#[test]
+fn distinct_scoring_heavy_multi_cluster_bit_exact()
+{
+	let mut rng = SmallRng::seed_from_u64(0xD0_0B1F);
+	let data = Data::new(3, &mut rng);
+	let batch = heavy_multi_cluster(&mut rng);
+	for mode in ALL_MODES
+	{
+		let (logical, mult) = cpu_pair(&batch, &data, mode);
+		assert_scores_equal(&logical, &mult, &data, mode, &format!("heavy K=3 mode {mode}"));
+	}
+}
+
+/// TERNARY with a non-quarter empty value: the f32 sum would round, so the
+/// distinct view must NOT be taken — and the scores stay the logical ones.
+#[test]
+fn distinct_scoring_off_for_non_quarter_empty_value()
+{
+	let mut rng = SmallRng::seed_from_u64(0xD0_0B20);
+	let data = Data::new(1, &mut rng);
+	let (logical, mult) = cpu_pair(&heavy_duplicates([14, 10, 14], &mut rng), &data, TERNARY);
+	for ev in [0.3f32, 0.1, 0.7]
+	{
+		assert!(crate::adaptive::DistinctScoring::for_export(&mult, TERNARY, ev).is_none(), "ev {ev} engaged");
+		let score = |e: &GenomeExport| {
+			let n = data.eval.num_rows();
+			let rows = compute_per_example_scores(e, &data.eval, n, 1, TIB, ev, TERNARY, RUN_SEED, false, None, None);
+			rows.iter().flatten().map(|s| s.to_bits()).collect::<Vec<u64>>()
+		};
+		assert_eq!(score(&logical), score(&mult), "ev {ev}: scores differ");
+	}
+	assert!(crate::adaptive::DistinctScoring::for_export(&mult, TERNARY, 0.5).is_some(), "quarter ev must engage");
+}
+
+/// A copy whose connections differ from its representative's (a grouping the
+/// export does not honour) must fall back to the logical path, not mis-score.
+#[test]
+fn distinct_scoring_rejects_a_copy_that_differs()
+{
+	let mut rng = SmallRng::seed_from_u64(0xD0_0B21);
+	let data = Data::new(1, &mut rng);
+	let (_, mut mult) = cpu_pair(&heavy_duplicates([14, 14, 14], &mut rng), &data, QUAD_WEIGHTED);
+	assert!(crate::adaptive::DistinctScoring::for_export(&mult, QUAD_WEIGHTED, EMPTY_VALUE).is_some());
+	let copy = (0..mult.grouping.num_units()).find(|&l| !mult.grouping.is_representative(l)).expect("a copy");
+	let bits = mult.groups[0].bits;
+	let c = &mut mult.connections[mult.groups[0].conn_offset + copy * bits];
+	*c = (*c + 1) % TIB as i64;
+	assert!(crate::adaptive::DistinctScoring::for_export(&mult, QUAD_WEIGHTED, EMPTY_VALUE).is_none());
+}
+
+/// The weighted Metal kernels must actually RUN (an Err would fall back to
+/// the CPU twin and let the GPU half of `assert_scores_equal` pass
+/// vacuously): each group of the distinct view, dispatched directly, equals
+/// the logical group's GPU scores bit for bit.
+#[test]
+fn distinct_scoring_gpu_kernels_run_and_match()
+{
+	let (Some(dense), Some(sparse)) =
+		(crate::metal_ramlm::MetalRAMLMEvaluator::new().ok(), ram_core::metal_sparse::MetalSparseEvaluator::new().ok())
+	else
+	{
+		eprintln!("[distinct] no Metal device — skipping");
+		return;
+	};
+	let mut rng = SmallRng::seed_from_u64(0xD0_0B22);
+	let data = Data::new(1, &mut rng);
+	let multi = Data::new(3, &mut rng);
+	let cases = [
+		(heavy_duplicates([14, 12, 13], &mut rng), &data),
+		(heavy_duplicates([10, 8, 6], &mut rng), &data),
+		(heavy_multi_cluster(&mut rng), &multi),
+	];
+	for mode in [QUAD_WEIGHTED, QUAD_BINARY, BINARY, TERNARY]
+	{
+		for (i, (batch, d)) in cases.iter().enumerate()
+		{
+			let (logical, mult) = cpu_pair(batch, d, mode);
+			let view = crate::adaptive::DistinctScoring::for_export(&mult, mode, EMPTY_VALUE).expect("engaged");
+			for coverage_aware in [false, true]
+			{
+				for gi in 0..logical.groups.len()
+				{
+					let what = format!("case {i} mode {mode} group {gi} cov {coverage_aware}");
+					let want = group_gpu(&logical, gi, None, &d.eval, mode, coverage_aware, &dense, &sparse);
+					let got = group_gpu(&view.export, gi, Some(view.weights[gi].view()), &d.eval, mode, coverage_aware, &dense, &sparse);
+					assert_eq!(bits_of(&got.expect(&what)), bits_of(&want.expect(&what)), "{what}");
+				}
+			}
+		}
+	}
+}
+
+#[allow(clippy::too_many_arguments)]
+fn group_gpu(
+	e: &GenomeExport,
+	gi: usize,
+	w: Option<ram_core::slot_weights::SlotWeights<'_>>,
+	input: &PackedBits,
+	mode: u8,
+	coverage_aware: bool,
+	dense: &crate::metal_ramlm::MetalRAMLMEvaluator,
+	sparse: &ram_core::metal_sparse::MetalSparseEvaluator,
+) -> Result<Vec<f32>, String>
+{
+	use crate::adaptive::{evaluate_group_metal, evaluate_group_metal_weighted, evaluate_group_sparse_gpu, evaluate_group_sparse_gpu_weighted};
+	let (is_sparse, sub, _) = &e.group_info[gi];
+	let (g, n, c) = (&e.groups[gi], input.num_rows(), &e.connections);
+	if *is_sparse
+	{
+		let s = &e.sparse_exports[*sub];
+		return match w
+		{
+			Some(w) => evaluate_group_sparse_gpu_weighted(sparse, input, c, s, g, n, coverage_aware, mode, EMPTY_VALUE, RUN_SEED, 0, w),
+			None => evaluate_group_sparse_gpu(sparse, input, c, s, g, n, coverage_aware, mode, EMPTY_VALUE, RUN_SEED, 0),
+		};
+	}
+	let (words, cov) = (&e.dense_exports[*sub], e.dense_coverage.get(*sub).map_or(&[][..], |v| v.as_slice()));
+	match w
+	{
+		Some(w) => evaluate_group_metal_weighted(dense, input, c, words, g, n, cov, coverage_aware, mode, EMPTY_VALUE, RUN_SEED, 0, w),
+		None => evaluate_group_metal(dense, input, c, words, g, n, cov, coverage_aware, mode, EMPTY_VALUE, RUN_SEED, 0),
+	}
+}
+
+fn bits_of(v: &[f32]) -> Vec<u32>
+{
+	v.iter().map(|x| x.to_bits()).collect()
 }

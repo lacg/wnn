@@ -42,12 +42,97 @@ struct RAMLMParams
 };
 
 //
-// Mode-switched accumulation over neurons in a cluster.
+// Mode-switched accumulation over slots in a cluster: the multiplicity-weighted
+// sum over `count` slots from `start_neuron`, divided by `norm` (the cluster's
+// logical neuron count; == count for the logical layout, WnnUnitMult).
 // Returns probability based on memory_mode:
 //   TERNARY: P = (count_TRUE + empty_value * count_EMPTY) / neurons
 //   QUAD_BINARY: P = count(cell >= 2) / neurons
 //   QUAD_WEIGHTED: P = sum(WNN_QUAD_WEIGHTS[cell]) / neurons
 //
+template <typename Mult>
+inline float accumulate_dense_m(
+		device const ulong *packed_input,
+		device const int *connections_flat,
+		device const long *memory_words,
+		device const ulong *coverage,
+		uint coverage_aware,
+		uint addresses_per_neuron,
+		uint start_neuron,
+		uint count,
+		uint norm,
+		Mult mult,
+		uint bits_per_neuron,
+		uint words_per_neuron,
+		uint memory_mode,
+		float empty_value,
+		ulong run_seed,
+		uint example_idx)
+{
+	// QUAD_WEIGHTED (deterministic graded), QSR (QUAD + seeded coin), and PLN
+	// (TERNARY cells + fair u-coin) all reduce to sum(wnn_cell_weight_rng)/n.
+	if (memory_mode == WNN_MODE_QUAD_WEIGHTED || memory_mode == WNN_MODE_QSR || memory_mode == WNN_MODE_PLN)
+	{
+		float weighted_sum = 0.0f;
+		for (uint n = 0; n < count; n++)
+		{
+			uint neuron_idx = start_neuron + n;
+			device const int *connections = connections_flat + neuron_idx * bits_per_neuron;
+			uint address = wnn_compute_address(packed_input, connections, bits_per_neuron);
+			// Coverage-aware: an address this neuron never saw is NO evidence, not
+			// weak evidence. Skipping leaves the denominator at the cluster's
+			// neurons, matching the CPU rule and the sparse rule (a miss resolves
+			// to cell 0, whose weight is 0.0 in every mode).
+			if (coverage_aware != 0u
+					&& !wnn_is_covered(coverage, coverage_aware, neuron_idx, address, addresses_per_neuron))
+				continue;
+			uint cell = wnn_read_cell(memory_words, neuron_idx, address, words_per_neuron);
+			ulong rng = wnn_qsr_key(run_seed, neuron_idx, ulong(address), example_idx);
+			weighted_sum += float(mult(neuron_idx)) * wnn_cell_weight_rng(cell, memory_mode, empty_value, rng);
+		}
+		return weighted_sum / float(norm);
+	}
+	else if (memory_mode == WNN_MODE_QUAD_BINARY)
+	{
+		uint fired = 0;
+		for (uint n = 0; n < count; n++)
+		{
+			uint neuron_idx = start_neuron + n;
+			device const int *connections = connections_flat + neuron_idx * bits_per_neuron;
+			uint address = wnn_compute_address(packed_input, connections, bits_per_neuron);
+			if (coverage_aware != 0u
+					&& !wnn_is_covered(coverage, coverage_aware, neuron_idx, address, addresses_per_neuron))
+				continue;
+			uint cell = wnn_read_cell(memory_words, neuron_idx, address, words_per_neuron);
+			if (cell >= 2)
+				fired += mult(neuron_idx); // QUAD_WEAK_TRUE or QUAD_TRUE
+		}
+		return float(fired) / float(norm);
+	}
+	else
+	{
+		// TERNARY (default)
+		uint count_true = 0;
+		uint count_empty = 0;
+		for (uint n = 0; n < count; n++)
+		{
+			uint neuron_idx = start_neuron + n;
+			device const int *connections = connections_flat + neuron_idx * bits_per_neuron;
+			uint address = wnn_compute_address(packed_input, connections, bits_per_neuron);
+			if (coverage_aware != 0u
+					&& !wnn_is_covered(coverage, coverage_aware, neuron_idx, address, addresses_per_neuron))
+				continue;
+			uint cell = wnn_read_cell(memory_words, neuron_idx, address, words_per_neuron);
+			if (cell == WNN_CELL_TRUE)
+				count_true += mult(neuron_idx);
+			else if (cell == WNN_CELL_EMPTY)
+				count_empty += mult(neuron_idx);
+		}
+		return (float(count_true) + empty_value * float(count_empty)) / float(norm);
+	}
+}
+
+// The logical layout: every slot once, mean over `neurons_per_cluster`.
 inline float accumulate_dense(
 		device const ulong *packed_input,
 		device const int *connections_flat,
@@ -64,75 +149,10 @@ inline float accumulate_dense(
 		ulong run_seed,
 		uint example_idx)
 {
-	// QUAD_WEIGHTED (deterministic graded), QSR (QUAD + seeded coin), and PLN
-	// (TERNARY cells + fair u-coin) all reduce to sum(wnn_cell_weight_rng)/n.
-	if (memory_mode == WNN_MODE_QUAD_WEIGHTED || memory_mode == WNN_MODE_QSR || memory_mode == WNN_MODE_PLN)
-	{
-		float weighted_sum = 0.0f;
-		for (uint n = 0; n < neurons_per_cluster; n++)
-		{
-			uint neuron_idx = start_neuron + n;
-			device const int *connections = connections_flat + neuron_idx * bits_per_neuron;
-			uint address = wnn_compute_address(packed_input, connections, bits_per_neuron);
-			// Coverage-aware: an address this neuron never saw is NO evidence, not
-			// weak evidence. Skipping leaves the denominator at neurons_per_cluster,
-			// matching the CPU rule and the sparse rule (a miss resolves to cell 0,
-			// whose weight is 0.0 in every mode).
-			if (coverage_aware != 0u
-					&& !wnn_is_covered(coverage, coverage_aware, neuron_idx, address, addresses_per_neuron))
-				continue;
-			uint cell = wnn_read_cell(memory_words, neuron_idx, address, words_per_neuron);
-			ulong rng = wnn_qsr_key(run_seed, neuron_idx, ulong(address), example_idx);
-			weighted_sum += wnn_cell_weight_rng(cell, memory_mode, empty_value, rng);
-		}
-		return weighted_sum / float(neurons_per_cluster);
-	}
-	else if (memory_mode == WNN_MODE_QUAD_BINARY)
-	{
-		uint count = 0;
-		for (uint n = 0; n < neurons_per_cluster; n++)
-		{
-			uint neuron_idx = start_neuron + n;
-			device const int *connections = connections_flat + neuron_idx * bits_per_neuron;
-			uint address = wnn_compute_address(packed_input, connections, bits_per_neuron);
-			// Coverage-aware: an address this neuron never saw is NO evidence, not
-			// weak evidence. Skipping leaves the denominator at neurons_per_cluster,
-			// matching the CPU rule and the sparse rule (a miss resolves to cell 0,
-			// whose weight is 0.0 in every mode).
-			if (coverage_aware != 0u
-					&& !wnn_is_covered(coverage, coverage_aware, neuron_idx, address, addresses_per_neuron))
-				continue;
-			uint cell = wnn_read_cell(memory_words, neuron_idx, address, words_per_neuron);
-			if (cell >= 2)
-				count++; // QUAD_WEAK_TRUE or QUAD_TRUE
-		}
-		return float(count) / float(neurons_per_cluster);
-	}
-	else
-	{
-		// TERNARY (default)
-		uint count_true = 0;
-		uint count_empty = 0;
-		for (uint n = 0; n < neurons_per_cluster; n++)
-		{
-			uint neuron_idx = start_neuron + n;
-			device const int *connections = connections_flat + neuron_idx * bits_per_neuron;
-			uint address = wnn_compute_address(packed_input, connections, bits_per_neuron);
-			// Coverage-aware: an address this neuron never saw is NO evidence, not
-			// weak evidence. Skipping leaves the denominator at neurons_per_cluster,
-			// matching the CPU rule and the sparse rule (a miss resolves to cell 0,
-			// whose weight is 0.0 in every mode).
-			if (coverage_aware != 0u
-					&& !wnn_is_covered(coverage, coverage_aware, neuron_idx, address, addresses_per_neuron))
-				continue;
-			uint cell = wnn_read_cell(memory_words, neuron_idx, address, words_per_neuron);
-			if (cell == WNN_CELL_TRUE)
-				count_true++;
-			else if (cell == WNN_CELL_EMPTY)
-				count_empty++;
-		}
-		return (float(count_true) + empty_value * float(count_empty)) / float(neurons_per_cluster);
-	}
+	return accumulate_dense_m(
+			packed_input, connections_flat, memory_words, coverage, coverage_aware, addresses_per_neuron,
+			start_neuron, neurons_per_cluster, neurons_per_cluster, WnnUnitMult(), bits_per_neuron,
+			words_per_neuron, memory_mode, empty_value, run_seed, example_idx);
 }
 
 //
@@ -280,6 +300,49 @@ kernel void ramlm_forward_to_buffer(
 	uint global_cluster = cluster_ids[local_cluster];
 	uint output_idx = example_idx * params.total_clusters + global_cluster;
 	shared_buffer[output_idx] = prob;
+}
+
+//
+// Duplicate-aware (weighted) dense forward — worker ABI 23.
+//
+// A DISTINCT-slot layout (see sparse_forward_weighted): cluster c scores its
+// first `distinct[c]` slots at stride `neurons_per_cluster`, slot s counting
+// `slot_mult[s]` times, divided by `norm[c]` (its LOGICAL neuron count).
+// Grid: (num_clusters, num_examples); output [num_examples * num_clusters].
+//
+kernel void ramlm_forward_weighted(
+		device const ulong *packed_input_flat [[buffer(0)]],
+		device const int *connections_flat [[buffer(1)]],
+		device const long *memory_words [[buffer(2)]],
+		constant RAMLMParams &params [[buffer(3)]],
+		device float *probs_out [[buffer(4)]],
+		device const ulong *coverage [[buffer(5)]],	// dense coverage bitmap (dummy if unused)
+		device const uint *distinct [[buffer(6)]],	// [num_clusters] slots scored
+		device const uint *slot_mult [[buffer(7)]], // [num_neurons] copies per slot (0 = pad)
+		device const uint *norm [[buffer(8)]],			// [num_clusters] logical neurons
+		uint2 thread_pos [[thread_position_in_grid]])
+{
+	uint cluster_idx = thread_pos.x;
+	uint example_idx = thread_pos.y;
+
+	if (cluster_idx >= params.num_clusters)
+		return;
+	if (example_idx >= params.num_examples)
+		return;
+
+	device const ulong *packed_input = packed_input_flat + example_idx * params.words_per_example;
+	WnnSlotMult mult;
+	mult.m = slot_mult;
+
+	float prob = accumulate_dense_m(
+			packed_input, connections_flat, memory_words,
+			coverage, params.coverage_aware, params.addresses_per_neuron,
+			cluster_idx * params.neurons_per_cluster, distinct[cluster_idx], norm[cluster_idx], mult,
+			params.bits_per_neuron, params.words_per_neuron,
+			params.memory_mode, params.empty_value,
+			params.run_seed, example_idx + params.example_offset);
+
+	probs_out[example_idx * params.num_clusters + cluster_idx] = prob;
 }
 
 //

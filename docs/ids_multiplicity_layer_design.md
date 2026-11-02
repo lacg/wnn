@@ -458,6 +458,28 @@ Gain: scoring lookups ∝ U instead of N (about 3x at 25-35% distinct). Coin has
 stays k per unit, but it is cheap ALU work. Worth it only if Stage 0 shows scoring
 is a material share of SR1 wall time.
 
+**IMPLEMENTED 01/11/2026 (worker ABI 23)** — `adaptive/distinct_scoring.rs`. Probe on
+flow 7237 (cicids QUAD, ~490n x 34b, 28% distinct) showed scoring was ~83% of
+per-genome time at rate 1.0. As built, narrower than the table above:
+- The view is built per scoring call from the logical export + its `grouping`,
+  and every copy is VERIFIED against its representative (connections, sparse
+  range / dense row + coverage bits); any mismatch scores the logical export.
+- Admitted iff `cell_weight_quarters(mode, empty_value)` is Some (QUAD_WEIGHTED,
+  QUAD_BINARY, BINARY, TERNARY with a quarter `empty_value`) and
+  max logical N x max quarters <= 2^24. QSR / PLN (the k-coin variant above was
+  NOT built — they keep the logical path) and a non-quarter TERNARY
+  `empty_value` (CPU f32 sum would round) score the logical export.
+- Covers `compute_per_example_scores[_at]` (CPU sparse + dense twins, GPU
+  `sparse_forward_weighted` / `ramlm_forward_weighted`; one templated
+  accumulator per shader, the logical kernels are the unit-multiplicity case),
+  i.e. every single-cluster IDS score (train-threshold calibration, held-out,
+  validation, streaming). Multi-cluster `evaluate_genome_hybrid`'s GPU CE and
+  full-GPU paths and the eval-in-place probe still score the logical export.
+- Tests: multiplicity_parity_tests.rs `assert_scores_equal` now also asserts
+  engagement and distinct == logical on the same export; heavy multiplicity
+  (490 logical / 3 units, m <= 200), K = 3, non-quarter fallback, tampered copy
+  fallback, direct weighted-kernel dispatch.
+
 ---
 
 ## 8. Tests

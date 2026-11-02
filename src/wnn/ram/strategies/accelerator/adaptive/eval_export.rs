@@ -865,6 +865,66 @@ pub(crate) fn compute_per_example_scores_at(
 	sparse_metal: Option<&ram_core::metal_sparse::MetalSparseEvaluator>,
 ) -> Vec<Vec<f64>>
 {
+	// Duplicate-aware scoring (worker ABI 23): a collapsed multiplicity export
+	// is scored once per DISTINCT unit, weighted by its copies — bit-identical
+	// where `DistinctScoring::for_export` admits it, the logical export
+	// otherwise (adaptive/distinct_scoring.rs).
+	let distinct = DistinctScoring::for_export(export, memory_mode, empty_value);
+	let (export, weights) = match &distinct
+	{
+		Some(d) => (&d.export, Some(d.weights.as_slice())),
+		None => (export, None),
+	};
+	score_export_at(
+		export, weights, eval_input_bits, num_eval, num_clusters, empty_value, memory_mode, run_seed, coverage_aware,
+		example_offset, metal, sparse_metal,
+	)
+}
+
+/// `compute_per_example_scores_at` over the LOGICAL export, never the
+/// distinct view: the reference the duplicate-aware path is tested against.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compute_per_example_scores_logical(
+	export: &GenomeExport,
+	eval_input_bits: &ram_core::packed_bits::PackedBits,
+	num_eval: usize,
+	num_clusters: usize,
+	empty_value: f32,
+	memory_mode: u8,
+	run_seed: u64,
+	coverage_aware: bool,
+	metal: Option<&crate::metal_ramlm::MetalRAMLMEvaluator>,
+	sparse_metal: Option<&ram_core::metal_sparse::MetalSparseEvaluator>,
+) -> Vec<Vec<f64>>
+{
+	score_export_at(
+		export, None, eval_input_bits, num_eval, num_clusters, empty_value, memory_mode, run_seed, coverage_aware, 0,
+		metal, sparse_metal,
+	)
+}
+
+/// Score every group of `export`. `weights` (one per group) marks a
+/// DISTINCT-slot export: slot s counts `slot_mult[s]` times and cluster c
+/// divides by its logical `norm[c]`. None = the logical layout (every slot
+/// once, mean over the cluster's actual neurons — `1.0 * w == w`, so the
+/// arithmetic is the pre-ABI-23 arithmetic).
+#[allow(clippy::too_many_arguments)]
+fn score_export_at(
+	export: &GenomeExport,
+	weights: Option<&[super::distinct_scoring::GroupWeights]>,
+	eval_input_bits: &ram_core::packed_bits::PackedBits,
+	num_eval: usize,
+	num_clusters: usize,
+	empty_value: f32,
+	memory_mode: u8,
+	run_seed: u64,
+	coverage_aware: bool,
+	example_offset: u32,
+	metal: Option<&crate::metal_ramlm::MetalRAMLMEvaluator>,
+	sparse_metal: Option<&ram_core::metal_sparse::MetalSparseEvaluator>,
+) -> Vec<Vec<f64>>
+{
 	let mut all_scores: Vec<Vec<f64>> = vec![vec![0.0; num_clusters]; num_eval];
 	// Mode-correct miss default for sparse CPU-fallback lookups (matches the
 	// GPU sparse eval's default_cell_value). Under `coverage_aware` a miss
@@ -912,6 +972,10 @@ pub(crate) fn compute_per_example_scores_at(
 	for (group_idx, (is_sparse, sub_idx, cluster_ids)) in export.group_info.iter().enumerate()
 	{
 		let group = &export.groups[group_idx];
+		let group_weights = weights.map(|w| w[group_idx].view());
+		// Copies slot `slot` stands for, and cluster li's mean denominator.
+		let mult = |slot: usize| group_weights.map_or(1.0f32, |w| w.slot_mult[slot] as f32);
+		let norm = |li: usize, actual: usize| group_weights.map_or(actual, |w| w.norm[li] as usize);
 
 		if *is_sparse
 		{
@@ -919,19 +983,18 @@ pub(crate) fn compute_per_example_scores_at(
 
 			let gpu_success = if let Some(sparse_eval) = sparse_metal
 			{
-				match evaluate_group_sparse_gpu(
-					sparse_eval,
-					eval_input_bits,
-					&export.connections,
-					sparse_export,
-					group,
-					num_eval,
-					coverage_aware,
-					memory_mode,
-					empty_value,
-					run_seed,
-					example_offset,
-				)
+				let result = match group_weights
+				{
+					Some(w) => evaluate_group_sparse_gpu_weighted(
+						sparse_eval, eval_input_bits, &export.connections, sparse_export, group, num_eval,
+						coverage_aware, memory_mode, empty_value, run_seed, example_offset, w,
+					),
+					None => evaluate_group_sparse_gpu(
+						sparse_eval, eval_input_bits, &export.connections, sparse_export, group, num_eval,
+						coverage_aware, memory_mode, empty_value, run_seed, example_offset,
+					),
+				};
+				match result
 				{
 					Ok(group_scores) =>
 					{
@@ -998,10 +1061,10 @@ pub(crate) fn compute_per_example_scores_at(
 									address as u64,
 									ex_idx as u64 + example_offset as u64,
 								);
-								sum += cell_to_weight_rng(cell as i64, memory_mode, empty_value, rng);
+								sum += mult(neuron_base + n) * cell_to_weight_rng(cell as i64, memory_mode, empty_value, rng);
 							}
 
-							scores[cluster_id] = (sum / actual_neurons as f32) as f64;
+							scores[cluster_id] = (sum / norm(local_cluster, actual_neurons) as f32) as f64;
 						}
 					});
 			}
@@ -1015,20 +1078,18 @@ pub(crate) fn compute_per_example_scores_at(
 				.map_or(&[][..], |v| v.as_slice());
 			let gpu_success = if let Some(metal_eval) = metal
 			{
-				match evaluate_group_metal(
-					metal_eval,
-					eval_input_bits,
-					&export.connections,
-					dense_words,
-					group,
-					num_eval,
-					dense_cov,
-					coverage_aware,
-					memory_mode,
-					empty_value,
-					run_seed,
-					example_offset,
-				)
+				let result = match group_weights
+				{
+					Some(w) => evaluate_group_metal_weighted(
+						metal_eval, eval_input_bits, &export.connections, dense_words, group, num_eval, dense_cov,
+						coverage_aware, memory_mode, empty_value, run_seed, example_offset, w,
+					),
+					None => evaluate_group_metal(
+						metal_eval, eval_input_bits, &export.connections, dense_words, group, num_eval, dense_cov,
+						coverage_aware, memory_mode, empty_value, run_seed, example_offset,
+					),
+				};
+				match result
 				{
 					Ok(group_scores) =>
 					{
@@ -1113,10 +1174,10 @@ pub(crate) fn compute_per_example_scores_at(
 									address as u64,
 									ex_idx as u64 + example_offset as u64,
 								);
-								sum += cell_to_weight_rng(cell, memory_mode, empty_value, rng);
+								sum += mult(neuron_base + n) * cell_to_weight_rng(cell, memory_mode, empty_value, rng);
 							}
 
-							scores[cluster_id] = (sum / actual_neurons as f32) as f64;
+							scores[cluster_id] = (sum / norm(local_cluster, actual_neurons) as f32) as f64;
 						}
 					});
 			}

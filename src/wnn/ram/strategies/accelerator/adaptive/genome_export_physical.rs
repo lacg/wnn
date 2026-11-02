@@ -6,8 +6,11 @@
 //! export every scorer consumes — the same groups, connections and neuron slots
 //! as the plain export of the logical genome — with each logical slot reading
 //! its unit's memory: sparse slots alias the unit's sorted range (stored once),
-//! dense slots get the unit's row at the logical group's width. Scorers are
-//! untouched (docs/ids_multiplicity_layer_design.md §3).
+//! dense slots get the unit's row at the logical group's width. Every scorer
+//! accepts this logical layout unchanged (docs/ids_multiplicity_layer_design.md
+//! §3); since worker ABI 23 `compute_per_example_scores` re-lays it out as
+//! distinct units weighted by their copies when that is bit-exact
+//! (`adaptive/distinct_scoring.rs`, design doc §7).
 //!
 //! A unit may sit in a WIDER physical group than its logical group (the
 //! super-genome's cluster max bits is the batch's): its cells are addresses of
@@ -294,7 +297,7 @@ fn slot_sources(group: &ConfigGroup, starts: &[usize], unit_of: &[u32]) -> Vec<S
 
 /// Copy `len` bits from `src` at `src_bit` into `dst` at `dst_bit` (dst bits
 /// start clear). An empty `src` (coverage not tracked) copies nothing.
-fn copy_bits(src: &[u64], src_bit: usize, dst: &mut [u64], dst_bit: usize, len: usize)
+pub(super) fn copy_bits(src: &[u64], src_bit: usize, dst: &mut [u64], dst_bit: usize, len: usize)
 {
 	if src.is_empty()
 	{
