@@ -187,7 +187,6 @@ def _run_controller_flow(worker, flow_data: dict):
     mean_attitude_error_deg and per-stage held-out. Lazy controller imports keep
     the drone-sim deps out of IDS flow_runner subprocesses.
     """
-    import math
 
     flow_id = flow_data["id"]
     flow_name = flow_data.get("name", f"Flow {flow_id}")
@@ -218,7 +217,6 @@ def _run_controller_flow(worker, flow_data: dict):
 
         # Lazy controller imports (drone-sim deps).
         from wnn.control import phased_ga
-        from wnn.control.training import EpisodeConfig
         from wnn.seeds import resolve_seed_set, log_seed_set, record_seed_set
 
         # Build args from flow params (CLI defaults + overrides).
@@ -228,12 +226,13 @@ def _run_controller_flow(worker, flow_data: dict):
         # subprocess runs only this one flow, so taking over signals is correct).
         phased_ga._install_signal_handlers()
 
-        ec = EpisodeConfig(
-            dt=0.001, steps_per_episode=args.steps,
-            max_initial_tilt_rad=math.radians(args.tilt),
-            max_initial_yaw_rad=math.radians(args.tilt),
-            max_initial_body_rate=args.body_rate, max_initial_yaw_rate=args.yaw_rate,
-        )
+        # The SAME EpisodeConfig the CLI builds (phased_ga.episode_config_from_args,
+        # which also resolves the ABI-32 plant flags in place). This used to be a
+        # hand-copied EpisodeConfig with only dt/steps/tilt/rates, so a controller
+        # flow run by the worker silently dropped the disturbance preset, airframe,
+        # translation, motor lag and the ABI-32 plant — and left obs_att_estimator
+        # as the CLI's unresolved None, which WnnController refuses (02/11/2026).
+        ec = phased_ga.episode_config_from_args(args)
 
         base = args.base_seed if args.base_seed is not None else args.seed
         seeds = resolve_seed_set(base=base, run_index=0,
