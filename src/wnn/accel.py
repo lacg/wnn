@@ -124,7 +124,13 @@ import os
 #   Bit-identical scores where admitted (QUAD / QUAD_BINARY / BINARY / TERNARY with
 #   a quarter empty_value); QSR, PLN and rate < 1.0 score as before. Only per-genome
 #   time moves (~83% of a 7237-shape genome was scoring). Supersedes 22.
-EXPECTED_ABI = 23
+# 24 (02/11/2026): additive — IDSCacheWrapper.set_calib_sample(sample, seed,
+#   strata=None) / calib_sample() (flow param ids_calib_sample). The single-cluster
+#   SEARCH fitness calibrates each genome x fold threshold on a fixed stratified
+#   train subsample (Rust adaptive/calib_sample.rs). Default 0 = every row,
+#   bit-identical to 23; validation thresholds never subsample. IDSEvaluator only
+#   calls the setter when the flow sets the param. Supersedes 23.
+EXPECTED_ABI = 24
 
 BUILD_HINT = (
 	"Rebuild the accelerator: cd src/wnn/ram/strategies/accelerator && "
