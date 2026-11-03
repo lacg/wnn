@@ -3448,18 +3448,15 @@ def fitness_pools_label(args) -> str:
 	return "rotation(1 pool/gen)"
 
 
-# ABI 32 default linear rotor-drag coefficient k_d (1/s) for the ~39 g cf21_brushless.
-# SOURCE + CAVEAT: the model is the linear rotor-drag term of Faessler, Franchi &
-# Scaramuzza, "Differential Flatness of Quadrotor Dynamics Subject to Rotor Drag
-# for Accurate Tracking of High-Speed Trajectories" (RA-L 2018) and Svacha, Mohta &
-# Kumar, "Improving Quadrotor Trajectory Tracking by Compensating for Aerodynamic
-# Effects" (ICUAS 2017): a = −R·D·Rᵀ·v with D = diag(d_x, d_y, ~0), identified PER
-# VEHICLE. Those papers identify it on their own (larger) platforms; NO identification
-# exists for cf21_brushless in this repository, and the per-vehicle values for small
-# quads sit at a few tenths of 1/s. 0.3 is therefore a DISCLOSED PLACEHOLDER inside
-# that range, not a measured number — it is a sweep axis (--rotor-drag K, 0 = off)
-# until an identification for this airframe is sourced (docs/papers / paper-scout).
-DEFAULT_ROTOR_DRAG = 0.3
+# Default linear rotor-drag coefficient k_d (1/s) for the ~39 g cf21_brushless (ABI 32 model:
+# a = −R·D·Rᵀ·v, D = diag(k_d, k_d, ~0) — Faessler, Franchi & Scaramuzza RA-L 2018; Svacha, Mohta &
+# Kumar ICUAS 2017). SOURCE: Folk 2026 (UPenn PhD thesis, arXiv:2604.00343, docs/papers/
+# folk2026_wind_inference_thesis.md) — the only FREE-FLIGHT identification on a Crazyflie 2.1-Brushless:
+# per-rotor kd = 5.09e-6 at 57 g -> k_d = kd·Σηi/m = 0.647 1/s; Σηi ∝ √m at hover, so k_d ∝ 1/√m ->
+# 0.647·√(57/39.3) = 0.78 1/s at our 39.3 g. Caveats: the lateral fit includes parasitic drag, no
+# uncertainty is given; Förster 2015 (rotor-only, CF2.0) gives ~0.25. Was a 0.3 placeholder until the
+# CTRL-8 pop-50 sweep (k_d 0.78/0.5/0.25/0, 03/11/2026, Luiz "use 0.78 if supported").
+DEFAULT_ROTOR_DRAG = 0.78
 
 
 def resolve_abi32_plant(args) -> None:
