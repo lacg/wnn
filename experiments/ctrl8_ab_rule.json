@@ -1,0 +1,13 @@
+{
+  "study": "CTRL-8 stage-2 A/B: arm (position inputs) vs position-blind twin",
+  "registered": "2026-11-04 (Luiz: 'yes, s3-s6 ... just do it'); written BEFORE any s3-s6 run started",
+  "recipe": "arm_kd078 argv (ctrl8_drag_sweep_pop50.sh): _op31 anchor + stage-2 bundle, pop 50, ABI 33, --rotor-drag 0.78, xy 0.5, 2 s, w_pos 0.10, --att-err-ref tilt, NEURONS 15/3, MEMORY 120/2",
+  "twin": "same argv minus --obs-pos-err-xy --obs-vel-xy (w_pos 0.10 kept)",
+  "seeds": [31337002, 31337003, 31337004, 31337005, 31337006],
+  "s2_source": "arm_kd078 + twin_kd078 (logs/controller/ctrl8_drag_sweep_pop50/), identical recipe",
+  "n": 5,
+  "stick": "REPORT headline (stage-select on val; report seeds 99990101-05), paired per seed",
+  "rule": "ADOPT position inputs iff ALL: mean paired (arm - twin) pos3d < 0 m; mean paired err <= +0.10 deg; mean paired stable >= -0.5 pp",
+  "interim": "n=3 (s2-s4) is printed as a DIRECTION only; no decision and no early stop before n=5 (optional stopping would bias the rule)",
+  "also_report": "steady, alt, dx, dy per seed; both arms vs the ABI-33 rival bar experiments/ctrl22/rivals_abi33_tilt_kd0.78.json"
+}
