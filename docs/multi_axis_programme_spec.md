@@ -1,949 +1,389 @@
-# Multi-axis programme — specification (draft 3, 11/09/2026)
+# Multi-axis programme (CTRL-5) — specification (draft 4, 05/11/2026)
 
-Status: DESIGN, not armed. Draft 2 folded in the experiment-design review (19
-findings); draft 3 folds in the flight-dynamics review (15 findings). Both are in §9.
-Nothing is launched until the Stage 0 checklist (§5) is closed AND the §0 blocker is
-resolved.
+Status: DESIGN, not armed. Draft 4 re-bases draft 3 (19/09/2026, commit 3b8affdb — `git show
+3b8affdb:docs/multi_axis_programme_spec.md` for the full D0 / stale-altitude history it carried)
+onto the current controller: wheel ABI 33, the ABI-32 real-life stage-2 plant, rotor drag k_d 0.78,
+and the CTRL-8 recipe. Nothing is launched until the Stage 0 checklist (§5) is closed AND the CTRL-8
+arm-vs-twin verdict has named the anchor.
 
-## 0. D0 — the training-teacher hover anchoring: INVESTIGATED (controller agent, 11/09)
+## What changed since draft 3
 
-Draft 3 recorded the physics reviewer's claim as a blocker. The controller agent traced
-it read-only, line by line, and the picture is narrower and different:
+| # | draft 3 (19/09, ABI 29/30) | draft 4 (05/11, ABI 33) | evidence |
+|---|---|---|---|
+| 1 | Anchor `_hd29` (stage-1 ladder recipe, 180k-cell cap, MEMORY row) | Anchor = **the CTRL-8 winner recipe**, expected the ARM (position inputs) — §1 | experiments/ctrl8_ab_rule.json; logs/controller/ctrl8_ab_pop50/ |
+| 2 | ABI 29/30, stage-1 plant, inclinometer accel | ABI 33: exact box-QP MPC (9dd6d762); ABI 32 real-life plant under --translation = specific-force IMU, rotor drag, WNN attitude features from the Mahony estimator, --att-err-ref tilt (f99611bf) | src/wnn/control/_accel.py:87-96 (EXPECTED_ABI 33) |
+| 3 | No rotor drag | k_d = 0.78 1/s default (Folk 2026, mass-scaled; 1e9b12c9), chosen by the pop-50 drag sweep | phased_ga.py:3451-3459; logs/controller/ctrl8_drag_sweep_pop50/sweep.log |
+| 4 | 3.2 h/run | **~9 h/run measured** (7.2-10.8 h); axis C budgeted 18 h | §4 |
+| 5 | Round 1 = 12 runs ~46 h; total 40 runs ~215 h | Round 1 = 9 runs ~99 h; total 48-50 runs ~520-540 h at n=5 | §4 |
+| 6 | n=4 per condition + anchor extended to 8 | n=5 per condition (house rule), anchor s2-s6 from CTRL-8 + D4 extension s7-s9 | §4 |
+| 7 | ONE primary column per axis is the verdict | Holistic verdict (CTRL-8 rule_v2 template): attitude block decides, pos3d/alt tie-break; per-axis focus metric only sizes power | §2, §6 |
+| 8 | MEMORY multi-seed row is the surface | REPORT headline only (report seeds), five metrics stable/err/steady/alt/pos3d (+dx/dy) | R7, R8 |
+| 9 | Baselines via compute_baselines (stage-1, attitude-only) | Rival bar per condition via scripts/ctrl22_stage2_rivals.py on the condition's own argv | R6 |
+| 10 | Axis F plumbing open; --motor-lag 0.0375 | CLOSED at ABI 30; flag is `--motor-lag-s` = 2% SETTLING TIME T (T=0.15 nominal, 0.30 stress) | phased_ga.py:2700-2707 |
+| 11 | Trainer-airframe gap (#14/#15) open | CLOSED at ABI 30; `_hd30` re-fly superseded by the ABI-33 lineage | evaluator.py:1021-1033 |
+| 12 | Accelerometer hover-approximation disclosure | RESOLVED by ABI 32 (specific-force accel + drag; WNN reads attitude via Mahony) | f99611bf |
+| 13 | multi_axis_chain.sh ready | STALE: wraps the `_hd` ladder (sweep_ladder_gamma.sh / seed_arm_chain.sh), would fly the wrong recipe — rewrite | scripts/multi_axis_chain.sh:3-14 |
+| 14 | — | NEW open items: cf2x_firmware has no sourced k_d; axis C memory budget re-opened (anchor now ~1.6 M cells uncapped); stage-2 rescoring tool; wheel freeze | §5 |
 
-0.1 THE LABEL IS ANCHORED CORRECTLY BY CONSTRUCTION — no off-hover label exists.
-    The live DAgger label is the teacher's absolute pwm through output_decode_target
-    (controller.rs:5559-5567; legacy branch clamp(0,1) at :3452), and the student
-    decodes it as a DELTA around self.neutral = 0.5 (:5636-5640; cell_mode.rs:147-157)
-    added to an accumulator that leaks toward collective_anchor = the episode's TRUE
-    hover 0.694·(1+jitter) (dagger_train.rs:1287-1306, controller.rs:3001). So a
-    0.5-based teacher emitting 0.5/motor at level-and-on-altitude means "delta zero,
-    hold the anchor" = hover. The feared 0.194 pwm offset is exactly zero; from_id's
-    0.5 IS the label's neutral (optimal.rs:1399-1403, documented only as "legacy").
-    The reviewer's proposed fix (anchor the trainer at 0.694) would label +0.194 pwm =
-    12 grid levels at L=64 on every level step, integrating at G=4 to anchor+0.78 —
-    saturation. DO NOT ADOPT IT AS WRITTEN.
+## 0. Closed history (D0, stale-altitude, trainer-airframe, CTRL-17)
 
-0.2 WHAT IS ASYMMETRIC: THE LINEARIZATION POINT, and it is teacher-dependent.
-    All four builds call calibrate_control_gains_rs(…, hover, 0.05) (optimal.rs:349,
-    491, 906, 1209), probing at mix_to_motors_f64(hover, u) (controller.rs:6789-6812)
-    on a pwm² plant (:2371), so b ∝ hover and b(0.5)/b(0.694) = 0.720 (reviewer right
-    on this). Effect on K for cf21_brushless, from the closed forms:
-        lqr / lqi   k1 unchanged; k2 +0.1% roll/pitch, +2% yaw   → same law as rival
-        mpc / mpcof first-move gain +17% (angle 2.194 vs 1.871, rate 0.638 vs 0.544)
-                    because the 25 ms horizon is b-sensitive       → a HOTTER law
-    So the anchor's mpcof TRAINER is ~17% hotter (in normalized u) than the mpcof
-    RIVAL the scorer uses; lqr/lqi trainers match their rivals.
-
-0.3 MPCOF-SPECIFIC: the disturbance observer is mis-scaled. update_dhat uses the
-    trainer's b(0.5) against the student's applied pwm (optimal.rs:1233-1260) while
-    the student flies at 0.694 where true effectiveness is 1.39·b. Steady state: d̂
-    absorbs 0.39·b·u_student, so u_ff = d̂/b (:1271-1276, τ≈20 ms, clamp 0.2)
-    subtracts ~0.39·u_student from the label — a spurious negative feedback on the
-    student's own action — and over-compensates real L4C disturbances by 39%. The
-    scorer's mpcof (b at 0.694) has neither term.
-
-0.4 BLAST RADIUS (rule, not list): trainer-vs-rival law mismatch exists iff
-    cfg.translation AND the teacher id ∈ {lqr, mpc, lqi, mpcof}, on every wheel since
-    35b1328d (14/08). Every SL_* ladder passes --translation --teacher mpcof, so ALL 78
-    sweepladder markers (the 4 anchors, _leak090, _ls*, _mut1tap, _win2) and the
-    translation A/B ON arms carry finding 0.2/0.3. OFF arms and any pid-teacher run
-    do not. "Carry" means a hotter, DOB-distorted mpcof trainer — NOT a droop; the
-    anchor's 0.346 m altitude is not explained by this.
-    Separate, noted: the STUDENT's anchor is the true-mass hover in train and score
-    (dagger_train.rs:1287, stage1.rs:107-111, cpu_score.rs:193) while the rivals get
-    nominal-mass PD (:2819-2827) — a WNN-favouring asymmetry on the altitude column.
-    Add to the disclosure list.
-
-0.5 WHY NO TEST CAUGHT IT: Teacher never exposes its hover; no test compares the
-    bank's teacher to the scorer's; the six label pins (controller.rs:9234-9330) use a
-    constant-label fixture at neutral 0.5 and pin the label rule, not the teacher;
-    every CPU/GPU parity sweep compares STUDENT rollouts, and the DAgger teacher runs
-    CPU-only (dagger_train.rs:1240) with no GPU twin. The pin that would have caught a
-    semantic mismatch: "for id 1..4 under a translation cfg, the bank's teacher at
-    level / zero rates / alt_err 0 / vz 0 returns the label neutral on all motors" —
-    passes today, would FAIL under the reviewer's fix. Add it regardless.
-
-0.6 THE CORRECT FIX (if the effect is material): split hover into a LINEARIZATION
-    point and a MIXING base. Add probe_hover to the four builds and pass it to
-    calibrate_control_gains_rs while mix_to_motors_f64(self.hover = 0.5) stays;
-    AirframeRs carries probe_hover = √(af_mass·g/4k) when cfg.translation else 0.5
-    (dagger_train.rs:895-914, :940). CONTROLLER WHEEL ONLY (no ram_core, no worker
-    swap). Off-translation: probe_hover = 0.5 → bit-identical, all pins and parity
-    sweeps unchanged. Under translation: lqr/lqi labels move ≤0.1% (2% yaw); mpc/mpcof
-    gain moves ~17% and the DOB scale becomes consistent — a LINEAGE BREAK for the
-    anchor's mpcof trainer. Deploy only at an idle window (never while a chain is
-    armed), then A/B at n=4 on the anchor seeds.
-
-0.7 CHEAPER THAN A RE-FLY: the Python ctors take hover (optimal.rs:398, 580, 1109,
-    1316) and AttitudeSim exposes set_translation / hover_pwm / set_vertical_state
-    (controller.rs:998-1036), so a teacher_step_histogram-style rollout of
-    AttitudeMpcOfRs(hover=0.5) vs (hover=0.694) on the same L4C episodes — the 0.5
-    variant's output shifted by +0.194 to sit on the student's anchor — gives the
-    per-step label difference and each variant's own err/steady/alt in MINUTES, no
-    wheel, no chain risk. (Caveat: scripts/teacher_step_histogram.py:119 builds
-    AttitudeSim() on the synthetic plant despite its docstring — pass the airframe.)
-    Regenerating the banked winner's labels is NOT possible (markers hold cells only;
-    rollout_and_label_rs is not exported). The STUDENT-side effect needs a re-fly;
-    one smoke seed is not a measurement (n=4 MDE 0.61-0.69° err).
-
-0.8 RECOMMENDATION (controller agent): RECORD-AND-PROCEED, THEN MEASURE BEFORE FIXING.
-    Record §0.2/0.3 as the asymmetry (not "off-hover labels"). Run probe 0.7 first;
-    if the mpcof label delta is material, implement 0.6 and A/B it. This BLOCKS AXIS B
-    (the teacher-swap compares exactly the ids whose trainer and rival laws diverge:
-    mpc, mpcof vs lqr, pid) but NOT axes A, C, D or F, and it does not invalidate the
-    anchor's altitude finding.
-
-0.9 TRAINING-ALGORITHMS TRACE (11/09) — agrees with 0.1/0.2 and adds three things.
-    (a) The 0.194 offset is cancelled by the label's COORDINATE CONVENTION: the
-        antagonist grid labels net = p − 0.5 (cell_mode.rs antagonist_target) and the
-        student decodes around n = 0.5 on top of leaked_baseline = its TRUE-hover
-        anchor (controller.rs:90-102, :5573-5583, :5633-5640). So the label reads
-        "teacher pwm − 0.5 = student deviation from its own anchor", and the 0.5
-        teacher anchor is the ONE thing that makes that correct. Naive fix → +12
-        E-levels per level step → accumulator clamps at 1.0 → PD swings to −0.25 →
-        limit cycle between full throttle and anchor − 0.22. Confirms 0.1.
-    (b) K-sensitivity: k1 = √(q_att/r) is b-free and k2 moves ~0.06% on cf21 (b ≈
-        2e3 rad/s² per u, so 2√(qr)/b ≪ q_rate) — LQR/LQI nearly inert, and this
-        trace reads the MPC QP as b-insensitive too (cost structure), whereas the
-        controller trace computed +17% first-move gain for MPC/MPCOF from the
-        condensed QP. The two traces DISAGREE on MPC's gain sensitivity; the probe
-        in 0.7/0.10 measures the actual label-magnitude ratio and settles it. Both
-        agree the live channel is the mpcof OBSERVER (0.3): d̂ absorbs 0.28·b·u_student
-        and u_ff subtracts ~0.39·u_student from every label, cutting the closed-loop
-        DC attitude gain from 4 to ~1.56 below ~8 Hz — a TRANSIENT (err) effect, not
-        a hold-floor or altitude one. Magnitude ≈ 0.016 pwm on the trim motors, the
-        same order as the hold-window label and the 1/64 dead zone.
-    (c) TWO CONSEQUENCES THE SPEC HAD BACKWARDS, both urgent:
-        · PID AS A TRAINING TEACHER UNDER --translation IS BROKEN TODAY. PidFw's
-          mixer sits at the true hover (pid_firmware.rs:388-399, pinned), so through
-          path (a) it emits a permanent +12-level label → saturation. No pid-teacher
-          translation run has ever banked. Axis B's pid arm CANNOT FLY until the
-          label is re-based; it is not "confounded", it is impossible.
-        · ARM B (--dagger-label-delta --obs-pwm) AS QUEUED IS VOID by the same
-          mechanism in the other direction: the delta label is pid_pwms − label_base
-          with label_base = leaked_baseline ≈ 0.694 (controller.rs:5538-5563), while
-          the mpcof teacher emits ~0.5 at level → label −0.194 → clamped to −dmax →
-          every motor labelled "max descend" on every level step. The pin
-          delta_label_mode_labels_against_the_recorded_baseline uses anchor 0.5 and
-          cannot catch it. ACTION TAKEN 11/09 10:30 EDT: arm B is HELD in
-          scripts/post_arma_queue.sh behind the sentinel
-          experiments/labelscale_markers/LABEL_REBASE_LANDED.json (queue killed in
-          its pure-wait phase and relaunched; the 2x2 and window-k are unaffected).
-    (d) The correct fix is TWO coupled changes landed together, default-off,
-        bit-identical at s=1 off-translation: teacher probe/anchor at nominal hover
-        AND a label re-base (label = neutral + (p − hover_teacher)) for ALL teachers
-        including PidFw and the delta-label path; new pins at anchor 0.694
-        (mis-anchored mpcof → neutral, fixed mpcof → neutral, PidFw → neutral, arm B
-        delta label → 0 at level). Controller wheel only.
-    (e) Probe (minutes, no wheel): solo oracle-fed rollouts as in
-        scripts/teacher_step_histogram.py:114-147 (pass the airframe — it currently
-        builds the synthetic plant), 20 episodes x 2000 steps, cf21/L4C/tilt 5°, same
-        IC + weather seeds, teachers {mpcof, lqr} x anchors {0.5, 0.6942}. Report per
-        motor at L=64: teacher-relative label floor64(p − h_teacher) histogram
-        (dead-zone share, mean |levels|, saturation at s ∈ {1,2,4,8}); the raw
-        floor64(p − 0.5) histogram at 0.6942 (exposes the +12-level offset); and the
-        mean |u_cmd| ratio between anchors per teacher. MATERIAL = mpcof ratio
-        outside [0.8, 1.25] or motor-1/3 hold dead-zone share moving > 15 pp
-        (calibration: arm A's s=2 DOUBLED every label deviation and moved no column
-        at n=4). lqr ≈ 1.0 confirms (b).
-    (f) A/B if fixed: control = the (extended) anchor; arm = same recipe + flag; paired
-        seeds; MEMORY row. Expected for mpcof: offset → 0, K → ~0, observer term gone
-        → DC gain 1.56 → 4, and both banked gain arms (leak 0.90, L3) lost 4/4 when
-        G fell, so ERR should improve, steady move little, stable ≈ 0, and ALT must be
-        0 ± 0.08 m (collective untouched — alt is the bug detector). PRIMARY = ERR.
-    (g) Q2 verdict: at level-and-on-altitude the student is taught the CORRECT hover
-        as a neutral label; the hold floor and the altitude column are untouched by
-        D0. The WNN's 0.35 m altitude gap is collective-jitter anchor error corrected
-        at gain 4 (≈0.12 m at ±10%) plus the 0.11 m dead-zone bound — not D0.
-
-0.10 PROBE RESULT (11/09 14:15 EDT, scripts/hover_anchor_probe.py, output in
-     docs/d0_hover_anchor_probe.txt; 20 episodes x 2000 steps, cf21/L4C/tilt 5°, L=64,
-     same episodes across variants; h_nom = √(m·g/4k) = 0.6942 from the airframe):
-        teacher  variant  hover   dead_m13  mean|dev|  sat_s8  tilt°     today/fixed
-        mpcof    today    0.5000  0.0774    0.0346     0.101   0.496
-        mpcof    fixed    0.6942  0.0711    0.0342     0.088   0.496     1.010, +0.6 pp
-        lqr      today    0.5000  0.0853    0.0363     0.135   1.015
-        lqr      fixed    0.6942  0.0852    0.0362     0.134   1.015     1.002, +0.0 pp
-     ("today" = teacher at 0.5 with its output applied on the student's true-hover
-     anchor and observe() fed the applied pwm, i.e. what DAgger does; "fixed" = teacher
-     at h_nom.) VERDICT: IMMATERIAL at the pre-registered threshold (ratio outside
-     [0.8, 1.25] or dead-zone shift > 15 pp). Neither the disputed +17% MPC gain nor the
-     0.39·u observer term shows up in the label the trainer would build; the two
-     traces' first-order claim (zero label offset by coordinate convention) holds.
-     Caveat carried from the training trace: this is SOLO flight (u_cmd = u_mpc/1.39
-     partially self-cancels); in the DAgger loop the student applies the label at
-     gain 4, so the observer term could be larger there — the A/B is still the check.
-     CONSEQUENCE FOR THE PLAN: the fix is REQUIRED for correctness (derived hover, the
-     broken PID trainer, arm B's void delta label) but its expected effect on the
-     anchor is ≈ 0. So (i) the A/B is an equivalence check, err primary, alt
-     no-regression; (ii) once it passes, the derived hover becomes the DEFAULT for
-     every future run, and the banked s=1 controls stay valid comparators to first
-     order (state the caveat on every 2x2 / arm B report).
-
-DECISION D0 (Luiz), restated after both traces AND the probe:
-  (a) run probe 0.9(e) now (minutes, read-only) and decide on its number;
-  (b) implement the coupled fix 0.9(d) + A/B 0.9(f) regardless — it is REQUIRED
-      anyway before arm B or any pid-teacher translation run can exist;
-  (c) record and proceed with A, C, D, F only.
-Probe done (0.10): immaterial. Luiz (11/09): Priority 0 — land the fix before ANY
-next run, derive the hover, use it going forward. IN PROGRESS: rust-code agent on
-branch hover-anchor-derived (worktree), default-off switch --teacher-hover
-{legacy,derived}, pins at 0.694, controller wheel only. Deploy at the current idle
-window, smoke ONE, then A/B (4 anchor seeds, derived vs banked legacy) as the FIRST
-thing in the queue; then the 2x2 / window-k with derived ON; arm B once the delta
-label is re-based (same change).
-
-### 0.10 D0 A/B VERDICT — 4/4 banked 12/09/2026 02:10 EDT: EQUIVALENT, derived stays DEFAULT
-
-Paired vs the banked legacy anchors (s2 control = _crn), MEMORY multi-seed row, n=4,
-exact paired t, ONE primary column (docs/controller_d0_ab_verdict.txt):
-    column   mean delta (derived − legacy)   95% CI            verdict
-    err      −0.008°                         [−0.300, +0.285]  straddles — PRIMARY: indistinguishable
-    alt      +0.004 m                        [−0.225, +0.232]  straddles — no-regression check PASSES
-    steady   −0.075°                         [−0.593, +0.443]  straddles (descriptive)
-    stable   −0.25 pp                        [−1.63, +1.13]    straddles (descriptive)
-    failures/500 (MEMORY): derived 3/3/5/5 vs legacy 2/5/12/2 — Fisher p 0.73/0.14/0.45 per pair
-MDE at n=4: err 0.39°, alt 0.31 m (the observed paired SDs 0.18° / 0.14 m are lower on
-err and higher on alt than the arm-A priors). Bound on the effect: |Δerr| < 0.3°,
-|Δalt| < 0.23 m. Both CIs straddle zero ⇒ per the pre-registered read, derived teacher
-hover is CONFIRMED as the default (flipped a88cb7c1); no ALT regression, so the label
-re-base is not a bug. Per-run: s2 +0.24°/+0.03 m, s3 −0.01°/−0.06 m, s4 −0.20°/−0.15 m,
-s5 −0.06°/+0.19 m — the s5 alt swing (+0.19 m, headline CONNECTIONS#0 at 0.538 m) is a
-single-seed draw and the reason the alt CI is 0.46 m wide.
-CAVEAT (D8, §0b): every run in this A/B, both arms, trains the vertical channel through
-the stale-vert_obs replay; the A/B is internally consistent (same trainer both arms) but
-its alt column is not yet a controller property.
-
-## 0b. The STALE-ALTITUDE-FEATURES bug — replay trainers addressed on a stale observation (found 11/09, FIXED 12/09)
-
-STATUS: FIXED ON EVERY PATH, 12/09/2026 (Luiz: "fix ALL the bugs now, before anything flies
-again"; "fix bugs even on unused paths"). Controller wheel ABI 28. Proven by pin tests, not
-by a probe: the mechanism test below is the measurement.
-
-WHAT WAS FIXED (one change, five replay sites + the recorder):
-  · TrajectoryRs records `vert_obs` (collective, alt_err, vz) and `horiz_obs` (err_x,
-    err_y, vx, vy) per step at rollout — read back from the controller right after the
-    rollout set them (dagger_train.rs rollout_and_label_rs).
-  · `ReplayObs` (controller.rs) — the per-window stream; `bptt_train_window`,
-    `split_record`, `split_retrain_output` (and the split_scan / split_train helpers,
-    unused but fixed) take it and call `apply_replay_obs(t)` before every
-    `compute_features(t)`. A FAIL-LOUD guard (`replay_obs_guard`, Fix-A shape) refuses
-    any replay of a vertical/horizontal-feature controller without an aligned stream.
-  · Metal `controller_train` / `controller_record` kernels: two new buffers (per-step
-    vert *3 / horiz *4), the feature flags now reach the kernels' FwdParams (TrainParams
-    +5 fields, lockstep), and F.vert_*/F.horiz_* are refreshed in-loop from the buffers.
-    The host refusal (`!vert_on` in use_gpu_split) is GONE — the path is fixed, not
-    avoided; a misaligned batch fails loudly (`replay_obs_batch_guard`).
-  · Python fallback trainer (reward_gated.py): its rollout never sets the observation and
-    its Trajectory records none, so it now REFUSES (NotImplementedError) when the
-    controller reports `needs_replay_obs` (new pyclass getter) — never a silent zero.
-  · Found on the way, also fixed: `sample_initial_state` panicked on a zero-width
-    range (tilt/yaw/rate 0 — smokes, level starts); guarded in f64 so every non-zero
-    draw stream is bit-identical.
-PINS (cargo test -p ram_controller --lib --no-default-features: 206 pass, incl. all 14
-parity sweeps + the new one):
-  · replay_addresses_follow_the_recorded_vertical_obs — a controller whose output
-    neurons observe ONLY the vertical bits writes ≥4 distinct addresses per neuron
-    under a varying recorded stream and exactly 1 under a constant one (the stale
-    behaviour), with a deliberately stale live value (9,9,9) set before the replay.
-  · replay_refuses_without_the_obs_stream_when_vertical_features_are_on (should_panic).
-  · split_record_frames_follow_the_recorded_vertical_obs — recorded frame bits ==
-    this step's observation, step by step.
-  · rollout_records_the_vertical_obs_per_step — rollout stream aligned with gyros,
-    collective recorded, alt_err varies; the replay consumes it.
-  · parity_record_vertical_obs (Metal) — GPU record == CPU split_record under a
-    varying stream, and the stream is proven to change the rows (non-vacuous).
-AFFECTED (measured from the winner checkpoints' obs flags, not guessed): 148 banked
-runs, 594 h, every altitude-regimen run from the 14/08 stage-1 lambda sweep to the D0
-A/B — see docs/controller_stale_altitude_rerun_inventory.md. The 12-13/08 cohorts
-(dob_arm, dobfix, l1refly, sn_state) predate the features and are NOT affected.
-Every published altitude number from those 148 runs is VOID; the attitude numbers
-are suspect too (the address includes the vertical bits, so the stale bits shifted
-which cells the attitude features landed in). Luiz's order: requeue and rerun.
-
---- original finding (11/09), kept for the record ---
-
-Mechanism (file:line, tree 3b5fc37d):
-  · At rollout, `rollout_and_label_rs` sets the vertical observation EVERY step
-    (dagger_train.rs:1618-1630: `set_vertical_obs(collective, target_alt − z, vz)`),
-    so the student's live addresses carry per-step [collective, alt_err, vz] bits.
-  · The trajectory it records has NO vertical fields: `TrajectoryRs`
-    (dagger_train.rs:586-613) = gyros, accels, targets, pid/student pwms, integrals,
-    att_errs, label_base. Nothing about z.
-  · Training replays that record: `bptt_train_window` (controller.rs:3764-3800) takes
-    gyros/accels/targets/pwms only, and rebuilds each step's frame with
-    `compute_features(gyros[t], accels[t], targets[t])` (controller.rs:3892), which
-    appends `self.vert_obs` (controller.rs:5451-5464) — a field NOTHING in the replay
-    updates. `reset()` (controller.rs:949) does not clear it either.
-  ⇒ Every record of a training round is written at addresses whose three vertical
-    features equal the LAST rollout step of the LAST episode of that round (near
-    hover), while scoring/deploy reads addresses with the real per-step values. This
-    is the DOB frozen-accumulator bug (Fix A, 06/08) in the vertical channel — the
-    13/08 stage-1 review saw exactly this hazard for the GPU recorder and refused
-    that path (dagger_train.rs:2231-2237: "would append the vertical features as
-    ZEROS while the CPU/score path appends the real values") but called the CPU path
-    safe without checking it. The CPU split trainer (controller_split.rs) has no
-    vertical handling either (grep clean).
-
-Scope: every run with --obs-collective-cmd/--obs-alt-err/--obs-vz since 12/08/2026
-(d56576d7) — the anchor recipe sets all three (sweep_ladder_gamma.sh:62-63) — at
-sn=0 AND sn>0. That is the four anchors, arm A, the D0 A/B, the leak/label arms.
-
-Why it can still fly at 99% stable: the stale value is near hover, and so are most
-steps, so the thermometer bins agree on the majority of records; they DISAGREE on
-the transient steps after a disturbance — exactly where altitude error is made.
-With ~20 features x 16 bits and 24-bit neurons essentially every neuron addresses
-at least one vertical bit, so the effect is on address identity, not on a minority
-of neurons. This is a candidate mechanism for the 0.27 m altitude gap that no
-attitude lever has moved, and for "the floor is STRUCTURAL" (L1b).
-
-What must happen BEFORE axis C (and before treating the anchor's alt as a controller
-property):
-  1. MEASURE (Rust, read-only): a probe that, at scoring time, counts the fraction of
-     visited addresses that are EMPTY, vertical features on vs off, on one banked
-     anchor winner. Stale-write divergence shows as a high EMPTY fraction on the
-     transient steps. No wheel deploy needed for a probe binary; the run's cells are
-     in the banked winner.yaml.gz.
-  2. If confirmed, FIX by the Fix-A pattern: record [collective, alt_err, vz] (and
-     the stage-2 horizontal quad) per step in TrajectoryRs at rollout, slice them
-     into `bptt_train_window` like `student_pwms`, and call `set_vertical_obs` /
-     `set_horizontal_obs` before `compute_features(t)` at controller.rs:3892. Pin
-     test: replay frame bits == rollout frame bits for the vertical features on a
-     synthetic trajectory. Ship behind a flag, default legacy bit-identical (D0
-     precedent), A/B on the 4 anchor seeds, then flip. Wheel change ⇒ R9: anchor
-     re-fly or bit-identity, and the ABI bumps.
-  3. Until then, axis C's primary column (ALTITUDE) is measured against an anchor
-     whose altitude channel may be trained wrong — do not arm C.
+All CLOSED; detail in draft 3 (3b8affdb) and the memory notes. One line each:
+- D0 teacher hover anchoring — derived hover is DEFAULT (a88cb7c1, A/B equivalent 4/4); the label
+  re-base is teacher-agnostic through `teacher.hover()` (dagger_train.rs:1240-1259), so PidFw/LQR
+  labels are re-based too — the draft-3 "pid trainer saturates under translation" blocker is fixed in
+  code, but NO pid/lqr-teacher translation run has ever flown (Stage 0 #7 smoke checks it).
+- D8 stale-altitude replay — FIXED ABI 28 (ReplayObs; ABI 32 adds `att_up` to the stream).
+- Trainer never got the airframe — FIXED ABI 30 (evaluator.py:1021-1033 packs `ec.airframe_kwargs()`).
+- CTRL-17 stage-2 trainer gaps G1-G4 — FIXED ABI 31 (_accel.py:79-86).
+- Every banked marker from those eras is a DIFFERENT LINEAGE: never paired with ABI-33 runs (R9).
 
 ## 1. The claim under test
 
-Every controller result to date sits at ONE point of the design space:
+Every stage-2 controller result sits at ONE point of the design space:
 
-    airframe cf21_brushless · disturbance L4C · teacher mpcof · L=64 levels/motor
-    · sn=0 (single layer) · altitude regimen ON · b24 n256 · 4 seeds 31337002..5
+    airframe cf21_brushless · ABI-32 plant (specific-force IMU, rotor drag k_d 0.78, Mahony attitude
+    features, tilt reference) · disturbance L4C · teacher mpcof (ABI-33 exact MPC) · lag 0 · sn=0 ·
+    stage 2 (xy-offset 0.5 m, 2 s episodes, w_pos 0.10) · b24 n256→512 · seeds 31337002..
 
-A reviewer's first question is whether the ranking measured there survives a move
-along any axis. The programme answers it one axis at a time from the anchor, with
-the WNN's hyperparameters FROZEN (the thermometer encoder is re-fit per condition
-from that condition's PID rollouts — evaluator.py:463-490 — and that is stated, not
-hidden), LQR/LQI/MPC/MPCOF re-deriving their gains automatically, and PID flying the
-sourced firmware gains bound to each airframe.
+A reviewer asks whether the ranking measured there survives a move along any axis. The programme
+answers it one axis at a time from the anchor, recipe FROZEN (the thermometer encoder is re-fit per
+condition from that condition's PID rollouts — stated, not hidden), LQR/LQI/MPC/MPCOF re-deriving
+their gains from the plant, PID flying the sourced firmware gains of each airframe, and the position
+and altitude outer loops (position_loop.rs, altitude_pd.rs) deriving from the plant for every teacher.
 
-THE ANCHOR, correctly stated as a 4-seed mean±SD on the MEMORY multi-seed row
-(draft 1 printed seed 31337003's row and called it the mean — corrected):
+### 1.1 THE ANCHOR = the CTRL-8 winner recipe (verdict pending; the ARM is expected)
 
-    controller    stable        err          steady       alt          hd
-    MPCOF         100.0 ± 0.0   0.70 ± 0.01  0.01 ± 0.00  0.076 ± 0.04 0.0483  the teacher
-    LQI           100.0 ± 0.0   0.89 ± 0.06  0.45 ± 0.06  0.076 ± 0.04 0.0621
-    LQR           100.0 ± 0.0   1.05 ± 0.08  0.59 ± 0.11  0.076 ± 0.04 0.0726
-    MPC           100.0 ± 0.0   1.38 ± 0.17  1.04 ± 0.22  0.076 ± 0.04 0.0958
-    PID           100.0 ± 0.0   1.79 ± 0.36  1.03 ± 0.36  0.076 ± 0.04 0.1241  weakest classical
-    WNN anchor    98.95 ± 0.94  1.63 ± 0.20  1.17 ± 0.25  0.346 ± 0.035 0.127 ± 0.025  n=4  (`_hd`, pre-ABI-28 era)
-    WNN _hd29     97.50 ± 2.14  1.79 ± 0.34  1.22 ± 0.42  0.334 ± 0.048 0.161 ± 0.043  n=4  THE PROGRAMME ANCHOR (D9, 19/09)
-    (_hd29 = the same recipe re-flown 19/09 on ABI 29; MEMORY multi-seed row over seeds 31337002-05;
-     hd is the headline draw per seed: 0.1518/0.1458/0.2217/0.1247. Era A/B vs _hd: no systematic
-     shift, seed 4 moved most. s31337006 is flying (queue_1909 step 1) = first extension seed of D4.)
-    (classical SDs are over the 5 report seeds x 5 folds; classical alt is the outer
-     loop's, not the controller's; lower hd = better)
+The CTRL-8 A/B (rule experiments/ctrl8_ab_rule.json `rule_v2`, holistic: attitude block decides, pos3d
+tie-breaks; one interim look at n=3) decides between ARM (position inputs) and TWIN (position-blind).
+The anchor is the WINNER's exact argv. Expected: the ARM. Argv as flown (arm_s3.out `[argv]`, last-wins
+duplicates kept verbatim — this is what the chain must reproduce, not a cleaned version):
 
-What that table supports and what it does not:
-- The WNN's hd 95% CI at n=4 is [0.086, 0.167]. It contains MPC and PID alike. So the
-  anchor is NOT "level with PID" in any testable sense; it is "somewhere between LQR
-  and worse-than-PID". Draft 1's "its best seeds beat PID" was best-of-archive and
-  is withdrawn.
-- LQR vs LQI is a real order (SDs 0.06-0.08 on a 0.15 gap). PID vs WNN is not.
-- The WNN's altitude gap to every classical (0.35 vs 0.08 m) IS resolved: SD 0.035
-  on a 0.27 m gap. That is the one anchor fact with statistical content.
+```
+--levels 16 --lamarckian --skip-stages neurons,bits --max-cells 180000 --max-cells-strict --neurons-gens 5
+--neurons-patience 3 --conns-gens 5 --conns-patience 3 --memory-gens 120 --memory-patience 2 --pop 50
+--num-eval-folds 5 --check-interval 2 --magnitude-aware-patience --eval-episodes 100 --memory-eval-episodes 200
+--steps 2000 --tilt 5.0 --fit-aggregation zscore --zrank-clamp 3.0 --gate-stable 0.70 --gate-err 8.0
+--delta-gamma 1.0 --grid-bits 24 --grid-output-neurons 256 --max-output-neurons 256 --report-episodes 100
+--holdout-pop-sample 8 --runs 1 --memory-mode BINARY --airframe cf21_brushless --disturbance L4C --teacher mpcof
+--obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err --obs-yaw-err-i --obs-collective-cmd
+--obs-alt-err --obs-vz --translation --reward-lambda-alt 0 --grid-state-neurons 0 --max-state-neurons 0
+--report-seeds 99990101 99990102 99990103 99990104 99990105
+--obs-pwm --skip-stages connections,bits --max-output-neurons 512 --max-cells 1000000000 --teacher-hover derived
+--base-seed <seed>
+--fit-weight-err-sq 0.28125 --fit-weight-stable 0.225 --fit-weight-steady 0.39375 --fit-weight-pos 0.1
+--xy-offset 0.5 --att-err-ref tilt --neurons-gens 15 --neurons-patience 3 --eval-mem-budget auto --rotor-drag 0.78
+--obs-pos-err-xy --obs-vel-xy                      # ARM only; the TWIN omits this line
+```
+Effective: pipeline GRID → NEURONS (15 gens / patience 3) → MEMORY (120 / 2); obs-pwm; output neurons ≤ 512;
+cells uncapped; S16noJM weights x0.9 + w_pos 0.10, zscore combine, alt weight 0.0 (CTRL-19 closed), no MAD
+floor (CTRL-20 closed); 2 s episodes; provenance abi=33 wheel_sha256=a6398538ce04588c (arm_s3.out:7).
+Built by scripts/ctrl8_ab_pop50.sh (BASE = experiments/crn_noise_probe/ARGS_…_s31337002_op31.txt minus
+save/seed/weights, + W + S2 + POS). FILL IN at verdict: winner = {arm|twin}, decided on n={3|5}, date.
 
-THE HEADLINE QUESTION, narrowed to what OFAT can answer:
-    Q1. With the recipe frozen, is the anchor's position LOCALLY robust to a
-        one-axis move — on err (the attitude primary) and on altitude (the
-        resolved primary) — and does the 0.27 m altitude gap persist?
-hd is reported everywhere but is DESCRIPTIVE: it composes the best-resolved (err)
-and worst-resolved (stable) attitude columns, and it is absent from the verdict tool.
+PROVISIONAL anchor numbers — REPORT headline (stage-select crowned genome on report seeds 99990101-05),
+ABI 33, k_d 0.78; mean ± SD over search seeds. NOT a result until the A/B closes.
+```
+controller          n   stable %      err °        steady °     alt m          pos3d m
+ARM  (s2,s3,s4)     3   95.5 ± 1.4    2.67 ± 0.14  1.99 ± 0.15  0.181 ± 0.020  0.422 ± 0.009
+TWIN (s2,s3)        2   89.5          3.17         2.84         0.171          0.444      (twin_s4 flying)
+rival bar, xy 0.5 m, 2000 steps, k_d 0.78, estimator-fed (experiments/ctrl22/rivals_abi33_tilt_kd0.78.json):
+MPCOF               5   100.0         1.80 ± 0.03  1.06 ± 0.05  0.16 ± 0.01    0.35 ± 0.02   the teacher
+LQI                 5   100.0         1.92 ± 0.05  1.27 ± 0.05  0.16 ± 0.01    0.35 ± 0.01
+LQR                 5   100.0         1.94 ± 0.09  1.20 ± 0.06  0.16 ± 0.01    0.35 ± 0.01
+MPC                 5   100.0         2.24 ± 0.23  1.46 ± 0.19  0.16 ± 0.01    0.36 ± 0.01
+PID                 5   100.0         2.99 ± 0.38  2.50 ± 0.45  0.16 ± 0.02    0.35 ± 0.01   weakest classical
+```
+(rival SDs are over the 5 report seeds. WNN headline per seed: arm s2 97.0/2.55/2.02/0.163/0.411,
+s3 95.0/2.63/1.83/0.202/0.429, s4 94.4/2.83/2.13/0.178/0.425; twin s2 91.4/3.04/2.64/0.179/0.451,
+s3 87.6/3.30/3.03/0.163/0.436.)
+
+What the provisional anchor supports: the WNN beats PID on err and steady and is below every rival
+on stable and pos3d; it sits 0.87° err above its own teacher. Whether that position is LOCALLY robust
+is the programme's question.
+
+THE HEADLINE QUESTION:
+    Q1. With the recipe frozen, does a one-axis move change the controller as a whole (stable, err,
+        steady, alt, pos3d), and does the WNN's position relative to the rival bar at that condition
+        (above PID on err/steady, below all on stable/pos3d) persist?
+
+### 1.2 Already flown at n=1 — the drag axis (reference, not part of the programme)
+
+The pop-50 drag sweep is a one-seed OFAT on k_d (arm recipe, s31337002, ABI 33), headline:
+```
+k_d    WNN stable/err/steady/alt/pos3d            MPCOF rival err/steady (xy 0.5, 2 s)
+0.78   97.0 / 2.55 / 2.02 / 0.163 / 0.411          1.80 / 1.06
+0.50   93.2 / 2.66 / 2.05 / 0.170 / 0.406          1.95 / 1.29
+0.25   83.6 / 3.64 / 3.58 / 0.209 / 0.453          2.11 / 1.53
+0.00   86.2 / 3.72 / 4.17 / 0.180 / 0.420          2.31 / 1.81
+```
+n=1 per value: a direction, not a measurement. It is not re-flown here unless Luiz asks (Q6).
 
 ## 2. Rules (R1-R11)
 
-R1. VERDICT = the mean delta and its 95% CI on ONE pre-registered PRIMARY column
-    per axis (§3). The other three columns are descriptive. A Holm-4 CI is printed
-    as a robustness line (paired_power.py --primary). Win/loss tallies are never a
-    verdict ("k of n" is a sign test: 3/4 fires 31% under the null).
-R2. SIZE BEFORE FLYING, with the exact paired-t MDE at n=4 from the anchor arm's SDs
-    (scripts/paired_power.py, docs/controller_paired_power.txt):
-        err 0.61-0.69°   steady 0.69-1.00°   stable 1.9-2.0 pp   alt 0.08-0.16 m
-    and a 4-pair SD is itself uncertain (95% CI [0.57x, 3.7x]). Quote RANGES. Every
-    axis names its minimum effect of interest (MEI) against these. A null on a
-    column whose MDE exceeds the MEI is INDETERMINATE, never a refutation.
-R3. Altitude is the well-resolved channel (SD 0.04-0.08 m). It is the primary for
-    any axis whose "read" is about the WNN's altitude gap.
-R4. Same four seeds (31337002..5) and the same report seeds everywhere, for
-    bookkeeping. BUT the pairing is cosmetic: pair correlation on err/steady/alt is
-    ≈0 (paired-delta SD ≈ √2 x the anchor's between-seed SD), because the search seed
-    is a random draw, not a block. The PRIMARY analysis is therefore Welch two-sample
-    against an EXTENDED anchor (§4), with the paired analysis as robustness.
-R5. Train ORACLE, compare ESTIMATOR-FED: every classical row is the [est] row.
-R6. Every condition gets its OWN baseline file (compute_baselines.py --airframe
-    --disturbance --translation) BEFORE its WNN runs, and baselines are recomputed
-    on any new report-seed set (R10). Never compare across conditions' baselines.
-R7. Surface = MEMORY multi-seed row (stage-matched; the headline is a val draw that
-    moved 0.12 m alt / 0.022 hd on one anchor seed). Every table ALSO shows the
-    headline row with its crowned stage named — that is the deployed genome and
-    the one the H743 key count is measured on. Axis C additionally reports the
-    CONNECTIONS row, because MEMORY can regress on CONNECTIONS and sn>0 adds a stage.
-R8. Four columns on every surface. Altitude is never omitted. Classical rows carry
-    their SDs (§1) so V3's "order" says which gaps are real.
-R9. PROVENANCE. Every marker records the wheel hash, ABI and fitness_pools. The four
-    anchor markers come from three sweeps (04-07/09) and all PREDATE the 08/09 22:20
-    label-fix wheel; the fix was pinned bit-identical at s=1 in arm A's smoke, and
-    that pin is the anchor's validity argument — cite it. Any wheel change during the
-    programme forces either an anchor re-fly or a demonstrated bit-identity.
-R10. REPORT SEEDS ARE A VALIDATION SET. Every ladder decision so far was read on
-    99990101..05; stage-select avoids them but the recipe was chosen on them. The
-    programme's FINAL table uses a fresh never-used report-seed set (D5), with the
-    classical baselines recomputed on it (R6). Interim ticks may use the old set.
-R11. stable% is a bounded per-episode pass rate; a t-CI on it is approximate and its
-    paired SD swings 0.4-3.4 pp between arms. Report failures as counts with an exact
-    binomial CI where the episode counts are exported; otherwise stable is
-    descriptive only (hd already folds it in).
+R1. VERDICT is HOLISTIC on the five metrics together (§6), on the CTRL-8 rule_v2 template: the attitude
+    block (stable, err, steady) decides; alt and pos3d tie-break; mixed outcomes go to Luiz without an
+    automatic verdict. Each axis names a FOCUS metric that sizes its power (R2); it is not a gate.
+    Win/loss tallies are never a verdict.
+R2. SIZE BEFORE FLYING with exact noncentral-t MDEs (80 % power, α .05 two-sided). From the provisional
+    ARM n=3 SDs (stable 1.36 pp, err 0.144°, steady 0.152°, alt 0.020 m, pos3d 0.009 m):
+        paired n=5 (SD_d = √2·SD)    stable 3.2 pp  err 0.34°  steady 0.36°  alt 0.047 m  pos3d 0.022 m
+        Welch anchor 8 vs cond 5     stable 2.4 pp  err 0.25°  steady 0.27°  alt 0.035 m  pos3d 0.017 m
+    A 3-seed SD is itself uncertain (95 % CI [0.52x, 6.3x]) — QUOTE RANGES and refresh at the anchor's
+    n=5 (and again per condition after its 2nd seed). A null whose MDE exceeds the axis MEI is
+    INDETERMINATE, never a refutation.
+R3. pos3d is the best-resolved channel at stage 2 (SD 0.009 m); alt next (0.020 m). They tie-break, and
+    are the focus for axes whose read is about position/altitude hold.
+R4. Same search seeds (31337002..) and the same report seeds everywhere. Pairing by search seed is
+    cosmetic (pair correlation ≈ 0 in every earlier arm), so PRIMARY analysis = Welch vs the extended
+    anchor; paired is the robustness line.
+R5. Train ORACLE, compare ESTIMATOR-FED: every rival row is the [est] row (ctrl22 `feed: estimator`).
+    The WNN's own attitude features come from the Mahony estimator (ABI 32) — stated in every table.
+R6. Every condition gets its OWN rival bar, scored by scripts/ctrl22_stage2_rivals.py on the
+    condition's own argv (per-condition ARGS file; xy 0.5 m, 2000 steps cell) BEFORE its WNN runs,
+    and recomputed on any new report-seed set (R10). Never compare across conditions' bars. Conditions
+    that do not change the plant (B teacher, C state neurons) share the anchor's bar.
+R7. Surface = the REPORT HEADLINE only (stage-select crowned genome on the report seeds). No
+    STAGE-SELECT/VAL tables in reports (Luiz 25/10). Gen-line numbers are never results.
+R8. Five metrics on every surface: stable %, err °, steady °, alt m, pos3d m (dx/dy alongside). Rival
+    rows carry their SDs. Altitude and pos3d are never omitted.
+R9. PROVENANCE + WHEEL FREEZE. Every run records `[provenance]` (abi, wheel_sha256). The programme flies
+    on ONE wheel: ABI 33, sha a6398538ce04588c (the CTRL-8 anchor's). Never pair runs across ABIs or
+    wheel hashes. Any controller-wheel change during the programme stops it; resume only after an
+    anchor re-fly or a demonstrated bit-identity pin on the anchor argv (pop-6 smoke RESULT lines
+    identical pre/post).
+R10. REPORT SEEDS: D5 DECIDED 19/09 — final table on 99990201..05; interim reads keep 99990101..05. The
+    CTRL-8 anchor was read on 99990101..05, so the final table needs every winner RE-SCORED on D5 (Stage 0
+    #12) and every rival bar recomputed on D5 (#6).
+R11. stable is a bounded per-episode pass rate: report failures as counts (`stable_fail=k/n`, 50a9bdba)
+    with an exact Clopper-Pearson CI where exported; a t-CI on stable % is approximate.
 
-## 3. The axes — values, primary column, MEI, power, confounds
+## 3. The axes — values, focus metric, MEI, prerequisites (re-checked 05/11 against the tree)
 
-### Axis A — DISTURBANCE  (L4A, L4B vs anchor L4C)          8 runs, ~40 h
-Values: the sourced L4 rung only (training.py `_L4_LEVELS`): L4A clean plant, L4B
-10%, L4C 20% (Molchanov's ceiling). L1-L3 and the D variants are unsourced; not used.
-Primary: ERR (V1, WNN absolute). MEI 0.6° = the n=4 MDE; the plant-jitter step is
-expected to exceed it comfortably.
-Power caveat: Q1's V2 (gap to PID) is UNSIGNED here — PID's own 1.79±0.36° is
-jitter-driven and will move with the rung. State V1 as the resolvable quantity and
-V2 as the read, not the test.
-What L4A actually removes (physics review): ONLY the per-episode static plant draw —
-torque_scale_jitter and motor_asym_mag (training.py:231-235). Gyro/accel sigma and
-bias walk are the same ADIS16448 model on every rung (training.py:236-239), so the
-sensors stay noisy and the old "noise = dither" finding (which was disturbance-OFF,
-sensors clean) does NOT apply. The plausible "L4A is harder" mechanism is instead
-TEACHER-LABEL COLLAPSE: with no static torque offset, mpcof's d̂ ≈ 0 and more labels
-fall into the 1/16 dead zone. Name that, not dither.
-Also: under --translation the VERTICAL plant stays randomised at every rung
-(--mass-jitter 0.15, --collective-jitter 0.1, --alt-offset 0.3, --init-vz 0.2 are
-regimen defaults, phased_ga.py:2338-2347, drawn per episode independent of the rung).
-So L4A cleans the ATTITUDE plant only; Read (b) below is about attitude noise.
-Two protocols, both flown, named separately:
-  A-same  train and evaluate at the same rung (as written): "does the student need
-          plant randomisation to learn?"  — the 8 runs.
-  A-cross SCORING ONLY: the banked anchor winners (trained L4C) scored at L4A/L4B —
-          "how robust is one controller to plant uncertainty?" This is Molchanov's
-          own protocol (train randomised → deploy nominal), costs minutes, and the
-          classical rows are identical either way. Free; add it.
-Prereqs: baselines at L4A and L4B with --translation (minutes each).
+### Axis A — DISTURBANCE (L4A, L4B vs anchor L4C)                 2 conditions, 10 runs, ~90 h
+Values: the sourced L4 rung (training.py:231-235): L4A clean plant, L4B 10 %, L4C 20 %. L4A removes ONLY
+the per-episode static plant draw (torque_scale_jitter, motor_asym); sensor noise (ADIS16448) is shared
+by every rung (training.py:236-239), and the translation draws (mass/collective jitter, alt offset,
+xy start) stay randomised. The plausible "L4A is harder" mechanism is teacher-label collapse (mpcof
+d̂ ≈ 0 → more labels in the dead zone), not dither.
+Focus: ERR. MEI 0.6° (the plant-jitter step moved PID 0.58 → 1.79° at stage 1; the stage-2 bar at
+L4A/L4B is not yet scored — Stage 0 #6).
+A-cross (scoring only, minutes): the anchor winners scored at L4A/L4B — needs the stage-2 rescoring
+tool (#12).
+Prereqs: rival bars at L4A, L4B (#6); smoke (#7). No code.
 
-### Axis B — TEACHER  (pid, lqi vs anchor mpcof)             8 runs, ~40 h
-Values: pid and LQR (changed from lqi on physics review). LQR is MEMORYLESS
-(optimal.rs:419); lqi carries an integrator, mpcof a d̂ observer, the PID cascade two
-integrators plus an LPF. With pid + lqi both stateful, a null could not separate
-"student floor" from "hidden teacher state makes labels non-functions of the
-observation". pid + lqr keeps the quality span (1.79 / 1.05 / 0.70°) AND adds the
-memoryless control. mpc stays excluded, but for its own physics (no integral/
-observer, so the L4C torque offset is a steady 1.04° it cannot absorb; the +27%
-under translation is that, not a regimen artefact).
-BLOCKED BY §0 — and harder than draft 3 said: the pid TRAINER under --translation
-saturates the label today (§0.9(c)); axis B cannot fly at all until the label re-base
-(§0.9(d)) lands. Then pid vs lqr is a clean swap.
-Primary: ERR. What n=4 resolves: FULL tracking (student err moves by ~the 1.1°
-teacher gap) versus NONE. PARTIAL tracking (0.3-0.6°) is indeterminate at n=4.
-The null is NOT free: claiming "the student ignores its teacher" is an equivalence
-claim and needs a pre-registered margin. Margin = 0.55° (half the teacher gap),
-TOST at 90%; decidable only if |d| < 0.2° AND the observed SD ≤ 0.3°. State this.
-Prior: the live-label work found the steady floor teacher-independent (0.57-0.87°
-for every teacher), so the null is the prior on steady; err is the open column.
-Confound: the prior teacher screen was attitude-only AND through the ~6x mis-scaled
-thermometer — none of its numbers carry over. This is the first under the regimen.
-Prereqs: none new (TeacherBank fix is in since 05/08).
+### Axis B — TEACHER (pid, lqr vs anchor mpcof)                    2 conditions, 10 runs, ~90 h
+Values: pid (the weakest classical; quality span) and lqr (memoryless). Both fly the SAME outer
+position + altitude cascade as mpcof — the loops are teacher-independent (episode_regime.rs:40-74,
+dagger_train.rs:1612) — so the swap changes only the inner attitude law.
+NEW READ (stage-2 rival bar, xy 0.5): MPCOF 1.80°, LQR 1.94°, PID 2.99°. The lqr-vs-mpcof quality gap
+is now 0.14° — below every MDE — so the lqr arm tests "memoryless vs observer teacher at ≈ equal
+quality" only; the TEACHER-QUALITY question rests on pid (gap 1.19°).
+Focus: ERR. The "student ignores its teacher" null is an equivalence claim: TOST margin 0.6° (half
+the pid gap), decidable only if |d| < 0.2° and SD ≤ 0.3°.
+ABI 33's exact MPC changed only mpc/mpcof; pid/lqr arms are unaffected, the anchor's teacher is ABI 33.
+Prereqs: smoke per teacher (#7) — no pid/lqr-teacher translation run has EVER flown (no
+logs/controller/*.out `[argv]` line with --translation and --teacher pid|lqr); the smoke must show the
+re-based labels do not saturate. Shares the anchor's rival bar.
 
-### Axis C — STATE NEURONS  (sn=4, sn=8 vs anchor sn=0)      8 runs, ~50-60 h
-Values: --grid-state-neurons N --max-state-neurons N. The only lever family that
-ever reached sub-0.06 hd (attitude-only S1_lqi_sn8 0.0535, sn4 0.0618, Aug 2026,
-rotation-era scorer), and it has ZERO rows under the altitude regimen.
-Primary: ALTITUDE. MEI = 0.16 m of the 0.27 m gap (the n=4 MDE at the pessimistic
-SD 0.077; 0.08 m at SD 0.039). A state layer that closes less than that is not
-distinguishable from nothing at n=4 — say so up front.
-Also report the CONNECTIONS row (R7): sn>0 adds a stage, so a MEMORY-row loss may
-be a pipeline artefact, not a controller one.
-Confound: sn>0 changes the search (an extra stage); a win is "recurrent state + its
-search", which is how it would ship. Acceptable.
-Path (physics review, resolved): the ladder sets no WNN_* env, so `use_split` is
-false and sn>0 trains through the EDRA-BPTT window trainer ON CPU
-(controller.rs:3731-3747); the GPU split path refuses the vertical channel anyway
-(dagger_train.rs:1988-2001). Several anchor-era flags are sn=0-ONLY: write-priority
-/ err-floor (dagger_train.rs:266-275), --dagger-label-delta (evaluator.py:147),
-output_full_window (controller.rs:1817-1820). So if arm B or a window arm becomes the
-anchor before axis C flies, C cannot inherit it; a C win reads "recurrent state + a
-different trainer + its search". Observability: no trap — the vertical channel is
-fully observed and the state-prefix offset is derived from num_features(); do not
-expect a state layer to close the altitude gap by observability, only by smoothing
-the collective channel.
-Prereqs: (1) a 4-minute smoke at sn=4 with --translation on the CPU BPTT path;
-(2) memory budget vs the 180k-cell watchdog cap, stated before arming; (3) wall-clock
-estimate for the CPU trainer (budget 6-7 h per run, may be more).
+### Axis C — STATE NEURONS (sn=4, sn=8 vs anchor sn=0)             2 conditions, 10 runs, ~180 h (budget)
+Values: --grid-state-neurons N --max-state-neurons N. Prior (attitude-only, Aug 2026): S1_lqi_sn8
+hd 0.0535, sn4 0.0618 — no row under translation, none under stage 2.
+Focus: ALT and pos3d (the hold channels a recurrent state could smooth); err descriptive.
+Path: sn>0 trains through the CPU EDRA-BPTT window trainer (no GPU split with the vertical channel).
+The replay now must carry vert_obs, horiz_obs, pwm_dev (obs-pwm) and att_up (ABI 32) per step;
+`replay_obs_guard` refuses a misaligned stream. sn>0 with obs-pwm + Mahony attitude features +
+position inputs has NEVER run — the smoke (#7) is the first test.
+MEMORY BUDGET RE-OPENED (#8): the 19/09 decision (sn=4 uncapped ~18 GB; sn=8 at --max-cells 4000000)
+was sized against a 275k-cell sn=0 anchor under the 180k cap. The anchor is now UNCAPPED at ~1.6 M
+cells per genome (_op31 s2 marker: cells μ 1584k, peak RSS 11.4 GB). sn=4 uncapped will be larger
+(unmeasured); a 4 M cap on sn=8 is now only ~2.5x the anchor, a different condition than it was.
+Watchdog HOG_GB 28 (controller_mem_watchdog.sh:89) and the IDS worker (~10 GB) bound the box.
+--eval-mem-budget auto (50 % of available) limits eval, not training cells.
+Wall-clock: unmeasured on this recipe; budgeted 18 h/run (2x anchor). The first sn=4 run IS the
+measurement; re-cost after it.
+Prereqs: #7 smoke (plumbing), #8 budget decision, Q4.
 
-### Axis D — AIRFRAME  (cf2x_firmware vs cf21_brushless; cf2x_urdf deferred)  4 runs, ~20 h
-Values: cf2x_firmware only. VERIFIED 11/09 by constructing the controller: the
-firmware PID cascade builds on cf2x_firmware with ITS OWN sourced gains
-(platform_defaults_cf2.h). cf2x_urdf: the ValueError I hit fires only under
---calib-airframe; on the NORMAL path `_pid_cascade_kwargs` returns {} for rate=None
-(training.py:513-514) and trainer AND baseline scorer fall back to the legacy
-retired-plant loop SILENTLY (dagger_train.rs:930). So cf2x_urdf is not refused, it
-is quietly wrong — worse. Stage 0 adds a hard refusal there. Because the WNN's thermometer is fit from PID rollouts
-(evaluator.py:463), a fallback PID would contaminate the WNN's ENCODER, not just the
-comparator — so cf2x_urdf cannot be flown at all until a citable DSL single-loop PID
-is ported (Python + Rust + Metal, parity). Draft 1's "re-derive gains" is WITHDRAWN:
-airframe.py records Luiz's 05/08 rule that invariant-preserving derivation
-"manufactures an UNSOURCED number". docs/disturbance_param_sources.md also forbids
-blending the URDF plant with firmware gains (different Crazyflie builds).
-Primary: ALTITUDE (the transfer question is whether the recipe's altitude hold
-survives a different thrust/inertia map); err descriptive.
-Reads to state (physics review): cf2x_firmware's k_drag is 5x cf2x_urdf's
-(airframe.py:166,233) — yaw authority per pwm — on the one axis the student cannot
-observe (yaw is dead-reckoned), so expect the yaw-dither cost to scale with airframe;
-cf21_brushless's inertia is DERIVED ("treat as an assumption", airframe.py:183-217)
-while cf2x_firmware's is MEASURED, so axis D is also the inertia-sensitivity check a
-paper is asked for. A self-deriving comparator, if ever needed, should be LQI
-(integral), not MPC — moot under D1.
-Power caveat: the cf21 SDs give NO basis for the SD at another airframe. D's power
-statement is a guess until its first two seeds land (§4 round rule).
-Prereqs: baseline at (cf2x_firmware, L4C, --translation); one smoke.
+### Axis D — AIRFRAME (cf2x_firmware vs cf21_brushless)             1 condition, 5 runs, ~45 h
+Values: cf2x_firmware only (D1); cf2x_urdf refused (training.py `_pid_cascade_kwargs` ValueError, landed
+12/09) until a citable DSL PID exists. The trainer now gets the airframe (ABI 30), so D is no longer void.
+NEW BLOCKER — ROTOR DRAG HAS NO SOURCE FOR cf2x_firmware: DEFAULT_ROTOR_DRAG = 0.78 is airframe-
+independent (phased_ga.py:3459, applied at :3477 to any --translation run) and is sourced only for the
+39.3 g CF2.1-Brushless (Folk 2026). cf2x_firmware is 29 g (airframe.py:229). Options (Q3): (i) Förster
+2015 rotor-only CF2.0 ≈ 0.25 (cited in the DEFAULT_ROTOR_DRAG comment); (ii) Folk mass-scaled
+0.647·√(57/29) ≈ 0.91 — a cross-airframe extrapolation, unsourced; (iii) keep 0.78 and disclose. Since
+k_d moved the n=1 WNN by ~1.1° err between 0.78 and 0.25 (§1.2), this choice is not cosmetic: the
+condition is (airframe, k_d) and the airframe effect is confounded with the drag choice unless (i)/(ii)
+is sourced. 
+Focus: ALT and pos3d (does the hold transfer to a different thrust/inertia map); err descriptive.
+cf21_brushless inertia is DERIVED, cf2x_firmware's MEASURED — D is also the inertia-sensitivity check.
+Prereqs: Q3; rival bar at (cf2x_firmware, chosen k_d) (#6); smoke (#7).
 
-### Axis F — ACTUATOR LAG  (τ = 0.0375 s nominal, sweepable; anchor = 0)   8 runs, ~40 h  [NEW]
-Found by the physics review as the axis a controls reviewer asks about FIRST: motor
-settling (Molchanov eq. 7, τ = T/4 = 0.0375 s) is SOURCED, IMPLEMENTED in the sim
-(controller.rs:381-399, 2290-2297) with a Metal twin and a parity assertion, defaults
-to 0.0, and is reachable from NO recipe: nothing under src/wnn or scripts references
-it, RewardGatedConfigPacked has no field, and score_classical_baseline does not take
-it. The anchor is therefore a LAG-FREE 1 kHz high-gain loop — the most attackable
-modelling choice in the whole programme.
-Values: τ = 0.0375 s (nominal, sourced) and 2τ (stress) vs 0. Primary: ERR (lag
-degrades every controller; the read is whether the WNN degrades MORE than the
-classicals, i.e. V2). Expected effect: large — resolvable.
-Prereqs: PLUMBING (Python only, swap-free): phased_ga flag → EpisodeConfig → packed
-cfg + the baseline scorer; per-condition baselines; one smoke. Goes AHEAD of axis E
-and, on reviewer priority, ahead of axis D.
+### Axis F — ACTUATOR LAG (T = 0.15 s, 0.30 s vs anchor 0)            2 conditions, 10 runs, ~90 h
+Molchanov eq. 7 motor lag. UNITS: `--motor-lag-s` is the 2 % SETTLING TIME T, τ = T/4 (phased_ga.py:2700-
+2707): nominal T = 0.15 (τ 37.5 ms), stress T = 0.30. Passing 0.0375 would model a 4x faster motor.
+PLUMBING CLOSED (ABI 30): trainer packed cfg + per-round eval, both scorers, classical baselines,
+address recorder, thermometer calibration (_accel.py:71-78; classical_baseline.py:183,206; dagger.py:420-424;
+evaluator.py:677-679,900-902,1010; ga_memory.py:54-57). The ctrl22 rival script builds the regime through
+episode_config_from_args, so a per-condition ARGS file with --motor-lag-s carries the lag to the rivals.
+Never flown at lag > 0 (no .out argv with --motor-lag-s > 0).
+Focus: ERR (lag degrades every controller; the read is whether the WNN degrades MORE than the rivals).
+Expected effect large. Reviewer-priority axis.
+Prereqs: rival bars at T 0.15/0.30 (#6); smoke (#7).
 
-### Axis G — CONTROL RATE  (action_repeat 2 = 500 Hz vs anchor 1 kHz)   optional, 4 runs
-The WNN acts every 1 ms step (action_repeat=1) while the firmware cascade it is
-compared to runs at 500 Hz with hold; action_repeat already reaches the Metal scorer.
-Cheap, plumbed, and it is the H743 deployment question. Consider after F.
+### Axis G — CONTROL RATE (action_repeat 2 = 500 Hz)                optional, 5 runs, ~45 h
+D7: optional tail after round 2. Not costed in the total.
 
-DISCLOSURE (not an axis): the sim's accelerometer is the hover approximation —
-specific force = −gravity_body only (controller.rs:598-606). With translation on, a
-real IMU on a thrust-only quad carries no tilt information without a drag model; the
-sim's accel carries tilt at all times. This flatters the WNN's accel-derived features
-and the Mahony rival EQUALLY, so it is not a confound between rows, but the paper
-must state it. Wind: no sourced attitude-torque path exists and all L4 rungs are
-windless by design (disturbance_param_sources.md:239-251, 410-470) — cite, do not
-add. Inertia/mass mismatch on the attitude plant IS torque_scale_jitter, so axis A
-(±20%) plus axis D (measured vs derived inertia) already cover it — cite.
+### Axis E — LEVELS                                                     NOT FLOWN (D2)
+Dropped as an attitude axis (19/09). Re-open on altitude only if Luiz asks.
 
-### Axis E — LEVELS  (L=32, L=128 vs anchor L=64)            NOT FLOWN
-Prior: the alphabet probe and levels ablation were refuted at their bars, and the
-bits ladder found no width separates at n≤5; expected attitude effect is below the
-n=4 MDE on every column. Flying it would manufacture an indeterminate null (R2).
-One caveat for flight-dynamics (§9): the live-label dead-zone mechanism predicts L
-moves ALTITUDE (label grid ∝ 1/L), which would be a large-effect prior on the
-resolved channel. If flight-dynamics endorses that, E re-opens with alt as primary.
+DISCLOSURES (not axes): wind — all L4 rungs windless by design (disturbance_param_sources.md); inertia/
+mass mismatch on the attitude plant IS torque_scale_jitter (axis A) plus axis D; the outer position/
+altitude loops of every RIVAL are derived cascades (position_loop.rs:1-36) — the WNN is monolithic.
+The draft-3 accelerometer disclosure is RESOLVED by the ABI-32 specific-force IMU.
 
-## 4. Design: rounds, anchor extension, budget
+## 4. Design: rounds, anchor, budget
 
-INTERLEAVE, DON'T STAGE (the standing sweep rule, and R2's own logic: a condition's
-SD is known after its 2nd seed, which is when "the n it would need" is actionable):
-    round 1  one seed each of  L4A, L4B  (A has no prereqs), plus A-cross scoring
-             + pid, lqr once D0 (§0) is decided; + τ-lag once its plumbing lands;
-             + cf2x_firmware and sn=4/sn=8 as their prereqs land
-    round 2  second seed of every condition  → per-condition SD → re-size
-    round 3-4  third and fourth seeds
-    escalation rule (pre-registered): if a condition's primary CI straddles zero
-             AND includes the MEI after 4 seeds, add 2 seeds to that condition.
-ANCHOR EXTENSION: because the pairing is cosmetic (R4), the efficient spend is more
-ANCHOR seeds shared by all conditions. Fly 31337006..9 at the anchor (4 runs, ~20 h)
-on the programme's wheel; primary analysis Welch (anchor n=8 vs condition n=4, SE
-≈0.61 SD) with paired-4 as robustness (SE 0.79 SD). This beats "5 seeds everywhere"
-(+9 runs for SE 0.63 SD) and also gives the anchor its own R9-clean re-fly.
-BUDGET
-    anchor extension            4 runs   ~20 h   (round 1, first)
-    A disturbance (+ cross-rung scoring, minutes)   8   ~40
-    B teacher (pid, lqr) — blocked on D0            8   ~40
-    F actuator lag [NEW] — needs plumbing           8   ~40
-    C state neurons (CPU BPTT path)                 8   ~55+
-    D airframe (cf2x_firmware)                      4   ~20
-    G control rate (optional)                       4   ~20
-    E levels                                        0   —
-    total (A,B,F,C,D + anchor)                     40  ~215 h ≈ 9 days, plus escalation
-Every chain: marker-gated, idempotent, fails closed, one controller at a time, never
-edits a running .sh. Queues behind the post-arm-A queue (~90 h).
+INTERLEAVE, DON'T STAGE (D3): round r flies seed r of every condition before any condition gets
+seed r+1; a condition's SD exists after its 2nd seed, which is the re-size point.
 
-## 5. Stage 0 — prerequisites, no controller runs
+ANCHOR. The CTRL-8 A/B supplies the anchor's s2..s6 (arm or twin, whichever wins) on the same wheel
+and argv. If the n=3 interim stop fires, only s2..s4 exist and s5, s6 must fly first (+18 h). D4
+extension s7..s9 (+27 h) feeds the Welch primary (anchor n=8 vs condition n=5).
 
-  [x] (CLOSED 19/09/2026 — merged 12/09 as 50a9bdba; 13 markers since carry provenance)
-      Marker provenance fields (wheel hash, ABI, fitness_pools) exported by the
-      ladder — R9. CHECKED 11/09/2026: they did NOT exist. `fitness_pools` was in
-      the .out header only; ABI and wheel identity were printed nowhere. BUILT on
-      branch `marker-provenance` (worktree /Users/lacg/wnn-provenance), NOT LANDED —
-      the live tree is what the A/B's runs import and `controller_arm_lib.sh` is
-      re-sourced by every ladder launch, so this merges at an IDLE window only:
-        · wnn/control/provenance.py — `collect_provenance()` → ONE greppable line
-          `[provenance] wheel=ram_controller-2026.212.37 abi=27 wheel_sha256=<16 hex
-          of the .so> git=<short HEAD>[+dirty] fitness_pools=CRN(all 5 pools/gen)`,
-          printed by phased_ga right after the `Pop=…` header. Fail-safe: every
-          field degrades to `unknown`/0, a run can never die on provenance.
-        · controller_arm_lib.sh `provenance_json` — the line becomes a nested
-          `"provenance":{wheel,abi,wheel_sha256,git,fitness_pools}` object in the
-          marker; a .out without the line banks `"provenance":null` (visible absence).
-        · tests/controller_provenance.py (15 checks) + R9 cases in
-          tests/controller_arm_marker_rules.sh. That harness had been FAILING since
-          the 04/08 stage-header anchoring (its canned body had no headers) — fixed.
-      CONSEQUENCE for R9: every marker banked before the merge — the four anchors,
-      all of arm A, the D0 A/B runs flown before it — carries `provenance:null`
-      and rests on the s=1 bit-identity pin; the leaderboard/paired_power readers
-      go through json.load and ignore the field. Hash is of the compiled .so, not
-      the version string: two builds of 2026.212.37 from different trees differ.
-  [ ] Decision D5: fresh report-seed set for the final table — R10.
-  [x] Baselines --translation for (cf21, L4A), (cf21, L4B), (cf2x_firmware, L4C) —
-      DONE 11/09/2026 18:21 EDT, same args as the anchor file (5 report seeds
-      99990101-05, 100 ep x 2000 steps, tilt 5, sim_seed 911, fold 0):
-      experiments/l4teach_markers/baselines_{L4A,L4B}_cf21bl_translation.json and
-      baselines_L4C_cf2xfw_translation.json (log logs/controller/stage0_baselines.log).
-      [est] rows, stable 100.0% everywhere, err / steady / alt / hd:
-        L4A cf21:   PID 0.58/0.18/0.000/0.040  LQI 0.68/0.25/0.001/0.048  MPCOF 0.70/0.01/0.001/0.048
-        L4B cf21:   PID 1.08/0.54/0.038/0.075  LQI 0.76/0.31/0.038/0.053  MPCOF 0.70/0.01/0.038/0.048
-        L4C cf2xfw: PID 1.39/0.80/0.076/0.096  LQI 0.88/0.43/0.099/0.061  MPCOF 0.69/0.01/0.076/0.048
-        (anchor L4C cf21: PID 1.79/1.03/0.076/0.124  LQI 0.89/0.44/0.076/0.062  MPCOF 0.70/0.01/0.076/0.048)
-      Reads: MPCOF's 0.70 deg / 0.01 deg floor is IDENTICAL across all four conditions,
-      so V2 (gap to the teacher) is disturbance- and airframe-invariant and any WNN
-      movement along axis A/D is the student's, not the teacher's. PID's err is the
-      most disturbance-sensitive row (0.58 -> 1.08 -> 1.79 deg across L4A/L4B/L4C) and
-      is 0.40 deg lower on cf2x_firmware than on cf21 at L4C — the firmware gains fly
-      their own airframe better, so axis D's PID gap is NOT comparable to axis A's
-      (R6). alt m is set by the disturbance, not the controller (0.000/0.038/0.076
-      for L4A/L4B/L4C on cf21). PENDING: rerun all four on the D5 seed set once chosen.
-  [x] (CLOSED 19/09/2026 — merged 12/09 as 50a9bdba; `stable_fail=k/500` on every MULTI-SEED line)
-      Failure-count export for stable (R11). CHECKED 11/09/2026: the marker carries
-      only the seed-mean±SD of stable; no count. But every report seed scores
-      exactly 100 episodes and prints its own RESULT line, so k = round(acc x 100)
-      is EXACT and recoverable for every marker ever banked, anchors included. BUILT
-      on branch `marker-provenance` (same idle-window merge as the provenance item):
-        · phased_ga `_stable_failure_count` appends `stable_fail=k/n` to every
-          MULTI-SEED line (last field; the leaderboard and paired_power regexes take
-          the first `stable=` and are unaffected — verified) and carries
-          stable_failures/stable_episodes on the aggregate.
-        · scripts/stable_failure_ci.py — exact Clopper-Pearson 95% CI on the failure
-          rate per run x stage; reads `stable_fail=` from the marker, else reconstructs
-          from the .out (exactly n_seeds trailing RESULT lines per MULTI-SEED line —
-          the stage-select val scoring prints 45 RESULT lines in between; HEADLINE
-          aliases the crowned stage when pop[0] is crowned, since it is not re-scored).
-          REFUSES any stable% off the 100/N grid rather than round a count. `--vs A B`
-          adds Fisher's exact test. 12 checks in tests/controller_stable_failure_ci.py.
-      UNIT DECISION (stated, not hidden): the interval pools all 500 episodes as
-      Bernoulli trials; episodes within a seed share that seed's disturbance stream,
-      so the honest replication unit is the seed — the per-seed counts print beside
-      the pooled CI so clustering is visible (s3 _hd HEADLINE: 2/2/2/4/12).
-      First read, MEMORY row, fail/500 [95% CI on fail-rate, %]:
-        s2 _hd 3 [0.1,1.7]  vs _crn 2 [0.0,1.4]     s3 _hd 3 [0.1,1.7]  vs plain 5 [0.3,2.3]
-        Fisher s3: p=0.725. GRID rows differ by an order of magnitude (21-38/500), i.e.
-        stable is resolved at GRID and saturated by MEMORY — at 2-5 failures in 500 a
-        t-CI on stable% is meaningless and R11's count is the only honest form.
-  [x] sn>0 path audit (11/09/2026, current tree 3b5fc37d). Every claim of the §3-C
-      path paragraph re-verified at today's lines, plus the D0 question the review
-      predates:
-        · Trainer dispatch: `use_split = WNN_STATE_SPLIT=="1" && sn>0`
-          (dagger_train.rs:2223-2226); the ladder exports no WNN_* (grep clean), so
-          sn>0 takes the non-split branch (dagger_train.rs:2341-2352) →
-          `train_on_trajectory_rs` (1759) → `bptt_train_window` (controller.rs:3764-4417),
-          CPU. GPU split needs WNN_CONTROLLER_GPU_TRAIN=1 AND refuses the vertical
-          channel (`!vert_on`, dagger_train.rs:2238-2247).
-        · sn=0-ONLY: write-priority / err-floor gated by `state_bits_in == 0`
-          (controller.rs:3981-3987); --dagger-label-delta asserts sn==0
-          (controller.rs:3832-3837; evaluator.py:151); output_full_window refuses sn>0
-          (controller.rs:1821-1824). Confirmed: axis C cannot inherit arm B / arm D.
-        · D0 REACHES sn>0: the derived hover enters through TeacherBank::get
-          (dagger_train.rs:968-975), consumed by `rollout_and_label_rs` (1481), which
-          both the split and the BPTT branch share — so a C arm under
-          --teacher-hover derived trains against the same re-based labels as the anchor.
-        · State-prefix offset from num_features(): controller.rs:8096 (pin test).
-      ⚠️ NEW FINDING — D8, applies to sn=0 TOO (i.e. to the ANCHOR). See §0b below.
-  [ ] Smokes: one 4-minute phased_ga per new flag combination (L4A, L4B, pid, lqi,
-      sn=4, sn=8, cf2x_firmware) — rc 0 and a sane grid line.
-  [ ] Memory budget for sn=4/8 vs the 180k cap.
-  [ ] Round-major chain written (one script, conditions x seeds, marker-gated),
-      ending each round in a paired_power.py --primary verdict per condition against
-      the extended anchor AND the condition's own baseline.
-  [ ] Power statement per axis written INTO the chain header (R2).
-  [x] D0 resolved (§0.10, 12/09/2026: derived hover EQUIVALENT, default) — flipped 19/09.
-  [x] Hard refusal in `_pid_cascade_kwargs` for an airframe whose registered gains
-      have rate=None — LANDED 12/09/2026 at the idle window (training.py raises
-      ValueError naming the airframe; the KeyError path for the synthetic plant
-      still returns {} so the parity anchors stay bit-identical).
-  [x] (CLOSED 19/09/2026 — live in controller_arm_lib.sh, honoured by seed_arm_chain + queue_1909)
-      HOLD sentinel (11/09/2026, Luiz): `touch experiments/HOLD_CONTROLLER` → every
-      chain banks the run it is flying and WAITS before the next launch
-      (`wait_while_held` in controller_arm_lib.sh, reached by every chain through the
-      ladder; post_d0_queue.sh checks it before launching a chain too); `rm` resumes.
-      Idle windows are requested, never made by killing the queue. On branch
-      marker-provenance with the R9/R11 work; the FIRST window is being made the old
-      way (queue killed 21:26 EDT 11/09, chain finishes 4/4 alone) because the
-      sentinel cannot land into running scripts. Harness case added.
-  [ ] Actuator-lag plumbing (axis F): flag → EpisodeConfig → cfg → baseline scorer.
-  [ ] A-cross scoring script: score the 4 banked anchor winners at L4A/L4B.
-  [x] Stale notes fixed: `_FW_UNIT_NOTE` now says the SI conversion is DONE and
-      pinned (pid_firmware._SiGains.from_firmware, boundary training._pid_cascade_kwargs)
-      and gains are sourced, never re-derived — landed 12/09/2026. Memory note fixed 11/09.
+COST BASIS (measured, pop 50, ABI 33, k_d sweep + A/B, box shared with the IDS worker):
+arm_kd078 7.2 h · arm_kd050 8.7 · arm_kd025 9.7 · arm_kd000 9.9 · twin_kd078 10.1 · arm_s3 8.2 ·
+twin_s3 7.4 · arm_s4 7.5 · twin_s4 > 10.8 (flying). Mean of the 8 finished 8.6 h; PLANNING FIGURE 9 h.
+(For scale: _hd29 3.1 h — marker dur_s ~11.2k; _pipeN30 8.6-11.6 h; _op30 11.5-12.9 h; _op31 8.0-15.3 h.)
+Axis C: 18 h/run budgeted, unmeasured. One controller at a time; IDS has priority and is never
+paused — controller wall-clock stretches when the IDS load rises.
 
-## 5.1 Stage 0 closure plan (19/09/2026)
-
-Written while the box is committed ~60 h to scripts/queue_1909_close_then_full.sh (CTRL-7
-5th seed, CTRL-15 _op x4, CTRL-10 _pon s2, CTRL-16 _full x4); the next idle window is its
-STEP 6 STOP. Nothing here launches or edits a chain-sourced script before that window.
-STATE CHECK FIRST: three §5 items are STALE. Branch `marker-provenance` MERGED 12/09/2026
-07:39 EDT (50a9bdba); the worktree /Users/lacg/wnn-provenance is gone and origin/marker-
-provenance is 0 ahead / 80 behind. Every marker banked since (13, all `_hd29`) carries
-`"provenance":{wheel:ram_controller-2026.212.37, abi:29, wheel_sha256:026e02aa7f2a5a23,
-fitness_pools:CRN}` and `stable_fail=k/500` on every MULTI-SEED line. There is NO
-provenance/failure-count merge left for the idle window. One nit: `git=unknown` in every
-detached launch (the .so hash is the load-bearing field; fix optional).
-PROGRAMME ANCHOR = `_hd29` (ABI 29 wheel, 4/4 banked 19/09; s31337006 flies in the current
-queue as the first extension seed). The §1 table is the pre-ABI-29 `_hd` era and must be
-restated on `_hd29` before any V1 is computed. Run cost measured on `_hd29`: 3.1 h, peak RSS
-3.1-4.0 GB (the §4 budget's 5 h/run is conservative; axis C's CPU BPTT path is unmeasured).
-
-### 5.1.1 Every open §5 item — what closes it
+ROUND 1 (once Stage 0 is closed and the anchor is named):
 ```
-#  item (§5)                          closes with                                         kind      idle?  effort  depends on         evidence = closed
-1  [x] R9 provenance                  NOTHING — merged 12/09; flip to [x]                 doc       no     5 min   —                  13 markers with non-null provenance (checked 19/09)
-2  [x] R11 failure count              NOTHING — merged 12/09; flip to [x]                 doc       no     5 min   —                  stable_fail=14/500 on _hd29 s2 MEMORY line
-3  [x] HOLD sentinel                  NOTHING — live (controller_arm_lib.sh:38); flip [x] doc       no     5 min   —                  seed_arm_chain + queue_1909 honour it
-4  [x] D0 resolved                    NOTHING — §0.10 derived default 12/09; flip to [x]  doc       no     5 min   —                  a88cb7c1 flipped; A/B 4/4 straddles
-5  [ ] D5 fresh report seeds          Luiz answers D5 (rec 99990201..05)                  decision  no     1 msg   —                  D5 line in §8 marked DECIDED + date
-6  [x] baselines PENDING D5 rerun     compute_baselines x4 conditions (+tau,2tau) on D5   run       yes*   20 min  #5, #11            experiments/l4teach_markers/baselines_*_d5.json
-7  [ ] smokes per flag combo          ONE 60 s phased_ga per condition (8 incl. tau)      run       yes    40 min  #11 for tau        rc=0 + grid line + HEADLINE + [provenance] abi
-8  [ ] memory budget sn=4/8           anchor populates ~300k output cells at b24 n256; add   doc       no     30 min  —                  number in chain header; sn smoke peak_rss < 6 GB
-                                      the state layer's reachable cells vs the 180k grow cap
-9  [ ] round-major chain              scripts/multi_axis_chain.sh over seed_arm_chain.sh: code      write  3 h     #5, #8, #10        shellcheck clean; --dry-run prints 12 launches;
-                                      ARM_EXTRA_ARGS last-wins for --disturbance/--teacher/  (bash)  no,           harness case (marker-gated, idempotent, fails closed)
-                                      --airframe/--grid-state-neurons/--max-state-neurons/         smoke
-                                      --report-seeds (all plain store args, verified);            yes
-                                      ARM_SUFFIX=_ax<A|B|C|D|F>_<value>, ARM_CTRL_SUFFIX=_hd29,
-                                      ARM_NO_CONTROL=1 for anchor seeds; round ends in
-                                      paired_power.py --primary per condition. ZERO ladder edits
-                                      (ladder tag still reads cf21_brushless_L4C — suffix disambiguates)
-10 [ ] power statement per axis       paired_power.py re-run on _hd29 n=4 SDs -> R2 MDE     doc+code  no     2 h     —                  docs/controller_paired_power.txt refreshed;
-                                      ranges; add `--welch` (anchor n=8 vs cond n=4; grep:                                            MDE line per axis pasted into the chain header
-                                      paired_power.py has NO Welch today) — extend, no sibling
-11 [ ] actuator-lag plumbing (F)      NOT Python-only as §3-F says: score_controllers_metal code      build  Rust 3 h  —                cargo test motor_lag_off_is_bit_identical + new
-                                      exposes motor_lag_s, but RewardGatedConfigPacked       Rust+Py no,   Py 2 h                     packed-cfg pin; s=1 smoke RESULT line identical
-                                      (dagger_train.rs) has no field, the training rollout          install                           pre/post wheel (the R9 pin); baselines at tau, 2tau
-                                      never calls set_motor_lag, cpu_score.rs:614 and                yes
-                                      compute_baselines lack it -> trainer/scorer mismatch
-                                      (stage-1 trainer-gap pattern). Field + apply in the
-                                      rollout + cpu scorer + ABI 30; Python --motor-lag ->
-                                      EpisodeConfig -> both scorers + compute_baselines.
-                                      Wheel BUILT on a worktree, Python staged as a patch
-12 [ ] A-cross scoring                extend scripts/rescore_winners.py with --translation   code+run write  2 h     #5 (seed set)      JSON: 4 _hd29 winners x {L4A,L4B} x 5 report
-                                      regimen + --airframe (today: --disturbance only);      (Py)    no,                              seeds, triple + alt; classical rows from #6
-                                      score the 4 _hd29 winners at L4A/L4B                          run yes
-13 NEW anchor restated on _hd29       §1 table from the 4 _hd29 MEMORY multi-seed rows       doc       no     30 min  —                  §1 shows _hd29 n=4 (n=5 once s6 banks) + wheel sha
+order  condition                runs  h      why here
+(0)    anchor s5, s6            2     ~18    ONLY if the CTRL-8 n=3 interim stop fired
+1      A  L4A, L4B              2     ~18    no code; largest expected effect
+2      F  T=0.15, T=0.30        2     ~18    reviewer priority; plumbing closed
+3      B  pid, lqr              2     ~18    smoke must show no label saturation
+4      D  cf2x_firmware         1     ~9     after Q3 (k_d source)
+5      C  sn=4, sn=8            2     ~36    last: slowest, memory budget (#8) gates it
+       round 1 total            9     ~99 h  (~4 days); +18 h if (0)
 ```
-`yes*` = minutes and tiny RSS; fits the queue's 120 s between-step gap, but do it at the window.
+The anchor already has s2..s6 when round 1 starts, so every round-1 run reads as a DIRECTION against an
+n=5 anchor immediately; the D4 extension (s7..s9) flies in round 2 where Welch needs it.
 
-### 5.1.2 The idle window — what lands, in what order
-No merge is pending (5.1 header). The window is for the ONE deploy the programme needs (F wheel,
-ABI 30) and the runs that cannot fly beside a chain. Order, each step gated on the previous:
-  1. PRE-PIN smoke on ABI 29: the smoke shape below with the anchor flags, `--base-seed 1`; keep
-     its RESULT/HEADLINE lines.
-  2. Install the F wheel + apply the staged Python patch ATOMICALLY (`maturin develop --release
-     -m controller/Cargo.toml`); `cargo test -p ram_controller --lib --no-default-features`;
-     `tests/controller_provenance.py`; `python -c "import wnn.control._accel"` asserts ABI 30.
-  3. POST-PIN smoke, identical flags: RESULT lines must be bit-identical to step 1 and
-     `[provenance]` must print abi=30 + the new sha. Any drift = STOP, uninstall, do not arm.
-  4. Per-condition smokes (#7): L4A, L4B, pid, lqr, cf2x_firmware, sn=4, sn=8, --motor-lag
-     0.0375. For pid/lqr also grep the label-saturation print (§0.9(c)) — must not fire.
-  5. Baselines on the D5 seeds (#6), A-cross scoring (#12) — minutes each.
-  6. Arm `multi_axis_chain.sh` round 1 (5.1.5) detached (start_new_session, PPID=1), then leave.
-Smoke shape (bypasses the ladder so no marker is banked; numbers are NOT read):
-    cd /Users/lacg/wnn && /Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/bin/python -u -m \
-      wnn.control.phased_ga <the ladder's exact flag block from sweep_ladder_gamma.sh:124-146> \
-      --pop 6 --steps 200 --neurons-gens 1 --conns-gens 1 --memory-gens 1 --eval-episodes 2 \
-      --memory-eval-episodes 2 --report-episodes 2 --base-seed 1 \
-      --save-stage-checkpoints /private/tmp/smoke_ckpt  [+ the condition's flags, last-wins]
-    assert rc=0; grep -E '^\[provenance\]|HEADLINE|GRID' — all three present.
+BUDGET (n=5 per condition):
+```
+anchor completion (s5,s6 only if interim stop)       0-2 runs    0-18 h
+anchor extension D4 (s7..s9)                           3          27
+A disturbance (L4A, L4B)                              10          90
+F actuator lag (T 0.15, 0.30)                         10          90
+B teacher (pid, lqr)                                  10          90
+D airframe (cf2x_firmware)                             5          45
+C state neurons (sn=4, sn=8), 18 h budget             10         180
+total                                              48-50     ~520-540 h  ≈ 22-23 days of box time
+G optional tail                                       +5         +45
+```
+Draft 3 was 40 runs / ~215 h; the ~2.5x is the 3.2 → 9 h run cost plus n=5. Trims, each Luiz's call
+(Q1): n=4 per condition (-9 runs, ~-99 h); drop sn=8 (-5, ~-90 h); a pre-registered n=3 interim stop
+per condition on the rule_v2 pattern (saves up to 2 runs per decisive condition).
+Escalation (pre-registered): a condition whose verdict is "similar" while its CIs still contain the
+MEI after n=5 gets +2 seeds — a human decision, not automated.
+Every chain: marker-gated, idempotent, fails closed, HOLD-aware, one controller at a time, never edits
+a running .sh, never launched beside IDS memory pressure (the controller is the sacrifice).
 
-### 5.1.3 D0-D7 in one line each (answer in one message)
-```
-D0  CLOSED 12/09 (derived hover default, A/B equivalent 4/4) — no answer needed, acknowledge.
-D1  Axis D flies cf2x_firmware ONLY; cf2x_urdf waits for a citable DSL single-loop PID port.   rec: YES
-D2  Axis E: DROP with the R2 justification; re-open on altitude only if flight-dynamics endorses 1/L.  rec: DROP
-D3  Round-major interleaving (§4) replaces stage-major.                                        rec: CONFIRM
-D4  Anchor extension to 8 seeds: s31337006 is already flying (_hd29, CTRL-7); +3 = s7..s9.    rec: YES
-D5  Final-table report seeds 99990201..05; interim ticks keep 99990101..05.                    rec: CONFIRM BOTH
-D6  Add axis F (actuator lag), ahead of D — note it is Rust+Python, ABI 30, forces the s=1 pin. rec: YES
-D7  Axis G (500 Hz) as an optional 4-run tail after F.                                          rec: OPTIONAL, after round 2
-D9  NEW: programme anchor = _hd29 (ABI 29 era), the §1 _hd-era table is restated on it.        rec: YES
-```
+## 5. Stage 0 — prerequisites (status 05/11/2026)
 
-### 5.1.4 Order of work during the ~60 h (nothing below touches the box)
 ```
-1  spec edits: flip #1-#4 to [x]; #13 anchor restated on _hd29; #10 MDE refresh (reads markers only)   1 h
-2  Luiz: D1-D7 + D9 in one message; D5 is the only one with a downstream run (#6)                       —
-3  F plumbing (#11) on worktree branch `actuator-lag`: Rust field + rollout apply + cpu scorer + tests;  5 h
-   Python flag/EpisodeConfig/compute_baselines; wheel BUILT (maturin build), NOT installed; Python
-   kept OFF the live tree (git apply patch staged with the wheel — feedback_stage_python_with_wheel)
-4  paired_power.py --welch (#10) + rescore_winners.py --translation/--airframe (#12); unit-level only     3 h
-5  multi_axis_chain.sh (#9) with --dry-run, power statements in its header, harness case                 3 h
-6  sn=4/8 memory budget (#8)                                                                             0.5 h
-CANNOT run before the window: every smoke (#7), the D5 baselines (#6), A-cross scoring (#12), the
-F install (#11). A controller-wheel install is "anytime" by the crate split but NEVER while a chain
-is armed (three cohorts died 10/08) — the queue is a chain of chains until STEP 6.
+#   item                                   status    evidence / what closes it
+1   R9 provenance on every run              CLOSED    50a9bdba; arm_s3.out:7 `[provenance] … abi=33 wheel_sha256=a6398538ce04588c`
+2   R11 failure counts                      CLOSED    50a9bdba; `stable_fail=` on MULTI-SEED lines (3 in arm_s3.out)
+3   HOLD sentinel                           CLOSED    controller_arm_lib.sh; honoured by ctrl8_ab_pop50.sh:24
+4   D0 teacher hover / label re-base        CLOSED    a88cb7c1; dagger_train.rs:1240-1259 (teacher.hover(), all teachers)
+5   D5 report-seed set                      CLOSED    decided 19/09 (§8); implementation is #6 + #12
+6   Rival bars per condition (ABI 33)       OPEN      exist: cf21/L4C at k_d 0.78/0.5/0.25/0 on 99990101-05
+                                                      (experiments/ctrl22/rivals_abi33_tilt_kd*.json). Need: L4A, L4B, T0.15, T0.30,
+                                                      cf2x_firmware@k_d — each from a per-condition ARGS file via
+                                                      scripts/ctrl22_stage2_rivals.py; then all (+anchor) on D5. Minutes each.
+7   Smokes, one per condition (pop 6)       OPEN      none of lag>0, sn>0+translation, cf2x_firmware+translation, pid/lqr
+                                                      +translation has ever flown. Plumbing only (rc 0, GRID line, HEADLINE,
+                                                      [PLANT] + [provenance] abi=33); B: no label saturation. Decisions at pop 50.
+8   Axis C memory budget                    RE-OPENED anchor now ~1.6 M cells uncapped (_op31 marker), the 19/09 cap decision was
+                                                      sized vs 275k; first sn=4 run measures; Q4
+9   Round-major chain                       OPEN      scripts/multi_axis_chain.sh (111626af) wraps seed_arm_chain.sh →
+                                                      sweep_ladder_gamma.sh = the `_hd` ladder recipe (180k cap, no stage 2,
+                                                      no rotor-drag/estimator flags). REWRITE on the ctrl8_ab_pop50.sh pattern:
+                                                      anchor argv + condition flags last-wins, winner-file gated, HOLD-aware,
+                                                      --dry-run; keep its table/escape-hatch design and the T-units fix.
+10  Power statement per axis                OPEN      refresh R2 at the anchor's n=5; paired_power.py has --welch
+                                                      (scripts/paired_power.py:19,61) but reads banked sweepladder MARKERS —
+                                                      the CTRL-8 runs bank .out + winner only. Needs a HEADLINE-from-.out input.
+11  Actuator-lag plumbing (F)               CLOSED    ABI 30; see §3-F evidence
+12  Stage-2 rescoring (A-cross + D5)        OPEN      rescore_winners.py builds argv from (disturbance, airframe, translation,
+                                                      tilt) only (rescore_winners.py:152-163) → would score a stage-1 regime.
+                                                      Add a --run-args-file mode (as ctrl22_stage2_rivals.py does). Code, Python.
+13  Anchor restated                         OPEN      blocked on #18; §1.1 table is provisional
+14  Trainer gets the airframe               CLOSED    ABI 30; evaluator.py:1021-1033
+15  `_hd30` anchor re-fly                   SUPERSEDED _hd30 4/4 banked (ABI 30) but the lineage moved to ABI 33 / stage 2
+16  CTRL-17 stage-2 trainer gaps G1-G4      CLOSED    ABI 31; _accel.py:79-86
+17  Accelerometer disclosure                CLOSED    ABI 32 specific-force IMU (f99611bf)
+18  CTRL-8 arm-vs-twin verdict              OPEN      rule_v2 n=3 interim check pending twin_s4; names the anchor
+19  cf2x_firmware rotor-drag value          OPEN      no source (§3-D); Q3
+20  Wheel freeze for the programme          OPEN      Luiz confirms R9 freeze at ABI 33 sha a6398538ce04588c (Q5)
 ```
+BLOCKS ROUND 1: #6, #7, #9, #10, #18 (all axes); #12 (A-cross and the D5 final table, not the runs);
+#19 (axis D only); #8 (axis C only); #20 (any wheel change resets everything).
 
-### 5.1.3a NEW STAGE-0 ITEM (19/09/2026, found by the axis-F plumbing audit): THE TRAINER NEVER GETS THE AIRFRAME
-```
-RewardGatedConfigPacked(af_mass=0.0393)  →  af_k_thrust 2.4   af_inertia [2.3e-3, 2.3e-3, 4.6e-3]   arm 0.075   (synthetic plant)
-cf21_brushless registry                   →  k_thrust  0.2    inertia   [3.0e-5, 3.02e-5, 5.3e-5]  arm 0.0707
-implied hover pwm (thrust = k·pwm²):  trainer 0.200   scorer 0.694        runtime-verified 19/09 on the installed ABI-29 wheel
-```
-evaluator.py packs the trainer config at two sites (~L1485, ~L1604) from `_dist_packed_fields` +
-`_stage1_train_kwargs`, which passes ONLY `af_mass`. `EpisodeConfig.airframe_kwargs()` exists and is
-used by the scorers/baselines (classical_baseline.py) and the Lamarckian recorder (ga_memory.py) —
-not by the trainer pack. 12c62df9 (04/08) wired the plant "end to end" except here. Every one of the
-270 `*cf21_brushless*` markers — `_hd`, `_hd29`, `_pipeN`, `_bd`, `_dl`, the D0 and translation A/Bs,
-queue_1909 in flight — TRAINED against the synthetic plant (and DAgger labels from teachers whose
-gains derive from it) and SCORED on cf21. Within-lineage A/Bs stay valid (same trainer both arms);
-the absolute claim "trained and deployed on the Crazyflie 2.1 model" does not, D0's trainer-side
-"derived hover" was 0.200 not 0.694, and AXIS D IS VOID until the trainer sees the airframe.
-  [ ] #14 FIX: pass `ec.airframe_kwargs()` (plant fields + af_pid_* cascade) at both evaluator sites;
-      audit the thermometer-calibration sim (~L546) and `collect_student_feature_samples` (~L843)
-      for the same omission; test = a cf21 EpisodeConfig packs k_thrust 0.2 (dead-plumbing check).
-      kind: code (Python 4 lines + test) · lands WITH the ABI-30 wheel at the idle window · lineage break.
-  [ ] #15 RE-FLY the anchor on the fixed trainer: `_hd30` s31337002-05 (+s6-9 for D4), ~3.2 h each;
-      re-read the flash footprint (the student may need more or fewer keys on the true plant).
-      DECISION (Luiz): fix + re-fly before round 1 (recommended — axis D and the paper's cf21 claim
-      depend on it), or disclose as a limitation and keep the synthetic-plant lineage.
-
-### 5.1.4a Memory budget for axis C (sn=4 / sn=8) — CHECKED 19/09/2026 (closes item #8)
-```
-evidence (banked markers, per-genome cells = min-max Σ μ; peak RSS = /usr/bin/time -l)
-  sn=0  _hd29 s5 (ladder recipe, --max-cells 180000 --max-cells-strict)   275k cells        3.6 GB peak
-  sn=4  S1_lqi_sn4 s2-4 (Aug era, no cap)   6k-2.8M cells, μ 1.0-1.4M            13.4-18.0 GB peak
-  sn=8  S1_lqi_sn8 s2-4 (Aug era, no cap)   5k-9.1M cells, μ 4.4-5.3M            35.0-37.7 GB peak
-watchdog (scripts/controller_mem_watchdog.sh defaults): HOG_GB 28 = controller RSS at/above 28 GB → SIGKILL;
-HARD_AVAIL 6 GB; the IDS worker's flow runner co-resides at ~10 GB (flow 6072: 9.8 GB RSS).
-```
-Reads:
-· Under the ladder's `--max-cells 180000 --max-cells-strict` an sn>0 genome is CLAMPED at grow time, so axis
-  C would fly at ≤180k cells — a 5-50x smaller memory than the S1 runs that produced the sn>0 results the
-  §3-C prior rests on. That is a different controller, not the one the prior describes. Axis C must
-  therefore OPEN the cap like `_pipeN` (`--max-cells 1000000000`) or state the cap as part of the condition.
-· sn=4 uncapped: ~18 GB peak → fits beside the IDS worker (18 + 10 + dashboard ≈ 30 GB of 64) with the
-  watchdog's HOG_GB 28 NOT tripped. GO with the cap open.
-· sn=8 uncapped: 35-38 GB peak → ABOVE HOG_GB 28 → the watchdog WOULD SIGKILL it (rc 137, R1 retry x2, then
-  give up). Options: (i) raise HOG_GB to 44 for the axis-C runs (watchdog relaunch — a safety change, discuss
-  first per feedback_discuss_before_config_change); (ii) cap at `--max-cells 4000000` (μ of the S1 sn=8
-  runs) and state it; (iii) fly sn=8 only when the IDS worker is paused. Recommendation: (ii) — it keeps the
-  run under ~20 GB, is honest about the condition, and needs no safety-tool edit.
-  DECIDED 19/09/2026 (Luiz): (ii) — sn=4 flies with the cap OPEN, sn=8 at --max-cells 4000000; the chain
-  records max_cells in each C marker; item #8 CLOSED.
-· Both are CPU BPTT (no GPU split for sn>0 with the vertical channel): 6-7 h/run budgeted, unmeasured on
-  the ladder recipe — the first sn=4 run IS the measurement.
-
-### 5.1.5 Round 1 once Stage 0 is closed (per §4 round-major)
-```
-order  condition                         runs  h (3.2 h/run measured; C 6-7 h budgeted)  why here
-1      anchor _hd29 s31337007..9          3     ~10    every Welch primary shares it; R9-clean re-fly on the ABI-30 wheel
-2      A  L4A, L4B                         2     ~6.5   no prereqs, baselines banked, A-cross free; largest expected effect (PID err 0.58->1.79)
-3      F  tau=0.0375, 2tau                 2     ~6.5   reviewer-priority axis; the pin in 5.1.2 step 3 is its validity argument
-4      B  pid, lqr                         2     ~6.5   unblocked by D0; smoke must show no label saturation
-5      D  cf2x_firmware                    1     ~3.2   baseline banked; inertia-sensitivity read
-6      C  sn=4, sn=8                       2     ~13    last: CPU BPTT (slow), cannot inherit arm flags, budget #8 gates it
-       round 1 total                       12    ~46 h  (~2 days); then round 2 = second seed of every condition -> per-condition SD -> re-size
-```
-Axis A leads the axes because every prerequisite is banked and its effect is expected above the
-MDE, so it returns the first resolved V1 within a day. All 12 runs fly on ONE wheel (ABI 30,
-pinned bit-identical at lag 0), so no anchor seed mixes eras. §4 escalation and §6 verdicts unchanged.
+Idle-window procedure (unchanged in shape): smokes and rival bars need no wheel install; the controller
+wheel is NOT reinstalled for the programme (R9). Smoke shape (no marker, numbers NOT read):
+    cd /Users/lacg/wnn && PYTHONPATH=src/wnn /Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/bin/python -u -m \
+      wnn.control.phased_ga <anchor argv §1.1> --pop 6 --steps 200 --neurons-gens 1 --memory-gens 1 \
+      --eval-episodes 2 --memory-eval-episodes 2 --report-episodes 2 --base-seed 1 [+ condition flags, last-wins]
+    assert rc=0; grep -E '^\[provenance\]|^\[PLANT\]|HEADLINE|GRID'.
 
 ## 6. Verdict protocol (pre-registered, per condition)
 
-  V1. Δ(WNN_condition − WNN_anchor) on the PRIMARY column: Welch mean, 95% CI
-      (anchor n=8 when the extension has landed, else paired n=4). The other three
-      columns: same numbers, labelled descriptive. Holm-4 CI printed as robustness.
-  V2. Δ(WNN − PID) at the condition vs at the anchor. PID is fixed on the report
-      seeds, so V2 = V1 − a constant: it is the same test, reported as the READ.
-  V3. The classical order at the condition from its own baseline file, WITH SDs, and
-      where the WNN's hd falls in it — as a table, never a bare inequality.
-  V4. Altitude always shown; hd always shown and always descriptive.
-  A condition has MEASURED something if the primary CI excludes zero. An
-  indeterminate primary is written up with the n it would need (the tool prints it)
-  and, if the CI includes the MEI, triggers the §4 escalation rule.
+  V1. Δ(WNN_condition − WNN_anchor) on ALL FIVE metrics (stable, err, steady, alt, pos3d): Welch mean
+      and 95 % CI (anchor n=8 once extended, else n=5), paired as robustness. dx/dy printed alongside.
+  V2. HOLISTIC READ on the rule_v2 template, margins = the axis MEIs (similar = CI inside ±margin):
+        1. attitude block (stable, err, steady): if every metric is better-or-similar in one direction
+           and at least one is beyond its margin, the condition MOVED the controller in that direction;
+        2. all three similar → alt and pos3d decide (beyond margin = moved; else UNCHANGED);
+        3. mixed (one better, one worse beyond margin) → no automatic verdict, reported to Luiz.
+  V3. Position vs the condition's own rival bar (R6), as a table with SDs: is the WNN still above PID on
+      err/steady and below every rival on stable/pos3d? That is the robustness READ of Q1.
+  V4. An indeterminate condition is written up with the n it would need and, if its CIs include the
+      MEI after n=5, triggers the §4 escalation (human decision).
+  Reports: REPORT headline only; all five metrics together; never a single-metric gate.
 
 ## 7. What this programme is NOT
 
-- Not a search for a better operating point: hyperparameters are frozen and moved.
-  The encoder IS re-fit per condition (it is fit from that condition's PID rollouts);
-  that is part of the recipe, not tuning, and it is stated.
-- Not a factorial: 5 axes x 3 values x 4 seeds = 972 runs; this is 32. Interactions
-  are out of scope, and the claim in §1 is LOCAL to the anchor for that reason.
-- Not a replacement for the queued 2x2 / window-k. Arm B is HELD (§0.9(c)) until the
-  label re-base lands; this programme queues behind whatever runs.
+- Not a search for a better operating point: hyperparameters frozen; the encoder re-fit per condition
+  is part of the recipe, stated.
+- Not a factorial: interactions are out of scope; the claim is LOCAL to the anchor.
+- Not a replacement for CTRL-8: it waits for CTRL-8's verdict and inherits its winner.
 
-## 8. Open decisions for Luiz
+## 8. Decisions
 
-  DECIDED 19/09/2026 (Luiz, one message): D1 YES · D2 DROP as attitude axis (levels ladder at s2:
-  8/16/24/64/96 levels → err 7.18/2.68/2.95/1.75/2.04°; 96 levels held alt 0.264 vs 0.335 m — re-open
-  on altitude only if wanted; the 96-level point is n=1, 4.0 h/run, 396k cells ≤1.19 MB packed — fits) · D3 CONFIRMED · D4 YES (8 seeds; s6 flying, +s7-9) · D5 CONFIRMED
-  (99990201..05 final; ticks keep 99990101..05) · D6 YES (anchor lag 0 vs τ vs 2τ = the with/without)
-  · D7 OPTIONAL tail after round 2 · D9 YES (anchor = _hd29). Off-box work started 19/09 in worktrees:
-  actuator-lag (Rust+Python, ABI 30), stats-tools (paired_power --welch, rescore_winners flags),
-  multi-axis-chain (round-major chain + --dry-run).
+DECIDED 19/09/2026 (Luiz): D1 cf2x_firmware only · D2 levels dropped · D3 round-major · D4 anchor to 8
+seeds · D5 final report seeds 99990201..05, interim 99990101..05 · D6 axis F added (T units per §3-F) ·
+D7 axis G optional after round 2 · D9 anchor = `_hd29` — SUPERSEDED 05/11 by the CTRL-8 winner (draft 4).
+DECIDED since: alt weight 0.0 (CTRL-19, 28/10); MAD floor not adopted (CTRL-20, 30/10); ABI-32 real-life
+plant (31/10, option A); k_d 0.78 default (03/11); CTRL-8 rule_v2 holistic (05/11).
 
-  D1. Axis D: fly cf2x_firmware only now (recommended); cf2x_urdf waits for a citable
-      DSL single-loop PID port, or is dropped.
-  D2. Axis E: drop with justification, or re-open on altitude if flight-dynamics
-      endorses the 1/L altitude prior.
-  D3. Round-major interleaving (§4) in place of stage-major — confirm.
-  D4. Anchor extension to 8 seeds (+4 runs, Welch primary) in place of "5 seeds
-      everywhere" (+9 runs) — recommended.
-  D5. Fresh report-seed set for the final table (R10): e.g. 99990201..05 — confirm
-      the numbers, and whether interim ticks may keep using 99990101..05.
-  D0. (§0) trainer-vs-rival linearization asymmetry (mpc/mpcof ~17% + DOB 1.39x):
-      probe first (recommended), fix+A/B regardless, or record and proceed?
-  D6. Add axis F (actuator lag) — recommended, and ahead of D on reviewer priority.
-  D7. Axis G (control rate) — include as an optional tail?
+OPEN for Luiz:
+  Q1. Scope/cost: n=5 per condition (~520-540 h) as the house rule says, or a trim — n=4 (-99 h), drop
+      sn=8 (-90 h), or a pre-registered n=3 interim stop per condition (rule_v2 pattern)?
+  Q2. D4 anchor extension to 8 seeds (+27 h): keep, or anchor n=5 with paired + Welch 5-vs-5?
+  Q3. Axis D rotor drag for cf2x_firmware: Förster 0.25 (sourced, CF2.0 rotor-only), Folk mass-scaled
+      ~0.91 (unsourced extrapolation), or 0.78 disclosed?
+  Q4. Axis C memory: sn=4 uncapped and sn=8 at --max-cells 4000000 as decided 19/09, or re-cap now that
+      the anchor is ~1.6 M cells (e.g. sn=8 uncapped only with HOG_GB raised — a safety change)?
+  Q5. Freeze the controller wheel at ABI 33 (sha a6398538ce04588c) for the whole programme (~3 weeks)?
+  Q6. Re-fly the drag axis (§1.2) to n=5, or leave it as the n=1 reference it is?
 
 ## 9. Reviews
 
-### 9.1 experiment-design review — received 11/09/2026, 19 findings; all adopted
-Adopted into draft 2: anchor row corrected to the n=4 mean±SD (F1); "level with
-PID" and best-of-archive withdrawn, hd CI stated (F2); pairing shown to be cosmetic,
-Welch-vs-extended-anchor made primary (F3, F12); MEMORY row kept, headline row with
-crowned stage always shown, CONNECTIONS row for axis C (F4); ONE primary column per
-axis + Holm-4 robustness, V2 recognised as V1 − const (F5); exact noncentral-t
-sizing and MDE in the tool, normal approximation removed (F6, F19); axis B null as
-an equivalence claim with a 0.55° TOST margin (F7); axis A power restated on V1,
-encoder re-fit made explicit in §1/§7 (F8); axis C MEI 0.16 m (F9); axis D deepened —
-the PID-fed thermometer means a fallback PID contaminates the WNN encoder, which
-strengthens deferring cf2x_urdf (F10); Q1 narrowed to a local claim on err and alt,
-hd descriptive (F11); R9 provenance (F13); R10 fresh report seeds (F14); round-major
-interleaving with a per-condition escalation rule (F15); R11 stable as counts (F16);
-classical SDs carried (F17); axis E do-not-fly accepted with the 1/L altitude caveat
-routed to flight-dynamics (F18).
-
-### 9.2 flight-dynamics review — received 11/09/2026, 15 findings; all adopted or routed
-Adopted into draft 3: §0 training-teacher hover-anchoring mismatch surfaced as a
-BLOCKER and routed to Luiz/controller agents, not fixed (F1); axis D refusal claim
-corrected — cf2x_urdf falls back silently on the normal path; hard refusal added to
-Stage 0 (F2); option (ii) moot, LQI would be the right self-deriving comparator if
-ever needed (F3); axis D reads: 5x k_drag on the unobservable yaw axis, derived vs
-measured inertia (F4); axis A confound renamed from dither to teacher-label collapse,
-sensors stay noisy on every rung (F5); vertical plant stays randomised at L4A (F6);
-A-cross scoring protocol added, free (F7); axis C path named — CPU EDRA-BPTT, sn=0-only
-flags listed (F8); axis C observability accepted, mechanism caveat kept (F9); axis B
-second teacher changed lqi → lqr, mpc exclusion re-reasoned (F10); axis F actuator lag
-added — sourced, implemented, reachable from no recipe, anchor is lag-free (F11);
-accelerometer hover-approximation disclosure (F12); axis G control rate as optional
-(F13); wind and inertia coverage cited (F14); the two stale notes that produced
-draft 1's error listed in Stage 0, memory note fixed (F15).
+Draft 2 folded the experiment-design review (11/09, 19 findings); draft 3 the flight-dynamics review
+(11/09, 15 findings) — both listed in draft 3 §9 (3b8affdb). Draft 4 has NOT been reviewed: before
+arming, route §2/§4/§6 (holistic verdict with Welch, n, interim stops) to experiment-design and §3-C/D/F
+(sn>0 replay under the ABI-32 plant, cf2x k_d, lag units) to flight-dynamics.
