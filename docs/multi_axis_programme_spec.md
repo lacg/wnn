@@ -6,6 +6,28 @@ onto the current controller: wheel ABI 33, the ABI-32 real-life stage-2 plant, r
 and the CTRL-8 recipe. Nothing is launched until the Stage 0 checklist (§5) is closed AND the CTRL-8
 arm-vs-twin verdict has named the anchor.
 
+## Decisions 05/11/2026 (Luiz, on draft 4) — these OVERRIDE anything below that disagrees
+
+| # | decision | consequence in this spec / the tooling |
+|---|---|---|
+| D10 | Per-condition **n=3 interim stop** under the CTRL-8 holistic rule (experiments/ctrl8_ab_rule.json `rule_v2`): after a condition's 3rd seed, if all three attitude CIs (paired vs the anchor's same seeds) clear their margins in the same direction, STOP; else continue to n=5. **sn=8 flies only if sn=4 shows an effect.** | §4 budget is now a range; chain writes `<suffix>.STOPPED`; sn8 gated by a human-made `experiments/multi_axis_markers/SN8_APPROVED` |
+| D11 | **No anchor extension** (s7-s9 dropped). The CTRL-8 seeds of the winning arm ARE the anchor (s2 = `*_kd078`, s3-s6 = `ctrl8_ab_pop50/*_s<n>`). | D4 superseded; Welch is anchor n=5 vs condition n=3-5; if CTRL-8 stops at n=3 the chain flies the missing anchor s5/s6 itself |
+| D12 | **cf2x_firmware rotor drag = 0.25 1/s** (Förster 2015, rotor-only, CF2.0) — DISCLOSE that it is rotor-only and a different source than cf21's 0.78. | axis D condition = `--airframe cf2x_firmware --rotor-drag 0.25`; Q3 closed |
+| D13 | **Axis-C memory caps: re-measure** in the smoke at the current anchor size; the 19/09 caps are NOT reused. | chain REFUSES axis C until `MA_AXIS_C_MAX_CELLS` is set from the smoke's peak RSS / cells; Q4 closed |
+| D14 | **Controller wheel FROZEN at ABI 33** (sha a6398538ce04588c) for the whole programme. | R9; chain preflight refuses any other wheel and refuses to bank a run whose `[provenance]` differs; Q5 closed |
+| D15 | **No drag-sweep re-fly.** §1.2 stays an n=1 reference. | Q6 closed |
+
+Report seeds in-programme: every condition flies the anchor argv's own 99990101..05 (the interim set),
+so its headline compares directly with the banked anchor headlines; the FINAL table re-scores every
+crown on D5 (99990201..05) with `phased_ga <argv> --report-seeds <D5> --recalc-headline <ckpt dir>`
+(same regime) — and the rivals on D5 are already scored (§5 #6).
+
+Tooling landed 05/11 (no box time used): scripts/headline_compare.py (7ddeba55; .out REPORT-headline
+comparison, paired|Welch, rule_v2 verdict + interim-stop check); rescore_winners.py `--run-out`
+(5d5f816e; stage-2 crowned-genome scoring under a changed regime = A-cross); scripts/multi_axis_chain.sh
+rewritten + tests/multi_axis_chain_dryrun.sh 27/27 (d6d9cfd8; NOT launched); per-condition rival bars
+(§5 #6).
+
 ## What changed since draft 3
 
 | # | draft 3 (19/09, ABI 29/30) | draft 4 (05/11, ABI 33) | evidence |
@@ -127,7 +149,9 @@ R1. VERDICT is HOLISTIC on the five metrics together (§6), on the CTRL-8 rule_v
 R2. SIZE BEFORE FLYING with exact noncentral-t MDEs (80 % power, α .05 two-sided). From the provisional
     ARM n=3 SDs (stable 1.36 pp, err 0.144°, steady 0.152°, alt 0.020 m, pos3d 0.009 m):
         paired n=5 (SD_d = √2·SD)    stable 3.2 pp  err 0.34°  steady 0.36°  alt 0.047 m  pos3d 0.022 m
-        Welch anchor 8 vs cond 5     stable 2.4 pp  err 0.25°  steady 0.27°  alt 0.035 m  pos3d 0.017 m
+        Welch anchor 8 vs cond 5     stable 2.4 pp  err 0.25°  steady 0.27°  alt 0.035 m  pos3d 0.017 m   (moot: D11, no extension)
+        Welch anchor 5 vs cond 5     stable 2.8 pp  err 0.29°  steady 0.31°  alt 0.040 m  pos3d 0.019 m
+    The D10 interim look is PAIRED at n=3 (rule_v2): CIs there are wide, so only large effects stop early.
     A 3-seed SD is itself uncertain (95 % CI [0.52x, 6.3x]) — QUOTE RANGES and refresh at the anchor's
     n=5 (and again per condition after its 2nd seed). A null whose MDE exceeds the axis MEI is
     INDETERMINATE, never a refutation.
@@ -159,7 +183,7 @@ R11. stable is a bounded per-episode pass rate: report failures as counts (`stab
 
 ## 3. The axes — values, focus metric, MEI, prerequisites (re-checked 05/11 against the tree)
 
-### Axis A — DISTURBANCE (L4A, L4B vs anchor L4C)                 2 conditions, 10 runs, ~90 h
+### Axis A — DISTURBANCE (L4A, L4B vs anchor L4C)                 2 conditions, 6-10 runs, ~54-90 h (D10)
 Values: the sourced L4 rung (training.py:231-235): L4A clean plant, L4B 10 %, L4C 20 %. L4A removes ONLY
 the per-episode static plant draw (torque_scale_jitter, motor_asym); sensor noise (ADIS16448) is shared
 by every rung (training.py:236-239), and the translation draws (mass/collective jitter, alt offset,
@@ -171,7 +195,7 @@ A-cross (scoring only, minutes): the anchor winners scored at L4A/L4B — needs 
 tool (#12).
 Prereqs: rival bars at L4A, L4B (#6); smoke (#7). No code.
 
-### Axis B — TEACHER (pid, lqr vs anchor mpcof)                    2 conditions, 10 runs, ~90 h
+### Axis B — TEACHER (pid, lqr vs anchor mpcof)                    2 conditions, 6-10 runs, ~54-90 h (D10)
 Values: pid (the weakest classical; quality span) and lqr (memoryless). Both fly the SAME outer
 position + altitude cascade as mpcof — the loops are teacher-independent (episode_regime.rs:40-74,
 dagger_train.rs:1612) — so the swap changes only the inner attitude law.
@@ -185,7 +209,7 @@ Prereqs: smoke per teacher (#7) — no pid/lqr-teacher translation run has EVER 
 logs/controller/*.out `[argv]` line with --translation and --teacher pid|lqr); the smoke must show the
 re-based labels do not saturate. Shares the anchor's rival bar.
 
-### Axis C — STATE NEURONS (sn=4, sn=8 vs anchor sn=0)             2 conditions, 10 runs, ~180 h (budget)
+### Axis C — STATE NEURONS (sn=4, sn=8 vs anchor sn=0)             sn=4 3-5 runs ~54-90 h; sn=8 only if sn=4 shows an effect (D10)
 Values: --grid-state-neurons N --max-state-neurons N. Prior (attitude-only, Aug 2026): S1_lqi_sn8
 hd 0.0535, sn4 0.0618 — no row under translation, none under stage 2.
 Focus: ALT and pos3d (the hold channels a recurrent state could smooth); err descriptive.
@@ -193,7 +217,7 @@ Path: sn>0 trains through the CPU EDRA-BPTT window trainer (no GPU split with th
 The replay now must carry vert_obs, horiz_obs, pwm_dev (obs-pwm) and att_up (ABI 32) per step;
 `replay_obs_guard` refuses a misaligned stream. sn>0 with obs-pwm + Mahony attitude features +
 position inputs has NEVER run — the smoke (#7) is the first test.
-MEMORY BUDGET RE-OPENED (#8): the 19/09 decision (sn=4 uncapped ~18 GB; sn=8 at --max-cells 4000000)
+MEMORY BUDGET RE-MEASURED IN THE SMOKE (D13, #8): the 19/09 decision (sn=4 uncapped ~18 GB; sn=8 at --max-cells 4000000)
 was sized against a 275k-cell sn=0 anchor under the 180k cap. The anchor is now UNCAPPED at ~1.6 M
 cells per genome (_op31 s2 marker: cells μ 1584k, peak RSS 11.4 GB). sn=4 uncapped will be larger
 (unmeasured); a 4 M cap on sn=8 is now only ~2.5x the anchor, a different condition than it was.
@@ -201,24 +225,26 @@ Watchdog HOG_GB 28 (controller_mem_watchdog.sh:89) and the IDS worker (~10 GB) b
 --eval-mem-budget auto (50 % of available) limits eval, not training cells.
 Wall-clock: unmeasured on this recipe; budgeted 18 h/run (2x anchor). The first sn=4 run IS the
 measurement; re-cost after it.
-Prereqs: #7 smoke (plumbing), #8 budget decision, Q4.
+Prereqs: #7 smoke (plumbing + peak RSS / cells at the current anchor size, /usr/bin/time -l) → a human
+sets MA_AXIS_C_MAX_CELLS (D13). sn=8 additionally waits for SN8_APPROVED (D10: only if sn=4 shows an effect).
 
-### Axis D — AIRFRAME (cf2x_firmware vs cf21_brushless)             1 condition, 5 runs, ~45 h
+### Axis D — AIRFRAME (cf2x_firmware vs cf21_brushless)             1 condition, 3-5 runs, ~27-45 h (D10)
 Values: cf2x_firmware only (D1); cf2x_urdf refused (training.py `_pid_cascade_kwargs` ValueError, landed
 12/09) until a citable DSL PID exists. The trainer now gets the airframe (ABI 30), so D is no longer void.
-NEW BLOCKER — ROTOR DRAG HAS NO SOURCE FOR cf2x_firmware: DEFAULT_ROTOR_DRAG = 0.78 is airframe-
+DECIDED 05/11 (D12): k_d = 0.25 (Förster 2015, rotor-only — DISCLOSED). The problem it resolves: DEFAULT_ROTOR_DRAG = 0.78 is airframe-
 independent (phased_ga.py:3459, applied at :3477 to any --translation run) and is sourced only for the
 39.3 g CF2.1-Brushless (Folk 2026). cf2x_firmware is 29 g (airframe.py:229). Options (Q3): (i) Förster
 2015 rotor-only CF2.0 ≈ 0.25 (cited in the DEFAULT_ROTOR_DRAG comment); (ii) Folk mass-scaled
 0.647·√(57/29) ≈ 0.91 — a cross-airframe extrapolation, unsourced; (iii) keep 0.78 and disclose. Since
 k_d moved the n=1 WNN by ~1.1° err between 0.78 and 0.25 (§1.2), this choice is not cosmetic: the
 condition is (airframe, k_d) and the airframe effect is confounded with the drag choice unless (i)/(ii)
-is sourced. 
+is sourced. D12 takes (i); the disclosure must say rotor-only (Förster) vs free-flight incl. parasitic
+(Folk), so axis D's airframe effect carries a drag-source difference with it.
 Focus: ALT and pos3d (does the hold transfer to a different thrust/inertia map); err descriptive.
 cf21_brushless inertia is DERIVED, cf2x_firmware's MEASURED — D is also the inertia-sensitivity check.
-Prereqs: Q3; rival bar at (cf2x_firmware, chosen k_d) (#6); smoke (#7).
+Prereqs: rival bar at (cf2x_firmware, k_d 0.25) — DONE (#6); smoke (#7).
 
-### Axis F — ACTUATOR LAG (T = 0.15 s, 0.30 s vs anchor 0)            2 conditions, 10 runs, ~90 h
+### Axis F — ACTUATOR LAG (T = 0.15 s, 0.30 s vs anchor 0)            2 conditions, 6-10 runs, ~54-90 h (D10)
 Molchanov eq. 7 motor lag. UNITS: `--motor-lag-s` is the 2 % SETTLING TIME T, τ = T/4 (phased_ga.py:2700-
 2707): nominal T = 0.15 (τ 37.5 ms), stress T = 0.30. Passing 0.0375 would model a 4x faster motor.
 PLUMBING CLOSED (ABI 30): trainer packed cfg + per-round eval, both scorers, classical baselines,
@@ -246,9 +272,9 @@ The draft-3 accelerometer disclosure is RESOLVED by the ABI-32 specific-force IM
 INTERLEAVE, DON'T STAGE (D3): round r flies seed r of every condition before any condition gets
 seed r+1; a condition's SD exists after its 2nd seed, which is the re-size point.
 
-ANCHOR. The CTRL-8 A/B supplies the anchor's s2..s6 (arm or twin, whichever wins) on the same wheel
-and argv. If the n=3 interim stop fires, only s2..s4 exist and s5, s6 must fly first (+18 h). D4
-extension s7..s9 (+27 h) feeds the Welch primary (anchor n=8 vs condition n=5).
+ANCHOR (D11). The CTRL-8 A/B supplies the anchor's s2..s6 (arm or twin, whichever wins) on the same
+wheel and argv. No s7..s9 extension. If CTRL-8 stopped at its n=3 interim look, only s2..s4 exist and
+the chain flies s5/s6 itself at the head of rounds 4/5.
 
 COST BASIS (measured, pop 50, ABI 33, k_d sweep + A/B, box shared with the IDS worker):
 arm_kd078 7.2 h · arm_kd050 8.7 · arm_kd025 9.7 · arm_kd000 9.9 · twin_kd078 10.1 · arm_s3 8.2 ·
@@ -257,37 +283,38 @@ twin_s3 7.4 · arm_s4 7.5 · twin_s4 > 10.8 (flying). Mean of the 8 finished 8.6
 Axis C: 18 h/run budgeted, unmeasured. One controller at a time; IDS has priority and is never
 paused — controller wall-clock stretches when the IDS load rises.
 
-ROUND 1 (once Stage 0 is closed and the anchor is named):
+ROUND 1 (once Stage 0 is closed and the anchor is named) — AS DECIDED 05/11 (D10-D13):
 ```
-order  condition                runs  h      why here
-(0)    anchor s5, s6            2     ~18    ONLY if the CTRL-8 n=3 interim stop fired
-1      A  L4A, L4B              2     ~18    no code; largest expected effect
-2      F  T=0.15, T=0.30        2     ~18    reviewer priority; plumbing closed
-3      B  pid, lqr              2     ~18    smoke must show no label saturation
-4      D  cf2x_firmware         1     ~9     after Q3 (k_d source)
-5      C  sn=4, sn=8            2     ~36    last: slowest, memory budget (#8) gates it
-       round 1 total            9     ~99 h  (~4 days); +18 h if (0)
+order  condition                      runs  h      why here
+1      A  L4A, L4B                    2     ~18    no code; largest expected effect
+2      F  T=0.15, T=0.30              2     ~18    reviewer priority; plumbing closed
+3      B  pid, lqr                    2     ~18    smoke must show no label saturation
+4      D  cf2x_firmware @ k_d 0.25    1     ~9     D12
+5      C  sn=4                        1     ~18    last: slowest; flies once MA_AXIS_C_MAX_CELLS is set (D13)
+       (sn=8 REFUSED until SN8_APPROVED — D10)
+       round 1 total                  8     ~81 h  (~3.4 days)
 ```
-The anchor already has s2..s6 when round 1 starts, so every round-1 run reads as a DIRECTION against an
-n=5 anchor immediately; the D4 extension (s7..s9) flies in round 2 where Welch needs it.
+Rounds 2 and 3 repeat the same 8 launches (seeds 31337003, 31337004). After round 3 every condition
+gets its rule_v2 interim look; STOPPED conditions skip rounds 4-5. If CTRL-8 itself stopped at n=3,
+rounds 4 and 5 each start with the missing anchor seed (ma_anchor_<arm|twin>_s<seed>, +9 h each).
 
-BUDGET (n=5 per condition):
+BUDGET (D10/D11: n=3..5 per condition, no anchor extension):
 ```
-anchor completion (s5,s6 only if interim stop)       0-2 runs    0-18 h
-anchor extension D4 (s7..s9)                           3          27
-A disturbance (L4A, L4B)                              10          90
-F actuator lag (T 0.15, 0.30)                         10          90
-B teacher (pid, lqr)                                  10          90
-D airframe (cf2x_firmware)                             5          45
-C state neurons (sn=4, sn=8), 18 h budget             10         180
-total                                              48-50     ~520-540 h  ≈ 22-23 days of box time
-G optional tail                                       +5         +45
+                                         runs (n=3 .. n=5)   h (9 h/run; C 18 h budgeted)
+A disturbance (L4A, L4B)                   6 .. 10              54 .. 90
+F actuator lag (T 0.15, 0.30)              6 .. 10              54 .. 90
+B teacher (pid, lqr)                       6 .. 10              54 .. 90
+D airframe (cf2x_firmware @ 0.25)          3 .. 5               27 .. 45
+C sn=4                                     3 .. 5               54 .. 90
+   rounds 1-3 (fixed, every condition)    24                   ~243 h  (~10 days)
+C sn=8 (only if sn=4 shows an effect)      0 / 3 .. 5           0 / 54 .. 90
+anchor s5, s6 (only if CTRL-8 stopped at 3) 0 .. 2              0 .. 18
+total                                     24 .. 47             ~243 .. ~513 h  (10-21 days of box time)
+G optional tail                            +5                   +45
 ```
-Draft 3 was 40 runs / ~215 h; the ~2.5x is the 3.2 → 9 h run cost plus n=5. Trims, each Luiz's call
-(Q1): n=4 per condition (-9 runs, ~-99 h); drop sn=8 (-5, ~-90 h); a pre-registered n=3 interim stop
-per condition on the rule_v2 pattern (saves up to 2 runs per decisive condition).
-Escalation (pre-registered): a condition whose verdict is "similar" while its CIs still contain the
-MEI after n=5 gets +2 seeds — a human decision, not automated.
+Draft 4 as first written was 48-50 runs / ~520-540 h; D10/D11 cut the floor to the 24 runs of
+rounds 1-3. Escalation (pre-registered): a condition whose verdict is "similar" while its CIs still
+contain the MEI after n=5 gets +2 seeds — a human decision, not automated.
 Every chain: marker-gated, idempotent, fails closed, HOLD-aware, one controller at a time, never edits
 a running .sh, never launched beside IDS memory pressure (the controller is the sacrifice).
 
@@ -307,38 +334,47 @@ a running .sh, never launched beside IDS memory pressure (the controller is the 
 7   Smokes, one per condition (pop 6)       OPEN      none of lag>0, sn>0+translation, cf2x_firmware+translation, pid/lqr
                                                       +translation has ever flown. Plumbing only (rc 0, GRID line, HEADLINE,
                                                       [PLANT] + [provenance] abi=33); B: no label saturation. Decisions at pop 50.
-8   Axis C memory budget                    RE-OPENED anchor now ~1.6 M cells uncapped (_op31 marker), the 19/09 cap decision was
-                                                      sized vs 275k; first sn=4 run measures; Q4
-9   Round-major chain                       OPEN      scripts/multi_axis_chain.sh (111626af) wraps seed_arm_chain.sh →
-                                                      sweep_ladder_gamma.sh = the `_hd` ladder recipe (180k cap, no stage 2,
-                                                      no rotor-drag/estimator flags). REWRITE on the ctrl8_ab_pop50.sh pattern:
-                                                      anchor argv + condition flags last-wins, winner-file gated, HOLD-aware,
-                                                      --dry-run; keep its table/escape-hatch design and the T-units fix.
-10  Power statement per axis                OPEN      refresh R2 at the anchor's n=5; paired_power.py has --welch
-                                                      (scripts/paired_power.py:19,61) but reads banked sweepladder MARKERS —
-                                                      the CTRL-8 runs bank .out + winner only. Needs a HEADLINE-from-.out input.
+8   Axis C memory budget                    OPEN      D13: re-measured in the sn=4/sn=8 smokes (peak RSS + cells); a human then sets
+                                                      MA_AXIS_C_MAX_CELLS — the chain REFUSES axis C until then
+9   Round-major chain                       CLOSED    d6d9cfd8: scripts/multi_axis_chain.sh REWRITTEN (recipe = the anchor .out's own
+                                                      [argv]; MA_ANCHOR=arm|twin; winner+headline+provenance gated markers in
+                                                      experiments/multi_axis_markers; D10 interim stop; D13/D10 gates for C;
+                                                      D14 wheel check; attempt-3 deferral; HOLD + bracketed-pgrep idle gate).
+                                                      tests/multi_axis_chain_dryrun.sh 27/27. NOT launched.
+10  Power statement per axis                TOOL DONE 7ddeba55: scripts/headline_compare.py reads .out headlines (paired|Welch,
+                                                      five metrics, rule_v2 verdict, interim-stop flag; reuses paired_power's exact-t).
+                                                      The R2 numbers are refreshed once the anchor has n=5 (after #18).
 11  Actuator-lag plumbing (F)               CLOSED    ABI 30; see §3-F evidence
-12  Stage-2 rescoring (A-cross + D5)        OPEN      rescore_winners.py builds argv from (disturbance, airframe, translation,
-                                                      tilt) only (rescore_winners.py:152-163) → would score a stage-1 regime.
-                                                      Add a --run-args-file mode (as ctrl22_stage2_rivals.py does). Code, Python.
+12  Stage-2 rescoring (A-cross + D5)        TOOL DONE 5d5f816e: rescore_winners.py --run-out (crowned genome from the run's
+                                                      stage checkpoint, trained regime = its [argv], scoring = argv + --score-args).
+                                                      Dry-run verified only; first real use must reproduce a run's own headline
+                                                      (--score-args "" ) before any A-cross number is read. D5 same-regime =
+                                                      phased_ga --recalc-headline. Both need box time (GB checkpoints) — idle window.
 13  Anchor restated                         OPEN      blocked on #18; §1.1 table is provisional
 14  Trainer gets the airframe               CLOSED    ABI 30; evaluator.py:1021-1033
 15  `_hd30` anchor re-fly                   SUPERSEDED _hd30 4/4 banked (ABI 30) but the lineage moved to ABI 33 / stage 2
 16  CTRL-17 stage-2 trainer gaps G1-G4      CLOSED    ABI 31; _accel.py:79-86
 17  Accelerometer disclosure                CLOSED    ABI 32 specific-force IMU (f99611bf)
-18  CTRL-8 arm-vs-twin verdict              OPEN      rule_v2 n=3 interim check pending twin_s4; names the anchor
-19  cf2x_firmware rotor-drag value          OPEN      no source (§3-D); Q3
-20  Wheel freeze for the programme          OPEN      Luiz confirms R9 freeze at ABI 33 sha a6398538ce04588c (Q5)
+18  CTRL-8 arm-vs-twin verdict              OPEN      n=3 computed 05/11 (headline_compare.py, paired): stable −6.33 pp [−8.68, −3.99],
+                                                      err −0.53° [−0.84, −0.22], steady −0.83° [−1.63, −0.03] (arm better on all
+                                                      three); steady's CI does not clear its 0.1° margin → the interim-stop
+                                                      condition is NOT met as written; step-1 verdict is "undecided" on the strict
+                                                      reading, "arm wins" if an unresolved-but-not-worse metric counts as
+                                                      better-or-similar. Luiz's call; names the anchor.
+19  cf2x_firmware rotor-drag value          CLOSED    D12: 0.25 (Förster 2015, rotor-only, disclosed)
+20  Wheel freeze for the programme          CLOSED    D14: ABI 33 sha a6398538ce04588c; enforced by the chain preflight
 ```
-BLOCKS ROUND 1: #6, #7, #9, #10, #18 (all axes); #12 (A-cross and the D5 final table, not the runs);
-#19 (axis D only); #8 (axis C only); #20 (any wheel change resets everything).
+BLOCKS ROUND 1 (after 05/11 tooling): #18 (names the anchor; sets MA_ANCHOR) and #7 (smokes, after
+#18 tonight) for every axis; #8 for axis C only. #12's real use (A-cross, D5 final table) is not on the
+round-1 path.
 
-Idle-window procedure (unchanged in shape): smokes and rival bars need no wheel install; the controller
-wheel is NOT reinstalled for the programme (R9). Smoke shape (no marker, numbers NOT read):
-    cd /Users/lacg/wnn && PYTHONPATH=src/wnn /Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/bin/python -u -m \
-      wnn.control.phased_ga <anchor argv §1.1> --pop 6 --steps 200 --neurons-gens 1 --memory-gens 1 \
-      --eval-episodes 2 --memory-eval-episodes 2 --report-episodes 2 --base-seed 1 [+ condition flags, last-wins]
-    assert rc=0; grep -E '^\[provenance\]|^\[PLANT\]|HEADLINE|GRID'.
+Smokes (fly AFTER the CTRL-8 verdict; pop 6 = plumbing only, numbers NOT read): the exact argv per
+condition is printed by `MA_ANCHOR=<arm|twin> bash scripts/multi_axis_chain.sh --smoke-list` (anchor argv
+verbatim from its s3 .out + `--pop 6 --steps 200 --neurons-gens 1 --memory-gens 1 --eval-episodes 2
+--memory-eval-episodes 2 --report-episodes 2 --base-seed 1` + the condition flags, under /usr/bin/time -l).
+Assert rc 0, `[PLANT]`, `[provenance] abi=33 wheel_sha256=a6398538ce04588c`, a GRID line and a HEADLINE;
+axis B: no label saturation; axis C: read peak RSS + cells, then set MA_AXIS_C_MAX_CELLS (D13).
+One smoke at a time, never beside a live phased_ga. No wheel install anywhere (D14).
 
 ## 6. Verdict protocol (pre-registered, per condition)
 
@@ -370,16 +406,11 @@ D7 axis G optional after round 2 · D9 anchor = `_hd29` — SUPERSEDED 05/11 by 
 DECIDED since: alt weight 0.0 (CTRL-19, 28/10); MAD floor not adopted (CTRL-20, 30/10); ABI-32 real-life
 plant (31/10, option A); k_d 0.78 default (03/11); CTRL-8 rule_v2 holistic (05/11).
 
-OPEN for Luiz:
-  Q1. Scope/cost: n=5 per condition (~520-540 h) as the house rule says, or a trim — n=4 (-99 h), drop
-      sn=8 (-90 h), or a pre-registered n=3 interim stop per condition (rule_v2 pattern)?
-  Q2. D4 anchor extension to 8 seeds (+27 h): keep, or anchor n=5 with paired + Welch 5-vs-5?
-  Q3. Axis D rotor drag for cf2x_firmware: Förster 0.25 (sourced, CF2.0 rotor-only), Folk mass-scaled
-      ~0.91 (unsourced extrapolation), or 0.78 disclosed?
-  Q4. Axis C memory: sn=4 uncapped and sn=8 at --max-cells 4000000 as decided 19/09, or re-cap now that
-      the anchor is ~1.6 M cells (e.g. sn=8 uncapped only with HOG_GB raised — a safety change)?
-  Q5. Freeze the controller wheel at ABI 33 (sha a6398538ce04588c) for the whole programme (~3 weeks)?
-  Q6. Re-fly the drag axis (§1.2) to n=5, or leave it as the n=1 reference it is?
+DECIDED 05/11/2026 (Luiz, on draft 4): D10-D15 — see the block at the top. Q1-Q6 of draft 4 are CLOSED by
+them (Q1 → D10, Q2 → D11, Q3 → D12, Q4 → D13, Q5 → D14, Q6 → D15).
+
+STILL OPEN: the CTRL-8 verdict (#18), including how rule_v2 step 1 treats an attitude metric whose CI is
+on the better side but does not clear its margin (headline_compare.py prints both readings).
 
 ## 9. Reviews
 
