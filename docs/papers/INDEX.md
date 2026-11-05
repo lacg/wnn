@@ -6,7 +6,7 @@ agent (.claude/agents/paper-scout.md) and by hand.
 
 - [Molchanov et al. 2019 — Sim-to-(Multi)-Real](https://arxiv.org/abs/1903.04628) —
   PDF: `papers/molchanov2019_sim_to_multi_real.pdf`. Plant-DR Table I; motor lag
-  T=0.15s; OU motor noise; 20%-helps/30%-hurts DR finding; NO obs delay/dropout/
+  T=0.15s = 2% SETTLING time (eq 7-8; τ=T/4=37.5 ms), DR U(0.1,0.2), nominals from Förster [8]; OU motor noise; 20%-helps/30%-hurts DR finding; NO obs delay/dropout/
   torque bias. Extraction: docs/disturbance_param_sources.md (S1).
 - [Panerati et al. 2021 — gym-pybullet-drones](https://arxiv.org/abs/2103.02142) —
   PDF: `papers/panerati2021_gym_pybullet_drones.pdf`. System-identified aero
@@ -30,3 +30,11 @@ agent (.claude/agents/paper-scout.md) and by hand.
   CF2.0 hover 16073 rpm at 33 g; NO translational drag term.
 - [Faessler et al. 2018 — rotor-drag flatness (RA-L)](faessler2018_rotor_drag_flatness.md) —
   610 g / 6-inch quad: dx 0.43–0.54, dy 0.24–0.39 s⁻¹ (model form reference, not micro).
+- [Gräfe et al. 2026 — How to Model Your Crazyflie Brushless (ICRA'26)](grafe2026_model_crazyflie_brushless.md) —
+  MEASURED CF Brushless (44 g) motor τ = 50 ms (in-flight IR rpm, first-order on Ω) → T_ours = 0.20 s; DR ±20%.
+- [Eschmann et al. 2024 — sysid subject to motor delays (arXiv 2404.07837)](eschmann2024_sysid_motor_delays.md) —
+  27 g CF2.1 flight-fit τ = 0.072 s (rpm inferred), 3.35 kg quad τ = 0.065 s → T_ours ≈ 0.29 / 0.26 s.
+- [Eschmann et al. 2024 — Learning to Fly in Seconds (arXiv 2311.13081)](eschmann2024_learning_to_fly_in_seconds.md) —
+  ASSUMED sim τ = 0.15 s ("common" 0.05–0.25 s, uncited) → T_ours = 0.60 s.
+- [Bitcraze 2015 — CF2.0 M1 step response plot](bitcraze2015_m1_step_response.md) —
+  brushed 0→100→0% PWM: digitised τ_rise ≈ 0.064 s, τ_fall ≈ 0.23–0.26 s (coast); Greiff 2017 J−/J+ ≈ 4.2.

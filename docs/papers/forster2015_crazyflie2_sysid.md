@@ -64,3 +64,30 @@ Linear horizontal drag force per unit speed = |κ⊥|·Θ̇Σ = 9.1785e-7 × 760
 - No uncertainty or confidence interval on κ⊥. Only the SSE and a figure of the trend.
 - No Crazyflie 2.1 or brushless data. No quadratic parasitic-drag coefficient (removed by the baseline subtraction).
 - The thesis gives no hover rotor speed or hover command directly. Hover is our derivation from the maps.
+
+## Motor transfer function (§3.4) — added 05/11/2026 (motor-lag question)
+
+**Regime:** one CF2.0 brushed motor on the load cell, command→thrust, sinusoidal excitation
+`ue[n] = A·cos(Ωl n) + B` (eq 3.6), "commanding it to the specified motor(s) with a frequency of 500 Hz";
+B fixed to 30000, A = 20000 (Table 3.1: series 1 N=4000, l∈[0..2000], motor #1, 43 measurements;
+series 2 N=8000, l∈[0..4000], motor #3, 40 measurements). Frequencies above 12.5 Hz ignored.
+Weighted LS fit of a frequency-response estimate (method of D'Andrea et al. [5]).
+
+Verbatim results (eqs 3.15–3.17):
+
+    H1(z) = 6.0705967·10−8 / (1 − 0.9745210·z−1)
+    H2(z) = 7.2345374·10−8 / (1 − 0.9695404·z−1)
+    "it is recommended to use the second transfer function: H(z) = H2(z)."
+
+Caveat printed by the author: latency is not compensated ("currently the latency of the signals is
+completely omitted"); radio ping RTT mean 57.1030 ms (Table 3.2); load-cell latency "was not determined".
+Fig 3.16: l = 12 fits "very well", l = 25 shows "a distinct shift".
+
+**Derivation (ours, not printed):** sample period Ts = 1/500 Hz = 0.002 s (consistent with the
+12.5 Hz cut: l=200, N=8000 → 200/8000·500 = 12.5 Hz). First-order τ = −Ts / ln(pole):
+H1 → τ = 0.0775 s; **H2 → τ = 0.0647 s**. In our T = 4τ convention: H1 → T = 0.31 s, H2 → T = 0.26 s.
+Cross-check: Eschmann et al. 2024 (arXiv:2404.07837) quote "in [2] [Förster] the time constant has been
+estimated at 0.065 s" — matches our H2 derivation.
+
+Absent: no time-domain step test, no rise/fall asymmetry, no rpm measurement in this section, no
+uncertainty on the poles; the fit is command→thrust, not command→rpm.

@@ -35,3 +35,8 @@ Sanity check: at 8 m/s, x = 7245·8/0.057 = 1.02e6, which matches the Fig 6.6 ax
 - A different vehicle from the CF2.0/2.1 brushed: brushless motors, 57 g, and much more frame and deck area.
 - No uncertainty on kd. No separate parasitic-drag fit for the Crazyflie. Airspeed range is about 0–8 m/s.
 - No hover rotor-speed value is printed. Our hover Σηi comes from kη.
+
+## Motor time constant — checked 05/11/2026: ABSENT
+§2.1.2 eq (2.12) `η̇ = (1/τm)(ηc − η)` ("τm is the motor time constant") and §(ch. 4) "τm is the motor
+time constant which must be identified a priori using bench top testing." **No numeric τm value is printed
+anywhere in the thesis** (grep over full pdftotext of all "τ" occurrences). Do not cite Folk for a CF2.1-BL τm.
