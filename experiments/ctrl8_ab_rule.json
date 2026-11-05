@@ -16,5 +16,21 @@
   "rule": "ADOPT position inputs iff ALL: mean paired (arm - twin) pos3d < 0 m; mean paired err <= +0.10 deg; mean paired stable >= -0.5 pp",
   "interim": "n=3 (s2-s4) is printed as a DIRECTION only; no decision and no early stop before n=5 (optional stopping would bias the rule)",
   "also_report": "steady, alt, dx, dy per seed; both arms vs the ABI-33 rival bar experiments/ctrl22/rivals_abi33_tilt_kd0.78.json",
-  "metric_confirmed": "05/11/2026 Luiz: decide on the distance that takes ALL axes into account (dx, dy, dz) = pos3d. pos3d = per-step sqrt(x^2 + y^2 + alt_err^2) averaged over the episode (controller/cpu_score.rs:431; rivals position_score.rs:304). Decided after 2/5 pairs (s2, s3) — arm wins under pos3d AND horizontal on both, so the choice does not depend on the data seen. Supersedes the design doc's 'horizontal' wording; dx/dy stay reported."
+  "metric_confirmed": "05/11/2026 Luiz: decide on the distance that takes ALL axes into account (dx, dy, dz) = pos3d. pos3d = per-step sqrt(x^2 + y^2 + alt_err^2) averaged over the episode (controller/cpu_score.rs:431; rivals position_score.rs:304). Decided after 2/5 pairs (s2, s3) — arm wins under pos3d AND horizontal on both, so the choice does not depend on the data seen. Supersedes the design doc's 'horizontal' wording; dx/dy stay reported.",
+  "rule_v2": {
+    "amended": "05/11/2026 ~07:30 EST by Luiz, after 2/5 pairs (s2, s3) and BEFORE twin_s4 finished. Replaces 'rule' (single-metric pos3d gate).",
+    "principle": "Compare the controllers as a WHOLE on all metrics (stable, err, steady, pos3d; alt/dx/dy reported). pos3d is the TIE-BREAKER only when stable/err/steady are similar.",
+    "margins": {
+      "stable_pp": 0.5,
+      "err_deg": 0.1,
+      "steady_deg": 0.1,
+      "pos3d_m": 0.0
+    },
+    "decision": [
+      "1. ATTITUDE BLOCK (stable, err, steady; paired arm-twin means, 95% two-sided t CI): if every metric is better-or-similar for one side and at least one is better beyond its margin (CI clear of the margin), that side WINS regardless of pos3d.",
+      "2. If all three are similar (CIs inside the margins) -> pos3d decides (lower wins).",
+      "3. Mixed (one better beyond margin, another worse beyond margin) -> no automatic verdict; report to Luiz."
+    ],
+    "stopping": "One interim look at n=3 (s2-s4): if step 1 gives a verdict with all three attitude CIs clear of their margins in the same direction, STOP (cancel s5/s6). Otherwise continue to n=5 and apply the same rule. Disclosed: one interim look slightly inflates the error rate."
+  }
 }
