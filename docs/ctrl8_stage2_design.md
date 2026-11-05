@@ -97,7 +97,7 @@ Pass criteria (audit §6):
 - The arm `_s2p31` and the twin `_s2b31`, each on s2–s6, paired per seed.
 - About 10 runs × ~10 h = **~100 h** at 2 s (or about 300 h at 6 s).
 - PRE-REGISTERED RULE (to be fixed before launch): the position features are adopted iff all of the following hold:
-  - mean paired horizontal error is lower than the twin's;
+  - mean paired **3-D position error (pos3d: dx, dy and dz)** is lower than the twin's (Luiz 05/11/2026; was "horizontal");
   - mean err is not worse than +0.10°;
   - mean stable is not worse than −0.5 pp.
 
