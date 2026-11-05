@@ -75,6 +75,24 @@ different quantities and must never be pooled or presented as the same measureme
 Cross-cell comparisons within this script's own output are valid, since every cell is
 replayed at the same point in its lifecycle.
 
+STAGE-2 / CTRL-8-STYLE RUNS (--run-out, 05/11/2026, multi-axis spec draft 4 §5 #12):
+the Condition flags above cannot express a stage-2 regime (xy start, tilt reference,
+rotor drag, estimator features, position inputs), and the HEADLINE genome is the
+stage-select CROWNED genome (e.g. NEURONS#0 in ckpt/<tag>/stage1_neurons.yaml.gz), not
+the winner file's MEMORY population[0]. --run-out <.out> (repeatable / glob) takes the
+run's own `[argv]` line as the TRAINED regime, appends --score-args to it for the
+SCORING regime (e.g. "--disturbance L4A" for A-cross), loads the crowned genome from
+the run's --save-stage-checkpoints dir, and scores it with the same _fit_thresholds /
+_score_once pair as the legacy mode ('train' thresholds = trained regime, train seed).
+Report seeds = the SCORING regime's --report-seeds (put D5 in --score-args).
+A crowned genome without cells (arch-only) is refused — it would need retraining.
+SAME-REGIME re-scoring on new report seeds needs no tool: phased_ga's own
+  phased_ga <the run's argv> --report-seeds <D5> --recalc-headline <its ckpt dir>
+re-selects on the (unchanged) val seeds and scores the crown on the new report seeds.
+  rescore_winners.py --run-out 'logs/controller/ctrl8_ab_pop50/arm_s*.out' \\
+      --run-out logs/controller/ctrl8_drag_sweep_pop50/arm_kd078.out \\
+      --score-args "--disturbance L4A" --out experiments/ctrl22/across_L4A.json --dry-run
+
 Usage:
   rescore_winners.py --glob 'logs/controller/dfa1l/*_winner.yaml.gz' \\
       --report-seeds 99990101 99990102 99990103 99990104 99990105 \\
@@ -94,7 +112,10 @@ _TAG = re.compile(r"^(?P<sub>[^_]+)_(?P<feat>[^_]+)_(?P<mode>[^_]+)_s(?P<seed>\d
 _SEED = re.compile(r"_s(?P<seed>\d{5,})")
 # The four-column surface (stable/err/steady/alt): metric attr → column.
 COLUMNS = (("acc", "stable"), ("mean_attitude_error_deg", "err"),
-           ("mean_steady_error_deg", "steady"), ("mean_altitude_error_m", "alt"))
+           ("mean_steady_error_deg", "steady"), ("mean_altitude_error_m", "alt"),
+           # stage 2 (ABI 32): 3-D position error + its horizontal components. None
+           # unless the regime translates with an xy start, so stage-1 rows show a dash.
+           ("mean_position_error_m", "pos3d"), ("mean_dx_m", "dx"), ("mean_dy_m", "dy"))
 DISTURBANCES = ["OFF", "L4A", "L4B", "L4C", "L1", "L2", "L3", "L2D", "L3D"]
 
 
@@ -351,6 +372,153 @@ def _dry_run(a, score, trained, paths):
 		print(f"    {p}  → " + (f"tag={meta['tag']} seed={meta['seed']}" if meta else "UNPARSEABLE (skipped)"))
 
 
+_CROWN = re.compile(r"\[stage-select\] HEADLINE stage=(\S+) genome=(\S+)")
+
+
+@dataclass(frozen=True)
+class ArgvCondition:
+	"""A regime given as a full phased_ga argv (the --run-out mode)."""
+	name: str
+	words: tuple
+
+	def label(self):
+		return self.name
+
+	def argv(self):
+		return list(self.words)
+
+
+def _regime_exact(cond):
+	"""Resolve a full run argv through phased_ga — no tail is appended: the run's own
+	steps / tilt / rates / report episodes / folds stand as flown."""
+	from wnn.control.phased_ga import build_arg_parser, episode_config_from_args
+	args = build_arg_parser().parse_args(cond.argv())
+	return Regime(cond, args, episode_config_from_args(args))
+
+
+def _read_run_out(path):
+	"""(argv words, crowned stage label, crowned key) from a run .out — LAST [argv] and
+	LAST crown line. None for a field the .out does not carry (crash / still flying)."""
+	import shlex
+	words, crown = None, None
+	with open(path, "rb") as f:
+		for raw in f:
+			line = raw.decode("utf-8", "replace")
+			if line.startswith("[argv]"):
+				words = shlex.split(line[len("[argv]"):])
+			m = _CROWN.search(line)
+			if m:
+				crown = (m.group(1), m.group(2))
+	return words, crown
+
+
+def _crowned_genome(ckpt_dir, stage, key):
+	"""(spec, genome) for the stage-select crown `key` ('NEURONS#0' or 'MEMORY'): the
+	stage checkpoint's fitness-sorted population[i], read with phased_ga's own loader
+	(top-(i+1) streamed — a b24 n256 stage file is GBs of YAML)."""
+	from pathlib import Path
+	from wnn.control.phased_ga import _stage_entry_from_checkpoint
+	idx = int(key.split("#", 1)[1]) if "#" in key else 0
+	for p in sorted(Path(ckpt_dir).glob("stage*_*.yaml.gz")):
+		if p.name.startswith("emergency") or p.name.split("_", 1)[1].split(".")[0].upper() != stage:
+			continue
+		e = _stage_entry_from_checkpoint(p, top_k=idx + 1)
+		if e is None or e[0] != stage:
+			continue
+		pop = e[2].final_population
+		if len(pop) <= idx:
+			raise SystemExit(f"{p}: crown {key} but only {len(pop)} members")
+		return e[1], pop[idx]
+	raise SystemExit(f"{ckpt_dir}: no stage checkpoint for crowned stage {stage}")
+
+
+def _run_out_jobs(a):
+	"""[(path, tag, trained Regime, score Regime, stage, key, ckpt_dir)] for --run-out."""
+	import shlex
+	jobs = []
+	for g in a.run_out:
+		for path in sorted(globmod.glob(g)):
+			words, crown = _read_run_out(path)
+			tag = os.path.basename(path)[:-4] if path.endswith(".out") else os.path.basename(path)
+			if words is None or crown is None:
+				print(f"  SKIP {path} — {'no [argv] line' if words is None else 'no stage-select crown yet'}")
+				continue
+			trained = _regime_exact(ArgvCondition(f"{tag} as flown", tuple(words)))
+			extra = shlex.split(a.score_args or "")
+			score = _regime_exact(ArgvCondition(f"{tag} + [{a.score_args or ''}]", tuple(words + extra)))
+			ckpt = getattr(trained.args, "save_stage_checkpoints", None)
+			if not ckpt:
+				print(f"  SKIP {path} — the run saved no stage checkpoints (cannot load the crown)")
+				continue
+			jobs.append((path, tag, trained, score, crown[0], crown[1], ckpt))
+	return jobs
+
+
+def _rescore_run_out(job):
+	"""One crowned genome, both threshold variants, across the SCORING regime's report seeds."""
+	from wnn.seeds import resolve_seed_set
+	path, tag, trained, score, stage, key, ckpt = job
+	spec, genome = _crowned_genome(ckpt, stage, key)
+	if getattr(genome, "cells", None) is None:
+		print(f"  SKIP {tag} — crown {key} carries no cells (arch-only; re-scoring would retrain)")
+		return None
+	base = trained.args.base_seed if trained.args.base_seed is not None else trained.args.seed
+	train_seed = resolve_seed_set(base=base, run_index=0, train=trained.args.train_seed,
+	                              test=trained.args.test_seed, val=trained.args.val_seed).train
+	seeds = [int(s) for s in score.args.report_seeds]
+	fixed = _fit_thresholds(trained, spec, seeds[0], train_seed, use_score=True)
+	runs = {"per_seed": [], "train": []}
+	for rs in seeds:
+		refit = _fit_thresholds(score, spec, rs, train_seed, use_score=False)
+		runs["per_seed"].append(_row(_score_once(spec, genome, score, rs, refit)))
+		runs["train"].append(_row(_score_once(spec, genome, score, rs, fixed)))
+	return {"tag": tag, "run_out": path, "crown": key, "seed": base, "train_seed": train_seed,
+	        "score_args": score.cond.label(), "report_seeds": seeds,
+	        "substrate": None, "feature": None, "mode": None,
+	        "per_seed": {"agg": _agg(runs["per_seed"]), "runs": runs["per_seed"]},
+	        "train": {"agg": _agg(runs["train"]), "runs": runs["train"]}}
+
+
+def _main_run_out(a):
+	jobs = _run_out_jobs(a)
+	if a.dry_run:
+		print("DRY RUN (--run-out) — resolved, nothing loaded or scored")
+		for path, tag, trained, score, stage, key, ckpt in jobs:
+			print(f"  {tag}: crown {key} from {ckpt} · train seed base {trained.args.base_seed}")
+			_describe(trained, "trained:")
+			_describe(score, "score:")
+			print(f"           report seeds {list(score.args.report_seeds)} · xy_offset "
+			      f"{getattr(score.ec, 'max_initial_xy_offset_m', None)} · rotor_drag "
+			      f"{getattr(score.args, 'rotor_drag', None)} · motor_lag_s {getattr(score.ec, 'motor_lag_s', None)}")
+		print(f"  out: {a.out}")
+		return 0
+	results = []
+	for job in jobs:
+		print(f"  scoring {job[1]} (crown {job[5]}) ...", flush=True)
+		r = _rescore_run_out(job)
+		if r:
+			results.append(r)
+			_flush_run_out(results, a, complete=False)
+			_print_row(r)
+	if not results:
+		print("no crowned genomes scored", file=sys.stderr)
+		return 1
+	_flush_run_out(results, a, complete=True)
+	print(f"# wrote {a.out}")
+	return 0
+
+
+def _flush_run_out(results, a, complete):
+	doc = {"meta": {"mode": "run-out", "score_args": a.score_args, "complete": complete,
+	                "variance_note": "±SD over REPORT seeds for one frozen crowned genome "
+	                                 "(test-set variance), the rivals' axis."},
+	       "cells": results}
+	tmp = a.out + ".tmp"
+	with open(tmp, "w") as f:
+		json.dump(doc, f, indent=1)
+	os.replace(tmp, a.out)
+
+
 def _build_parser():
 	from wnn.control.airframe import Airframe
 	ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
@@ -384,6 +552,12 @@ def _build_parser():
 	# the threshold-misalignment bug, reintroduced by a scoring-tilt change.
 	ap.add_argument("--trained-tilt", type=float, default=None,
 	                help="--tilt the winner was TRAINED/calibrated at (default: --tilt)")
+	ap.add_argument("--run-out", action="append", default=None, metavar="OUT_GLOB",
+	                help="stage-2 mode: score the stage-select CROWN of each run .out under its "
+	                     "own [argv] (+ --score-args); repeatable. See the module docstring.")
+	ap.add_argument("--score-args", default="",
+	                help="--run-out: phased_ga flags appended (last-wins) for the SCORING regime, "
+	                     "e.g. '--disturbance L4A --report-seeds 99990201 ...'")
 	ap.add_argument("--dry-run", action="store_true",
 	                help="print the resolved regimes + matched winners and exit")
 	ap.add_argument("--out", required=True)
@@ -392,6 +566,8 @@ def _build_parser():
 
 def main():
 	a = _build_parser().parse_args()
+	if a.run_out:
+		return _main_run_out(a)
 	score_cond, trained_cond = _conditions(a)
 	score, trained = _regime(score_cond, a), _regime(trained_cond, a)
 	paths = sorted(globmod.glob(a.glob))
