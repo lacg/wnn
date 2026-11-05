@@ -229,7 +229,22 @@ mod metal_controller;
 ///   |Δpwm| mean 6e-5, p99 7.5e-4, max 5.3e-3. Unconstrained-path labels are
 ///   byte-identical (mpc_unconstrained_labels_bit_identical_to_fista_build); PID,
 ///   LQR, LQI unaffected. Python surface unchanged. ~16x faster per solve.
-pub const ABI_VERSION: u32 = 33;
+/// ABI 34 (05/11/2026): motor lag done right on CPU AND GPU (Luiz, 05/11).
+///   - ONE pwm convention under --motor-lag-s: the observer's u (pwm_applied) is
+///     the COMMANDED pwm on both sides — the Metal kernel stored it after the lag
+///     filter while the CPU held the command (parity_lag_x_obs_pwm_dhat_cpu_vs_gpu).
+///   - LAG-AWARE teachers on the TRUE T (ids 1-4; PID unchanged): LQR/LQI by
+///     CARE on the actuator-augmented continuous model (Newton–Kleinman), MPC/MPCOF
+///     on the augmented discrete model (doubling DARE terminal cost); the
+///     actuator is estimated by filtering the applied pwm (actuator_lag.rs); the
+///     episode's first decision is the law's fixed point under the plant's
+///     seed-at-first-command filter.
+///   - MPCOF observer subtracts b·(filtered actuator), not b·u_commanded.
+///   RESULTS-CHANGING for every lagged run (teacher labels, rivals, GPU d̂
+///   observer). T = 0 is bit-identical to ABI 33 (abi34_tests digests captured
+///   on e56d6084; t0_gpu_lag_obs_rows_bit_identical_to_abi33). Python surface
+///   unchanged.
+pub const ABI_VERSION: u32 = 34;
 
 /// Mode-aware untrained-cell decode anchor (ABI 12): QUAD→0.75, TERNARY→0.5
 /// (the fixed PLN empty_value), BINARY→0.5 (antagonist-pair effective neutral).

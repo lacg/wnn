@@ -93,7 +93,11 @@ import os
 # EpisodeConfig.imu_specific_force / rotor_drag / att_err_ref and
 # ControllerSpec.obs_att_estimator (phased_ga). STAGE THIS FILE WITH THE WHEEL.
 # ABI 33 (02/11/2026, 195563e9): exact box-QP MPC solver (active set + Cholesky) — new mpc/mpcof teacher lineage.
-EXPECTED_ABI = 33
+# ABI 34 (05/11/2026): motor lag on CPU AND GPU — one COMMANDED pwm convention
+# for the observer's u (the Metal kernel had post-lag), lag-aware LQR/LQI/MPC/
+# MPCOF on the TRUE T (PID unchanged), mpcof observer on the filtered actuator.
+# New lineage for every --motor-lag-s > 0 run; T = 0 bit-identical to 33.
+EXPECTED_ABI = 34
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "
