@@ -1002,8 +1002,11 @@ pub struct AirframeRs
 	/// the trainer cannot fly a lag-free plant while the scorer flies a lagged
 	/// one (the stage-1 trainer-gap pattern). NOT mirrored from
 	/// wnn/control/airframe.py::Airframe: it is a sweep AXIS carried by
-	/// EpisodeConfig.motor_lag_s, not an airframe constant. The teachers stay
-	/// lag-blind on purpose (the axis reads how much each controller degrades).
+	/// EpisodeConfig.motor_lag_s, not an airframe constant. ABI 34 (05/11/2026,
+	/// Luiz): the model-based teachers (ids 1-4) are built LAG-AWARE on the TRUE
+	/// T via `teacher()` (Teacher::from_id_lagged); PID stays the firmware law.
+	/// Until ABI 33 they were lag-blind and the mpcof observer read the lag as a
+	/// disturbance.
 	pub motor_lag_s: f32,
 	/// ABI 32: specific-force IMU + rotor drag — read by `sim()` like the lag,
 	/// so every sim built through it (trainer, eval, calibration, recorder,
@@ -1081,6 +1084,24 @@ impl AirframeRs
 			{
 				return Teacher::PidFw(p);
 			}
+		}
+		// ABI 34: under motor lag ids 1-4 are the LAG-AWARE designs, anchored at
+		// the same hover the lag-free match below would use (teacher_hover, else
+		// from_id's legacy 0.5). T = 0 never enters here: the lag-free path below
+		// is the ABI-33 code, untouched.
+		if self.motor_lag_s > 0.0 && (1..=4).contains(&id)
+		{
+			return Teacher::from_id_lagged(
+				id,
+				self.dt,
+				self.arm_length,
+				self.k_thrust,
+				self.k_drag,
+				self.inertia,
+				self.gravity,
+				self.teacher_hover.unwrap_or(0.5),
+				self.motor_lag_s,
+			);
 		}
 		// D0: ids 1-4 anchor at teacher_hover when one is set (scorer rival, or
 		// the trainer with teacher_hover_mode = 1 under translation). id 0 without

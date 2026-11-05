@@ -24,6 +24,7 @@ use crate::controller::{
 	calibrate_control_gains_rs, clamp_f64, mix_to_motors_f64, quat_to_euler_f64, wrap_angle_f64,
 	AttitudePidRs,
 };
+use crate::actuator_lag::{motor_lag_alpha, ActuatorLag};
 use crate::box_qp::BoxQpSolver;
 use pyo3::prelude::*;
 
@@ -285,6 +286,212 @@ fn attitude_linear_model(b: [f64; 3]) -> (Mat, Mat)
 	(a, bm)
 }
 
+// ===========================================================================
+// ABI 34 (05/11/2026): LAG-AWARE design model. Under --motor-lag-s T the plant
+// filters every command, ua' = (1−α)·ua + α·u with α = 4dt/T (= dt/τ, τ = T/4;
+// AttitudeSim::apply_motor_lag), and the torque of the step is b·ua' — the
+// FILTERED value. Discretized exactly as the plant steps (the attitude part is
+// the lag-free model's I + A·dt):
+//   angle' = angle + dt·rate
+//   rate'  = rate  + dt·b·((1−α)·ua + α·u)
+//   ua'    = (1−α)·ua + α·u
+// x = [ (∫e,) angle, rate, ua ] per axis block of 3 — 9 states, 12 with the LQI
+// integral (∫e' = ∫e + dt·angle). α = 1 ⇒ the ua columns vanish and the model is
+// the lag-free one (pinned by lag_alpha_one_collapses_to_lag_free).
+// ===========================================================================
+
+pub(crate) fn attitude_lag_model(b: [f64; 3], dt: f64, alpha: f64, integral: bool) -> (Mat, Mat)
+{
+	let off = if integral { 3 } else { 0 };
+	let ns = off + 9;
+	let mut a = Mat::identity(ns);
+	let mut bm = Mat::zeros(ns, 3);
+	for i in 0..3
+	{
+		if integral
+		{
+			a.set(i, off + i, dt);
+		}
+		a.set(off + i, off + 3 + i, dt);
+		a.set(off + 3 + i, off + 6 + i, dt * b[i] * (1.0 - alpha));
+		a.set(off + 6 + i, off + 6 + i, 1.0 - alpha);
+		bm.set(off + 3 + i, i, dt * b[i] * alpha);
+		bm.set(off + 6 + i, i, alpha);
+	}
+	(a, bm)
+}
+
+/// The lag-aware state cost: q_int (when integral) / q_att / q_rate as the
+/// lag-free teachers weight them, and 0 on the actuator state (it is a means,
+/// not an objective — R already prices the command).
+pub(crate) fn lag_state_cost(q_att: f64, q_rate: f64, q_int: Option<f64>) -> Mat
+{
+	let mut d: Vec<f64> = Vec::with_capacity(12);
+	if let Some(qi) = q_int
+	{
+		d.extend_from_slice(&[qi; 3]);
+	}
+	d.extend_from_slice(&[q_att; 3]);
+	d.extend_from_slice(&[q_rate; 3]);
+	d.extend_from_slice(&[0.0; 3]);
+	let mut m = Mat::zeros(d.len(), d.len());
+	for (i, v) in d.iter().enumerate()
+	{
+		m.set(i, i, *v);
+	}
+	m
+}
+
+/// DARE by the structured doubling algorithm (Chu, Fan, Lin 2005):
+///   G₀ = B R⁻¹ Bᵀ, H₀ = Q, A₀ = A;  W = I + G H
+///   A ← A W⁻¹ A,  G ← G + A W⁻¹ G Aᵀ,  H ← H + Aᵀ H W⁻¹ A
+/// H → the stabilizing P QUADRATICALLY. The plain recursion `dare` converges at
+/// the closed loop's slowest pole squared per sweep — at dt = 1 ms the LQI
+/// integral pole needs > 10⁴ sweeps (its cap) — so the lag-aware designs use
+/// this. `dare` stays as is for the lag-free MPC terminal cost (T = 0 is
+/// bit-identical to ABI 33).
+pub(crate) fn dare_doubling(a: &Mat, b: &Mat, q: &Mat, r: &Mat) -> Mat
+{
+	let n = a.r;
+	let eye = Mat::identity(n);
+	let r_inv = inverse(r).expect("dare_doubling: R singular");
+	let mut ak = a.clone();
+	let mut gk = b.matmul(&r_inv).matmul(&b.transpose());
+	let mut hk = q.clone();
+	for _ in 0..64
+	{
+		let w_inv = inverse(&eye.add(&gk.matmul(&hk))).expect("dare_doubling: I+GH singular");
+		let aw = ak.matmul(&w_inv);
+		let a_next = aw.matmul(&ak);
+		let g_next = gk.add(&aw.matmul(&gk).matmul(&ak.transpose()));
+		let h_next = hk.add(&ak.transpose().matmul(&hk).matmul(&w_inv).matmul(&ak));
+		let scale = h_next.d.iter().fold(1.0f64, |m, v| m.max(v.abs()));
+		let delta = h_next.max_abs_diff(&hk);
+		ak = a_next;
+		gk = g_next;
+		hk = h_next;
+		if delta <= 1e-13 * scale
+		{
+			break;
+		}
+	}
+	hk
+}
+
+/// Discrete LQR gain K = (R + BᵀPB)⁻¹ BᵀPA for the control law u = −K x.
+pub(crate) fn dlqr_gain(a: &Mat, b: &Mat, q: &Mat, r: &Mat) -> Mat
+{
+	let p = dare_doubling(a, b, q, r);
+	let bt = b.transpose();
+	let mid = r.add(&bt.matmul(&p).matmul(b));
+	inverse(&mid).expect("dlqr_gain: R+BᵀPB singular").matmul(&bt.matmul(&p).matmul(a))
+}
+
+/// ABI 34: the CONTINUOUS actuator-augmented model for the CARE-designed
+/// teachers (LQR, LQI — their lag-free selves are continuous-CARE closed forms,
+/// so the lag-aware ones stay in that family and converge onto them as τ → 0):
+///   angle' = rate,  rate' = b·ua,  ua' = (u − ua)/τ   (+ ∫e' = angle for LQI)
+/// i.e. A gains the −I/τ actuator block and B = [0; 0; I/τ].
+pub(crate) fn attitude_lag_model_continuous(b: [f64; 3], tau: f64, integral: bool) -> (Mat, Mat)
+{
+	let off = if integral { 3 } else { 0 };
+	let ns = off + 9;
+	let mut a = Mat::zeros(ns, ns);
+	let mut bm = Mat::zeros(ns, 3);
+	for i in 0..3
+	{
+		if integral
+		{
+			a.set(i, off + i, 1.0);
+		}
+		a.set(off + i, off + 3 + i, 1.0);
+		a.set(off + 3 + i, off + 6 + i, b[i]);
+		a.set(off + 6 + i, off + 6 + i, -1.0 / tau);
+		bm.set(off + 6 + i, i, 1.0 / tau);
+	}
+	(a, bm)
+}
+
+/// The actuator time constant τ = T/4 for the plant's (clamped) settling time.
+pub(crate) fn motor_lag_tau(settling_s: f32, dt: f32) -> f64
+{
+	(settling_s.max(4.0 * dt) as f64) / 4.0
+}
+
+/// CARE  AᵀP + PA − PBR⁻¹BᵀP + Q = 0  by Newton–Kleinman (Kleinman 1968):
+/// K₀ from the discrete DARE of a fine Euler discretization (h = 1e-5, Q·h, R·h
+/// — a stabilizing approximation of the continuous gain), then
+///   (A − BKₖ)ᵀPₖ + Pₖ(A − BKₖ) = −(Q + KₖᵀRKₖ),  Kₖ₊₁ = R⁻¹BᵀPₖ
+/// to a fixed point (quadratic convergence). The Lyapunov solve is the n²×n²
+/// Kronecker system — n ≤ 12 here, so ≤ 144 unknowns, no eigensolver needed.
+pub(crate) fn care(a: &Mat, b: &Mat, q: &Mat, r: &Mat) -> Mat
+{
+	let n = a.r;
+	let h = 1e-5;
+	let ah = Mat::identity(n).add(&a.scale(h));
+	let r_inv = inverse(r).expect("care: R singular");
+	let mut k = dlqr_gain(&ah, &b.scale(h), &q.scale(h), &r.scale(h));
+	let mut p = Mat::zeros(n, n);
+	for _ in 0..50
+	{
+		let acl = a.sub(&b.matmul(&k));
+		let m = q.add(&k.transpose().matmul(r).matmul(&k));
+		p = lyapunov(&acl, &m);
+		let k_next = r_inv.matmul(&b.transpose()).matmul(&p);
+		let scale = k_next.d.iter().fold(1.0f64, |mx, v| mx.max(v.abs()));
+		let delta = k_next.max_abs_diff(&k);
+		k = k_next;
+		if delta <= 1e-13 * scale
+		{
+			break;
+		}
+	}
+	p
+}
+
+/// Solve AᵀP + PA = −M (A Hurwitz) via the Kronecker form on vec(P), row-major.
+fn lyapunov(a: &Mat, m: &Mat) -> Mat
+{
+	let n = a.r;
+	let nn = n * n;
+	let mut l = Mat::zeros(nn, nn);
+	for i in 0..n
+	{
+		for j in 0..n
+		{
+			let row = i * n + j;
+			for k in 0..n
+			{
+				// (AᵀP)ᵢⱼ = Σₖ Aₖᵢ Pₖⱼ ;  (PA)ᵢⱼ = Σₖ Pᵢₖ Aₖⱼ
+				l.set(row, k * n + j, l.get(row, k * n + j) + a.get(k, i));
+				l.set(row, i * n + k, l.get(row, i * n + k) + a.get(k, j));
+			}
+		}
+	}
+	let rhs: Vec<f64> = m.d.iter().map(|v| -v).collect();
+	let x = inverse(&l).expect("lyapunov: singular (closed loop not Hurwitz?)").mul_vec(&rhs);
+	let mut p = Mat::zeros(n, n);
+	p.d.copy_from_slice(&x);
+	// Symmetrize away round-off.
+	p.add(&p.transpose()).scale(0.5)
+}
+
+/// Continuous LQR gain K = R⁻¹BᵀP (u = −K x) from the CARE.
+pub(crate) fn clqr_gain(a: &Mat, b: &Mat, q: &Mat, r: &Mat) -> Mat
+{
+	let p = care(a, b, q, r);
+	inverse(r).expect("clqr_gain: R singular").matmul(&b.transpose()).matmul(&p)
+}
+
+/// ABI 34: a lag-aware state-feedback law — the augmented-model gain and the
+/// actuator estimate it multiplies (LQR: x = [e, rate, ua]; LQI: [∫e, e, rate, ua]).
+#[derive(Clone)]
+pub(crate) struct LagFeedback
+{
+	pub(crate) k: Mat,
+	pub(crate) act: ActuatorLag,
+}
+
 fn diag6(d: [f64; 6]) -> Mat
 {
 	let mut m = Mat::zeros(6, 6);
@@ -319,6 +526,48 @@ fn state_error(q: [f32; 4], gyro: [f32; 3], target_rpy: [f32; 3]) -> [f64; 6]
 	]
 }
 
+/// ABI 34: the episode's FIRST decision under motor lag. The plant seeds its
+/// lag filter AT that command (AttitudeSim::apply_motor_lag: the vehicle is
+/// already flying at it), so for this one step the actuator state IS the
+/// command, ua = u — not the 0 the estimate holds before anything flew. The
+/// self-consistent action is the law's fixed point under that identity: with
+/// z the state without the actuator block (K = [K_z | K_ua]) and the actuator
+/// entering as `act_sign`·v,
+///   v = K_z·z + K_ua·(act_sign·v)   ⇒   (I − act_sign·K_ua)·v = K_z·z.
+/// LQR/LQI apply u = −v (act_sign = −1); MPC applies u = v (act_sign = +1).
+/// Planning step 0 with ua = 0 instead commands the lead a lagged actuator
+/// needs, the plant applies it UNLAGGED and then holds it for ~τ: measured on
+/// cf21 at T = 0.30, lag-aware LQR mean err 3.94° → 1.09° with this step
+/// (abi34_tests::lag_aware_teachers_hold_the_lagged_plant).
+fn first_step_fixed_point(k: &Mat, z: &[f64], act_sign: f64) -> Vec<f64>
+{
+	let nz = z.len();
+	let mut lhs = Mat::identity(3);
+	let mut rhs = vec![0.0f64; 3];
+	for i in 0..3
+	{
+		for j in 0..nz
+		{
+			rhs[i] += k.get(i, j) * z[j];
+		}
+		for j in 0..3
+		{
+			lhs.set(i, j, lhs.get(i, j) - act_sign * k.get(i, nz + j));
+		}
+	}
+	inverse(&lhs).expect("first-step fixed point: I − s·K_ua singular").mul_vec(&rhs)
+}
+
+/// ABI 34: append the actuator estimate to a state vector (augmented models).
+#[inline]
+fn with_actuator(x: &[f64], ua: [f64; 3]) -> Vec<f64>
+{
+	let mut z = Vec::with_capacity(x.len() + 3);
+	z.extend_from_slice(x);
+	z.extend_from_slice(&ua);
+	z
+}
+
 // ===========================================================================
 // LQR teacher — u = clamp(−Kx, ±authority), K from the discrete Riccati.
 // ===========================================================================
@@ -335,6 +584,8 @@ pub struct AttitudeLqrRs
 	k: Mat, // 3×6 feedback gain
 	hover: f64,
 	authority: f64,
+	/// ABI 34: Some ⇔ motor lag on — the 3×9 gain on [e, rate, ua] replaces `k`.
+	lag: Option<LagFeedback>,
 }
 
 impl AttitudeLqrRs
@@ -378,6 +629,52 @@ impl AttitudeLqrRs
 			k,
 			hover,
 			authority,
+			lag: None,
+		}
+	}
+
+	/// ABI 34: the LAG-AWARE LQR for a plant with motor-lag settling time
+	/// `motor_lag_s` (> 0): continuous LQR (CARE) on the 9-state actuator-
+	/// augmented model, same q_att/q_rate/r_ctrl, 0 on the actuator state — the
+	/// lag-free teacher's own design family, so as τ → 0 it converges onto the
+	/// closed form above (pinned by care_lag_design_converges_to_closed_form).
+	#[allow(clippy::too_many_arguments)]
+	pub(crate) fn build_lagged(
+		dt: f32,
+		arm_length: f32,
+		k_thrust: f32,
+		k_drag: f32,
+		inertia: [f32; 3],
+		gravity: f32,
+		hover: f64,
+		authority: f64,
+		q_att: f64,
+		q_rate: f64,
+		r_ctrl: f64,
+		motor_lag_s: f32,
+	) -> Self
+	{
+		let mut t = Self::build(
+			dt, arm_length, k_thrust, k_drag, inertia, gravity, hover, authority, q_att, q_rate, r_ctrl,
+		);
+		let b = calibrate_control_gains_rs(
+			dt, arm_length, k_thrust, k_drag, inertia, gravity, hover, 0.05,
+		);
+		let (a, bm) = attitude_lag_model_continuous(b, motor_lag_tau(motor_lag_s, dt), false);
+		t.lag = Some(LagFeedback {
+			k: clqr_gain(&a, &bm, &lag_state_cost(q_att, q_rate, None), &diag3([r_ctrl; 3])),
+			act: ActuatorLag::new(motor_lag_s, dt),
+		});
+		t
+	}
+
+	/// ABI 34: the pwm applied last step (commanded convention) → actuator
+	/// estimate. No-op without lag (LQR is memoryless there).
+	pub(crate) fn observe_applied(&mut self, applied_pwm: [f64; 4])
+	{
+		if let Some(l) = self.lag.as_mut()
+		{
+			l.act.observe(applied_pwm);
 		}
 	}
 
@@ -385,7 +682,13 @@ impl AttitudeLqrRs
 	pub fn step_rs(&mut self, q: [f32; 4], gyro: [f32; 3], target_rpy: [f32; 3]) -> [f64; 4]
 	{
 		let x = state_error(q, gyro, target_rpy);
-		let u = self.k.mul_vec(&x); // K x  (3,)
+		let u = match self.lag.as_ref()
+		{
+			// ABI 34: K·[e, rate, ua] on the augmented model.
+			Some(l) if l.act.seeded() => l.k.mul_vec(&with_actuator(&x, l.act.state())),
+			Some(l) => first_step_fixed_point(&l.k, &x, -1.0),
+			None => self.k.mul_vec(&x), // K x  (3,)
+		};
 		let a = self.authority;
 		mix_to_motors_f64(
 			self.hover,
@@ -426,7 +729,14 @@ impl AttitudeLqrRs
 			dt, arm_length, k_thrust, k_drag, inertia, gravity, hover, authority, q_att, q_rate, r_ctrl,
 		)
 	}
-	pub fn reset(&mut self) {} // memoryless
+	pub fn reset(&mut self)
+	{
+		// Memoryless without lag; with it, only the actuator estimate (ABI 34).
+		if let Some(l) = self.lag.as_mut()
+		{
+			l.act.reset();
+		}
+	}
 	/// One step → 4 motor PWMs (f32), for Python parity vs optimal.LQRController.
 	fn step(&mut self, q: [f32; 4], gyro: [f32; 3], target_rpy: [f32; 3]) -> [f32; 4]
 	{
@@ -476,6 +786,9 @@ pub struct AttitudeLqiRs
 	dt: f64,
 	hover: f64,
 	authority: f64,
+	/// ABI 34: Some ⇔ motor lag on — the 3×12 gain on [∫e, e, rate, ua]
+	/// replaces `k`/`k_int` (the integral state and its clamp are unchanged).
+	lag: Option<LagFeedback>,
 }
 
 impl AttitudeLqiRs
@@ -533,6 +846,51 @@ impl AttitudeLqiRs
 			dt: dt as f64,
 			hover,
 			authority,
+			lag: None,
+		}
+	}
+
+	/// ABI 34: the LAG-AWARE LQI — continuous LQR (CARE) on the 12-state
+	/// augmented model [∫e, e, rate, ua], same q_int/q_att/q_rate/r_ctrl, 0 on
+	/// the actuator state; converges onto the spectral-factor gains as τ → 0.
+	#[allow(clippy::too_many_arguments)]
+	pub(crate) fn build_lagged(
+		dt: f32,
+		arm_length: f32,
+		k_thrust: f32,
+		k_drag: f32,
+		inertia: [f32; 3],
+		gravity: f32,
+		hover: f64,
+		authority: f64,
+		q_att: f64,
+		q_rate: f64,
+		r_ctrl: f64,
+		q_int: f64,
+		motor_lag_s: f32,
+	) -> Self
+	{
+		let mut t = Self::build(
+			dt, arm_length, k_thrust, k_drag, inertia, gravity, hover, authority, q_att, q_rate, r_ctrl,
+			q_int,
+		);
+		let b = calibrate_control_gains_rs(
+			dt, arm_length, k_thrust, k_drag, inertia, gravity, hover, 0.05,
+		);
+		let (a, bm) = attitude_lag_model_continuous(b, motor_lag_tau(motor_lag_s, dt), true);
+		t.lag = Some(LagFeedback {
+			k: clqr_gain(&a, &bm, &lag_state_cost(q_att, q_rate, Some(q_int)), &diag3([r_ctrl; 3])),
+			act: ActuatorLag::new(motor_lag_s, dt),
+		});
+		t
+	}
+
+	/// ABI 34: the pwm applied last step → actuator estimate (no-op without lag).
+	pub(crate) fn observe_applied(&mut self, applied_pwm: [f64; 4])
+	{
+		if let Some(l) = self.lag.as_mut()
+		{
+			l.act.observe(applied_pwm);
 		}
 	}
 
@@ -546,6 +904,29 @@ impl AttitudeLqiRs
 				self.integral[axis] + x[axis] * self.dt,
 				-self.i_clamp,
 				self.i_clamp,
+			);
+		}
+		if let Some(l) = self.lag.as_ref()
+		{
+			// ABI 34: u = −K·[∫e, e, rate, ua] — the integral gain lives in K.
+			let mut z = Vec::with_capacity(12);
+			z.extend_from_slice(&self.integral);
+			z.extend_from_slice(&x);
+			let u = if l.act.seeded()
+			{
+				z.extend_from_slice(&l.act.state());
+				l.k.mul_vec(&z)
+			}
+			else
+			{
+				first_step_fixed_point(&l.k, &z, -1.0)
+			};
+			let a = self.authority;
+			return mix_to_motors_f64(
+				self.hover,
+				clamp_f64(-u[0], -a, a),
+				clamp_f64(-u[1], -a, a),
+				clamp_f64(-u[2], -a, a),
 			);
 		}
 		let u = self.k.mul_vec(&x); // K x  (3,)
@@ -614,6 +995,10 @@ impl AttitudeLqiRs
 	pub fn reset(&mut self)
 	{
 		self.integral = [0.0; 3];
+		if let Some(l) = self.lag.as_mut()
+		{
+			l.act.reset();
+		}
 	}
 	/// One step → 4 motor PWMs (f32), for Python parity testing.
 	fn step(&mut self, q: [f32; 4], gyro: [f32; 3], target_rpy: [f32; 3]) -> [f32; 4]
@@ -900,6 +1285,9 @@ pub struct AttitudeMpcRs
 	/// iterations, converged). Read-only — never feeds back into a solve.
 	#[cfg(test)]
 	probe: Option<Vec<MpcProbe>>,
+	/// ABI 34: Some ⇔ motor lag on — the prediction model is the 9-state
+	/// augmented one and x0 carries this actuator estimate. (MpcOf feeds it too.)
+	act: Option<ActuatorLag>,
 }
 
 /// One recorded horizon solve (test-only probe).
@@ -942,9 +1330,53 @@ impl AttitudeMpcRs
 		let qm = diag6([q_att, q_att, q_att, q_rate, q_rate, q_rate]);
 		let rm = diag3([r_ctrl, r_ctrl, r_ctrl]);
 		let qf = dare(&ad, &bd, &qm, &rm); // terminal cost-to-go (discrete LQR)
+		Self::from_discrete(&ad, &bd, &qm, &rm, &qf, horizon, hover, authority)
+	}
 
+	/// ABI 34: the LAG-AWARE MPC — the same condensed horizon QP on the 9-state
+	/// augmented model (attitude_lag_model at dt_mpc), terminal cost from the
+	/// augmented DARE, 0 stage cost on the actuator state. x0 = [e, rate, ua].
+	#[allow(clippy::too_many_arguments)]
+	pub(crate) fn build_lagged(
+		dt: f32,
+		arm_length: f32,
+		k_thrust: f32,
+		k_drag: f32,
+		inertia: [f32; 3],
+		gravity: f32,
+		hover: f64,
+		authority: f64,
+		q_att: f64,
+		q_rate: f64,
+		r_ctrl: f64,
+		horizon: usize,
+		dt_mpc: f64,
+		motor_lag_s: f32,
+	) -> Self
+	{
+		let b = calibrate_control_gains_rs(
+			dt, arm_length, k_thrust, k_drag, inertia, gravity, hover, 0.05,
+		);
+		// The prediction step is dt_mpc, so its lag coefficient is too (the
+		// estimator below runs at the plant's dt).
+		let t_eff = (motor_lag_s as f64).max(4.0 * dt_mpc);
+		let (ad, bd) = attitude_lag_model(b, dt_mpc, 4.0 * dt_mpc / t_eff, false);
+		let qm = lag_state_cost(q_att, q_rate, None);
+		let rm = diag3([r_ctrl, r_ctrl, r_ctrl]);
+		let qf = dare_doubling(&ad, &bd, &qm, &rm);
+		let mut m = Self::from_discrete(&ad, &bd, &qm, &rm, &qf, horizon, hover, authority);
+		m.act = Some(ActuatorLag::new(motor_lag_s, dt));
+		m
+	}
+
+	/// The condensed horizon QP for a discrete model (ad, bd) with stage costs
+	/// (qm, rm) and terminal cost qf — shared by the lag-free (6-state) and the
+	/// lag-aware (9-state) builds. The state dimension is ad's.
+	#[allow(clippy::too_many_arguments)]
+	fn from_discrete(ad: &Mat, bd: &Mat, qm: &Mat, rm: &Mat, qf: &Mat, horizon: usize, hover: f64, authority: f64) -> Self
+	{
 		let n = horizon;
-		let ns = 6usize;
+		let ns = ad.r;
 		let nu = 3usize;
 		let rows = ns * (n + 1);
 		let cols = nu * n;
@@ -954,7 +1386,7 @@ impl AttitudeMpcRs
 		ad_pow.push(Mat::identity(ns)); // Ad^0
 		for k in 1..=n
 		{
-			ad_pow.push(ad_pow[k - 1].matmul(&ad));
+			ad_pow.push(ad_pow[k - 1].matmul(ad));
 		}
 		let mut sx = Mat::zeros(rows, ns);
 		let mut su = Mat::zeros(rows, cols);
@@ -971,7 +1403,7 @@ impl AttitudeMpcRs
 			// Su blocks
 			for j in 0..k
 			{
-				let blk = ad_pow[k - 1 - j].matmul(&bd); // 6×3
+				let blk = ad_pow[k - 1 - j].matmul(bd); // ns×3
 				for ii in 0..ns
 				{
 					for jj in 0..nu
@@ -1034,13 +1466,29 @@ impl AttitudeMpcRs
 			g_buf: vec![0.0; cols],
 			#[cfg(test)]
 			probe: None,
+			act: None,
+		}
+	}
+
+	/// ABI 34: the pwm applied last step → actuator estimate (no-op without lag).
+	pub(crate) fn observe_applied(&mut self, applied_pwm: [f64; 4])
+	{
+		if let Some(act) = self.act.as_mut()
+		{
+			act.observe(applied_pwm);
 		}
 	}
 
 	pub fn step_rs(&mut self, q: [f32; 4], gyro: [f32; 3], target_rpy: [f32; 3]) -> [f64; 4]
 	{
 		let x = state_error(q, gyro, target_rpy);
-		let u = self.step_axes_rs(&x);
+		let z = self.act.as_ref().map(|act| (act.seeded(), with_actuator(&x, act.state())));
+		let u = match z
+		{
+			Some((true, z)) => self.step_axes_rs(&z),
+			Some((false, _)) => self.first_step_axes(&x),
+			None => self.step_axes_rs(&x),
+		};
 		let a = self.authority;
 		mix_to_motors_f64(
 			self.hover,
@@ -1054,7 +1502,7 @@ impl AttitudeMpcRs
 	/// control [u_roll, u_pitch, u_yaw] (pre-clamp). Extracted so the
 	/// offset-free wrapper (AttitudeMpcOfRs) can inject its disturbance
 	/// feedforward BEFORE mixing.
-	pub(crate) fn step_axes_rs(&mut self, x: &[f64; 6]) -> [f64; 3]
+	pub(crate) fn step_axes_rs(&mut self, x: &[f64]) -> [f64; 3]
 	{
 		let a = self.authority;
 		let cols = self.n * 3;
@@ -1078,13 +1526,32 @@ impl AttitudeMpcRs
 		[self.u_buf[0], self.u_buf[1], self.u_buf[2]]
 	}
 
+	/// ABI 34: the lag-aware MPC's first decision (see first_step_fixed_point):
+	/// the fixed point of the unconstrained first-move map U*₀ = M·[x; ua] under
+	/// ua = u, which step_rs then clamps to ±authority like any other move.
+	pub(crate) fn first_step_axes(&self, x: &[f64]) -> [f64; 3]
+	{
+		let mut m0 = Mat::zeros(3, self.ustar_map.c);
+		for i in 0..3
+		{
+			for j in 0..self.ustar_map.c
+			{
+				m0.set(i, j, self.ustar_map.get(i, j));
+			}
+		}
+		let v = first_step_fixed_point(&m0, x, 1.0);
+		[v[0], v[1], v[2]]
+	}
+
 	#[cfg(test)]
-	fn record_probe(&mut self, x: &[f64; 6], constrained: bool)
+	fn record_probe(&mut self, x: &[f64], constrained: bool)
 	{
 		if let Some(p) = self.probe.as_mut()
 		{
+			let mut x6 = [0.0f64; 6];
+			x6.copy_from_slice(&x[..6]);
 			p.push(MpcProbe {
-				x: *x,
+				x: x6,
 				u: self.u_buf.clone(),
 				constrained,
 				iters: if constrained { self.qp.last_solves } else { 0 },
@@ -1131,6 +1598,10 @@ impl AttitudeMpcRs
 		for w in self.warm.iter_mut()
 		{
 			*w = 0.0;
+		}
+		if let Some(act) = self.act.as_mut()
+		{
+			act.reset();
 		}
 	}
 	fn step(&mut self, q: [f32; 4], gyro: [f32; 3], target_rpy: [f32; 3]) -> [f32; 4]
@@ -1208,6 +1679,47 @@ impl AttitudeMpcOfRs
 			dt, arm_length, k_thrust, k_drag, inertia, gravity, hover, authority, q_att, q_rate, r_ctrl,
 			horizon, dt_mpc,
 		);
+		Self::around(mpc, b, l_gain, ff_clamp, dt, hover, authority)
+	}
+
+	/// ABI 34: the LAG-AWARE offset-free MPC — the lag-aware MPC (9-state model,
+	/// x0 carries the actuator estimate) plus the observer reading the FILTERED
+	/// actuator: residual = rate_dot − b·ua − d̂. Subtracting b·u_commanded (the
+	/// lag-free law) reads every commanded change the rotors have not yet
+	/// followed as a disturbance, and the feedforward then fights the lag.
+	#[allow(clippy::too_many_arguments)]
+	pub(crate) fn build_lagged(
+		dt: f32,
+		arm_length: f32,
+		k_thrust: f32,
+		k_drag: f32,
+		inertia: [f32; 3],
+		gravity: f32,
+		hover: f64,
+		authority: f64,
+		q_att: f64,
+		q_rate: f64,
+		r_ctrl: f64,
+		horizon: usize,
+		dt_mpc: f64,
+		l_gain: f64,
+		ff_clamp: f64,
+		motor_lag_s: f32,
+	) -> Self
+	{
+		let b = calibrate_control_gains_rs(
+			dt, arm_length, k_thrust, k_drag, inertia, gravity, hover, 0.05,
+		);
+		let mpc = AttitudeMpcRs::build_lagged(
+			dt, arm_length, k_thrust, k_drag, inertia, gravity, hover, authority, q_att, q_rate, r_ctrl,
+			horizon, dt_mpc, motor_lag_s,
+		);
+		Self::around(mpc, b, l_gain, ff_clamp, dt, hover, authority)
+	}
+
+	#[allow(clippy::too_many_arguments)]
+	fn around(mpc: AttitudeMpcRs, b: [f64; 3], l_gain: f64, ff_clamp: f64, dt: f32, hover: f64, authority: f64) -> Self
+	{
 		AttitudeMpcOfRs {
 			mpc,
 			b,
@@ -1227,6 +1739,16 @@ impl AttitudeMpcOfRs
 	/// u_roll=(m3−m1)/2, u_pitch=(m2−m0)/2, u_yaw=((m0+m2)−(m1+m3))/4.
 	pub fn observe(&mut self, gyro: [f32; 3], applied_pwm: [f64; 4])
 	{
+		// ABI 34: under motor lag the torque came from the FILTERED actuator, so
+		// that — not the command — is the model term's u. Filter first (the
+		// plant's order: lag, then the step the gyro just measured).
+		if let Some(act) = self.mpc.act.as_mut()
+		{
+			act.observe(applied_pwm);
+			let ua = act.state();
+			self.update_dhat(gyro, ua);
+			return;
+		}
 		let m = applied_pwm;
 		self.update_dhat(
 			gyro,
@@ -1258,6 +1780,10 @@ impl AttitudeMpcOfRs
 	pub fn step_rs(&mut self, q: [f32; 4], gyro: [f32; 3], target_rpy: [f32; 3]) -> [f64; 4]
 	{
 		let x = state_error(q, gyro, target_rpy);
+		if self.mpc.act.is_some()
+		{
+			return self.step_lagged(&x);
+		}
 		let u = self.mpc.step_axes_rs(&x);
 		let a = self.authority;
 		let mut u_cmd = [0.0f64; 3];
@@ -1273,6 +1799,41 @@ impl AttitudeMpcOfRs
 		// last_u kept for telemetry; d̂ is updated ONLY via observe() (the DAGGER
 		// loop feeds it the student's applied action). Solo flight without
 		// observe() ⇒ d̂ stays 0 ⇒ mpcof degrades to plain MPC (safe no-op).
+		self.last_u = u_cmd;
+		mix_to_motors_f64(self.hover, u_cmd[0], u_cmd[1], u_cmd[2])
+	}
+
+	/// ABI 34 lag-aware step. The MPC plans in DISTURBANCE-SHIFTED coordinates:
+	/// the rotors' net effect is b·ua + d = b·(ua + d/b) ≈ b·(ua + u_ff), so
+	/// x0's actuator entry is ua + u_ff and the plan's u is the net command
+	/// (u_cmd = u − u_ff, as the lag-free law). Feeding the raw ua instead would
+	/// have the plan cancel the very feedforward that holds the offset at bay.
+	fn step_lagged(&mut self, x: &[f64; 6]) -> [f64; 4]
+	{
+		let (seeded, ua) = self
+			.mpc
+			.act
+			.as_ref()
+			.map(|act| (act.seeded(), act.state()))
+			.unwrap_or((false, [0.0; 3]));
+		let mut u_ff = [0.0f64; 3];
+		let mut z = [0.0f64; 9];
+		z[..6].copy_from_slice(x);
+		for axis in 0..3
+		{
+			u_ff[axis] = clamp_f64(self.dhat[axis] / self.b[axis], -self.ff_clamp, self.ff_clamp);
+			z[6 + axis] = ua[axis] + u_ff[axis];
+		}
+		// First decision: the plant seeds the actuator at u_cmd = u − u_ff, so
+		// the shifted actuator ua + u_ff equals the plan's own u — the same fixed
+		// point as the plain MPC's.
+		let u = if seeded { self.mpc.step_axes_rs(&z) } else { self.mpc.first_step_axes(x) };
+		let a = self.authority;
+		let mut u_cmd = [0.0f64; 3];
+		for axis in 0..3
+		{
+			u_cmd[axis] = clamp_f64(u[axis] - u_ff[axis], -a, a);
+		}
 		self.last_u = u_cmd;
 		mix_to_motors_f64(self.hover, u_cmd[0], u_cmd[1], u_cmd[2])
 	}
@@ -1447,6 +2008,54 @@ impl Teacher
 		}
 	}
 
+	/// ABI 34 (05/11/2026): the teacher for a plant with motor-lag settling time
+	/// `motor_lag_s` (Molchanov T; τ = T/4). The model-based teachers (ids 1-4)
+	/// get the TRUE lag (Luiz, 05/11): LQR/LQI/MPC/MPCOF are designed on the
+	/// actuator-augmented model and estimate the actuator by filtering the pwm
+	/// they are told was applied. PID (id 0) is the firmware reference and stays
+	/// exactly as built. `motor_lag_s <= 0` IS from_id_with_hover — the lag-free
+	/// code path, not an augmented model evaluated at τ = 0 (T = 0 bit-identical
+	/// to ABI 33, pinned by abi34_tests).
+	#[allow(clippy::too_many_arguments)]
+	pub fn from_id_lagged(
+		id: u8,
+		dt: f32,
+		arm_length: f32,
+		k_thrust: f32,
+		k_drag: f32,
+		inertia: [f32; 3],
+		gravity: f32,
+		hover: f64,
+		motor_lag_s: f32,
+	) -> Teacher
+	{
+		if !(motor_lag_s > 0.0)
+		{
+			return Self::from_id_with_hover(id, dt, arm_length, k_thrust, k_drag, inertia, gravity, hover);
+		}
+		let authority = 0.4;
+		let t = motor_lag_s;
+		match id
+		{
+			1 => Teacher::Lqr(AttitudeLqrRs::build_lagged(
+				dt, arm_length, k_thrust, k_drag, inertia, gravity, hover, authority, Q_ATT, Q_RATE, R_CTRL, t,
+			)),
+			2 => Teacher::Mpc(AttitudeMpcRs::build_lagged(
+				dt, arm_length, k_thrust, k_drag, inertia, gravity, hover, authority, Q_ATT, Q_RATE,
+				R_CTRL, 25, 0.001, t,
+			)),
+			3 => Teacher::Lqi(AttitudeLqiRs::build_lagged(
+				dt, arm_length, k_thrust, k_drag, inertia, gravity, hover, authority, Q_ATT, Q_RATE,
+				R_CTRL, Q_INT, t,
+			)),
+			4 => Teacher::MpcOf(AttitudeMpcOfRs::build_lagged(
+				dt, arm_length, k_thrust, k_drag, inertia, gravity, hover, authority, Q_ATT, Q_RATE,
+				R_CTRL, 25, 0.001, 0.05, 0.2, t,
+			)),
+			_ => Self::from_id_with_hover(id, dt, arm_length, k_thrust, k_drag, inertia, gravity, hover),
+		}
+	}
+
 	/// D0 (11/09/2026): the collective this teacher was BUILT at — the pwm every
 	/// motor sits on at level / zero rates / zero attitude error, i.e. the
 	/// teacher's own neutral. 0.5 for the legacy attitude teachers (from_id),
@@ -1557,14 +2166,19 @@ impl Teacher
 
 	/// Feed the observer teachers the (gyro, actually-applied motor PWMs) pair
 	/// each rollout step — under DAGGER the sim propagates on the STUDENT's
-	/// action, which is what a model-residual observer must see. No-op for
-	/// teachers without an observer.
+	/// action, which is what a model-residual observer must see. ABI 34: the
+	/// lag-aware LQR/MPC/LQI also read it (their actuator estimate); every one
+	/// of those is a no-op without motor lag. PID never observes.
 	#[inline]
 	pub fn observe(&mut self, gyro: [f32; 3], applied_pwm: [f64; 4])
 	{
-		if let Teacher::MpcOf(m) = self
+		match self
 		{
-			m.observe(gyro, applied_pwm);
+			Teacher::MpcOf(m) => m.observe(gyro, applied_pwm),
+			Teacher::Lqr(l) => l.observe_applied(applied_pwm),
+			Teacher::Mpc(m) => m.observe_applied(applied_pwm),
+			Teacher::Lqi(l) => l.observe_applied(applied_pwm),
+			Teacher::Pid(_) | Teacher::PidFw(_) => {}
 		}
 	}
 	#[inline]
@@ -1815,3 +2429,156 @@ mod alloc_lqr_tests
 #[cfg(test)]
 #[path = "mpc_solver_tests.rs"]
 mod mpc_solver_tests;
+
+/// ABI 34: the lag-aware design math (the augmented model, the doubling DARE).
+#[cfg(test)]
+mod lag_design_tests
+{
+	use super::*;
+
+	fn b_cf21() -> [f64; 3]
+	{
+		calibrate_control_gains_rs(0.001, 0.0707, 0.2, 0.0057, [3.0e-5, 3.0e-5, 5.3e-5], 9.81, 0.6942, 0.05)
+	}
+
+	fn riccati_residual(a: &Mat, b: &Mat, q: &Mat, r: &Mat, p: &Mat) -> f64
+	{
+		let at = a.transpose();
+		let bt = b.transpose();
+		let mid = inverse(&r.add(&bt.matmul(p).matmul(b))).unwrap();
+		let rhs = q
+			.add(&at.matmul(p).matmul(a))
+			.sub(&at.matmul(p).matmul(b).matmul(&mid).matmul(&bt.matmul(p).matmul(a)));
+		let scale = p.d.iter().fold(1.0f64, |m, v| m.max(v.abs()));
+		rhs.max_abs_diff(p) / scale
+	}
+
+	/// The doubling DARE solves the Riccati equation on every augmented model the
+	/// teachers build (LQR/MPC 9-state, LQI 12-state) at both axis values.
+	#[test]
+	fn doubling_dare_solves_the_augmented_riccati()
+	{
+		for tt in [0.15f32, 0.30]
+		{
+			let alpha = motor_lag_alpha(tt, 0.001);
+			for integral in [false, true]
+			{
+				let (a, b) = attitude_lag_model(b_cf21(), 0.001, alpha, integral);
+				let q = lag_state_cost(Q_ATT, Q_RATE, if integral { Some(Q_INT) } else { None });
+				let r = diag3([R_CTRL; 3]);
+				let p = dare_doubling(&a, &b, &q, &r);
+				let res = riccati_residual(&a, &b, &q, &r, &p);
+				assert!(res < 1e-9, "T={tt} integral={integral}: relative Riccati residual {res:e}");
+			}
+		}
+	}
+
+	/// α = 1 (T clamped to 4dt: no lag) collapses the augmented design onto the
+	/// lag-free one: the actuator columns of K vanish and the [e, rate] columns
+	/// equal the 6-state discrete LQR on I + A·dt, B·dt.
+	#[test]
+	fn lag_alpha_one_collapses_to_lag_free()
+	{
+		let b = b_cf21();
+		let r = diag3([R_CTRL; 3]);
+		let (a9, b9) = attitude_lag_model(b, 0.001, 1.0, false);
+		let k9 = dlqr_gain(&a9, &b9, &lag_state_cost(Q_ATT, Q_RATE, None), &r);
+		let (a_c, b_c) = attitude_linear_model(b);
+		let a6 = Mat::identity(6).add(&a_c.scale(0.001));
+		let b6 = b_c.scale(0.001);
+		let k6 = dlqr_gain(&a6, &b6, &diag6([Q_ATT, Q_ATT, Q_ATT, Q_RATE, Q_RATE, Q_RATE]), &r);
+		for i in 0..3
+		{
+			for j in 0..6
+			{
+				let (x, y) = (k9.get(i, j), k6.get(i, j));
+				assert!((x - y).abs() <= 1e-9 * y.abs().max(1.0), "K[{i},{j}] {x} vs {y}");
+			}
+			for j in 6..9
+			{
+				assert!(k9.get(i, j).abs() < 1e-12, "K[{i},{j}] actuator column {} ≠ 0 at α=1", k9.get(i, j));
+			}
+		}
+	}
+
+	/// The Newton–Kleinman CARE solves the continuous Riccati equation on the
+	/// LQR (9-state) and LQI (12-state) augmented models at both axis values.
+	#[test]
+	fn care_solves_the_augmented_riccati()
+	{
+		for tt in [0.15f32, 0.30]
+		{
+			for integral in [false, true]
+			{
+				let (a, b) = attitude_lag_model_continuous(b_cf21(), motor_lag_tau(tt, 0.001), integral);
+				let q = lag_state_cost(Q_ATT, Q_RATE, if integral { Some(Q_INT) } else { None });
+				let r = diag3([R_CTRL; 3]);
+				let p = care(&a, &b, &q, &r);
+				let r_inv = inverse(&r).unwrap();
+				let res = a
+					.transpose()
+					.matmul(&p)
+					.add(&p.matmul(&a))
+					.sub(&p.matmul(&b).matmul(&r_inv).matmul(&b.transpose()).matmul(&p))
+					.add(&q);
+				let scale = p.d.iter().fold(1.0f64, |m, v| m.max(v.abs()));
+				let worst = res.d.iter().fold(0.0f64, |m, v| m.max(v.abs())) / scale;
+				assert!(worst < 1e-8, "T={tt} integral={integral}: relative CARE residual {worst:e}");
+			}
+		}
+	}
+
+	/// τ → 0 converges onto the LAG-FREE teachers' closed forms (continuity with
+	/// the T = 0 path): LQR's k1/k2 and LQI's k_att/k_rate/k_int, actuator
+	/// columns → 0.
+	#[test]
+	fn care_lag_design_converges_to_closed_form()
+	{
+		let (dt, arm, kt, kd, inertia, g, hover) = (0.001f32, 0.0707f32, 0.2f32, 0.0057f32, [3.0e-5f32, 3.0e-5, 5.3e-5], 9.81f32, 0.6942);
+		let lqr = AttitudeLqrRs::build(dt, arm, kt, kd, inertia, g, hover, 0.4, Q_ATT, Q_RATE, R_CTRL);
+		let lqi = AttitudeLqiRs::build(dt, arm, kt, kd, inertia, g, hover, 0.4, Q_ATT, Q_RATE, R_CTRL, Q_INT);
+		let tau = 1e-6;
+		let r = diag3([R_CTRL; 3]);
+		let (a, b) = attitude_lag_model_continuous(b_cf21(), tau, false);
+		let k = clqr_gain(&a, &b, &lag_state_cost(Q_ATT, Q_RATE, None), &r);
+		let (ai, bi) = attitude_lag_model_continuous(b_cf21(), tau, true);
+		let ki = clqr_gain(&ai, &bi, &lag_state_cost(Q_ATT, Q_RATE, Some(Q_INT)), &r);
+		let close = |x: f64, y: f64, what: &str| {
+			assert!((x - y).abs() <= 1e-2 * y.abs().max(1e-3), "{what}: {x} vs closed form {y}");
+		};
+		for axis in 0..3
+		{
+			close(k.get(axis, axis), lqr.k.get(axis, axis), "LQR angle");
+			close(k.get(axis, 3 + axis), lqr.k.get(axis, 3 + axis), "LQR rate");
+			assert!(k.get(axis, 6 + axis).abs() < 1e-2, "LQR actuator column {}", k.get(axis, 6 + axis));
+			close(ki.get(axis, axis), lqi.k_int[axis], "LQI int");
+			close(ki.get(axis, 3 + axis), lqi.k.get(axis, axis), "LQI angle");
+			close(ki.get(axis, 6 + axis), lqi.k.get(axis, 3 + axis), "LQI rate");
+		}
+	}
+
+	/// The augmented closed loop is stable: x' = (A − B K) x decays	/// The augmented closed loop is stable: x' = (A − B K) x decays from a unit
+	/// state on every axis (power iteration bound via a long free response).
+	#[test]
+	fn lag_aware_closed_loop_is_stable()
+	{
+		for tt in [0.15f32, 0.30]
+		{
+			for integral in [false, true]
+			{
+				let (a, b) = attitude_lag_model(b_cf21(), 0.001, motor_lag_alpha(tt, 0.001), integral);
+				let q = lag_state_cost(Q_ATT, Q_RATE, if integral { Some(Q_INT) } else { None });
+				let k = dlqr_gain(&a, &b, &q, &diag3([R_CTRL; 3]));
+				let acl = a.sub(&b.matmul(&k));
+				let mut x = vec![1.0f64; a.r];
+				for _ in 0..200_000
+				{
+					x = acl.mul_vec(&x);
+				}
+				let norm = x.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+				assert!(norm < 1e-3, "T={tt} integral={integral}: closed loop not decaying (|x|={norm:e})");
+			}
+		}
+	}
+}
+

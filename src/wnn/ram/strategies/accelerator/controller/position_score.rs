@@ -189,7 +189,9 @@ pub fn score_position_teacher(
 	// permanently below target — a 1.372 m droop on cf21. Teacher-side twin of
 	// stage 1's collective_anchor.
 	let hover_pwm = (mass as f64 * af_gravity as f64 / (4.0 * af_k_thrust as f64)).sqrt();
-	let mut teacher = crate::optimal::Teacher::from_id_with_hover(
+	// ABI 34: lag-aware on the TRUE motor lag (ids 1-4); T = 0 is exactly
+	// from_id_with_hover, the pre-ABI-34 call.
+	let mut teacher = crate::optimal::Teacher::from_id_lagged(
 		teacher_id,
 		af_dt,
 		af_arm_length,
@@ -198,6 +200,7 @@ pub fn score_position_teacher(
 		af_inertia,
 		af_gravity,
 		hover_pwm,
+		motor_lag_s,
 	);
 	let mut est = if use_estimator
 	{
