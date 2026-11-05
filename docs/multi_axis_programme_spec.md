@@ -256,6 +256,31 @@ Focus: ERR (lag degrades every controller; the read is whether the WNN degrades 
 Expected effect large. Reviewer-priority axis.
 Prereqs: rival bars at T 0.15/0.30 (#6); smoke (#7).
 
+### 3.1 Rival bars at the round-1 conditions (05/11, estimator-fed, xy 0.5 m, 2000 steps, 99990101-05)
+```
+condition        PID                       LQR                        MPC                        LQI                        MPCOF (teacher)
+                 stable/err/steady/alt/pos3d
+anchor L4C       100/2.99/2.50/.16/.35     100/1.94/1.20/.16/.35      100/2.24/1.46/.16/.36      100/1.92/1.27/.16/.35      100/1.80/1.06/.16/.35
+L4A              100/1.42/0.71/.138/.328   100/1.79/1.05/.138/.340    100/1.79/1.06/.138/.340    100/1.83/1.24/.138/.335    100/1.79/1.05/.138/.340
+L4B              100/1.96/1.37/.143/.332   100/1.83/1.09/.143/.343    100/1.92/1.17/.143/.344    100/1.86/1.25/.143/.338    100/1.79/1.06/.143/.343
+lag T=0.15       100/2.92/2.45/.158/.349   87.6/3.00/1.97/.160/.358   98.6/2.35/1.39/.159/.349   87.2/2.98/2.36/.161/.346   94.0/3.43/2.27/.249/.435
+lag T=0.30       100/2.92/2.40/.161/.350   27.8/14.8/9.75/.309/.819   58.2/6.87/4.72/.186/.483   28.4/14.9/11.8/.322/.701   0.6/18.4/12.6/.415/.882
+cf2x_fw k_d .25  100/2.55/2.23/.156/.331   100/2.24/1.65/.165/.350    100/2.60/1.93/.156/.350    100/2.22/1.78/.165/.342    100/2.11/1.53/.156/.342
+```
+READS — two change the programme and need a physics opinion BEFORE axis F flies:
+- AXIS F BREAKS THE TEACHER. The model-based laws are derived lag-free; with the lag in the plant they
+  lose stability: at T=0.15 MPCOF (the anchor's TEACHER) is 94.0 % stable / 3.43° (worse than PID), at
+  T=0.30 it is 0.6 % stable / 18.4°, LQR/LQI ~28 %. Only the firmware PID (lower gain) stays 100 %.
+  A WNN trained by DAgger on a 0.6 %-stable teacher measures the teacher's collapse, not the student's
+  robustness. Route to flight-dynamics: is this the physically right behaviour of a lag-unaware design
+  (then axis F at T=0.30 needs a lag-aware or PID teacher, or is dropped), or a modelling bug (teacher
+  gains / MPC prediction should include the lag)? Until answered, T=0.30 should not fly; T=0.15 is
+  flyable but its read must name the degraded teacher.
+- L4A: on the clean plant PID (1.42°) beats every model-based rival including the teacher (1.79°);
+  MPCOF's floor is plant-jitter-invariant (1.79-1.80° at L4A/L4B/L4C). V3 at L4A reads against PID.
+- cf2x_firmware @ 0.25: all rivals 100 %; MPCOF 2.11° (vs 1.80° on cf21 @ 0.78) — the airframe+drag
+  move is visible in the bar itself.
+
 ### Axis G — CONTROL RATE (action_repeat 2 = 500 Hz)                optional, 5 runs, ~45 h
 D7: optional tail after round 2. Not costed in the total.
 
@@ -291,6 +316,7 @@ order  condition                      runs  h      why here
 3      B  pid, lqr                    2     ~18    smoke must show no label saturation
 4      D  cf2x_firmware @ k_d 0.25    1     ~9     D12
 5      C  sn=4                        1     ~18    last: slowest; flies once MA_AXIS_C_MAX_CELLS is set (D13)
+       (F T=0.30 REFUSED until F030_APPROVED — §3.1 teacher collapse; round 1 = 7 runs ~72 h without it)
        (sn=8 REFUSED until SN8_APPROVED — D10)
        round 1 total                  8     ~81 h  (~3.4 days)
 ```
@@ -327,10 +353,10 @@ a running .sh, never launched beside IDS memory pressure (the controller is the 
 3   HOLD sentinel                           CLOSED    controller_arm_lib.sh; honoured by ctrl8_ab_pop50.sh:24
 4   D0 teacher hover / label re-base        CLOSED    a88cb7c1; dagger_train.rs:1240-1259 (teacher.hover(), all teachers)
 5   D5 report-seed set                      CLOSED    decided 19/09 (§8); implementation is #6 + #12
-6   Rival bars per condition (ABI 33)       OPEN      exist: cf21/L4C at k_d 0.78/0.5/0.25/0 on 99990101-05
-                                                      (experiments/ctrl22/rivals_abi33_tilt_kd*.json). Need: L4A, L4B, T0.15, T0.30,
-                                                      cf2x_firmware@k_d — each from a per-condition ARGS file via
-                                                      scripts/ctrl22_stage2_rivals.py; then all (+anchor) on D5. Minutes each.
+6   Rival bars per condition (ABI 33)       CLOSED    05/11: experiments/ctrl22/rivals_abi33_ma_{L4A,L4B,lagT015,lagT030,cf2xfw_kd025}.json
+                                                      (interim seeds 99990101-05) + *_d5.json and rivals_abi33_ma_anchor_d5.json
+                                                      (D5 99990201-05); ARGS_ma_*.txt = arm argv + condition flags last-wins.
+                                                      B and C share the anchor's bar (rivals_abi33_tilt_kd0.78.json). See §3.1.
 7   Smokes, one per condition (pop 6)       OPEN      none of lag>0, sn>0+translation, cf2x_firmware+translation, pid/lqr
                                                       +translation has ever flown. Plumbing only (rc 0, GRID line, HEADLINE,
                                                       [PLANT] + [provenance] abi=33); B: no label saturation. Decisions at pop 50.
@@ -365,7 +391,8 @@ a running .sh, never launched beside IDS memory pressure (the controller is the 
 20  Wheel freeze for the programme          CLOSED    D14: ABI 33 sha a6398538ce04588c; enforced by the chain preflight
 ```
 BLOCKS ROUND 1 (after 05/11 tooling): #18 (names the anchor; sets MA_ANCHOR) and #7 (smokes, after
-#18 tonight) for every axis; #8 for axis C only. #12's real use (A-cross, D5 final table) is not on the
+#18 tonight) for every axis; #8 for axis C only; axis F T=0.30 additionally waits for a physics ruling on
+the collapsing lag-unaware teacher (§3.1) — the chain gates it behind F030_APPROVED. #12's real use (A-cross, D5 final table) is not on the
 round-1 path.
 
 Smokes (fly AFTER the CTRL-8 verdict; pop 6 = plumbing only, numbers NOT read): the exact argv per

@@ -60,12 +60,14 @@ cd "$(dirname "$0")/.." || exit 1
 
 # =============================== THE TABLE — edit here ===============================
 # axis|value|suffix|flags|gate     gate: ""=none · AXIS_C=needs MA_AXIS_C_MAX_CELLS · SN8=AXIS_C + SN8_APPROVED
+#   F030 = needs F030_APPROVED: at T=0.30 the mpcof TEACHER is 0.6 % stable (spec §3.1) — flies only
+#   after flight-dynamics/Luiz rule on the lag-unaware teacher.
 # Order = round-1 order of spec draft 4 §4 (A, F, B, D, C).
 CONDITIONS=(
 	"A|L4A|axA_L4A|--disturbance L4A|"
 	"A|L4B|axA_L4B|--disturbance L4B|"
 	"F|T0.15|axF_T015|--motor-lag-s 0.15|"
-	"F|T0.30|axF_T030|--motor-lag-s 0.30|"
+	"F|T0.30|axF_T030|--motor-lag-s 0.30|F030"
 	"B|pid|axB_pid|--teacher pid|"
 	"B|lqr|axB_lqr|--teacher lqr|"
 	"D|cf2x_firmware|axD_cf2xfw_kd025|--airframe cf2x_firmware --rotor-drag 0.25|"
@@ -138,6 +140,7 @@ gate_state() {   # <gate> -> "" (open) or the refusal reason
 	case "$1" in
 		"") echo "" ;;
 		AXIS_C) [ -n "${MA_AXIS_C_MAX_CELLS:-}" ] && echo "" || echo "MA_AXIS_C_MAX_CELLS unset (decision 4: set it from the smoke's measurement)" ;;
+		F030) [ -f "${MARK}/F030_APPROVED" ] && echo "" || echo "T=0.30 waits for ${MARK}/F030_APPROVED (mpcof teacher collapses at this lag, spec §3.1)" ;;
 		SN8) if [ -z "${MA_AXIS_C_MAX_CELLS:-}" ]; then echo "MA_AXIS_C_MAX_CELLS unset"
 		     elif [ ! -f "${MARK}/SN8_APPROVED" ]; then echo "sn=8 waits for ${MARK}/SN8_APPROVED (decision 1: only if sn=4 shows an effect)"
 		     else echo ""; fi ;;

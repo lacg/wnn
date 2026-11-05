@@ -91,6 +91,7 @@ DRY="$(bash "$C" --dry-run --round 1)"
 check "round-1 plan lines" "$(echo "$DRY" | grep -c '^PLAN r1')" 9
 check "order A,A,F,F,B,B,D,C,C" "$(echo "$DRY" | grep '^PLAN' | sed -E 's/.*axis=([A-Z]+).*/\1/' | tr -d '\n')" "AAFFBBDCC"
 check "C refused without MA_AXIS_C_MAX_CELLS" "$(echo "$DRY" | grep 'axC_' | grep -c 'status=REFUSED')" 2
+check "T0.30 refused without F030_APPROVED" "$(echo "$DRY" | grep axF_T030 | grep -c REFUSED)" 1
 check "cf2x flies at k_d 0.25" "$(echo "$DRY" | grep -c 'cf2x_firmware --rotor-drag 0.25')" 1
 DRY2="$(MA_AXIS_C_MAX_CELLS=123 bash "$C" --dry-run --round 1)"
 check "sn4 todo + cap when MA_AXIS_C_MAX_CELLS set" "$(echo "$DRY2" | grep axC_sn4 | grep -c 'status=todo.*--max-cells 123')" 1
@@ -105,14 +106,14 @@ check "wrong wheel -> exit 1, nothing launched" "$?/$(launches)" "1/0"
 
 echo "== RUN round 1"
 MA_ANCHOR=arm MA_AXIS_C_MAX_CELLS=1000000000 bash "$C" --round 1 >/dev/null 2>&1
-check "round 1 exit 2 (sn8 refused)" "$?" 2
-check "8 launches" "$(launches)" 8
-check "8 markers" "$(ls "$SR/experiments/multi_axis_markers"/*.json | wc -l | tr -d ' ')" 8
-check "recipe passed verbatim (base-seed stripped)" "$(grep -c -- "--levels 16 --pop 50 --teacher mpcof" "$STUB_CALLS")" 8
+check "round 1 exit 2 (sn8 + T0.30 refused)" "$?" 2
+check "7 launches" "$(launches)" 7
+check "7 markers" "$(ls "$SR/experiments/multi_axis_markers"/*.json | wc -l | tr -d ' ')" 7
+check "recipe passed verbatim (base-seed stripped)" "$(grep -c -- "--levels 16 --pop 50 --teacher mpcof" "$STUB_CALLS")" 7
 check "condition flag last + seed" "$(grep '^ma_axB_pid_s31337002' "$STUB_CALLS" | grep -c -- '--teacher pid --base-seed 31337002')" 1
 check "sn4 carries the cap" "$(grep '^ma_axC_sn4' "$STUB_CALLS" | grep -c -- '--max-cells 1000000000')" 1
 MA_ANCHOR=arm MA_AXIS_C_MAX_CELLS=1000000000 bash "$C" --round 1 >/dev/null 2>&1
-check "relaunch idempotent (no new launch)" "$(launches)" 8
+check "relaunch idempotent (no new launch)" "$(launches)" 7
 
 echo "== RUN failure / attempt-3 / provenance"
 for i in 1 2 3; do STUB_FAIL=ma_axA_L4A_s31337003 MA_ANCHOR=arm MA_AXIS_C_MAX_CELLS=1 bash "$C" --round 2 >/dev/null 2>&1; done
