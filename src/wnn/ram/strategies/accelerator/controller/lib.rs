@@ -36,6 +36,8 @@ mod position_score; // scope C stage 2: score the full-state cascade in METRES
 mod record_ops; // reference-rollout recorders (address universe, input entropy)
 #[cfg(test)]
 mod abi32_tests; // ABI 32 behaviour + CPU/Metal parity (plant, G5, dx/dy, estimator)
+#[cfg(test)]
+mod abi34_tests; // ABI 34: lag-aware teachers, one pwm convention under motor lag, T=0 pins
 mod att_estimator; // ABI 32: the WNN's Mahony attitude estimate (obs_att_estimator)
 mod att_err_ref; // CTRL-17 G5 (ABI 32): attitude error vs the position loop tilt reference
 mod plant_opts; // ABI 32: specific-force IMU + rotor drag as ONE value every sim host applies

@@ -1103,7 +1103,7 @@ kernel void controller_rollout(
 	// included. The d̂ observer's model term reads this, never the pre-trim
 	// accumulator. Hover-init (never read before the first update —
 	// dhat_have_last=false skips t=0). Mirrors WnnController.pwm_applied;
-	// updated just before sim.step with the final applied command.
+	// updated with the final COMMAND just before the motor-lag filter (ABI 34).
 	float pwm_applied[MAX_ROTORS];
 	for (uint m = 0u; m < MAX_ROTORS; m++)
 		pwm_applied[m] = (P.decouple_outputs != 0u && m >= 1u) ? 0.0f : 0.5f;
@@ -1611,6 +1611,19 @@ kernel void controller_rollout(
 			sum_effort += se;
 		}
 
+		// DOB Fix A + ABI 34 PWM CONVENTION: pwm at this point is the FINAL
+		// COMMAND (trim + residual + hold resolved) and is what the observer
+		// reads next step as its u — stored BEFORE the actuator lag below. A
+		// flight controller with only an IMU knows its own command, not the
+		// rotor's lagged response (that needs RPM telemetry), and the CPU side
+		// (WnnController.pwm_applied via step()/observe_applied, the teachers'
+		// last_applied) has always held the command, because AttitudeSim::step
+		// lags internally. Until ABI 33 this store sat AFTER the lag, so under
+		// --motor-lag-s the GPU scorer's d̂ read post-lag u while the CPU trainer
+		// read the command (parity_lag_x_obs_pwm_dhat_cpu_vs_gpu). T=0 skips the
+		// filter, so the order swap is bit-identical there.
+		for (uint m = 0u; m < P.num_motors; m++)
+			pwm_applied[m] = pwm[m];
 		// MOTOR LAG (Molchanov eq. 7), applied to the FINAL command before the
 		// plant sees it — twin of AttitudeSim::apply_motor_lag. T<=0 => skipped
 		// entirely (bit-identical legacy path). T is the 2% SETTLING time, so
@@ -1631,11 +1644,6 @@ kernel void controller_rollout(
 				pwm[m] = motor_filt[m];
 			}
 		}
-		// DOB Fix A: pwm at this point is FINAL (trim + residual + lag + hold all
-		// resolved) — exactly what the RK4 below consumes. Next step's
-		// forward_state/derive_features reads it as the observer's u.
-		for (uint m = 0u; m < P.num_motors; m++)
-			pwm_applied[m] = pwm[m];
 		// ---- sim.step (RK4) --------------------------------------------------
 		float3 torque;
 		if (USE_GEOMETRY)

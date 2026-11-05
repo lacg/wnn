@@ -11384,11 +11384,134 @@ mod tests
 		// (With d̂=d the applied torque is −d/b ⇒ ω̇≈0.)
 	}
 
+	/// ABI 34: the GPU score rows for the lag x obs fixtures, digested to one u64.
+	fn lag_obs_gpu_rows(ev: &ControllerRolloutEvaluator, c: &WnnController, q0: &[f32], w0: &[f32], eps: usize, steps: usize, lag: f32) -> Vec<f64>
+	{
+		ev.score(
+			&[c], q0, w0, eps, steps,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD,
+			lag,
+			[0.0, 0.0, 0.0],
+			None, None, None, None, None,
+		)
+		.expect("gpu score (lag x obs)")[0]
+			.to_vec()
+	}
+
+	fn lag_obs_fixture(obs_pwm: bool) -> WnnController
+	{
+		let b = crate::controller::calibrate_control_gains_rs(
+			SIM_DT, SIM_ARM, SIM_KT, SIM_KD, SIM_INERTIA, SIM_G, 0.5, 0.05,
+		);
+		test_controller_dhat_pwm(0xA834, Some(b), false, obs_pwm)
+	}
+
+	fn digest_rows(rows: &[f64]) -> u64
+	{
+		let mut h = 0xcbf2_9ce4_8422_2325u64;
+		for v in rows
+		{
+			for b in v.to_bits().to_le_bytes()
+			{
+				h ^= b as u64;
+				h = h.wrapping_mul(0x0000_0100_0000_01B3);
+			}
+		}
+		h
+	}
+
+	/// ABI-33 digests of the T = 0 GPU score rows (d̂ observer on; obs_pwm off/on),
+	/// captured on the pre-change build (commit e56d6084). ABI 34 moved the
+	/// kernel's pwm_applied store ABOVE the lag filter; at T = 0 the filter is
+	/// skipped, so the rows must not move by a single bit.
+	const ABI33_T0_GPU_DIGESTS: [u64; 2] = [0xd1a0_5f5c_c870_4b19, 0x8c3c_cc0c_784d_df9c];
+
+	#[test]
+	fn t0_gpu_lag_obs_rows_bit_identical_to_abi33()
+	{
+		if std::env::var("WNN_SKIP_GPU_TESTS").is_ok()
+		{
+			return;
+		}
+		let ev = match ControllerRolloutEvaluator::new()
+		{
+			Ok(e) => e,
+			Err(_) => return,
+		};
+		let (num_eps, steps) = (8usize, 400usize);
+		let (q0, w0) = test_episodes(0xA833, num_eps);
+		let got: Vec<u64> = [false, true]
+			.iter()
+			.map(|&p| digest_rows(&lag_obs_gpu_rows(&ev, &lag_obs_fixture(p), &q0, &w0, num_eps, steps, 0.0)))
+			.collect();
+		assert_eq!(got, ABI33_T0_GPU_DIGESTS.to_vec(), "T=0 GPU rows moved vs ABI 33 (got {got:#x?})");
+	}
+
+	/// ABI 34 — LAG x OBS PARITY (finding 1 of the 05/11 flight-dynamics review).
+	/// Under motor lag the kernel stored pwm_applied AFTER the lag filter while the
+	/// CPU (WnnController.pwm_applied, the teachers' last_applied) held the
+	/// COMMANDED pwm, so the d̂ observer — the consumer of pwm_applied — read a
+	/// different u on the GPU scorer than on the CPU trainer. ONE convention now:
+	/// COMMANDED (what an IMU-only flight controller knows). Crossed with --obs-pwm
+	/// (whose accumulator is the commanded command on both sides) at
+	/// T ∈ {0, 0.15, 0.30}, against the PRODUCTION CPU scorer, all 5 metrics.
+	/// Non-vacuity: lag must move the GPU row, and the d̂ features must move it
+	/// at T > 0 (else the observer convention is untested).
+	#[test]
+	fn parity_lag_x_obs_pwm_dhat_cpu_vs_gpu()
+	{
+		if std::env::var("WNN_SKIP_GPU_TESTS").is_ok()
+		{
+			return;
+		}
+		let ev = match ControllerRolloutEvaluator::new()
+		{
+			Ok(e) => e,
+			Err(_) => return,
+		};
+		let (num_eps, steps) = (8usize, 400usize);
+		let (q0, w0) = test_episodes(0xA833, num_eps);
+		for obs_pwm in [false, true]
+		{
+			let mut c = lag_obs_fixture(obs_pwm);
+			let mut t0_row = Vec::new();
+			for lag in [0.0f32, 0.15, 0.30]
+			{
+				let cpu = cpu_scorer_row(&mut c, &q0, &w0, num_eps, steps, lag);
+				let gpu = lag_obs_gpu_rows(&ev, &c, &q0, &w0, num_eps, steps, lag);
+				for (i, name) in ["reward", "err", "stable", "jerk", "mono"].iter().enumerate()
+				{
+					assert_rel_close(gpu[i], cpu[i], 2e-2, 1e-4, &format!("obs_pwm={obs_pwm} lag={lag} {name}"));
+				}
+				assert!(cpu[1] > 1e-3, "lag={lag}: rollout has no attitude error (err={})", cpu[1]);
+				if lag == 0.0
+				{
+					t0_row = gpu.clone();
+				}
+				else
+				{
+					assert!(
+						(gpu[1] - t0_row[1]).abs() > 1e-6,
+						"obs_pwm={obs_pwm}: GPU lag={lag} scored like lag=0 — the filter is unreached"
+					);
+				}
+			}
+		}
+	}
+
 	fn test_controller_dhat(seed: u64, dhat_b: Option<[f64; 3]>, ff: bool) -> WnnController
+	{
+		test_controller_dhat_pwm(seed, dhat_b, ff, false)
+	}
+
+	/// test_controller_dhat with the --obs-pwm feature (and delta control, so the
+	/// accumulator it reads is a real state) switchable. obs_pwm = false is
+	/// test_controller_dhat exactly (same RNG stream, same feature count).
+	fn test_controller_dhat_pwm(seed: u64, dhat_b: Option<[f64; 3]>, ff: bool, obs_pwm: bool) -> WnnController
 	{
 		let (num_motors, levels, bpf, window, n_state, sbpn, obpn) =
 			(4usize, 4usize, 3usize, 2usize, 8usize, 8usize, 8usize);
-		let num_features = 9usize + if dhat_b.is_some() { 3 } else { 0 };
+		let num_features = 9usize + if dhat_b.is_some() { 3 } else { 0 } + if obs_pwm { num_motors } else { 0 };
 		let frame_bits = num_features * bpf;
 		let mut rng = SmallRng::seed_from_u64(seed);
 		// d̂ is small (rate-accel residual), so its thresholds must straddle a small
@@ -11425,7 +11548,7 @@ mod tests
 			thresholds,
 			state_connections,
 			output_connections,
-			false,
+			obs_pwm, // delta_control rides with obs_pwm (the production pairing)
 			0.15,
 			0.98,
 			1.0,
@@ -11434,7 +11557,7 @@ mod tests
 			false,
 			false,
 			false,
-			false,
+			obs_pwm,
 			false,
 			false,
 			0.99,
