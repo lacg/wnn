@@ -1,0 +1,9 @@
+{
+  "study": "CTRL-8 stage-2 A/B: arm (position inputs) vs position-blind twin, pop 50, ABI 33, k_d 0.78",
+  "decided": "2026-11-05 17:30 EST by Luiz at n=3 (s2-s4); s5/s6 cancelled (arm_s5 stopped at NEURONS gen 1)",
+  "verdict": "ADOPT position inputs (--obs-pos-err-xy --obs-vel-xy): the arm recipe is the CTRL-5 multi-axis anchor",
+  "basis": "rule_v2 step 1 (holistic): arm better on every attitude metric on every seed; stable and err CIs clear their margins; steady better on every seed",
+  "deviation_disclosed": "rule_v2's pre-registered n=3 STOP needed all three attitude CIs clear; steady CI [-1.63,-0.03] missed -0.10 deg. Luiz stopped at n=3 anyway (05/11) — report as n=3, stopped early by decision, not by the stopping rule.",
+  "paired_means_n3": {"stable_pp": [6.33, 3.99, 8.68], "err_deg": [-0.53, -0.84, -0.22], "steady_deg": [-0.83, -1.63, -0.03], "alt_m": [0.016, -0.055, 0.086], "pos3d_m": [-0.020, -0.064, 0.025], "dx_m": -0.026, "dy_m": -0.018},
+  "caveat": "part of the attitude gain is by construction: err/steady are measured vs the position loop's tilt reference, which a position-blind twin cannot know"
+}
