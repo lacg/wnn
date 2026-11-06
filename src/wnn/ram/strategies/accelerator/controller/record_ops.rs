@@ -88,17 +88,23 @@ pub struct CascadeDriver<'a>
 	pub cfg: &'a RewardGatedConfigPacked,
 	/// The action applied last step, for the mpcof observer (rollout twin).
 	pub last_applied: [f32; 4],
+	/// ABI 38: the teacher's cascade as it FLIES — its motor command, or for a CTBR
+	/// student its CTBR label through the student's own inner stage.
+	pub pilot: crate::episode_regime::ExpertPilot,
 }
 
 impl<'a> CascadeDriver<'a>
 {
-	pub fn new(teacher: &'a mut Teacher, cfg: &'a RewardGatedConfigPacked) -> Self
+	/// `student` is the controller being recorded: a CTBR student's teacher flies
+	/// through the student's inner stage (ExpertPilot).
+	pub fn new(teacher: &'a mut Teacher, cfg: &'a RewardGatedConfigPacked, student: &WnnController) -> Self
 	{
 		CascadeDriver {
 			teacher,
 			loops: OuterLoops::for_cfg(cfg),
 			cfg,
 			last_applied: [0.5; 4],
+			pilot: crate::episode_regime::ExpertPilot::for_controller(student),
 		}
 	}
 
@@ -106,8 +112,9 @@ impl<'a> CascadeDriver<'a>
 	{
 		self.teacher.observe(gyro, self.last_applied.map(|v| v as f64));
 		let pwm = self
-			.loops
-			.expert(self.teacher, sim, q, gyro, target, self.cfg.target_altitude)
+			.pilot
+			.command(&self.loops, self.teacher, sim, q, gyro, target, self.cfg.target_altitude)
+			.1
 			.map(|v| v as f32);
 		sim.step(pwm);
 		self.last_applied = pwm;
@@ -147,6 +154,7 @@ impl Driver<'_>
 			Driver::Cascade(c) =>
 			{
 				c.teacher.reset();
+				c.pilot.reset();
 				c.last_applied = [0.5; 4];
 			}
 			Driver::Alloc(_) => {}

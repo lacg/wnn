@@ -204,6 +204,158 @@ impl OuterLoops
 			_ => teacher.step_rs(q, gyro, target),
 		}
 	}
+
+	/// ABI 38 (CTRL-27): the CTBR twin of `expert` — the same outer loops (position
+	/// → tilt reference, altitude PD → collective deviation), with the attitude
+	/// teacher's OUTER decision as the label instead of its motor command:
+	/// [collective deviation, p, q, r] (Teacher::ctbr_label). `outer_steps` is the
+	/// student's outer period in physical ticks (its action_repeat).
+	#[allow(clippy::too_many_arguments)]
+	pub(crate) fn expert_ctbr(
+		&self,
+		teacher: &mut Teacher,
+		sim: &AttitudeSim,
+		q: [f32; 4],
+		gyro: [f32; 3],
+		target: [f32; 3],
+		target_altitude: f32,
+		outer_steps: usize,
+	) -> [f64; 4]
+	{
+		let alt_err = (target_altitude - sim.altitude_rs()) as f64;
+		let vz = sim.vertical_velocity_rs() as f64;
+		let coll = self.alt_pd.as_ref().map_or(0.0, |pd| pd.delta(alt_err, vz));
+		let tgt = match self.pos.as_ref()
+		{
+			// The full cascade: step_full_state's tilt reference, verbatim.
+			Some(pl) if self.alt_pd.is_some() =>
+			{
+				let [hx, hy] = sim.position_xy_rs();
+				let [hvx, hvy] = sim.velocity_xy_rs();
+				let (roll_ref, pitch_ref) = pl.tilt_ref((-hx) as f64, hvx as f64, (-hy) as f64, hvy as f64);
+				[roll_ref as f32, pitch_ref as f32, target[2]]
+			}
+			_ => target,
+		};
+		teacher
+			.ctbr_label(q, gyro, tgt, outer_steps, coll)
+			.expect("CTBR teacher validated before the first episode (validate_train_regime)")
+	}
+}
+
+/// ABI 38 (CTRL-27): what a training-cascade rollout FLIES when the teacher drives
+/// it — expert_drives (pure BC), the threshold-calibration sampler and the MEMORY
+/// recorder. On the motor path, the teacher's own motor command (`expert`). For a
+/// CTBR student, the teacher's CTBR label flown through the student's OWN inner
+/// stage at the student's outer rate (ctbr::CtbrOverRate) — so the cascade the
+/// student is calibrated, recorded and cloned on is the one it flies.
+pub(crate) struct ExpertPilot
+{
+	ctbr: Option<(crate::ctbr::CtbrOverRate, usize)>,
+}
+
+impl ExpertPilot
+{
+	pub(crate) fn for_controller(controller: &WnnController) -> Self
+	{
+		ExpertPilot {
+			ctbr: controller.ctbr_ref().map(|c| {
+				let hold = controller.action_repeat_n().max(1);
+				(crate::ctbr::CtbrOverRate::new(c.spec.rate_stage(), hold), hold)
+			}),
+		}
+	}
+
+	/// Episode start (the inner stage forgets its integrals, filters and clocks).
+	pub(crate) fn reset(&mut self)
+	{
+		if let Some((p, _)) = self.ctbr.as_mut()
+		{
+			p.reset();
+		}
+	}
+
+	/// The teacher's LABEL for this step (motor command, or CTBR bank vector) and
+	/// the pwm the teacher's cascade puts on the motors.
+	#[allow(clippy::too_many_arguments)]
+	pub(crate) fn command(
+		&mut self,
+		loops: &OuterLoops,
+		teacher: &mut Teacher,
+		sim: &AttitudeSim,
+		q: [f32; 4],
+		gyro: [f32; 3],
+		target: [f32; 3],
+		target_altitude: f32,
+	) -> ([f64; 4], [f64; 4])
+	{
+		match self.ctbr.as_mut()
+		{
+			Some((pilot, hold)) =>
+			{
+				let label = loops.expert_ctbr(teacher, sim, q, gyro, target, target_altitude, *hold);
+				(label, pilot.fly(label, gyro))
+			}
+			None =>
+			{
+				let pwm = loops.expert(teacher, sim, q, gyro, target, target_altitude);
+				(pwm, pwm)
+			}
+		}
+	}
+}
+
+/// ABI 38: the refusals a CTBR student adds to a training config — run BEFORE the
+/// first episode so no rollout can hit an undefined label mid-run.
+///   * every teacher the config can select must define a rate-level decision
+///     (Teacher::supports_ctbr: the firmware PID cascade, or mpcof);
+///   * the student's inner stage must BE the airframe's firmware rate loop — the
+///     config's own af_pid_* cascade (gains, saturation, hover, k_thrust, rate,
+///     filter): a student trained over one rate loop and labelled by a teacher
+///     whose cascade is another would imitate a controller it does not fly.
+pub(crate) fn validate_ctbr_regime(controller: &WnnController, cfg: &RewardGatedConfigPacked) -> Result<(), String>
+{
+	let Some(c) = controller.ctbr_ref()
+	else
+	{
+		return Ok(());
+	};
+	let s = &c.spec;
+	let main_hz = (1.0 / cfg.dt.max(1e-9)).round() as u32;
+	let same = s.rate_gains == cfg.af_pid_rate
+		&& s.out_limit_n == cfg.af_pid_out_limit_n
+		&& s.hover_n == cfg.af_pid_hover_n
+		// the packed config carries k_thrust as f32 (the plant's own precision)
+		&& s.k_thrust as f32 == cfg.af_k_thrust
+		&& s.attitude_hz == cfg.af_pid_attitude_hz
+		&& s.lpf_hz == cfg.af_pid_lpf_hz
+		&& s.main_loop_hz == main_hz;
+	if !same
+	{
+		return Err(format!(
+			"CTBR: the student's inner rate loop ({}) is not the training config's firmware cascade \
+			 (af_pid_rate/out_limit/hover_n/k_thrust/attitude_hz/lpf_hz, main loop {main_hz} Hz) — build the \
+			 CtbrSpec from the SAME airframe cascade the config carries",
+			s.provenance_line()
+		));
+	}
+	let af = crate::dagger_train::AirframeRs::from_cfg(cfg);
+	let mut ids: Vec<u8> = vec![cfg.teacher];
+	ids.extend(cfg.teacher_schedule.iter().copied());
+	ids.extend(cfg.teacher_blend.iter().copied());
+	ids.sort_unstable();
+	ids.dedup();
+	for id in ids
+	{
+		if !af.teacher(id).supports_ctbr()
+		{
+			return Err(format!(
+				"CTBR: teacher id {id} has no rate-level decision — the cascade's outer teachers are \
+				 0 (the firmware attitude PID, needs af_pid_* cascade gains) and 4 (mpcof)"
+			));
+		}
+	}
+	Ok(())
 }
 
 /// G5 (ABI 32): the attitude-error reference a config scores against — the

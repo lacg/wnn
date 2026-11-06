@@ -91,6 +91,9 @@ impl CalibEpisode<'_>
 	)
 	{
 		let collective = self.begin(controller, teacher, sim, rng);
+		// ABI 38: the teacher's cascade as it flies (a CTBR student's teacher flies
+		// through the student's own inner stage) — fresh per episode.
+		let mut pilot = crate::episode_regime::ExpertPilot::for_controller(controller);
 		let proxy_pwm = controller.obs_pwm_flag();
 		let mut prev_applied = [controller.collective_anchor(); 4];
 		let mut last_applied = [0.5f32; 4];
@@ -114,10 +117,8 @@ impl CalibEpisode<'_>
 			{
 				col.push(controller.last_feature_vector_ref()[f]);
 			}
-			let expert = self
-				.loops
-				.expert(teacher, sim, q, gyro, target, self.cfg.target_altitude);
-			let applied = expert.map(|v| v as f32);
+			let (_label, flown) = pilot.command(self.loops, teacher, sim, q, gyro, target, self.cfg.target_altitude);
+			let applied = flown.map(|v| v as f32);
 			controller.observe_applied(applied);
 			sim.step(applied);
 			prev_applied = applied;

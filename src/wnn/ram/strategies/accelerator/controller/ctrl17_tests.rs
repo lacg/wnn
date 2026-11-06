@@ -229,7 +229,7 @@ fn record_one(cfg: &RewardGatedConfigPacked, draws: &Stage1Cfg, cascade: bool) -
 	let mut pid = AttitudePidRs::new_default();
 	let mut d = if cascade
 	{
-		Driver::Cascade(CascadeDriver::new(&mut teacher, cfg))
+		Driver::Cascade(CascadeDriver::new(&mut teacher, cfg, &c))
 	}
 	else
 	{
@@ -273,7 +273,7 @@ pub(crate) fn record_universe_for(cfg: &RewardGatedConfigPacked, student: &crate
 	let mut sim = af.sim();
 	let mut c = student.clone();
 	let mut teacher = af.teacher(cfg.teacher);
-	let mut d = Driver::Cascade(CascadeDriver::new(&mut teacher, cfg));
+	let mut d = Driver::Cascade(CascadeDriver::new(&mut teacher, cfg, &c));
 	let mut draws = recorder_draws(if cfg.xy_offset > 0.0 { Some((0.3, -0.2)) } else { None });
 	for v in [&mut draws.init_z, &mut draws.init_vz, &mut draws.mass, &mut draws.collective_frac, &mut draws.init_x, &mut draws.init_y]
 	{

@@ -91,7 +91,7 @@ fn shape_gamma(t: f32, gamma: f32) -> f32
 }
 
 #[inline]
-fn decoded_to_delta(decoded: f32, delta_max: f32, n: f32, gamma: f32) -> f32
+pub(crate) fn decoded_to_delta(decoded: f32, delta_max: f32, n: f32, gamma: f32) -> f32
 {
 	let t = if decoded >= n
 	{
@@ -109,7 +109,7 @@ fn decoded_to_delta(decoded: f32, delta_max: f32, n: f32, gamma: f32) -> f32
 /// MUST invert the gamma shaping too — a DAgger label encoded with the wrong
 /// inverse teaches the student a delta it will never emit.
 #[inline]
-fn delta_to_decoded(delta: f32, delta_max: f32, n: f32, gamma: f32) -> f32
+pub(crate) fn delta_to_decoded(delta: f32, delta_max: f32, n: f32, gamma: f32) -> f32
 {
 	let d = delta.clamp(-delta_max, delta_max);
 	let t = shape_gamma(d / delta_max, 1.0 / gamma); // inverse of |t|^gamma
@@ -1830,6 +1830,67 @@ impl WnnController
 		Ok(())
 	}
 
+	/// ABI 38 (CTRL-27): make this a CASCADE controller (ctbr.rs). Refused on the
+	/// combinations the design rules out (docs/ctrl_cascade_design.md §1.2, §5.1):
+	///   * a non-quad airframe — the inner stage is the firmware '+' mixer;
+	///   * decouple_outputs — the banks are already the control axes;
+	///   * obs_pwm — it existed for the hidden delta accumulator and the lagged
+	///     actuator; absolute decode removes the first and the inner loop owns the
+	///     second (the outer loop's action no longer depends on motor state);
+	///   * the d̂ observer (dhat_b / dhat_ff) — the torque disturbance is the inner
+	///     integrator's job;
+	///   * delta_label_scale ≠ 1 — a motor-delta label knob with no CTBR meaning.
+	/// delta_control is allowed (the delta-law ablation).
+	pub(crate) fn enable_ctbr(&mut self, spec: crate::ctbr::CtbrSpec) -> Result<(), String>
+	{
+		let mut why = Vec::new();
+		if self.num_motors != 4
+		{
+			why.push(format!("num_motors = {} (the inner stage is the quad '+' mixer)", self.num_motors));
+		}
+		if self.decouple_outputs
+		{
+			why.push("decouple_outputs (the CTBR banks already are the control axes)".to_string());
+		}
+		if self.obs_pwm
+		{
+			why.push("obs_pwm (no hidden accumulator; the inner loop owns the actuator)".to_string());
+		}
+		if self.dhat_b.is_some() || self.dhat_ff
+		{
+			why.push("the d̂ observer (the inner rate integrator rejects torque disturbances)".to_string());
+		}
+		if self.delta_label_scale != 1.0
+		{
+			why.push(format!("delta_label_scale = {} (a motor-delta label knob)", self.delta_label_scale));
+		}
+		if !why.is_empty()
+		{
+			return Err(format!("CTBR (output_mode=ctbr) cannot be combined with: {}", why.join("; ")));
+		}
+		self.ctbr = Some(crate::ctbr::CtbrInner::new(spec)?);
+		// The accumulators are bank deviations from here on.
+		self.pwm.iter_mut().for_each(|v| *v = 0.0);
+		self.pwm_prev.iter_mut().for_each(|v| *v = 0.0);
+		Ok(())
+	}
+
+	/// The cascade state, None on the motor path — the GPU scorer's and the
+	/// trainers' view.
+	pub(crate) fn ctbr_ref(&self) -> Option<&crate::ctbr::CtbrInner>
+	{
+		self.ctbr.as_ref()
+	}
+
+	/// TEST-ONLY: the label-replay identity — the NEXT decision step holds `sp`
+	/// exactly (f64) instead of the decoded setpoint, as if the decode had produced
+	/// the teacher's label.
+	#[cfg(test)]
+	pub(crate) fn ctbr_inject_setpoint(&mut self, sp: [f64; 4])
+	{
+		self.ctbr_inject = Some(sp);
+	}
+
 	/// ABI 32: (kp, ki) of the attitude estimator, None when off — the GPU twin.
 	pub(crate) fn att_estimator_gains(&self) -> Option<(f32, f32)>
 	{
@@ -2434,6 +2495,9 @@ impl WnnController
 			integral_scale,
 			dt,
 			decouple_outputs,
+			ctbr: None,
+			#[cfg(test)]
+			ctbr_inject: None,
 			num_features,
 			integral_acc: vec![0.0f32; num_integral],
 			yaw_heading: 0.0,
@@ -3115,6 +3179,17 @@ pub struct WnnController
 	// num_motors==4. delta accumulator neutral: T→0.5 (hover), torques→0 (no rotation).
 	decouple_outputs: bool,
 
+	// --- ABI 38 (CTRL-27): the CASCADE output contract (ctbr.rs) ---
+	// Some ⇒ the 4 banks are [collective deviation, p_sp, q_sp, r_sp], decoded on
+	// the spec's per-bank range/γ, held across action-repeat, and flown every
+	// physical step through the firmware RATE PID (pid_firmware::RateStageFw) on
+	// the measured gyro. step() still returns 4 motor pwm, so every rollout host is
+	// unchanged. None ⇒ the motor-level controller, bit-identical to ABI 37
+	// (abi38_pins).
+	ctbr: Option<crate::ctbr::CtbrInner>,
+	#[cfg(test)]
+	ctbr_inject: Option<[f64; 4]>,
+
 	// --- H2: configurable error/integral observation features (18/06/2026) ---
 	// The base sensor frame is always the 9 raw values (NUM_FEATURES). These
 	// toggles APPEND derived error/integral features in a FIXED canonical order
@@ -3382,6 +3457,7 @@ impl WnnController
 		obs_att_estimator = false,
 		est_kp = 2.0,
 		est_ki = 0.1,
+		ctbr = None,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -3430,6 +3506,7 @@ impl WnnController
 		obs_att_estimator: bool,
 		est_kp: f32,
 		est_ki: f32,
+		ctbr: Option<crate::ctbr::CtbrSpec>,
 	) -> PyResult<Self>
 	{
 		let mut c = Self::new_core(
@@ -3483,7 +3560,34 @@ impl WnnController
 			c.enable_att_estimator(est_kp, est_ki)
 				.map_err(pyo3::exceptions::PyValueError::new_err)?;
 		}
+		// ABI 38: LAST, so its refusals see the finished configuration.
+		if let Some(spec) = ctbr
+		{
+			c.enable_ctbr(spec).map_err(pyo3::exceptions::PyValueError::new_err)?;
+		}
 		Ok(c)
+	}
+
+	/// ABI 38: "pwm" (motor-level, the ABI-37 lineage) or "ctbr" (the cascade).
+	#[getter]
+	pub fn output_mode(&self) -> &'static str
+	{
+		if self.ctbr.is_some() { "ctbr" } else { "pwm" }
+	}
+
+	/// ABI 38: the cascade contract this controller was built with (None ⇒ pwm).
+	#[getter]
+	pub fn ctbr_spec(&self) -> Option<crate::ctbr::CtbrSpec>
+	{
+		self.ctbr.as_ref().map(|c| c.spec.clone())
+	}
+
+	/// ABI 38: the setpoint the inner loop is tracking — [collective deviation,
+	/// p, q, r] of the last decision (None ⇒ pwm). Telemetry / label histograms.
+	#[getter]
+	pub fn ctbr_held_setpoint(&self) -> Option<[f64; 4]>
+	{
+		self.ctbr.as_ref().map(|c| c.held())
 	}
 
 	/// ABI 32: warm-start the attitude estimator from the episode's initial
@@ -3595,6 +3699,14 @@ impl WnnController
 	{
 		let a = pwm.clamp(0.0, 1.0);
 		self.collective_anchor = a;
+		// CTBR: the banks are deviations (accumulators stay at 0); the anchor moves
+		// the inner stage's operating point instead — the D0 transport onto the
+		// episode's commanded collective (ctbr.rs).
+		if let Some(c) = self.ctbr.as_mut()
+		{
+			c.set_anchor(a);
+			return;
+		}
 		for m in 0..self.num_motors
 		{
 			if self.decouple_outputs && m >= 1
@@ -3643,7 +3755,13 @@ impl WnnController
 		// at the anchor). STAGE 1: the anchor is the commanded collective, so the
 		// episode OPENS at hover instead of falling from step one; it is 0.5
 		// unless set_collective_anchor was called, keeping legacy runs identical.
-		let anchor = self.collective_anchor;
+		// ABI 38 CTBR: the accumulators are bank deviations (0) and the inner
+		// stage forgets the episode; the motor path below is untouched.
+		if let Some(c) = self.ctbr.as_mut()
+		{
+			c.reset();
+		}
+		let anchor = if self.ctbr.is_some() { 0.0 } else { self.collective_anchor };
 		for (m, v) in self.pwm.iter_mut().enumerate()
 		{
 			*v = if self.decouple_outputs && m >= 1
@@ -4096,10 +4214,18 @@ impl WnnController
 	/// MUST call this so the encode can never drift from decode_outputs again
 	/// (the absolute+decouple torque bug, 20/06/2026, was this drift across 6
 	/// duplicated sites).
+	///
+	/// ABI 38 CTBR: the label is a bank setpoint (collective deviation / body rate)
+	/// and encodes through the bank alphabet (CtbrSpec::encode) — delta or not, the
+	/// same absolute-label convention the motor delta path keeps.
 	#[inline]
-	fn output_decode_target(&self, motor: usize, target: f32) -> f32
+	pub(crate) fn output_decode_target(&self, motor: usize, target: f32) -> f32
 	{
-		if !self.delta_control && self.decouple_outputs && motor >= 1
+		if let Some(c) = self.ctbr.as_ref()
+		{
+			c.spec.encode(motor, target, self.neutral)
+		}
+		else if !self.delta_control && self.decouple_outputs && motor >= 1
 		{
 			(target * 0.5 + 0.5).clamp(0.0, 1.0)
 		}
@@ -4138,12 +4264,7 @@ impl WnnController
 			// the absolute PWM — matches what step() decodes.
 			let d_target = if self.delta_control
 			{
-				delta_to_decoded(
-					target_pwm[motor] - self.leaked_baseline(motor),
-					self.delta_max,
-					self.neutral,
-					self.delta_gamma,
-				)
+				self.delta_label_target(motor, target_pwm[motor] - self.leaked_baseline(motor))
 			}
 			else
 			{
@@ -4287,12 +4408,7 @@ impl WnnController
 			// absolute PWM. Then thermometer-encode it.
 			let d_target = if self.delta_control
 			{
-				delta_to_decoded(
-					target_pwm[m] - self.leaked_baseline(m),
-					self.delta_max,
-					self.neutral,
-					self.delta_gamma,
-				)
+				self.delta_label_target(m, target_pwm[m] - self.leaked_baseline(m))
 			}
 			else
 			{
@@ -5076,6 +5192,14 @@ impl WnnController
 				// (mirrors the GPU's `t`-indexed decode), so decision steps land on
 				// the same coin index CPU↔GPU regardless of the repeat cadence.
 				self.decode_step = self.decode_step.wrapping_add(1);
+				// CTBR: the HELD setpoint, flown through the inner rate loop on THIS
+				// tick's gyro — the rate loop is not held, only the outer decision.
+				if let Some(c) = self.ctbr.as_mut()
+				{
+					let pwm = c.fly(gyro).to_vec();
+					self.pwm_applied.clone_from(&pwm);
+					return pwm;
+				}
 				return self.last_pwm.clone();
 			}
 		}
@@ -5184,7 +5308,24 @@ impl WnnController
 		// 7. Strategy-5 decode → motor PWMs. delta-control applies the accumulator;
 		//    decouple_outputs (H3) decodes 4 CONTROLS then mixes to motors. See
 		//    decode_outputs() — the single source of truth (mirrored by the shader).
-		let mut pwm = self.decode_outputs();
+		// ABI 38 CTBR: decode the setpoint, hold it, fly it through the inner rate
+		// loop (decode_ctbr / ctbr.rs). The motor path is the decode_outputs branch.
+		let mut pwm = if self.ctbr.is_some()
+		{
+			let sp = self.decode_ctbr();
+			let c = self.ctbr.as_mut().expect("checked");
+			c.hold(sp);
+			#[cfg(test)]
+			if let Some(x) = self.ctbr_inject.take()
+			{
+				c.hold_exact(x);
+			}
+			c.fly(gyro).to_vec()
+		}
+		else
+		{
+			self.decode_outputs()
+		};
 		// OUTPUT-SIDE DOB: subtract the observer's feedforward from the POLICY's
 		// motors, exactly as optimal.rs::step_rs does for mpcof
 		// (u_cmd = u − clamp(d̂/b)), then re-mix through the same '+' convention the
@@ -5390,7 +5531,7 @@ impl WnnController
 				let in_out = self.build_output_input(&in_state, &frame, &new_state);
 
 				out_ins.push(in_out);
-				pwms.push(pid_pwms[ep][t]);
+				pwms.push(self.split_scan_label(pid_pwms[ep][t]));
 				ep_of.push(ep);
 				step_of.push(dec);
 				dec += 1;
@@ -5696,6 +5837,10 @@ impl WnnController
 		{
 			return Err(format!("delta_label_scale must be a positive finite number, got {s}"));
 		}
+		if self.ctbr.is_some() && s != 1.0
+		{
+			return Err(format!("delta_label_scale = {s}: a motor-delta label knob, refused under CTBR"));
+		}
 		self.delta_label_scale = s;
 		Ok(())
 	}
@@ -5728,11 +5873,83 @@ impl WnnController
 		if self.dagger_label_delta
 		{
 			let base = label_base.expect("dagger_label_delta: label_base checked at entry")[t][m];
-			delta_to_decoded(pid_pwms[t][m] - base, self.delta_max, self.neutral, self.delta_gamma)
+			self.delta_label_target(m, pid_pwms[t][m] - base)
 		}
 		else
 		{
 			self.output_decode_target(m, pid_pwms[t][m])
+		}
+	}
+
+	/// The label the state-split CONFLICT SCAN reads (spread vs tau, high/low split,
+	/// the accumulator correlation): the raw label on the motor path (bit-identical),
+	/// the bank's DECODE-space target under CTBR — the scan's tau and spreads are in
+	/// pwm-like [0,1] units, and a rate label in rad/s (±4.2) with a collective in pwm
+	/// (±0.25) is not one scale.
+	#[inline]
+	pub(crate) fn split_scan_label(&self, label: [f32; 4]) -> [f32; 4]
+	{
+		if self.ctbr.is_none()
+		{
+			return label;
+		}
+		let mut out = label;
+		for (m, v) in out.iter_mut().enumerate()
+		{
+			*v = self.output_decode_target(m, label[m]);
+		}
+		out
+	}
+
+	/// Flat labels (×4 per step) as the Metal RECORD kernel must see them — the
+	/// GPU twin of split_record's scan label (split_scan_label).
+	pub(crate) fn gpu_record_labels<'a>(&self, flat: &'a [f32]) -> std::borrow::Cow<'a, [f32]>
+	{
+		if self.ctbr.is_none()
+		{
+			return std::borrow::Cow::Borrowed(flat);
+		}
+		std::borrow::Cow::Owned(
+			flat
+				.chunks_exact(4)
+				.flat_map(|l| self.split_scan_label([l[0], l[1], l[2], l[3]]))
+				.collect(),
+		)
+	}
+
+	/// Flat labels as the Metal TRAIN kernel must see them, so its odt_train
+	/// (clamp / decouple-torque map) lands on output_decode_target EXACTLY:
+	///   * CTBR: the decode-space target (odt_train's clamp is then the identity);
+	///   * motor delta with delta_label_scale ≠ 1: neutral + s·(label − neutral),
+	///     computed HERE in the CPU's own f32 arithmetic — the kernel never scaled,
+	///     so the GPU split trained an unscaled label the CPU split never wrote
+	///     (bug found 06/11/2026 while building CTRL-27; reachable only with
+	///     WNN_CONTROLLER_GPU_TRAIN=1 + WNN_STATE_SPLIT=1 + --delta-label-scale);
+	///   * otherwise the labels untouched (bit-identical).
+	pub(crate) fn gpu_train_labels<'a>(&self, flat: &'a [f32]) -> std::borrow::Cow<'a, [f32]>
+	{
+		if self.ctbr.is_some()
+		{
+			return self.gpu_record_labels(flat);
+		}
+		if self.delta_control && self.delta_label_scale != 1.0
+		{
+			let (n, sc) = (self.neutral, self.delta_label_scale);
+			return std::borrow::Cow::Owned(flat.iter().map(|&p| n + sc * (p - n)).collect());
+		}
+		std::borrow::Cow::Borrowed(flat)
+	}
+
+	/// The raw decode target that makes bank `m` emit the per-step DELTA `delta`
+	/// (true-delta labels, the per-step trainers): the global delta alphabet on the
+	/// motor path, the bank's delta_max·range / γ alphabet under CTBR.
+	#[inline]
+	fn delta_label_target(&self, m: usize, delta: f32) -> f32
+	{
+		match self.ctbr.as_ref()
+		{
+			Some(c) => c.spec.encode_delta(m, delta, self.neutral, self.delta_max),
+			None => delta_to_decoded(delta, self.delta_max, self.neutral, self.delta_gamma),
 		}
 	}
 
@@ -5743,7 +5960,12 @@ impl WnnController
 	#[inline]
 	pub(crate) fn bank_anchor(&self, m: usize) -> f32
 	{
-		if self.decouple_outputs && m >= 1
+		// CTBR: every bank is a deviation around 0 (ctbr.rs "THE COORDINATES").
+		if self.ctbr.is_some()
+		{
+			0.0
+		}
+		else if self.decouple_outputs && m >= 1
 		{
 			0.0
 		}
@@ -5760,6 +5982,63 @@ impl WnnController
 		anchor + self.delta_leak * (self.pwm_prev[m] - anchor)
 	}
 
+	/// Bank `m`'s raw decode ∈ [0,1] from the last output cells. Mode-aware (ABI
+	/// 12): QUAD/TERNARY mean cell weight; BINARY antagonist 0.5 + (ΣE−ΣI)/levels.
+	/// QSR/PLN (is_stochastic) draw a FRESH per-timestep coin per level
+	/// (decode_motor_cells_coin) whose fire probability is the cell's deterministic
+	/// weight — E[coin]=weight, so the decode is an unbiased sample of the
+	/// QUAD/TERNARY sibling. See cell_mode.rs.
+	#[inline]
+	fn raw_bank_decode(&self, m: usize) -> f32
+	{
+		let start = m * self.levels_per_motor;
+		if crate::cell_mode::is_stochastic(self.memory_mode)
+		{
+			self.decode_motor_cells_coin(m)
+		}
+		else
+		{
+			decode_motor_cells(
+				&self.last_output_cells[start..start + self.levels_per_motor],
+				self.memory_mode,
+				self.output_decode,
+			)
+		}
+	}
+
+	/// ABI 38 CTBR decode: the 4 banks → [collective deviation, p, q, r] on the
+	/// spec's alphabet. ABSOLUTE by default (the untrained neutral is zero rate at
+	/// the anchor's collective — "hold zero body rate", stable over the inner loop
+	/// by construction); with delta_control (the ablation) a leaky per-bank
+	/// accumulator on a delta_max·range alphabet, clamped to ±range. self.pwm holds
+	/// the setpoint either way (the label baseline the delta label measures from).
+	fn decode_ctbr(&mut self) -> [f32; crate::ctbr::CTBR_BANKS]
+	{
+		if self.delta_control
+		{
+			self.pwm_prev.copy_from_slice(&self.pwm);
+		}
+		let mut sp = [0.0f32; crate::ctbr::CTBR_BANKS];
+		for (m, slot) in sp.iter_mut().enumerate()
+		{
+			let decoded = self.raw_bank_decode(m);
+			let spec = &self.ctbr.as_ref().expect("decode_ctbr: CTBR controller").spec;
+			let v = if self.delta_control
+			{
+				let r = spec.range[m];
+				let delta = spec.decode_delta(m, decoded, self.neutral, self.delta_max);
+				(self.leaked_baseline(m) + delta).clamp(-r, r)
+			}
+			else
+			{
+				spec.decode(m, decoded, self.neutral)
+			};
+			self.pwm[m] = v;
+			*slot = v;
+		}
+		sp
+	}
+
 	fn decode_outputs(&mut self) -> Vec<f32>
 	{
 		if self.delta_control
@@ -5769,24 +6048,7 @@ impl WnnController
 		let mut out = Vec::with_capacity(self.num_motors);
 		for m in 0..self.num_motors
 		{
-			let start = m * self.levels_per_motor;
-			// Mode-aware raw decode (ABI 12): QUAD/TERNARY mean cell weight;
-			// BINARY antagonist 0.5 + (ΣE−ΣI)/levels. QSR/PLN (is_stochastic) draw a
-			// FRESH per-timestep coin per level (decode_motor_cells_coin) whose fire
-			// probability is the cell's deterministic weight — E[coin]=weight, so the
-			// decode is an unbiased sample of the QUAD/TERNARY sibling. See cell_mode.rs.
-			let decoded = if crate::cell_mode::is_stochastic(self.memory_mode)
-			{
-				self.decode_motor_cells_coin(m)
-			}
-			else
-			{
-				decode_motor_cells(
-					&self.last_output_cells[start..start + self.levels_per_motor],
-					self.memory_mode,
-					self.output_decode,
-				)
-			};
+			let decoded = self.raw_bank_decode(m);
 			if self.decouple_outputs
 			{
 				// banks: 0=T (neutral 0.5, [0,1]); 1..=3 = torques (neutral 0, [-1,1]).

@@ -342,6 +342,69 @@ struct RolloutParams
 	att_est_on: u32,
 	est_kp: f32,
 	est_ki: f32,
+	// + 11 (ABI 38, CTRL-27 the cascade controller), appended in lockstep with the
+	// shader twin. ctbr_on=0 ⇒ the ABI-37 rollout. The inner rate stage reads the
+	// pidfw_* block (filled from the controller's CtbrSpec; residual is refused
+	// under CTBR so the block is free). See CtbrGpu.
+	ctbr_on: u32,
+	ctbr_range: [f32; 4],
+	ctbr_gamma: [f32; 4],
+	ctbr_hover_pwm: f32,
+	ctbr_outer_pid: u32,
+}
+
+/// ABI 38: the cascade controller as the score kernel needs it — the bank alphabet
+/// and the inner rate stage, derived from the controller's CtbrSpec through the
+/// SAME RateStageFw the CPU flies (gains, saturation, hover, decimation and the
+/// lpf2p coefficients are read off the Rust object, never re-derived).
+#[derive(Clone, Copy, PartialEq)]
+struct CtbrGpu
+{
+	range: [f32; 4],
+	gamma: [f32; 4],
+	hover_pwm: f32,
+	stage: PidFwCfg,
+}
+
+impl CtbrGpu
+{
+	fn from_controller(c: &WnnController) -> Option<Self>
+	{
+		let ct = c.ctbr_ref()?;
+		let rs = ct.spec.rate_stage();
+		let lpf = rs.lpf_coeffs();
+		let rate = rs.gains_flat();
+		Some(CtbrGpu {
+			range: ct.spec.range,
+			gamma: ct.spec.gamma,
+			hover_pwm: rs.hover_pwm() as f32,
+			stage: PidFwCfg {
+				att: [0.0; 12],
+				rate: std::array::from_fn(|i| rate[i] as f32),
+				out_limit_n: rs.out_limit_n() as f32,
+				hover_n: rs.hover_thrust_n() as f32,
+				k_thrust: rs.k_thrust() as f32,
+				decimation: rs.decimation(),
+				lpf: lpf.map_or([0.0; 5], |l| std::array::from_fn(|i| l[i] as f32)),
+				filter_on: lpf.is_some() as u32,
+			},
+		})
+	}
+}
+
+impl PartialEq for PidFwCfg
+{
+	fn eq(&self, o: &Self) -> bool
+	{
+		self.att == o.att
+			&& self.rate == o.rate
+			&& self.out_limit_n == o.out_limit_n
+			&& self.hover_n == o.hover_n
+			&& self.k_thrust == o.k_thrust
+			&& self.decimation == o.decimation
+			&& self.lpf == o.lpf
+			&& self.filter_on == o.filter_on
+	}
 }
 
 /// 06/11/2026: the thread-private capacities of controller_rollout.metal
@@ -374,6 +437,11 @@ pub struct ControllerRolloutEvaluator
 	// (HAS_GEOMETRY=true is implied — the legacy quad is `pipeline` above).
 	// RefCell: score() is &self and the evaluator is single-threaded per call.
 	geom_pipelines: std::cell::RefCell<std::collections::HashMap<u32, ComputePipelineState>>,
+	/// TEST-ONLY (ABI 38 label-replay identity on the GPU): Some(firmware attitude
+	/// gains) ⇒ a CTBR population's outer setpoint is the in-kernel firmware attitude
+	/// half (ctbr_outer_pid) instead of the WNN decode.
+	#[cfg(test)]
+	pub(crate) test_ctbr_outer_pid: std::cell::Cell<Option<[f32; 12]>>,
 }
 
 impl ControllerRolloutEvaluator
@@ -411,6 +479,8 @@ impl ControllerRolloutEvaluator
 			library,
 			pipeline,
 			geom_pipelines: std::cell::RefCell::new(std::collections::HashMap::new()),
+			#[cfg(test)]
+			test_ctbr_outer_pid: std::cell::Cell::new(None),
 		})
 	}
 
@@ -674,6 +744,33 @@ impl ControllerRolloutEvaluator
 				n_state, MAX_STATE_NEURONS_GPU
 			));
 		}
+		// ABI 38: the cascade contract, uniform across the population (a mixed batch
+		// would fly half of it through the wrong output law) and refused with the
+		// in-kernel blocks it cannot share the pidfw_* slots / '+' mixer with.
+		let ctbr = CtbrGpu::from_controller(controllers[0]);
+		if controllers.iter().any(|c| CtbrGpu::from_controller(c) != ctbr)
+		{
+			return Err("score_controllers_metal: the population mixes output modes / CTBR specs — score each \
+			            lineage separately"
+				.to_string());
+		}
+		if ctbr.is_some() && (residual.is_some() || geometry.is_some() || alloc_baseline.is_some())
+		{
+			return Err("score_controllers_metal: a CTBR (cascade) controller cannot be composed with the \
+			            residual baseline, an N-rotor geometry or the allocator (the inner stage is the quad \
+			            firmware rate loop)"
+				.to_string());
+		}
+		#[cfg(test)]
+		let outer_pid_att = self.test_ctbr_outer_pid.get();
+		#[cfg(not(test))]
+		let outer_pid_att: Option<[f32; 12]> = None;
+		// The pidfw_* block: the residual baseline's cascade, or the CTBR inner stage.
+		let fw: Option<PidFwCfg> = match ctbr
+		{
+			Some(ct) => Some(PidFwCfg { att: outer_pid_att.unwrap_or([0.0; 12]), ..ct.stage }),
+			None => residual.and_then(|r| r.cascade),
+		};
 		// Delta-control mode (uniform across the population) so the kernel decodes
 		// the SAME way step() does (was absolute-only → wrong for delta controllers).
 		let (delta_control, delta_max, delta_leak, delta_gamma) = controllers[0].delta_params();
@@ -930,7 +1027,9 @@ impl ControllerRolloutEvaluator
 				dist_dropout_len_steps: dist.map_or(0, |d| d.dropout_len_steps),
 				dist_obs_delay_steps: dist.map_or(0, |d| d.obs_delay_steps),
 				dist_torque_scale_jitter: dist.map_or(0.0, |d| d.torque_scale_jitter),
-				// Firmware cascade — off unless the residual config carries it.
+				// Firmware cascade — the residual baseline's (pidfw_on selects it in
+				// pid_step), or the CTBR inner stage's (pidfw_on stays 0: residual is
+				// refused under CTBR, and the inner stage is gated by ctbr_on).
 				pidfw_on: if residual.and_then(|r| r.cascade).is_some()
 				{
 					1
@@ -939,22 +1038,14 @@ impl ControllerRolloutEvaluator
 				{
 					0
 				},
-				pidfw_att: residual
-					.and_then(|r| r.cascade)
-					.map_or([0.0; 12], |c| c.att),
-				pidfw_rate: residual
-					.and_then(|r| r.cascade)
-					.map_or([0.0; 12], |c| c.rate),
-				pidfw_out_limit_n: residual
-					.and_then(|r| r.cascade)
-					.map_or(0.0, |c| c.out_limit_n),
-				pidfw_hover_n: residual.and_then(|r| r.cascade).map_or(0.0, |c| c.hover_n),
-				pidfw_k_thrust: residual.and_then(|r| r.cascade).map_or(0.0, |c| c.k_thrust),
-				pidfw_decimation: residual
-					.and_then(|r| r.cascade)
-					.map_or(1, |c| c.decimation.max(1)),
-				pidfw_lpf: residual.and_then(|r| r.cascade).map_or([0.0; 5], |c| c.lpf),
-				pidfw_filter_on: residual.and_then(|r| r.cascade).map_or(0, |c| c.filter_on),
+				pidfw_att: fw.map_or([0.0; 12], |c| c.att),
+				pidfw_rate: fw.map_or([0.0; 12], |c| c.rate),
+				pidfw_out_limit_n: fw.map_or(0.0, |c| c.out_limit_n),
+				pidfw_hover_n: fw.map_or(0.0, |c| c.hover_n),
+				pidfw_k_thrust: fw.map_or(0.0, |c| c.k_thrust),
+				pidfw_decimation: fw.map_or(1, |c| c.decimation.max(1)),
+				pidfw_lpf: fw.map_or([0.0; 5], |c| c.lpf),
+				pidfw_filter_on: fw.map_or(0, |c| c.filter_on),
 				// L1 d̂ observer — read from the controller itself (uniform across the
 				// population, like every other obs_* flag), so the kernel cannot use a
 				// b that disagrees with the one the CPU path computes features from.
@@ -987,6 +1078,11 @@ impl ControllerRolloutEvaluator
 				att_est_on: att_est.is_some() as u32,
 				est_kp: att_est.map_or(0.0, |(kp, _)| kp),
 				est_ki: att_est.map_or(0.0, |(_, ki)| ki),
+				ctbr_on: ctbr.is_some() as u32,
+				ctbr_range: ctbr.map_or([0.0; 4], |c| c.range),
+				ctbr_gamma: ctbr.map_or([1.0; 4], |c| c.gamma),
+				ctbr_hover_pwm: ctbr.map_or(0.0, |c| c.hover_pwm),
+				ctbr_outer_pid: (ctbr.is_some() && outer_pid_att.is_some()) as u32,
 			};
 
 			let b_q0 = self.buf(q0_chunk);
@@ -2389,7 +2485,10 @@ impl ControllerTrainer
 		let b_gy = self.buf(batch.gyros);
 		let b_ac = self.buf(batch.accels);
 		let b_tg = self.buf(batch.targets);
-		let b_pp = self.buf(batch.pid_pwms);
+		// ABI 38: the labels as the train kernel's odt_train must see them (CTBR decode-space
+		// targets; the motor delta-label scale pre-applied) — WnnController::gpu_train_labels.
+		let train_labels = controllers[0].gpu_train_labels(batch.pid_pwms);
+		let b_pp = self.buf(&train_labels[..]);
 		let b_mk = self.buf(&markers);
 		let b_ky = self.buf(&keys);
 		let b_vl = self.buf(&values);
@@ -2601,7 +2700,10 @@ impl ControllerTrainer
 		let b_gy = self.buf(batch.gyros);
 		let b_ac = self.buf(batch.accels);
 		let b_tg = self.buf(batch.targets);
-		let b_pp = self.buf(batch.pid_pwms);
+		// ABI 38: the scan label (CTBR decode space) — WnnController::gpu_record_labels,
+		// the GPU twin of split_record's split_scan_label.
+		let scan_labels = controllers[0].gpu_record_labels(batch.pid_pwms);
+		let b_pp = self.buf(&scan_labels[..]);
 		let b_ro = self.buf(&rec_out);
 		let b_rs = self.buf(&rec_state);
 		let b_rp = self.buf(&rec_pwm);
@@ -4156,6 +4258,35 @@ fn build_parity_fixture_mode(
 	output_decode: Option<u8>,
 ) -> Result<ParityFixture, String>
 {
+	build_parity_fixture_variant(seed_salt, memory_mode, output_decode, FixtureVariant::Legacy)
+}
+
+/// ABI 38: the split-parity fixture's output law. Legacy = the decoupled absolute
+/// controller every existing case flies (bit-identical); Ctbr = the cascade (the
+/// same fixture, motor banks → CTBR banks); DeltaScale = a delta student with
+/// delta_label_scale 2 (the GPU-split label-scale bug fixed 06/11/2026).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum FixtureVariant
+{
+	Legacy,
+	#[cfg(test)]
+	Ctbr,
+	#[cfg(test)]
+	DeltaScale,
+}
+
+fn build_parity_fixture_variant(
+	seed_salt: u64,
+	memory_mode: u8,
+	output_decode: Option<u8>,
+	variant: FixtureVariant,
+) -> Result<ParityFixture, String>
+{
+	let legacy = variant == FixtureVariant::Legacy;
+	#[cfg(test)]
+	let delta = variant == FixtureVariant::DeltaScale;
+	#[cfg(not(test))]
+	let delta = false;
 	let (num_motors, levels, n_state, sbpn, obpn, bpf, window) =
 		(4usize, 8usize, 8usize, 12usize, 12usize, 4usize, 4usize);
 	let num_features = 9usize; // no H2 extras
@@ -4187,7 +4318,7 @@ fn build_parity_fixture_mode(
 		thresholds,
 		state_conns,
 		output_conns,
-		false,
+		delta,
 		0.1,
 		0.95,
 		1.0,
@@ -4202,7 +4333,7 @@ fn build_parity_fixture_mode(
 		0.99,
 		1.0,
 		0.001,
-		true,
+		legacy, // decouple_outputs (the legacy fixture); off for the ABI-38 variants
 		1, // action_repeat: parity fixtures stay at N=1 (bit-identical anchor)
 		memory_mode,
 		output_decode,
@@ -4217,9 +4348,10 @@ fn build_parity_fixture_mode(
 		false, // stage-2 horizontal channel OFF
 		false, // output_full_window OFF (legacy layout)
 		1,     // frame_stride = 1 (legacy every-step window)
-		1.0,   // delta_label_scale = 1 (legacy label)
+		if delta { 2.0 } else { 1.0 }, // delta_label_scale (2 only for DeltaScale)
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
+		fixture_ctbr(variant),
 	)
 	.map_err(|e| format!("{e}"))?;
 	for _ in 0..(n_state * 4)
@@ -4301,6 +4433,18 @@ fn build_parity_fixture_mode(
 		att_up: vec![0.0; total_steps * 3],
 		cpu_obs,
 	})
+}
+
+#[cfg(test)]
+fn fixture_ctbr(variant: FixtureVariant) -> Option<crate::ctbr::CtbrSpec>
+{
+	(variant == FixtureVariant::Ctbr).then(crate::abi38_tests::spec)
+}
+
+#[cfg(not(test))]
+fn fixture_ctbr(_variant: FixtureVariant) -> Option<crate::ctbr::CtbrSpec>
+{
+	None
 }
 
 fn controller_train_parity_once(selective: bool) -> Result<(usize, usize, usize), String>
@@ -5243,23 +5387,40 @@ pub fn run_controller_split_train_loop_parity_test() -> Vec<(String, bool, Strin
 	}
 	// coarse_target>0 keeps BOTH sides on the coarse scan path (the parity-proven
 	// twin); larger targets coarsen harder → surface conflicts → exercise planting
-	// + output retrain across the full loop (coarse=8/12/16 all plant on the fixture).
+	// + output retrain across the full loop. Every case must PLANT (split_parity_salt
+	// picks a planting fixture per coarse target); a non-planting case fails.
 	// Modes: QUAD(2) is the bit-identical anchor across all 4 configs; TERNARY(0)
 	// and BINARY(3) each get one selective + one non-selective config (split-trainer
 	// T/B support, Luiz 12/07/2026 — plant_cell + mode-aware retrain must twin).
 	for &(selective, coarse_target, mode, decode) in SPLIT_TRAIN_PARITY_CASES
 	{
-		match controller_split_train_loop_parity_once(selective, coarse_target, 0xF0_0DAEu64 ^ ((coarse_target as u64) << 8), mode, decode) {
+		match controller_split_train_loop_parity_once(selective, coarse_target, split_parity_salt(coarse_target), mode, decode) {
 			Ok((s_mism, o_mism, planted, s_addr, o_addr)) => {
 				let dec = match decode { Some(1) => "antagonist", Some(0) => "cumulative", _ => "mode-default" };
 				let name = format!("controller_split_train_loop_parity(selective={selective}, coarse={coarse_target}, mode={mode}, decode={dec})");
-				results.push((name, s_mism == 0 && o_mism == 0, format!(
+				// A case that plants nothing compares two empty memories — it cannot
+				// fail. Until 06/11/2026 the coarse 12/16 cases did exactly that.
+				results.push((name, s_mism == 0 && o_mism == 0 && planted > 0 && o_addr > 0, format!(
 					"planted={planted}, state_addrs={s_addr} state_mismatch={s_mism}, output_addrs={o_addr} output_mismatch={o_mism}")));
 			}
 			Err(e) => results.push((format!("controller_split_train_loop_parity(selective={selective}, coarse={coarse_target}, mode={mode}, decode={decode:?})"), false, e)),
 		}
 	}
 	results
+}
+
+/// The split-parity fixture salt per coarse target. The coarse 12/16 cases used the
+/// bare 0xF0_0DAE ^ coarse<<8 salt and planted NOTHING (a vacuous pass, found
+/// 06/11/2026); these are the first planting salts of that family (k << 20).
+pub(crate) fn split_parity_salt(coarse_target: usize) -> u64
+{
+	let k: u64 = match coarse_target
+	{
+		12 => 1,
+		16 => 3,
+		_ => 0,
+	};
+	0xF0_0DAEu64 ^ ((coarse_target as u64) << 8) ^ (k << 20)
 }
 
 fn controller_split_train_loop_parity_once(
@@ -5270,14 +5431,26 @@ fn controller_split_train_loop_parity_once(
 	output_decode: Option<u8>,
 ) -> Result<(usize, usize, usize, usize, usize), String>
 {
+	controller_split_train_loop_parity_variant(selective, coarse_target, salt, memory_mode, output_decode, FixtureVariant::Legacy)
+}
+
+pub(crate) fn controller_split_train_loop_parity_variant(
+	selective: bool,
+	coarse_target: usize,
+	salt: u64,
+	memory_mode: u8,
+	output_decode: Option<u8>,
+	variant: FixtureVariant,
+) -> Result<(usize, usize, usize, usize, usize), String>
+{
 	// Loosened clean_gain/accum_corr (vs production 0.999/0.9) so the synthetic
 	// random fixture actually plants latches/counters/bidir chains — exercising the
 	// full resolve+retrain machinery the parity must cover. Parity is threshold-
 	// agnostic (it's the same decision both sides).
 	let (tau, clean_gain, accum_corr, max_rounds, k_start) = (0.1f32, 0.7f32, 0.6f32, 6usize, 1usize);
 	// Two identical controllers from the same deterministic fixture seed.
-	let f_cpu = build_parity_fixture_mode(salt, memory_mode, output_decode)?;
-	let f_gpu = build_parity_fixture_mode(salt, memory_mode, output_decode)?;
+	let f_cpu = build_parity_fixture_variant(salt, memory_mode, output_decode, variant)?;
+	let f_gpu = build_parity_fixture_variant(salt, memory_mode, output_decode, variant)?;
 	let mut c_cpu = f_cpu.c;
 	let c_gpu = f_gpu.c;
 	let (num_motors, levels, n_state, ..) = c_gpu.gpu_dims();
@@ -6038,6 +6211,7 @@ fn controller_plant_latch_parity_once(high_on: bool) -> Result<(usize, usize, us
 		1.0,   // delta_label_scale = 1 (legacy label)
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
+		None, // ctbr OFF (ABI 38: the motor-level controller)
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -6230,6 +6404,7 @@ fn controller_plant_counter_parity_once() -> Result<(usize, usize, usize), Strin
 		1.0,   // delta_label_scale = 1 (legacy label)
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
+		None, // ctbr OFF (ABI 38: the motor-level controller)
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -6410,6 +6585,7 @@ fn controller_plant_bidir_parity_once() -> Result<(usize, usize, usize), String>
 		1.0,   // delta_label_scale = 1 (legacy label)
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
+		None, // ctbr OFF (ABI 38: the motor-level controller)
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7081,7 +7257,7 @@ fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool)
 		2, None, None, 0.05, false, 0.30,
 		false, false, false,
 		false, false,
-		false, 1, 1.0, false, false, 2.0, 0.1,
+		false, 1, 1.0, false, false, 2.0, 0.1, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7232,7 +7408,7 @@ fn controller_record_att_est_parity_once() -> Result<(usize, usize, usize, bool)
 		false, false, false,
 		false, false,
 		false, 1, 1.0, false,
-		true, 2.0, 0.1, // obs_att_estimator ON
+		true, 2.0, 0.1, None, // obs_att_estimator ON; ctbr OFF
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7366,7 +7542,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 		2, None, None, 0.05, false, 0.30,
 		true, true, true, // stage-1 vertical channel ON
 		false, false,     // stage-2 horizontal OFF
-		false, 1, 1.0, false, false, 2.0, 0.1,
+		false, 1, 1.0, false, false, 2.0, 0.1, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7723,7 +7899,9 @@ mod tests
 		// + 10 (ABI 32, 31/10/2026) = 143: imu_specific_force(1) + rotor_drag(1) +
 		// att_ref_on(1) + att_ref_bxy/omega/zeta/max_tilt(4) + att_est_on(1) +
 		// est_kp(1) + est_ki(1). Same lockstep rule.
-		assert_eq!(mem::size_of::<RolloutParams>(), 143 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
+		// + 11 (ABI 38 CTBR): ctbr_on(1) + ctbr_range(4) + ctbr_gamma(4) +
+		// ctbr_hover_pwm(1) + ctbr_outer_pid(1). Same lockstep rule.
+		assert_eq!(mem::size_of::<RolloutParams>(), 154 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============
@@ -8313,6 +8491,111 @@ mod tests
 			gpu[0][2]
 		);
 	}
+	/// ABI 38 pin: the GPU residual firmware-cascade rows (pidfw_step, which ABI 38
+	/// splits into an attitude half and a rate half for the cascade controller) at
+	/// decimation 2 and 10, captured on the ABI-37 kernel (15d5bbf0) before the
+	/// split. Not a bit may move.
+	const ABI37_GPU_PIDFW_ROWS: [u64; 2] = [0x3c0f_f20c_e3de_b130, 0x7d9c_76ce_bc6b_6ebb];
+
+	#[test]
+	fn abi38_gpu_pidfw_residual_rows_bit_identical_to_abi37()
+	{
+		if std::env::var("WNN_SKIP_GPU_TESTS").is_ok() || Device::system_default().is_none()
+		{
+			return;
+		}
+		let (num_eps, steps) = (8usize, 2000usize);
+		let (q0, w0) = test_episodes(0xF19FA, num_eps);
+		let ev = ControllerRolloutEvaluator::new().expect("evaluator");
+		let mut got = Vec::new();
+		for decimation in [2u32, 10u32]
+		{
+			let c = test_controller(4, 0xC5, false);
+			let residual = ResidualCfg { scale: 1.0, clamp: 0.4, pid: [0.0; 10], cascade: Some(bl_pidfw_cfg(decimation)) };
+			let gpu = ev
+				.score(&[&c], &q0, &w0, num_eps, steps, (SIM_DT, BL_ARM, BL_KT, BL_INERTIA, SIM_G), BL_KD, 0.20, [0.0; 3], None, Some(residual), None, None, None)
+				.expect("gpu score");
+			got.push(digest_rows(&gpu[0]));
+		}
+		eprintln!("[abi38-pin] gpu pidfw residual rows {got:#018x?}");
+		assert_eq!(got[..], ABI37_GPU_PIDFW_ROWS[..], "GPU residual firmware cascade moved vs ABI 37");
+	}
+
+	/// ABI 38 LABEL-REPLAY IDENTITY on the GPU (design §2.1): a cascade population
+	/// whose outer setpoint is the kernel's firmware ATTITUDE half (ctbr_outer_pid —
+	/// "a decode equal to the PID teacher's label") flown through the CTBR rate half
+	/// scores like the firmware cascade itself (the residual baseline with a zero
+	/// residual), at lag 0 and 0.20, with L4C-like weather. To f32 ROUNDING, not
+	/// bit-exact: the residual's pidfw_step keeps its ABI-37 fused text (pinned) and
+	/// Metal contracts the split halves differently (measured worst rel 2.2e-7 over
+	/// 2000 steps). The CPU identity (abi38_tests::label_replay_identity_cpu) is
+	/// bit-exact.
+	#[test]
+	fn abi38_gpu_label_replay_identity()
+	{
+		if std::env::var("WNN_SKIP_GPU_TESTS").is_ok() || Device::system_default().is_none()
+		{
+			return;
+		}
+		let (num_eps, steps) = (8usize, 2000usize);
+		let (q0, w0) = test_episodes(0xF19FA, num_eps);
+		let ev = ControllerRolloutEvaluator::new().expect("evaluator");
+		let rs = bl_pidfw_rs(2);
+		let spec = crate::ctbr::CtbrSpec {
+			rate_gains: [
+				0.0349711022, 0.0699422043, 0.000437138777, 0.581194641, 0.0349711022, 0.0699422043, 0.000437138777,
+				0.581194641, 0.0209826613, 0.00292008703, 0.0, 2.90946386,
+			],
+			out_limit_n: 0.0999984741,
+			hover_n: BL_HOVER_N as f64,
+			k_thrust: BL_KT as f64,
+			main_loop_hz: 1000,
+			attitude_hz: 500.0,
+			lpf_hz: 30.0,
+			range: [0.25, 4.2, 4.2, 1.6],
+			gamma: [1.0, 2.0, 2.0, 2.0],
+		};
+		assert_eq!(spec.rate_stage().decimation(), rs.decimation());
+		let att = bl_pidfw_cfg(2).att;
+		let dist = crate::controller::Disturbance {
+			tau_bias: [0.0; 3],
+			gust_sigma: 0.0,
+			gust_tau_c: 0.1,
+			motor_asym: [1.12, 0.9, 1.05, 0.95],
+			gyro_sigma: 0.0107,
+			gyro_bias_walk: 3.9e-5,
+			accel_sigma: 0.126,
+			dropout_prob: 0.0,
+			dropout_len_steps: 0,
+			obs_delay_steps: 0,
+			torque_scale_jitter: 0.2,
+			seed: 99,
+		};
+		for lag in [0.0f32, 0.20]
+		{
+			let mut cascade = test_controller(4, 0xC5, false);
+			cascade.enable_ctbr(spec.clone()).expect("ctbr");
+			// The residual reference flies the SAME f32 stage the CTBR kernel is handed.
+			let stage = CtbrGpu::from_controller(&cascade).expect("ctbr gpu").stage;
+			let plain = test_controller(4, 0xC5, false);
+			let residual = ResidualCfg { scale: 1.0, clamp: 0.4, pid: [0.0; 10], cascade: Some(PidFwCfg { att, ..stage }) };
+			let reference = ev
+				.score(&[&plain], &q0, &w0, num_eps, steps, (SIM_DT, BL_ARM, BL_KT, BL_INERTIA, SIM_G), BL_KD, lag, [0.0; 3], Some(dist), Some(residual), None, None, None)
+				.expect("residual score");
+			ev.test_ctbr_outer_pid.set(Some(att));
+			let got = ev
+				.score(&[&cascade], &q0, &w0, num_eps, steps, (SIM_DT, BL_ARM, BL_KT, BL_INERTIA, SIM_G), BL_KD, lag, [0.0; 3], Some(dist), None, None, None, None)
+				.expect("ctbr score");
+			ev.test_ctbr_outer_pid.set(None);
+			eprintln!("[abi38] GPU identity T={lag}: err {:.6}/{:.6} stable {}/{}", got[0][1], reference[0][1], got[0][2], reference[0][2]);
+			let worst = got[0].iter().zip(&reference[0]).map(|(a, b)| ((a - b).abs() / b.abs().max(1e-12), a, b)).fold((0.0f64, 0.0, 0.0), |m, (r, a, b)| if r > m.0 { (r, *a, *b) } else { m });
+			eprintln!("[abi38] GPU identity T={lag}: worst rel diff {:.3e} ({} vs {})", worst.0, worst.1, worst.2);
+			assert!(reference[0][1] > 1e-4 && reference[0][2] > 0.5, "vacuous reference rollout");
+			assert_eq!(got[0][2], reference[0][2], "T={lag}: stable fraction differs");
+			assert!(worst.0 < 1e-6, "T={lag}: GPU cascade departs from the GPU firmware cascade (rel {:.3e})", worst.0);
+		}
+	}
+
 	// SENSITIVITY, MEASURED BY MUTATION (05/08/2026) — recorded so nobody assumes more
 	// coverage than this test has:
 	//   - GPU filter_on 1 -> 0 (CPU oracle unchanged): FAILS. Good; the filter is the term

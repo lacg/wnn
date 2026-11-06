@@ -1312,6 +1312,10 @@ pub struct AttitudeMpcRs
 	/// ABI 34: Some ⇔ motor lag on — the prediction model is the 9-state
 	/// augmented one and x0 carries this actuator estimate. (MpcOf feeds it too.)
 	act: Option<ActuatorLag>,
+	/// ABI 38: the discrete design model the horizon QP was condensed from, kept so
+	/// the CTBR label can roll the plan forward (planned_rate).
+	ad: Mat,
+	bd: Mat,
 }
 
 /// One recorded horizon solve (test-only probe).
@@ -1491,7 +1495,41 @@ impl AttitudeMpcRs
 			#[cfg(test)]
 			probe: None,
 			act: None,
+			ad: ad.clone(),
+			bd: bd.clone(),
 		}
+	}
+
+	/// ABI 38 (CTRL-27): the MPC's decision at the RATE level — the body rate the
+	/// current plan U* (u_buf, the last solve's) reaches `n_o` model steps ahead of
+	/// x0 on the design model (ad, bd): x_{k+1} = ad·x_k + bd·u_k. With the
+	/// lag-aware 9-state model the actuator lag is inside the prediction. The state
+	/// layout is [angle err, rate, (ua)] in both models, so the rate is x[3..6].
+	/// n_o is clipped to [1, horizon] (the plan does not exist past it).
+	pub(crate) fn planned_rate(&self, x0: &[f64], n_o: usize) -> [f64; 3]
+	{
+		let ns = self.ad.r;
+		debug_assert_eq!(x0.len(), ns, "planned_rate: x0 is not the design model's state");
+		let mut x = x0.to_vec();
+		let mut nx = vec![0.0f64; ns];
+		for k in 0..n_o.clamp(1, self.n)
+		{
+			for (i, slot) in nx.iter_mut().enumerate()
+			{
+				let mut acc = 0.0f64;
+				for (j, xj) in x.iter().enumerate()
+				{
+					acc += self.ad.get(i, j) * xj;
+				}
+				for j in 0..3
+				{
+					acc += self.bd.get(i, j) * self.u_buf[3 * k + j];
+				}
+				*slot = acc;
+			}
+			std::mem::swap(&mut x, &mut nx);
+		}
+		[x[3], x[4], x[5]]
 	}
 
 	/// ABI 34: the pwm applied last step → actuator estimate (no-op without lag).
@@ -1862,6 +1900,41 @@ impl AttitudeMpcOfRs
 		mix_to_motors_f64(self.hover, u_cmd[0], u_cmd[1], u_cmd[2])
 	}
 
+	/// ABI 38 (CTRL-27, Luiz 06/11: the cascade's DEFAULT outer teacher): the
+	/// offset-free MPC's attitude decision expressed as a BODY-RATE setpoint — the
+	/// rate its plan reaches one outer period (`n_o` model steps) ahead
+	/// (AttitudeMpcRs::planned_rate; docs/ctrl_cascade_design.md §2.2).
+	///
+	/// The plan is the SAME horizon solve step_rs makes (warm start advances
+	/// identically). Lag-free: planned from x0 on the nominal model — the realised
+	/// net torque b·(u − u_ff) + d ≈ b·u, so the plan is the expected trajectory.
+	/// Lag-aware: from z0 = [x0, ua + u_ff], the disturbance-shifted actuator state
+	/// (step_lagged's coordinates); ua is what the observer saw the INNER loop
+	/// deliver, so there is no first-decision fixed point here — the vehicle's first
+	/// command comes from the rate loop, not from this law. observe() is unchanged:
+	/// d̂ and the actuator estimate keep reading the applied (inner-loop) pwm.
+	pub(crate) fn ctbr_rate(&mut self, q: [f32; 4], gyro: [f32; 3], target_rpy: [f32; 3], n_o: usize) -> [f64; 3]
+	{
+		let x = state_error(q, gyro, target_rpy);
+		let z: Vec<f64> = match self.mpc.act.as_ref()
+		{
+			Some(act) =>
+			{
+				let ua = act.state();
+				let mut z = x.to_vec();
+				for axis in 0..3
+				{
+					let u_ff = clamp_f64(self.dhat[axis] / self.b[axis], -self.ff_clamp, self.ff_clamp);
+					z.push(ua[axis] + u_ff);
+				}
+				z
+			}
+			None => x.to_vec(),
+		};
+		let _ = self.mpc.step_axes_rs(&z);
+		self.mpc.planned_rate(&z, n_o)
+	}
+
 	/// The observer state (per-axis d̂) — the Option-A --state-integral target
 	/// analog (this IS the teacher's accumulated memory).
 	pub fn integrals(&self) -> [f32; 3]
@@ -2186,6 +2259,50 @@ impl Teacher
 		let (roll_ref, pitch_ref) = pos.tilt_ref(err_x, vx, err_y, vy);
 		let target_rpy = [roll_ref as f32, pitch_ref as f32, yaw_ref];
 		self.step_with_collective(q, gyro, target_rpy, pd, alt_err, vz)
+	}
+
+	/// ABI 38 (CTRL-27): the teacher's OUTER decision in the cascade's bank
+	/// coordinates, [collective deviation, p_sp, q_sp, r_sp] (ctbr.rs). The
+	/// collective is the caller's (the altitude PD's deviation — the same term
+	/// step_with_collective adds; 0 without translation). The rates are:
+	///   * PidFw — the firmware ATTITUDE stage on its own 500 Hz schedule, held
+	///     between updates (AttitudePidFirmwareRs::att_stage_step): exactly the
+	///     rate_sp the cascade hands its rate stage, so the label-replay identity
+	///     holds (design §2.1);
+	///   * MpcOf — the plan's body rate `outer_steps` ahead (§2.2);
+	///   * every other teacher — refused (no rate-level decision is defined).
+	/// Call EVERY physical step in place of step_rs (the teacher's internal clocks
+	/// run exactly as in training); observe() is unchanged.
+	pub fn ctbr_label(
+		&mut self,
+		q: [f32; 4],
+		gyro: [f32; 3],
+		target_rpy: [f32; 3],
+		outer_steps: usize,
+		coll_dev: f64,
+	) -> Result<[f64; 4], String>
+	{
+		let r = match self
+		{
+			Teacher::PidFw(p) => p.att_stage_step(
+				[q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64],
+				[target_rpy[0] as f64, target_rpy[1] as f64, target_rpy[2] as f64],
+			),
+			Teacher::MpcOf(m) => m.ctbr_rate(q, gyro, target_rpy, outer_steps),
+			Teacher::Pid(_) => return Err("CTBR teacher 'pid' needs the airframe's firmware cascade gains (the legacy single-loop PID has no attitude stage)".into()),
+			Teacher::Lqr(_) | Teacher::Mpc(_) | Teacher::Lqi(_) =>
+			{
+				return Err("CTBR outer-loop teachers are pid (firmware attitude stage) and mpcof (planned body rate) — lqr/mpc/lqi define no rate-level decision".into())
+			}
+		};
+		Ok([coll_dev, r[0], r[1], r[2]])
+	}
+
+	/// Whether `ctbr_label` is defined for this teacher (the validation every CTBR
+	/// host runs BEFORE its first episode).
+	pub fn supports_ctbr(&self) -> bool
+	{
+		matches!(self, Teacher::PidFw(_) | Teacher::MpcOf(_))
 	}
 
 	/// Feed the observer teachers the (gyro, actually-applied motor PWMs) pair

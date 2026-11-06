@@ -244,7 +244,7 @@ pub(crate) fn rival(teacher: u8, lag: f32) -> (f64, f64, f64, f64, f64, f64, f64
 		true, 0.0, s1.init_z.clone(), s1.init_vz.clone(), s1.mass.clone(), s1.collective_frac.clone(),
 		2.0, 1.0, 0.25,
 		s1.init_x.clone(), s1.init_y.clone(), 1.0, 1.0, 0.5236,
-		lag, false, 0.0, true,
+		lag, false, 0.0, true, 0,
 	)
 	.expect("rival must score")
 }

@@ -176,12 +176,82 @@ impl PidCh
 	}
 }
 
-/// The cascade. Construct with SI gains; `step_rs` takes the sim's state and returns the
-/// 4 PWMs `AttitudeSim` expects, in its '+' motor order.
+/// The ATTITUDE stage of the firmware cascade (attitude_pid_controller.c's angle
+/// loop): Euler angle error -> body-rate setpoint (rad/s), per axis, at attitude_hz.
+///
+/// ABI 38 (CTRL-27): split out of `AttitudePidFirmwareRs` so the cascade controller
+/// can put the WNN where this stage was (the student emits the rate setpoint) and
+/// keep the RATE stage below it verbatim. It is also the C2 rival's outer loop and
+/// the PID teacher's CTBR label (`Teacher::ctbr_label`).
 #[derive(Clone, Copy, Debug)]
-pub struct AttitudePidFirmwareRs
+pub struct AttStageFw
 {
 	att: [PidCh; 3],
+}
+
+impl AttStageFw
+{
+	fn new(att: [SiAxis; 3], dt: f64) -> Self
+	{
+		// attFiltEnable is false in firmware and the attitude D-term is stable
+		// unfiltered (roll/pitch kd = 0 anyway), so the attitude loop is unfiltered.
+		AttStageFw {
+			att: [
+				PidCh::new(att[0], dt, 0.0, None),
+				PidCh::new(att[1], dt, 0.0, None),
+				PidCh::new(att[2], dt, 0.0, None),
+			],
+		}
+	}
+
+	pub fn reset(&mut self)
+	{
+		for c in self.att.iter_mut()
+		{
+			c.reset();
+		}
+	}
+
+	/// One attitude-loop update: the rate setpoint per axis. attitude_pid_controller.c
+	/// hands the attitude PID the ACTUAL angle as its measurement, so its D-term
+	/// differentiates the angle — matters for yaw alone (kd 0.35). Only yaw wraps.
+	pub fn update(&mut self, q: [f64; 4], target_rpy: [f64; 3]) -> [f64; 3]
+	{
+		let rpy = quat_to_euler(q);
+		let mut sp = [0.0f64; 3];
+		for i in 0..3
+		{
+			sp[i] = self.att[i].update(target_rpy[i], rpy[i], i == 2);
+		}
+		sp
+	}
+
+	fn integrals_f32(&self) -> [f32; 3]
+	{
+		[self.att[0].integ as f32, self.att[1].integ as f32, self.att[2].integ as f32]
+	}
+
+	fn i_clamps_f32(&self) -> [f32; 3]
+	{
+		let one = |v: f64| if v == 0.0 { 1.0f32 } else { v as f32 };
+		[one(self.att[0].g.i_limit), one(self.att[1].g.i_limit), one(self.att[2].g.i_limit)]
+	}
+}
+
+/// The RATE stage of the firmware cascade: body-rate setpoint (rad/s) -> per-axis
+/// force offset (N) -> '+' mixer -> 4 pwm, updated every `decimation` sim ticks and
+/// HELD in between (stabilizer_types.h RATE_DO_EXECUTE).
+///
+/// ABI 38 (CTRL-27): the cascade controller's INNER LOOP — the shipped firmware rate
+/// PID with the sourced cf21bl gains (never re-derived), reading the same measured
+/// gyro the student does. `step` takes the collective as a pwm DEVIATION from this
+/// stage's own hover and adds it uniformly after the mixer, exactly as
+/// `Teacher::step_with_collective` composes the PID teacher — so a setpoint stream
+/// equal to the PID teacher's labels reproduces the PID teacher bit for bit (the
+/// label-replay identity, abi38_tests).
+#[derive(Clone, Copy, Debug)]
+pub struct RateStageFw
+{
 	rate: [PidCh; 3],
 	hover_thrust_n: f64,
 	k_thrust: f64,
@@ -190,11 +260,186 @@ pub struct AttitudePidFirmwareRs
 	held: [f64; 3],
 }
 
+impl RateStageFw
+{
+	fn new(rate: [SiAxis; 3], dt: f64, out_limit_n: f64, filt: Option<Lpf2p>, hover_thrust_n: f64, k_thrust: f64, decimation: u32) -> Self
+	{
+		RateStageFw {
+			rate: [
+				PidCh::new(rate[0], dt, out_limit_n, filt),
+				PidCh::new(rate[1], dt, out_limit_n, filt),
+				PidCh::new(rate[2], dt, out_limit_n, filt),
+			],
+			hover_thrust_n,
+			k_thrust,
+			decimation,
+			tick: 0,
+			held: [0.0; 3],
+		}
+	}
+
+	/// Build the rate stage alone from the flat SI arrays the packed config carries
+	/// ([roll, pitch, yaw] x [kp, ki, kd, i_limit]). None when `attitude_hz <= 0`
+	/// (no cascade gains supplied) — the same contract as
+	/// `AttitudePidFirmwareRs::from_si_arrays`, of which this is the rate half.
+	#[allow(clippy::too_many_arguments)]
+	pub fn from_si_arrays(
+		rate: [f64; 12],
+		out_limit_n: f64,
+		hover_n: f64,
+		k_thrust: f64,
+		main_loop_hz: u32,
+		attitude_hz: f64,
+		lpf_hz: f64,
+	) -> Option<Self>
+	{
+		AttitudePidFirmwareRs::from_si_arrays([0.0; 12], rate, out_limit_n, hover_n, k_thrust, main_loop_hz, attitude_hz, lpf_hz)
+			.map(|p| p.rate)
+	}
+
+	pub fn reset(&mut self)
+	{
+		for c in self.rate.iter_mut()
+		{
+			c.reset();
+		}
+		self.tick = 0;
+		self.held = [0.0; 3];
+	}
+
+	/// Whether THIS tick runs the rate loop (otherwise the held force is re-mixed).
+	#[inline]
+	fn update_tick(&self) -> bool
+	{
+		self.tick % self.decimation == 0
+	}
+
+	#[inline]
+	fn update(&mut self, rate_sp: [f64; 3], gyro: [f64; 3])
+	{
+		for i in 0..3
+		{
+			self.held[i] = self.rate[i].update(rate_sp[i], gyro[i], false);
+		}
+	}
+
+	/// One 1 kHz sim tick: run the rate loop on the update ticks (`rate_sp` is
+	/// read only then), hold its per-axis force otherwise, and mix. `coll_dev` is
+	/// the collective as a pwm deviation from `hover_pwm()`, added uniformly to
+	/// every motor after the mixer and clamped to [0, 1] — the PID teacher's
+	/// step_with_collective composition. 0.0 ⇒ the bare cascade output.
+	pub fn step(&mut self, rate_sp: [f64; 3], gyro: [f64; 3], coll_dev: f64) -> [f64; 4]
+	{
+		if self.update_tick()
+		{
+			self.update(rate_sp, gyro);
+		}
+		self.tick = self.tick.wrapping_add(1);
+		let base = self.mix(self.held);
+		if coll_dev == 0.0
+		{
+			return base;
+		}
+		[
+			(base[0] + coll_dev).clamp(0.0, 1.0),
+			(base[1] + coll_dev).clamp(0.0, 1.0),
+			(base[2] + coll_dev).clamp(0.0, 1.0),
+			(base[3] + coll_dev).clamp(0.0, 1.0),
+		]
+	}
+
+	/// The pwm every motor sits on at level and at rest — the stage's own hover,
+	/// computed through the SAME clamp-and-sqrt the mixer applies so it is
+	/// bit-identical to `mix([0,0,0])` (pinned by level_at_rest_is_hover_on_all_motors).
+	pub fn hover_pwm(&self) -> f64
+	{
+		(clamp(self.hover_thrust_n, 0.0, self.k_thrust) / self.k_thrust).sqrt()
+	}
+
+	/// The rate loop's filter coefficients, or None when filtering is off. Lets the GPU
+	/// be handed exactly the filter the CPU runs.
+	pub fn lpf_coeffs(&self) -> Option<[f64; 5]>
+	{
+		self.rate[0].filt.map(|f| f.coeffs())
+	}
+
+	/// Sim ticks per rate-loop update (main_loop_hz / attitude_hz). Same reason as
+	/// lpf_coeffs: the GPU must be handed the CPU's own value, not recompute it.
+	pub fn decimation(&self) -> u32
+	{
+		self.decimation
+	}
+
+	/// [roll, pitch, yaw] x [kp, ki, kd, i_limit] — the GPU's copy of the gains.
+	pub fn gains_flat(&self) -> [f64; 12]
+	{
+		let mut out = [0.0f64; 12];
+		for i in 0..3
+		{
+			let g = self.rate[i].g;
+			out[i * 4..i * 4 + 4].copy_from_slice(&[g.kp, g.ki, g.kd, g.i_limit]);
+		}
+		out
+	}
+
+	/// The int16 output saturation in newtons.
+	pub fn out_limit_n(&self) -> f64
+	{
+		self.rate[0].out_limit
+	}
+
+	pub fn hover_thrust_n(&self) -> f64
+	{
+		self.hover_thrust_n
+	}
+
+	pub fn k_thrust(&self) -> f64
+	{
+		self.k_thrust
+	}
+
+	/// Per-axis force offset (N) -> per-motor thrust (N) -> PWM, '+' motor order.
+	///
+	/// Sim convention (`AttitudeSim::body_torque`): M0 front(+x), M1 right(-y),
+	/// M2 rear(-x), M3 left(+y); roll = L*(-t1+t3), pitch = L*(-t0+t2),
+	/// yaw = k*(t0-t1+t2-t3). Firmware halves roll/pitch and does NOT halve yaw
+	/// (power_distribution_quadrotor.c). thrust = k_thrust*pwm^2, so pwm = sqrt(t/kt).
+	fn mix(&self, axis_n: [f64; 3]) -> [f64; 4]
+	{
+		let (r, p, y) = (axis_n[0] / 2.0, axis_n[1] / 2.0, axis_n[2]);
+		let (h, kt) = (self.hover_thrust_n, self.k_thrust);
+		// +roll raises the LEFT motor (M3) and drops the RIGHT (M1); +pitch raises the
+		// REAR (M2) and drops the FRONT (M0) — matching body_torque's signs.
+		let t = [h - p + y, h - r - y, h + p + y, h + r - y];
+		let mut pwm = [0.0f64; 4];
+		for i in 0..4
+		{
+			pwm[i] = (clamp(t[i], 0.0, kt) / kt).sqrt();
+		}
+		pwm
+	}
+}
+
+/// The cascade = `AttStageFw` composed onto `RateStageFw`. Construct with SI gains;
+/// `step_rs` takes the sim's state and returns the 4 PWMs `AttitudeSim` expects, in
+/// its '+' motor order. ABI 38: the composition is bit-identical to the pre-split
+/// cascade (abi38_pins::ABI37_PIDFW, captured on the ABI-37 build).
+#[derive(Clone, Copy, Debug)]
+pub struct AttitudePidFirmwareRs
+{
+	att: AttStageFw,
+	rate: RateStageFw,
+	/// ABI 38: the attitude stage's last output, held between its updates
+	/// (att_stage_step — the CTBR label). Never read by step_rs.
+	att_held: [f64; 3],
+}
+
 impl AttitudePidFirmwareRs
 {
 	/// `att`/`rate` are per-axis (roll, pitch, yaw) SI gains; `rate_out_limit_n` is the
 	/// firmware's int16 saturation expressed in newtons; `hover_thrust_n` is m*g/4;
 	/// `rate_lpf_cutoff_hz` of 0.0 disables the rate-D filter (firmware's own default).
+	#[allow(clippy::too_many_arguments)]
 	pub fn new_si(
 		att: [SiAxis; 3],
 		rate: [SiAxis; 3],
@@ -207,34 +452,19 @@ impl AttitudePidFirmwareRs
 	) -> Self
 	{
 		let dt = 1.0 / attitude_hz as f64;
-		let filt = |c: f64| {
-			if c > 0.0
-			{
-				Some(Lpf2p::new(attitude_hz as f64, c))
-			}
-			else
-			{
-				None
-			}
-		};
-		// attFiltEnable is false in firmware and the attitude D-term is stable
-		// unfiltered (roll/pitch kd = 0 anyway), so only the rate loop is filtered.
+		let filt = if rate_lpf_cutoff_hz > 0.0 { Some(Lpf2p::new(attitude_hz as f64, rate_lpf_cutoff_hz)) } else { None };
 		AttitudePidFirmwareRs {
-			att: [
-				PidCh::new(att[0], dt, 0.0, None),
-				PidCh::new(att[1], dt, 0.0, None),
-				PidCh::new(att[2], dt, 0.0, None),
-			],
-			rate: [
-				PidCh::new(rate[0], dt, rate_out_limit_n, filt(rate_lpf_cutoff_hz)),
-				PidCh::new(rate[1], dt, rate_out_limit_n, filt(rate_lpf_cutoff_hz)),
-				PidCh::new(rate[2], dt, rate_out_limit_n, filt(rate_lpf_cutoff_hz)),
-			],
-			hover_thrust_n,
-			k_thrust,
-			decimation: (main_loop_hz / attitude_hz).max(1),
-			tick: 0,
-			held: [0.0; 3],
+			att: AttStageFw::new(att, dt),
+			rate: RateStageFw::new(
+				rate,
+				dt,
+				rate_out_limit_n,
+				filt,
+				hover_thrust_n,
+				k_thrust,
+				(main_loop_hz / attitude_hz).max(1),
+			),
+			att_held: [0.0; 3],
 		}
 	}
 
@@ -293,59 +523,69 @@ impl AttitudePidFirmwareRs
 	/// and is not the same quantity, so it is deliberately not exposed here.
 	pub fn integrals_f32(&self) -> [f32; 3]
 	{
-		[
-			self.att[0].integ as f32,
-			self.att[1].integ as f32,
-			self.att[2].integ as f32,
-		]
+		self.att.integrals_f32()
 	}
 
 	/// Matching clamp magnitudes for normalizing those integrals. A zero i_limit means
 	/// "unclamped" in pid.c, so report 1.0 rather than 0.0 and avoid a divide-by-zero.
 	pub fn i_clamps_f32(&self) -> [f32; 3]
 	{
-		let one = |v: f64| if v == 0.0 { 1.0f32 } else { v as f32 };
-		[
-			one(self.att[0].g.i_limit),
-			one(self.att[1].g.i_limit),
-			one(self.att[2].g.i_limit),
-		]
+		self.att.i_clamps_f32()
 	}
 
 	/// The rate loop's filter coefficients, or None when filtering is off. Lets the GPU
 	/// be handed exactly the filter the CPU runs.
 	pub fn rate_lpf_coeffs(&self) -> Option<[f64; 5]>
 	{
-		self.rate[0].filt.map(|f| f.coeffs())
+		self.rate.lpf_coeffs()
 	}
 
 	/// Sim ticks per cascade update (main_loop_hz / attitude_hz). Same reason as
 	/// rate_lpf_coeffs: the GPU must be handed the CPU's own value, not recompute it.
 	pub fn decimation(&self) -> u32
 	{
-		self.decimation
+		self.rate.decimation()
+	}
+
+	/// The cascade's inner (rate) stage, unstepped — the cascade controller's inner
+	/// loop and the CTBR rivals' (ABI 38) are built from the SAME gains through this.
+	pub fn rate_stage(&self) -> RateStageFw
+	{
+		let mut r = self.rate;
+		r.reset();
+		r
 	}
 
 	pub fn reset(&mut self)
 	{
-		for c in self.att.iter_mut().chain(self.rate.iter_mut())
-		{
-			c.reset();
-		}
-		self.tick = 0;
-		self.held = [0.0; 3];
+		self.att.reset();
+		self.rate.reset();
+		self.att_held = [0.0; 3];
 	}
 
 	/// One 1 kHz sim tick. The cascade updates every `decimation` ticks and its output
 	/// is HELD in between (stabilizer_types.h RATE_DO_EXECUTE).
 	pub fn step_rs(&mut self, q: [f64; 4], gyro: [f64; 3], target_rpy: [f64; 3]) -> [f64; 4]
 	{
-		if self.tick % self.decimation == 0
+		// The attitude stage runs only on the rate stage's update ticks; on the others
+		// the rate stage ignores its setpoint and re-mixes the held force.
+		let sp = if self.rate.update_tick() { self.att.update(q, target_rpy) } else { [0.0; 3] };
+		self.rate.step(sp, gyro, 0.0)
+	}
+
+	/// ABI 38: the attitude stage alone, on the cascade's own schedule — the rate
+	/// setpoint the cascade WOULD hand its rate stage this tick, HELD between updates
+	/// exactly like the force the rate stage holds. Advances the same tick counter
+	/// `step_rs` does, so a teacher driven through this instead of `step_rs` keeps the
+	/// cascade's timing. The PID teacher's CTBR label (Teacher::ctbr_label).
+	pub fn att_stage_step(&mut self, q: [f64; 4], target_rpy: [f64; 3]) -> [f64; 3]
+	{
+		if self.rate.update_tick()
 		{
-			self.held = self.update_cascade(q, gyro, target_rpy);
+			self.att_held = self.att.update(q, target_rpy);
 		}
-		self.tick = self.tick.wrapping_add(1);
-		self.mix(self.held)
+		self.rate.tick = self.rate.tick.wrapping_add(1);
+		self.att_held
 	}
 
 	/// f32 entry point for the sim's hot path, mirroring `AttitudePidRs::step_pub`.
@@ -362,50 +602,12 @@ impl AttitudePidFirmwareRs
 		[p[0] as f32, p[1] as f32, p[2] as f32, p[3] as f32]
 	}
 
-	/// Angle (rad) -> rate setpoint (rad/s) -> per-motor force offset (N), per axis.
-	fn update_cascade(&mut self, q: [f64; 4], gyro: [f64; 3], target_rpy: [f64; 3]) -> [f64; 3]
-	{
-		let rpy = quat_to_euler(q);
-		let mut out = [0.0f64; 3];
-		for i in 0..3
-		{
-			// attitude_pid_controller.c hands the attitude PID the ACTUAL angle as its
-			// measurement, so its D-term differentiates the angle — matters for yaw
-			// alone (kd 0.35). Only yaw wraps.
-			let is_yaw = i == 2;
-			let rate_sp = self.att[i].update(target_rpy[i], rpy[i], is_yaw);
-			out[i] = self.rate[i].update(rate_sp, gyro[i], false);
-		}
-		out
-	}
-
 	/// The pwm every motor sits on at level and at rest — the cascade's own
 	/// hover, computed through the SAME clamp-and-sqrt the mixer applies so it is
 	/// bit-identical to `mix([0,0,0])` (pinned by level_at_rest_is_hover_on_all_motors).
 	pub fn hover_pwm(&self) -> f64
 	{
-		(clamp(self.hover_thrust_n, 0.0, self.k_thrust) / self.k_thrust).sqrt()
-	}
-
-	/// Per-axis force offset (N) -> per-motor thrust (N) -> PWM, '+' motor order.
-	///
-	/// Sim convention (`AttitudeSim::body_torque`): M0 front(+x), M1 right(-y),
-	/// M2 rear(-x), M3 left(+y); roll = L*(-t1+t3), pitch = L*(-t0+t2),
-	/// yaw = k*(t0-t1+t2-t3). Firmware halves roll/pitch and does NOT halve yaw
-	/// (power_distribution_quadrotor.c). thrust = k_thrust*pwm^2, so pwm = sqrt(t/kt).
-	fn mix(&self, axis_n: [f64; 3]) -> [f64; 4]
-	{
-		let (r, p, y) = (axis_n[0] / 2.0, axis_n[1] / 2.0, axis_n[2]);
-		let (h, kt) = (self.hover_thrust_n, self.k_thrust);
-		// +roll raises the LEFT motor (M3) and drops the RIGHT (M1); +pitch raises the
-		// REAR (M2) and drops the FRONT (M0) — matching body_torque's signs.
-		let t = [h - p + y, h - r - y, h + p + y, h + r - y];
-		let mut pwm = [0.0f64; 4];
-		for i in 0..4
-		{
-			pwm[i] = (clamp(t[i], 0.0, kt) / kt).sqrt();
-		}
-		pwm
+		self.rate.hover_pwm()
 	}
 }
 

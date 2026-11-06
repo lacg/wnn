@@ -1284,9 +1284,12 @@ fn label_rebase_for(
 	teacher: &Teacher,
 ) -> Option<LabelRebase>
 {
+	// ABI 38: a CTBR label is already a deviation in bank coordinates (the
+	// collective bank is the altitude PD's deviation from the teacher's hover).
 	if cfg.translation
 		&& cfg.teacher_hover_mode == TEACHER_HOVER_DERIVED
 		&& controller.delta_control_flag()
+		&& controller.ctbr_ref().is_none()
 	{
 		Some(LabelRebase {
 			hover_teacher: teacher.hover(),
@@ -1680,6 +1683,10 @@ pub(crate) fn rollout_and_label_inner(
 	// STAGE 1+2: the teacher's outer altitude + position loops (both None ⇒ the
 	// attitude-only teacher, the bit-identical legacy path).
 	let loops = OuterLoops::for_cfg(cfg);
+	// ABI 38: the teacher's command — and, under expert_drives, what flies: the
+	// motor command (motor path, unchanged) or the CTBR label through the
+	// student's own inner stage (episode_regime::ExpertPilot).
+	let mut pilot = crate::episode_regime::ExpertPilot::for_controller(controller);
 	// D0: the coordinates this episode's labels are recorded in (None ⇒ the
 	// legacy raw pwm, byte-identical).
 	let rebase = label_rebase_for(cfg, controller, teacher);
@@ -1760,7 +1767,7 @@ pub(crate) fn rollout_and_label_inner(
 		// on top of the attitude law, the DISCLOSED CASCADE the classical rivals
 		// already are. Without it the student is asked to learn altitude from a
 		// teacher that never commands it.
-		let expert_pwm = loops.expert(teacher, sim, q, gyro, target_64, cfg.target_altitude);
+		let (expert_pwm, expert_flown) = pilot.command(&loops, teacher, sim, q, gyro, target_64, cfg.target_altitude);
 		// D0: the LABEL — the teacher's pwm re-based on its own hover when the
 		// switch is on, the raw pwm otherwise (teacher_label_f32).
 		let expert_pwm_f32 = teacher_label_f32(expert_pwm, rebase);
@@ -1786,7 +1793,7 @@ pub(crate) fn rollout_and_label_inner(
 		// other path is bit-identical.
 		let mut applied = if cfg.expert_drives
 		{
-			teacher_label_f32(expert_pwm, None)
+			teacher_label_f32(expert_flown, None)
 		}
 		else
 		{
@@ -2447,6 +2454,7 @@ pub(crate) fn validate_train_regime(
 			cfg.af_mass
 		));
 	}
+	crate::episode_regime::validate_ctbr_regime(controller, cfg)?;
 	if cfg.teacher_hover_mode > TEACHER_HOVER_DERIVED
 	{
 		return Err(format!(
@@ -2479,6 +2487,13 @@ fn imitation_diag_line(controller: &WnnController, cfg: &RewardGatedConfigPacked
 	if cfg.expert_drives || cfg.explore_eps > 0.0
 	{
 		eprintln!("[imit] round={it} skipped: expert_drives/explore_eps replace the student's command in student_pwms (use WNN_IMIT_PROBE)");
+		return;
+	}
+	// ABI 38: a cascade student's recorded command is the INNER loop's motor pwm,
+	// not its decode — the per-motor reconstruction below has no meaning there.
+	if controller.ctbr_ref().is_some()
+	{
+		eprintln!("[imit] round={it} skipped: CTBR — student_pwms are inner-loop motor commands, not the bank decode");
 		return;
 	}
 	let (_dc, dmax, _leak, _g) = controller.delta_params();
@@ -2876,6 +2891,9 @@ pub fn dagger_train_inplace(
 	// estimator does not change the feature LAYOUT, only its values, which is
 	// exactly why a missing forward here would be silent.
 	obs_att_estimator = false,
+	// ABI 38 (CTRL-27): the cascade contract — the SAME three-place invariant.
+	// A missing forward would train a motor-level controller on CTBR labels.
+	ctbr = None,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn dagger_train_batch_inplace(
@@ -2954,6 +2972,7 @@ pub fn dagger_train_batch_inplace(
 	dagger_label_delta: bool,
 	target_levels: usize,
 	obs_att_estimator: bool,
+	ctbr: Option<crate::ctbr::CtbrSpec>,
 ) -> PyResult<Vec<(Py<WnnController>, TrainStats)>>
 {
 	use rayon::prelude::*;
@@ -3061,6 +3080,7 @@ pub fn dagger_train_batch_inplace(
 					obs_att_estimator,
 					2.0, // est_kp — the rivals' Mahony default (TeacherFeed / est_kp)
 					0.1, // est_ki
+					ctbr.clone(),
 				)?;
 				controller
 					.set_target_levels_core(target_levels)
@@ -3398,7 +3418,16 @@ pub fn eval_ensemble_closed_loop(
 	motor_lag_s = 0.0,
 	// ABI 32: the real-life plant + the G5 attitude-error reference — the rival
 	// flies and is scored exactly like the WNN (translation-only; OFF ⇒ ABI 31).
-	imu_specific_force = false, rotor_drag = 0.0, att_err_tilt_ref = false))]
+	imu_specific_force = false, rotor_drag = 0.0, att_err_tilt_ref = false,
+	// ABI 38 (CTRL-27): the CASCADE rivals. 0 ⇒ the teacher flies its own motor
+	// command (the ABI-37 rival, bit-identical). N > 0 ⇒ the teacher's CTBR outer
+	// decision (Teacher::ctbr_label: the firmware attitude stage for id 0 — the C2
+	// rival — or mpcof's planned body rate N ticks ahead — C4), refreshed every N
+	// ticks and flown through the firmware RATE PID (ctbr::CtbrOverRate) built
+	// from the af_pid_* cascade: the inner loop the cascade student flies. N = the
+	// student's action_repeat for a matched outer rate; N = 1 for id 0 is the
+	// firmware's own cascade (equal to the motor-level PID row by construction).
+	ctbr_outer_hold = 0))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_classical_baseline(
 	teacher_id: u8,
@@ -3452,6 +3481,7 @@ pub fn score_classical_baseline(
 	imu_specific_force: bool,
 	rotor_drag: f32,
 	att_err_tilt_ref: bool,
+	ctbr_outer_hold: usize,
 ) -> PyResult<(f64, f64, f64, f64, f64, f64, f64, f64)>
 {
 	let (plant, att_ref) = crate::stage1::stage1_extras(
@@ -3593,6 +3623,26 @@ pub fn score_classical_baseline(
 	let mut sim = af.sim();
 	let mut teacher = af.teacher(teacher_id);
 	let target = [0.0_f32, 0.0, 0.0];
+	// ABI 38: the cascade rival's outer-over-rate composition (None ⇒ motor-level).
+	let mut over_rate = if ctbr_outer_hold > 0
+	{
+		let pid = af.pid_fw.as_ref().ok_or_else(|| {
+			pyo3::exceptions::PyValueError::new_err(
+				"score_classical_baseline: ctbr_outer_hold needs the af_pid_* firmware cascade (the inner rate loop)",
+			)
+		})?;
+		if !teacher.supports_ctbr()
+		{
+			return Err(pyo3::exceptions::PyValueError::new_err(format!(
+				"score_classical_baseline: teacher {teacher_id} has no CTBR outer decision (pid / mpcof only)"
+			)));
+		}
+		Some(crate::ctbr::CtbrOverRate::new(pid.rate_stage(), ctbr_outer_hold))
+	}
+	else
+	{
+		None
+	};
 	// Estimator-fed teachers (13/08 rule): comparison rows fly on a Mahony
 	// estimate of the same noisy IMU the WNN reads — the true quaternion never
 	// enters the rival's chain. false ⇒ the byte-identical oracle path.
@@ -3637,6 +3687,10 @@ pub fn score_classical_baseline(
 			init_omegas[ep * 3 + 2],
 		];
 		teacher.reset();
+		if let Some(o) = over_rate.as_mut()
+		{
+			o.reset();
+		}
 		sim.reset(Some(init_q), Some(init_omega));
 		// STAGE 1: per-episode plant draw + vertical ICs, AFTER reset (which
 		// zeroes z/vz) — cpu_score::score_one's order.
@@ -3725,8 +3779,42 @@ pub fn score_classical_baseline(
 				],
 			);
 			// STAGE 1: the DISCLOSED cascade — the same expert DAgger trains with.
-			let cmd = match (s1.as_ref(), alt_pd.as_ref(), pos_loop.as_ref())
+			let cmd = if let Some(o) = over_rate.as_mut()
 			{
+				// ABI 38: the same outer loops, the teacher's CTBR decision, the
+				// firmware rate PID underneath (episode_regime::expert_ctbr's shape).
+				let (coll, tgt) = match (s1.as_ref(), alt_pd.as_ref())
+				{
+					(Some(cfg), Some(pd)) =>
+					{
+						let coll = pd.delta(
+							(cfg.target_altitude - sim.altitude_rs()) as f64,
+							sim.vertical_velocity_rs() as f64,
+						);
+						let tgt = match pos_loop.as_ref()
+						{
+							Some(pl) =>
+							{
+								let (x, y) = sim.position_xy();
+								let (vx, vy) = sim.velocity_xy();
+								let (r, p) = pl.tilt_ref(-(x as f64), vx as f64, -(y as f64), vy as f64);
+								[r as f32, p as f32, 0.0]
+							}
+							None => target,
+						};
+						(coll, tgt)
+					}
+					_ => (0.0, target),
+				};
+				let label = teacher
+					.ctbr_label(q, gyro, tgt, ctbr_outer_hold, coll)
+					.map_err(pyo3::exceptions::PyValueError::new_err)?;
+				o.fly(label, gyro)
+			}
+			else
+			{
+				match (s1.as_ref(), alt_pd.as_ref(), pos_loop.as_ref())
+				{
 				// STAGE 2: the FULL cascade — position loop sets the tilt reference
 				// the attitude teacher then tracks. Target is the origin, so the
 				// horizontal error is just -position.
@@ -3757,6 +3845,7 @@ pub fn score_classical_baseline(
 					sim.vertical_velocity_rs() as f64,
 				),
 				_ => teacher.step_rs(q, gyro, target),
+				}
 			};
 			let pwm = [cmd[0] as f32, cmd[1] as f32, cmd[2] as f32, cmd[3] as f32];
 			// Diff against the PREVIOUS applied command, before it is replaced.
@@ -4171,6 +4260,7 @@ mod rival_plant_tests
 			false,
 			0.0,
 			false,
+			0,
 		)
 		.expect("scorer must accept a well-formed plant")
 	}
@@ -4983,7 +5073,7 @@ mod motor_lag_axis_f_tests
 			false, 2.0, 0.1,
 			false, 0.0, vec![], vec![], vec![], vec![],
 			2.0, 1.0, 0.25, vec![], vec![], 1.0, 1.0, 0.5236,
-			motor_lag_s, false, 0.0, false,
+			motor_lag_s, false, 0.0, false, 0,
 		)
 		.expect("baseline scores")
 	}

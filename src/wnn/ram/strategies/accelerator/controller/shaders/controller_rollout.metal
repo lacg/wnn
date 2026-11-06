@@ -236,6 +236,23 @@ struct Params
 	// estimator.rs MahonyFilter, f32 here). 0 ⇒ accel-only attitude features.
 	uint att_est_on;
 	float est_kp, est_ki;
+	// ABI 38 (CTRL-27), appended in lockstep with RolloutParams: the CASCADE
+	// controller (controller/ctbr.rs). ctbr_on=1 ⇒ the 4 banks decode ABSOLUTELY
+	// (or as the delta-law ablation) to [collective deviation, p, q, r] on the
+	// per-bank range/γ, held across action-repeat, and EVERY physical step flies
+	// the firmware RATE half (pidfw_rate_half) on the measured gyro. The rate
+	// gains/saturation/hover/k_thrust/decimation/lpf are the pidfw_* block above
+	// (residual is refused with CTBR, so that block is free and pidfw_on stays 0).
+	// ctbr_hover_pwm = the rate stage's own hover (host f64 → f32): the collective
+	// transport is coll_anchor − ctbr_hover_pwm under translation, 0 otherwise.
+	// ctbr_outer_pid=1 (identity test / GPU C2 rival, attitude-only): the outer
+	// setpoint is the in-kernel firmware ATTITUDE half (pidfw_att) instead of the
+	// WNN decode. 0 ⇒ none of this runs ⇒ the ABI-37 rollout.
+	uint ctbr_on;
+	float ctbr_range[4];
+	float ctbr_gamma[4];
+	float ctbr_hover_pwm;
+	uint ctbr_outer_pid;
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -441,6 +458,8 @@ inline float pidfw_pid(thread float *st, uint i_integ, uint i_prev, float sp,
 											 float i_limit, float out_limit, bool first,
 											 thread float *lpf_d1, thread float *lpf_d2,
 											 constant Params &P, float dt)
+// (The rate-D filter is P.pidfw_lpf / P.pidfw_filter_on — the residual baseline's
+// cascade and, ABI 38, the CTBR inner stage: the two never coexist.)
 {
 	float error = sp - measured;
 	if (wrap)
@@ -467,9 +486,71 @@ inline float pidfw_pid(thread float *st, uint i_integ, uint i_prev, float sp,
 	return out;
 }
 
+// ABI 38 (CTRL-27): the cascade in two halves — pid_firmware.rs AttStageFw /
+// RateStageFw — for the CTBR inner stage (and its GPU identity hook). The residual
+// baseline's pidfw_step below keeps its ABI-37 fused text.
+inline float pidfw_cascade_dt(constant Params &P)
+{
+	// dt of the CASCADE, not the physical step: it runs at attitude_hz, so its
+	// timestep is decimation * P.dt.
+	return P.dt * (float)max(P.pidfw_decimation, 1u);
+}
+
+// Attitude half: euler error -> body-rate setpoint (rad/s) per axis. Measured is
+// the ANGLE (its D-term differentiates the angle — matters for yaw alone, kd 0.35).
+// Only yaw wraps. Reads/writes the attitude slots of `st` (0..3, 6..9).
+inline void pidfw_att_half(float4 q, thread const float *target, constant Params &P,
+													 thread float *st, bool first, thread float *rate_sp)
+{
+	float w = q.x, x = q.y, y = q.z, z = q.w;
+	float rpy[3];
+	rpy[0] = atan2(2.0f * (w * x + y * z), 1.0f - 2.0f * (x * x + y * y));
+	float sinp = 2.0f * (w * y - z * x);
+	rpy[1] = (sinp >= 1.0f)		 ? (M_PI_F * 0.5f)
+					 : (sinp <= -1.0f) ? (-M_PI_F * 0.5f)
+														 : asin(sinp);
+	rpy[2] = atan2(2.0f * (w * z + x * y), 1.0f - 2.0f * (y * y + z * z));
+	float dt = pidfw_cascade_dt(P);
+	for (uint i = 0u; i < 3u; i++)
+		rate_sp[i] = pidfw_pid(st, i, 6u + i, target[i], rpy[i], i == 2u,
+													 P.pidfw_att[i * 4 + 0], P.pidfw_att[i * 4 + 1], P.pidfw_att[i * 4 + 2],
+													 P.pidfw_att[i * 4 + 3], 0.0f, first, nullptr, nullptr, P, dt);
+}
+
+// Rate half: body-rate setpoint -> per-axis force offset (N), HELD in st[18..21].
+// Measured is the body rate; its derivative is the filtered one. Rate slots of
+// `st` (3..6, 9..12, 12..18 filter, 18..21 held force).
+inline void pidfw_rate_half(thread const float *rate_sp, thread const float *gyro, constant Params &P,
+														thread float *st, bool first)
+{
+	float dt = pidfw_cascade_dt(P);
+	for (uint i = 0u; i < 3u; i++)
+		st[18u + i] = pidfw_pid(st, 3u + i, 9u + i, rate_sp[i], gyro[i], false,
+														P.pidfw_rate[i * 4 + 0], P.pidfw_rate[i * 4 + 1], P.pidfw_rate[i * 4 + 2],
+														P.pidfw_rate[i * 4 + 3], P.pidfw_out_limit_n, first,
+														&st[12u + i], &st[15u + i], P, dt);
+}
+
+// Per-axis force offset (N) -> per-motor thrust -> pwm. Firmware halves roll/pitch
+// and does NOT halve yaw. thrust = k_thrust*pwm^2 so pwm = sqrt(t/kt).
+inline void pidfw_mix(thread const float *st, constant Params &P, thread float *out_pwm)
+{
+	float r = st[18] * 0.5f, pi_ = st[19] * 0.5f, yv = st[20];
+	float h = P.pidfw_hover_n, kt = P.pidfw_k_thrust;
+	float t0 = h - pi_ + yv, t1 = h - r - yv, t2 = h + pi_ + yv, t3 = h + r - yv;
+	out_pwm[0] = sqrt(clamp(t0, 0.0f, kt) / kt); // M0 front
+	out_pwm[1] = sqrt(clamp(t1, 0.0f, kt) / kt); // M1 right
+	out_pwm[2] = sqrt(clamp(t2, 0.0f, kt) / kt); // M2 rear
+	out_pwm[3] = sqrt(clamp(t3, 0.0f, kt) / kt); // M3 left
+}
+
 inline void pidfw_step(float4 q, thread const float *gyro, constant Params &P,
 											 thread float *st, thread float *out_pwm)
 {
+	// ABI 38: kept VERBATIM from ABI 37 (fused attitude+rate loop). Re-expressing it
+	// through pidfw_att_half/pidfw_rate_half is the same arithmetic in principle but
+	// moved the Metal codegen's bits (abi38_gpu_pidfw_residual_rows pin), so the
+	// residual baseline keeps this exact text and the CTBR path uses the halves.
 	uint tick = (uint)st[21];
 	if (tick % max(P.pidfw_decimation, 1u) == 0u)
 	{
@@ -511,6 +592,30 @@ inline void pidfw_step(float4 q, thread const float *gyro, constant Params &P,
 	out_pwm[1] = sqrt(clamp(t1, 0.0f, kt) / kt); // M1 right
 	out_pwm[2] = sqrt(clamp(t2, 0.0f, kt) / kt); // M2 rear
 	out_pwm[3] = sqrt(clamp(t3, 0.0f, kt) / kt); // M3 left
+}
+
+// ABI 38: one physical tick of the CTBR inner stage (ctbr.rs CtbrInner::fly /
+// RateStageFw::step): run the rate half on the update ticks with the HELD
+// setpoint sp[1..4], hold the force otherwise, mix, then add the collective
+// sp[0] + transport uniformly and clamp — the PID teacher's composition. A zero
+// offset leaves the mixer's output untouched (RateStageFw::step's early return).
+inline void ctbr_inner_tick(thread const float *sp, float transport, thread const float *gyro,
+														constant Params &P, thread float *st, thread float *out_pwm)
+{
+	uint tick = (uint)st[21];
+	if (tick % max(P.pidfw_decimation, 1u) == 0u)
+	{
+		bool first = st[22] == 0.0f;
+		float rate_sp[3] = {sp[1], sp[2], sp[3]};
+		pidfw_rate_half(rate_sp, gyro, P, st, first);
+		st[22] = 1.0f;
+	}
+	st[21] = (float)(tick + 1u);
+	pidfw_mix(st, P, out_pwm);
+	float off = transport + sp[0];
+	if (off != 0.0f)
+		for (uint m = 0u; m < 4u; m++)
+			out_pwm[m] = clamp(out_pwm[m] + off, 0.0f, 1.0f);
 }
 
 inline void pid_step(float4 q, thread const float *gyro, constant Params &P,
@@ -1183,6 +1288,23 @@ kernel void controller_rollout(
 			pwm_applied[m] = coll_anchor;
 		}
 	}
+	// ABI 38 CTBR: the bank accumulators are DEVIATIONS (0 = zero rate, the
+	// anchor's collective) — WnnController::enable_ctbr / reset. The inner rate
+	// stage has its own per-episode state (pidfw_* slot layout) and the HELD
+	// setpoint of the last decision; the collective transport is the D0 rule
+	// (CtbrInner::set_anchor): anchor − inner hover under translation, else 0.
+	float ctbr_st[PIDFW_STATE];
+	for (uint _i = 0u; _i < (uint)PIDFW_STATE; _i++)
+		ctbr_st[_i] = 0.0f;
+	float ctbr_held[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+	float ctbr_transport = 0.0f;
+	if (P.ctbr_on != 0u)
+	{
+		for (uint m = 0u; m < MAX_ROTORS; m++)
+			pwm_acc[m] = 0.0f;
+		if (P.translation_on != 0u)
+			ctbr_transport = coll_anchor - P.ctbr_hover_pwm;
+	}
 
 	// W2 disturbances: per-thread (this thread owns ONE episode rollout, so the
 	// OU gust + gyro-bias state is episode-scoped, zeroed here = sim.reset()).
@@ -1500,7 +1622,26 @@ kernel void controller_rollout(
 				float decoded = (bin_half != 0u)
 														? clamp(0.5f + (sum - sum_i) / (float)P.levels, 0.0f, 1.0f)
 														: clamp(sum / (float)P.levels, 0.0f, 1.0f);
-				if (P.decouple_outputs != 0u)
+				if (P.ctbr_on != 0u)
+				{
+					// ABI 38 CTBR decode (WnnController::decode_ctbr): absolute on the
+					// bank alphabet, or the delta-law ablation (delta_max of the bank
+					// range, the bank γ, leak toward 0, clamped to ±range). The motor
+					// pwm comes from the inner stage after the decision.
+					float r = P.ctbr_range[m];
+					if (P.delta_control != 0u)
+					{
+						float delta = decoded_to_delta(decoded, P.delta_max * r, P.residual_neutral, P.ctbr_gamma[m]);
+						pwm_acc[m] = clamp(P.delta_leak * pwm_acc[m] + delta, -r, r);
+					}
+					else
+					{
+						pwm_acc[m] = decoded_to_delta(decoded, r, P.residual_neutral, P.ctbr_gamma[m]);
+					}
+					ctbr_held[m] = pwm_acc[m];
+					pwm[m] = 0.0f;
+				}
+				else if (P.decouple_outputs != 0u)
 				{
 					// H3: bank 0 = thrust T (neutral 0.5, [0,1]); banks 1..3 = torques
 					// (neutral 0, [-1,1]). Accumulate per CONTROL; mix to motors after loop.
@@ -1568,6 +1709,27 @@ kernel void controller_rollout(
 			for (uint n = 0u; n < P.n_state; n++)
 				prev_state[n] = new_state[n];
 			for (uint m = 0u; m < P.num_motors; m++)
+				last_pwm[m] = pwm[m];
+		}
+		// ---- ABI 38 CTBR: the inner rate loop flies EVERY physical step ------------
+		// on the setpoint held since the last decision (the outer decision is held,
+		// the rate loop is not) and on THIS step's measured gyro — CtbrInner::fly.
+		// ctbr_outer_pid (identity / GPU C2 rival): the outer setpoint is the
+		// firmware attitude half on the cascade's own schedule instead.
+		if (P.ctbr_on != 0u)
+		{
+			if (P.ctbr_outer_pid != 0u && ((uint)ctbr_st[21]) % max(P.pidfw_decimation, 1u) == 0u)
+			{
+				float tgt[3] = {P.target0, P.target1, P.target2};
+				float sp3[3];
+				pidfw_att_half(q, tgt, P, ctbr_st, ctbr_st[22] == 0.0f, sp3);
+				ctbr_held[0] = 0.0f;
+				ctbr_held[1] = sp3[0];
+				ctbr_held[2] = sp3[1];
+				ctbr_held[3] = sp3[2];
+			}
+			ctbr_inner_tick(ctbr_held, ctbr_transport, sensors, P, ctbr_st, pwm);
+			for (uint m = 0u; m < 4u; m++)
 				last_pwm[m] = pwm[m];
 		}
 		// ---- Residual hybrid: pwm = clamp(base + clamp((wnn-0.5)·scale)) ----------

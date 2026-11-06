@@ -19,6 +19,7 @@ mod solver_view; // ABI 35 B: window-lived solver view (no per-record entry clon
 mod cell_remap; // cell ADDRESS remaps on architecture change (bit-exact port)
 mod controller;
 mod controller_split;
+mod ctbr; // ABI 38 (CTRL-27): the cascade controller's output contract + inner stage
 mod controller_training;
 mod cpu_score; // CPU (rayon) batch scorer — twin of score_controllers_metal
 mod dagger_train;
@@ -45,9 +46,11 @@ mod abi35_tests; // ABI 35: bptt walk fixtures, CPU pins, CPU/GPU walk parity
 mod lag_student_law_tests; // diagnostic: student output law under motor lag
 mod imitation_probe; // diagnostic (WNN_IMIT_PROBE): imitation vs closed loop under motor lag
 #[cfg(test)]
-mod abi38_pins;
+mod abi38_pins; // ABI 38: motor-level byte-identity pins captured on the ABI-37 build
 #[cfg(test)]
-mod train_asym_tests; // ABI 38: per-episode training motor asymmetry // ABI 38: motor-level byte-identity pins captured on the ABI-37 build
+mod train_asym_tests; // ABI 38: per-episode training motor asymmetry
+#[cfg(test)]
+mod abi38_tests; // ABI 38: the cascade controller — identity, rivals, CPU/GPU parity, trainers
 #[cfg(test)]
 mod abi34_tests; // ABI 34: lag-aware teachers, one pwm convention under motor lag, T=0 pins
 mod att_estimator; // ABI 32: the WNN's Mahony attitude estimate (obs_att_estimator)
@@ -305,6 +308,21 @@ mod metal_controller;
 ///     ram_core::counter_rng). mag 0 ⇒ bit-identical to ABI 37 (abi38_pins,
 ///     train_asym_tests); mag > 0 is a LINEAGE BREAK for every L4C run
 ///     (provenance train_asym=per_episode:<mag>).
+///   - THE CASCADE CONTROLLER (CTRL-27, Luiz 06/11; docs/ctrl_cascade_design.md):
+///     WnnController(ctbr=CtbrSpec) — the 4 banks are [collective deviation, p, q,
+///     r], decoded absolutely on a per-bank range/γ, held across action-repeat and
+///     flown every tick through the firmware RATE PID (pid_firmware::RateStageFw,
+///     sourced cf21bl gains) on the measured gyro; step() still returns 4 pwm.
+///     Teachers: Teacher::ctbr_label (PID: the firmware attitude stage; mpcof: the
+///     plan's body rate one outer period ahead). Every trainer (sn=0 direct write,
+///     sn>0 EDRA-BPTT CPU + GPU walk, the state-split trainer CPU + GPU), the
+///     calibration sampler, the recorder, expert_drives, the CPU and Metal scorers
+///     and the rivals (score_classical_baseline(ctbr_outer_hold=)) support it.
+///     dagger_train_batch_inplace(ctbr=). output_mode "pwm" is bit-identical to
+///     ABI 37 (abi38_pins, abi38_gpu_pidfw_residual_rows pin).
+///   - Bugs fixed alongside: the wheel did not build at 15d5bbf0 (imitation_probe
+///     test-only loader); the GPU split ignored --delta-label-scale (trained the
+///     unscaled label); two split-parity sweep cases planted nothing (vacuous).
 pub const ABI_VERSION: u32 = 38;
 
 /// Where the sn>0 trainer walks when WNN_CONTROLLER_GPU_BPTT is unset ("cpu"|"gpu").
@@ -1032,7 +1050,7 @@ fn record_on_training_cascade(
 	let af = dagger_train::AirframeRs::from_cfg(cfg);
 	let mut sim = af.sim();
 	let mut teacher = af.teacher(cfg.teacher_id_for(0, 0));
-	let mut d = record_ops::Driver::Cascade(record_ops::CascadeDriver::new(&mut teacher, cfg));
+	let mut d = record_ops::Driver::Cascade(record_ops::CascadeDriver::new(&mut teacher, cfg, controller));
 	let s1 = record_ops::RecorderStage1 {
 		cfg: s1_cfg,
 		gravity: cfg.af_gravity,
@@ -1229,6 +1247,7 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()>
 	// Attitude sim + WNN controller + PID reference (paper #1 hot-path).
 	m.add_class::<controller::AttitudeSim>()?;
 	m.add_class::<controller::WnnController>()?;
+	m.add_class::<ctbr::CtbrSpec>()?; // ABI 38: the cascade contract
 	m.add_class::<genome_cells::GenomeCells>()?;
 	m.add_class::<controller::AttitudePidRs>()?;
 	// L1: plant control-effectiveness b, the d̂ observer's one plant constant.

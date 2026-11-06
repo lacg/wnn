@@ -9,13 +9,12 @@
 //!     a fresh airframe every episode, reproducible from the episode seed;
 //!   * every training host flies it — DAgger rollouts, the per-round eval, the
 //!     calibration sampler, the MEMORY recorder;
-//!   * the GPU training paths (sn>0 EDRA-BPTT walk, state-split) stay bit-identical
-//!     to the CPU under it. No Metal kernel simulates a TRAINING plant (they replay
+//!   * the GPU sn>0 EDRA-BPTT walk stays bit-identical to the CPU under it. No Metal kernel simulates a TRAINING plant (they replay
 //!     the CPU rollouts' recorded streams), so the asymmetric plant reaches the GPU
 //!     only through those streams — which is exactly what these parity tests cover.
 
 use crate::abi38_pins::{cells_and_stats_digest, prod_cfg, prod_student};
-use crate::controller::{train_motor_asym, AttitudeSim, ReplayObs, WnnController};
+use crate::controller::{train_motor_asym, AttitudeSim, WnnController};
 use crate::dagger_train::{dagger_train_inplace_with, rollout_and_label_rs, AirframeRs, RewardGatedConfigPacked, TrajectoryRs};
 use rand::rngs::SmallRng;
 use rand::SeedableRng;
@@ -168,51 +167,11 @@ pub(crate) fn asym_batch(cfg: &RewardGatedConfigPacked, student: &mut WnnControl
 	let mut teacher = af.teacher(cfg.teacher);
 	let mut sim: AttitudeSim = af.sim();
 	let mut rng = SmallRng::seed_from_u64(17);
-	(0..3).map(|_| rollout_and_label_rs(student, &mut teacher, &mut sim, cfg, 0.1, &mut rng, [0.0; 3])).collect()
+	(0..6).map(|_| rollout_and_label_rs(student, &mut teacher, &mut sim, cfg, 0.1, &mut rng, [0.0; 3])).collect()
 }
 
-/// The CPU split trainer exactly as dagger_train calls it.
-pub(crate) fn split_cpu(c: &mut WnnController, gated: &[&TrajectoryRs], cfg: &RewardGatedConfigPacked) -> usize
-{
-	let ro: Vec<ReplayObs> = gated
-		.iter()
-		.map(|t| ReplayObs { vert: t.vert_obs.clone(), horiz: t.horiz_obs.clone(), pwm_dev: t.pwm_dev.clone(), att_up: t.att_up.clone() })
-		.collect();
-	c.split_train_loop(
-		gated.iter().map(|t| t.gyros.clone()).collect(),
-		gated.iter().map(|t| t.accels.clone()).collect(),
-		gated.iter().map(|t| t.targets.clone()).collect(),
-		gated.iter().map(|t| t.pid_pwms.clone()).collect(),
-		cfg.split_tau,
-		cfg.split_clean_gain,
-		cfg.split_accum_corr,
-		cfg.split_max_rounds,
-		cfg.split_k_start,
-		cfg.split_coarse_target,
-		cfg.split_selective_output,
-		gated.iter().map(|t| t.init_yaw).collect(),
-		ro,
-	)
-	.2
-}
-
-/// State-split trainer: CPU and GPU plant the same cells on asymmetric rollouts.
-#[test]
-fn asymmetric_split_trainer_cpu_matches_gpu()
-{
-	if std::env::var("WNN_SKIP_GPU_TESTS").is_ok() || metal::Device::system_default().is_none()
-	{
-		return;
-	}
-	let mut cfg = cfg_mag(0.20, MAG);
-	cfg.split_coarse_target = 16;
-	let mut rec = prod_student(4, 1, true, 0xAA);
-	let batch = asym_batch(&cfg, &mut rec);
-	let gated: Vec<&TrajectoryRs> = batch.iter().collect();
-	let mut cpu = prod_student(4, 1, true, 0xAB);
-	let planted_cpu = split_cpu(&mut cpu, &gated, &cfg);
-	let gpu = prod_student(4, 1, true, 0xAB);
-	let planted_gpu = crate::dagger_train::try_gpu_split(&gpu, &gated, &cfg, [0.0; 3]).expect("GPU split ran");
-	assert_eq!(planted_cpu, planted_gpu, "planted counts differ");
-	assert_eq!(crate::abi35_tests::cells_digest(&cpu), crate::abi35_tests::cells_digest(&gpu), "GPU split diverged under asymmetry");
-}
+// The state-split trainer replays the recorded streams; its CPU/GPU parity is
+// stream-agnostic and is exercised on the planting fixture (metal_controller
+// parity_split_train_loop, abi38_tests::ctbr_split_trainer_cpu_matches_gpu). The
+// real asymmetric rollouts find no clean separator, so a parity check on them would
+// be vacuous — removed rather than kept as a test that cannot fail.
