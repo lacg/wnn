@@ -375,3 +375,30 @@ fn diag_memoryless_student_observability()
 		}
 	}
 }
+
+/// ABI 36 pin (the 06/11/2026 fix, in probe form): at the cf21 airframe lag
+/// T = 0.20 the best linear memoryless student flown through the live output
+/// law STAYS STABLE when it observes the delivered actuator u_a in place of its
+/// command (the ABI-36 --obs-pwm convention), and COLLAPSES on the ABI-35
+/// command convention — the contrast keeps the test from being vacuous.
+#[test]
+fn abi36_linear_student_with_delivered_actuator_holds_lag_020()
+{
+	let run = |with_ua: u8| {
+		let (mut rows, _, _, _) = fly(4, 0.20, None, with_ua, 10, 2000, 0);
+		let mut last = (0.0, 0.0, 0.0);
+		for it in 0..4
+		{
+			let (f, _) = fit(&rows);
+			let (new_rows, st, err, steady) = fly(4, 0.20, Some(&f), with_ua, 10, 2000, 100 + it * 10);
+			last = (st, err, steady);
+			rows.extend(new_rows);
+		}
+		last
+	};
+	let delivered = run(2);
+	let command = run(0);
+	eprintln!("[abi36] T=0.20 linear student: delivered {delivered:?} command {command:?}");
+	assert!(delivered.0 >= 99.0 && delivered.1 < 4.0, "delivered-actuator student lost the lagged plant: {delivered:?}");
+	assert!(command.0 < 50.0, "command-convention student no longer collapses — the probe lost its teeth: {command:?}");
+}

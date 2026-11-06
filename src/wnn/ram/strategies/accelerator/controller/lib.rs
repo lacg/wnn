@@ -266,7 +266,17 @@ mod metal_controller;
 ///     share (LAG_CMD_SHARE); student d-hat observer subtracts the LAGGED actuator
 ///     (new Python method set_observer_motor_lag). PLN fire-bit GPU twin fixed.
 ///   RESULTS-CHANGING for lagged runs only; T = 0 bit-identical to ABI 34.
-pub const ABI_VERSION: u32 = 35;
+///
+/// ABI 36 (06/11/2026):
+///   - Under motor lag the --obs-pwm feature reports the student's DELIVERED
+///     actuator estimate u_a − anchor (WnnController::act_twin_next: the plant
+///     filter's twin over the commands that FLEW, plant coefficient, seeded at the
+///     first command), CPU and Metal score kernel; the twin advances whenever the
+///     lag is on (it used to advance only for d-hat). Fixes the sn=0 collapse under
+///     the airframe lag (lag_student_law_tests; metal abi36_* parity + pins).
+///   RESULTS-CHANGING for lagged obs_pwm runs only; T = 0 and d-hat-only lagged
+///   rows bit-identical to ABI 35 (abi36_t0_obs_pwm_rows_bit_identical_to_abi35).
+pub const ABI_VERSION: u32 = 36;
 
 /// Where the sn>0 trainer walks when WNN_CONTROLLER_GPU_BPTT is unset ("cpu"|"gpu").
 /// Decided by the item-E measurement rule (05/11/2026).

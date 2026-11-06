@@ -316,6 +316,10 @@ pub(crate) fn rollout_one(
 					let r = ((pwm[m] - neutral) * residual_scale).clamp(-residual_clamp, residual_clamp);
 					pwm[m] = (base[m] + r).clamp(0.0, 1.0);
 				}
+				// What FLIES is the composed command — tell the controller (the d̂
+				// observer and, ABI 36, the actuator twin behind the obs_pwm feature
+				// read pwm_applied), as the kernel stores the final command.
+				c.observe_applied_slice(&pwm);
 			}
 
 			// Motor jerk: sqrt(Σ_m (Δpwm_m)²) per step (the L2 norm of the

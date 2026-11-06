@@ -10944,4 +10944,173 @@ mod tests
 			"residual + N≠4 geometry must be refused"
 		);
 	}
+
+	// ===================================================================
+	// ABI 36 (06/11/2026): under motor lag the --obs-pwm feature reports the
+	// student's DELIVERED actuator estimate u_a − anchor (the plant-filter twin
+	// of its own applied commands), not the command. Fixtures: the lag x obs
+	// controller with the d̂ observer OFF (the production recipe) and ON.
+	// ===================================================================
+
+	fn abi36_fixture(dhat_on: bool) -> WnnController
+	{
+		let b = crate::controller::calibrate_control_gains_rs(
+			SIM_DT, SIM_ARM, SIM_KT, SIM_KD, SIM_INERTIA, SIM_G, 0.5, 0.05,
+		);
+		test_controller_dhat_pwm(0xA836, if dhat_on { Some(b) } else { None }, false, true)
+	}
+
+	/// ABI-35 digests [CPU ×3, GPU ×3] of the cases in the test below (T = 0
+	/// obs_pwm with d̂ off/on; d̂-only at T = 0.20), captured on the pre-change build (ABI 35, commit 0c693ef0) by
+	/// running this test there. T = 0 never writes the twin ⇒ not a bit may move.
+	const ABI35_T0_OBS_PWM_DIGESTS: [u64; 6] = [0xdb19_219c_4c0b_0602, 0x4b46_5573_8f4e_2598, 0xcf7e_5176_8f8c_3cd6, 0xe8c6_12ec_82dd_e3ed, 0x69a5_5d2e_e49e_10d5, 0x5e1d_d89a_355a_61c3];
+
+	#[test]
+	fn abi36_t0_obs_pwm_rows_bit_identical_to_abi35()
+	{
+		let (num_eps, steps) = (8usize, 400usize);
+		let (q0, w0) = test_episodes(0xA836, num_eps);
+		// (d̂ on, obs_pwm on, lag): T = 0 with obs_pwm, plus the d̂-only lagged
+		// controller (obs_pwm off) — the twin's d̂ consumer must not move either.
+		let cases = [(false, true, 0.0f32), (true, true, 0.0), (true, false, 0.20)];
+		let fixture = |dhat_on: bool, obs: bool| {
+			let b = crate::controller::calibrate_control_gains_rs(
+				SIM_DT, SIM_ARM, SIM_KT, SIM_KD, SIM_INERTIA, SIM_G, 0.5, 0.05,
+			);
+			test_controller_dhat_pwm(0xA836, if dhat_on { Some(b) } else { None }, false, obs)
+		};
+		let mut got = Vec::new();
+		for &(d, o, lag) in &cases
+		{
+			let mut c = fixture(d, o);
+			got.push(digest_rows(&cpu_scorer_row(&mut c, &q0, &w0, num_eps, steps, lag)));
+		}
+		let ev = if std::env::var("WNN_SKIP_GPU_TESTS").is_ok() { None } else { ControllerRolloutEvaluator::new().ok() };
+		if let Some(ev) = ev.as_ref()
+		{
+			for &(d, o, lag) in &cases
+			{
+				got.push(digest_rows(&lag_obs_gpu_rows(ev, &fixture(d, o), &q0, &w0, num_eps, steps, lag)));
+			}
+		}
+		eprintln!("[abi36] ABI-35 pin digests {got:#x?}");
+		assert_eq!(got[..], ABI35_T0_OBS_PWM_DIGESTS[..got.len()], "obs_pwm T=0 / d̂-only lagged rows moved vs ABI 35");
+	}
+
+	/// The feature IS the delivered actuator: on a lagged plant, every step's
+	/// obs_pwm features equal the plant-expression reference filter of the
+	/// commands that flew, minus the anchor (bit-exact), from the step after the
+	/// first command; t = 0 reads the accumulator. pwm_feature_obs() (what the
+	/// DAgger rollout records for the replay) equals what compute_features then
+	/// produces, bit for bit, at every step. At T = 0 the feature is the command.
+	#[test]
+	fn abi36_obs_pwm_reports_delivered_actuator_under_lag()
+	{
+		for lag in [0.0f32, 0.20]
+		{
+			let mut c = abi36_fixture(false);
+			c.set_observer_motor_lag_core(lag);
+			let mut sim = AttitudeSim::new(SIM_DT, SIM_ARM, SIM_KT, SIM_KD, SIM_INERTIA, SIM_G);
+			sim.set_motor_lag(lag);
+			c.reset(0.0);
+			sim.reset(Some([0.995, 0.07, -0.05, 0.0]), Some([0.3, -0.2, 0.1]));
+			let alpha = 4.0f32 * SIM_DT / lag.max(4.0 * SIM_DT);
+			let off = 9usize; // obs_pwm sits right after the 9 base features (d̂ off)
+			let mut filt = [0.0f32; 4];
+			let mut last_cmd = [0.0f32; 4];
+			assert_eq!(c.obs_pwm_delivered(), lag > 0.0, "T={lag}: obs_pwm_delivered");
+			let mut separated = false;
+			for t in 0..600usize
+			{
+				let (gyro, accel) = sim.read_imu();
+				let preview = c.pwm_feature_obs();
+				let cmd_feat: Vec<f32> = (0..4).map(|m| c.pwm_feature_obs_command(m)).collect();
+				let out = c.step(gyro, accel, [0.0; 3]);
+				let feats = c.last_feature_vector_ref().to_vec();
+				for m in 0..4
+				{
+					assert_eq!(feats[off + m].to_bits(), preview[m].to_bits(), "T={lag} t={t} m={m}: pwm_feature_obs != feature");
+					let want = if lag > 0.0 && t >= 1 { filt[m] - c.bank_anchor(m) } else { cmd_feat[m] };
+					assert_eq!(feats[off + m].to_bits(), want.to_bits(), "T={lag} t={t} m={m}: feature {} vs want {}", feats[off + m], want);
+					if (feats[off + m] - cmd_feat[m]).abs() > 1e-6
+					{
+						separated = true;
+					}
+				}
+				// What flies: a wobbled command (the observe_applied path), so the
+				// twin must follow what FLEW, not step()'s return.
+				let wob = 0.01 * ((t as f32) * 0.07).sin();
+				let applied = [
+					(out[0] + wob).clamp(0.0, 1.0),
+					out[1],
+					(out[2] - wob).clamp(0.0, 1.0),
+					out[3],
+				];
+				c.observe_applied(applied);
+				for m in 0..4
+				{
+					filt[m] = if t == 0 { applied[m] } else { filt[m] + alpha * (applied[m] - filt[m]) };
+				}
+				last_cmd = applied;
+				sim.step(applied);
+			}
+			let _ = last_cmd;
+			assert_eq!(separated, lag > 0.0, "T={lag}: delivered vs command separation {separated}");
+		}
+	}
+
+	/// ABI 36 CPU/GPU parity under lag with the d̂ observer OFF (the production
+	/// recipe — the twin now runs without it): GPU rows track the production CPU
+	/// scorer, and the convention is REACHED — the CPU scorer equals the
+	/// delivered-convention oracle exactly, differs from the command-convention
+	/// oracle (observer lag 0 on the same lagged plant), and the GPU row sits
+	/// nearer the delivered oracle on every metric that separates.
+	#[test]
+	fn abi36_parity_lag_obs_pwm_delivered_cpu_vs_gpu()
+	{
+		if std::env::var("WNN_SKIP_GPU_TESTS").is_ok()
+		{
+			return;
+		}
+		let ev = match ControllerRolloutEvaluator::new()
+		{
+			Ok(e) => e,
+			Err(_) => return,
+		};
+		let (num_eps, steps) = (8usize, 400usize);
+		let (q0, w0) = test_episodes(0xA836, num_eps);
+		for dhat_on in [false, true]
+		{
+			for lag in [0.15f32, 0.20, 0.30]
+			{
+				let mut c = abi36_fixture(dhat_on);
+				c.set_observer_motor_lag_core(lag);
+				let aware = cpu_oracle_quad_lag(&mut c, &q0, &w0, num_eps, steps, lag);
+				c.set_observer_motor_lag_core(0.0);
+				let blind = cpu_oracle_quad_lag(&mut c, &q0, &w0, num_eps, steps, lag);
+				let scorer = cpu_scorer_row(&mut c, &q0, &w0, num_eps, steps, lag);
+				let gpu = lag_obs_gpu_rows(&ev, &c, &q0, &w0, num_eps, steps, lag);
+				eprintln!("[abi36] dhat={dhat_on} T={lag}: err delivered {:.6} command {:.6} scorer {:.6} gpu {:.6}", aware[1], blind[1], scorer[1], gpu[1]);
+				assert_eq!(scorer[1], aware[1], "dhat={dhat_on} T={lag}: CPU scorer did not arm the actuator twin");
+				for (i, name) in ["reward", "err", "stable", "jerk", "mono"].iter().enumerate()
+				{
+					assert_rel_close(gpu[i], scorer[i], 2e-2, 1e-4, &format!("abi36 dhat={dhat_on} T={lag} {name}"));
+				}
+				let mut separating = 0;
+				for i in 0..5
+				{
+					if (aware[i] - blind[i]).abs() > 1e-9
+					{
+						separating += 1;
+						assert!(
+							(gpu[i] - aware[i]).abs() < (gpu[i] - blind[i]).abs(),
+							"dhat={dhat_on} T={lag} metric {i}: GPU {} nearer the command convention {} than delivered {}",
+							gpu[i], blind[i], aware[i]
+						);
+					}
+				}
+				assert!(separating > 0, "dhat={dhat_on} T={lag}: delivered and command conventions indistinguishable");
+			}
+		}
+	}
 }

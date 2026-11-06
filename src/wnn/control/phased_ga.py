@@ -289,7 +289,7 @@ def _resume_ga_state_if_targeted(strat, args, stage_num: int) -> None:
 	print(f"[resume] Stage {stage_num} ({strat.name}): continuing AT generation "
 	      f"{strat._resume_start_gen} with the dumped GA state", flush=True)
 
-from wnn.control.provenance import collect_provenance
+from wnn.control.provenance import collect_provenance, obs_pwm_convention
 from wnn.control.evaluator import (
 	ControllerSpec, ControllerEvaluator, arch_shape_from_spec, spec_from_arch,
 	fit_thresholds_from_pid_rollouts,
@@ -2666,8 +2666,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                help="Include yaw in per-axis features (default ON). --no-obs-peraxis-yaw drops "
 	                     "yaw → roll+pitch only (gravity-observable; avoids drifting dead-reckoned-yaw poison).")
 	ap.add_argument("--obs-pwm", action=argparse.BooleanOptionalAction, default=False,
-	                help="Expose the RAW throttle accumulator (current pwm, num_motors feats) as "
-	                     "obs — the DIRECT fix for delta's hidden state (∫error was only a proxy). Default OFF.")
+	                help="Expose the throttle accumulator's deviation from its anchor (num_motors feats) as "
+	                     "obs — the DIRECT fix for delta's hidden state (∫error was only a proxy). "
+	                     "ABI 36: under motor lag (--motor-lag-s > 0, incl. the --translation airframe "
+	                     "default) the feature IS the DELIVERED actuator — the student's first-order "
+	                     "estimate u_a of what the rotors deliver, filtered from its own applied commands "
+	                     "with the plant's T — minus the anchor, not the command (a memoryless student "
+	                     "cannot recover u_a from the command; lag-aware teachers label on it). Lag off: "
+	                     "the command, bit-identical to ABI 35. Provenance token obs_pwm=delivered|command|off. "
+	                     "Default OFF.")
 	ap.add_argument("--obs-yaw-err", action=argparse.BooleanOptionalAction, default=False,
 	                help="Yaw-anchor (Phase A): add a CLEAN scalar yaw-error feature "
 	                     "(target_yaw − anchored heading). yaw_heading is seeded to the episode's "
@@ -3896,7 +3903,8 @@ def main():
 	# R9 (multi-axis spec): one greppable line the ladder copies into the marker —
 	# wheel, ABI, .so hash, git HEAD, pool scheme. Fail-safe by construction.
 	print(collect_provenance(fitness_pools_label(args),
-	                         motor_lag=f"{float(args.motor_lag_s):g}s:{args.motor_lag_source}").line())
+	                         motor_lag=f"{float(args.motor_lag_s):g}s:{args.motor_lag_source}",
+	                         obs_pwm=obs_pwm_convention(bool(args.obs_pwm), float(args.motor_lag_s))).line())
 	import shlex
 	print(f"[argv] {shlex.join(args.cli_argv)}", flush=True)
 

@@ -1126,6 +1126,10 @@ kernel void controller_rollout(
 		dhat_ua[m] = 0.0f;
 	bool dhat_ua_seeded = false;
 	bool dhat_lag_obs = (P.dhat_on != 0u) && (P.motor_settling_time_s > 0.0f);
+	// ABI 36: the twin is the student's ACTUATOR estimate, not only d̂'s — it
+	// advances whenever the lag is on, and under lag the obs_pwm feature reports
+	// it (delivered u_a − anchor; controller.rs act_twin_next/delivered_feature).
+	bool act_twin_on = (P.motor_settling_time_s > 0.0f);
 	thread const float *dhat_u_src = dhat_lag_obs ? (thread const float *)dhat_ua : (thread const float *)pwm_applied;
 	for (uint m = 0u; m < MAX_ROTORS; m++)
 		motor_filt[m] = 0.0f;
@@ -1382,8 +1386,29 @@ kernel void controller_rollout(
 		// decouple, the collective anchor otherwise) — twin of
 		// WnnController::compute_features / pwm_feature_obs.
 		float pwm_feat[MAX_ROTORS];
-		for (uint m = 0u; m < P.num_motors; m++)
-			pwm_feat[m] = pwm_acc[m] - ((P.decouple_outputs != 0u && m >= 1u) ? 0.0f : coll_anchor);
+		if (act_twin_on && dhat_ua_seeded && P.obs_pwm != 0u)
+		{
+			// ABI 36: the DELIVERED actuator in bank space (un-mixed to controls
+			// under decouple — dagger_train::unmix_motors_to_controls, same order).
+			float bank[MAX_ROTORS];
+			for (uint m = 0u; m < MAX_ROTORS; m++)
+				bank[m] = dhat_ua[m];
+			if (P.decouple_outputs != 0u)
+			{
+				float p0 = dhat_ua[0], p1 = dhat_ua[1], p2 = dhat_ua[2], p3 = dhat_ua[3];
+				bank[0] = (p0 + p1 + p2 + p3) * 0.25f;
+				bank[1] = (p3 - p1) * 0.5f;
+				bank[2] = (p2 - p0) * 0.5f;
+				bank[3] = (p0 - p1 + p2 - p3) * 0.25f;
+			}
+			for (uint m = 0u; m < P.num_motors; m++)
+				pwm_feat[m] = bank[m] - ((P.decouple_outputs != 0u && m >= 1u) ? 0.0f : coll_anchor);
+		}
+		else
+		{
+			for (uint m = 0u; m < P.num_motors; m++)
+				pwm_feat[m] = pwm_acc[m] - ((P.decouple_outputs != 0u && m >= 1u) ? 0.0f : coll_anchor);
+		}
 		if (hold)
 		{
 			derive_features(sensors, F, integ, yaw_heading, pwm_feat, dhat_u_src, dhat, dhat_last_gyro, dhat_have_last);
@@ -1641,11 +1666,11 @@ kernel void controller_rollout(
 			pwm_applied[m] = pwm[m];
 		// ABI 35: advance the observer's actuator twin with this command (the CPU
 		// advances it lazily at the next compute_features — the same update).
-		if (dhat_lag_obs)
+		if (act_twin_on)
 		{
 			float t_obs = max(P.motor_settling_time_s, 4.0f * P.dt);
 			float a_obs = 4.0f * P.dt / t_obs;
-			for (uint m = 0u; m < 4u; m++)
+			for (uint m = 0u; m < min(P.num_motors, (uint)MAX_ROTORS); m++)
 				dhat_ua[m] = dhat_ua_seeded ? (dhat_ua[m] + a_obs * (pwm_applied[m] - dhat_ua[m])) : pwm_applied[m];
 			dhat_ua_seeded = true;
 		}

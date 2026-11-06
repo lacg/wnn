@@ -102,7 +102,11 @@ import os
 # (bit-identical), per-record GPU solve retired, lag-aware LQR/MPC cost on the
 # delivered actuator + command share, student d-hat on the lagged actuator
 # (set_observer_motor_lag), airframe-bound lag default (Python). T = 0 bit-identical to 34.
-EXPECTED_ABI = 35
+# ABI 36 (06/11/2026): under motor lag the --obs-pwm feature reports the student's
+# DELIVERED actuator estimate u_a − anchor (plant-filter twin of its own applied
+# commands, CPU + Metal), not the command — the lag-collapse fix (0%/82° at T=0.20).
+# The twin advances whenever the lag is on (not only with d-hat). T = 0 bit-identical to 35.
+EXPECTED_ABI = 36
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

@@ -1803,6 +1803,15 @@ impl WnnController
 	pub fn pwm_feature_obs(&self) -> [f32; 4]
 	{
 		let mut p = [0.0f32; 4];
+		// ABI 36: under motor lag, from the step after the first command flew, the
+		// feature is the DELIVERED actuator (the twin's next value) — see
+		// act_twin_next. Lag off, or t = 0: the accumulator (ABI 35, bit-identical).
+		if self.dhat_lag_alpha > 0.0 && self.act_have_last
+		{
+			let d = self.delivered_feature(&self.act_twin_next());
+			p[..self.num_motors.min(4)].copy_from_slice(&d[..self.num_motors.min(4)]);
+			return p;
+		}
 		for (m, slot) in p.iter_mut().enumerate().take(self.num_motors.min(4))
 		{
 			*slot = self.pwm[m] - self.bank_anchor(m);
@@ -1936,30 +1945,73 @@ impl WnnController
 		self.dhat
 	}
 
-	/// ABI 35: what the d̂ observer's model term multiplies by b — the command
-	/// that flew last step (lag off, bit-identical to ABI 34), or, under motor lag,
-	/// the plant filter's output for that command. Called ONCE per observer update
-	/// (= once per physical step after the first), which is exactly the cadence of
-	/// the plant's filter: seeded at the first command, then
-	/// ua += α·(u − ua) in the plant's own f32 expression.
-	fn dhat_actuator(&mut self) -> [f32; 4]
+	/// ABI 36: the student's ACTUATOR TWIN — its estimate u_a of what the rotors
+	/// deliver under motor lag (Molchanov eq. 7, AttitudeSim::apply_motor_lag),
+	/// built from the commands that FLEW (pwm_applied: step()'s return, or what
+	/// the loop owner observe_applied()) with the plant's own f32 coefficient,
+	/// seeded at the first command exactly as the plant seeds. It is the value
+	/// the twin takes at THIS step's compute_features — pure, so pwm_feature_obs
+	/// (called by the rollouts BEFORE step()) and compute_features agree to the
+	/// bit. Advanced ONCE per physical step after the first (compute_features),
+	/// the plant filter's cadence. ABI 35 advanced it only inside the d̂ block;
+	/// since ABI 36 it advances whenever the lag is on — the obs_pwm feature
+	/// reads it too (the 06/11/2026 lag-collapse fix).
+	fn act_twin_next(&self) -> [f32; 8]
 	{
-		let u = [self.pwm_applied[0], self.pwm_applied[1], self.pwm_applied[2], self.pwm_applied[3]];
-		if self.dhat_lag_alpha <= 0.0
+		let n = self.num_motors.min(8);
+		let mut ua = self.dhat_ua;
+		for m in 0..n
 		{
-			return u;
+			ua[m] = if self.dhat_ua_seeded
+			{
+				ua[m] + self.dhat_lag_alpha * (self.pwm_applied[m] - ua[m])
+			}
+			else
+			{
+				self.pwm_applied[m]
+			};
 		}
-		if !self.dhat_ua_seeded
+		ua
+	}
+
+	/// ABI 36: the obs_pwm feature value for bank `m` under motor lag once the
+	/// twin is seeded: u_a − bank anchor, in BANK space (under decouple the
+	/// motor-space twin is un-mixed to controls [T, τr, τp, τy] first — linear,
+	/// so filtering then un-mixing equals un-mixing the filtered commands).
+	fn delivered_feature(&self, ua: &[f32; 8]) -> [f32; 8]
+	{
+		let mut out = [0.0f32; 8];
+		let bank = if self.decouple_outputs
 		{
-			self.dhat_ua = u;
-			self.dhat_ua_seeded = true;
-			return self.dhat_ua;
+			let c = crate::dagger_train::unmix_motors_to_controls([ua[0], ua[1], ua[2], ua[3]]);
+			let mut b = *ua;
+			b[..4].copy_from_slice(&c);
+			b
 		}
-		for m in 0..4
+		else
 		{
-			self.dhat_ua[m] += self.dhat_lag_alpha * (u[m] - self.dhat_ua[m]);
+			*ua
+		};
+		for m in 0..self.num_motors.min(8)
+		{
+			out[m] = bank[m] - self.bank_anchor(m);
 		}
-		self.dhat_ua
+		out
+	}
+
+	/// ABI 36 (tests): the COMMAND-convention obs_pwm value for bank m — the
+	/// accumulator − anchor that ABI ≤ 35 always reported.
+	#[cfg(test)]
+	pub(crate) fn pwm_feature_obs_command(&self, m: usize) -> f32
+	{
+		self.pwm[m] - self.bank_anchor(m)
+	}
+
+	/// ABI 36: true when the obs_pwm feature reports the DELIVERED actuator
+	/// (motor lag on) rather than the command — the provenance token.
+	pub(crate) fn obs_pwm_delivered(&self) -> bool
+	{
+		self.obs_pwm && self.dhat_lag_alpha > 0.0
 	}
 
 	/// ABI 35: tell the d̂ observer the plant's motor-lag settling time T (s), the
@@ -1976,7 +2028,7 @@ impl WnnController
 		{
 			0.0
 		};
-		self.dhat_ua = [0.0; 4];
+		self.dhat_ua = [0.0; 8];
 		self.dhat_ua_seeded = false;
 	}
 
@@ -1993,6 +2045,13 @@ impl WnnController
 	/// return as the default; any loop that modifies the action afterwards
 	/// (expert_drives, exploration, replay of recorded trajectories) must call
 	/// this with what really flew, BEFORE the next step's compute_features.
+	/// observe_applied for any rotor count (the alloc/residual scorer path).
+	pub(crate) fn observe_applied_slice(&mut self, applied: &[f32])
+	{
+		let n = self.pwm_applied.len().min(applied.len());
+		self.pwm_applied[..n].copy_from_slice(&applied[..n]);
+	}
+
 	pub(crate) fn observe_applied(&mut self, applied: [f32; 4])
 	{
 		for (m, v) in self.pwm_applied.iter_mut().enumerate().take(4)
@@ -2345,8 +2404,9 @@ impl WnnController
 			dhat_last_gyro: [0.0f32; 3],
 			dhat_have_last: false,
 			dhat_lag_alpha: 0.0,
-			dhat_ua: [0.0f32; 4],
+			dhat_ua: [0.0f32; 8],
 			dhat_ua_seeded: false,
+			act_have_last: false,
 			// Scope C stage 1 vertical channel.
 			obs_collective_cmd,
 			obs_alt_err,
@@ -3103,8 +3163,9 @@ pub struct WnnController
 	// teachers). Set by the HOST that owns the plant (set_observer_motor_lag),
 	// like the teachers' lag.
 	dhat_lag_alpha: f32,
-	dhat_ua: [f32; 4],
+	dhat_ua: [f32; 8], // ABI 36: the actuator twin, per motor (≤ 8), shared by obs_pwm + d̂
 	dhat_ua_seeded: bool,
+	act_have_last: bool, // ABI 36: a command has flown since reset (twin advances from then on)
 	dt: f32,                  // physics timestep (s); used to scale gyro-z when anchored
 	num_features: usize,      // 9 + enabled extra features (drives all frame sizing)
 	// Per-step integral accumulators, one per enabled "_i" feature, in canonical
@@ -3539,8 +3600,9 @@ impl WnnController
 		self.dhat_last_gyro = [0.0; 3];
 		self.dhat_have_last = false;
 		// ABI 35: the observer's actuator twin re-seeds with the plant's filter.
-		self.dhat_ua = [0.0; 4];
+		self.dhat_ua = [0.0; 8];
 		self.dhat_ua_seeded = false;
+		self.act_have_last = false;
 		// Action-repeat: episodes align decisions at t=0; held PWM back to hover.
 		self.step_counter = 0;
 		for (m, v) in self.last_pwm.iter_mut().enumerate()
@@ -4245,6 +4307,14 @@ impl WnnController
 	pub fn set_observer_motor_lag(&mut self, settling_time_s: f32)
 	{
 		self.set_observer_motor_lag_core(settling_time_s);
+	}
+
+	/// ABI 36: true when the obs_pwm feature reports the DELIVERED actuator (obs_pwm
+	/// on and an observer lag armed by the host) — the provenance convention.
+	#[pyo3(name = "obs_pwm_delivered")]
+	pub fn obs_pwm_delivered_py(&self) -> bool
+	{
+		self.obs_pwm_delivered()
 	}
 
 	/// Multi-step EDRA-BPTT over a teacher-forced window (absolute-PWM mode).
@@ -5294,6 +5364,16 @@ impl WnnController
 			self.last_feature_vector.clone_from(&feats);
 			return feats;
 		}
+		// ABI 36: advance the actuator twin once per physical step after the first
+		// (lag on only — lag off never writes it). Read by the obs_pwm feature and
+		// the d̂ observer below.
+		if self.dhat_lag_alpha > 0.0 && self.act_have_last
+		{
+			self.dhat_ua = self.act_twin_next();
+			self.dhat_ua_seeded = true;
+		}
+		let act_delivered = self.dhat_lag_alpha > 0.0 && self.act_have_last;
+		self.act_have_last = true;
 		// Derived errors from the IMU (accel-only attitude; yaw dead-reckoned).
 		// ABI 32: with obs_att_estimator the attitude reads the estimator's body
 		// "up" instead (same formulas — atan2 is scale-free).
@@ -5369,12 +5449,18 @@ impl WnnController
 			// jitter dominates the raw value. A replay applies the recorded value
 			// (pwm_feat_override, one-shot) because it has neither the deploy
 			// accumulator nor that episode's anchor.
+			// ABI 36: under motor lag (from the step after the first command) the
+			// feature is the DELIVERED actuator u_a − anchor (act_twin_next): the
+			// lag-aware teacher's label depends on u_a, which is not a function of
+			// the command when the rotors lag (06/11/2026 collapse, 0%/82°).
 			let over = self.pwm_feat_override.take();
+			let delivered = if act_delivered { Some(self.delivered_feature(&self.dhat_ua)) } else { None };
 			for m in 0..self.num_motors
 			{
-				let v = match over
+				let v = match (over, delivered)
 				{
-					Some(o) if m < 4 => o[m],
+					(Some(o), _) if m < 4 => o[m],
+					(_, Some(d)) if m < 8 => d[m],
 					_ => self.pwm[m] - self.bank_anchor(m),
 				};
 				feats.push(v);
@@ -5410,7 +5496,14 @@ impl WnnController
 			{
 				// ABI 35: under motor lag the model term reads the LAGGED actuator
 				// (the plant-filter twin), never the command. Lag off ⇒ the command.
-				let m = self.dhat_actuator();
+				let m: [f32; 4] = if self.dhat_lag_alpha > 0.0
+				{
+					[self.dhat_ua[0], self.dhat_ua[1], self.dhat_ua[2], self.dhat_ua[3]]
+				}
+				else
+				{
+					[self.pwm_applied[0], self.pwm_applied[1], self.pwm_applied[2], self.pwm_applied[3]]
+				};
 				// '+' mixer inverse (teacher's observe()): u_roll=(m3−m1)/2,
 				// u_pitch=(m2−m0)/2, u_yaw=((m0+m2)−(m1+m3))/4.
 				let u = [
@@ -7702,7 +7795,7 @@ mod sn0_tests
 			let _ = c.compute_features(gyro, accel, [0.0; 3]);
 			if t >= 1
 			{
-				twin.push(c.dhat_ua);
+				twin.push([c.dhat_ua[0], c.dhat_ua[1], c.dhat_ua[2], c.dhat_ua[3]]);
 				reference.push(filt);
 			}
 			sum += c.dhat_estimate().iter().fold(0.0f64, |m, v| m.max(v.abs() as f64));

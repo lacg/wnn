@@ -37,16 +37,29 @@ class ControllerProvenance:
 	# ABI 35 item I: the RESOLVED plant motor lag "T s:source" (e.g. "0.2s:airframe:grafe2026").
 	# Printed BEFORE fitness_pools, which must stay last (it may contain spaces).
 	motor_lag: str = UNKNOWN
+	# ABI 36: what the --obs-pwm feature reported — "delivered" (motor lag on: the
+	# student's u_a estimate − anchor), "command" (lag off: the accumulator −
+	# anchor), "off". Printed BEFORE fitness_pools.
+	obs_pwm: str = UNKNOWN
 
 	def line(self) -> str:
 		"""The single greppable line the ladder copies into the marker."""
 		return (f"{PROVENANCE_PREFIX} wheel={self.wheel} abi={self.abi} "
 		        f"wheel_sha256={self.wheel_sha256} git={self.git} "
 		        f"motor_lag={self.motor_lag} "
+		        f"obs_pwm={self.obs_pwm} "
 		        f"fitness_pools={self.fitness_pools}")
 
 
-def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN) -> ControllerProvenance:
+def obs_pwm_convention(obs_pwm: bool, motor_lag_s: float) -> str:
+	"""ABI 36 rule, mirrored from WnnController::obs_pwm_delivered: under motor lag
+	the obs_pwm feature IS the delivered-actuator estimate; lag off it is the command."""
+	if not obs_pwm:
+		return "off"
+	return "delivered" if float(motor_lag_s) > 0.0 else "command"
+
+
+def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: str = UNKNOWN) -> ControllerProvenance:
 	"""Gather every field, never raising: each accessor degrades to UNKNOWN / 0."""
 	wheel, abi, sha = _wheel_identity()
 	return ControllerProvenance(
@@ -56,6 +69,7 @@ def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN) -> Controll
 		git=_git_head(os.path.dirname(os.path.abspath(__file__))),
 		fitness_pools=fitness_pools,
 		motor_lag=motor_lag.replace(" ", "_").replace('"', ""),
+		obs_pwm=obs_pwm.replace(" ", "_").replace('"', ""),
 	)
 
 
