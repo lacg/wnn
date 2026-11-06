@@ -667,7 +667,10 @@ constant float CTRL_TERNARY_EMPTY = 0.5f;
 
 inline bool ctrl_fire_bit(uint cell, uint memory_mode)
 {
-	if (memory_mode == WNN_MODE_TERNARY || memory_mode == WNN_MODE_BINARY)
+	// Twin of cell_mode::cell_fire_bit: every NON-quad mode (TERNARY, BINARY, PLN)
+	// fires on TRUE(1) only. PLN was missing until ABI 35 and took the QUAD MSB rule,
+	// so an EMPTY(2) PLN state cell read as fired on the GPU and not on the CPU.
+	if (memory_mode == WNN_MODE_TERNARY || memory_mode == WNN_MODE_BINARY || memory_mode == WNN_MODE_PLN)
 		return cell == 1u;
 	return ((cell >> 1) & 1u) != 0u;
 }
