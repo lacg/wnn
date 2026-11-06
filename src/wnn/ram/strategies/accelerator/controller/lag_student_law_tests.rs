@@ -557,6 +557,33 @@ fn probe_cfg(lag: f32, tr: bool) -> crate::dagger_train::RewardGatedConfigPacked
 	c
 }
 
+/// The probe's G1-calibrated (untrained) RAM student + its config — shared by
+/// ram_probe and imitation_probe's light test.
+pub(crate) fn probe_student_and_cfg(lag: f32, seed: u64) -> (crate::controller::WnnController, crate::dagger_train::RewardGatedConfigPacked)
+{
+	let tr = std::env::var("LAGDIAG_TRANSLATION").is_ok();
+	let cfg = probe_cfg(lag, tr);
+	(calibrated_student(&cfg, seed, 0.1, 0.95, tr), cfg)
+}
+
+fn calibrated_student(cfg: &crate::dagger_train::RewardGatedConfigPacked, seed: u64, dmax: f32, leak: f32, tr: bool) -> crate::controller::WnnController
+{
+	let mut c0 = ram_student(9 + 6 + 4 + if tr { 7 } else { 0 }, Vec::new(), seed, dmax, leak, tr);
+	let nf = c0.num_features();
+	let samples = crate::calib_sampler::sample_calibration_features_rs(&mut c0, cfg, 24, seed ^ 0xCA1);
+	let mut thr = Vec::with_capacity(nf * 8);
+	for col in samples.iter()
+	{
+		let mut v = col.clone();
+		v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+		for k in 0..8
+		{
+			thr.push(v[((k as f64 + 0.5) / 8.0 * (v.len() - 1) as f64) as usize]);
+		}
+	}
+	ram_student(nf, thr, seed, dmax, leak, tr)
+}
+
 fn ram_probe(lag: f32, force_command: bool, seed: u64, dmax: f32, leak: f32, tr: bool) -> (f64, f64, Vec<f64>)
 {
 	use rand::SeedableRng;

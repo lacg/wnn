@@ -1668,6 +1668,50 @@ impl WnnController
 		&self.thresholds
 	}
 
+	/// DIAGNOSTIC (imitation_probe, 06/11/2026): per output neuron, the address
+	/// the LAST step() read (from the cached output-layer input). Read-only.
+	pub(crate) fn diag_output_addresses(&self) -> Vec<u64>
+	{
+		let num_out = self.num_motors * self.levels_per_motor;
+		let b = self.output_bits_per_neuron;
+		(0..num_out)
+			.map(|n| compute_address_sparse(&self.last_output_layer_input, &self.output_connections[n * b..(n + 1) * b], b))
+			.collect()
+	}
+
+	/// DIAGNOSTIC: the raw per-bank decode ∈ [0,1] of the LAST step()'s cells
+	/// (deterministic modes) — what the trainer's target is compared against.
+	pub(crate) fn diag_raw_decode(&self) -> [f32; 4]
+	{
+		let mut d = [0.5f32; 4];
+		let l = self.levels_per_motor;
+		for (m, slot) in d.iter_mut().enumerate().take(self.num_motors.min(4))
+		{
+			*slot = crate::cell_mode::decode_motor_cells(&self.last_output_cells[m * l..(m + 1) * l], self.memory_mode, self.output_decode);
+		}
+		d
+	}
+
+	/// DIAGNOSTIC: the decode target and per-neuron target bits the live sn=0
+	/// trainer derives from a bank-space label (output_target_at's ABSOLUTE
+	/// branch — the probe refuses dagger_label_delta).
+	pub(crate) fn diag_targets(&self, label: [f32; 4]) -> ([f32; 4], Vec<bool>)
+	{
+		assert!(!self.dagger_label_delta, "imitation_probe: dagger_label_delta not supported");
+		let mut d = [0.5f32; 4];
+		let l = self.levels_per_motor;
+		let mut bits = Vec::with_capacity(self.num_motors * l);
+		for m in 0..self.num_motors.min(4)
+		{
+			d[m] = self.output_decode_target(m, label[m]);
+			for i in 0..l
+			{
+				bits.push(self.otb(d[m], i));
+			}
+		}
+		(d, bits)
+	}
+
 	/// Delta-control mode params the GPU scorer needs so it matches step()'s
 	/// delta-mode decode (previously the kernel was absolute-only, scoring
 	/// delta controllers in the WRONG mode). Uniform across a population.

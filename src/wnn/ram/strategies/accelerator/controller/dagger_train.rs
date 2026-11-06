@@ -1326,7 +1326,7 @@ pub(crate) fn rebased_label_base(
 	out
 }
 
-fn sim_default(cfg: &RewardGatedConfigPacked) -> AttitudeSim
+pub(crate) fn sim_default(cfg: &RewardGatedConfigPacked) -> AttitudeSim
 {
 	// The sim the training loop controls. Airframe comes from the config (see
 	// the af_* fields) so it is defined ONCE, on the Python side, with its
@@ -1592,6 +1592,25 @@ pub fn rollout_and_label_rs(
 	target: [f32; 3],
 ) -> TrajectoryRs
 {
+	rollout_and_label_inner(controller, teacher, sim, cfg, tilt_rad, rng, target, None)
+}
+
+/// rollout_and_label_rs with an optional DIAGNOSTIC capture (imitation_probe).
+/// `cap = None` is the production rollout, byte-identical; the capture only
+/// reads the controller (and, when it asks, re-syncs the student's accumulator
+/// to what flew under expert_drives — never in production).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn rollout_and_label_inner(
+	controller: &mut WnnController,
+	teacher: &mut Teacher,
+	sim: &mut AttitudeSim,
+	cfg: &RewardGatedConfigPacked,
+	tilt_rad: f64,
+	rng: &mut SmallRng,
+	target: [f32; 3],
+	mut cap: Option<&mut crate::imitation_probe::ImitCapture>,
+) -> TrajectoryRs
+{
 	let (init_q, init_omega) = sample_initial_state(
 		rng,
 		tilt_rad,
@@ -1655,6 +1674,10 @@ pub fn rollout_and_label_rs(
 	// which the teacher ignores anyway (no prior gyro) — is harmless. No-op for
 	// every teacher except MpcOf.
 	let mut last_applied = [0.5f32; 4];
+	if let Some(c) = cap.as_deref_mut()
+	{
+		c.begin_episode(cfg.motor_lag_s, cfg.dt as f32);
+	}
 	let mut cumulative = 0.0_f64;
 	let mut sum_err = 0.0_f64;
 	let mut steps = 0_usize;
@@ -1686,6 +1709,10 @@ pub fn rollout_and_label_rs(
 				last_applied[3] as f64,
 			],
 		);
+		if let Some(c) = cap.as_deref_mut()
+		{
+			c.observe_applied(last_applied);
+		}
 
 		// SCOPE C STAGE 1+2: the live vertical + horizontal observation for THIS
 		// step, at the same start-of-step snapshot as the IMU — the exact twin of
@@ -1782,6 +1809,11 @@ pub fn rollout_and_label_rs(
 		// return as a default, but expert_drives / explore_eps may have replaced
 		// or perturbed it — the observer must see the plant's real input.
 		controller.observe_applied(applied);
+		if let Some(c) = cap.as_deref_mut()
+		{
+			c.record_teacher_inputs(q, gyro, teacher.integrals(), controller.vert_obs());
+			c.record(controller, traj.pid_pwms[traj.pid_pwms.len() - 1], applied);
+		}
 		sim.step(applied);
 		last_applied = applied; // offset-free MPC observer: what the sim saw
 		// G5 (ABI 32): vs the position loop's tilt reference when armed; else the
@@ -2412,6 +2444,15 @@ pub(crate) fn validate_train_regime(
 /// neutral + delta·(1 − n)/dmax (gamma 1, n = 0.5 BINARY).
 fn imitation_diag_line(controller: &WnnController, cfg: &RewardGatedConfigPacked, it: usize, tilt_rad: f64, trajs: &[TrajectoryRs])
 {
+	// Under expert_drives (and explore_eps) student_pwms holds the APPLIED action,
+	// not the student's own command, so the decode below would be the teacher's
+	// re-derived through the student's baseline — a wrong number, not a noisy one.
+	// imitation_probe measures BC imitation properly (06/11/2026).
+	if cfg.expert_drives || cfg.explore_eps > 0.0
+	{
+		eprintln!("[imit] round={it} skipped: expert_drives/explore_eps replace the student's command in student_pwms (use WNN_IMIT_PROBE)");
+		return;
+	}
 	let (_dc, dmax, _leak, _g) = controller.delta_params();
 	let n = controller.neutral_f32();
 	let (mut se, mut sl, mut sat, mut cnt, mut steps) = (0.0f64, 0.0f64, 0usize, 0usize, 0usize);
@@ -3011,6 +3052,14 @@ pub fn dagger_train_batch_inplace(
 				// memory further, so writes compound (QUAD nudging settles same-address
 				// disagreement by vote tally). The caller keeps the LAST fold's stats,
 				// which is what the pre-ABI-15 Python fold loop reported.
+				// DIAGNOSTIC (06/11/2026, CTRL-5 lag): WNN_IMIT_PROBE=1 runs the
+				// imitation-vs-closed-loop probe on THIS batch's genome 0 — the exact
+				// recipe controller + packed config — before training. Never set in
+				// production; read-only on `controller` (the probe trains clones).
+				if i == 0 && std::env::var("WNN_IMIT_PROBE").is_ok()
+				{
+					crate::imitation_probe::run(&controller, &cfg, target_rpy, &fold_seeds[i]);
+				}
 				let mut stats = TrainStats::default();
 				for &seed_k in &fold_seeds[i]
 				{
