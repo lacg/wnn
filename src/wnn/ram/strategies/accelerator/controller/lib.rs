@@ -14,6 +14,8 @@ mod altitude_pd; // scope C stage 1: outer altitude loop handing a collective to
 mod box_qp; // exact box-QP solver for the MPC teachers (PDAS + primal active-set)
 mod arch_ops; // architecture (connectivity) operators (counter_rng, Rust-first)
 mod cell_mode;
+mod bptt_plan; // ABI 35: a bptt window's memory-independent inputs (CPU + GPU walk)
+mod solver_view; // ABI 35 B: window-lived solver view (no per-record entry clone)
 mod cell_remap; // cell ADDRESS remaps on architecture change (bit-exact port)
 mod controller;
 mod controller_split;
@@ -37,6 +39,8 @@ mod position_score; // scope C stage 2: score the full-state cascade in METRES
 mod record_ops; // reference-rollout recorders (address universe, input entropy)
 #[cfg(test)]
 mod abi32_tests; // ABI 32 behaviour + CPU/Metal parity (plant, G5, dx/dy, estimator)
+#[cfg(test)]
+mod abi35_tests; // ABI 35: bptt walk fixtures, CPU pins, CPU/GPU walk parity
 #[cfg(test)]
 mod abi34_tests; // ABI 34: lag-aware teachers, one pwm convention under motor lag, T=0 pins
 mod att_estimator; // ABI 32: the WNN's Mahony attitude estimate (obs_att_estimator)

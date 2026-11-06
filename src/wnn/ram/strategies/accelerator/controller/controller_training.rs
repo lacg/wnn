@@ -551,7 +551,35 @@ pub(crate) fn reachable_topk_for_neuron(
 	};
 	let trained: std::collections::HashSet<usize> =
 		entries.iter().map(|&(a, _)| a as usize).collect();
+	reachable_topk_core(
+		entries,
+		&|a: usize| trained.contains(&a),
+		default_val,
+		proj,
+		&dup_ok,
+		n_bits,
+		k_top,
+		saturation,
+		base_and_valid,
+	)
+}
 
+/// The body of `reachable_topk_for_neuron` with the "is this address written?" test
+/// supplied by the caller (ABI 35 B): the bptt walk answers it from a window-lived
+/// SolverView instead of rebuilding a HashSet of the neuron per record.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn reachable_topk_core(
+	entries: &[(u64, u8)],
+	trained: &dyn Fn(usize) -> bool,
+	default_val: u8,
+	proj: usize,
+	dup_ok: &dyn Fn(usize) -> bool,
+	n_bits: usize,
+	k_top: usize,
+	saturation: f64,
+	base_and_valid: &dyn Fn(u8) -> Option<f64>,
+) -> Vec<(usize, f64)>
+{
 	let mut cands: Vec<(usize, f64)> = Vec::new();
 
 	// (a) Trained cells.
@@ -585,7 +613,7 @@ pub(crate) fn reachable_topk_for_neuron(
 				{
 					addr ^= 1usize << (n_bits - 1 - k);
 				}
-				if !trained.contains(&addr) && dup_ok(addr)
+				if !trained(addr) && dup_ok(addr)
 				{
 					cands.push((addr, base_def + HAMMING_COST * (h as f64) + saturation));
 					collected += 1;
@@ -611,9 +639,86 @@ pub(crate) fn reachable_topk_for_neuron(
 		}
 	}
 
-	cands.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap().then(a.0.cmp(&b.0)));
-	cands.truncate(k_top);
+	// (cost, addr) is a TOTAL order here (addresses are unique: written cells are
+	// distinct and the untrained hunt skips written ones), so selecting the k_top
+	// smallest and sorting only those equals a full sort + truncate — bit-identical,
+	// O(n) instead of O(n log n) for the ~thousands of written cells per neuron.
+	let cmp = |a: &(usize, f64), b: &(usize, f64)| a.1.partial_cmp(&b.1).unwrap().then(a.0.cmp(&b.0));
+	if k_top == 0
+	{
+		cands.clear();
+		return cands;
+	}
+	if cands.len() > k_top
+	{
+		cands.select_nth_unstable_by(k_top - 1, cmp);
+		cands.truncate(k_top);
+	}
+	cands.sort_by(cmp);
 	cands
+}
+
+/// ABI 35 (B): `solve_partial_connectivity_qsr_reachable` reading a window-lived
+/// SolverView (no per-record clone / HashSet). `base` is the first view neuron of
+/// this solve (motor m's bank starts at m*levels). Same phase 1 + beam, so the
+/// result is bit-identical.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn solve_qsr_reachable_view(
+	view: &crate::solver_view::SolverView,
+	base: usize,
+	connections: &[i64],
+	num_neurons: usize,
+	n_bits_per_neuron: usize,
+	total_input_bits: usize,
+	input_bits: &[bool],
+	target_bits: &[bool],
+	n_immutable_bits: usize,
+	topk_per_neuron: usize,
+	memory_mode: u8,
+) -> Option<Vec<bool>>
+{
+	let memory_size = 1usize << n_bits_per_neuron;
+	let beam_width = MAX_BEAM_WIDTH.min((8 * num_neurons).max(16));
+	let k_top = topk_per_neuron.min(memory_size);
+	let top_k: Vec<Vec<(usize, f64)>> = (0..num_neurons)
+		.into_par_iter()
+		.map(|n| {
+			let conn = &connections[n * n_bits_per_neuron..(n + 1) * n_bits_per_neuron];
+			let target_true = target_bits[n];
+			let entries = view.entries(base + n);
+			let occ_written = entries.iter().filter(|&&(_, v)| v != WEAK_FALSE).count();
+			let occupied = (memory_size - entries.len()) + occ_written;
+			let saturation = SATURATION_COST * (occupied as f64 / memory_size as f64);
+			let base_cost = |val: u8| -> Option<f64> {
+				Some(
+					QSR_DISTANCE_COST
+						* crate::cell_mode::nudge_distance(val, target_true, memory_mode) as f64,
+				)
+			};
+			let proj = projected_address(conn, input_bits, n_bits_per_neuron);
+			reachable_topk_core(
+				entries,
+				&|a: usize| view.contains(base + n, a as u64),
+				ram_core::neuron_memory::EMPTY_U8,
+				proj,
+				&|_a: usize| true,
+				n_bits_per_neuron,
+				k_top,
+				saturation,
+				&base_cost,
+			)
+		})
+		.collect();
+	run_beam_search_from_topk(
+		&top_k,
+		connections,
+		num_neurons,
+		n_bits_per_neuron,
+		total_input_bits,
+		input_bits,
+		n_immutable_bits,
+		beam_width,
+	)
 }
 
 /// Reachable-address TRINARY solver — exact drop-in for
