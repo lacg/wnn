@@ -11,12 +11,13 @@
 # (logs/controller/ctrl8_ab_pop50/<arm|twin>_s3.out) with --base-seed / --save-* stripped; the
 # condition flags are appended AFTER it (argparse last-wins). No recipe is copied into this file.
 #   MA_ANCHOR=arm|twin   REQUIRED in run mode — the CTRL-8 rule_v2 verdict, set by a human.
-# ANCHOR SEEDS (decision 2: no s7-s9 — the CTRL-8 seeds ARE the anchor):
-#   s31337002 = logs/controller/ctrl8_drag_sweep_pop50/<a>_kd078.out
-#   s31337003..06 = logs/controller/ctrl8_ab_pop50/<a>_s<n>.out
-#   If CTRL-8 stopped at its n=3 interim look, s5/s6 do not exist: this chain flies them itself as
-#   `ma_anchor_<a>_s<seed>` FIRST in rounds 4/5 (no condition flags), so every condition seed has
-#   its same-seed anchor before the round's verdict.
+# THE ANCHOR FLIES IN THIS CHAIN (ABI 35 item I, Luiz 05/11/2026). The recipe carries no
+#   --motor-lag-s, so under --translation it now flies the AIRFRAME-BOUND lag (cf21_brushless
+#   T=0.20 s, Gräfe 2026 — phased_ga AIRFRAME_MOTOR_LAG_S). The CTRL-8 seeds were flown LAG-FREE
+#   and are therefore NO LONGER the anchor: the ANCHOR condition (`ma_anchor_s<seed>`, no condition
+#   flags) flies FIRST in every round r at seed r, so every condition seed has its same-seed,
+#   same-plant anchor before the round's verdict. (Supersedes decision 2's "CTRL-8 seeds ARE the
+#   anchor".)
 # REPORT SEEDS: the anchor argv's own 99990101..05 (interim set, so every headline compares to the
 #   banked anchor headlines directly). The FINAL table re-scores every crown on D5 99990201..05 with
 #   `phased_ga <argv> --report-seeds <D5> --recalc-headline <ckpt>` (spec §5 #12) — not this chain.
@@ -30,10 +31,14 @@
 #       sn=8 flies ONLY if sn=4 showed an effect — a HUMAN reading: touch
 #       experiments/multi_axis_markers/SN8_APPROVED after reading sn4's verdict. Until then sn8 is
 #       REFUSED (exit 2) and the chain moves on.
-#   (3) cf2x_firmware flies at --rotor-drag 0.25 (Förster 2015, rotor-only — disclosed).
+#   (3) cf2x_firmware flies at --rotor-drag 0.25 (Förster 2015, rotor-only — disclosed) and
+#       INHERITS its airframe's lag T=0.26 s (Förster 2015 H2 pole, item I) — no lag flag here.
 #   (4) axis C has NO pre-set cell cap: the smoke re-measures at the current anchor size. Axis C is
 #       REFUSED until MA_AXIS_C_MAX_CELLS is set by a human from that measurement (a number appended
 #       as --max-cells; 1000000000 = the anchor's own "uncapped").
+#   (6) ITEM I (05/11/2026): axis F = lag OFF (--motor-lag-s 0, the lag-free arm vs the lagged
+#       anchor) and the stress T=0.30. The F030 approval gate is GONE: the teachers are lag-aware
+#       since ABI 34. A banked run's `[provenance]` must carry the resolved `motor_lag=` token.
 #   (5) wheel FROZEN at ABI 33 sha a6398538ce04588c: preflight refuses any other installed wheel, and
 #       a run whose `[provenance]` line differs is NOT banked (abort).
 #
@@ -60,14 +65,15 @@ cd "$(dirname "$0")/.." || exit 1
 
 # =============================== THE TABLE — edit here ===============================
 # axis|value|suffix|flags|gate     gate: ""=none · AXIS_C=needs MA_AXIS_C_MAX_CELLS · SN8=AXIS_C + SN8_APPROVED
-#   F030 = needs F030_APPROVED: at T=0.30 the mpcof TEACHER is 0.6 % stable (spec §3.1) — flies only
-#   after flight-dynamics/Luiz rule on the lag-unaware teacher.
-# Order = round-1 order of spec draft 4 §4 (A, F, B, D, C).
+# Order = the ANCHOR first (item I), then round-1 order of spec draft 4 §4 (A, F, B, D, C).
+# The ANCHOR row MUST stay first and keep suffix `anchor`: the verdict pairs every condition
+# against its banked outs (anchor_out) and skips it as an arm.
 CONDITIONS=(
+	"ANC|airframe-lag|anchor||"
 	"A|L4A|axA_L4A|--disturbance L4A|"
 	"A|L4B|axA_L4B|--disturbance L4B|"
-	"F|T0.15|axF_T015|--motor-lag-s 0.15|"
-	"F|T0.30|axF_T030|--motor-lag-s 0.30|F030"
+	"F|off|axF_lagoff|--motor-lag-s 0|"
+	"F|T0.30|axF_T030|--motor-lag-s 0.30|"
 	"B|pid|axB_pid|--teacher pid|"
 	"B|lqr|axB_lqr|--teacher lqr|"
 	"D|cf2x_firmware|axD_cf2xfw_kd025|--airframe cf2x_firmware --rotor-drag 0.25|"
@@ -79,14 +85,13 @@ FROZEN_ABI="33"
 FROZEN_SHA="a6398538ce04588c"
 # =====================================================================================
 
-# MA_PYTHON / MA_LOG / MA_LOCK / MA_TIME / MA_CTRL8_DIR / MA_SWEEP_DIR are TEST HOOKS for
+# MA_PYTHON / MA_LOG / MA_LOCK / MA_TIME / MA_CTRL8_DIR are TEST HOOKS for
 # tests/multi_axis_chain_dryrun.sh — never set them on a production launch.
 VP="${MA_PYTHON:-/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/bin/python}"
 LOG="${MA_LOG:-/private/tmp/multi_axis_chain.log}"
 LOCK="${MA_LOCK:-/private/tmp/multi_axis_chain.lock}"
 TIME_CMD="${MA_TIME-/usr/bin/time -l}"
 CTRL8_DIR="${MA_CTRL8_DIR:-logs/controller/ctrl8_ab_pop50}"
-SWEEP_DIR="${MA_SWEEP_DIR:-logs/controller/ctrl8_drag_sweep_pop50}"
 OUT="logs/controller/multi_axis"
 MARK="experiments/multi_axis_markers"
 LIB="scripts/controller_arm_lib.sh"
@@ -118,12 +123,8 @@ seed_idx() { echo "$SEEDS" | awk -v s="$1" '{for(i=1;i<=NF;i++) if($i==s) print 
 has_headline() { [ -f "$1" ] && grep -a -q '\[stage-select\] HEADLINE held-out:' "$1"; }
 
 # ---- the anchor --------------------------------------------------------------------------
-anchor_out() {   # <seed> -> the anchor .out for that seed (CTRL-8 file, else this chain's own)
-	local a="${ANCHOR:-arm}" s="$1" n
-	n="$(seed_idx "$s")"
-	if [ "$s" = "31337002" ]; then echo "${SWEEP_DIR}/${a}_kd078.out"; return; fi
-	local c8="${CTRL8_DIR}/${a}_s$((n + 1)).out"
-	if has_headline "$c8"; then echo "$c8"; else echo "${OUT}/ma_anchor_${a}_s${s}.out"; fi
+anchor_out() {   # <seed> -> this chain's own ANCHOR-condition .out for that seed (item I)
+	echo "${OUT}/$(tag_of anchor "$1").out"
 }
 anchor_argv() {   # the winner's recipe, verbatim, minus the per-run fields
 	local src="${CTRL8_DIR}/${ANCHOR:-arm}_s3.out"
@@ -140,7 +141,6 @@ gate_state() {   # <gate> -> "" (open) or the refusal reason
 	case "$1" in
 		"") echo "" ;;
 		AXIS_C) [ -n "${MA_AXIS_C_MAX_CELLS:-}" ] && echo "" || echo "MA_AXIS_C_MAX_CELLS unset (decision 4: set it from the smoke's measurement)" ;;
-		F030) [ -f "${MARK}/F030_APPROVED" ] && echo "" || echo "T=0.30 waits for ${MARK}/F030_APPROVED (mpcof teacher collapses at this lag, spec §3.1)" ;;
 		SN8) if [ -z "${MA_AXIS_C_MAX_CELLS:-}" ]; then echo "MA_AXIS_C_MAX_CELLS unset"
 		     elif [ ! -f "${MARK}/SN8_APPROVED" ]; then echo "sn=8 waits for ${MARK}/SN8_APPROVED (decision 1: only if sn=4 shows an effect)"
 		     else echo ""; fi ;;
@@ -164,9 +164,6 @@ build_plan() {
 	local r="$1" seed rec axis value suffix flags gate
 	PLAN=()
 	seed="$(nth_seed "$r")"
-	if ! has_headline "$(anchor_out "$seed")"; then
-		PLAN[${#PLAN[@]}]="$r|anchor|${ANCHOR:-arm}|anchor_${ANCHOR:-arm}|${seed}||"
-	fi
 	for rec in "${CONDITIONS[@]}"; do
 		IFS='|' read -r axis value suffix flags gate <<< "$rec"
 		PLAN[${#PLAN[@]}]="$r|${axis}|${value}|${suffix}|${seed}|${flags}|${gate}"
@@ -175,11 +172,7 @@ build_plan() {
 print_plan_line() {
 	local r axis value suffix seed flags gate st why
 	IFS='|' read -r r axis value suffix seed flags gate <<< "$1"
-	if [ "$axis" = "anchor" ]; then
-		st="$(banked "$suffix" "$seed" && echo banked || echo todo)"
-	else
-		st="$(status_of "$suffix" "$seed" "$gate")"
-	fi
+	st="$(status_of "$suffix" "$seed" "$gate")"
 	why="$(gate_state "$gate")"
 	printf 'PLAN r%s axis=%-6s cond=%-16s seed=%s tag=%s status=%s flags="%s"%s\n' "$r" "$axis" "$suffix" "$seed" \
 		"$(tag_of "$suffix" "$seed")" "$st" "$(cond_flags "$flags" "$gate")" "${why:+ [$why]}"
@@ -218,12 +211,17 @@ preflight() {
 	[ -f "$LIB" ] || { log "ABORT — $LIB missing."; exit 1; }
 	[ -x "$VP" ] || { log "ABORT — venv python $VP missing."; exit 1; }
 	[ -n "$(anchor_argv)" ] || { log "ABORT — no [argv] in ${CTRL8_DIR}/${ANCHOR}_s3.out."; exit 1; }
+	# Item I: the anchor must fly the AIRFRAME-BOUND lag — a recipe carrying its own lag flag would
+	# silently override it (and the F conditions' last-wins flags would no longer be the only lag).
+	if echo " $(anchor_argv) " | grep -qE -- " --(motor-lag-s|no-motor-lag)( |=)"; then
+		log "ABORT — the anchor argv carries a motor-lag flag; item I needs it to resolve the airframe lag. Nothing launched."; exit 1
+	fi
 	local id; id="$(wheel_identity)"
 	[ "$id" = "${FROZEN_ABI} ${FROZEN_SHA}" ] || { log "ABORT — installed wheel is '${id:-unknown}', the programme is FROZEN at ABI ${FROZEN_ABI} sha ${FROZEN_SHA} (decision 5). Nothing launched."; exit 1; }
 	local help f
 	help="$(PYTHONPATH=src/wnn "$VP" -m wnn.control.phased_ga --help 2>/dev/null)"
 	[ -n "$help" ] || { log "ABORT — phased_ga --help printed nothing (tree broken?)."; exit 1; }
-	for f in --disturbance --motor-lag-s --teacher --airframe --rotor-drag --grid-state-neurons --max-state-neurons --max-cells; do
+	for f in --disturbance --motor-lag-s --no-motor-lag --teacher --airframe --rotor-drag --grid-state-neurons --max-state-neurons --max-cells; do
 		echo "$help" | grep -q -- "$f" || { log "ABORT — phased_ga has no $f (source/wheel skew). Nothing launched."; exit 1; }
 	done
 	log "preflight OK — anchor ${ANCHOR}, wheel ABI ${FROZEN_ABI} sha ${FROZEN_SHA}, flags present."
@@ -238,6 +236,8 @@ check_run() {   # <rc> <out> <winner> -> "" if bankable, else the reason
 	prov="$(grep -a -m1 '^\[provenance\]' "$out")"
 	echo "$prov" | grep -q "abi=${FROZEN_ABI} " && echo "$prov" | grep -q "wheel_sha256=${FROZEN_SHA}" \
 		|| { echo "provenance mismatch: ${prov:-none}"; return; }
+	# Item I: the run must state the lag it RESOLVED (a pre-item-I tree would fly lag-free silently).
+	echo "$prov" | grep -q " motor_lag=" || { echo "provenance has no motor_lag= (pre-item-I tree): ${prov}"; return; }
 	echo ""
 }
 bank_marker() {   # <tag> <axis> <value> <suffix> <seed> <out> <dur_s> <flags>
@@ -254,8 +254,7 @@ launch_one() {
 	local r axis value suffix seed flags gate tag st full out win rc t0 why n
 	IFS='|' read -r r axis value suffix seed flags gate <<< "$1"
 	tag="$(tag_of "$suffix" "$seed")"
-	if [ "$axis" = "anchor" ]; then st="$(banked "$suffix" "$seed" && echo banked || echo todo)"
-	else st="$(status_of "$suffix" "$seed" "$gate")"; fi
+	st="$(status_of "$suffix" "$seed" "$gate")"
 	case "$st" in
 		banked) log "r$r SKIP $tag — banked."; return 0 ;;
 		STOPPED*) log "r$r SKIP $tag — condition stopped at the n=3 interim look."; return 0 ;;
@@ -295,11 +294,12 @@ round_verdict() {
 	log "---------- ROUND $r VERDICT (paired vs anchor ${ANCHOR}, rule_v2; REPORT headline) ----------"
 	for rec in "${CONDITIONS[@]}"; do
 		IFS='|' read -r axis value suffix flags gate <<< "$rec"
+		[ "$suffix" = "anchor" ] && continue   # the control group, not an arm
 		outs="$(cond_outs "$suffix")"; n="$(echo "$outs" | grep -c .)"
 		[ "$n" -ge 2 ] || { log "$suffix: n=$n — direction only, no read."; continue; }
 		args=""
 		for s in $outs; do args="$args --arm $s"; done
-		for s in $SEEDS; do args="$args --ctl $(anchor_out "$s")"; done
+		for s in $SEEDS; do banked anchor "$s" && args="$args --ctl $(anchor_out "$s")"; done
 		js="/private/tmp/multi_axis_verdict_${suffix}.json"
 		log "--- $suffix (axis $axis = $value), n=$n ---"
 		# shellcheck disable=SC2086
@@ -321,9 +321,9 @@ print_smokes() {
 	argv="$(anchor_argv)"
 	[ -n "$argv" ] || { echo "no anchor argv (${CTRL8_DIR}/${ANCHOR:-arm}_s3.out)" >&2; exit 1; }
 	echo "# pop-6 plumbing smokes (anchor ${ANCHOR:-arm}; numbers are NOT read; decisions at pop 50)."
-	echo "# assert rc=0 + [PLANT] + [provenance] abi=33 sha ${FROZEN_SHA} + GRID + HEADLINE; /usr/bin/time -l gives peak RSS."
+	echo "# assert rc=0 + [PLANT] motor_lag=… + [provenance] abi=${FROZEN_ABI} sha ${FROZEN_SHA} + GRID + HEADLINE; /usr/bin/time -l gives peak RSS."
 	echo "# axis C: no cap (decision 4) — read peak RSS + cells, then set MA_AXIS_C_MAX_CELLS."
-	for rec in "anchor|-|anchor||" "${CONDITIONS[@]}"; do
+	for rec in "${CONDITIONS[@]}"; do
 		IFS='|' read -r axis value suffix flags gate <<< "$rec"
 		echo "cd /Users/lacg/wnn && PYTHONPATH=src/wnn nice -n 5 /usr/bin/time -l $VP -u -m wnn.control.phased_ga $argv" \
 			"--pop 6 --steps 200 --neurons-gens 1 --memory-gens 1 --eval-episodes 2 --memory-eval-episodes 2 --report-episodes 2" \
