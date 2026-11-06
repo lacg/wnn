@@ -32,8 +32,12 @@ def test_line_is_single_token_per_field() -> None:
 	line = p.line()
 	check("line starts with the prefix", line.startswith(PROVENANCE_PREFIX + " "), True)
 	fields = dict(re.findall(r" (\w+)=(\S+)", line.split(" fitness_pools=")[0]))
-	check("wheel/abi/sha/git are space-free tokens", fields,
-	      {"wheel": "ram_controller-2026.212.37", "abi": "27", "wheel_sha256": "08cdd0462eac0d15", "git": "3b5fc37d+dirty"})
+	check("wheel/abi/sha/git/motor_lag are space-free tokens", fields,
+	      {"wheel": "ram_controller-2026.212.37", "abi": "27", "wheel_sha256": "08cdd0462eac0d15", "git": "3b5fc37d+dirty",
+	       "motor_lag": "unknown"})
+	q = ControllerProvenance("w", 35, "s", "g", "rotation(1 pool/gen)", "0.2s:airframe:grafe2026")
+	check("ABI 35 item I: resolved motor lag is printed before fitness_pools",
+	      " motor_lag=0.2s:airframe:grafe2026 fitness_pools=rotation(1 pool/gen)" in q.line(), True)
 	check("fitness_pools is the LAST field (may contain spaces)", line.endswith(" fitness_pools=CRN(all 5 pools/gen)"), True)
 	check("no double quotes anywhere (the marker is printf'd JSON)", '"' in line, False)
 

@@ -71,14 +71,15 @@ provenance_json() {
 		printf 'null'
 		return 0
 	fi
-	local wheel abi sha git pools
+	local wheel abi sha git pools lag
 	wheel=$(printf '%s' "$line" | sed -nE 's/.* wheel=([^ ]+).*/\1/p')
+	lag=$(printf '%s' "$line"   | sed -nE 's/.* motor_lag=([^ ]+).*/\1/p')
 	abi=$(printf '%s' "$line"   | sed -nE 's/.* abi=([0-9]+).*/\1/p')
 	sha=$(printf '%s' "$line"   | sed -nE 's/.* wheel_sha256=([^ ]+).*/\1/p')
 	git=$(printf '%s' "$line"   | sed -nE 's/.* git=([^ ]+).*/\1/p')
 	pools=$(printf '%s' "$line" | sed -nE 's/.* fitness_pools=(.*)$/\1/p')
-	printf '{"wheel":"%s","abi":%s,"wheel_sha256":"%s","git":"%s","fitness_pools":"%s"}' \
-		"${wheel:-unknown}" "${abi:-0}" "${sha:-unknown}" "${git:-unknown}" \
+	printf '{"wheel":"%s","abi":%s,"wheel_sha256":"%s","git":"%s","motor_lag":"%s","fitness_pools":"%s"}' \
+		"${wheel:-unknown}" "${abi:-0}" "${sha:-unknown}" "${git:-unknown}" "${lag:-unknown}" \
 		"$(printf '%s' "${pools:-unknown}" | tr -d '"')"
 }
 

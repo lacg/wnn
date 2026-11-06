@@ -2697,14 +2697,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "cascade) instead of the historical synthetic plant. Default OFF "
 	                     "= every banked run reproduces. Adopting this is a LINEAGE BREAK "
 	                     "(~85%% of addresses move) — see task #11's paired A/B.")
-	ap.add_argument("--motor-lag-s", type=float, default=0.0,
+	ap.add_argument("--motor-lag-s", type=float, default=None,
 	                help="AXIS F (multi-axis spec §3-F): first-order motor lag (Molchanov eq. 7) "
 	                     "as the 2%% SETTLING TIME T in seconds, NOT the time constant "
-	                     "(tau = T/4). Nominal T=0.15 (tau 37.5 ms); the 2tau stress arm is "
-	                     "T=0.30. ONE value for every plant step: DAgger training + per-round "
+	                     "(tau = T/4). ONE value for every plant step: DAgger training + per-round "
 	                     "eval, both batch scorers, the classical baselines, the MEMORY-phase "
-	                     "address recorder and the thermometer calibration. Default 0.0 = OFF "
-	                     "= bit-identical to every run flown before ABI 30.")
+	                     "address recorder and the thermometer calibration. DEFAULT (ABI 35, "
+	                     "item I): with --translation the AIRFRAME's measured lag "
+	                     "(cf21_brushless 0.20, cf2x_firmware 0.26 — see AIRFRAME_MOTOR_LAG_S; "
+	                     "other airframes must pass it); without --translation 0 = OFF. "
+	                     "0 = explicit opt-out.")
+	ap.add_argument("--no-motor-lag", action="store_true", default=False,
+	                help="ABI 35: fly lag-free under --translation (same as --motor-lag-s 0) — "
+	                     "axis F's lag-off arm.")
 	# --- ABI 32 (31/10/2026, Luiz option A): the REAL-LIFE plant. Luiz: "we have
 	# the rotor drag in real life; make it off only if we actually do not want
 	# it" — so with --translation the specific-force IMU, rotor drag and the
@@ -3458,6 +3463,62 @@ def fitness_pools_label(args) -> str:
 # CTRL-8 pop-50 sweep (k_d 0.78/0.5/0.25/0, 03/11/2026, Luiz "use 0.78 if supported").
 DEFAULT_ROTOR_DRAG = 0.78
 
+# ITEM I (ABI 35, Luiz 05/11/2026): AIRFRAME-BOUND MOTOR LAG. Under --translation (the real-life
+# plant) a run that does not pass --motor-lag-s flies its airframe's MEASURED motor lag, in our
+# Molchanov eq. (7) convention T = 2% settling time = 4·tau (AttitudeSim::apply_motor_lag).
+#   cf21_brushless: T = 0.20 s. SOURCE: Gräfe, Scherer, Hönig & Trimpe, "How to Model Your
+#     Crazyflie Brushless", IEEE ICRA 2026, arXiv:2603.05944 (docs/papers/
+#     grafe2026_model_crazyflie_brushless.md) — the only measurement on the CF 2.1 Brushless:
+#     in-flight motor command vs rotor RPM (custom IR deck), first-order fit, Table II "T = 50 ms"
+#     (a TIME CONSTANT tau) -> 4 × 0.050 = 0.20 s. Caveats: no CI; their DR band ±20% puts tau in
+#     [40, 60] ms -> T in [0.16, 0.24] s.
+#   cf2x_firmware: T = 0.26 s. SOURCE: Förster 2015 (ETH BSc thesis, CF 2.0 system identification;
+#     docs/papers/forster2015_crazyflie2_sysid.md) §3.4 — one brushed motor on a load cell,
+#     command->thrust, recommended H2(z) pole 0.9695404 at Ts = 2 ms -> tau = -Ts/ln(pole) =
+#     0.0647 s (Eschmann et al. 2024, arXiv:2404.07837, quote "0.065 s") -> 4 × 0.065 = 0.26 s.
+#     Caveats: latency not compensated, no uncertainty, command->thrust not rpm.
+# Any OTHER airframe under --translation has no measured value here: refused unless --motor-lag-s
+# is given. Explicit opt-out (axis F's lag-off arm): --motor-lag-s 0 or --no-motor-lag. Without
+# --translation nothing changes (0 unless given — every attitude-only run reproduces).
+AIRFRAME_MOTOR_LAG_S = {
+	"cf21_brushless": (0.20, "grafe2026"),
+	"cf2x_firmware": (0.26, "forster2015"),
+}
+
+
+def resolve_motor_lag(translation: bool, airframe, motor_lag_s, no_motor_lag: bool) -> tuple:
+	"""(T seconds, source tag) for the plant's motor lag — the ONE resolver every
+	entry point uses (phased_ga, the rival/rescore scripts via episode_config_from_args,
+	compute_baselines). `motor_lag_s` None = not given on the command line."""
+	if no_motor_lag:
+		if motor_lag_s not in (None, 0.0):
+			raise SystemExit("--no-motor-lag contradicts --motor-lag-s > 0.")
+		return 0.0, "opt-out"
+	if motor_lag_s is not None:
+		lag = float(motor_lag_s)
+		if not math.isfinite(lag) or lag < 0.0:
+			raise SystemExit(f"--motor-lag-s must be finite and >= 0 s (got {motor_lag_s}); it is "
+			                 "Molchanov's 2% settling time T = 4·tau.")
+		return lag, ("explicit" if lag > 0.0 else "opt-out")
+	if not translation:
+		return 0.0, "off"
+	if airframe not in AIRFRAME_MOTOR_LAG_S:
+		raise SystemExit(
+			f"--translation flies the real-life plant, whose motor lag is airframe-bound, and "
+			f"airframe {airframe!r} has no measured lag (known: {sorted(AIRFRAME_MOTOR_LAG_S)}). "
+			f"Pass --motor-lag-s T explicitly (or --no-motor-lag to fly lag-free).")
+	lag, src = AIRFRAME_MOTOR_LAG_S[airframe]
+	return lag, f"airframe:{src}"
+
+
+def _resolve_motor_lag_args(args) -> None:
+	"""Resolve args.motor_lag_s IN PLACE (idempotent: the source is remembered)."""
+	if getattr(args, "motor_lag_source", None) is not None:
+		return
+	args.motor_lag_s, args.motor_lag_source = resolve_motor_lag(
+		bool(getattr(args, "translation", False)), getattr(args, "airframe", None),
+		getattr(args, "motor_lag_s", None), bool(getattr(args, "no_motor_lag", False)))
+
 
 def resolve_abi32_plant(args) -> None:
 	"""Resolve the ABI-32 real-life plant flags IN PLACE (idempotent): concrete
@@ -3493,6 +3554,7 @@ def resolve_abi32_plant(args) -> None:
 		                 "pass --force-blind-attitude to override, or --imu-inclinometer "
 		                 "--no-rotor-drag for the ABI-31 plant.")
 	args.imu_specific_force, args.rotor_drag, args.obs_att_estimator = isf, k_d, est
+	_resolve_motor_lag_args(args)
 
 
 def _plant_header(args, ec) -> str:
@@ -3500,7 +3562,8 @@ def _plant_header(args, ec) -> str:
 	return (f"[PLANT] imu={'specific-force' if ec.imu_specific_force else 'inclinometer'} "
 	        f"rotor_drag={ec.rotor_drag:g} "
 	        f"att_features={'estimator' if args.obs_att_estimator else 'accel'} "
-	        f"att_err_ref={ec.att_err_ref} translation={ec.translation}")
+	        f"att_err_ref={ec.att_err_ref} translation={ec.translation} "
+	        f"motor_lag={ec.motor_lag_s:g}s({getattr(args, 'motor_lag_source', 'off')})")
 
 
 def episode_config_from_args(args) -> EpisodeConfig:
@@ -3673,7 +3736,8 @@ def main():
 		# One line a smoke / marker can grep, like [FAULT]: the axis is armed for
 		# EVERY plant step (training, eval, baselines, recorder, calibration).
 		print(f"[AXIS-F] motor lag T={ec.motor_lag_s:.4f} s (tau={ec.motor_lag_s / 4.0 * 1e3:.2f} ms) "
-		      "armed for ALL rollouts (training AND scoring AND baselines)", flush=True)
+		      f"[{args.motor_lag_source}] armed for ALL rollouts (training AND scoring AND baselines)",
+		      flush=True)
 	# STAGE 2 GUARD, same reasoning one level up: the horizontal FEATURES read
 	# x/y, which never leave the origin unless episodes start displaced. Refuse
 	# a run whose horizontal channel would be constant zeros.
@@ -3811,7 +3875,8 @@ def main():
 	      f"madfloor={'on' if args.zrank_mad_floor else 'off'}")
 	# R9 (multi-axis spec): one greppable line the ladder copies into the marker —
 	# wheel, ABI, .so hash, git HEAD, pool scheme. Fail-safe by construction.
-	print(collect_provenance(fitness_pools_label(args)).line())
+	print(collect_provenance(fitness_pools_label(args),
+	                         motor_lag=f"{float(args.motor_lag_s):g}s:{args.motor_lag_source}").line())
 	import shlex
 	print(f"[argv] {shlex.join(args.cli_argv)}", flush=True)
 

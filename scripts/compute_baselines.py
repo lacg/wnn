@@ -87,8 +87,11 @@ def _score_seed(seed, a):
 
 
 def _resolve_plant(a) -> None:
-	"""ABI 32: phased_ga's real-life defaults (translation ⇒ specific force + drag)."""
-	from wnn.control.phased_ga import DEFAULT_ROTOR_DRAG
+	"""ABI 32: phased_ga's real-life defaults (translation ⇒ specific force + drag);
+	ABI 35 item I: the motor lag through phased_ga's OWN resolver (airframe-bound)."""
+	from wnn.control.phased_ga import DEFAULT_ROTOR_DRAG, resolve_motor_lag
+	a.motor_lag_s, a.motor_lag_source = resolve_motor_lag(
+		bool(a.translation), a.airframe, a.motor_lag_s, bool(a.no_motor_lag))
 	if a.imu_specific_force and a.imu_inclinometer:
 		raise SystemExit("--imu-specific-force and --imu-inclinometer are mutually exclusive.")
 	if a.imu_specific_force is None:
@@ -131,10 +134,13 @@ def main():
 	ap.add_argument("--att-err-ref", choices=("level", "tilt"), default="level",
 	                help="CTRL-17 G5: attitude error vs level (default) or the position "
 	                     "loop's tilt reference — pass the WNN run's value.")
-	ap.add_argument("--motor-lag-s", type=float, default=0.0,
+	ap.add_argument("--motor-lag-s", type=float, default=None,
 	                help="AXIS F: Molchanov eq. 7 motor lag as the 2%% SETTLING TIME T (s), "
-	                     "tau = T/4 — pass the SAME value as the WNN run's --motor-lag-s "
-	                     "(nominal 0.15, stress 0.30). Default 0.0 = OFF, bit-identical.")
+	                     "tau = T/4. Resolved by phased_ga.resolve_motor_lag (ABI 35 item I): "
+	                     "with --translation the AIRFRAME's measured lag unless given; without "
+	                     "it 0 = OFF. 0 = explicit opt-out.")
+	ap.add_argument("--no-motor-lag", action="store_true", default=False,
+	                help="ABI 35: lag-free under --translation (same as --motor-lag-s 0).")
 	ap.add_argument("--tilt", type=float, default=5.0)
 	ap.add_argument("--report-seed", type=int, default=99990101)
 	# Multi-seed held-out: each seed is an independent held-out draw. The
@@ -169,8 +175,6 @@ def main():
 		                 "and the synthetic default has none.")
 	if a.xy_offset > 0.0 and not a.translation:
 		raise SystemExit("--xy-offset requires --translation: x/y cannot move without it.")
-	if a.motor_lag_s < 0.0:
-		raise SystemExit(f"--motor-lag-s must be >= 0 s (got {a.motor_lag_s}).")
 	_resolve_plant(a)
 
 	seeds = a.report_seeds if a.report_seeds else [a.report_seed]
@@ -233,7 +237,7 @@ def main():
 	        "xy_offset_m": float(a.xy_offset),
 	        "airframe": a.airframe,
 	        # AXIS F. A file without this key predates ABI 30 and is lag-free (0.0).
-	        "motor_lag_s": float(a.motor_lag_s),
+	        "motor_lag_s": float(a.motor_lag_s), "motor_lag_source": a.motor_lag_source,
 	        # ABI 32. A file without these keys predates ABI 32: inclinometer, no drag, level.
 	        "imu_specific_force": bool(a.imu_specific_force), "rotor_drag": float(a.rotor_drag),
 	        "att_err_ref": a.att_err_ref,
