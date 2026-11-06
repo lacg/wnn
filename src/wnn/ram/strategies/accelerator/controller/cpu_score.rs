@@ -93,6 +93,8 @@ pub(crate) fn rollout_one(
 	{
 		sim.set_motor_lag(motor_lag_s);
 	}
+	// ABI 35: the student's d̂ observer subtracts the plant's LAGGED actuator — same T as the plant.
+	c.set_observer_motor_lag_core(motor_lag_s);
 	// ABI 32: real-life plant options ride the translation config (OFF calls nothing).
 	if let Some(s1) = stage1
 	{

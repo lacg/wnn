@@ -497,6 +497,8 @@ def reward_gated_train(
 	refuse_python_abi32_plant(base_ec, "reward_gated.py Python trainer")
 	if float(getattr(base_ec, "motor_lag_s", 0.0)) > 0.0:
 		sim.set_motor_lag(float(base_ec.motor_lag_s))
+	# ABI 35: the student's d̂ observer subtracts the plant's LAGGED actuator — same T.
+	controller.set_observer_motor_lag(float(getattr(base_ec, "motor_lag_s", 0.0)))
 	target = config.target_rpy
 
 	history_scores: list[float] = []

@@ -1112,6 +1112,18 @@ kernel void controller_rollout(
 	// flying at that throttle), mirroring AttitudeSim::apply_motor_lag.
 	float motor_filt[MAX_ROTORS];
 	bool motor_filt_init = false;
+	// ABI 35: the d̂ observer's twin of that filter (WnnController.dhat_ua). Under
+	// motor lag the observer's model term reads the LAGGED actuator, not the
+	// command: fed the same commands, seeded at the first one, advanced once per
+	// physical step with the plant's own coefficient — controller.rs
+	// dhat_actuator(). Lag off ⇒ never written, the observer reads pwm_applied
+	// (bit-identical to ABI 34).
+	float dhat_ua[MAX_ROTORS];
+	for (uint m = 0u; m < MAX_ROTORS; m++)
+		dhat_ua[m] = 0.0f;
+	bool dhat_ua_seeded = false;
+	bool dhat_lag_obs = (P.dhat_on != 0u) && (P.motor_settling_time_s > 0.0f);
+	thread const float *dhat_u_src = dhat_lag_obs ? (thread const float *)dhat_ua : (thread const float *)pwm_applied;
 	for (uint m = 0u; m < MAX_ROTORS; m++)
 		motor_filt[m] = 0.0f;
 	// SCOPE C STAGE 1: vertical state, episode-scoped like the lag filter.
@@ -1371,7 +1383,7 @@ kernel void controller_rollout(
 			pwm_feat[m] = pwm_acc[m] - ((P.decouple_outputs != 0u && m >= 1u) ? 0.0f : coll_anchor);
 		if (hold)
 		{
-			derive_features(sensors, F, integ, yaw_heading, pwm_feat, pwm_applied, dhat, dhat_last_gyro, dhat_have_last);
+			derive_features(sensors, F, integ, yaw_heading, pwm_feat, dhat_u_src, dhat, dhat_last_gyro, dhat_have_last);
 			for (uint m = 0u; m < P.num_motors; m++)
 				pwm[m] = last_pwm[m];
 		}
@@ -1381,7 +1393,7 @@ kernel void controller_rollout(
 			// forward_state (single source with the training kernel).
 			uchar new_state[MAX_STATE_NEURONS];
 			forward_state(sensors, F, ring, filled, pushes, integ, yaw_heading, pwm_feat,
-										pwm_applied,
+										dhat_u_src,
 										dhat, dhat_last_gyro, dhat_have_last, prev_state,
 										state_conns, conn_state_g, state_keys, state_vals, state_off, state_cnt,
 										g_state_base, thresholds, new_state);
@@ -1624,6 +1636,16 @@ kernel void controller_rollout(
 		// filter, so the order swap is bit-identical there.
 		for (uint m = 0u; m < P.num_motors; m++)
 			pwm_applied[m] = pwm[m];
+		// ABI 35: advance the observer's actuator twin with this command (the CPU
+		// advances it lazily at the next compute_features — the same update).
+		if (dhat_lag_obs)
+		{
+			float t_obs = max(P.motor_settling_time_s, 4.0f * P.dt);
+			float a_obs = 4.0f * P.dt / t_obs;
+			for (uint m = 0u; m < 4u; m++)
+				dhat_ua[m] = dhat_ua_seeded ? (dhat_ua[m] + a_obs * (pwm_applied[m] - dhat_ua[m])) : pwm_applied[m];
+			dhat_ua_seeded = true;
+		}
 		// MOTOR LAG (Molchanov eq. 7), applied to the FINAL command before the
 		// plant sees it — twin of AttitudeSim::apply_motor_lag. T<=0 => skipped
 		// entirely (bit-identical legacy path). T is the 2% SETTLING time, so

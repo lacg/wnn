@@ -900,6 +900,8 @@ def collect_student_feature_samples(genome, episode_config, num_episodes: int,
 	_lag = float(getattr(episode_config, "motor_lag_s", 0.0))
 	if _lag > 0.0:
 		sim.set_motor_lag(_lag)
+	# ABI 35: the student's d̂ observer subtracts the plant's LAGGED actuator — same T.
+	ctl.set_observer_motor_lag(_lag)
 	rng = np.random.default_rng(seed)
 	nf = genome.spec.num_features()
 	samples: list[list[float]] = [[] for _ in range(nf)]

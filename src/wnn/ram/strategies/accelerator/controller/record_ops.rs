@@ -243,6 +243,8 @@ pub fn record_address_universe(
 ) -> (Vec<(usize, u64)>, Vec<(usize, u64)>)
 {
 	use std::collections::HashSet;
+	// ABI 35: the student's d̂ observer subtracts the plant's LAGGED actuator — same T as the plant.
+	c.set_observer_motor_lag_core(sim.motor_lag());
 	let mut state_set: HashSet<(usize, u64)> = HashSet::new();
 	let mut out_set: HashSet<(usize, u64)> = HashSet::new();
 
