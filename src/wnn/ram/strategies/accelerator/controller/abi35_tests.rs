@@ -106,7 +106,7 @@ pub(crate) struct WalkEpisode
 pub(crate) fn walk_episodes(seed: u64, eps: usize, steps: usize) -> Vec<WalkEpisode>
 {
 	let mut rng = SmallRng::seed_from_u64(seed ^ 0xE915_0DE5);
-	let mut v3 = |rng: &mut SmallRng, s: f32| [rng.gen_range(-s..s), rng.gen_range(-s..s), rng.gen_range(-s..s)];
+	let v3 = |rng: &mut SmallRng, s: f32| [rng.gen_range(-s..s), rng.gen_range(-s..s), rng.gen_range(-s..s)];
 	(0..eps)
 		.map(|_| {
 			let mut e = WalkEpisode {

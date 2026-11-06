@@ -657,7 +657,6 @@ mod tests
 		{
 			c[feature_of(b as usize, frame_bits, bpf)] += 1;
 		}
-		argmax(&c).max(1);
 		c.iter().max().unwrap() - c.iter().min().unwrap()
 	}
 
