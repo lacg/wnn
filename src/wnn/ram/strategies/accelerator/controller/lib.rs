@@ -337,7 +337,12 @@ mod metal_controller;
 ///   (ctbr_mpcof.rs). Replaces the ABI-38 label (the motor-level plan's rate N_o
 ///   ahead: MPCOF>rate 18.8% stable at lag 0.20). Python surface unchanged; the bump
 ///   separates the cascade+mpcof lineage. Motor-level teachers bit-identical to 38.
-pub const ABI_VERSION: u32 = 39;
+/// ABI 40 (06/11/2026, CTRL-34): under DAgger the cascade MPCOF teacher plans from the
+///   FLOWN rate loop (Teacher::ctbr_sync_inner copies the student's real inner-loop state
+///   before each label — the shadow had drifted 0.16–0.40 vs a real integrator ~0.15) and
+///   the reward gate is selectable (--rg-gate improvement|quantile|off; default improvement
+///   = 39). Cascade+mpcof labels change → new lineage; motor-level path bit-identical to 39.
+pub const ABI_VERSION: u32 = 40;
 
 /// Where the sn>0 trainer walks when WNN_CONTROLLER_GPU_BPTT is unset ("cpu"|"gpu").
 /// Decided by the item-E measurement rule (05/11/2026).
