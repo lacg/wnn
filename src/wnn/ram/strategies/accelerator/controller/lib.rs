@@ -45,6 +45,8 @@ mod abi35_tests; // ABI 35: bptt walk fixtures, CPU pins, CPU/GPU walk parity
 mod lag_student_law_tests; // diagnostic: student output law under motor lag
 mod imitation_probe; // diagnostic (WNN_IMIT_PROBE): imitation vs closed loop under motor lag
 #[cfg(test)]
+mod abi38_pins; // ABI 38: motor-level byte-identity pins captured on the ABI-37 build
+#[cfg(test)]
 mod abi34_tests; // ABI 34: lag-aware teachers, one pwm convention under motor lag, T=0 pins
 mod att_estimator; // ABI 32: the WNN's Mahony attitude estimate (obs_att_estimator)
 mod att_err_ref; // CTRL-17 G5 (ABI 32): attitude error vs the position loop tilt reference
