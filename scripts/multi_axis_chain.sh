@@ -39,7 +39,7 @@
 #   (6) ITEM I (05/11/2026): axis F = lag OFF (--motor-lag-s 0, the lag-free arm vs the lagged
 #       anchor) and the stress T=0.30. The F030 approval gate is GONE: the teachers are lag-aware
 #       since ABI 34. A banked run's `[provenance]` must carry the resolved `motor_lag=` token.
-#   (5) wheel FROZEN at ABI 35 sha 7e08dd27843f19a1 (re-frozen 06/11, Luiz; post-2a27ce01 canonical export order): preflight refuses any other installed wheel, and
+#   (5) wheel FROZEN at ABI 37 sha 24c868fd052e341d (re-frozen 06/11: ABI 36 delivered-actuator obs-pwm + ABI 37 GPU-scorer fixes): preflight refuses any other installed wheel, and
 #       a run whose `[provenance]` line differs is NOT banked (abort).
 #
 # ATTEMPT-3 RULE. A launch that fails (rc!=0, no winner, no headline, wrong provenance) aborts the
@@ -81,8 +81,14 @@ CONDITIONS=(
 	"C|sn8|axC_sn8|--grid-state-neurons 8 --max-state-neurons 8|SN8"
 )
 SEEDS="31337002 31337003 31337004 31337005 31337006"   # seed r flies in round r
-FROZEN_ABI="35"
-FROZEN_SHA="7e08dd27843f19a1"
+FROZEN_ABI="37"
+FROZEN_SHA="24c868fd052e341d"
+# LAG LAW (06/11/2026, CTRL-5 lag-collapse hunt, flight-dynamics agent): the 20-step output
+# accumulator (leak 0.95 / dmax 0.1) stacked on the 50 ms motor lag collapses the student; leak 0.7 /
+# dmax 0.6 keeps the gain at 4 (2*dmax/(1-leak)) with a ~3.3-step time constant. Pop-50 grid at lag
+# 0.20 s31337002: 64.6%/5.42° vs 0%/46.33° at the default law. Appended to EVERY condition (incl.
+# axF_lagoff) so each axis changes ONE factor vs the anchor. Main-session call while Luiz slept.
+LAG_LAW_FLAGS="--delta-leak 0.7 --delta-max 0.6"
 # =====================================================================================
 
 # MA_PYTHON / MA_LOG / MA_LOCK / MA_TIME / MA_CTRL8_DIR are TEST HOOKS for
@@ -129,7 +135,9 @@ anchor_out() {   # <seed> -> this chain's own ANCHOR-condition .out for that see
 anchor_argv() {   # the winner's recipe, verbatim, minus the per-run fields
 	local src="${CTRL8_DIR}/${ANCHOR:-arm}_s3.out"
 	[ -f "$src" ] || { echo ""; return; }
-	grep -a -m1 '^\[argv\]' "$src" | sed -E 's/^\[argv\] //; s/--base-seed [0-9]+//g; s/--save-stage-checkpoints [^ ]+//g; s/--save-winner [^ ]+//g; s/  +/ /g; s/ +$//'
+	local base
+	base="$(grep -a -m1 '^\[argv\]' "$src" | sed -E 's/^\[argv\] //; s/--base-seed [0-9]+//g; s/--save-stage-checkpoints [^ ]+//g; s/--save-winner [^ ]+//g; s/  +/ /g; s/ +$//')"
+	[ -n "$base" ] && echo "$base${LAG_LAW_FLAGS:+ $LAG_LAW_FLAGS}"
 }
 
 # ---- status ------------------------------------------------------------------------------
