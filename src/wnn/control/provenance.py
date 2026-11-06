@@ -34,15 +34,19 @@ class ControllerProvenance:
 	wheel_sha256: str   # first 16 hex of sha256 over the compiled .so actually imported
 	git: str            # short HEAD of the Python tree, "+dirty" when the tree has edits
 	fitness_pools: str  # the same label the "Pop=..." header prints
+	# ABI 35 item I: the RESOLVED plant motor lag "T s:source" (e.g. "0.2s:airframe:grafe2026").
+	# Printed BEFORE fitness_pools, which must stay last (it may contain spaces).
+	motor_lag: str = UNKNOWN
 
 	def line(self) -> str:
 		"""The single greppable line the ladder copies into the marker."""
 		return (f"{PROVENANCE_PREFIX} wheel={self.wheel} abi={self.abi} "
 		        f"wheel_sha256={self.wheel_sha256} git={self.git} "
+		        f"motor_lag={self.motor_lag} "
 		        f"fitness_pools={self.fitness_pools}")
 
 
-def collect_provenance(fitness_pools: str) -> ControllerProvenance:
+def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN) -> ControllerProvenance:
 	"""Gather every field, never raising: each accessor degrades to UNKNOWN / 0."""
 	wheel, abi, sha = _wheel_identity()
 	return ControllerProvenance(
@@ -51,6 +55,7 @@ def collect_provenance(fitness_pools: str) -> ControllerProvenance:
 		wheel_sha256=sha,
 		git=_git_head(os.path.dirname(os.path.abspath(__file__))),
 		fitness_pools=fitness_pools,
+		motor_lag=motor_lag.replace(" ", "_").replace('"', ""),
 	)
 
 
