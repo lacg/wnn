@@ -114,8 +114,31 @@ impl<'a> CascadeDriver<'a>
 	}
 }
 
+/// The MEMORY recorder's weather stream salt (ABI 38): a recorder episode's seed is
+/// disturbance_episode_seed(RECORDER_WEATHER_SALT, ep) — a stream of its own,
+/// disjoint from the trainer's loop rng and from every scorer pool.
+const RECORDER_WEATHER_SALT: u64 = 0x7EC0_4DE5_A5A3_0038;
+
 impl Driver<'_>
 {
+	/// ABI 38: with per-episode training asymmetry on (dist_motor_asym_mag > 0) the
+	/// training-cascade recorder flies the training weather — the per-episode ±mag
+	/// airframe and the config's other weather — so the universe it records is the
+	/// one the asymmetric trainer writes. With mag 0 the recorder stays the ABI-37
+	/// clean-plant recorder, bit-identically (that the recorder flies NO weather at
+	/// all is a pre-existing gap, a lineage decision left to Luiz).
+	fn arm_weather(&self, sim: &mut AttitudeSim, ep: usize)
+	{
+		if let Driver::Cascade(c) = self
+		{
+			if c.cfg.dist_enabled && c.cfg.dist_motor_asym_mag > 0.0
+			{
+				let seed = crate::controller::disturbance_episode_seed(RECORDER_WEATHER_SALT, ep as u64);
+				crate::dagger_train::arm_cfg_disturbance(sim, c.cfg, seed);
+			}
+		}
+	}
+
 	fn reset(&mut self)
 	{
 		match self
@@ -192,6 +215,7 @@ fn run_episode<F: FnMut(&WnnController)>(
 		}
 		c.set_collective_anchor(s.cfg.collective_pwm(ep, s.gravity, s.k_thrust));
 	}
+	driver.arm_weather(sim, ep);
 	let mut n = 0usize;
 	for _ in 0..steps
 	{

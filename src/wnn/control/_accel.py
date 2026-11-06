@@ -110,7 +110,10 @@ import os
 # production vector overflowed thread-private sensors[]) and --obs-collective-cmd
 # fed the absolute collective pwm like the trainer/CPU scorer (was the fraction).
 # Results-changing for GPU-scored --translation runs, lag 0 included.
-EXPECTED_ABI = 37
+# ABI 38 (06/11/2026, CTRL-27): per-episode TRAINING motor asymmetry
+# (RewardGatedConfigPacked.dist_motor_asym_mag; mag 0 bit-identical to 37) and the
+# cascade controller (WnnController(ctbr=CtbrSpec), output_mode "ctbr").
+EXPECTED_ABI = 38
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

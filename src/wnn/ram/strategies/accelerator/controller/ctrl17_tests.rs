@@ -264,3 +264,26 @@ fn g2_recorder_flies_the_training_cascade()
 	assert!(x != 0.0 || y != 0.0, "the xy start was never applied");
 	assert_ne!(o_xy, o_z, "arming xy must change the recorded universe");
 }
+
+/// ABI 38: the training-cascade recorder's output universe for `cfg` and a given
+/// student (two 600-step episodes; xy draws iff the config arms the channel).
+pub(crate) fn record_universe_for(cfg: &RewardGatedConfigPacked, student: &crate::controller::WnnController) -> Vec<(usize, u64)>
+{
+	let af = AirframeRs::from_cfg(cfg);
+	let mut sim = af.sim();
+	let mut c = student.clone();
+	let mut teacher = af.teacher(cfg.teacher);
+	let mut d = Driver::Cascade(CascadeDriver::new(&mut teacher, cfg));
+	let mut draws = recorder_draws(if cfg.xy_offset > 0.0 { Some((0.3, -0.2)) } else { None });
+	for v in [&mut draws.init_z, &mut draws.init_vz, &mut draws.mass, &mut draws.collective_frac, &mut draws.init_x, &mut draws.init_y]
+	{
+		if let Some(&x) = v.first()
+		{
+			v.push(x);
+		}
+	}
+	let s1 = RecorderStage1 { cfg: &draws, gravity: cfg.af_gravity, k_thrust: cfg.af_k_thrust };
+	let q = [[0.998f32, 0.05, -0.03, 0.0], [0.997, -0.04, 0.06, 0.0]];
+	let om = [[0.1f32, -0.1, 0.0], [0.0, 0.2, 0.05]];
+	record_address_universe(&mut c, &mut sim, &mut d, &q, &om, [0.0; 3], 600, Some(&s1)).1
+}

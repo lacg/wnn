@@ -60,10 +60,36 @@ def _dist_packed_fields(rg) -> tuple:
 	Returns (enabled, tau_bias, gust_sigma, gust_tau_c, motor_asym,
 	gyro_sigma, gyro_bias_walk, accel_sigma, dropout_prob, dropout_len_steps,
 	obs_delay_steps, torque_scale_jitter) — the last 4 are the W2.4 D5/D6/D7
-	levers (0 = exactly-off). Note: the batched Rust trainer uses the FIXED
-	motor_asym multipliers — motor_asym_mag's per-episode δ draw is a
-	run_episode-only convenience (motor wear is per-airframe)."""
+	levers (0 = exactly-off). The per-EPISODE motor-asymmetry magnitude
+	(motor_asym_mag) travels separately — _train_asym_kwargs — and since ABI 38
+	(Luiz 06/11/2026, "train the same way, asymmetric") the batched Rust trainer
+	DRAWS it per training episode with the scorer's distribution
+	(controller::train_motor_asym). Until ABI 37 the batched trainer flew the
+	FIXED multipliers only — an effectively symmetric plant while every scorer
+	pool flew a ±mag airframe (a W2 implementation shortcut, 59c824c6, never a
+	design decision)."""
 	return _dist_packed_fields_ec(getattr(rg, "episode_config", None))
+
+
+def _train_asym_kwargs(ec) -> dict:
+	"""ABI 38: the per-episode training motor-asymmetry magnitude for a
+	RewardGatedConfigPacked — every training host (DAgger, per-round eval,
+	calibration sampler, MEMORY recorder) draws base·(1 + U(−mag, +mag)) per
+	episode from it. 0.0 (no disturbance, or motor_asym_mag 0) ⇒ the ABI-37
+	trainer bit for bit."""
+	d = getattr(ec, "disturbance", None)
+	return {"dist_motor_asym_mag": float(d.motor_asym_mag) if d is not None else 0.0}
+
+
+def train_asym_token(ec) -> str:
+	"""Provenance token for the training plant's motor asymmetry: 'per_episode'
+	(±mag drawn every training episode, ABI 38), 'fixed' (weather on, mag 0) or
+	'off' (no disturbance)."""
+	d = getattr(ec, "disturbance", None)
+	if d is None:
+		return "off"
+	mag = float(d.motor_asym_mag)
+	return f"per_episode:{mag:g}" if mag > 0.0 else "fixed"
 
 
 def _dist_packed_fields_ec(ec) -> tuple:
@@ -1007,6 +1033,7 @@ def reference_packed_config(ec, teacher: str = "pid", teacher_hover_mode: str = 
 		dist_gyro_bias_walk=dist_gbw, dist_accel_sigma=dist_acs,
 		dist_dropout_prob=dist_dp, dist_dropout_len_steps=dist_dls,
 		dist_obs_delay_steps=dist_ods, dist_torque_scale_jitter=dist_tsj,
+		**_train_asym_kwargs(ec),
 		teacher_hover_mode=_TEACHER_HOVER_MODES[teacher_hover_mode],
 		**_plant_train_kwargs(ec),
 		**ec.motor_lag_kwargs(),
@@ -1668,6 +1695,7 @@ class ControllerEvaluator:
 			dist_gyro_bias_walk=dist_gbw, dist_accel_sigma=dist_acs,
 			dist_dropout_prob=dist_dp, dist_dropout_len_steps=dist_dls,
 			dist_obs_delay_steps=dist_ods, dist_torque_scale_jitter=dist_tsj,
+			**_train_asym_kwargs(getattr(rg, "episode_config", None)),
 			expert_drives=getattr(rg, "expert_drives", False),
 			write_priority_err=getattr(rg, "write_priority_err", False),
 			write_err_floor_deg=getattr(rg, "write_err_floor_deg", 0.0),
@@ -1805,6 +1833,7 @@ class ControllerEvaluator:
 			dist_gyro_bias_walk=dist_gbw, dist_accel_sigma=dist_acs,
 			dist_dropout_prob=dist_dp, dist_dropout_len_steps=dist_dls,
 			dist_obs_delay_steps=dist_ods, dist_torque_scale_jitter=dist_tsj,
+			**_train_asym_kwargs(getattr(rg, "episode_config", None)),
 			expert_drives=getattr(rg, "expert_drives", False),
 			write_priority_err=getattr(rg, "write_priority_err", False),
 			write_err_floor_deg=getattr(rg, "write_err_floor_deg", 0.0),

@@ -41,6 +41,11 @@ class ControllerProvenance:
 	# student's u_a estimate − anchor), "command" (lag off: the accumulator −
 	# anchor), "off". Printed BEFORE fitness_pools.
 	obs_pwm: str = UNKNOWN
+	# ABI 38 (Luiz 06/11/2026): the TRAINING plant's motor asymmetry —
+	# "per_episode:<mag>" (±mag drawn every training episode: a lineage break for
+	# every run with motor_asym_mag > 0, e.g. L4C), "fixed" or "off".
+	# Printed BEFORE fitness_pools.
+	train_asym: str = UNKNOWN
 
 	def line(self) -> str:
 		"""The single greppable line the ladder copies into the marker."""
@@ -48,6 +53,7 @@ class ControllerProvenance:
 		        f"wheel_sha256={self.wheel_sha256} git={self.git} "
 		        f"motor_lag={self.motor_lag} "
 		        f"obs_pwm={self.obs_pwm} "
+		        f"train_asym={self.train_asym} "
 		        f"fitness_pools={self.fitness_pools}")
 
 
@@ -59,7 +65,8 @@ def obs_pwm_convention(obs_pwm: bool, motor_lag_s: float) -> str:
 	return "delivered" if float(motor_lag_s) > 0.0 else "command"
 
 
-def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: str = UNKNOWN) -> ControllerProvenance:
+def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: str = UNKNOWN,
+                       train_asym: str = UNKNOWN) -> ControllerProvenance:
 	"""Gather every field, never raising: each accessor degrades to UNKNOWN / 0."""
 	wheel, abi, sha = _wheel_identity()
 	return ControllerProvenance(
@@ -70,6 +77,7 @@ def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: st
 		fitness_pools=fitness_pools,
 		motor_lag=motor_lag.replace(" ", "_").replace('"', ""),
 		obs_pwm=obs_pwm.replace(" ", "_").replace('"', ""),
+		train_asym=train_asym.replace(" ", "_").replace('"', ""),
 	)
 
 

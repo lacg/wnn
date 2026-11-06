@@ -367,6 +367,17 @@ pub struct RewardGatedConfigPacked
 	// Requires the horizontal channel (xy_offset > 0). false ⇒ legacy level.
 	#[pyo3(get, set)]
 	pub att_err_tilt_ref: bool,
+	// ABI 38 (Luiz 06/11/2026, "train the same way, asymmetric"): the D3 per-
+	// EPISODE motor-asymmetry magnitude. Each training episode flies
+	// dist_motor_asym × (1 + U(−mag, +mag)) per motor — the scorer's distribution
+	// (controller::train_motor_asym) — instead of the FIXED multipliers alone, which
+	// left the trainer on an effectively symmetric plant while every scorer pool
+	// flies a ±mag airframe (W2 shortcut 59c824c6, never a design decision).
+	// Read wherever a training episode arms its weather (apply_cfg_disturbance:
+	// DAgger rollouts, per-round eval, calibration sampler) and by the MEMORY
+	// recorder. 0.0 ⇒ bit-identical to ABI 37.
+	#[pyo3(get)]
+	pub dist_motor_asym_mag: f32,
 }
 
 #[pymethods]
@@ -410,6 +421,7 @@ impl RewardGatedConfigPacked
 		teacher_hover_mode = 0,
 		motor_lag_s = 0.0,
 		imu_specific_force = false, rotor_drag = 0.0, att_err_tilt_ref = false,
+		dist_motor_asym_mag = 0.0,
 ))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -496,6 +508,7 @@ impl RewardGatedConfigPacked
 		imu_specific_force: bool,
 		rotor_drag: f32,
 		att_err_tilt_ref: bool,
+		dist_motor_asym_mag: f32,
 	) -> PyResult<Self>
 	{
 		let cfg = Self {
@@ -582,8 +595,15 @@ impl RewardGatedConfigPacked
 			imu_specific_force,
 			rotor_drag,
 			att_err_tilt_ref,
+			dist_motor_asym_mag,
 		};
 		cfg.validate_abi32().map_err(pyo3::exceptions::PyValueError::new_err)?;
+		if !(dist_motor_asym_mag.is_finite() && (0.0..1.0).contains(&dist_motor_asym_mag))
+		{
+			return Err(pyo3::exceptions::PyValueError::new_err(format!(
+				"dist_motor_asym_mag = {dist_motor_asym_mag} must be in [0, 1) (a multiplier 1 + U(−mag, mag))"
+			)));
+		}
 		Ok(cfg)
 	}
 }
@@ -1348,11 +1368,19 @@ pub(crate) fn apply_cfg_disturbance(sim: &mut AttitudeSim, cfg: &RewardGatedConf
 		return;
 	}
 	let ep_seed: u64 = rng.gen();
+	arm_cfg_disturbance(sim, cfg, ep_seed);
+}
+
+/// Arm a training episode's weather from the config and THIS episode's seed —
+/// including the per-episode motor-asymmetry draw (ABI 38, train_motor_asym; the
+/// fixed multipliers alone when dist_motor_asym_mag is 0).
+pub(crate) fn arm_cfg_disturbance(sim: &mut AttitudeSim, cfg: &RewardGatedConfigPacked, ep_seed: u64)
+{
 	sim.set_disturbance(
 		cfg.dist_tau_bias,
 		cfg.dist_gust_sigma,
 		cfg.dist_gust_tau_c,
-		cfg.dist_motor_asym,
+		crate::controller::train_motor_asym(cfg.dist_motor_asym, cfg.dist_motor_asym_mag, ep_seed),
 		cfg.dist_gyro_sigma,
 		cfg.dist_gyro_bias_walk,
 		cfg.dist_accel_sigma,
@@ -2316,7 +2344,7 @@ fn warn_gpu_split_no_pressure()
 /// `Some(planted)` on success (controller mutated in place via interior
 /// mutability), or `None` if there is no usable Metal trainer or the dispatch
 /// errored — the caller then runs the CPU split so training never silently no-ops.
-fn try_gpu_split(
+pub(crate) fn try_gpu_split(
 	controller: &WnnController,
 	gated: &[&TrajectoryRs],
 	cfg: &RewardGatedConfigPacked,
@@ -4344,6 +4372,7 @@ mod d0_hover_anchor_tests
 			teacher_hover_mode,
 			motor_lag_s: 0.0,
 			imu_specific_force: false, rotor_drag: 0.0, att_err_tilt_ref: false,
+			dist_motor_asym_mag: 0.0,
 		}
 	}
 
@@ -4871,6 +4900,7 @@ mod motor_lag_axis_f_tests
 			teacher_hover_mode: 0,
 			motor_lag_s,
 			imu_specific_force: false, rotor_drag: 0.0, att_err_tilt_ref: false,
+			dist_motor_asym_mag: 0.0,
 		}
 	}
 

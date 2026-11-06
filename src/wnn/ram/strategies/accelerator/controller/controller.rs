@@ -247,6 +247,7 @@ fn q_scale(q: [f32; 4], s: f32) -> [f32; 4]
 //   4 = QSR/PLN decode coin              (axis = motor, k = level, per step)
 //   5 = D5 sensor-freeze start draw      (axis 0, k 0; uniform per step)
 //   6 = D7 per-episode torque scale      (axis 0..2, k 0; step 0 only)
+//   7 = TRAINING per-episode motor asym δ (ram_core::counter_rng layer 7, index = motor)
 //  15 = per-episode seed derivation      (axis 0, k 0; step = episode index)
 // =============================================================================
 
@@ -264,6 +265,10 @@ pub const DIST_CH_DROPOUT: u32 = 5;
 /// D7 dynamics randomization: per-axis torque scale drawn ONCE per episode at
 /// step 0 — uniform in [1-j, 1+j] (axis 0..2, k 0).
 pub const DIST_CH_TORQUE_SCALE: u32 = 6;
+/// D3 TRAINING draw (ABI 38, Luiz 06/11 "train the same way, asymmetric"): the
+/// per-episode motor-asymmetry δ of a TRAINING episode, one uniform per motor —
+/// drawn on ram_core::counter_rng with this id as the layer (see train_motor_asym).
+pub const DIST_CH_MOTOR_ASYM: u32 = 7;
 pub const DIST_CH_EP_SEED: u32 = 15;
 
 // 2π as the SAME f32 literal used in the Metal twin (DIST_TWO_PI) so Box-Muller
@@ -314,6 +319,34 @@ pub fn dist_gauss(seed: u32, step: u32, axis: u32, channel: u32) -> f32
 	let u1 = dist_uniform(seed, step, axis, channel, 0).max(1e-7);
 	let u2 = dist_uniform(seed, step, axis, channel, 1);
 	(-2.0 * u1.ln()).sqrt() * (DIST_TWO_PI * u2).cos()
+}
+
+/// ABI 38: the motor asymmetry a TRAINING episode flies — the fixed per-motor
+/// multipliers × (1 + δ_m), δ_m ~ U(−mag, +mag) iid per motor: the SAME
+/// distribution the scorer resolves (training.DisturbanceConfig.resolved_motor_asym:
+/// x·(1 + U(−mag, mag))), drawn per EPISODE from the episode's weather seed on the
+/// shared counter RNG (ram_core::counter_rng, SplitMix64-finalised; layer = channel
+/// 7, index = motor) instead of once per scoring pool. NOT dist_hash_u32: its single
+/// xorshift32 round over a linear (axis·1_000_003) mix correlates neighbouring axes
+/// (measured ρ ≈ 0.4 between motors 0/1 on this draw — train_asym_tests). The training
+/// episode seeds come from the trainer's own fold-seeded loop rng, so a training
+/// draw never reproduces a scorer pool's airframe.
+///
+/// mag == 0 returns `base` untouched (no draw), so every run without
+/// --motor-asym-mag is bit-identical to ABI 37. Expression order: −mag + 2·mag·u.
+pub fn train_motor_asym(base: [f32; 4], mag: f32, seed: u64) -> [f32; 4]
+{
+	if mag == 0.0
+	{
+		return base;
+	}
+	let mut out = base;
+	for (m, v) in out.iter_mut().enumerate()
+	{
+		let u = ram_core::counter_rng::uniform(seed, 0, 0, DIST_CH_MOTOR_ASYM as u64, m as u64, 0) as f32;
+		*v = base[m] * (1.0 + (-mag + 2.0 * mag * u));
+	}
+	out
 }
 
 /// Per-episode disturbance seed from a base seed + episode index — the SAME

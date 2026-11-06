@@ -139,9 +139,12 @@ class DisturbanceConfig:
 	# D3: per-motor k_thrust multipliers (1.0 = clean motor). Fixed part.
 	motor_asym: tuple = (1.0, 1.0, 1.0, 1.0)
 	# D3 per-episode draw: each episode multiplies motor_asym[i] by
-	# (1 + U(-mag, +mag)) drawn from the episode rng. Applied by run_episode
-	# (and apply_disturbance) only — the batched Rust/Metal paths use the
-	# fixed `motor_asym` (motor wear is per-airframe, not per-flight).
+	# (1 + U(-mag, +mag)). TRAINING draws it per episode on every path —
+	# run_episode/apply_disturbance (episode rng) and, since ABI 38 (Luiz
+	# 06/11/2026), the batched Rust trainer (controller::train_motor_asym, the
+	# counter RNG keyed on the training episode's weather seed). SCORING resolves
+	# ONE draw per pass (evaluator.disturbance_stream — per-airframe wear, see
+	# resolved_asym below).
 	motor_asym_mag: float = 0.0
 	# D4: sensor noise — gyro white σ (rad/s) + slow bias walk (rad/s/√s);
 	# accel white σ (m/s²).
@@ -183,7 +186,9 @@ class DisturbanceConfig:
 	# SCORING passes now bind this once per pass (see
 	# dagger.eval_closed_loop_reset) so Python and the kernel fly the same
 	# airframe. TRAINING paths deliberately keep the per-episode redraw: there
-	# the variety IS the point (domain randomization over airframe wear).
+	# the variety IS the point (domain randomization over airframe wear). Until
+	# ABI 37 that held for the Python trainer only; the batched Rust trainer
+	# flew the fixed multipliers. ABI 38 draws per training episode there too.
 	resolved_asym: Optional[tuple] = None
 
 	# Intensity-ladder presets (plan w2_disturbances.md). Magnitudes are % of

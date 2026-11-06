@@ -64,6 +64,7 @@ fn regime(xy: f32, steps: usize, expert_drives: bool) -> RewardGatedConfigPacked
 		teacher_hover_mode: TEACHER_HOVER_DERIVED,
 		motor_lag_s: 0.0,
 		imu_specific_force: true, rotor_drag: 0.78, att_err_tilt_ref: xy > 0.0,
+		dist_motor_asym_mag: 0.0,
 	}
 }
 

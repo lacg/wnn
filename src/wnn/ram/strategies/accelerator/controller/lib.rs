@@ -45,7 +45,9 @@ mod abi35_tests; // ABI 35: bptt walk fixtures, CPU pins, CPU/GPU walk parity
 mod lag_student_law_tests; // diagnostic: student output law under motor lag
 mod imitation_probe; // diagnostic (WNN_IMIT_PROBE): imitation vs closed loop under motor lag
 #[cfg(test)]
-mod abi38_pins; // ABI 38: motor-level byte-identity pins captured on the ABI-37 build
+mod abi38_pins;
+#[cfg(test)]
+mod train_asym_tests; // ABI 38: per-episode training motor asymmetry // ABI 38: motor-level byte-identity pins captured on the ABI-37 build
 #[cfg(test)]
 mod abi34_tests; // ABI 34: lag-aware teachers, one pwm convention under motor lag, T=0 pins
 mod att_estimator; // ABI 32: the WNN's Mahony attitude estimate (obs_att_estimator)
@@ -293,7 +295,17 @@ mod metal_controller;
 ///   3.10°/94%; production-shaped fixture CPU/GPU rel 0.3-0.6 → 1e-6
 ///   (abi32_tests::parity_production_regime_cpu_vs_gpu). ≤ 21-feature, no
 ///   collective_cmd controllers are bit-identical to ABI 36.
-pub const ABI_VERSION: u32 = 37;
+///
+/// ABI 38 (06/11/2026, CTRL-27):
+///   - PER-EPISODE TRAINING MOTOR ASYMMETRY (Luiz, "train the same way,
+///     asymmetric"): RewardGatedConfigPacked(dist_motor_asym_mag=) — every
+///     training episode (DAgger rollouts, per-round eval, calibration sampler; the
+///     MEMORY recorder flies the training weather when it is on) draws
+///     dist_motor_asym·(1 + U(−mag, +mag)) per motor (controller::train_motor_asym,
+///     ram_core::counter_rng). mag 0 ⇒ bit-identical to ABI 37 (abi38_pins,
+///     train_asym_tests); mag > 0 is a LINEAGE BREAK for every L4C run
+///     (provenance train_asym=per_episode:<mag>).
+pub const ABI_VERSION: u32 = 38;
 
 /// Where the sn>0 trainer walks when WNN_CONTROLLER_GPU_BPTT is unset ("cpu"|"gpu").
 /// Decided by the item-E measurement rule (05/11/2026).

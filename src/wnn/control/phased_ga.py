@@ -295,6 +295,7 @@ from wnn.control.evaluator import (
 	fit_thresholds_from_pid_rollouts,
 	collect_student_feature_samples,
 	calib_episode_config as _calib_ec,
+	train_asym_token,
 )
 from wnn.control.arch_strategy import (
 	ControllerArchGAStrategy, ControllerArchTSStrategy,
@@ -3904,7 +3905,8 @@ def main():
 	# wheel, ABI, .so hash, git HEAD, pool scheme. Fail-safe by construction.
 	print(collect_provenance(fitness_pools_label(args),
 	                         motor_lag=f"{float(args.motor_lag_s):g}s:{args.motor_lag_source}",
-	                         obs_pwm=obs_pwm_convention(bool(args.obs_pwm), float(args.motor_lag_s))).line())
+	                         obs_pwm=obs_pwm_convention(bool(args.obs_pwm), float(args.motor_lag_s)),
+	                         train_asym=train_asym_token(ec)).line())
 	import shlex
 	print(f"[argv] {shlex.join(args.cli_argv)}", flush=True)
 
