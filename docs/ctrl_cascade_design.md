@@ -6,6 +6,10 @@
 >    not an ablation. The firmware attitude stage becomes the C2 rival / ablation teacher.
 > 3. Build starts as soon as the motor-lag diagnosis (CTRL-26) reports, whatever its verdict. Plane: CTRL-27.
 > 4. Next step after v1 flies: Neural-Fly-style disturbance learner on top of the cascade (CTRL-28).
+> 5. **sn > 0 IS IN v1 SCOPE** (Luiz 06/11: "not in a hurry … take your time to not leave some tech
+>    debt"). The EDRA-BPTT walk (CPU + GPU-resident, ABI 35), the split trainer and every sn>0 path must
+>    support the CTBR banks (collective + p, q, r) with the same CPU/GPU parity and bit-exact tests as the
+>    motor-bank path. R9 below ("sn>0 unsupported in v1") is SUPERSEDED. No `unsupported in v1` asserts.
 
 Status: DESIGN ONLY. No code is changed by this document and no run is launched.
 Approved for exploration by Luiz on 06/11/2026. Author: flight-dynamics agent.
