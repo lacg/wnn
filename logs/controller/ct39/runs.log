@@ -21,3 +21,11 @@
 2026-11-06T21:40:48Z END S1_250hz_ct39 steady=5.28°  err=7.42°  stable=34.6%  alt=0.218m
 2026-11-06T21:40:48Z CHAIN2 DONE
 2026-11-06T21:52:08Z START C1_250hz_quad_ct39 --motor-lag-s 0.20 --output-mode ctbr --action-repeat 4 --memory-mode QUAD_WEIGHTED
+2026-11-06T21:55:59Z END C1_250hz_quad_ct39 steady=4.72°  err=5.74°  stable=47.0%  alt=0.245m
+2026-11-06T21:55:59Z START S1_250hz_quad_ct39 --motor-lag-s 0.20 --output-mode ctbr --action-repeat 4 --memory-mode QUAD_WEIGHTED
+2026-11-06T22:00:30Z END S1_250hz_quad_ct39 steady=5.91°  err=7.98°  stable=26.2%  alt=0.241m
+2026-11-06T22:00:30Z START C1_100hz_quad_ct39 --motor-lag-s 0.20 --output-mode ctbr --action-repeat 10 --memory-mode QUAD_WEIGHTED
+2026-11-06T22:02:28Z END C1_100hz_quad_ct39 steady=4.13°  err=5.60°  stable=56.2%  alt=0.194m
+2026-11-06T22:02:28Z START S1_100hz_quad_ct39 --motor-lag-s 0.20 --output-mode ctbr --action-repeat 10 --memory-mode QUAD_WEIGHTED
+2026-11-06T22:04:51Z END S1_100hz_quad_ct39 steady=5.93°  err=7.91°  stable=26.8%  alt=0.248m
+2026-11-06T22:04:51Z CHAIN3 (QUAD) DONE
