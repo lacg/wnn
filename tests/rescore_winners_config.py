@@ -36,7 +36,7 @@ def _args(**over):
 	base = dict(steps=2000, tilt=5.0, body_rate=0.5, yaw_rate=0.3, episodes=100,
 	            disturbance="L4A", airframe="cf21_brushless", translation=True,
 	            trained_disturbance=None, trained_airframe=None, trained_translation=None,
-	            trained_tilt=None)
+	            trained_tilt=None, plant_args=rw.LEGACY_PLANT_ARGS)
 	base.update(over)
 	return SimpleNamespace(**base)
 
@@ -83,17 +83,20 @@ def test_regime_resolves_through_phased_ga():
 	# Same argv through phased_ga directly must give the SAME plant (no hand copy).
 	ref = episode_config_from_args(build_arg_parser().parse_args(
 		["--disturbance", "L4A", "--airframe", "cf21_brushless", "--translation",
-		 "--steps", "2000", "--tilt", "5.0", "--body-rate", "0.5", "--yaw-rate", "0.3",
+		 "--imu-inclinometer", "--no-rotor-drag", "--no-motor-lag", "--steps", "2000", "--tilt", "5.0", "--body-rate", "0.5", "--yaw-rate", "0.3",
 		 "--report-episodes", "100", "--num-eval-folds", "5"]))
 	same = all(getattr(ref, f) == getattr(reg.ec, f) for f in
 	           ("steps_per_episode", "max_initial_tilt_rad", "translation", "max_initial_alt_offset_m",
-	            "max_initial_vz", "collective_cmd_jitter", "mass_jitter", "target_altitude"))
+	            "max_initial_vz", "collective_cmd_jitter", "mass_jitter", "target_altitude",
+	            "imu_specific_force", "rotor_drag", "motor_lag_s"))
 	check("ec fields identical to phased_ga's own assembly", same, True)
+	check("glob mode flies the ABI<=31 plant the winners flew (inclinometer, no drag, no lag)",
+	      (reg.ec.imu_specific_force, reg.ec.rotor_drag, reg.ec.motor_lag_s), (False, 0.0, 0.0))
 	check("disturbance preset identical", type(ref.disturbance).__name__, type(reg.ec.disturbance).__name__)
-	legacy = rw._regime(rw.Condition("L4C", None, False), a)
+	legacy = rw._regime(rw.Condition("L4C", None, False, 5.0), a)
 	check("legacy plant: no airframe", legacy.ec.airframe, None)
 	try:
-		rw._regime(rw.Condition("L4A", None, True), a)
+		rw._regime(rw.Condition("L4A", None, True, 5.0), a)
 		check("translation without airframe refused", False, True)
 	except SystemExit as e:
 		check("translation without airframe refused (phased_ga's guard wording)",
@@ -101,7 +104,7 @@ def test_regime_resolves_through_phased_ga():
 
 
 def _cli(argv, cwd):
-	env = dict(os.environ, PYTHONPATH=os.path.join(ROOT, "src", "wnn"))
+	env = dict(os.environ, PYTHONPATH=os.pathsep.join([os.path.join(ROOT, "src"), os.path.join(ROOT, "src", "wnn")]))
 	return subprocess.run([sys.executable, SCRIPT] + argv, capture_output=True, text=True, env=env, cwd=cwd)
 
 

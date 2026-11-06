@@ -170,11 +170,26 @@ class Regime:
 		return self.args.report_episodes or self.args.eval_episodes
 
 
+# The plant of the glob mode. Its Condition argv carries only disturbance / airframe /
+# translation — no recipe features — and every winner this mode replays (dfa1l, the
+# sweep-ladder _hd/_pipeN/_op lineages) was flown on the ABI <= 31 plant: inclinometer
+# accelerometer, no rotor drag, no motor lag. Leaving the plant to phased_ga's CURRENT
+# defaults made every --translation replay resolve the ABI-32 specific-force IMU, which
+# resolve_abi32_plant then refused (a feature-less argv cannot see its attitude) — the
+# mode was dead for translation since ABI 32 — and from ABI 35 it would also have flown
+# the airframe-bound motor lag. So the glob mode states that plant EXPLICITLY; --plant-args
+# overrides it (last-wins). Runs flown on the ABI-32+ plant use --run-out (their own argv).
+LEGACY_PLANT_ARGS = "--imu-inclinometer --no-rotor-drag --no-motor-lag"
+
+
 def _regime(cond, a):
 	"""Resolve a Condition EXACTLY as phased_ga would: its own parser supplies every
-	default the held-out report reads, episode_config_from_args assembles the plant."""
+	default the held-out report reads, episode_config_from_args assembles the plant
+	(the plant flags themselves are explicit — see LEGACY_PLANT_ARGS)."""
+	import shlex
 	from wnn.control.phased_ga import build_arg_parser, episode_config_from_args
-	argv = cond.argv() + ["--steps", str(a.steps), "--tilt", str(cond.tilt),
+	plant = shlex.split(getattr(a, "plant_args", LEGACY_PLANT_ARGS))
+	argv = cond.argv() + plant + ["--steps", str(a.steps), "--tilt", str(cond.tilt),
 	                      "--body-rate", str(a.body_rate), "--yaw-rate", str(a.yaw_rate),
 	                      "--report-episodes", str(a.episodes), "--num-eval-folds", "5"]
 	args = build_arg_parser().parse_args(argv)
@@ -558,6 +573,11 @@ def _build_parser():
 	ap.add_argument("--score-args", default="",
 	                help="--run-out: phased_ga flags appended (last-wins) for the SCORING regime, "
 	                     "e.g. '--disturbance L4A --report-seeds 99990201 ...'")
+	ap.add_argument("--plant-args", default=LEGACY_PLANT_ARGS,
+	                help="glob mode: the phased_ga PLANT flags of both regimes (default: the "
+	                     f"ABI <= 31 plant the glob-mode winners flew, '{LEGACY_PLANT_ARGS}'). "
+	                     "Pass '' for phased_ga's current defaults (then a --translation "
+	                     "replay needs its attitude-feature flags here too).")
 	ap.add_argument("--dry-run", action="store_true",
 	                help="print the resolved regimes + matched winners and exit")
 	ap.add_argument("--out", required=True)
