@@ -39,7 +39,7 @@
 #   (6) ITEM I (05/11/2026): axis F = lag OFF (--motor-lag-s 0, the lag-free arm vs the lagged
 #       anchor) and the stress T=0.30. The F030 approval gate is GONE: the teachers are lag-aware
 #       since ABI 34. A banked run's `[provenance]` must carry the resolved `motor_lag=` token.
-#   (5) wheel FROZEN at ABI 33 sha a6398538ce04588c: preflight refuses any other installed wheel, and
+#   (5) wheel FROZEN at ABI 35 sha 7e08dd27843f19a1 (re-frozen 06/11, Luiz; post-2a27ce01 canonical export order): preflight refuses any other installed wheel, and
 #       a run whose `[provenance]` line differs is NOT banked (abort).
 #
 # ATTEMPT-3 RULE. A launch that fails (rc!=0, no winner, no headline, wrong provenance) aborts the
@@ -81,8 +81,8 @@ CONDITIONS=(
 	"C|sn8|axC_sn8|--grid-state-neurons 8 --max-state-neurons 8|SN8"
 )
 SEEDS="31337002 31337003 31337004 31337005 31337006"   # seed r flies in round r
-FROZEN_ABI="33"
-FROZEN_SHA="a6398538ce04588c"
+FROZEN_ABI="35"
+FROZEN_SHA="7e08dd27843f19a1"
 # =====================================================================================
 
 # MA_PYTHON / MA_LOG / MA_LOCK / MA_TIME / MA_CTRL8_DIR are TEST HOOKS for
