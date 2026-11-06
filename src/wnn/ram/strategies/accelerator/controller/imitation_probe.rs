@@ -579,6 +579,9 @@ pub(crate) fn run(base: &WnnController, cfg: &RewardGatedConfigPacked, target: [
 }
 
 /// The recipe controller + cfg from a dump_recipe_fixture.py text fixture.
+/// Test-only: it seeds from the ctrl17_pins fixture config (a #[cfg(test)] module),
+/// so outside tests it would not compile — which broke the wheel build at 15d5bbf0.
+#[cfg(test)]
 pub(crate) fn from_fixture(path: &str) -> (WnnController, RewardGatedConfigPacked, [f32; 3], Vec<u64>)
 {
 	let text = std::fs::read_to_string(path).expect("fixture");
@@ -670,6 +673,7 @@ mod tests
 
 /// Fixture loader (generated from RewardGatedConfigPacked's 77 fields by
 /// scripts/diag/dump_recipe_fixture.py's sibling step; keep in sync).
+#[cfg(test)]
 fn cfg_set(c: &mut RewardGatedConfigPacked, k: &str, v: &str)
 {
 	fn vecp<T: std::str::FromStr>(v: &str) -> Vec<T>
