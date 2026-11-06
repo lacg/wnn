@@ -10,6 +10,9 @@
 >    debt"). The EDRA-BPTT walk (CPU + GPU-resident, ABI 35), the split trainer and every sn>0 path must
 >    support the CTBR banks (collective + p, q, r) with the same CPU/GPU parity and bit-exact tests as the
 >    motor-bank path. R9 below ("sn>0 unsupported in v1") is SUPERSEDED. No `unsupported in v1` asserts.
+> 6. **Train = score plant (CTRL-32, part of v1):** the trainer draws the motor-asymmetry δ per training
+>    episode with the scorer's distribution (L4C ±20%), CPU + Metal, every trainer path, motor-level AND
+>    cascade. Own commit(s) before the cascade commits; provenance `train_asym=per_episode`.
 
 Status: DESIGN ONLY. No code is changed by this document and no run is launched.
 Approved for exploration by Luiz on 06/11/2026. Author: flight-dynamics agent.
