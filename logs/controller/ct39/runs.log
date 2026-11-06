@@ -13,3 +13,11 @@
 2026-11-06T20:27:12Z START S1p_stage2_lag020_ct39_pid --motor-lag-s 0.20 --output-mode ctbr --action-repeat 10 --teacher pid
 2026-11-06T20:28:45Z END S1p_stage2_lag020_ct39_pid steady=5.28°  err=7.96°  stable=25.0%  alt=0.237m
 2026-11-06T20:28:45Z ALL DONE
+2026-11-06T21:15:10Z START SM2_stage2_lag020_law_asym --motor-lag-s 0.20 --delta-leak 0.7 --delta-max 0.6
+2026-11-06T21:35:00Z END SM2_stage2_lag020_law_asym steady=3.18°  err=4.02°  stable=81.6%  alt=0.465m
+2026-11-06T21:35:00Z START C1_250hz_ct39 --motor-lag-s 0.20 --output-mode ctbr --action-repeat 4
+2026-11-06T21:37:41Z END C1_250hz_ct39 steady=4.69°  err=5.87°  stable=55.8%  alt=0.222m
+2026-11-06T21:37:41Z START S1_250hz_ct39 --motor-lag-s 0.20 --output-mode ctbr --action-repeat 4
+2026-11-06T21:40:48Z END S1_250hz_ct39 steady=5.28°  err=7.42°  stable=34.6%  alt=0.218m
+2026-11-06T21:40:48Z CHAIN2 DONE
+2026-11-06T21:52:08Z START C1_250hz_quad_ct39 --motor-lag-s 0.20 --output-mode ctbr --action-repeat 4 --memory-mode QUAD_WEIGHTED
