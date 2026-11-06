@@ -42,6 +42,8 @@ mod abi32_tests; // ABI 32 behaviour + CPU/Metal parity (plant, G5, dx/dy, estim
 #[cfg(test)]
 mod abi35_tests; // ABI 35: bptt walk fixtures, CPU pins, CPU/GPU walk parity
 #[cfg(test)]
+mod lag_student_law_tests; // diagnostic: student output law under motor lag
+#[cfg(test)]
 mod abi34_tests; // ABI 34: lag-aware teachers, one pwm convention under motor lag, T=0 pins
 mod att_estimator; // ABI 32: the WNN's Mahony attitude estimate (obs_att_estimator)
 mod att_err_ref; // CTRL-17 G5 (ABI 32): attitude error vs the position loop tilt reference
