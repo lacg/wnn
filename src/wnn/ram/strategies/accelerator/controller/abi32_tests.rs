@@ -389,3 +389,216 @@ fn trainer_config_refuses_inert_abi32_options()
 	c.imu_specific_force = true;
 	assert!(c.validate_abi32().is_ok());
 }
+
+// ---------------------------------------------------------------------------
+// 06/11/2026 (CTRL-5 lag hunt): CPU vs GPU on the PRODUCTION-SHAPED regime.
+// The pop-6 grid at seed 7 scored the SAME trained genomes 6.58°/49% on the
+// GPU and 3.10°/94% on the CPU scorer (lag 0, deterministic repeat). The
+// fixtures above fly a reduced feature set with disturbances OFF; this one
+// adds what production has: per-axis p+i (yaw off), yaw err + integral,
+// obs_pwm, estimator, specific-force IMU + rotor drag 0.78, tilt reference,
+// and L4C-like weather (motor asym + gyro noise). Ablates each ingredient.
+// ---------------------------------------------------------------------------
+
+fn prod_controller(seed: u64, estimator: bool, cells: usize) -> WnnController
+{
+	prod_controller_f(seed, estimator, cells, [true; 6])
+}
+
+/// f = [peraxis_i, obs_pwm, yaw_err, yaw_err_i, vert, horiz]
+fn prod_controller_f(seed: u64, estimator: bool, cells: usize, f: [bool; 6]) -> WnnController
+{
+	let (num_motors, levels, bpf, window, obpn) = (4usize, 4usize, 3usize, 1usize, 8usize);
+	let num_features = 9 + 2 + 2 * f[0] as usize + 4 * f[1] as usize + f[2] as usize + f[3] as usize + 3 * f[4] as usize + 4 * f[5] as usize;
+	let frame_bits = num_features * bpf;
+	let mut rng = SmallRng::seed_from_u64(seed);
+	let thresholds: Vec<f32> = (0..frame_bits).map(|_| rng.gen_range(-0.3f32..0.3)).collect();
+	let num_out = num_motors * levels;
+	let output_connections: Vec<i64> = (0..num_out * obpn).map(|_| rng.gen_range(0..frame_bits) as i64).collect();
+	let mut c = WnnController::new_core(
+		num_motors, levels, bpf, window, 0, 0, obpn, thresholds, Vec::new(), output_connections,
+		true, 0.05, 0.98, 1.0,
+		false, false, true, f[0], false, f[1], f[2], f[3],
+		0.99, 1.0, DT, false, 1, ram_core::neuron_memory::BINARY, None, None, 0.05, false, 0.30,
+		f[4], f[4], f[4], f[5], f[5], false, 1,
+	)
+	.expect("prod controller must construct");
+	assert_eq!(c.num_features(), num_features);
+	for n in 0..num_out
+	{
+		for _ in 0..cells
+		{
+			let addr = rng.gen_range(0..(1u64 << obpn));
+			c.write_output_cell_internal(n, addr, if rng.gen_bool(0.5) { 1 } else { 0 });
+		}
+	}
+	if estimator
+	{
+		c.enable_att_estimator(2.0, 0.1).expect("estimator on");
+	}
+	c
+}
+
+fn prod_dist(on: bool) -> Option<crate::controller::Disturbance>
+{
+	on.then(|| crate::controller::Disturbance {
+		tau_bias: [0.0; 3],
+		gust_sigma: 0.0,
+		gust_tau_c: 0.1,
+		motor_asym: [1.15, 0.85, 1.1, 0.9],
+		gyro_sigma: 0.0107,
+		gyro_bias_walk: 0.0,
+		accel_sigma: 0.0,
+		dropout_prob: 0.0,
+		dropout_len_steps: 0,
+		obs_delay_steps: 0,
+		torque_scale_jitter: 0.0,
+		seed: 4242,
+	})
+}
+
+fn prod_rows(c: &WnnController, s1: &Stage1Cfg, steps: usize, dist: bool) -> ([f64; 17], Option<Vec<f64>>)
+{
+	prod_rows_lag(c, s1, steps, dist, 0.0)
+}
+
+fn prod_rows_lag(c: &WnnController, s1: &Stage1Cfg, steps: usize, dist: bool, lag: f32) -> ([f64; 17], Option<Vec<f64>>)
+{
+	let (q0, w0) = ics();
+	let d = prod_dist(dist);
+	let mut cc = c.clone();
+	let (en, dd) = match d { Some(d) => (true, d), None => (false, prod_dist(true).unwrap()) };
+	let cr = crate::cpu_score::rollout_one(
+		&mut cc, &q0, &w0, EPS, steps, DT, ARM, KT, KD, INERTIA, G, lag, [0.0; 3],
+		en, dd.tau_bias, dd.gust_sigma, dd.gust_tau_c, dd.motor_asym, dd.gyro_sigma, dd.gyro_bias_walk, dd.accel_sigma, dd.seed,
+		0.0, 0, 0, 0.0, 4, 4, None, None, None, 1.0, 0.4, None, Some(s1),
+	);
+	let gr = ControllerRolloutEvaluator::new().ok().map(|ev| {
+		ev.score(&[c], &q0, &w0, EPS, steps, (DT, ARM, KT, INERTIA, G), KD, lag, [0.0; 3], d, None, None, None, Some(s1))
+			.expect("gpu score")[0]
+			.clone()
+	});
+	(cr, gr)
+}
+
+#[test]
+#[ignore]
+fn diag_prod_regime_cpu_vs_gpu()
+{
+	let plant_full = PlantOpts::new(true, 0.78).unwrap();
+	for (name, est, plant, tilt, dist) in [
+		("bare", false, PlantOpts::OFF, false, false),
+		("+dist", false, PlantOpts::OFF, false, true),
+		("+plant", false, plant_full, false, false),
+		("+tilt", false, PlantOpts::OFF, true, false),
+		("+est", true, PlantOpts::OFF, false, false),
+		("+est+plant", true, plant_full, false, false),
+		("full", true, plant_full, true, true),
+	]
+	{
+		let c = prod_controller(29, est, 64);
+		let s1 = cfg(plant, if tilt { tilt_ref() } else { AttErrRef::LEVEL });
+		for steps in [400usize, 2000]
+		{
+			let (cr, gr) = prod_rows(&c, &s1, steps, dist);
+			if let Some(g) = gr
+			{
+				eprintln!("[prodpar] {name:11} steps={steps}: err cpu {:.6} gpu {:.6} | stable {:.3}/{:.3} | pos {:.4}/{:.4} | rel {:.2e}",
+					cr[1], g[1], cr[2], g[2], cr[13], g[13], ((g[1] - cr[1]) / cr[1].abs().max(1e-9)).abs());
+			}
+		}
+	}
+}
+
+#[test]
+#[ignore]
+fn diag_prod_feature_ablation_cpu_vs_gpu()
+{
+	let names = ["peraxis_i", "obs_pwm", "yaw_err", "yaw_err_i", "vert", "horiz"];
+	let mut sets: Vec<(String, [bool; 6])> = vec![("none".into(), [false; 6]), ("all".into(), [true; 6])];
+	for i in 0..6
+	{
+		let mut f = [false; 6];
+		f[i] = true;
+		sets.push((format!("only {}", names[i]), f));
+	}
+	for i in 0..6
+	{
+		let mut f = [true; 6];
+		f[i] = false;
+		sets.push((format!("all-{}", names[i]), f));
+	}
+	for (i, j) in [(1usize, 4usize), (1, 5), (4, 5), (0, 4), (2, 4)]
+	{
+		let mut f = [false; 6];
+		f[i] = true;
+		f[j] = true;
+		sets.push((format!("{}+{}", names[i], names[j]), f));
+	}
+	for (name, f) in sets
+	{
+		let c = prod_controller_f(29, false, 64, f);
+		let s1 = cfg(PlantOpts::OFF, AttErrRef::LEVEL);
+		for steps in [20usize, 60, 200]
+		{
+			let (cr, gr) = prod_rows(&c, &s1, steps, false);
+			if let Some(g) = gr
+			{
+				eprintln!("[ablate] {name:16} steps={steps:4}: err cpu {:.7} gpu {:.7} rel {:.2e} | alt {:.5}/{:.5}",
+					cr[1], g[1], ((g[1] - cr[1]) / cr[1].abs().max(1e-9)).abs(), cr[14], g[14]);
+			}
+		}
+	}
+}
+
+/// 06/11/2026: the GPU score kernel fed --obs-collective-cmd the hover-relative
+/// FRACTION while the CPU scorer and the trainer feed the ABSOLUTE collective pwm.
+/// A controller that reads ONLY the vertical channel (+ base) must score the same
+/// on both, tightly, over a horizon long enough for one flipped bit to show.
+#[test]
+fn parity_collective_cmd_feature_absolute_pwm()
+{
+	let c = prod_controller_f(29, false, 64, [false, false, false, false, true, false]);
+	let mut s1 = cfg(PlantOpts::OFF, AttErrRef::LEVEL);
+	s1.collective_frac = (0..EPS).map(|e| 0.02 * e as f32 - 0.03).collect();
+	for steps in [60usize, 200]
+	{
+		let (cr, gr) = prod_rows(&c, &s1, steps, false);
+		if let Some(g) = gr
+		{
+			for (i, name) in [(1usize, "err"), (0, "reward"), (14, "alt"), (13, "pos")]
+			{
+				close(g[i], cr[i], 1e-3, 1e-5, &format!("collective_cmd steps={steps} {name}"));
+			}
+		}
+	}
+}
+
+/// 06/11/2026 pin: the PRODUCTION-shaped controller (26 features: per-axis p+i,
+/// obs_pwm, yaw pair, vertical + horizontal channels; estimator; specific-force
+/// IMU + rotor drag 0.78; tilt reference; motor asym + gyro noise) scores the
+/// same on CPU and GPU over 2000 steps, lag 0 and the airframe lag 0.20. Before
+/// the MAX_FEATURES / collective_cmd fixes the GPU diverged by 30-60 % here.
+#[test]
+fn parity_production_regime_cpu_vs_gpu()
+{
+	let plant = PlantOpts::new(true, 0.78).unwrap();
+	let c = prod_controller(29, true, 64);
+	let mut s1 = cfg(plant, tilt_ref());
+	s1.collective_frac = (0..EPS).map(|e| 0.02 * e as f32 - 0.03).collect();
+	for lag in [0.0f32, 0.20]
+	{
+		let (cr, gr) = prod_rows_lag(&c, &s1, 2000, true, lag);
+		if let Some(g) = gr
+		{
+			for (i, name) in [(1usize, "err"), (0, "reward"), (2, "stable"), (13, "pos"), (14, "alt"), (15, "dx"), (16, "dy")]
+			{
+				close(g[i], cr[i], 1e-4, 1e-6, &format!("production T={lag} {name}"));
+			}
+		}
+	}
+	// The host refuses what the kernel cannot hold.
+	assert!(crate::metal_controller::kernel_feature_dims_ok("t", 40, 4).is_ok());
+	assert!(crate::metal_controller::kernel_feature_dims_ok("t", 41, 1).is_err());
+	assert!(crate::metal_controller::kernel_feature_dims_ok("t", 26, 7).is_err());
+}

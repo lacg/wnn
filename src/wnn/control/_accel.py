@@ -106,7 +106,11 @@ import os
 # DELIVERED actuator estimate u_a − anchor (plant-filter twin of its own applied
 # commands, CPU + Metal), not the command — the lag-collapse fix (0%/82° at T=0.20).
 # The twin advances whenever the lag is on (not only with d-hat). T = 0 bit-identical to 35.
-EXPECTED_ABI = 36
+# ABI 37 (06/11/2026): GPU scorer fixes — MAX_FEATURES 21→40 (the 26-feature
+# production vector overflowed thread-private sensors[]) and --obs-collective-cmd
+# fed the absolute collective pwm like the trainer/CPU scorer (was the fraction).
+# Results-changing for GPU-scored --translation runs, lag 0 included.
+EXPECTED_ABI = 37
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

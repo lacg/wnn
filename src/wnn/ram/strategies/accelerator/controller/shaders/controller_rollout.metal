@@ -20,7 +20,17 @@ using namespace metal;
 // =============================================================================
 
 constant uint NUM_FEATURES = 9u;	// base raw sensors (gyro+accel+target)
-constant uint MAX_FEATURES = 21u; // 9 base + 8 H2 extras (tilt+per-axis ×p/i) + 4 pwm-accumulator
+// Thread-private feature capacity. Was 21 (9 base + 8 H2 + 4 pwm) — but the
+// stage-1/2 channels (vert 3 + horiz 4), the yaw pair and d̂ grew the production
+// vector to 26, and the kernels wrote sensors[21..25] PAST the array (Metal
+// thread-private out-of-bounds: silent, undefined) since stage 2. Found
+// 06/11/2026 (abi32_tests::diag_prod_feature_ablation_cpu_vs_gpu). 40 covers
+// the widest legal set (9 + 2 tilt + 6 per-axis + 8 pwm + 2 yaw + 3 d̂ + 7 xyz).
+// The host refuses anything wider (kernel_feature_dims_ok).
+constant uint MAX_FEATURES = 40u;
+// The K-window ring keeps its old footprint (8 × 21 floats) — the host refuses
+// window × num_features above it, so widening MAX_FEATURES costs no ring memory.
+constant uint MAX_RING_FLOATS = 168u;
 
 // Compile-time maxima for thread-private arrays (host asserts runtime <= these).
 // MAX_STATE_NEURONS bumped 32→64 (09/07/2026): the NEURONS GA grows state_neurons to
@@ -1037,7 +1047,7 @@ kernel void controller_rollout(
 
 	// K-window ring of observation frames (oldest-first in [0,filled)); stride =
 	// P.num_features (≤ MAX_FEATURES). Holds base sensors + enabled H2 extras.
-	float ring[MAX_WINDOW * MAX_FEATURES];
+	float ring[MAX_RING_FLOATS];
 	uint filled = 0u;
 	uint pushes = 0u; // frame-stride tick source (twin of controller.rs frame_pushes)
 	// H2 per-thread (per-episode) state: leaky-integral accumulators + gyro-z
@@ -1348,11 +1358,17 @@ kernel void controller_rollout(
 		// SCOPE C STAGE 1: refresh the vertical observation for THIS step, twin of
 		// the host calling set_vertical_obs() before step(). Read from the state
 		// as it stands at step start — the same snapshot the sensors come from.
-		// Collective is the episode's commanded fraction (hover-relative, so 0.0
-		// means "hold hover"); alt_err is target − z; vz is +up.
+		// Collective is the episode's commanded collective in ABSOLUTE pwm — the
+		// anchor, Stage1Cfg::collective_pwm — exactly what the CPU scorer and the
+		// DAgger trainer (episode_regime::feed_live_obs) hand set_vertical_obs.
+		// BUG until 06/11/2026: this read the hover-relative FRACTION (≈ 0) while
+		// training and the CPU scorer fed ≈ 0.69 since ed921bac (13/08/2026), so
+		// the GPU scorer read --obs-collective-cmd addresses training never wrote
+		// (pop-6 grid, same genomes: GPU 6.58°/49% vs CPU 3.10°/94%).
+		// alt_err is target − z; vz is +up.
 		if (P.translation_on != 0u)
 		{
-			F.vert_collective_cmd = ep_coll_frac;
+			F.vert_collective_cmd = coll_anchor;
 			F.vert_alt_err = P.target_altitude - zpos;
 			F.vert_vz = vz;
 			// STAGE 2: target is the ORIGIN, so the error is just −position.
@@ -2134,7 +2150,7 @@ kernel void controller_train(
 
 	uchar prev_state[MAX_STATE_NEURONS];
 	uchar new_state[MAX_STATE_NEURONS];
-	float ring[MAX_WINDOW * MAX_FEATURES];
+	float ring[MAX_RING_FLOATS];
 	float integ[MAX_INTEGRALS];
 	float pwm_acc[MAX_ROTORS]; // obs_pwm reads [0..num_motors) — N>4 safe
 	uint writes = 0u;
@@ -2365,7 +2381,7 @@ kernel void controller_record(
 
 	uchar prev_state[MAX_STATE_NEURONS];
 	uchar new_state[MAX_STATE_NEURONS];
-	float ring[MAX_WINDOW * MAX_FEATURES];
+	float ring[MAX_RING_FLOATS];
 	float integ[MAX_INTEGRALS];
 	float pwm_acc[MAX_ROTORS]; // obs_pwm reads [0..num_motors) — N>4 safe
 	for (uint n = 0u; n < P.n_state; n++)

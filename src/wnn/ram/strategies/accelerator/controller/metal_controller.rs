@@ -344,6 +344,26 @@ struct RolloutParams
 	est_ki: f32,
 }
 
+/// 06/11/2026: the thread-private capacities of controller_rollout.metal
+/// (MAX_FEATURES, MAX_RING_FLOATS). Before this guard a 26-feature production
+/// controller overflowed the kernel's 21-slot sensor array silently.
+pub(crate) const GPU_MAX_FEATURES: usize = 40;
+pub(crate) const GPU_MAX_RING_FLOATS: usize = 168;
+
+pub(crate) fn kernel_feature_dims_ok(site: &str, num_features: usize, window: usize) -> Result<(), String>
+{
+	if num_features > GPU_MAX_FEATURES || window * num_features > GPU_MAX_RING_FLOATS
+	{
+		return Err(format!(
+			"{site}: num_features={num_features} × window={window} exceeds the Metal kernel's \
+			 thread-private capacity (MAX_FEATURES={GPU_MAX_FEATURES}, ring {GPU_MAX_RING_FLOATS} floats) — \
+			 CPU fallback required."
+		));
+	}
+	Ok(())
+}
+
+
 pub struct ControllerRolloutEvaluator
 {
 	device: Device,
@@ -676,6 +696,7 @@ impl ControllerRolloutEvaluator
 		) = controllers[0].obs_params();
 		// Action-repeat N (uniform across the population, like delta/obs config).
 		let action_repeat = controllers[0].action_repeat_n();
+		kernel_feature_dims_ok("score_controllers_metal", num_features, window)?;
 		let num_out = num_motors * levels;
 		let frame_bits = num_features * bpf;
 		let sensor_total = window * frame_bits;
@@ -2237,6 +2258,7 @@ impl ControllerTrainer
 			ctrl_dt,
 		) = controllers[0].obs_params();
 		let (delta_control, _dmax, _dleak, _dgamma) = controllers[0].delta_params();
+		kernel_feature_dims_ok("controller_train (metal)", num_features, window)?;
 		let num_out = num_motors * levels;
 		let frame_bits = num_features * bpf;
 		let sensor_total = window * frame_bits;
@@ -2461,6 +2483,7 @@ impl ControllerTrainer
 		) = controllers[0].obs_params();
 		let (delta_control, _dmax, _dleak, _dgamma) = controllers[0].delta_params();
 		let _ = (num_motors, levels, obpn);
+		kernel_feature_dims_ok("controller_record (metal)", num_features, window)?;
 		let frame_bits = num_features * bpf;
 		let sensor_total = window * frame_bits;
 		let out_input_len = frame_bits + n_state;

@@ -507,7 +507,7 @@ fn fly_thermo(id: u8, lag: f32, fit_t: &Fit, thr: &[Vec<f64>], with_ua: u8, epis
 // (ABI 36) vs T=0.20 command (ABI 35 convention, test toggle).
 // ---------------------------------------------------------------------------
 
-fn ram_student(nf: usize, thresholds: Vec<f32>, seed: u64, dmax: f32, leak: f32) -> crate::controller::WnnController
+fn ram_student(nf: usize, thresholds: Vec<f32>, seed: u64, dmax: f32, leak: f32, tr: bool) -> crate::controller::WnnController
 {
 	use rand::{Rng, SeedableRng};
 	let (levels, bpf, obpn) = (64usize, 8usize, 24usize);
@@ -521,15 +521,15 @@ fn ram_student(nf: usize, thresholds: Vec<f32>, seed: u64, dmax: f32, leak: f32)
 		false, false, true, true, true, true, false, false,
 		0.99, 1.0, 0.001, false, 1,
 		ram_core::neuron_memory::BINARY, None, None, 0.05, false, 0.30,
-		false, false, false, false, false, false, 1,
+		tr, tr, tr, tr, tr, false, 1,
 	)
 	.expect("ram student")
 }
 
-fn probe_cfg(lag: f32) -> crate::dagger_train::RewardGatedConfigPacked
+fn probe_cfg(lag: f32, tr: bool) -> crate::dagger_train::RewardGatedConfigPacked
 {
-	let mut c = crate::ctrl17_pins::pin_translation_cfg(0.0);
-	c.translation = false;
+	let mut c = crate::ctrl17_pins::pin_translation_cfg(if tr { 0.5 } else { 0.0 });
+	c.translation = tr;
 	c.teacher = 4;
 	c.motor_lag_s = lag;
 	c.steps_per_episode = 2000;
@@ -542,11 +542,11 @@ fn probe_cfg(lag: f32) -> crate::dagger_train::RewardGatedConfigPacked
 	c
 }
 
-fn ram_probe(lag: f32, force_command: bool, seed: u64, dmax: f32, leak: f32) -> (f64, f64, Vec<f64>)
+fn ram_probe(lag: f32, force_command: bool, seed: u64, dmax: f32, leak: f32, tr: bool) -> (f64, f64, Vec<f64>)
 {
 	use rand::SeedableRng;
-	let cfg = probe_cfg(lag);
-	let mut c0 = ram_student(9 + 6 + 4, Vec::new(), seed, dmax, leak);
+	let cfg = probe_cfg(lag, tr);
+	let mut c0 = ram_student(9 + 6 + 4 + if tr { 7 } else { 0 }, Vec::new(), seed, dmax, leak, tr);
 	let nf = c0.num_features();
 	let samples = crate::calib_sampler::sample_calibration_features_rs(&mut c0, &cfg, 24, seed ^ 0xCA1);
 	let mut thr = Vec::with_capacity(nf * 8);
@@ -559,7 +559,7 @@ fn ram_probe(lag: f32, force_command: bool, seed: u64, dmax: f32, leak: f32) -> 
 			thr.push(v[((k as f64 + 0.5) / 8.0 * (v.len() - 1) as f64) as usize]);
 		}
 	}
-	let mut c = ram_student(nf, thr, seed, dmax, leak);
+	let mut c = ram_student(nf, thr, seed, dmax, leak, tr);
 	c.set_obs_pwm_force_command(force_command);
 	let st = crate::dagger_train::dagger_train_inplace_rs(&mut c, &cfg, [0.0; 3], seed);
 	let mut sim = crate::dagger_train::AirframeRs::from_cfg(&cfg).sim();
@@ -581,9 +581,10 @@ fn diag_ram_student_real_trainer_under_lag()
 	{
 		for (lag, force) in [(0.0f32, false), (0.20, false), (0.20, true)]
 		{
-			let (st, err, rounds) = ram_probe(lag, force, seed, dmax, leak);
+			let tr = std::env::var("LAGDIAG_TRANSLATION").is_ok();
+			let (st, err, rounds) = ram_probe(lag, force, seed, dmax, leak, tr);
 			eprintln!(
-				"[ramdiag] dmax={dmax} leak={leak} seed={seed} T={lag:.2} obs_pwm={} eval@5°: stable {st:5.1}% err {err:6.2}° | rounds stable {:?}",
+				"[ramdiag] tr={tr} dmax={dmax} leak={leak} seed={seed} T={lag:.2} obs_pwm={} eval@5°: stable {st:5.1}% err {err:6.2}° | rounds stable {:?}",
 				if lag > 0.0 && !force { "delivered" } else { "command" },
 				rounds.iter().map(|v| (v * 100.0).round()).collect::<Vec<_>>()
 			);

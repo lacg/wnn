@@ -276,7 +276,21 @@ mod metal_controller;
 ///     the airframe lag (lag_student_law_tests; metal abi36_* parity + pins).
 ///   RESULTS-CHANGING for lagged obs_pwm runs only; T = 0 and d-hat-only lagged
 ///   rows bit-identical to ABI 35 (abi36_t0_obs_pwm_rows_bit_identical_to_abi35).
-pub const ABI_VERSION: u32 = 36;
+///
+/// ABI 37 (06/11/2026): two GPU SCORER bugs (controller_rollout.metal), present
+/// since stage 1/2 — RESULTS-CHANGING for every GPU-scored --translation run:
+///   - MAX_FEATURES was 21 while the production vector is 26: sensors[21..25]
+///     were written past the thread-private array (silent UB) in the score,
+///     train and record kernels. Now 40 (+ a 168-float ring cap), host-guarded
+///     (kernel_feature_dims_ok).
+///   - the score kernel fed --obs-collective-cmd the hover-relative FRACTION;
+///     the trainer and the CPU scorer feed the ABSOLUTE collective pwm (since
+///     ed921bac, 13/08/2026). Now the anchor, as on the CPU.
+///   Evidence: pop-6 grid, same trained genomes, lag 0: GPU 6.58°/49% vs CPU
+///   3.10°/94%; production-shaped fixture CPU/GPU rel 0.3-0.6 → 1e-6
+///   (abi32_tests::parity_production_regime_cpu_vs_gpu). ≤ 21-feature, no
+///   collective_cmd controllers are bit-identical to ABI 36.
+pub const ABI_VERSION: u32 = 37;
 
 /// Where the sn>0 trainer walks when WNN_CONTROLLER_GPU_BPTT is unset ("cpu"|"gpu").
 /// Decided by the item-E measurement rule (05/11/2026).
