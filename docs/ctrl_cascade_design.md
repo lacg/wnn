@@ -1,5 +1,12 @@
 # CTRL cascade: WNN outer attitude loop over a classical rate loop (CTBR)
 
+> **DECISIONS 06/11/2026 (Luiz)** — supersede the defaults below where they differ:
+> 1. Inner loop = the firmware rate PID (as drafted).
+> 2. **Outer-loop TEACHER = MPCOF** (its attitude decision expressed as rate setpoints) — the default,
+>    not an ablation. The firmware attitude stage becomes the C2 rival / ablation teacher.
+> 3. Build starts as soon as the motor-lag diagnosis (CTRL-26) reports, whatever its verdict. Plane: CTRL-27.
+> 4. Next step after v1 flies: Neural-Fly-style disturbance learner on top of the cascade (CTRL-28).
+
 Status: DESIGN ONLY. No code is changed by this document and no run is launched.
 Approved for exploration by Luiz on 06/11/2026. Author: flight-dynamics agent.
 Code references are to `src/wnn/ram/strategies/accelerator/controller/` unless stated.
