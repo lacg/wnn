@@ -1936,6 +1936,57 @@ impl WnnController
 		self.dhat
 	}
 
+	/// ABI 35: what the d̂ observer's model term multiplies by b — the command
+	/// that flew last step (lag off, bit-identical to ABI 34), or, under motor lag,
+	/// the plant filter's output for that command. Called ONCE per observer update
+	/// (= once per physical step after the first), which is exactly the cadence of
+	/// the plant's filter: seeded at the first command, then
+	/// ua += α·(u − ua) in the plant's own f32 expression.
+	fn dhat_actuator(&mut self) -> [f32; 4]
+	{
+		let u = [self.pwm_applied[0], self.pwm_applied[1], self.pwm_applied[2], self.pwm_applied[3]];
+		if self.dhat_lag_alpha <= 0.0
+		{
+			return u;
+		}
+		if !self.dhat_ua_seeded
+		{
+			self.dhat_ua = u;
+			self.dhat_ua_seeded = true;
+			return self.dhat_ua;
+		}
+		for m in 0..4
+		{
+			self.dhat_ua[m] += self.dhat_lag_alpha * (u[m] - self.dhat_ua[m]);
+		}
+		self.dhat_ua
+	}
+
+	/// ABI 35: tell the d̂ observer the plant's motor-lag settling time T (s), the
+	/// SAME quantity AttitudeSim::set_motor_lag takes. T <= 0 ⇒ off (the command,
+	/// bit-identical to ABI 34). The coefficient is the plant's own f32
+	/// expression 4dt/max(T, 4dt) on this controller's dt.
+	pub(crate) fn set_observer_motor_lag_core(&mut self, settling_s: f32)
+	{
+		self.dhat_lag_alpha = if settling_s > 0.0
+		{
+			4.0 * self.dt / settling_s.max(4.0 * self.dt)
+		}
+		else
+		{
+			0.0
+		};
+		self.dhat_ua = [0.0; 4];
+		self.dhat_ua_seeded = false;
+	}
+
+	/// The observer's lag coefficient (0.0 = lag off) — the GPU hosts check it
+	/// against the plant they score on.
+	pub(crate) fn observer_lag_alpha(&self) -> f32
+	{
+		self.dhat_lag_alpha
+	}
+
 	/// DOB Fix A: record the motor PWM the plant ACTUALLY received this step —
 	/// the student-side twin of `Teacher::observe()`. step() stores its own
 	/// return as the default; any loop that modifies the action afterwards
@@ -2292,6 +2343,9 @@ impl WnnController
 			dhat: [0.0f32; 3],
 			dhat_last_gyro: [0.0f32; 3],
 			dhat_have_last: false,
+			dhat_lag_alpha: 0.0,
+			dhat_ua: [0.0f32; 4],
+			dhat_ua_seeded: false,
 			// Scope C stage 1 vertical channel.
 			obs_collective_cmd,
 			obs_alt_err,
@@ -3033,6 +3087,19 @@ pub struct WnnController
 	dhat: [f32; 3],           // the estimate itself (rate-accel units)
 	dhat_last_gyro: [f32; 3], // previous step's gyro, for the finite-difference ω̇
 	dhat_have_last: bool,     // false on step 0 of an episode (no ω̇ available yet)
+	// ABI 35 (05/11/2026): the d̂ observer under motor lag. The plant's torque comes
+	// from the LAGGED actuator (Molchanov eq. 7, AttitudeSim::apply_motor_lag), so
+	// subtracting b·u_commanded reads every command change the rotors have not yet
+	// followed as a disturbance — the same defect ABI 34 fixed in the mpcof
+	// teacher. dhat_lag_alpha is the PLANT's coefficient 4dt/max(T, 4dt) (0.0 =
+	// lag off ⇒ the command, bit-identical to ABI 34); dhat_ua is the student's
+	// twin of the plant filter, fed the same commands, seeded at the first one
+	// exactly as the plant seeds (and as actuator_lag::ActuatorLag does for the
+	// teachers). Set by the HOST that owns the plant (set_observer_motor_lag),
+	// like the teachers' lag.
+	dhat_lag_alpha: f32,
+	dhat_ua: [f32; 4],
+	dhat_ua_seeded: bool,
 	dt: f32,                  // physics timestep (s); used to scale gyro-z when anchored
 	num_features: usize,      // 9 + enabled extra features (drives all frame sizing)
 	// Per-step integral accumulators, one per enabled "_i" feature, in canonical
@@ -3466,6 +3533,9 @@ impl WnnController
 		self.dhat = [0.0; 3];
 		self.dhat_last_gyro = [0.0; 3];
 		self.dhat_have_last = false;
+		// ABI 35: the observer's actuator twin re-seeds with the plant's filter.
+		self.dhat_ua = [0.0; 4];
+		self.dhat_ua_seeded = false;
 		// Action-repeat: episodes align decisions at t=0; held PWM back to hover.
 		self.step_counter = 0;
 		for (m, v) in self.last_pwm.iter_mut().enumerate()
@@ -4162,6 +4232,14 @@ impl WnnController
 			}
 		}
 		(s_writes, o_writes)
+	}
+
+	/// ABI 35: the plant's motor-lag settling time T (s) for the d̂ observer —
+	/// the host passes the SAME T it gives AttitudeSim::set_motor_lag (and the
+	/// teachers). T <= 0 ⇒ off (bit-identical to ABI 34).
+	pub fn set_observer_motor_lag(&mut self, settling_time_s: f32)
+	{
+		self.set_observer_motor_lag_core(settling_time_s);
 	}
 
 	/// Multi-step EDRA-BPTT over a teacher-forced window (absolute-PWM mode).
@@ -5364,9 +5442,11 @@ impl WnnController
 		{
 			if self.dhat_have_last
 			{
+				// ABI 35: under motor lag the model term reads the LAGGED actuator
+				// (the plant-filter twin), never the command. Lag off ⇒ the command.
+				let m = self.dhat_actuator();
 				// '+' mixer inverse (teacher's observe()): u_roll=(m3−m1)/2,
 				// u_pitch=(m2−m0)/2, u_yaw=((m0+m2)−(m1+m3))/4.
-				let m = &self.pwm_applied;
 				let u = [
 					(m[3] - m[1]) * 0.5,
 					(m[2] - m[0]) * 0.5,
@@ -7631,6 +7711,106 @@ mod sn0_tests
 			1,     // frame_stride = 1 (legacy every-step window)
 		)
 		.expect("obs_pwm controller must construct")
+	}
+
+	/// ABI 35 — the student's d̂ observer under motor lag. Drives a dhat-on
+	/// controller with the DAgger/deploy protocol (compute_features(t), then the
+	/// command that flew) through a LAGGED plant with no disturbance, returning
+	/// (mean over steps of max-axis |d̂|, the observer's actuator twin per step,
+	/// the plant-expression reference filter per step).
+	fn lag_observer_run(observer_lag_s: f32, plant_lag_s: f32, steps: usize) -> (f64, Vec<[f32; 4]>, Vec<[f32; 4]>)
+	{
+		let b = calibrate_control_gains_rs(0.001, 0.075, 2.4, 0.05, [0.0023, 0.0023, 0.0046], 9.81, 0.5, 0.05);
+		let mut c = dhat_feature_controller(Some([b[0], b[1], b[2]]), false);
+		c.set_observer_motor_lag_core(observer_lag_s);
+		let mut sim = AttitudeSim::new(0.001, 0.075, 2.4, 0.05, [0.0023, 0.0023, 0.0046], 9.81);
+		sim.set_motor_lag(plant_lag_s);
+		c.reset(0.0);
+		sim.reset(Some([1.0, 0.0, 0.0, 0.0]), Some([0.0; 3]));
+		let alpha = 4.0f32 * 0.001 / plant_lag_s.max(4.0 * 0.001);
+		let (mut twin, mut reference) = (Vec::new(), Vec::new());
+		let mut filt = [0.0f32; 4];
+		let mut sum = 0.0f64;
+		for t in 0..steps
+		{
+			let (gyro, accel) = sim.read_imu();
+			let _ = c.compute_features(gyro, accel, [0.0; 3]);
+			if t >= 1
+			{
+				twin.push(c.dhat_ua);
+				reference.push(filt);
+			}
+			sum += c.dhat_estimate().iter().fold(0.0f64, |m, v| m.max(v.abs() as f64));
+			// A command that keeps changing (what a lag is visible on), near hover.
+			let w = (t as f32) * 0.02;
+			let cmd = [0.5 + 0.03 * w.sin(), 0.5 - 0.02 * w.cos(), 0.5 + 0.03 * w.sin(), 0.5 - 0.02 * w.cos()];
+			for m in 0..4
+			{
+				filt[m] = if t == 0 { cmd[m] } else { filt[m] + alpha * (cmd[m] - filt[m]) };
+			}
+			c.observe_applied(cmd);
+			sim.step(cmd);
+		}
+		(sum / steps as f64, twin, reference)
+	}
+
+	/// The observer's actuator twin IS the plant's filter: bit-equal, every step
+	/// (same f32 expression, same seeding at the first command).
+	#[test]
+	fn abi35_observer_twin_equals_plant_filter()
+	{
+		for tt in [0.15f32, 0.30]
+		{
+			let (_, twin, reference) = lag_observer_run(tt, tt, 600);
+			assert_eq!(twin.len(), 599);
+			for (t, (a, r)) in twin.iter().zip(reference.iter()).enumerate()
+			{
+				assert_eq!(a, r, "T={tt} step {}: observer twin {a:?} vs plant filter {r:?}", t + 1);
+			}
+		}
+	}
+
+	/// With NO disturbance the lag-aware observer stays near 0, while the ABI-34
+	/// command convention reads the actuator lag as a disturbance — the student
+	/// twin of abi34_tests::mpcof_observer_does_not_read_lag_as_disturbance.
+	#[test]
+	fn abi35_observer_does_not_read_lag_as_disturbance()
+	{
+		for tt in [0.15f32, 0.30]
+		{
+			let (aware, ..) = lag_observer_run(tt, tt, 1500);
+			let (blind, ..) = lag_observer_run(0.0, tt, 1500);
+			eprintln!("[abi35] T={tt} student mean max|d̂|: aware {aware:.4} blind {blind:.4}");
+			assert!(aware < 0.25 * blind, "T={tt}: lag-aware d̂ {aware} not well below command-convention {blind}");
+		}
+	}
+
+	/// T = 0 (and an observer lag of 0 set explicitly) is the ABI-34 command
+	/// convention bit-for-bit: the default controller and one with
+	/// set_observer_motor_lag(0) produce identical feature streams on the
+	/// unlagged plant.
+	#[test]
+	fn abi35_observer_lag_zero_is_the_command()
+	{
+		let b = calibrate_control_gains_rs(0.001, 0.075, 2.4, 0.05, [0.0023, 0.0023, 0.0046], 9.81, 0.5, 0.05);
+		let mut a = dhat_feature_controller(Some([b[0], b[1], b[2]]), false);
+		let mut z = dhat_feature_controller(Some([b[0], b[1], b[2]]), false);
+		assert_eq!(a.observer_lag_alpha(), 0.0);
+		z.set_observer_motor_lag_core(0.0);
+		assert_eq!(z.observer_lag_alpha(), 0.0);
+		let mut sim = AttitudeSim::new(0.001, 0.075, 2.4, 0.05, [0.0023, 0.0023, 0.0046], 9.81);
+		a.reset(0.0);
+		z.reset(0.0);
+		sim.reset(Some([0.995, 0.06, -0.08, 0.0]), Some([0.2, -0.1, 0.05]));
+		for _ in 0..400
+		{
+			let (gyro, accel) = sim.read_imu();
+			let pa = a.step(gyro, accel, [0.0; 3]);
+			let pz = z.step(gyro, accel, [0.0; 3]);
+			assert_eq!(pa, pz);
+			assert_eq!(a.dhat_estimate(), z.dhat_estimate());
+			sim.step([pa[0], pa[1], pa[2], pa[3]]);
+		}
 	}
 
 	/// sn=0 controller with the d̂ observer ON (feature path; ff optional).

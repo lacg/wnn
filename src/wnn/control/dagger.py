@@ -422,6 +422,9 @@ def train_dagger(
 	refuse_python_abi32_plant(ec, "dagger.py Python trainer")
 	if float(getattr(ec, "motor_lag_s", 0.0)) > 0.0:
 		sim.set_motor_lag(float(ec.motor_lag_s))
+	# ABI 35: the student's d̂ observer subtracts the plant's LAGGED actuator — same T
+	# (0.0 = off = the command, bit-identical to ABI 34).
+	controller.set_observer_motor_lag(float(getattr(ec, "motor_lag_s", 0.0)))
 	target = config.target_rpy
 
 	stats = {

@@ -321,10 +321,26 @@ pub(crate) fn attitude_lag_model(b: [f64; 3], dt: f64, alpha: f64, integral: boo
 	(a, bm)
 }
 
+/// ABI 35 (05/11/2026): the share of the effort weight priced on the COMMAND
+/// under motor lag. RULE (fixed in advance, never tuned on results): the lag-free
+/// teachers price the effort the rotors DELIVER, r·u²; under lag the delivered
+/// effort is the filtered actuator ua, so the lag-aware cost keeps the SAME total
+/// effort budget r and splits it —
+///   (1 − ε)·r on the delivered actuator ua  +  ε·r on the command u,  ε = 0.1.
+/// Because the split sums to r, the cost → q·x² + r·u² as τ → 0 (ua → u): the
+/// design converges onto the lag-free one (care_lag_design_converges_to_closed_form,
+/// lag_alpha_one_collapses_to_lag_free — exact at α = 1, where pricing u_k now and
+/// ua_{k+1} = u_k next step sums to r·u_k²). ε is "small" by construction (one
+/// tenth of the budget, an order of magnitude below the delivered share): it keeps
+/// R positive definite (the Riccati problems need it) without letting the command
+/// cost dominate. ABI 34 priced the COMMAND only (0 on ua, r on u), i.e. the
+/// teachers minimised what they asked for, not what the rotors produced.
+pub(crate) const LAG_CMD_SHARE: f64 = 0.1;
+
 /// The lag-aware state cost: q_int (when integral) / q_att / q_rate as the
-/// lag-free teachers weight them, and 0 on the actuator state (it is a means,
-/// not an objective — R already prices the command).
-pub(crate) fn lag_state_cost(q_att: f64, q_rate: f64, q_int: Option<f64>) -> Mat
+/// lag-free teachers weight them, and (1 − LAG_CMD_SHARE)·r_ctrl on the actuator
+/// state — the effort the rotors actually deliver (see LAG_CMD_SHARE).
+pub(crate) fn lag_state_cost(q_att: f64, q_rate: f64, q_int: Option<f64>, r_ctrl: f64) -> Mat
 {
 	let mut d: Vec<f64> = Vec::with_capacity(12);
 	if let Some(qi) = q_int
@@ -333,13 +349,19 @@ pub(crate) fn lag_state_cost(q_att: f64, q_rate: f64, q_int: Option<f64>) -> Mat
 	}
 	d.extend_from_slice(&[q_att; 3]);
 	d.extend_from_slice(&[q_rate; 3]);
-	d.extend_from_slice(&[0.0; 3]);
+	d.extend_from_slice(&[(1.0 - LAG_CMD_SHARE) * r_ctrl; 3]);
 	let mut m = Mat::zeros(d.len(), d.len());
 	for (i, v) in d.iter().enumerate()
 	{
 		m.set(i, i, *v);
 	}
 	m
+}
+
+/// The lag-aware command cost: LAG_CMD_SHARE·r_ctrl per axis (see LAG_CMD_SHARE).
+pub(crate) fn lag_cmd_cost(r_ctrl: f64) -> Mat
+{
+	diag3([LAG_CMD_SHARE * r_ctrl; 3])
 }
 
 /// DARE by the structured doubling algorithm (Chu, Fan, Lin 2005):
@@ -635,7 +657,7 @@ impl AttitudeLqrRs
 
 	/// ABI 34: the LAG-AWARE LQR for a plant with motor-lag settling time
 	/// `motor_lag_s` (> 0): continuous LQR (CARE) on the 9-state actuator-
-	/// augmented model, same q_att/q_rate/r_ctrl, 0 on the actuator state — the
+	/// augmented model, same q_att/q_rate, r_ctrl split per LAG_CMD_SHARE — the
 	/// lag-free teacher's own design family, so as τ → 0 it converges onto the
 	/// closed form above (pinned by care_lag_design_converges_to_closed_form).
 	#[allow(clippy::too_many_arguments)]
@@ -662,7 +684,7 @@ impl AttitudeLqrRs
 		);
 		let (a, bm) = attitude_lag_model_continuous(b, motor_lag_tau(motor_lag_s, dt), false);
 		t.lag = Some(LagFeedback {
-			k: clqr_gain(&a, &bm, &lag_state_cost(q_att, q_rate, None), &diag3([r_ctrl; 3])),
+			k: clqr_gain(&a, &bm, &lag_state_cost(q_att, q_rate, None, r_ctrl), &lag_cmd_cost(r_ctrl)),
 			act: ActuatorLag::new(motor_lag_s, dt),
 		});
 		t
@@ -879,7 +901,7 @@ impl AttitudeLqiRs
 		);
 		let (a, bm) = attitude_lag_model_continuous(b, motor_lag_tau(motor_lag_s, dt), true);
 		t.lag = Some(LagFeedback {
-			k: clqr_gain(&a, &bm, &lag_state_cost(q_att, q_rate, Some(q_int)), &diag3([r_ctrl; 3])),
+			k: clqr_gain(&a, &bm, &lag_state_cost(q_att, q_rate, Some(q_int), r_ctrl), &lag_cmd_cost(r_ctrl)),
 			act: ActuatorLag::new(motor_lag_s, dt),
 		});
 		t
@@ -1335,7 +1357,7 @@ impl AttitudeMpcRs
 
 	/// ABI 34: the LAG-AWARE MPC — the same condensed horizon QP on the 9-state
 	/// augmented model (attitude_lag_model at dt_mpc), terminal cost from the
-	/// augmented DARE, 0 stage cost on the actuator state. x0 = [e, rate, ua].
+	/// augmented DARE, effort split per LAG_CMD_SHARE (ABI 35). x0 = [e, rate, ua].
 	#[allow(clippy::too_many_arguments)]
 	pub(crate) fn build_lagged(
 		dt: f32,
@@ -1361,8 +1383,8 @@ impl AttitudeMpcRs
 		// estimator below runs at the plant's dt).
 		let t_eff = (motor_lag_s as f64).max(4.0 * dt_mpc);
 		let (ad, bd) = attitude_lag_model(b, dt_mpc, 4.0 * dt_mpc / t_eff, false);
-		let qm = lag_state_cost(q_att, q_rate, None);
-		let rm = diag3([r_ctrl, r_ctrl, r_ctrl]);
+		let qm = lag_state_cost(q_att, q_rate, None, r_ctrl);
+		let rm = lag_cmd_cost(r_ctrl);
 		let qf = dare_doubling(&ad, &bd, &qm, &rm);
 		let mut m = Self::from_discrete(&ad, &bd, &qm, &rm, &qf, horizon, hover, authority);
 		m.act = Some(ActuatorLag::new(motor_lag_s, dt));
@@ -2464,8 +2486,8 @@ mod lag_design_tests
 			for integral in [false, true]
 			{
 				let (a, b) = attitude_lag_model(b_cf21(), 0.001, alpha, integral);
-				let q = lag_state_cost(Q_ATT, Q_RATE, if integral { Some(Q_INT) } else { None });
-				let r = diag3([R_CTRL; 3]);
+				let q = lag_state_cost(Q_ATT, Q_RATE, if integral { Some(Q_INT) } else { None }, R_CTRL);
+				let r = lag_cmd_cost(R_CTRL);
 				let p = dare_doubling(&a, &b, &q, &r);
 				let res = riccati_residual(&a, &b, &q, &r, &p);
 				assert!(res < 1e-9, "T={tt} integral={integral}: relative Riccati residual {res:e}");
@@ -2482,7 +2504,7 @@ mod lag_design_tests
 		let b = b_cf21();
 		let r = diag3([R_CTRL; 3]);
 		let (a9, b9) = attitude_lag_model(b, 0.001, 1.0, false);
-		let k9 = dlqr_gain(&a9, &b9, &lag_state_cost(Q_ATT, Q_RATE, None), &r);
+		let k9 = dlqr_gain(&a9, &b9, &lag_state_cost(Q_ATT, Q_RATE, None, R_CTRL), &lag_cmd_cost(R_CTRL));
 		let (a_c, b_c) = attitude_linear_model(b);
 		let a6 = Mat::identity(6).add(&a_c.scale(0.001));
 		let b6 = b_c.scale(0.001);
@@ -2511,8 +2533,8 @@ mod lag_design_tests
 			for integral in [false, true]
 			{
 				let (a, b) = attitude_lag_model_continuous(b_cf21(), motor_lag_tau(tt, 0.001), integral);
-				let q = lag_state_cost(Q_ATT, Q_RATE, if integral { Some(Q_INT) } else { None });
-				let r = diag3([R_CTRL; 3]);
+				let q = lag_state_cost(Q_ATT, Q_RATE, if integral { Some(Q_INT) } else { None }, R_CTRL);
+				let r = lag_cmd_cost(R_CTRL);
 				let p = care(&a, &b, &q, &r);
 				let r_inv = inverse(&r).unwrap();
 				let res = a
@@ -2529,8 +2551,14 @@ mod lag_design_tests
 	}
 
 	/// τ → 0 converges onto the LAG-FREE teachers' closed forms (continuity with
-	/// the T = 0 path): LQR's k1/k2 and LQI's k_att/k_rate/k_int, actuator
-	/// columns → 0.
+	/// the T = 0 path): LQR's k1/k2 and LQI's k_att/k_rate/k_int.
+	///
+	/// ABI 35: with the effort split (LAG_CMD_SHARE) the comparison is on the
+	/// DELIVERED law, not the raw K columns. The design feeds back the actuator
+	/// state (u = −K_x·x − k_ua·ua), and as τ → 0 the actuator sits on its quasi-
+	/// steady manifold ua = u, so the rotors deliver ua = −K_x·x / (1 + k_ua). That
+	/// effective gain is what must equal the lag-free closed form; the raw K_x is
+	/// sqrt(q/(ε·r)) — the command-only weight — and differs by design.
 	#[test]
 	fn care_lag_design_converges_to_closed_form()
 	{
@@ -2538,22 +2566,46 @@ mod lag_design_tests
 		let lqr = AttitudeLqrRs::build(dt, arm, kt, kd, inertia, g, hover, 0.4, Q_ATT, Q_RATE, R_CTRL);
 		let lqi = AttitudeLqiRs::build(dt, arm, kt, kd, inertia, g, hover, 0.4, Q_ATT, Q_RATE, R_CTRL, Q_INT);
 		let tau = 1e-6;
-		let r = diag3([R_CTRL; 3]);
+		let r = lag_cmd_cost(R_CTRL);
 		let (a, b) = attitude_lag_model_continuous(b_cf21(), tau, false);
-		let k = clqr_gain(&a, &b, &lag_state_cost(Q_ATT, Q_RATE, None), &r);
+		let k = clqr_gain(&a, &b, &lag_state_cost(Q_ATT, Q_RATE, None, R_CTRL), &r);
 		let (ai, bi) = attitude_lag_model_continuous(b_cf21(), tau, true);
-		let ki = clqr_gain(&ai, &bi, &lag_state_cost(Q_ATT, Q_RATE, Some(Q_INT)), &r);
+		let ki = clqr_gain(&ai, &bi, &lag_state_cost(Q_ATT, Q_RATE, Some(Q_INT), R_CTRL), &r);
 		let close = |x: f64, y: f64, what: &str| {
 			assert!((x - y).abs() <= 1e-2 * y.abs().max(1e-3), "{what}: {x} vs closed form {y}");
 		};
 		for axis in 0..3
 		{
-			close(k.get(axis, axis), lqr.k.get(axis, axis), "LQR angle");
-			close(k.get(axis, 3 + axis), lqr.k.get(axis, 3 + axis), "LQR rate");
-			assert!(k.get(axis, 6 + axis).abs() < 1e-2, "LQR actuator column {}", k.get(axis, 6 + axis));
-			close(ki.get(axis, axis), lqi.k_int[axis], "LQI int");
-			close(ki.get(axis, 3 + axis), lqi.k.get(axis, axis), "LQI angle");
-			close(ki.get(axis, 6 + axis), lqi.k.get(axis, 3 + axis), "LQI rate");
+			let d = 1.0 + k.get(axis, 6 + axis);
+			close(k.get(axis, axis) / d, lqr.k.get(axis, axis), "LQR angle");
+			close(k.get(axis, 3 + axis) / d, lqr.k.get(axis, 3 + axis), "LQR rate");
+			let di = 1.0 + ki.get(axis, 9 + axis);
+			close(ki.get(axis, axis) / di, lqi.k_int[axis], "LQI int");
+			close(ki.get(axis, 3 + axis) / di, lqi.k.get(axis, axis), "LQI angle");
+			close(ki.get(axis, 6 + axis) / di, lqi.k.get(axis, 3 + axis), "LQI rate");
+		}
+	}
+
+	/// ABI 35 rule pin: the lag-aware cost prices the DELIVERED actuator
+	/// ((1 − ε)·r on ua) plus a small command term (ε·r on u), ε = 0.1, and the
+	/// split sums to the lag-free r (what makes the τ → 0 limit the lag-free
+	/// design). A change to ε or to the split must fail here, not drift silently.
+	#[test]
+	fn lag_effort_split_rule()
+	{
+		assert_eq!(LAG_CMD_SHARE, 0.1);
+		for integral in [false, true]
+		{
+			let q = lag_state_cost(Q_ATT, Q_RATE, if integral { Some(Q_INT) } else { None }, 2.0);
+			let off = if integral { 9 } else { 6 };
+			let rc = lag_cmd_cost(2.0);
+			for i in 0..3
+			{
+				let (q_ua, r_u) = (q.get(off + i, off + i), rc.get(i, i));
+				assert_eq!(q_ua, 0.9 * 2.0);
+				assert_eq!(r_u, 0.1 * 2.0);
+				assert!((q_ua + r_u - 2.0).abs() < 1e-15);
+			}
 		}
 	}
 
@@ -2567,8 +2619,8 @@ mod lag_design_tests
 			for integral in [false, true]
 			{
 				let (a, b) = attitude_lag_model(b_cf21(), 0.001, motor_lag_alpha(tt, 0.001), integral);
-				let q = lag_state_cost(Q_ATT, Q_RATE, if integral { Some(Q_INT) } else { None });
-				let k = dlqr_gain(&a, &b, &q, &diag3([R_CTRL; 3]));
+				let q = lag_state_cost(Q_ATT, Q_RATE, if integral { Some(Q_INT) } else { None }, R_CTRL);
+				let k = dlqr_gain(&a, &b, &q, &lag_cmd_cost(R_CTRL));
 				let acl = a.sub(&b.matmul(&k));
 				let mut x = vec![1.0f64; a.r];
 				for _ in 0..200_000

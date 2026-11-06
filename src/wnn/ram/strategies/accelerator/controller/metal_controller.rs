@@ -11525,6 +11525,64 @@ mod tests
 		}
 	}
 
+	/// ABI 35 — the d̂ observer reads the LAGGED actuator on BOTH sides. The
+	/// tolerance parity above would pass even if one side still read the
+	/// command, so this pins the convention: against two CPU oracles on the same
+	/// lagged plant — observer lag = T (ABI 35) and observer lag = 0 (the ABI-34
+	/// command convention) — the two must differ materially (the convention is
+	/// reached), the production CPU scorer must equal the lag-aware oracle
+	/// exactly (it arms the observer), and the GPU row must sit closer to the
+	/// lag-aware oracle than to the command one on every metric that separates.
+	#[test]
+	fn parity_lag_dhat_observer_reads_lagged_actuator()
+	{
+		if std::env::var("WNN_SKIP_GPU_TESTS").is_ok()
+		{
+			return;
+		}
+		let ev = match ControllerRolloutEvaluator::new()
+		{
+			Ok(e) => e,
+			Err(_) => return,
+		};
+		let (num_eps, steps) = (8usize, 400usize);
+		let (q0, w0) = test_episodes(0xA835, num_eps);
+		for obs_pwm in [false, true]
+		{
+			for lag in [0.15f32, 0.30]
+			{
+				let mut c = lag_obs_fixture(obs_pwm);
+				c.set_observer_motor_lag_core(lag);
+				let aware = cpu_oracle_quad_lag(&mut c, &q0, &w0, num_eps, steps, lag);
+				c.set_observer_motor_lag_core(0.0);
+				let blind = cpu_oracle_quad_lag(&mut c, &q0, &w0, num_eps, steps, lag);
+				let scorer = cpu_scorer_row(&mut c, &q0, &w0, num_eps, steps, lag);
+				let gpu = lag_obs_gpu_rows(&ev, &c, &q0, &w0, num_eps, steps, lag);
+				eprintln!("[abi35] obs_pwm={obs_pwm} T={lag}: err aware {:.6} blind {:.6} scorer {:.6} gpu {:.6}", aware[1], blind[1], scorer[1], gpu[1]);
+				assert!(
+					(aware[1] - blind[1]).abs() > 1e-4 * aware[1].abs().max(1e-6),
+					"obs_pwm={obs_pwm} T={lag}: observer convention unreached (aware {} == blind {})",
+					aware[1], blind[1]
+				);
+				assert_eq!(scorer[1], aware[1], "obs_pwm={obs_pwm} T={lag}: CPU scorer did not arm the observer lag");
+				let mut separating = 0;
+				for i in 0..5
+				{
+					if (aware[i] - blind[i]).abs() > 1e-9
+					{
+						separating += 1;
+						assert!(
+							(gpu[i] - aware[i]).abs() < (gpu[i] - blind[i]).abs(),
+							"obs_pwm={obs_pwm} T={lag} metric {i}: GPU {} nearer the command convention {} than lag-aware {}",
+							gpu[i], blind[i], aware[i]
+						);
+					}
+				}
+				assert!(separating > 0);
+			}
+		}
+	}
+
 	fn test_controller_dhat(seed: u64, dhat_b: Option<[f64; 3]>, ff: bool) -> WnnController
 	{
 		test_controller_dhat_pwm(seed, dhat_b, ff, false)

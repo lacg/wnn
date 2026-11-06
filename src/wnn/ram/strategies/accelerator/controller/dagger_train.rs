@@ -2358,6 +2358,8 @@ pub fn dagger_train_inplace_rs(
 	let af = AirframeRs::from_cfg(cfg);
 	let mut teachers = TeacherBank::new(af);
 	let mut sim = sim_default(cfg);
+	// ABI 35: the student's d̂ observer subtracts the plant's LAGGED actuator — same T as the plant.
+	controller.set_observer_motor_lag_core(sim.motor_lag());
 
 	let mut stats = TrainStats::default();
 	let mut history_scores: Vec<f64> = Vec::new();
@@ -2987,6 +2989,8 @@ pub fn eval_ensemble_closed_loop(
 		for c in &controllers
 		{
 			let mut cb = c.borrow_mut(py);
+			// ABI 35: the d̂ observer subtracts the plant's LAGGED actuator — same T.
+			cb.set_observer_motor_lag_core(sim.motor_lag());
 			cb.reset(iy);
 			cb.seed_att_estimator(init_q); // ABI 32 (no-op when off)
 			cb.set_decode_seed(coin_seed);
