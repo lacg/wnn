@@ -228,3 +228,26 @@ solve, keeping memory resident per genome across the round loop (the Q1 requirem
 extend `parity_bptt_window` with a fourth case per mode that runs both walks and compares
 digests. The pieces the walk needs — read path, both write paths, and the solve — are now
 all on the GPU and individually parity-proven.
+
+
+## STATUS — ABI 35 (05/11/2026): the WALK runs on the GPU; the per-record solve is retired
+
+- `controller_bptt_walk` (`controller/shaders/controller_bptt.metal`, host
+  `controller/bptt_walk_gpu.rs`): one threadgroup walks a genome's whole gated round of
+  prepared windows (`bptt_plan.rs`, built by the SAME `bptt_prepare_window` the CPU walk
+  uses). Both layers live in resident writable tables for the round; forward state roll +
+  backward record loop are in-kernel; dispatches are whole-window chunks
+  (`WNN_CONTROLLER_BPTT_CHUNK_RECORDS`, default 256) so the cancel flag is polled and the
+  watchdog never sees a long kernel; tables grow between chunks.
+- Exactness: integer phase-1 ranks (saturation is a common shift; f64 sums of dyadic
+  saturations are exact for <= 40-bit neurons, enforced), stable (cost, parent, rank)
+  beam order, first-minimum argmin. Beam entries are set/value masks over the sn mutable
+  bits only. Option-A integral targets and `protect_learned` are ported.
+- Selection: `phased_ga --bptt-device {cpu,gpu}` → `WNN_CONTROLLER_GPU_BPTT` ("1"/"0";
+  unset ⇒ the wheel's `BPTT_DEVICE_DEFAULT`). Unsupported shapes (sn=0, sn>64, >4 banks,
+  >40 bits, topk outside 1..8) print once and walk the same plans on the CPU.
+- Gates: `abi35_tests::cpu_walk_matches_gpu` (72 cases, production shape, all modes) and
+  `dagger_train_cpu_matches_gpu` (whole reward-gated DAgger); CPU walk pinned to the
+  pre-ABI-35 digests.
+- Retired: `controller_phase1_topk`, `controller_beam_search`, `solve_layers`, the solve
+  coalescer and `WNN_CONTROLLER_GPU_SOLVE`.
