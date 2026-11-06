@@ -367,6 +367,57 @@ fn closed_loop(rig: &mut Rig, c: &mut WnnController, seed: u64) -> (f64, f64)
 	(st * 100.0, err.to_degrees())
 }
 
+/// The SAME controller through the production CPU scorer (cpu_score::rollout_one,
+/// the GA-fitness twin of the Metal kernel), ICs drawn from the trainer's own
+/// distributions at the scorer tilt (5°). Returns (stable %, err °, steady °).
+fn closed_loop_scorer(cfg: &RewardGatedConfigPacked, c: &WnnController, n: usize, seed: u64, asym: [f32; 4]) -> (f64, f64, f64)
+{
+	use crate::episode_regime::jitter_sym;
+	let mut rng = SmallRng::seed_from_u64(seed);
+	let (mut q0, mut w0) = (Vec::with_capacity(4 * n), Vec::with_capacity(3 * n));
+	let (mut z, mut vz, mut mass, mut coll) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+	for _ in 0..n
+	{
+		let (q, w) = crate::dagger_train::sample_initial_state(
+			&mut rng,
+			5f64.to_radians(),
+			cfg.max_initial_yaw_rad,
+			cfg.max_initial_body_rate,
+			cfg.max_initial_yaw_rate,
+			[cfg.active_roll, cfg.active_pitch, cfg.active_yaw],
+		);
+		q0.extend_from_slice(&q);
+		w0.extend_from_slice(&w);
+		mass.push(cfg.af_mass * (1.0 + jitter_sym(&mut rng, cfg.mass_jitter)));
+		z.push(jitter_sym(&mut rng, cfg.alt_offset));
+		vz.push(jitter_sym(&mut rng, cfg.init_vz));
+		coll.push(jitter_sym(&mut rng, cfg.collective_jitter));
+	}
+	let s1 = crate::stage1::Stage1Cfg {
+		target_altitude: cfg.target_altitude,
+		lambda_alt: 0.0,
+		init_z: z,
+		init_vz: vz,
+		mass,
+		collective_frac: coll,
+		lambda_pos: 0.0,
+		init_x: Vec::new(),
+		init_y: Vec::new(),
+		plant: cfg.plant_opts(),
+		att_ref: crate::att_err_ref::AttErrRef::LEVEL,
+	};
+	let mut cc = c.clone();
+	let row = crate::cpu_score::rollout_one(
+		&mut cc, &q0, &w0, n, cfg.steps_per_episode, cfg.dt as f32, cfg.af_arm_length, cfg.af_k_thrust, cfg.af_k_drag,
+		cfg.af_inertia, cfg.af_gravity, cfg.motor_lag_s, [0.0; 3], cfg.dist_enabled, cfg.dist_tau_bias, cfg.dist_gust_sigma,
+		cfg.dist_gust_tau_c, asym, cfg.dist_gyro_sigma, cfg.dist_gyro_bias_walk, cfg.dist_accel_sigma,
+		seed ^ 0xD157, cfg.dist_dropout_prob, cfg.dist_dropout_len_steps, cfg.dist_obs_delay_steps,
+		cfg.dist_torque_scale_jitter, c.levels_per_motor(), c.num_motors(), None, None, None, 0.0, 0.0, None,
+		if cfg.translation { Some(&s1) } else { None },
+	);
+	(row[2] * 100.0, row[1].to_degrees(), row[5].to_degrees())
+}
+
 fn report(tag: &str, lag: f32, c: &WnnController, train: &ImitCapture, ho: &ImitCapture, own: Option<&ImitCapture>, cl: (f64, f64))
 {
 	let nm = c.num_motors().min(4);
@@ -479,14 +530,46 @@ pub(crate) fn run(base: &WnnController, cfg: &RewardGatedConfigPacked, target: [
 	// states and on its own, and its closed loop.
 	let mut d = base.clone();
 	let mut st = crate::dagger_train::TrainStats::default();
+	// WNN_IMIT_TRAIN_ASYM=<mag>: each fold trains on its OWN resolved motor
+	// asymmetry (1 + U(±mag), the scorer's draw law) — the train/score plant match.
+	let train_asym: Option<f32> = std::env::var("WNN_IMIT_TRAIN_ASYM").ok().and_then(|v| v.parse().ok());
+	let mut tr_rng = SmallRng::seed_from_u64(seed ^ 0x7A5A);
 	for &fs in folds
 	{
-		st = crate::dagger_train::dagger_train_inplace_rs(&mut d, cfg, target, fs);
+		let mut cf = cfg.clone();
+		if let Some(mag) = train_asym
+		{
+			use rand::Rng;
+			cf.dist_motor_asym = std::array::from_fn(|m| cfg.dist_motor_asym[m] * (1.0 + tr_rng.gen_range(-mag..mag)));
+			eprintln!("[imitprobe] train fold {fs}: motor asym {:?}", cf.dist_motor_asym);
+		}
+		st = crate::dagger_train::dagger_train_inplace_rs(&mut d, &cf, target, fs);
 	}
 	let ho_d = held_out(&mut rig, &mut d, false, ho_eps, ho_tilt, seed ^ 0x4E1D);
 	let own_d = held_out(&mut rig, &mut d, true, ho_eps, 5f64.to_radians(), seed ^ 0x0E1D);
 	let cl_d = closed_loop(&mut rig, &mut d, seed ^ 0xE7A1);
 	report("DAgger", lag, &d, &train, &ho_d, Some(&own_d), cl_d);
+	let sc = closed_loop_scorer(cfg, &d, 200, seed ^ 0x5C0E, cfg.dist_motor_asym);
+	eprintln!("[imitprobe] lag={lag:.2} DAgger via PRODUCTION CPU scorer (rollout_one, 200 eps @5°): stable {:.1}% err {:.2}° steady {:.2}°", sc.0, sc.1, sc.2);
+	// The production scorer's pools fly a RESOLVED per-pool motor asymmetry
+	// (DisturbanceConfig.resolved_motor_asym: 1 + U(±mag), L4C mag 0.20) that the
+	// trainer's packed cfg never carries (fixed multipliers). 5 pools, same draw law.
+	let mag: f32 = std::env::var("WNN_IMIT_ASYM_MAG").ok().and_then(|v| v.parse().ok()).unwrap_or(0.20);
+	let mut ar = SmallRng::seed_from_u64(seed ^ 0xA5A5);
+	let mut acc = (0.0, 0.0, 0.0);
+	let mut rows = Vec::new();
+	for pool in 0..5u64
+	{
+		use rand::Rng;
+		let a: [f32; 4] = std::array::from_fn(|m| cfg.dist_motor_asym[m] * (1.0 + ar.gen_range(-mag..mag)));
+		let r = closed_loop_scorer(cfg, &d, 100, seed ^ 0x5C0E ^ (pool << 20), a);
+		rows.push(format!("[{:.2} {:.2} {:.2} {:.2}] {:.0}%/{:.2}°", a[0], a[1], a[2], a[3], r.0, r.1));
+		acc = (acc.0 + r.0 / 5.0, acc.1 + r.1 / 5.0, acc.2 + r.2 / 5.0);
+	}
+	eprintln!(
+		"[imitprobe] lag={lag:.2} DAgger via PRODUCTION CPU scorer WITH ±{mag} motor asym (5 pools × 100): stable {:.1}% err {:.2}° steady {:.2}° | {}",
+		acc.0, acc.1, acc.2, rows.join(" ")
+	);
 	eprintln!(
 		"[imitprobe] lag={lag:.2} DAgger rounds stable {:?} err {:?}",
 		st.iter_stable_rate.iter().map(|v| (v * 100.0).round()).collect::<Vec<_>>(),
