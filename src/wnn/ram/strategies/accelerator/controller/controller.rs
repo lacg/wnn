@@ -1982,6 +1982,7 @@ impl WnnController
 
 	/// The observer's lag coefficient (0.0 = lag off) — the GPU hosts check it
 	/// against the plant they score on.
+	#[cfg(test)]
 	pub(crate) fn observer_lag_alpha(&self) -> f32
 	{
 		self.dhat_lag_alpha

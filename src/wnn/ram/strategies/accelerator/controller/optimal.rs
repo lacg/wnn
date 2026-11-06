@@ -24,7 +24,9 @@ use crate::controller::{
 	calibrate_control_gains_rs, clamp_f64, mix_to_motors_f64, quat_to_euler_f64, wrap_angle_f64,
 	AttitudePidRs,
 };
-use crate::actuator_lag::{motor_lag_alpha, ActuatorLag};
+use crate::actuator_lag::ActuatorLag;
+#[cfg(test)]
+use crate::actuator_lag::motor_lag_alpha;
 use crate::box_qp::BoxQpSolver;
 use pyo3::prelude::*;
 

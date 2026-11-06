@@ -862,6 +862,7 @@ impl GenomeCells
 	// `None` (legacy callers) keeps the historical remap, which is only correct
 	// at <= 64 bits — the staged Python passes the widths.
 
+	#[pyo3(signature = (d, old_bits=None, new_bits=None))]
 	pub fn remap_bits_state(&mut self, d: i64, old_bits: Option<u32>, new_bits: Option<u32>) -> PyResult<()>
 	{
 		if wide_layer(old_bits, new_bits)
@@ -882,6 +883,7 @@ impl GenomeCells
 		Ok(())
 	}
 
+	#[pyo3(signature = (d, old_bits=None, new_bits=None))]
 	pub fn remap_bits_output(&mut self, d: i64, old_bits: Option<u32>, new_bits: Option<u32>) -> PyResult<()>
 	{
 		if wide_layer(old_bits, new_bits)
@@ -905,6 +907,7 @@ impl GenomeCells
 	/// STATE neurogenesis of +k / -k neurons: prefix reshapes in BOTH layers;
 	/// on shrink, removed state neurons' own cells are dropped first.
 	/// Mirrors RecurrentArchGenome._remap_state_neuro exactly.
+	#[pyo3(signature = (k, sw, ow, pf, removed_floor, state_bits_old=None, state_bits_new=None, output_bits_old=None, output_bits_new=None))]
 	pub fn state_neuro(
 		&mut self,
 		k: i64,
@@ -973,6 +976,7 @@ impl GenomeCells
 	/// Surgical removal of state neuron k: drop its cells, reindex higher state
 	/// neurons down by one, excise its pf-bit prefix window from every address
 	/// in BOTH layers. Mirrors RecurrentArchGenome.remove_state_neuron.
+	#[pyo3(signature = (k, p_lsb_s, p_lsb_o, pf, state_bits=None, output_bits=None))]
 	pub fn remove_state_neuron(
 		&mut self,
 		k: u32,

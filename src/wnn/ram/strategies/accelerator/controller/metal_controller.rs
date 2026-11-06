@@ -7002,6 +7002,7 @@ pub fn run_controller_record_vertical_obs_parity_test() -> Vec<(String, bool, St
 /// split_record applies it from ReplayObs.pwm_dev. Same shape as the vertical
 /// test: zero mismatch AND stream-sensitive (a constant stream must change the
 /// CPU rows, else the pwm bits never reached the comparison).
+#[cfg(test)]
 pub fn run_controller_record_obs_pwm_parity_test() -> Vec<(String, bool, String)>
 {
 	let mut results = Vec::new();
@@ -7022,6 +7023,7 @@ pub fn run_controller_record_obs_pwm_parity_test() -> Vec<(String, bool, String)
 	results
 }
 
+#[cfg(test)]
 fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool), String>
 {
 	let f = build_parity_fixture(0x0B5E_5A1Eu64)?;
@@ -7150,6 +7152,7 @@ fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool)
 /// as the obs_pwm test: zero mismatch AND stream-sensitive (a constant level
 /// stream must change the CPU rows, else the attitude bits never reached the
 /// comparison).
+#[cfg(test)]
 pub fn run_controller_record_att_est_parity_test() -> Vec<(String, bool, String)>
 {
 	let mut results = Vec::new();
@@ -7170,6 +7173,7 @@ pub fn run_controller_record_att_est_parity_test() -> Vec<(String, bool, String)
 	results
 }
 
+#[cfg(test)]
 fn controller_record_att_est_parity_once() -> Result<(usize, usize, usize, bool), String>
 {
 	let f = build_parity_fixture(0xA7E5_7001u64)?;
@@ -7296,11 +7300,13 @@ fn controller_record_att_est_parity_once() -> Result<(usize, usize, usize, bool)
 	Ok((mism, cpu_conf.len(), gpu_conf.len(), sensitive))
 }
 
+#[cfg(test)]
 fn conflict_set(conf: &[ScanConflict]) -> std::collections::HashMap<Vec<usize>, u32>
 {
 	conf.iter().map(|c| (c.instances.clone(), c.spread.to_bits())).collect()
 }
 
+#[cfg(test)]
 fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, bool), String>
 {
 	// Trajectories + episode layout from the anchor fixture; the CONTROLLER is a
@@ -7424,6 +7430,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 	Ok((mism, cpu_conf.len(), gpu_conf.len(), sensitive))
 }
 
+#[cfg(test)]
 mod tests
 {
 	use super::*;
