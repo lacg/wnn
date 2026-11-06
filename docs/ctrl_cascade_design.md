@@ -192,20 +192,55 @@ EXACTLY like the teacher: `mix(axis_N)` at `hover_thrust_n`, then a uniform pwm 
 `T_coll − hover_pwm`, then clamp. It must not convert the collective to newtons first, or the
 identity breaks in the 4th digit.
 
-### 2.2 Alternative outer teacher: MPCOF expressed as rate setpoints (ablation)
+### 2.2 Outer teacher: MPCOF on the closed inner loop (ABI 39, CTRL-33 — supersedes the ABI-38 label)
 
-MPCOF (`optimal.rs::AttitudeMpcOfRs`) solves for TORQUE-level u over a 25 × 1 ms horizon. Its
-rate-level label is the model's planned body rate one outer period ahead:
-`ω_sp = [x_{k+N_o}]_rate`, with N_o = T_outer / dt_mpc = 10, from propagating x0 with U* through
-the design model (A, B). This is the lag-augmented model when lag is on: `attitude_lag_model`.
-The rollout is cheap because U* is already computed. The d̂ observer keeps reading the APPLIED pwm
-(now the inner loop's output) via `Teacher::observe`, which is unchanged. Caveats:
-- the horizon is 25 ms, which is ≥ T_outer only up to 40 Hz outer; at 100 Hz it is fine;
-- the label-replay identity does NOT hold, because the MPCOF-planned rates are tracked by the
-  firmware rate PID, not by MPCOF itself.
+**Superseded ABI-38 label.** The motor-level MPCOF's planned body rate N_o steps ahead. It planned
+TORQUE as if it commanded the rotors, never modelled the rate PID, and under lag counted the motor
+lag twice. Rival bar at lag 0.20: MPCOF>rate(h10) 18.8% stable / 36.9° vs PID>rate 100% / 1.73°.
 
-So this teacher defines a NEW classical rival ("MPCOF-attitude over firmware rate"), and that
-rival must be flown and reported alongside.
+**Derivation (code: `ctbr_axis_mpc.rs`, `ctbr_mpcof.rs`).** Each body axis is its own problem (the
+'+' mixer and the diagonal inertia decouple the axes). Linear model at the plant tick dt (1 kHz),
+state `s = [θ, ω, ua, I, f1, f2, pm, Fh]`:
+- θ is the Euler-angle error. This is the firmware attitude stage's own convention (`state_error`):
+  each Euler error drives that axis's BODY rate, and θ' = ω for small angles.
+- ω is the body rate (gyro).
+- ua is the lagged axis force (N).
+- I, f1/f2, pm and Fh are the rate PID's internals: integrator, 30 Hz lpf2p delay line, last
+  measured rate and held output.
+
+On a rate-update tick (every `decimation` ticks, dt_r = 1/attitude_hz) the rate PID runs as in pid.c:
+`e = sp − ω; I += e·dt_r; D = lpf2p(−(ω − pm)/dt_r); Fh = kp·e + ki·I + kd·D`. Every tick:
+`ua += α(Fh − ua)` (α = `motor_lag_alpha` of the airframe's resolved lag, 1 at T = 0), then
+`ω += dt(c·ua + d)` and `θ += dt·ω + ½dt²(c·ua + d)`. The torque gains are c = L/Jx, L/Jy and
+4·k_drag/Jz (`body_torque` through the firmware mixer).
+
+The OUTER model (A, B) is the exact composition of action_repeat such ticks from the loop's current
+phase, built column by column from the tick function. The gains come from the airframe's firmware
+cascade (the same `RateStageFw` every CTBR inner loop uses) and are never re-derived. Cost per outer
+step: 100·θ² + 0.5·ω² + 1·sp². The terminal cost is the DARE solution of the same model. The
+setpoint is boxed at the bank rate range (4.2, 4.2, 2.0 rad/s). The horizon is 20 outer steps,
+solved exactly (`box_qp.rs`).
+
+**Offset-free.** The observer is `d̂ += 0.02·(ω'_gyro − c·ua_measured − d̂)` every tick. The measured
+ua is the applied pwm, passed through the plant's own lag (prime/seed protocol) and converted to
+thrust kt·pwm². d̂ is therefore the torque the nominal rotors do not explain: asymmetry, jitter,
+rotor drag and gusts. For a constant d the closed loop rests at θ = ω = sp = 0 with
+Fh = ua = −d/c and I = −d/(c·ki). The rate integrator carries the trim, and it measurably absorbs the
+±20% asymmetry. The plan regulates x − x_ss(d̂), so a nonzero d̂ never biases it.
+
+**Inner-state estimate.** The teacher runs a SHADOW firmware rate stage on the measured gyro and on its
+own held setpoints. When the teacher flies (C4 rival, expert_drives, calibration, recorder), the
+shadow IS the inner loop. Under DAgger it is the loop the teacher's policy would have produced, and
+any force mismatch reaches the plan through d̂.
+
+**Collective.** Not planned: the altitude PD's deviation passes through as for the PID teacher. The
+mixer adds it uniformly, so the planned axis forces are unchanged.
+
+**Timing.** One decision per action_repeat ticks, held in between: the stream the student must
+reproduce.
+
+The label-replay identity still does NOT hold (the MPCOF setpoints are tracked by the rate PID), so the
+"MPCOF > rate" rival is flown and reported alongside.
 
 ### 2.3 DAgger labels
 
@@ -315,7 +350,7 @@ cascade. That is a different paper claim and must be stated as such.
    - `output_decode_target` accepts the setpoint 4-vector when `ctbr`.
 3. **`optimal.rs` `Teacher`**: add `ctbr_label(q, gyro, target, outer) → [f64; 4]`.
    - PidFw: `att_stage` + `hover + pd.delta`.
-   - MpcOf: planned rate at N_o (2.2).
+   - MpcOf: the closed-inner-loop MPC's rate setpoint (2.2, ABI 39).
    - Others: return `Err` (unsupported, loud).
    - `observe()` is unchanged.
 4. **`episode_regime.rs::OuterLoops`**: an `expert_ctbr` twin of `expert` that routes
