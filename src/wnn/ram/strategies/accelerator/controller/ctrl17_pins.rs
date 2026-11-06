@@ -162,7 +162,9 @@ fn trainer_fingerprint(cfg: &RewardGatedConfigPacked) -> u64
 	{
 		h.word(*n as u64);
 	}
-	let (s_cells, o_cells) = c.export_cells();
+	// The pin was captured on the RAW ram_core export order (b7b0f422); export_cells
+	// is canonical (sorted) since 05/11/2026, so hash the raw walk to keep the pin.
+	let (s_cells, o_cells) = (c.bptt_layer(true).export(), c.bptt_layer(false).export());
 	for (n, a, v) in s_cells.iter().chain(&o_cells)
 	{
 		h.word(*n as u64);

@@ -238,7 +238,27 @@ pub(crate) fn dagger_digest_with(mode: u8, sn: usize, gpu: bool) -> ((u64, Vec<u
 		"{:?} {:?} {:?} {:?} {} {:?}",
 		st.iter_fitness, st.iter_mean_err_deg, st.iter_stable_rate, st.iter_n_trained, st.train_steps, st.iter_motor_jerk_mean
 	);
-	((cells_digest(&c), st.iter_cells_written.clone()), fp)
+	// The Lamarckian egress ORDER is part of the contract: GA-Memory's mutate_values
+	// keys its draws by universe position, so two memories with identical cells but a
+	// different export order mutate different cells (the 05/11 MEMORY-stage smoke split).
+	let ex = c.export_cells();
+	let order = cells_order_digest(&ex.0, &ex.1);
+	((cells_digest(&c), st.iter_cells_written.clone()), format!("{fp} egress={order:#x}"))
+}
+
+/// FNV over the exported triples IN ORDER (position-sensitive, unlike cells_digest).
+pub(crate) fn cells_order_digest(st: &[(usize, u64, u8)], ot: &[(usize, u64, u8)]) -> u64
+{
+	let mut h: u64 = 0xcbf29ce484222325;
+	for &(n, a, v) in st.iter().chain(ot.iter())
+	{
+		for x in [n as u64, a, v as u64]
+		{
+			h ^= x;
+			h = h.wrapping_mul(0x100000001b3);
+		}
+	}
+	h
 }
 
 /// Prepare every window of `eps` (train_on_trajectory_rs slicing) on a clone of `base`.
@@ -444,6 +464,46 @@ mod tests
 				base.total_cells(), tc, tc * 1e3 / recs as f64, tg, tg * 1e3 / recs as f64, tc / tg
 			);
 		}
+	}
+
+	/// Lamarckian egress is CANONICAL: two controllers holding the same cells export
+	/// them in the same order whatever their map's capacity history (the CPU walk
+	/// inserts-then-deletes cells the GPU apply-back never touches, so their tables
+	/// grow differently). GA-Memory's index-keyed mutate_values depends on it.
+	#[test]
+	fn egress_order_independent_of_capacity_history()
+	{
+		let shape = WalkShape { mode: 3, sn: 4, sbpn: 12, obpn: 12, levels: 8, bpf: 4, window_k: 2, prod: false, seed: 0xE9, tail: 0.3 };
+		let base = walk_controller(&shape);
+		let default = crate::cell_mode::canonical_default_cell(shape.mode);
+		let other = if default == 0 { 1 } else { 0 };
+		let cells: Vec<(usize, u64)> = (0..3000u64).map(|i| ((i % 32) as usize, i.wrapping_mul(0x9E37_79B9) & 0xFFF)).collect();
+		let (a, b) = (base.clone(), base.clone());
+		for &(n, ad) in &cells
+		{
+			a.bptt_layer(false).write_cell(n, ad, other, true);
+		}
+		// b: grow every map far past a's capacity, then delete the extras.
+		for n in 0..32usize
+		{
+			for ad in 0x1000u64..0x1000 + 4096
+			{
+				b.bptt_layer(false).write_cell(n, ad, other, true);
+			}
+		}
+		for &(n, ad) in cells.iter().rev()
+		{
+			b.bptt_layer(false).write_cell(n, ad, other, true);
+		}
+		for n in 0..32usize
+		{
+			for ad in 0x1000u64..0x1000 + 4096
+			{
+				b.bptt_layer(false).write_cell(n, ad, default, true);
+			}
+		}
+		assert_eq!(cells_digest(&a), cells_digest(&b), "fixture: same cell function");
+		assert_eq!(a.export_cells(), b.export_cells(), "export_cells order depends on map history");
 	}
 
 	/// The plan-list CPU walk IS the public bptt_train_window walk (reset handling).

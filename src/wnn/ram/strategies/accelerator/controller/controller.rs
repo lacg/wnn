@@ -2835,6 +2835,21 @@ impl ReplayObs
 	}
 }
 
+/// A layer's cells in CANONICAL (neuron, address) order. SparseLayerMemory::export
+/// walks the hash maps in slot order, which depends on each map's capacity history
+/// (a cell inserted then deleted grows the table), so two memories with identical
+/// cells could export in different orders — and GA-Memory's mutate_values keys its
+/// draws by universe POSITION. Found 05/11/2026: the CPU and GPU bptt walks leave
+/// identical cells but different histories, so the MEMORY stage flipped different
+/// cells. (neuron, address) keys are unique, so the unstable sort is exact.
+fn canonical_export(mem: &SparseLayerMemory) -> Vec<(usize, u64, u8)>
+{
+	use rayon::prelude::*;
+	let mut v = mem.export();
+	v.par_sort_unstable_by_key(|&(n, a, _)| (n, a));
+	v
+}
+
 /// Stateful WNN controller. One per drone / one per training episode.
 ///
 /// Input pipeline per step:
@@ -3579,7 +3594,7 @@ impl WnnController
 	/// (neuron_idx, address, value) triples.
 	pub fn export_cells(&self) -> (Vec<(usize, u64, u8)>, Vec<(usize, u64, u8)>)
 	{
-		(self.state_memory.export(), self.output_memory.export())
+		(canonical_export(&self.state_memory), canonical_export(&self.output_memory))
 	}
 
 	/// (neuron_idx, address) the STATE layer read on the last step() call.
@@ -3750,7 +3765,7 @@ impl WnnController
 	/// genome per generation.
 	fn export_cells_handle(&self) -> crate::genome_cells::GenomeCells
 	{
-		let (st, ot) = (self.state_memory.export(), self.output_memory.export());
+		let (st, ot) = (canonical_export(&self.state_memory), canonical_export(&self.output_memory));
 		let mut out = crate::genome_cells::GenomeCells::default();
 		out.sn.reserve(st.len());
 		out.sa.reserve(st.len());
