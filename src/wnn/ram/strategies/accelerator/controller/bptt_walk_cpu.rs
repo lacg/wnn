@@ -33,6 +33,116 @@ impl WnnController
 		)
 	}
 
+	/// bptt_train_window's entry contract for ONE window (yaw anchor + the fail-LOUD
+	/// replay guards), then prepare. Shared by the CPU path and the GPU round planner,
+	/// so both see exactly the same windows.
+	#[allow(clippy::too_many_arguments)]
+	pub(crate) fn bptt_prepare_checked(
+		&mut self,
+		gyros: &[[f32; 3]],
+		accels: &[[f32; 3]],
+		targets: &[[f32; 3]],
+		pid_pwms: &[[f32; 4]],
+		reset_state: bool,
+		state_integral_targets: Option<&[[f32; 3]]>,
+		init_yaw: f32,
+		student_pwms: Option<&[[f32; 4]]>,
+		label_base: Option<&[[f32; 4]]>,
+		replay_obs: Option<&ReplayObs>,
+	) -> Option<BpttWindowPlan>
+	{
+		// Yaw-anchor: single-window bptt ⇒ pending_init_yaws holds just this traj's yaw.
+		self.pending_init_yaws = vec![init_yaw];
+		let w = gyros.len();
+		if w == 0
+		{
+			return None;
+		}
+		// DOB Fix A guard: an observer-on replay without the applied stream would
+		// silently reproduce the frozen-accumulator divergence — the exact class
+		// of completes-cleanly-measures-nothing trap this project keeps hitting.
+		// Fail LOUDLY instead.
+		if self.dhat_b.is_some()
+		{
+			let ok = student_pwms.map(|s| s.len() == w).unwrap_or(false);
+			assert!(
+				ok,
+				"bptt_train_window: obs_dhat is on but student_pwms is missing or \
+				 misaligned (got {:?}, need {} steps) — the replay observer would \
+				 diverge from deploy (Fix A, 12/08/2026)",
+				student_pwms.map(|s| s.len()),
+				w
+			);
+		}
+		// True-delta label guard: same fail-LOUD shape as Fix A. A missing
+		// baseline would silently measure the delta from nothing.
+		if self.dagger_label_delta
+		{
+			assert!(
+				self.state_neurons == 0,
+				"dagger_label_delta is sn=0 only — the split trainer labels absolute"
+			);
+			let ok = label_base.map(|b| b.len() == w).unwrap_or(false);
+			assert!(
+				ok,
+				"bptt_train_window: dagger_label_delta is on but label_base is missing or \
+				 misaligned (got {:?}, need {} steps)",
+				label_base.map(|b| b.len()),
+				w
+			);
+		}
+		self.replay_obs_guard(replay_obs, w, "bptt_train_window");
+		self.bptt_prepare_window(
+			gyros,
+			accels,
+			targets,
+			pid_pwms,
+			reset_state,
+			state_integral_targets,
+			student_pwms,
+			label_base,
+			replay_obs,
+		)
+	}
+
+	// ---- accessors for the GPU walk host (bptt_walk_gpu.rs) ----
+	pub(crate) fn bptt_layer(&self, state: bool) -> &SparseLayerMemory
+	{
+		if state
+		{
+			&self.state_memory
+		}
+		else
+		{
+			&self.output_memory
+		}
+	}
+	pub(crate) fn bptt_conns(&self) -> (&[i64], &[i64])
+	{
+		(&self.state_connections, &self.output_connections)
+	}
+	pub(crate) fn bptt_prev_state(&self) -> &[u8]
+	{
+		&self.prev_state
+	}
+	pub(crate) fn bptt_set_prev_state(&mut self, v: &[u8])
+	{
+		self.prev_state.copy_from_slice(v);
+	}
+	/// (num_motors, levels, obpn, sn, sbpn, memory_mode, output_full_window)
+	pub(crate) fn bptt_dims(&self) -> (usize, usize, usize, usize, usize, u8, bool)
+	{
+		(
+			self.num_motors,
+			self.levels_per_motor,
+			self.output_bits_per_neuron,
+			self.state_neurons,
+			self.state_bits_per_neuron,
+			self.memory_mode,
+			self.output_full_window,
+		)
+	}
+
 	/// The memory-independent half of the old forward roll: features, frames, the
 	/// K-frame ring, action-repeat holds, observers — plus the teacher target bits and
 	/// the Option-A state targets. Mutates the controller's feature state exactly as the

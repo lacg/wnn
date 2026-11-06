@@ -48,6 +48,9 @@ mod att_err_ref; // CTRL-17 G5 (ABI 32): attitude error vs the position loop til
 mod plant_opts; // ABI 32: specific-force IMU + rotor drag as ONE value every sim host applies
 mod stage1; // scope C stage 1 vertical-channel config (scorer parameter object) // Phase-0 N-rotor allocation substrate (not wired; docs/OVERACTUATED_RESIDUAL_DESIGN.md)
 
+// ABI 35: GPU-resident sn>0 bptt walk host (macOS/Metal only).
+#[cfg(target_os = "macos")]
+mod bptt_walk_gpu;
 // GPU-batched closed-loop controller eval (macOS/Metal only).
 #[cfg(target_os = "macos")]
 #[path = "metal_controller.rs"]

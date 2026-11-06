@@ -1843,6 +1843,58 @@ pub fn train_on_trajectory_rs(
 	cfg: &RewardGatedConfigPacked,
 ) -> (usize, usize)
 {
+	let mut s_writes = 0_usize;
+	let mut o_writes = 0_usize;
+	for w in traj_windows(traj, cfg)
+	{
+		let (sw, ow) = controller.bptt_train_window(
+			w.g,
+			w.a,
+			w.tg,
+			w.pp,
+			cfg.topk_per_neuron,
+			w.first,
+			cfg.protect_learned,
+			w.ig,
+			traj.init_yaw, // yaw-anchor: re-seed heading on the reset window
+			w.ae,
+			cfg.write_priority_err,
+			cfg.write_err_floor_deg,
+			w.sp,
+			w.lb,
+			w.ro,
+		);
+		s_writes += sw;
+		o_writes += ow;
+	}
+	(s_writes, o_writes)
+}
+
+/// One bptt window's slices of a trajectory — THE chunking both trainers use
+/// (bptt_window steps, reset on the first chunk only). Tightly coupled helper of
+/// train_on_trajectory_rs / plan_trajectory_rs.
+struct TrajWindow
+{
+	g: Vec<[f32; 3]>,
+	a: Vec<[f32; 3]>,
+	tg: Vec<[f32; 3]>,
+	pp: Vec<[f32; 4]>,
+	// Option A: per-chunk integral targets for the state layer (None if the
+	// trajectory didn't record them — the walk then uses the indirect state solve).
+	ig: Option<Vec<[f32; 3]>>,
+	// L4: per-record |attitude err| for the magnitude-priority commit.
+	ae: Option<Vec<f32>>,
+	// DOB Fix A: the applied-pwm stream for the replay's observer.
+	sp: Option<Vec<[f32; 4]>>,
+	// True-delta label baseline.
+	lb: Option<Vec<[f32; 4]>>,
+	// Stale-altitude-features fix: the per-step observation streams.
+	ro: Option<ReplayObs>,
+	first: bool,
+}
+
+fn traj_windows(traj: &TrajectoryRs, cfg: &RewardGatedConfigPacked) -> Vec<TrajWindow>
+{
 	let w = cfg.bptt_window;
 	let n = traj.steps;
 	// C1 imitates expert (PID); C2 reinforces student's own action.
@@ -1854,90 +1906,110 @@ pub fn train_on_trajectory_rs(
 	{
 		&traj.pid_pwms
 	};
-
-	let mut s_writes = 0_usize;
-	let mut o_writes = 0_usize;
-	let mut first = true;
+	let opt = |len: usize, end: usize| len >= end;
+	let mut out = Vec::new();
 	let mut start = 0;
 	while start < n
 	{
 		let end = (start + w).min(n);
-		let g = traj.gyros[start..end].to_vec();
-		let a = traj.accels[start..end].to_vec();
-		let tg = traj.targets[start..end].to_vec();
-		let pp = targets_pwm[start..end].to_vec();
-		if g.is_empty()
+		if traj.gyros[start..end].is_empty()
 		{
 			break;
 		}
-		// Option A: per-chunk integral targets for the state layer (empty if the
-		// trajectory didn't record them — bptt_train_window then falls back to the
-		// indirect BPTT state solve).
-		let ig = if traj.pid_integrals.len() >= end
-		{
-			Some(traj.pid_integrals[start..end].to_vec())
-		}
-		else
-		{
-			None
-		};
-		// L4: per-record |attitude err| for the magnitude-priority commit. Only
-		// sliced when the trajectory recorded it (length-aligned with gyros).
-		let ae = if traj.att_errs.len() >= end
-		{
-			Some(traj.att_errs[start..end].to_vec())
-		}
-		else
-		{
-			None
-		};
-		// DOB Fix A: the applied-pwm stream for the replay's observer, sliced
-		// exactly like gyros. student_pwms records what the sim received
-		// (expert_drives / exploration included), so replay == deploy.
-		let sp = if traj.student_pwms.len() >= end
-		{
-			Some(traj.student_pwms[start..end].to_vec())
-		}
-		else
-		{
-			None
-		};
-		// True-delta label baseline, sliced exactly like gyros.
-		let lb = if traj.label_base.len() >= end
-		{
-			Some(traj.label_base[start..end].to_vec())
-		}
-		else
-		{
-			None
-		};
-		// Stale-altitude-features fix: the per-step observation streams, sliced
-		// exactly like gyros (None only for a pre-field trajectory; the replay's
-		// guard refuses that whenever the features are on).
-		let ro = ReplayObs::slice(&traj.vert_obs, &traj.horiz_obs, &traj.pwm_dev, &traj.att_up, start, end);
-		let (sw, ow) = controller.bptt_train_window(
-			g,
-			a,
-			tg,
-			pp,
-			cfg.topk_per_neuron,
-			first,
-			cfg.protect_learned,
-			ig,
-			traj.init_yaw, // yaw-anchor: re-seed heading on the reset window
-			ae,
-			cfg.write_priority_err,
-			cfg.write_err_floor_deg,
-			sp,
-			lb,
-			ro,
-		);
-		s_writes += sw;
-		o_writes += ow;
-		first = false;
+		out.push(TrajWindow {
+			g: traj.gyros[start..end].to_vec(),
+			a: traj.accels[start..end].to_vec(),
+			tg: traj.targets[start..end].to_vec(),
+			pp: targets_pwm[start..end].to_vec(),
+			ig: opt(traj.pid_integrals.len(), end).then(|| traj.pid_integrals[start..end].to_vec()),
+			ae: opt(traj.att_errs.len(), end).then(|| traj.att_errs[start..end].to_vec()),
+			sp: opt(traj.student_pwms.len(), end).then(|| traj.student_pwms[start..end].to_vec()),
+			lb: opt(traj.label_base.len(), end).then(|| traj.label_base[start..end].to_vec()),
+			ro: ReplayObs::slice(&traj.vert_obs, &traj.horiz_obs, &traj.pwm_dev, &traj.att_up, start, end),
+			first: start == 0,
+		});
 		start = end;
 	}
-	(s_writes, o_writes)
+	out
+}
+
+/// ABI 35: prepare every window of a gated round (in order) for the GPU walk.
+fn plan_round(
+	controller: &mut WnnController,
+	gated: &[&TrajectoryRs],
+	cfg: &RewardGatedConfigPacked,
+) -> Vec<crate::bptt_plan::BpttWindowPlan>
+{
+	let mut plans = Vec::new();
+	for traj in gated
+	{
+		for w in traj_windows(traj, cfg)
+		{
+			if ram_core::cancel::check_cancel()
+			{
+				return plans;
+			}
+			if let Some(p) = controller.bptt_prepare_checked(
+				&w.g,
+				&w.a,
+				&w.tg,
+				&w.pp,
+				w.first,
+				w.ig.as_deref(),
+				traj.init_yaw,
+				w.sp.as_deref(),
+				w.lb.as_deref(),
+				w.ro.as_ref(),
+			)
+			{
+				plans.push(p);
+			}
+		}
+	}
+	plans
+}
+
+/// Rounds walked on the GPU (the parity test asserts the GPU really ran).
+pub(crate) static GPU_BPTT_ROUNDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static GPU_BPTT_FALLBACK_WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// ABI 35: train a gated round's trajectories with the GPU-resident sn>0 walk
+/// (bit-identical to the per-trajectory CPU walk). A GPU refusal/failure is printed
+/// (once per process) and the SAME prepared windows are walked on the CPU — training
+/// never silently no-ops and never changes meaning. Returns cells written.
+fn train_round_gpu(
+	controller: &mut WnnController,
+	gated: &[&TrajectoryRs],
+	cfg: &RewardGatedConfigPacked,
+) -> usize
+{
+	let plans = plan_round(controller, gated, cfg);
+	#[cfg(target_os = "macos")]
+	let gpu = crate::bptt_walk_gpu::walk_plans_gpu(controller, &plans, cfg.topk_per_neuron, cfg.protect_learned);
+	#[cfg(not(target_os = "macos"))]
+	let gpu: Result<(usize, usize), String> = Err("no Metal on this platform".into());
+	match gpu
+	{
+		Ok((s, o)) =>
+		{
+			GPU_BPTT_ROUNDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+			s + o
+		}
+		Err(e) =>
+		{
+			if !GPU_BPTT_FALLBACK_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed)
+			{
+				eprintln!("[controller] ⚠️ GPU bptt walk unavailable ({e}) — walking on the CPU (WNN_CONTROLLER_GPU_BPTT)");
+			}
+			let mut cells = 0;
+			for p in &plans
+			{
+				let (s, o) = controller.bptt_walk_cpu(p, cfg.topk_per_neuron, cfg.protect_learned, &crate::bptt_plan::BpttL4::off());
+				cells += s + o;
+			}
+			cells
+		}
+	}
 }
 
 // ----- Closed-loop eval ----------------------------------------------------
@@ -2346,6 +2418,19 @@ pub fn dagger_train_inplace_rs(
 	seed: u64,
 ) -> TrainStats
 {
+	dagger_train_inplace_with(controller, cfg, target, seed, crate::bptt_plan::gpu_bptt_requested())
+}
+
+/// `dagger_train_inplace_rs` with the sn>0 trainer chosen explicitly (`gpu_bptt`):
+/// the whole-trainer parity test runs both without touching the process env.
+pub(crate) fn dagger_train_inplace_with(
+	controller: &mut WnnController,
+	cfg: &RewardGatedConfigPacked,
+	target: [f32; 3],
+	seed: u64,
+	gpu_bptt: bool,
+) -> TrainStats
+{
 	// SCOPE C STAGE 1 (13/08/2026) — the trainer DOES roll out with vertical (and,
 	// armed, horizontal) dynamics, so the features are live here. What must still
 	// be refused is the MISMATCH (see validate_train_regime). Keep it a panic, not a
@@ -2391,6 +2476,7 @@ pub fn dagger_train_inplace_rs(
 			.unwrap_or(false)
 		&& controller.dhat_params().is_none();
 
+	let use_gpu_bptt = gpu_bptt && controller.gpu_dims().2 > 0;
 	for it in 0..cfg.num_rounds
 	{
 		let tilt_rad = cfg.round_tilt_rad(it);
@@ -2496,14 +2582,28 @@ pub fn dagger_train_inplace_rs(
 		}
 		else
 		{
-			for traj in &trajs
+			// ABI 35: sn>0 rounds can walk on the GPU (opt-in; bit-identical).
+			if use_gpu_bptt
 			{
-				if episode_passes_gate_rs(traj.cumulative_reward, &round_scores, &history_scores, cfg)
+				let gated: Vec<&TrajectoryRs> = trajs
+					.iter()
+					.filter(|t| episode_passes_gate_rs(t.cumulative_reward, &round_scores, &history_scores, cfg))
+					.collect();
+				cells_written += train_round_gpu(controller, &gated, cfg);
+				n_trained += gated.len();
+				stats.train_steps += gated.iter().map(|t| t.steps).sum::<usize>();
+			}
+			else
+			{
+				for traj in &trajs
 				{
-					let (sw, ow) = train_on_trajectory_rs(controller, traj, cfg);
-					cells_written += sw + ow;
-					n_trained += 1;
-					stats.train_steps += traj.steps;
+					if episode_passes_gate_rs(traj.cumulative_reward, &round_scores, &history_scores, cfg)
+					{
+						let (sw, ow) = train_on_trajectory_rs(controller, traj, cfg);
+						cells_written += sw + ow;
+						n_trained += 1;
+						stats.train_steps += traj.steps;
+					}
 				}
 			}
 		}

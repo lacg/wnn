@@ -1567,7 +1567,7 @@ const MARKER_FINAL_U32: u32 = 0xFFFF_FFFFu32;
 /// — the Murmur3 finalizer masked to the table size. Used to seed the output marker
 /// table (train_seeded) at the exact home index find_or_claim_slot would probe from.
 #[inline]
-fn host_slot_hash(key: u64, mask: u64) -> usize
+pub(crate) fn host_slot_hash(key: u64, mask: u64) -> usize
 {
 	let mut x = key;
 	x ^= x >> 33;

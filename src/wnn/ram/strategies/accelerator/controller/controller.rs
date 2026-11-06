@@ -4320,54 +4320,15 @@ impl WnnController
 		replay_obs: Option<ReplayObs>,
 	) -> (usize, usize)
 	{
-		// Yaw-anchor: single-window bptt ⇒ pending_init_yaws holds just this traj's yaw.
-		self.pending_init_yaws = vec![init_yaw];
 		let w = gyros.len();
-		if w == 0
-		{
-			return (0, 0);
-		}
-		// DOB Fix A guard: an observer-on replay without the applied stream would
-		// silently reproduce the frozen-accumulator divergence — the exact class
-		// of completes-cleanly-measures-nothing trap this project keeps hitting.
-		// Fail LOUDLY instead.
-		if self.dhat_b.is_some()
-		{
-			let ok = student_pwms.as_ref().map(|s| s.len() == w).unwrap_or(false);
-			assert!(
-				ok,
-				"bptt_train_window: obs_dhat is on but student_pwms is missing or \
-				 misaligned (got {:?}, need {} steps) — the replay observer would \
-				 diverge from deploy (Fix A, 12/08/2026)",
-				student_pwms.as_ref().map(|s| s.len()),
-				w
-			);
-		}
-		// True-delta label guard: same fail-LOUD shape as Fix A. A missing
-		// baseline would silently measure the delta from nothing.
-		if self.dagger_label_delta
-		{
-			assert!(
-				self.state_neurons == 0,
-				"dagger_label_delta is sn=0 only — the split trainer labels absolute"
-			);
-			let ok = label_base.as_ref().map(|b| b.len() == w).unwrap_or(false);
-			assert!(
-				ok,
-				"bptt_train_window: dagger_label_delta is on but label_base is missing or \
-				 misaligned (got {:?}, need {} steps)",
-				label_base.as_ref().map(|b| b.len()),
-				w
-			);
-		}
-		self.replay_obs_guard(replay_obs.as_ref(), w, "bptt_train_window");
-		let plan = match self.bptt_prepare_window(
+		let plan = match self.bptt_prepare_checked(
 			&gyros,
 			&accels,
 			&targets,
 			&pid_pwms,
 			reset_state,
 			state_integral_targets.as_deref(),
+			init_yaw,
 			student_pwms.as_deref(),
 			label_base.as_deref(),
 			replay_obs.as_ref(),

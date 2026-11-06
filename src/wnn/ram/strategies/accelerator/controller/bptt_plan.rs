@@ -52,3 +52,10 @@ impl BpttL4<'_>
 		BpttL4 { att_errs: None, window_len: 0, write_priority_err: false, write_err_floor_deg: 0.0 }
 	}
 }
+
+/// Whether the GPU sn>0 trainer is requested for this process
+/// (WNN_CONTROLLER_GPU_BPTT=1; phased_ga --gpu-bptt sets it). Read per training call.
+pub(crate) fn gpu_bptt_requested() -> bool
+{
+	std::env::var("WNN_CONTROLLER_GPU_BPTT").map(|v| v == "1").unwrap_or(false)
+}

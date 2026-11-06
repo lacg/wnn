@@ -55,6 +55,8 @@ pub(crate) struct WalkShape
 	pub window_k: usize,
 	pub prod: bool,
 	pub seed: u64,
+	/// Probability a connection lands on a state bit (the solves' mutable bits).
+	pub tail: f64,
 }
 
 pub(crate) fn walk_controller(s: &WalkShape) -> WnnController
@@ -68,7 +70,7 @@ pub(crate) fn walk_controller(s: &WalkShape) -> WnnController
 	let out_in = frame_bits + s.sn;
 	// Bias half the connections onto the state bits so the solves have work to do.
 	let pick = |rng: &mut SmallRng, width: usize, tail: usize| -> i64 {
-		if tail > 0 && rng.gen_bool(0.3)
+		if tail > 0 && rng.gen_bool(s.tail)
 		{
 			(width - tail + rng.gen_range(0..tail)) as i64
 		}
@@ -184,12 +186,12 @@ pub(crate) fn pin_cases() -> Vec<(WalkShape, usize, usize, usize, bool)>
 	let mut v = Vec::new();
 	for (i, &mode) in [2u8, 0, 3].iter().enumerate()
 	{
-		let small = WalkShape { mode, sn: 4, sbpn: 8, obpn: 8, levels: 8, bpf: 3, window_k: 2, prod: false, seed: 0xA35 + i as u64 };
+		let small = WalkShape { mode, sn: 4, sbpn: 8, obpn: 8, levels: 8, bpf: 3, window_k: 2, prod: false, seed: 0xA35 + i as u64, tail: 0.3 };
 		v.push((small, 3, 70, 32, false));
 		v.push((small, 2, 50, 16, true));
 		for &sn in &[4usize, 8]
 		{
-			let prod = WalkShape { mode, sn, sbpn: 24, obpn: 24, levels: 64, bpf: 16, window_k: 2, prod: true, seed: 0xB35 + i as u64 };
+			let prod = WalkShape { mode, sn, sbpn: 24, obpn: 24, levels: 64, bpf: 16, window_k: 2, prod: true, seed: 0xB35 + i as u64, tail: 0.3 };
 			v.push((prod, 2, 48, 32, false));
 		}
 	}
@@ -223,10 +225,68 @@ pub(crate) fn dagger_student(mode: u8, sn: usize) -> WnnController
 /// per-round cells written).
 pub(crate) fn dagger_digest(mode: u8, sn: usize) -> (u64, Vec<usize>)
 {
+	dagger_digest_with(mode, sn, false).0
+}
+
+/// (cells digest, per-round writes), full TrainStats fingerprint — CPU or GPU walk.
+pub(crate) fn dagger_digest_with(mode: u8, sn: usize, gpu: bool) -> ((u64, Vec<usize>), String)
+{
 	let mut c = dagger_student(mode, sn);
 	let cfg = crate::ctrl17_pins::pin_translation_cfg(0.0);
-	let st = crate::dagger_train::dagger_train_inplace_rs(&mut c, &cfg, [0.0; 3], 0x5EED);
-	(cells_digest(&c), st.iter_cells_written.clone())
+	let st = crate::dagger_train::dagger_train_inplace_with(&mut c, &cfg, [0.0; 3], 0x5EED, gpu);
+	let fp = format!(
+		"{:?} {:?} {:?} {:?} {} {:?}",
+		st.iter_fitness, st.iter_mean_err_deg, st.iter_stable_rate, st.iter_n_trained, st.train_steps, st.iter_motor_jerk_mean
+	);
+	((cells_digest(&c), st.iter_cells_written.clone()), fp)
+}
+
+/// Prepare every window of `eps` (train_on_trajectory_rs slicing) on a clone of `base`.
+pub(crate) fn plan_episodes(base: &WnnController, eps: &[WalkEpisode], win: usize) -> Vec<crate::bptt_plan::BpttWindowPlan>
+{
+	let mut c = base.clone();
+	let mut plans = Vec::new();
+	for e in eps
+	{
+		let n = e.g.len();
+		let mut start = 0;
+		while start < n
+		{
+			let end = (start + win).min(n);
+			let ro = slice_obs(&e.obs, start, end);
+			if let Some(p) = c.bptt_prepare_checked(
+				&e.g[start..end],
+				&e.a[start..end],
+				&e.t[start..end],
+				&e.p[start..end],
+				start == 0,
+				None,
+				0.0,
+				None,
+				None,
+				Some(&ro),
+			)
+			{
+				plans.push(p);
+			}
+			start = end;
+		}
+	}
+	plans
+}
+
+/// CPU walk over a plan list: (cells digest, s_writes, o_writes, prev_state).
+pub(crate) fn walk_plans_cpu(base: &WnnController, plans: &[crate::bptt_plan::BpttWindowPlan], topk: usize, protect: bool) -> (u64, usize, usize, Vec<u8>)
+{
+	let mut c = base.clone();
+	let (mut sw, mut ow) = (0, 0);
+	for p in plans
+	{
+		let (a, b) = c.bptt_walk_cpu(p, topk, protect, &crate::bptt_plan::BpttL4::off());
+		sw += a;
+		ow += b;
+	}
+	(cells_digest(&c), sw, ow, c.bptt_prev_state().to_vec())
 }
 
 #[cfg(test)]
@@ -249,6 +309,126 @@ mod tests
 		(0x274b19851591a17d, 0x180, 0x531e),
 		(0x6a93ce519fc01c8e, 0x300, 0x5315),
 	];
+
+
+	/// Random Option-A overrides on a plan list (the GPU path ports the integral target).
+	fn with_overrides(plans: &mut [crate::bptt_plan::BpttWindowPlan], sn: usize, mode: u8, seed: u64)
+	{
+		let mut rng = SmallRng::seed_from_u64(seed);
+		let (t, f) = (crate::cell_mode::true_cell(mode), crate::cell_mode::false_cell(mode));
+		for p in plans.iter_mut()
+		{
+			p.state_target = Some(
+				(0..p.n_rec * sn)
+					.map(|_| match rng.gen_range(0..3) { 0 => t, 1 => f, _ => crate::bptt_plan::NO_STATE_OVERRIDE })
+					.collect(),
+			);
+		}
+	}
+
+	#[cfg(target_os = "macos")]
+	fn gpu_case(shape: &WalkShape, eps: usize, steps: usize, win: usize, protect: bool, overrides: bool, budget: usize, topk: usize) -> Result<String, String>
+	{
+		let base = walk_controller(shape);
+		let ep = walk_episodes(shape.seed, eps, steps);
+		let mut plans = plan_episodes(&base, &ep, win);
+		if overrides
+		{
+			with_overrides(&mut plans, shape.sn, shape.mode, shape.seed);
+		}
+		let cpu = walk_plans_cpu(&base, &plans, topk, protect);
+		let mut g = base.clone();
+		let (sw, ow) = crate::bptt_walk_gpu::walk_plans_gpu_with(&mut g, &plans, topk, protect, budget)?;
+		let gpu = (cells_digest(&g), sw, ow, g.bptt_prev_state().to_vec());
+		if cpu != gpu
+		{
+			return Err(format!("{shape:?} eps={eps} win={win} protect={protect} ov={overrides} budget={budget} topk={topk}: cpu {cpu:x?} != gpu {gpu:x?}"));
+		}
+		if cpu.2 == 0 || cpu.1 == 0
+		{
+			return Err(format!("{shape:?}: vacuous walk (writes s={} o={})", cpu.1, cpu.2));
+		}
+		Ok(format!("{shape:?} ok digest {:#x} s={} o={}", cpu.0, cpu.1, cpu.2))
+	}
+
+	/// THE ACCEPTANCE GATE: the GPU walk reproduces the CPU walk bit-for-bit — whole
+	/// cell function of both layers, write counts and the carried recurrent state —
+	/// over multi-window, multi-episode resident walks at production shape (sn 4/8,
+	/// 24-bit neurons, 64 levels, obs-pwm + vertical/horizontal features) and a dense
+	/// small shape, in QUAD/TERNARY/BINARY, with protect_learned, Option-A overrides,
+	/// one-window dispatches + table growth, and topk 1/4/8.
+	#[cfg(target_os = "macos")]
+	#[test]
+	fn cpu_walk_matches_gpu()
+	{
+		if metal::Device::system_default().is_none()
+		{
+			return;
+		}
+		let mut fails = Vec::new();
+		let mut n = 0;
+		let mut cases = pin_cases();
+		// Dense tie-heavy shapes: few bits, most connections on the 8 state bits, so
+		// beam ties and the transition solve decide many records.
+		for (i, &mode) in [2u8, 0, 3].iter().enumerate()
+		{
+			let dense = WalkShape { mode, sn: 8, sbpn: 5, obpn: 5, levels: 8, bpf: 2, window_k: 2, prod: false, seed: 0xC35 + i as u64, tail: 0.8 };
+			cases.push((dense, 3, 80, 32, false));
+			cases.push((dense, 2, 64, 8, true));
+		}
+		for (shape, eps, steps, win, protect) in cases
+		{
+			for &(ov, budget, topk) in &[(false, 256usize, 4usize), (true, 1, 4), (false, 64, 8), (false, 256, 1)]
+			{
+				n += 1;
+				match gpu_case(&shape, eps, steps, win, protect, ov, budget, topk)
+				{
+					Ok(_) => {}
+					Err(e) => fails.push(e),
+				}
+			}
+		}
+		assert!(fails.is_empty(), "{}/{} GPU walk cases diverged: {fails:#?}", fails.len(), n);
+	}
+
+	/// Whole reward-gated DAgger, CPU walk vs GPU walk: identical cells, per-round
+	/// writes, and every closed-loop eval statistic (rounds 2+ roll out on the
+	/// GPU-trained memory, so any divergence compounds into these).
+	#[cfg(target_os = "macos")]
+	#[test]
+	fn dagger_train_cpu_matches_gpu()
+	{
+		if metal::Device::system_default().is_none()
+		{
+			return;
+		}
+		for &(mode, sn) in &[(2u8, 4usize), (0u8, 4usize), (3u8, 4usize), (2u8, 8usize)]
+		{
+			let cpu = dagger_digest_with(mode, sn, false);
+			let before = crate::dagger_train::GPU_BPTT_ROUNDS.load(std::sync::atomic::Ordering::Relaxed);
+			let gpu = dagger_digest_with(mode, sn, true);
+			let after = crate::dagger_train::GPU_BPTT_ROUNDS.load(std::sync::atomic::Ordering::Relaxed);
+			assert!(after > before, "mode {mode} sn {sn}: the GPU walk never ran (fell back to the CPU)");
+			assert!(cpu.0 .1.iter().sum::<usize>() > 0, "mode {mode} sn {sn}: vacuous dagger_train");
+			assert_eq!(cpu, gpu, "mode {mode} sn {sn}: GPU dagger_train diverged from the CPU trainer");
+		}
+	}
+
+	/// The plan-list CPU walk IS the public bptt_train_window walk (reset handling).
+	#[test]
+	fn plan_list_walk_equals_public_walk()
+	{
+		for (shape, eps, steps, win, protect) in pin_cases().into_iter().take(4)
+		{
+			let base = walk_controller(&shape);
+			let ep = walk_episodes(shape.seed, eps, steps);
+			let mut c = base.clone();
+			let (sw, ow) = walk_cpu_public(&mut c, &ep, win, 4, protect);
+			let plans = plan_episodes(&base, &ep, win);
+			let (d, s2, o2, prev) = walk_plans_cpu(&base, &plans, 4, protect);
+			assert_eq!((cells_digest(&c), sw, ow, c.bptt_prev_state().to_vec()), (d, s2, o2, prev), "{shape:?}");
+		}
+	}
 
 	#[test]
 	fn cpu_dagger_bit_identical_to_pre_abi35()
