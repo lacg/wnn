@@ -251,7 +251,24 @@ mod metal_controller;
 ///   observer). T = 0 is bit-identical to ABI 33 (abi34_tests digests captured
 ///   on e56d6084; t0_gpu_lag_obs_rows_bit_identical_to_abi33). Python surface
 ///   unchanged.
-pub const ABI_VERSION: u32 = 34;
+///
+/// ABI 35 (05/11/2026):
+///   - GPU-resident sn>0 EDRA-BPTT walk (controller_bptt_walk): a genome's gated
+///     round walks in-kernel over resident writable tables, bit-exact vs the CPU walk
+///     (abi35_tests). Selected per process by WNN_CONTROLLER_GPU_BPTT ("1"/"0"; unset
+///     ⇒ BPTT_DEVICE_DEFAULT) — phased_ga --bptt-device sets it.
+///   - CPU walk quick wins (window-lived solver view, concurrent motor/state solves),
+///     bit-identical to ABI 34 (digests captured on 72b8535e).
+///   - The per-record GPU solve (WNN_CONTROLLER_GPU_SOLVE) is retired.
+///   - Lag-aware LQR/LQI/MPC/MPCOF price the DELIVERED actuator + a fixed command
+///     share (LAG_CMD_SHARE); student d-hat observer subtracts the LAGGED actuator
+///     (new Python method set_observer_motor_lag). PLN fire-bit GPU twin fixed.
+///   RESULTS-CHANGING for lagged runs only; T = 0 bit-identical to ABI 34.
+pub const ABI_VERSION: u32 = 35;
+
+/// Where the sn>0 trainer walks when WNN_CONTROLLER_GPU_BPTT is unset ("cpu"|"gpu").
+/// Decided by the item-E measurement rule (05/11/2026).
+pub const BPTT_DEVICE_DEFAULT: &str = "cpu";
 
 /// Mode-aware untrained-cell decode anchor (ABI 12): QUAD→0.75, TERNARY→0.5
 /// (the fixed PLN empty_value), BINARY→0.5 (antagonist-pair effective neutral).
@@ -1130,6 +1147,7 @@ fn desirability_fitness_combine(
 fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()>
 {
 	m.add("ABI_VERSION", ABI_VERSION)?;
+	m.add("BPTT_DEVICE_DEFAULT", BPTT_DEVICE_DEFAULT)?;
 	m.add_function(wrap_pyfunction!(fitness_combine, m)?)?;
 	m.add_function(wrap_pyfunction!(gated_fitness_combine, m)?)?;
 	m.add_function(wrap_pyfunction!(desirability_fitness_combine, m)?)?;

@@ -97,7 +97,12 @@ import os
 # for the observer's u (the Metal kernel had post-lag), lag-aware LQR/LQI/MPC/
 # MPCOF on the TRUE T (PID unchanged), mpcof observer on the filtered actuator.
 # New lineage for every --motor-lag-s > 0 run; T = 0 bit-identical to 33.
-EXPECTED_ABI = 34
+# ABI 35 (05/11/2026): GPU-resident sn>0 bptt walk (controller_bptt_walk, bit-exact;
+# --bptt-device / WNN_CONTROLLER_GPU_BPTT, BPTT_DEVICE_DEFAULT), CPU walk quick wins
+# (bit-identical), per-record GPU solve retired, lag-aware LQR/MPC cost on the
+# delivered actuator + command share, student d-hat on the lagged actuator
+# (set_observer_motor_lag), airframe-bound lag default (Python). T = 0 bit-identical to 34.
+EXPECTED_ABI = 35
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

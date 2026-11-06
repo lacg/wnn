@@ -414,6 +414,38 @@ mod tests
 		}
 	}
 
+	/// Wall-time of the CPU vs GPU walk at production shape (prints; a human reads it).
+	/// cargo test --release ... bench_bptt_walk -- --ignored --nocapture
+	#[cfg(target_os = "macos")]
+	#[test]
+	#[ignore]
+	fn bench_bptt_walk()
+	{
+		for &sn in &[4usize, 8]
+		{
+			let shape = WalkShape { mode: 2, sn, sbpn: 24, obpn: 24, levels: 64, bpf: 16, window_k: 2, prod: true, seed: 0xBE7C, tail: 0.3 };
+			let mut base = walk_controller(&shape);
+			// Warm memory: two passes so the solves scan real tables.
+			let warm = walk_episodes(shape.seed ^ 1, 8, 1000);
+			walk_cpu_public(&mut base, &warm, 32, 4, false);
+			let ep = walk_episodes(shape.seed, 4, 400);
+			let plans = plan_episodes(&base, &ep, 32);
+			let recs: usize = plans.iter().map(|p| p.n_rec).sum();
+			let t0 = std::time::Instant::now();
+			let cpu = walk_plans_cpu(&base, &plans, 4, false);
+			let tc = t0.elapsed().as_secs_f64();
+			let mut g = base.clone();
+			let t1 = std::time::Instant::now();
+			let r = crate::bptt_walk_gpu::walk_plans_gpu(&mut g, &plans, 4, false).expect("gpu");
+			let tg = t1.elapsed().as_secs_f64();
+			assert_eq!((cpu.1, cpu.2), r);
+			println!(
+				"sn={sn} records={recs} cells={} cpu {:.3}s ({:.3} ms/rec) gpu {:.3}s ({:.3} ms/rec) speedup {:.2}x",
+				base.total_cells(), tc, tc * 1e3 / recs as f64, tg, tg * 1e3 / recs as f64, tc / tg
+			);
+		}
+	}
+
 	/// The plan-list CPU walk IS the public bptt_train_window walk (reset handling).
 	#[test]
 	fn plan_list_walk_equals_public_walk()

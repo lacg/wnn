@@ -53,9 +53,15 @@ impl BpttL4<'_>
 	}
 }
 
-/// Whether the GPU sn>0 trainer is requested for this process
-/// (WNN_CONTROLLER_GPU_BPTT=1; phased_ga --gpu-bptt sets it). Read per training call.
+/// Whether the GPU sn>0 trainer is requested for this process:
+/// WNN_CONTROLLER_GPU_BPTT "1" ⇒ GPU, "0" ⇒ CPU, unset ⇒ crate::BPTT_DEVICE_DEFAULT
+/// (phased_ga --bptt-device always sets it). Read per training call.
 pub(crate) fn gpu_bptt_requested() -> bool
 {
-	std::env::var("WNN_CONTROLLER_GPU_BPTT").map(|v| v == "1").unwrap_or(false)
+	match std::env::var("WNN_CONTROLLER_GPU_BPTT").as_deref()
+	{
+		Ok("1") => true,
+		Ok("0") => false,
+		_ => crate::BPTT_DEVICE_DEFAULT == "gpu",
+	}
 }

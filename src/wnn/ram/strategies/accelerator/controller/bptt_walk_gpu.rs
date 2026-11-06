@@ -112,7 +112,7 @@ impl BpttWalker
 		let pipeline = device
 			.new_compute_pipeline_state_with_function(&func)
 			.map_err(|e| format!("controller_bptt_walk pipeline creation failed: {e}"))?;
-		let threads = (pipeline.max_total_threads_per_threadgroup().min(1024) / 32) * 32;
+		let threads = (pipeline.max_total_threads_per_threadgroup().min(512) / 32) * 32;
 		if threads < 64
 		{
 			return Err(format!("controller_bptt_walk: only {threads} threads per threadgroup"));

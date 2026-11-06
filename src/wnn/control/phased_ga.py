@@ -2707,6 +2707,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "(cf21_brushless 0.20, cf2x_firmware 0.26 — see AIRFRAME_MOTOR_LAG_S; "
 	                     "other airframes must pass it); without --translation 0 = OFF. "
 	                     "0 = explicit opt-out.")
+	ap.add_argument("--bptt-device", choices=("cpu", "gpu"), default=None,
+	                help="ABI 35: where the sn>0 EDRA-BPTT DAgger trainer walks — 'cpu' (rayon) "
+	                     "or 'gpu' (the resident Metal walk, controller_bptt_walk; bit-identical "
+	                     "to the CPU walk). Default: the wheel's BPTT_DEVICE_DEFAULT. Sets "
+	                     "WNN_CONTROLLER_GPU_BPTT for the Rust trainer. sn=0 always trains on the "
+	                     "CPU (direct write, nothing to solve). The IDS worker shares the GPU.")
 	ap.add_argument("--no-motor-lag", action="store_true", default=False,
 	                help="ABI 35: fly lag-free under --translation (same as --motor-lag-s 0) — "
 	                     "axis F's lag-off arm.")
@@ -3624,6 +3630,17 @@ def episode_config_from_args(args) -> EpisodeConfig:
 	)
 
 
+def _apply_bptt_device(args) -> None:
+	"""Pin WNN_CONTROLLER_GPU_BPTT from --bptt-device (or the wheel default) and say which."""
+	from wnn.control._accel import require_accel
+	default = "gpu" if getattr(require_accel(), "BPTT_DEVICE_DEFAULT", "cpu") == "gpu" else "cpu"
+	device = args.bptt_device or default
+	os.environ["WNN_CONTROLLER_GPU_BPTT"] = "1" if device == "gpu" else "0"
+	print(f"[bptt] sn>0 trainer device={device}"
+	      f"{'' if args.bptt_device else ' (wheel default)'} (WNN_CONTROLLER_GPU_BPTT="
+	      f"{os.environ['WNN_CONTROLLER_GPU_BPTT']})")
+
+
 def main():
 	args = build_arg_parser().parse_args()
 	# The exact command line, kept so a saved genome can be re-scored under the
@@ -3631,6 +3648,9 @@ def main():
 	# to GUESS the recipe from the .out header and silently dropped --obs-pwm & co.
 	args.cli_argv = list(sys.argv[1:])
 	_validate_rank_weights(args)
+
+	# ABI 35: the sn>0 trainer's device (read by the Rust trainer per training call).
+	_apply_bptt_device(args)
 
 	# Option A: enable the learned-integral state target in the Rust trainer
 	# (read per bptt_train_window call). Set before any training begins.

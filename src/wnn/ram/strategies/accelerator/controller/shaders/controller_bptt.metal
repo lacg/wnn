@@ -386,8 +386,8 @@ kernel void controller_bptt_walk(
 	threadgroup ulong b_val[2][BW_MAX_BEAMS][BW_MAX_BEAM];
 	threadgroup uint b_n[BW_MAX_BEAMS];
 	threadgroup uint b_ok[BW_MAX_BEAMS];
-	threadgroup uint b_cur;
-	threadgroup atomic_uint b_valid[BW_MAX_BEAMS];
+	threadgroup uint b_side[BW_MAX_BEAMS];
+	threadgroup atomic_uint b_valid[2][BW_MAX_BEAMS];
 	threadgroup uint c_cost[BW_MAX_BEAMS][BW_MAX_CAND];
 	threadgroup ulong sol_bits[BW_MAX_BEAMS];
 	threadgroup uint sol_ok[BW_MAX_BEAMS];
@@ -493,45 +493,51 @@ kernel void controller_bptt_walk(
 			}
 			if (tid < nbeams)
 			{
-				bool live = tid < nm || do_state;
-				b_n[tid] = 1u;
-				b_ok[tid] = live ? 1u : 0u;
 				b_cost[0][tid][0] = 0u;
 				b_mask[0][tid][0] = 0ul;
 				b_val[0][tid][0] = 0ul;
-				atomic_store_explicit(&b_valid[tid], 0u, memory_order_relaxed);
+				atomic_store_explicit(&b_valid[0][tid], 0u, memory_order_relaxed);
+				atomic_store_explicit(&b_valid[1][tid], 0u, memory_order_relaxed);
 			}
-			if (tid == 0u)
-				b_cur = 0u;
 			threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup);
 
-			// phase 2: the beams, side by side (motor m = beam m; state = beam nm)
+			// phase 2: the beams, side by side (motor m = beam m; state = beam nm). Each
+			// thread tracks ITS beam's size / liveness / buffer side locally — all threads
+			// of a beam update them identically from the shared valid counter — so a step
+			// costs two barriers and finished/dead beams cost nothing.
+			const uint b = my_beam;
+			const bool is_state = (b == nm);
+			const uint depth = is_state ? sn : P.levels;
+			const uint W = is_state ? P.beam_st : P.beam_out;
+			uint my_n = 1u;
+			bool my_ok = b < nbeams && (b < nm || do_state);
+			uint my_cur = 0u;
 			const uint max_depth = max(P.levels, do_state ? sn : 0u);
 			for (uint s = 0u; s < max_depth; ++s)
 			{
-				const uint cur = b_cur;
-				const uint b = my_beam;
-				const bool is_state = (b == nm);
-				const uint depth = is_state ? sn : P.levels;
-				const bool run = b < nbeams && s < depth && b_ok[b] != 0u;
+				const bool run = my_ok && s < depth;
 				const uint task = is_state ? (P.num_out + s) : (b * P.levels + s);
 				const uint kc = run ? tk_cnt[task] : 0u;
-				const uint C = run ? b_n[b] * kc : 0u;
+				if (run && kc == 0u)
+					my_ok = false; // CPU: empty top-k ⇒ the solve fails
+				const uint C = (run && kc > 0u) ? my_n * kc : 0u;
+				const uint par = s & 1u;
 				// A: score + conflict-check every (parent, address) pair
 				for (uint c = my_lane; c < C; c += TB)
 				{
 					uint pi = c / kc, ai = c % kc;
 					uint q = task * BW_MAX_KTOP + ai;
-					ulong pm = b_mask[cur][b][pi], pv = b_val[cur][b][pi];
+					ulong pm = b_mask[my_cur][b][pi], pv = b_val[my_cur][b][pi];
 					ulong r0 = ci_bits[q * 3u], r1 = ci_bits[q * 3u + 1u];
 					bool ok = ci_ok[q] != 0u && ((pm & pv & r0) | (pm & ~pv & r1)) == 0ul;
-					c_cost[b][c] = ok ? b_cost[cur][b][pi] + tk_rank[q] : BW_NONE;
+					c_cost[b][c] = ok ? b_cost[my_cur][b][pi] + tk_rank[q] : BW_NONE;
 					if (ok)
-						atomic_fetch_add_explicit(&b_valid[b], 1u, memory_order_relaxed);
+						atomic_fetch_add_explicit(&b_valid[par][b], 1u, memory_order_relaxed);
 				}
 				threadgroup_barrier(mem_flags::mem_threadgroup);
 				// B: stable rank by (cost, c); keep the first beam_width
-				const uint W = is_state ? P.beam_st : P.beam_out;
+				if (tid < nbeams)
+					atomic_store_explicit(&b_valid[1u - par][tid], 0u, memory_order_relaxed);
 				for (uint c = my_lane; c < C; c += TB)
 				{
 					uint cc = c_cost[b][c];
@@ -549,53 +555,36 @@ kernel void controller_bptt_walk(
 						uint pi = c / kc, ai = c % kc;
 						uint q = task * BW_MAX_KTOP + ai;
 						ulong cm = ci_bits[q * 3u] | ci_bits[q * 3u + 1u];
-						b_cost[1u - cur][b][pos] = cc;
-						b_mask[1u - cur][b][pos] = b_mask[cur][b][pi] | cm;
-						b_val[1u - cur][b][pos] = (b_val[cur][b][pi] & ~cm) | ci_bits[q * 3u + 2u];
+						b_cost[1u - my_cur][b][pos] = cc;
+						b_mask[1u - my_cur][b][pos] = b_mask[my_cur][b][pi] | cm;
+						b_val[1u - my_cur][b][pos] = (b_val[my_cur][b][pi] & ~cm) | ci_bits[q * 3u + 2u];
 					}
 				}
 				threadgroup_barrier(mem_flags::mem_threadgroup);
-				// C: advance
-				if (tid < nbeams)
+				if (C > 0u)
 				{
-					bool r = tid < nbeams && s < (tid == nm ? sn : P.levels) && b_ok[tid] != 0u;
-					if (r)
+					uint nv = atomic_load_explicit(&b_valid[par][b], memory_order_relaxed);
+					if (nv == 0u)
+						my_ok = false;
+					else
 					{
-						uint nv = atomic_load_explicit(&b_valid[tid], memory_order_relaxed);
-						if (nv == 0u)
-							b_ok[tid] = 0u;
-						else
-							b_n[tid] = min(nv, tid == nm ? P.beam_st : P.beam_out);
+						my_n = min(nv, W);
+						my_cur = 1u - my_cur;
 					}
-					atomic_store_explicit(&b_valid[tid], 0u, memory_order_relaxed);
 				}
-				threadgroup_barrier(mem_flags::mem_threadgroup);
-				if (tid == 0u)
-				{
-					// Beams that did not run this step keep their buffer: copy cur → next so
-					// the swap is uniform (only beams past their depth or dead are affected).
-					for (uint bb = 0u; bb < nbeams; ++bb)
-					{
-						bool r = s < (bb == nm ? sn : P.levels) && b_ok[bb] != 0u;
-						if (!r)
-						{
-							for (uint i = 0u; i < b_n[bb]; ++i)
-							{
-								b_cost[1u - cur][bb][i] = b_cost[cur][bb][i];
-								b_mask[1u - cur][bb][i] = b_mask[cur][bb][i];
-								b_val[1u - cur][bb][i] = b_val[cur][bb][i];
-							}
-						}
-					}
-					b_cur = 1u - cur;
-				}
-				threadgroup_barrier(mem_flags::mem_threadgroup);
 			}
+			if (b < nbeams && my_lane == 0u)
+			{
+				b_n[b] = my_n;
+				b_ok[b] = my_ok ? 1u : 0u;
+				b_side[b] = my_cur;
+			}
+			threadgroup_barrier(mem_flags::mem_threadgroup);
 
 			// argmin (FIRST minimum) per beam → the solve's mutable bits
 			if (tid < nbeams)
 			{
-				uint cur = b_cur;
+				uint cur = b_side[tid];
 				sol_ok[tid] = b_ok[tid];
 				if (b_ok[tid] != 0u)
 				{
