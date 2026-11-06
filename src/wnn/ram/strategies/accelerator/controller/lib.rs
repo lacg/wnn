@@ -20,6 +20,8 @@ mod cell_remap; // cell ADDRESS remaps on architecture change (bit-exact port)
 mod controller;
 mod controller_split;
 mod ctbr; // ABI 38 (CTRL-27): the cascade controller's output contract + inner stage
+mod ctbr_axis_mpc; // ABI 39 (CTRL-33): the cascade outer MPC, one axis — model = the closed rate loop
+mod ctbr_mpcof; // ABI 39 (CTRL-33): the cascade's MPCOF outer teacher (shadow rate loop + observer)
 mod controller_training;
 mod cpu_score; // CPU (rayon) batch scorer — twin of score_controllers_metal
 mod dagger_train;
@@ -323,7 +325,18 @@ mod metal_controller;
 ///   - Bugs fixed alongside: the wheel did not build at 15d5bbf0 (imitation_probe
 ///     test-only loader); the GPU split ignored --delta-label-scale (trained the
 ///     unscaled label); two split-parity sweep cases planted nothing (vacuous).
-pub const ABI_VERSION: u32 = 38;
+///
+/// ABI 39 (06/11/2026, CTRL-33): the cascade's MPCOF OUTER teacher is re-derived —
+///   its prediction model IS the closed inner loop (firmware rate PID with the sourced
+///   gains + the airframe's resolved motor lag + the rigid body), discretised at the
+///   outer period (action_repeat ticks); its decision is the rate SETPOINT (per-axis
+///   condensed MPC, DARE terminal, box = the bank rate range; ctbr_axis_mpc.rs) with
+///   an offset-free observer on ω' and the plan regulated about the d̂ rest point;
+///   state from a shadow of the rate loop + the measured lagged actuator
+///   (ctbr_mpcof.rs). Replaces the ABI-38 label (the motor-level plan's rate N_o
+///   ahead: MPCOF>rate 18.8% stable at lag 0.20). Python surface unchanged; the bump
+///   separates the cascade+mpcof lineage. Motor-level teachers bit-identical to 38.
+pub const ABI_VERSION: u32 = 39;
 
 /// Where the sn>0 trainer walks when WNN_CONTROLLER_GPU_BPTT is unset ("cpu"|"gpu").
 /// Decided by the item-E measurement rule (05/11/2026).

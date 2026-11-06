@@ -73,6 +73,13 @@ impl Lpf2p
 		[self.b0, self.b1, self.b2, self.a1, self.a2]
 	}
 
+	/// The delay line (d1, d2) — ABI 39: the cascade MPC teacher's shadow of the
+	/// rate loop reads it as two of its prediction-model states (ctbr_mpcof.rs).
+	pub(crate) fn delay_line(&self) -> [f64; 2]
+	{
+		[self.d1, self.d2]
+	}
+
 	pub fn apply(&mut self, sample: f64) -> f64
 	{
 		let mut d0 = sample - self.d1 * self.a1 - self.d2 * self.a2;
@@ -238,6 +245,20 @@ impl AttStageFw
 	}
 }
 
+/// ABI 39 (CTRL-33): a snapshot of one rate-loop axis (RateStageFw::axis_state).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RateAxisState
+{
+	pub integ: f64,
+	/// The rate-D lpf2p delay line (d1, d2); zeros when the filter is off.
+	pub lpf: [f64; 2],
+	pub prev_measured: f64,
+	/// No update has run since reset (the D term is 0 on the first one).
+	pub first: bool,
+	/// The axis force (N) held since the last update.
+	pub held: f64,
+}
+
 /// The RATE stage of the firmware cascade: body-rate setpoint (rad/s) -> per-axis
 /// force offset (N) -> '+' mixer -> 4 pwm, updated every `decimation` sim ticks and
 /// HELD in between (stabilizer_types.h RATE_DO_EXECUTE).
@@ -305,6 +326,41 @@ impl RateStageFw
 		}
 		self.tick = 0;
 		self.held = [0.0; 3];
+	}
+
+	/// ABI 39 (CTRL-33): one axis's internal state, for the cascade MPC teacher's
+	/// prediction model (ctbr_axis_mpc.rs): it plans setpoints for THIS loop, so it
+	/// starts every plan from the loop's actual integrator, D-filter, last measured
+	/// rate and held output.
+	pub(crate) fn axis_state(&self, i: usize) -> RateAxisState
+	{
+		let c = &self.rate[i];
+		RateAxisState {
+			integ: c.integ,
+			lpf: c.filt.map_or([0.0; 2], |f| f.delay_line()),
+			prev_measured: c.prev_measured,
+			first: c.first,
+			held: self.held[i],
+		}
+	}
+
+	/// ABI 39: axis `i`'s SI gains (kp, ki, kd, i_limit).
+	pub(crate) fn axis_gains(&self, i: usize) -> SiAxis
+	{
+		self.rate[i].g
+	}
+
+	/// ABI 39: the rate loop's own sample period (1 / attitude_hz), s.
+	pub(crate) fn dt_rate(&self) -> f64
+	{
+		self.rate[0].dt
+	}
+
+	/// ABI 39: ticks since the last rate update, in [0, decimation) — 0 ⇔ this
+	/// tick runs the rate loop.
+	pub(crate) fn phase(&self) -> u32
+	{
+		self.tick % self.decimation
 	}
 
 	/// Whether THIS tick runs the rate loop (otherwise the held force is re-mixed).

@@ -1094,6 +1094,29 @@ impl AirframeRs
 	}
 	pub(crate) fn teacher(&self, id: u8) -> Teacher
 	{
+		let mut t = self.teacher_motor(id);
+		// ABI 39 (CTRL-33): mpcof's CASCADE law plans setpoints for the firmware rate
+		// loop, so it exists exactly when the airframe supplies that loop. Attached,
+		// not built: the planner is condensed on the first ctbr_label (it needs the
+		// outer period). The motor law it rides along with never reads it.
+		if let (Teacher::MpcOf(m), Some(p)) = (&mut t, self.pid_fw.as_ref())
+		{
+			m.attach_ctbr(crate::ctbr_mpcof::CtbrMpcOf::new(
+				p.rate_stage(),
+				self.dt,
+				self.arm_length,
+				self.k_drag,
+				self.inertia,
+				self.k_thrust,
+				self.motor_lag_s,
+			));
+		}
+		t
+	}
+
+	/// The teacher's motor-level law (every id; the ABI-38 `teacher`).
+	fn teacher_motor(&self, id: u8) -> Teacher
+	{
 		// PID (id 0) now derives from the airframe like every other teacher, WHEN the
 		// airframe supplied cascade gains. Without them it stays the legacy hand-tuned
 		// single loop — that fallback is what keeps the synthetic-plant parity anchors

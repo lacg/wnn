@@ -44,7 +44,7 @@ pub(crate) struct Mat
 
 impl Mat
 {
-	fn zeros(r: usize, c: usize) -> Self
+	pub(crate) fn zeros(r: usize, c: usize) -> Self
 	{
 		Mat {
 			r,
@@ -52,7 +52,7 @@ impl Mat
 			d: vec![0.0; r * c],
 		}
 	}
-	fn identity(n: usize) -> Self
+	pub(crate) fn identity(n: usize) -> Self
 	{
 		let mut m = Mat::zeros(n, n);
 		for i in 0..n
@@ -62,16 +62,21 @@ impl Mat
 		m
 	}
 	#[inline]
-	fn get(&self, i: usize, j: usize) -> f64
+	pub(crate) fn get(&self, i: usize, j: usize) -> f64
 	{
 		self.d[i * self.c + j]
 	}
 	#[inline]
-	fn set(&mut self, i: usize, j: usize, v: f64)
+	pub(crate) fn set(&mut self, i: usize, j: usize, v: f64)
 	{
 		self.d[i * self.c + j] = v;
 	}
-	fn transpose(&self) -> Mat
+	/// Row-major entries (the box-QP solver takes H as a flat buffer).
+	pub(crate) fn data(&self) -> &[f64]
+	{
+		&self.d
+	}
+	pub(crate) fn transpose(&self) -> Mat
 	{
 		let mut t = Mat::zeros(self.c, self.r);
 		for i in 0..self.r
@@ -83,7 +88,7 @@ impl Mat
 		}
 		t
 	}
-	fn matmul(&self, o: &Mat) -> Mat
+	pub(crate) fn matmul(&self, o: &Mat) -> Mat
 	{
 		assert_eq!(self.c, o.r, "matmul shape");
 		let mut out = Mat::zeros(self.r, o.c);
@@ -105,7 +110,7 @@ impl Mat
 		}
 		out
 	}
-	fn add(&self, o: &Mat) -> Mat
+	pub(crate) fn add(&self, o: &Mat) -> Mat
 	{
 		let mut out = self.clone();
 		for x in 0..self.d.len()
@@ -123,7 +128,7 @@ impl Mat
 		}
 		out
 	}
-	fn scale(&self, s: f64) -> Mat
+	pub(crate) fn scale(&self, s: f64) -> Mat
 	{
 		let mut out = self.clone();
 		for x in out.d.iter_mut()
@@ -153,7 +158,7 @@ impl Mat
 		out
 	}
 	/// mul_vec into a caller buffer (len = self.r) — same arithmetic order.
-	fn mul_vec_into(&self, v: &[f64], out: &mut [f64])
+	pub(crate) fn mul_vec_into(&self, v: &[f64], out: &mut [f64])
 	{
 		assert_eq!(self.c, v.len(), "mul_vec shape");
 		assert_eq!(self.r, out.len(), "mul_vec out shape");
@@ -171,7 +176,7 @@ impl Mat
 
 /// General square-matrix inverse via Gauss-Jordan with partial pivoting.
 /// Returns None if singular. Used for the MPC condensed Hessian (3N×3N).
-fn inverse(a: &Mat) -> Option<Mat>
+pub(crate) fn inverse(a: &Mat) -> Option<Mat>
 {
 	assert_eq!(a.r, a.c, "inverse: square");
 	let n = a.r;
@@ -537,7 +542,7 @@ fn diag3(d: [f64; 3]) -> Mat
 
 /// State error vector x = [roll-tr, pitch-tp, yaw-ty, p, q, r] (angles wrapped).
 #[inline]
-fn state_error(q: [f32; 4], gyro: [f32; 3], target_rpy: [f32; 3]) -> [f64; 6]
+pub(crate) fn state_error(q: [f32; 4], gyro: [f32; 3], target_rpy: [f32; 3]) -> [f64; 6]
 {
 	let (roll, pitch, yaw) = quat_to_euler_f64(q);
 	[
@@ -1289,6 +1294,99 @@ impl AllocLqrRs
 // MPC teacher — condensed box-constrained QP solved EXACTLY per step (box_qp.rs).
 // ===========================================================================
 
+/// The condensed horizon QP of a discrete model x_{k+1} = ad·x_k + bd·u_k with
+/// stage costs (qm, rm) over k = 0..N−1 and terminal cost qf at k = N:
+/// cost = ½UᵀHU + gᵀU with g = g_map·x0, unconstrained optimum U* = ustar_map·x0.
+/// The input dimension is bd's column count — 3 for the motor-level MPC teachers
+/// (AttitudeMpcRs::from_discrete), 1 for the cascade's per-axis rate-setpoint MPC
+/// (ctbr_axis_mpc.rs, ABI 39). Extracted verbatim from from_discrete (same
+/// arithmetic order; the motor-level pins hold it).
+pub(crate) struct CondensedHorizon
+{
+	pub h: Mat,
+	pub g_map: Mat,
+	pub ustar_map: Mat,
+}
+
+pub(crate) fn condense_horizon(ad: &Mat, bd: &Mat, qm: &Mat, rm: &Mat, qf: &Mat, n: usize) -> CondensedHorizon
+{
+	let ns = ad.r;
+	let nu = bd.c;
+	let rows = ns * (n + 1);
+	let cols = nu * n;
+	// Prediction matrices: X = Sx·x0 + Su·U, X stacked over k=0..N.
+	// Sx block-row k = Ad^k ; Su block (k,j)=Ad^{k-1-j}·Bd for j<k else 0.
+	let mut ad_pow: Vec<Mat> = Vec::with_capacity(n + 1);
+	ad_pow.push(Mat::identity(ns)); // Ad^0
+	for k in 1..=n
+	{
+		ad_pow.push(ad_pow[k - 1].matmul(ad));
+	}
+	let mut sx = Mat::zeros(rows, ns);
+	let mut su = Mat::zeros(rows, cols);
+	for k in 0..=n
+	{
+		// Sx block
+		for i in 0..ns
+		{
+			for j in 0..ns
+			{
+				sx.set(k * ns + i, j, ad_pow[k].get(i, j));
+			}
+		}
+		// Su blocks
+		for j in 0..k
+		{
+			let blk = ad_pow[k - 1 - j].matmul(bd); // ns×3
+			for ii in 0..ns
+			{
+				for jj in 0..nu
+				{
+					su.set(k * ns + ii, j * nu + jj, blk.get(ii, jj));
+				}
+			}
+		}
+	}
+	// Qbar = blkdiag(Q,...,Q [k=0..N-1], Qf [k=N]); Rbar = blkdiag(R,...,R).
+	let mut qbar = Mat::zeros(rows, rows);
+	for k in 0..n
+	{
+		for i in 0..ns
+		{
+			for j in 0..ns
+			{
+				qbar.set(k * ns + i, k * ns + j, qm.get(i, j));
+			}
+		}
+	}
+	for i in 0..ns
+	{
+		for j in 0..ns
+		{
+			qbar.set(n * ns + i, n * ns + j, qf.get(i, j));
+		}
+	}
+	let mut rbar = Mat::zeros(cols, cols);
+	for k in 0..n
+	{
+		for i in 0..nu
+		{
+			for j in 0..nu
+			{
+				rbar.set(k * nu + i, k * nu + j, rm.get(i, j));
+			}
+		}
+	}
+	// H = 2(SuᵀQbarSu + Rbar) ; g = G·x0, G = 2·SuᵀQbarSx.
+	let sut = su.transpose();
+	let sutq = sut.matmul(&qbar);
+	let h = sutq.matmul(&su).add(&rbar).scale(2.0);
+	let g_map = sutq.matmul(&sx).scale(2.0); // 3N×6
+	let h_inv = inverse(&h).expect("MPC: H singular");
+	let ustar_map = h_inv.matmul(&g_map).scale(-1.0); // −H⁻¹G
+	CondensedHorizon { h, g_map, ustar_map }
+}
+
 #[pyclass]
 pub struct AttitudeMpcRs
 {
@@ -1312,10 +1410,6 @@ pub struct AttitudeMpcRs
 	/// ABI 34: Some ⇔ motor lag on — the prediction model is the 9-state
 	/// augmented one and x0 carries this actuator estimate. (MpcOf feeds it too.)
 	act: Option<ActuatorLag>,
-	/// ABI 38: the discrete design model the horizon QP was condensed from, kept so
-	/// the CTBR label can roll the plan forward (planned_rate).
-	ad: Mat,
-	bd: Mat,
 }
 
 /// One recorded horizon solve (test-only probe).
@@ -1404,80 +1498,8 @@ impl AttitudeMpcRs
 	fn from_discrete(ad: &Mat, bd: &Mat, qm: &Mat, rm: &Mat, qf: &Mat, horizon: usize, hover: f64, authority: f64) -> Self
 	{
 		let n = horizon;
-		let ns = ad.r;
-		let nu = 3usize;
-		let rows = ns * (n + 1);
-		let cols = nu * n;
-		// Prediction matrices: X = Sx·x0 + Su·U, X stacked over k=0..N.
-		// Sx block-row k = Ad^k ; Su block (k,j)=Ad^{k-1-j}·Bd for j<k else 0.
-		let mut ad_pow: Vec<Mat> = Vec::with_capacity(n + 1);
-		ad_pow.push(Mat::identity(ns)); // Ad^0
-		for k in 1..=n
-		{
-			ad_pow.push(ad_pow[k - 1].matmul(ad));
-		}
-		let mut sx = Mat::zeros(rows, ns);
-		let mut su = Mat::zeros(rows, cols);
-		for k in 0..=n
-		{
-			// Sx block
-			for i in 0..ns
-			{
-				for j in 0..ns
-				{
-					sx.set(k * ns + i, j, ad_pow[k].get(i, j));
-				}
-			}
-			// Su blocks
-			for j in 0..k
-			{
-				let blk = ad_pow[k - 1 - j].matmul(bd); // ns×3
-				for ii in 0..ns
-				{
-					for jj in 0..nu
-					{
-						su.set(k * ns + ii, j * nu + jj, blk.get(ii, jj));
-					}
-				}
-			}
-		}
-		// Qbar = blkdiag(Q,...,Q [k=0..N-1], Qf [k=N]); Rbar = blkdiag(R,...,R).
-		let mut qbar = Mat::zeros(rows, rows);
-		for k in 0..n
-		{
-			for i in 0..ns
-			{
-				for j in 0..ns
-				{
-					qbar.set(k * ns + i, k * ns + j, qm.get(i, j));
-				}
-			}
-		}
-		for i in 0..ns
-		{
-			for j in 0..ns
-			{
-				qbar.set(n * ns + i, n * ns + j, qf.get(i, j));
-			}
-		}
-		let mut rbar = Mat::zeros(cols, cols);
-		for k in 0..n
-		{
-			for i in 0..nu
-			{
-				for j in 0..nu
-				{
-					rbar.set(k * nu + i, k * nu + j, rm.get(i, j));
-				}
-			}
-		}
-		// H = 2(SuᵀQbarSu + Rbar) ; g = G·x0, G = 2·SuᵀQbarSx.
-		let sut = su.transpose();
-		let sutq = sut.matmul(&qbar);
-		let h = sutq.matmul(&su).add(&rbar).scale(2.0);
-		let g_map = sutq.matmul(&sx).scale(2.0); // 3N×6
-		let h_inv = inverse(&h).expect("MPC: H singular");
-		let ustar_map = h_inv.matmul(&g_map).scale(-1.0); // −H⁻¹G
+		let cols = 3 * n;
+		let CondensedHorizon { h, g_map, ustar_map } = condense_horizon(ad, bd, qm, rm, qf, n);
 		let qp = BoxQpSolver::new(cols, h.d.clone(), authority);
 
 		AttitudeMpcRs {
@@ -1495,41 +1517,7 @@ impl AttitudeMpcRs
 			#[cfg(test)]
 			probe: None,
 			act: None,
-			ad: ad.clone(),
-			bd: bd.clone(),
 		}
-	}
-
-	/// ABI 38 (CTRL-27): the MPC's decision at the RATE level — the body rate the
-	/// current plan U* (u_buf, the last solve's) reaches `n_o` model steps ahead of
-	/// x0 on the design model (ad, bd): x_{k+1} = ad·x_k + bd·u_k. With the
-	/// lag-aware 9-state model the actuator lag is inside the prediction. The state
-	/// layout is [angle err, rate, (ua)] in both models, so the rate is x[3..6].
-	/// n_o is clipped to [1, horizon] (the plan does not exist past it).
-	pub(crate) fn planned_rate(&self, x0: &[f64], n_o: usize) -> [f64; 3]
-	{
-		let ns = self.ad.r;
-		debug_assert_eq!(x0.len(), ns, "planned_rate: x0 is not the design model's state");
-		let mut x = x0.to_vec();
-		let mut nx = vec![0.0f64; ns];
-		for k in 0..n_o.clamp(1, self.n)
-		{
-			for (i, slot) in nx.iter_mut().enumerate()
-			{
-				let mut acc = 0.0f64;
-				for (j, xj) in x.iter().enumerate()
-				{
-					acc += self.ad.get(i, j) * xj;
-				}
-				for j in 0..3
-				{
-					acc += self.bd.get(i, j) * self.u_buf[3 * k + j];
-				}
-				*slot = acc;
-			}
-			std::mem::swap(&mut x, &mut nx);
-		}
-		[x[3], x[4], x[5]]
 	}
 
 	/// ABI 34: the pwm applied last step → actuator estimate (no-op without lag).
@@ -1711,6 +1699,10 @@ pub struct AttitudeMpcOfRs
 	dt: f64,
 	hover: f64,
 	authority: f64,
+	/// ABI 39 (CTRL-33): the cascade's outer-loop MPCOF (ctbr_mpcof.rs) — Some when
+	/// the airframe supplies the firmware rate loop (AirframeRs::teacher). The motor
+	/// law above never reads it; it only answers ctbr_label.
+	ctbr: Option<Box<crate::ctbr_mpcof::CtbrMpcOf>>,
 }
 
 impl AttitudeMpcOfRs
@@ -1793,7 +1785,24 @@ impl AttitudeMpcOfRs
 			dt: dt as f64,
 			hover,
 			authority,
+			ctbr: None,
 		}
+	}
+
+	/// ABI 39: give this teacher the cascade's outer-loop law (ctbr_mpcof.rs).
+	pub(crate) fn attach_ctbr(&mut self, c: crate::ctbr_mpcof::CtbrMpcOf)
+	{
+		self.ctbr = Some(Box::new(c));
+	}
+
+	pub(crate) fn supports_ctbr(&self) -> bool
+	{
+		self.ctbr.is_some()
+	}
+
+	fn ctbr_active(&self) -> Option<&crate::ctbr_mpcof::CtbrMpcOf>
+	{
+		self.ctbr.as_deref().filter(|c| c.active())
 	}
 
 	/// Feed the observer the gyro just read and the motor PWMs ACTUALLY applied
@@ -1801,6 +1810,12 @@ impl AttitudeMpcOfRs
 	/// u_roll=(m3−m1)/2, u_pitch=(m2−m0)/2, u_yaw=((m0+m2)−(m1+m3))/4.
 	pub fn observe(&mut self, gyro: [f32; 3], applied_pwm: [f64; 4])
 	{
+		// ABI 39: the cascade law's own observer + measured actuator (independent
+		// state; the motor law below is untouched).
+		if let Some(c) = self.ctbr.as_mut()
+		{
+			c.observe(gyro, applied_pwm);
+		}
 		// ABI 34: under motor lag the torque came from the FILTERED actuator, so
 		// that — not the command — is the model term's u. Filter first (the
 		// plant's order: lag, then the step the gyro just measured).
@@ -1900,45 +1915,27 @@ impl AttitudeMpcOfRs
 		mix_to_motors_f64(self.hover, u_cmd[0], u_cmd[1], u_cmd[2])
 	}
 
-	/// ABI 38 (CTRL-27, Luiz 06/11: the cascade's DEFAULT outer teacher): the
-	/// offset-free MPC's attitude decision expressed as a BODY-RATE setpoint — the
-	/// rate its plan reaches one outer period (`n_o` model steps) ahead
-	/// (AttitudeMpcRs::planned_rate; docs/ctrl_cascade_design.md §2.2).
-	///
-	/// The plan is the SAME horizon solve step_rs makes (warm start advances
-	/// identically). Lag-free: planned from x0 on the nominal model — the realised
-	/// net torque b·(u − u_ff) + d ≈ b·u, so the plan is the expected trajectory.
-	/// Lag-aware: from z0 = [x0, ua + u_ff], the disturbance-shifted actuator state
-	/// (step_lagged's coordinates); ua is what the observer saw the INNER loop
-	/// deliver, so there is no first-decision fixed point here — the vehicle's first
-	/// command comes from the rate loop, not from this law. observe() is unchanged:
-	/// d̂ and the actuator estimate keep reading the applied (inner-loop) pwm.
-	pub(crate) fn ctbr_rate(&mut self, q: [f32; 4], gyro: [f32; 3], target_rpy: [f32; 3], n_o: usize) -> [f64; 3]
+	/// ABI 39 (CTRL-33): the cascade's outer decision — the body-rate setpoint of the
+	/// offset-free MPC whose model is the closed inner loop (ctbr_mpcof.rs). Replaces
+	/// the ABI-38 label (this motor-level plan's rate N_o steps ahead), which planned
+	/// torque as if it commanded the rotors and never modelled the rate loop.
+	pub(crate) fn ctbr_rate(&mut self, q: [f32; 4], gyro: [f32; 3], target_rpy: [f32; 3], n_o: usize) -> Result<[f64; 3], String>
 	{
-		let x = state_error(q, gyro, target_rpy);
-		let z: Vec<f64> = match self.mpc.act.as_ref()
+		match self.ctbr.as_mut()
 		{
-			Some(act) =>
-			{
-				let ua = act.state();
-				let mut z = x.to_vec();
-				for axis in 0..3
-				{
-					let u_ff = clamp_f64(self.dhat[axis] / self.b[axis], -self.ff_clamp, self.ff_clamp);
-					z.push(ua[axis] + u_ff);
-				}
-				z
-			}
-			None => x.to_vec(),
-		};
-		let _ = self.mpc.step_axes_rs(&z);
-		self.mpc.planned_rate(&z, n_o)
+			Some(c) => Ok(c.label(q, gyro, target_rpy, n_o)),
+			None => Err("CTBR teacher 'mpcof' needs the airframe's firmware rate loop (af_pid_* cascade gains) — its prediction model is that loop".into()),
+		}
 	}
 
 	/// The observer state (per-axis d̂) — the Option-A --state-integral target
 	/// analog (this IS the teacher's accumulated memory).
 	pub fn integrals(&self) -> [f32; 3]
 	{
+		if let Some(c) = self.ctbr_active()
+		{
+			return c.integrals();
+		}
 		[
 			self.dhat[0] as f32,
 			self.dhat[1] as f32,
@@ -1949,6 +1946,10 @@ impl AttitudeMpcOfRs
 	/// in d̂ units (b·ff_clamp), the effective saturation of the estimator.
 	pub fn i_clamps(&self) -> [f32; 3]
 	{
+		if let Some(c) = self.ctbr_active()
+		{
+			return c.i_clamps();
+		}
 		[
 			(self.b[0] * self.ff_clamp) as f32,
 			(self.b[1] * self.ff_clamp) as f32,
@@ -1999,6 +2000,10 @@ impl AttitudeMpcOfRs
 		self.last_gyro = None;
 		self.last_u = [0.0; 3];
 		self.mpc.reset();
+		if let Some(c) = self.ctbr.as_mut()
+		{
+			c.reset();
+		}
 	}
 	/// One step → 4 motor PWMs (f32), for Python parity testing.
 	fn step(&mut self, q: [f32; 4], gyro: [f32; 3], target_rpy: [f32; 3]) -> [f32; 4]
@@ -2269,7 +2274,8 @@ impl Teacher
 	///     between updates (AttitudePidFirmwareRs::att_stage_step): exactly the
 	///     rate_sp the cascade hands its rate stage, so the label-replay identity
 	///     holds (design §2.1);
-	///   * MpcOf — the plan's body rate `outer_steps` ahead (§2.2);
+	///   * MpcOf — ABI 39 (CTRL-33): the setpoint of the MPC whose model is the closed
+	///     inner loop, decided every `outer_steps` ticks and held (ctbr_mpcof.rs);
 	///   * every other teacher — refused (no rate-level decision is defined).
 	/// Call EVERY physical step in place of step_rs (the teacher's internal clocks
 	/// run exactly as in training); observe() is unchanged.
@@ -2288,7 +2294,7 @@ impl Teacher
 				[q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64],
 				[target_rpy[0] as f64, target_rpy[1] as f64, target_rpy[2] as f64],
 			),
-			Teacher::MpcOf(m) => m.ctbr_rate(q, gyro, target_rpy, outer_steps),
+			Teacher::MpcOf(m) => m.ctbr_rate(q, gyro, target_rpy, outer_steps)?,
 			Teacher::Pid(_) => return Err("CTBR teacher 'pid' needs the airframe's firmware cascade gains (the legacy single-loop PID has no attitude stage)".into()),
 			Teacher::Lqr(_) | Teacher::Mpc(_) | Teacher::Lqi(_) =>
 			{
@@ -2302,7 +2308,12 @@ impl Teacher
 	/// host runs BEFORE its first episode).
 	pub fn supports_ctbr(&self) -> bool
 	{
-		matches!(self, Teacher::PidFw(_) | Teacher::MpcOf(_))
+		match self
+		{
+			Teacher::PidFw(_) => true,
+			Teacher::MpcOf(m) => m.supports_ctbr(),
+			_ => false,
+		}
 	}
 
 	/// Feed the observer teachers the (gyro, actually-applied motor PWMs) pair

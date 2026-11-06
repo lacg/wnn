@@ -113,7 +113,9 @@ import os
 # ABI 38 (06/11/2026, CTRL-27): per-episode TRAINING motor asymmetry
 # (RewardGatedConfigPacked.dist_motor_asym_mag; mag 0 bit-identical to 37) and the
 # cascade controller (WnnController(ctbr=CtbrSpec), output_mode "ctbr").
-EXPECTED_ABI = 38
+# ABI 39 (06/11/2026, CTRL-33): the cascade's mpcof outer teacher re-derived on the
+# closed inner loop (rate PID + motor lag + rigid body); surface unchanged.
+EXPECTED_ABI = 39
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "
