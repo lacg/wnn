@@ -1,0 +1,15 @@
+2026-11-06T19:39:12Z START C1_lag020_ct39 --motor-lag-s 0.20 --output-mode ctbr --action-repeat 10
+2026-11-06T19:41:15Z END C1_lag020_ct39 steady=4.19°  err=5.68°  stable=53.4%  alt=0.201m
+2026-11-06T19:41:15Z START S1_stage2_lag020_ct39 --motor-lag-s 0.20 --output-mode ctbr --action-repeat 10
+2026-11-06T19:43:01Z END S1_stage2_lag020_ct39 steady=4.89°  err=7.49°  stable=29.0%  alt=0.226m
+2026-11-06T19:43:01Z START C0_lag0_ct39 --motor-lag-s 0 --output-mode ctbr --action-repeat 10
+2026-11-06T19:44:22Z END C0_lag0_ct39 steady=4.25°  err=5.46°  stable=59.4%  alt=0.190m
+2026-11-06T19:44:22Z START M2_lag020_law_asym --motor-lag-s 0.20 --delta-leak 0.7 --delta-max 0.6
+2026-11-06T20:06:59Z END M2_lag020_law_asym steady=2.09°  err=2.57°  stable=96.0%  alt=0.292m
+2026-11-06T20:06:59Z START M0_lag0_asym --motor-lag-s 0
+2026-11-06T20:25:49Z END M0_lag0_asym steady=1.12°  err=1.71°  stable=100.0%  alt=0.122m
+2026-11-06T20:25:49Z START C1p_lag020_ct39_pid --motor-lag-s 0.20 --output-mode ctbr --action-repeat 10 --teacher pid
+2026-11-06T20:27:12Z END C1p_lag020_ct39_pid steady=1.81°  err=4.01°  stable=77.8%  alt=0.221m
+2026-11-06T20:27:12Z START S1p_stage2_lag020_ct39_pid --motor-lag-s 0.20 --output-mode ctbr --action-repeat 10 --teacher pid
+2026-11-06T20:28:45Z END S1p_stage2_lag020_ct39_pid steady=5.28°  err=7.96°  stable=25.0%  alt=0.237m
+2026-11-06T20:28:45Z ALL DONE
