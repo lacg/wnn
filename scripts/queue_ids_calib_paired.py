@@ -110,7 +110,7 @@ def verify(created: list[tuple[int, str, dict]]) -> int:
 		st, cj = con.execute("SELECT status, config_json FROM flows WHERE id=?", (fid,)).fetchone()
 		ne = con.execute("SELECT COUNT(*) FROM experiments WHERE flow_id=?", (fid,)).fetchone()[0]
 		got = json.loads(cj)["params"].get("ids_calib_sample")
-		if ne != 2 or st != "queued" or got != sets.get("ids_calib_sample"):
+		if ne != 2 or st not in ("queued", "running") or got != sets.get("ids_calib_sample"):  # worker may admit a flow before verify reads it
 			print(f"  ! VERIFY FAILED {fid} {name}: status={st} exps={ne} ids_calib_sample={got}")
 			bad += 1
 	con.close()

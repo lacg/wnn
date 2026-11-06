@@ -1,0 +1,29 @@
+2026-11-02T11:48:56Z armed; waiting for flow 7248 terminal AND worker ABI 24
+2026-11-05T20:38:42Z STOPPED by hand (Luiz 05/11: IDS-47 n=3 first, then decide n=5 vs accept; IDS-48 waits for that decision). Re-arm: nohup bash logs/ids/queue_ids48_after_ids47_n3.sh >> logs/ids/queue_ids48_after_ids47_n3.log 2>&1 &
+2026-11-06T13:15:11Z RE-ARMED by main session (Luiz never-idle rule 06/11; worker idle since 7248 at 12:06Z; IDS-47 un-paused flows still run first — FIFO min(id))
+2026-11-06T13:15:11Z armed; waiting for flow 7248 terminal AND worker ABI 24
+2026-11-06T13:15:11Z flow 7248 completed; ABI 24 live — queueing IDS-48
+IDS-48: 20 flows (10 seeds x 2 arms), seed-major
+  + 7348  IDS48-calibfull-unswt-QUAD-r25052
+  + 7349  IDS48-calibsub200k-unswt-QUAD-r25052
+  + 7350  IDS48-calibfull-unswt-QUAD-r34952
+  + 7351  IDS48-calibsub200k-unswt-QUAD-r34952
+  + 7352  IDS48-calibfull-unswt-QUAD-r35879
+  + 7353  IDS48-calibsub200k-unswt-QUAD-r35879
+  + 7354  IDS48-calibfull-unswt-QUAD-r58983
+  + 7355  IDS48-calibsub200k-unswt-QUAD-r58983
+  + 7356  IDS48-calibfull-unswt-QUAD-r63749
+  + 7357  IDS48-calibsub200k-unswt-QUAD-r63749
+  + 7358  IDS48-calibfull-unswt-QUAD-r67145
+  + 7359  IDS48-calibsub200k-unswt-QUAD-r67145
+  + 7360  IDS48-calibfull-unswt-QUAD-r72261
+  + 7361  IDS48-calibsub200k-unswt-QUAD-r72261
+  + 7362  IDS48-calibfull-unswt-QUAD-r77715
+  + 7363  IDS48-calibsub200k-unswt-QUAD-r77715
+  + 7364  IDS48-calibfull-unswt-QUAD-r88120
+  + 7365  IDS48-calibsub200k-unswt-QUAD-r88120
+  + 7366  IDS48-calibfull-unswt-QUAD-r98954
+  + 7367  IDS48-calibsub200k-unswt-QUAD-r98954
+  ! VERIFY FAILED 7348 IDS48-calibfull-unswt-QUAD-r25052: status=running exps=2 ids_calib_sample=None
+created 20, verify failures 1
+2026-11-06T13:15:17Z DONE queue rc=0
