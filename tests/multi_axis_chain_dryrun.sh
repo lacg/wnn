@@ -41,7 +41,7 @@ headline() {   # <stable> <err> <steady>
 }
 fake_anchor() {   # <file> <seed> <jitter>
 	{ echo "[argv] $ARGV0 --base-seed $2 --save-stage-checkpoints x --save-winner y"
-	  echo "[provenance] wheel=w abi=37 wheel_sha256=24c868fd052e341d git=g"
+	  echo "[provenance] wheel=w abi=39 wheel_sha256=cd0e0407f4ac9e4e git=g"
 	  headline "90.$3" "3.0$3" "3.0$3"; } > "$1"
 }
 fake_anchor "$SR/c8/arm_s3.out" 31337003 5
@@ -52,7 +52,7 @@ cat > "$SR/bin/stubpy" <<'EOF'
 case "$1" in
 	-c)
 		case "$2" in
-			*collect_provenance*) echo "${STUB_WHEEL:-37 24c868fd052e341d}"; exit 0 ;;
+			*collect_provenance*) echo "${STUB_WHEEL:-39 cd0e0407f4ac9e4e}"; exit 0 ;;
 			*) exec python3 "$@" ;;
 		esac ;;
 	scripts/*) exec python3 "$@" ;;
@@ -71,8 +71,8 @@ tag="$(basename "$win" _winner.yaml.gz)"
 echo "$tag $*" >> "$STUB_CALLS"
 echo "[argv] $*"
 if [ "${STUB_BAD_PROV:-}" = "$tag" ]; then echo "[provenance] wheel=w abi=32 wheel_sha256=deadbeef git=g motor_lag=0.2s:airframe:grafe2026 fitness_pools=x"
-elif [ "${STUB_NO_LAG:-}" = "$tag" ]; then echo "[provenance] wheel=w abi=37 wheel_sha256=24c868fd052e341d git=g fitness_pools=x"
-else echo "[provenance] wheel=w abi=37 wheel_sha256=24c868fd052e341d git=g motor_lag=0.2s:airframe:grafe2026 fitness_pools=x"; fi
+elif [ "${STUB_NO_LAG:-}" = "$tag" ]; then echo "[provenance] wheel=w abi=39 wheel_sha256=cd0e0407f4ac9e4e git=g fitness_pools=x"
+else echo "[provenance] wheel=w abi=39 wheel_sha256=cd0e0407f4ac9e4e git=g motor_lag=0.2s:airframe:grafe2026 fitness_pools=x"; fi
 [ "${STUB_FAIL:-}" = "$tag" ] && { echo "boom"; exit 7; }
 j=$(( ${seed: -1} % 3 ))
 case "$tag" in

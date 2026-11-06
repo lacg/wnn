@@ -39,7 +39,7 @@
 #   (6) ITEM I (05/11/2026): axis F = lag OFF (--motor-lag-s 0, the lag-free arm vs the lagged
 #       anchor) and the stress T=0.30. The F030 approval gate is GONE: the teachers are lag-aware
 #       since ABI 34. A banked run's `[provenance]` must carry the resolved `motor_lag=` token.
-#   (5) wheel FROZEN at ABI 37 sha 24c868fd052e341d (re-frozen 06/11: ABI 36 delivered-actuator obs-pwm + ABI 37 GPU-scorer fixes): preflight refuses any other installed wheel, and
+#   (5) wheel FROZEN at ABI 39 sha cd0e0407f4ac9e4e (re-frozen 06/11: + ABI 38 per-episode TRAINING motor asymmetry (CTRL-32) + ABI 39 cascade code, motor path pinned unchanged): preflight refuses any other installed wheel, and
 #       a run whose `[provenance]` line differs is NOT banked (abort).
 #
 # ATTEMPT-3 RULE. A launch that fails (rc!=0, no winner, no headline, wrong provenance) aborts the
@@ -81,8 +81,8 @@ CONDITIONS=(
 	"C|sn8|axC_sn8|--grid-state-neurons 8 --max-state-neurons 8|SN8"
 )
 SEEDS="31337002 31337003 31337004 31337005 31337006"   # seed r flies in round r
-FROZEN_ABI="37"
-FROZEN_SHA="24c868fd052e341d"
+FROZEN_ABI="39"
+FROZEN_SHA="cd0e0407f4ac9e4e"
 # LAG LAW (06/11/2026, CTRL-5 lag-collapse hunt, flight-dynamics agent): the 20-step output
 # accumulator (leak 0.95 / dmax 0.1) stacked on the 50 ms motor lag collapses the student; leak 0.7 /
 # dmax 0.6 keeps the gain at 4 (2*dmax/(1-leak)) with a ~3.3-step time constant. Pop-50 grid at lag
