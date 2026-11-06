@@ -1806,7 +1806,7 @@ impl WnnController
 		// ABI 36: under motor lag, from the step after the first command flew, the
 		// feature is the DELIVERED actuator (the twin's next value) — see
 		// act_twin_next. Lag off, or t = 0: the accumulator (ABI 35, bit-identical).
-		if self.dhat_lag_alpha > 0.0 && self.act_have_last
+		if self.dhat_lag_alpha > 0.0 && self.act_have_last && !self.obs_pwm_force_command
 		{
 			let d = self.delivered_feature(&self.act_twin_next());
 			p[..self.num_motors.min(4)].copy_from_slice(&d[..self.num_motors.min(4)]);
@@ -2007,11 +2007,18 @@ impl WnnController
 		self.pwm[m] - self.bank_anchor(m)
 	}
 
+	/// DIAGNOSTIC (tests only): force the ABI-35 command convention under lag.
+	#[cfg(test)]
+	pub(crate) fn set_obs_pwm_force_command(&mut self, on: bool)
+	{
+		self.obs_pwm_force_command = on;
+	}
+
 	/// ABI 36: true when the obs_pwm feature reports the DELIVERED actuator
 	/// (motor lag on) rather than the command — the provenance token.
 	pub(crate) fn obs_pwm_delivered(&self) -> bool
 	{
-		self.obs_pwm && self.dhat_lag_alpha > 0.0
+		self.obs_pwm && self.dhat_lag_alpha > 0.0 && !self.obs_pwm_force_command
 	}
 
 	/// ABI 35: tell the d̂ observer the plant's motor-lag settling time T (s), the
@@ -2407,6 +2414,7 @@ impl WnnController
 			dhat_ua: [0.0f32; 8],
 			dhat_ua_seeded: false,
 			act_have_last: false,
+			obs_pwm_force_command: false,
 			// Scope C stage 1 vertical channel.
 			obs_collective_cmd,
 			obs_alt_err,
@@ -3166,6 +3174,9 @@ pub struct WnnController
 	dhat_ua: [f32; 8], // ABI 36: the actuator twin, per motor (≤ 8), shared by obs_pwm + d̂
 	dhat_ua_seeded: bool,
 	act_have_last: bool, // ABI 36: a command has flown since reset (twin advances from then on)
+	// DIAGNOSTIC ONLY (tests): report the ABI-35 command even under lag, for the
+	// delivered-vs-command A/B on the real trainer. Never set by any host.
+	obs_pwm_force_command: bool,
 	dt: f32,                  // physics timestep (s); used to scale gyro-z when anchored
 	num_features: usize,      // 9 + enabled extra features (drives all frame sizing)
 	// Per-step integral accumulators, one per enabled "_i" feature, in canonical
@@ -5372,7 +5383,7 @@ impl WnnController
 			self.dhat_ua = self.act_twin_next();
 			self.dhat_ua_seeded = true;
 		}
-		let act_delivered = self.dhat_lag_alpha > 0.0 && self.act_have_last;
+		let act_delivered = self.dhat_lag_alpha > 0.0 && self.act_have_last && !self.obs_pwm_force_command;
 		self.act_have_last = true;
 		// Derived errors from the IMU (accel-only attitude; yaw dead-reckoned).
 		// ABI 32: with obs_att_estimator the attitude reads the estimator's body

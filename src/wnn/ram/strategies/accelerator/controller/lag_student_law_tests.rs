@@ -224,6 +224,32 @@ fn features(e: [f64; 6], c: [f64; 3], ua: [f64; 3], with_ua: u8) -> Vec<f64>
 fn fly(id: u8, lag: f32, policy: Option<&Fit>, with_ua: u8, episodes: usize, steps: usize, seed_off: usize)
 	-> (Vec<(Vec<f64>, [f64; 3])>, f64, f64, f64)
 {
+	match policy
+	{
+		None => fly_inner(id, lag, None, with_ua, episodes, steps, seed_off),
+		Some(fit) => fly_inner(id, lag, Some(&|f: &[f64]| {
+			let mut u = [0.0f64; 3];
+			for (j, fj) in f.iter().enumerate()
+			{
+				for ax in 0..3
+				{
+					u[ax] += fit.w[j][ax] * fj;
+				}
+			}
+			u
+		}), with_ua, episodes, steps, seed_off),
+	}
+}
+
+fn fly_with(id: u8, lag: f32, policy: &dyn Fn(&[f64]) -> [f64; 3], with_ua: u8, episodes: usize, steps: usize, seed_off: usize)
+	-> (Vec<(Vec<f64>, [f64; 3])>, f64, f64, f64)
+{
+	fly_inner(id, lag, Some(policy), with_ua, episodes, steps, seed_off)
+}
+
+fn fly_inner(id: u8, lag: f32, policy: Option<&dyn Fn(&[f64]) -> [f64; 3]>, with_ua: u8, episodes: usize, steps: usize, seed_off: usize)
+	-> (Vec<(Vec<f64>, [f64; 3])>, f64, f64, f64)
+{
 	let af = airframe(lag);
 	let mut teacher = af.teacher(id);
 	let hover = teacher.hover();
@@ -265,18 +291,7 @@ fn fly(id: u8, lag: f32, policy: Option<&Fit>, with_ua: u8, episodes: usize, ste
 			let target = match policy
 			{
 				None => p,
-				Some(fit) =>
-				{
-					let mut u = [0.0f64; 3];
-					for (j, fj) in f.iter().enumerate()
-					{
-						for ax in 0..3
-						{
-							u[ax] += fit.w[j][ax] * fj;
-						}
-					}
-					mix_plus(hover, u)
-				}
+				Some(pol) => mix_plus(hover, pol(&f)),
 			};
 			let mut cmd = [0.0f64; 4];
 			for m in 0..4
@@ -401,4 +416,177 @@ fn abi36_linear_student_with_delivered_actuator_holds_lag_020()
 	eprintln!("[abi36] T=0.20 linear student: delivered {delivered:?} command {command:?}");
 	assert!(delivered.0 >= 99.0 && delivered.1 < 4.0, "delivered-actuator student lost the lagged plant: {delivered:?}");
 	assert!(command.0 < 50.0, "command-convention student no longer collapses — the probe lost its teeth: {command:?}");
+}
+
+// ---------------------------------------------------------------------------
+// Probe 3 (06/11/2026, after ABI 36's grid still collapsed): the same linear
+// student, but on THERMOMETER-ENCODED features (8 quantile thresholds per
+// feature fitted on the teacher-label pass, the recipe's --bits-per-feature 8).
+// Isolates input RESOLUTION from observability.
+// ---------------------------------------------------------------------------
+
+fn thermo_fit_thresholds(rows: &[(Vec<f64>, [f64; 3])], bpf: usize) -> Vec<Vec<f64>>
+{
+	let nf = rows[0].0.len() - 1; // last is the bias
+	(0..nf)
+		.map(|j| {
+			let mut v: Vec<f64> = rows.iter().map(|r| r.0[j]).collect();
+			v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+			(0..bpf).map(|k| v[((k as f64 + 0.5) / bpf as f64 * (v.len() - 1) as f64) as usize]).collect()
+		})
+		.collect()
+}
+
+fn thermo(f: &[f64], thr: &[Vec<f64>]) -> Vec<f64>
+{
+	let mut out = Vec::new();
+	for (j, t) in thr.iter().enumerate()
+	{
+		for &x in t
+		{
+			out.push(if f[j] >= x { 1.0 } else { 0.0 });
+		}
+	}
+	out.push(1.0);
+	out
+}
+
+#[test]
+#[ignore]
+fn diag_thermometer_student_resolution()
+{
+	for bpf in [8usize, 32]
+	{
+		for lag in [0.0f32, 0.20]
+		{
+			for with_ua in [0u8, 2]
+			{
+				let (rows0, _, _, _) = fly(4, lag, None, with_ua, 10, 2000, 0);
+				let thr = thermo_fit_thresholds(&rows0, bpf);
+				let enc = |rows: Vec<(Vec<f64>, [f64; 3])>| -> Vec<(Vec<f64>, [f64; 3])> {
+					rows.into_iter().map(|(f, y)| (thermo(&f, &thr), y)).collect()
+				};
+				let mut rows = enc(rows0.clone());
+				let mut line = String::new();
+				for it in 0..4
+				{
+					let (fit_t, r2) = fit(&rows);
+					let (new_rows, st, err, steady) = fly_thermo(4, lag, &fit_t, &thr, with_ua, 10, 2000, 100 + it * 10);
+					line += &format!(" | it{it} R2 {:.2}/{:.2} fly {st:5.1}% {err:6.2}° {steady:6.2}°", r2[0], r2[1]);
+					rows.extend(enc(new_rows));
+				}
+				eprintln!("[thermodiag] bpf={bpf} T={lag:.2} feats={}{line}", ["e,c", "e,c,ua", "e,ua"][with_ua as usize]);
+			}
+		}
+	}
+}
+
+/// fly() with the policy reading thermometer-encoded features.
+fn fly_thermo(id: u8, lag: f32, fit_t: &Fit, thr: &[Vec<f64>], with_ua: u8, episodes: usize, steps: usize, seed_off: usize)
+	-> (Vec<(Vec<f64>, [f64; 3])>, f64, f64, f64)
+{
+	fly_with(id, lag, &|f: &[f64]| {
+		let b = thermo(f, thr);
+		let mut u = [0.0f64; 3];
+		for (j, bj) in b.iter().enumerate()
+		{
+			for ax in 0..3
+			{
+				u[ax] += fit_t.w[j][ax] * bj;
+			}
+		}
+		u
+	}, with_ua, episodes, steps, seed_off)
+}
+
+// ---------------------------------------------------------------------------
+// Probe 4: the REAL trainer + REAL RAM student (dagger_train_inplace_rs, sn=0,
+// BINARY, delta law, 64 levels/motor, 24-bit output neurons, thresholds fitted
+// by the G1 calibration sampler at 8 per feature) on the cf21 airframe,
+// attitude-only (no translation), mpcof teacher. A/B: T=0 vs T=0.20 delivered
+// (ABI 36) vs T=0.20 command (ABI 35 convention, test toggle).
+// ---------------------------------------------------------------------------
+
+fn ram_student(nf: usize, thresholds: Vec<f32>, seed: u64, dmax: f32, leak: f32) -> crate::controller::WnnController
+{
+	use rand::{Rng, SeedableRng};
+	let (levels, bpf, obpn) = (64usize, 8usize, 24usize);
+	let mut rng = rand::rngs::SmallRng::seed_from_u64(seed);
+	let frame_bits = nf * bpf;
+	let thr = if thresholds.is_empty() { vec![0.0f32; frame_bits] } else { thresholds };
+	let out_conn: Vec<i64> = (0..4 * levels * obpn).map(|_| rng.gen_range(0..frame_bits) as i64).collect();
+	crate::controller::WnnController::new_core(
+		4, levels, bpf, 1, 0, 0, obpn, thr, Vec::new(), out_conn,
+		true, dmax, leak, 1.0,
+		false, false, true, true, true, true, false, false,
+		0.99, 1.0, 0.001, false, 1,
+		ram_core::neuron_memory::BINARY, None, None, 0.05, false, 0.30,
+		false, false, false, false, false, false, 1,
+	)
+	.expect("ram student")
+}
+
+fn probe_cfg(lag: f32) -> crate::dagger_train::RewardGatedConfigPacked
+{
+	let mut c = crate::ctrl17_pins::pin_translation_cfg(0.0);
+	c.translation = false;
+	c.teacher = 4;
+	c.motor_lag_s = lag;
+	c.steps_per_episode = 2000;
+	c.num_rounds = 8;
+	c.episodes_per_round = 24;
+	c.eval_episodes = 20;
+	c.easy_tilt_deg = 8.0;
+	c.full_tilt_deg = 20.0;
+	c.dist_enabled = false;
+	c
+}
+
+fn ram_probe(lag: f32, force_command: bool, seed: u64, dmax: f32, leak: f32) -> (f64, f64, Vec<f64>)
+{
+	use rand::SeedableRng;
+	let cfg = probe_cfg(lag);
+	let mut c0 = ram_student(9 + 6 + 4, Vec::new(), seed, dmax, leak);
+	let nf = c0.num_features();
+	let samples = crate::calib_sampler::sample_calibration_features_rs(&mut c0, &cfg, 24, seed ^ 0xCA1);
+	let mut thr = Vec::with_capacity(nf * 8);
+	for col in samples.iter()
+	{
+		let mut v = col.clone();
+		v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+		for k in 0..8
+		{
+			thr.push(v[((k as f64 + 0.5) / 8.0 * (v.len() - 1) as f64) as usize]);
+		}
+	}
+	let mut c = ram_student(nf, thr, seed, dmax, leak);
+	c.set_obs_pwm_force_command(force_command);
+	let st = crate::dagger_train::dagger_train_inplace_rs(&mut c, &cfg, [0.0; 3], seed);
+	let mut sim = crate::dagger_train::AirframeRs::from_cfg(&cfg).sim();
+	c.set_observer_motor_lag_core(sim.motor_lag());
+	let mut rng = rand::rngs::SmallRng::seed_from_u64(seed ^ 0xE7A1);
+	let (_f, err, stable, _j, _m) = crate::dagger_train::eval_closed_loop_rs(&mut c, &mut sim, &cfg, &mut rng, [0.0; 3], 5f64.to_radians(), 4, 64);
+	(stable * 100.0, err.to_degrees(), st.iter_stable_rate.clone())
+}
+
+#[test]
+#[ignore]
+fn diag_ram_student_real_trainer_under_lag()
+{
+	let laws: Vec<(f32, f32)> = std::env::var("LAGDIAG_LAWS")
+		.ok()
+		.map(|v| v.split(';').map(|p| { let mut it = p.split(','); (it.next().unwrap().parse().unwrap(), it.next().unwrap().parse().unwrap()) }).collect())
+		.unwrap_or(vec![(0.1, 0.95)]);
+	for (dmax, leak, seed) in laws.iter().flat_map(|&(d, l)| [1u64, 2].map(|s| (d, l, s)))
+	{
+		for (lag, force) in [(0.0f32, false), (0.20, false), (0.20, true)]
+		{
+			let (st, err, rounds) = ram_probe(lag, force, seed, dmax, leak);
+			eprintln!(
+				"[ramdiag] dmax={dmax} leak={leak} seed={seed} T={lag:.2} obs_pwm={} eval@5°: stable {st:5.1}% err {err:6.2}° | rounds stable {:?}",
+				if lag > 0.0 && !force { "delivered" } else { "command" },
+				rounds.iter().map(|v| (v * 100.0).round()).collect::<Vec<_>>()
+			);
+		}
+	}
 }
