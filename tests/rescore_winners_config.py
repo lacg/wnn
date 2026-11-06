@@ -35,7 +35,8 @@ def check(label, got, want):
 def _args(**over):
 	base = dict(steps=2000, tilt=5.0, body_rate=0.5, yaw_rate=0.3, episodes=100,
 	            disturbance="L4A", airframe="cf21_brushless", translation=True,
-	            trained_disturbance=None, trained_airframe=None, trained_translation=None)
+	            trained_disturbance=None, trained_airframe=None, trained_translation=None,
+	            trained_tilt=None)
 	base.update(over)
 	return SimpleNamespace(**base)
 
@@ -62,16 +63,16 @@ def test_trained_regime_defaults_fieldwise_to_the_scoring_one():
 	_, trained = rw._conditions(_args(translation=False, trained_translation=True))
 	check("--trained-translation overrides a False scoring flag", trained.translation, True)
 	check("argv carries only the set fields",
-	      rw.Condition("L4B", None, False).argv(), ["--disturbance", "L4B"])
+	      rw.Condition("L4B", None, False, 5.0).argv(), ["--disturbance", "L4B"])
 	check("argv with airframe + translation",
-	      rw.Condition("L4A", "cf2x_urdf", True).argv(),
+	      rw.Condition("L4A", "cf2x_urdf", True, 5.0).argv(),
 	      ["--disturbance", "L4A", "--airframe", "cf2x_urdf", "--translation"])
 
 
 def test_regime_resolves_through_phased_ga():
 	from wnn.control.phased_ga import build_arg_parser, episode_config_from_args
 	a = _args()
-	reg = rw._regime(rw.Condition("L4A", "cf21_brushless", True), a)
+	reg = rw._regime(rw.Condition("L4A", "cf21_brushless", True, 5.0), a)
 	check("airframe preset on the ec", reg.ec.airframe.name, "cf21_brushless")
 	check("translation on the ec", reg.ec.translation, True)
 	check("steps forwarded", reg.ec.steps_per_episode, 2000)
