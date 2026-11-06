@@ -200,6 +200,24 @@ def pid_metrics(ec, draw: HoldoutDraw, feed: TeacherFeed = TeacherFeed()) -> dic
 	mean_reward/mean_effort are None: this scorer returns stability and error, and
 	inventing a reward here would be a made-up number in a comparison table.
 	"""
+	return teacher_metrics(ec, draw, feed, 0, 0, "PID")
+
+
+def cascade_rival_metrics(ec, draw: HoldoutDraw, feed: TeacherFeed, teacher_id: int,
+                          outer_hold: int) -> dict:
+	"""ABI 38 (CTRL-27): a CASCADE rival — the teacher's CTBR outer decision held for
+	`outer_hold` ticks over the airframe's firmware RATE PID
+	(score_classical_baseline(ctbr_outer_hold=)). teacher 0 = C2 (the firmware
+	attitude stage; at hold 1 it IS the PID row, pinned by abi38_tests), 4 = C4 (the
+	mpcof planned-rate label). Labelled 'PID>rate(hN)' / 'MPCOF>rate(hN)'."""
+	name = {0: "PID", 4: "MPCOF"}[int(teacher_id)]
+	return teacher_metrics(ec, draw, feed, int(teacher_id), int(outer_hold), f"{name}>rate(h{int(outer_hold)})")
+
+
+def teacher_metrics(ec, draw: HoldoutDraw, feed: TeacherFeed, teacher_id: int,
+                    ctbr_outer_hold: int, name: str) -> dict:
+	"""One classical row (motor-level when ctbr_outer_hold == 0) in phased_ga's
+	metric-dict shape — the body pid_metrics always had."""
 	from ._accel import score_classical_baseline
 	q0, w0, fields = _episode_fields(ec, draw)
 	s1 = _stage1_fields(ec, draw)
@@ -208,8 +226,10 @@ def pid_metrics(ec, draw: HoldoutDraw, feed: TeacherFeed = TeacherFeed()) -> dic
 	# 6th value (21/08/2026): mean motor-command jerk, same definition as the
 	# WNN scorer's, so teacher and WNN jerk are directly comparable. Tolerate a
 	# 5-tuple wheel so this Python can land before the wheel does.
+	if ctbr_outer_hold:
+		fields["ctbr_outer_hold"] = int(ctbr_outer_hold)
 	_r = score_classical_baseline(
-		0, list(q0), list(w0), draw.steps, draw.stable_deg, **fields)
+		int(teacher_id), list(q0), list(w0), draw.steps, draw.stable_deg, **fields)
 	st, err, steady, alt_m, pos3d_m = _r[:5]
 	jerk = _r[5] if len(_r) > 5 else None
 	return {"stable_rate": st, "mean_attitude_error_deg": err,
@@ -234,4 +254,4 @@ def pid_metrics(ec, draw: HoldoutDraw, feed: TeacherFeed = TeacherFeed()) -> dic
 	        # (7th/8th scorer values); None off translation or on an older wheel.
 	        "mean_dx_m": (float(_r[6]) if s1 and len(_r) > 7 else None),
 	        "mean_dy_m": (float(_r[7]) if s1 and len(_r) > 7 else None),
-	        "label": feed.label_for("PID")}
+	        "label": feed.label_for(name)}

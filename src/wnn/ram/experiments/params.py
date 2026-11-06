@@ -147,6 +147,15 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	"controller_rotor_drag",          # plant: linear rotor drag k_d (1/s)
 	"controller_obs_att_estimator",   # feature source: Mahony-estimated attitude (default with specific force)
 	"controller_att_err_ref",         # scoring: attitude error vs level | tilt (position-loop reference)
+	# ABI 38 (CTRL-27): the cascade controller, same knobs as phased_ga --output-mode /
+	# --ctbr-rate-max / --ctbr-coll-max / --ctbr-gamma. The flow adapter reads
+	# controller_output_mode and REFUSES "ctbr" (its EpisodeConfig carries no airframe
+	# firmware cascade to be the inner loop); the CLI is the cascade's entry point.
+	"controller_output_mode",         # "pwm" (motor-level) | "ctbr" (cascade)
+	"controller_ctbr_rate_max",       # [p, q, r] body-rate range (rad/s)
+	"controller_ctbr_coll_max",       # collective-deviation range (pwm)
+	"controller_ctbr_gamma",          # [T, p, q, r] per-bank alphabet gamma
+	"controller_ctbr_delta_law",      # ablation: delta-law decode instead of absolute
 	# Specialist programme (14/08/2026)
 	"controller_conn_policy",         # connection-creation policy: spread | min2 | min3
 	"controller_output_full_window",  # arm D: output layer samples ALL k frames, not just t-0

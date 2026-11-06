@@ -289,7 +289,7 @@ def _resume_ga_state_if_targeted(strat, args, stage_num: int) -> None:
 	print(f"[resume] Stage {stage_num} ({strat.name}): continuing AT generation "
 	      f"{strat._resume_start_gen} with the dumped GA state", flush=True)
 
-from wnn.control.provenance import collect_provenance, obs_pwm_convention
+from wnn.control.provenance import arch_token, collect_provenance, obs_pwm_convention
 from wnn.control.evaluator import (
 	ControllerSpec, ControllerEvaluator, arch_shape_from_spec, spec_from_arch,
 	fit_thresholds_from_pid_rollouts,
@@ -393,6 +393,53 @@ def apply_output_neuron_ceiling(args, arch_cfg) -> None:
 			f"down. Raise --max-output-neurons to >= {grid_max}, or lower the grid axis.")
 
 
+def _resolve_ctbr(args, ec) -> None:
+	"""ABI 38: resolve --output-mode into args._ctbr (the ControllerSpec.ctbr dict, or
+	None) ONCE, with the cascade's refusals, so every _make_spec call of the run
+	carries the same inner loop. The inner loop is the airframe's firmware rate PID
+	as EpisodeConfig.cascade_kwargs hands it to the trainer and the rivals."""
+	args._ctbr = None
+	if getattr(args, "output_mode", "pwm") != "ctbr":
+		return
+	# The cascade decodes ABSOLUTELY (design §2.4: the inner rate integrator replaces
+	# the accumulator); the delta law is the explicit --ctbr-delta-law ablation.
+	args.delta_control = bool(getattr(args, "ctbr_delta_law", False))
+	bad = [flag for flag, on in (("--obs-pwm", args.obs_pwm),
+	                             ("--decouple-outputs", getattr(args, "decouple_outputs", False)),
+	                             ("--obs-dhat", getattr(args, "obs_dhat", False)),
+	                             ("--dhat-ff", getattr(args, "dhat_ff", False)))
+	       if on]
+	if float(getattr(args, "delta_label_scale", 1.0)) != 1.0:
+		bad.append("--delta-label-scale")
+	if bad:
+		raise SystemExit(f"--output-mode ctbr refuses {', '.join(bad)} (the cascade has no hidden "
+		                 "accumulator to observe, its banks are already the control axes, and the torque "
+		                 "disturbance is the inner rate integrator's job).")
+	teachers = {args.teacher,
+	            *_parse_teacher_list(getattr(args, "teacher_schedule", ""), "--teacher-schedule"),
+	            *_parse_teacher_list(getattr(args, "teacher_blend", ""), "--teacher-blend")}
+	if not teachers <= {"pid", "mpcof"}:
+		raise SystemExit(f"--output-mode ctbr: teacher(s) {sorted(teachers - {'pid', 'mpcof'})} define no "
+		                 "rate-level decision — use pid (the firmware attitude stage) or mpcof.")
+	from wnn.control.evaluator import ctbr_spec_dict, CTBR_DEFAULT_RATE_MAX, CTBR_DEFAULT_GAMMA
+	args._ctbr = ctbr_spec_dict(
+		ec,
+		rate_max=tuple(args.ctbr_rate_max) if args.ctbr_rate_max else CTBR_DEFAULT_RATE_MAX,
+		coll_max=args.ctbr_coll_max,
+		gamma=tuple(args.ctbr_gamma) if args.ctbr_gamma else CTBR_DEFAULT_GAMMA)
+	c = args._ctbr
+	print(f"[CTBR] output_mode=ctbr: WNN outer loop at {1000.0 / max(int(args.action_repeat), 1) / (ec.dt * 1000.0):g} Hz "
+	      f"(action_repeat {args.action_repeat}) over the firmware rate PID at {c['attitude_hz']:g} Hz; "
+	      f"banks [T, p, q, r] range={c['range']} gamma={c['gamma']}; teacher={args.teacher}; "
+	      f"delta_control={'on (ablation)' if args.delta_control else 'off (absolute)'}")
+
+
+def _ctbr_rival_hold(args) -> "int | None":
+	"""ABI 38: the cascade rivals' outer hold (the student's action_repeat) for a
+	ctbr run, None for a motor-level run (no extra rival rows)."""
+	return max(int(args.action_repeat), 1) if getattr(args, "_ctbr", None) is not None else None
+
+
 def _make_spec(state_neurons: int, levels: int, bits: int,
                delta_control: bool = True, delta_leak: float = 0.95,
                delta_max: float = 0.1, delta_gamma: float = 1.0,
@@ -423,7 +470,8 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                num_motors: int = 4,
                input_window_k: int = 4,
                memory_mode: str = "QUAD_WEIGHTED",
-               output_decode: "str | None" = None) -> ControllerSpec:
+               output_decode: "str | None" = None,
+               ctbr: "dict | None" = None) -> ControllerSpec:
 	"""Build a ControllerSpec from a (state_neurons, levels, bits) grid point.
 	`bits` becomes BOTH state_bits_per_neuron and output_bits_per_neuron, matching
 	the grid-search convention (the GA can later split them in the BITS phase).
@@ -471,6 +519,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		action_repeat=action_repeat,
 		memory_mode=memory_mode,
 		output_decode=output_decode,
+		ctbr=ctbr,
 	)
 
 
@@ -1350,7 +1399,8 @@ def _save_winner(path: str, args, spec: ControllerSpec,
 # Baselines (PID + reference numbers from prior runs)
 # -----------------------------------------------------------------------------
 
-def _pid_baseline(ec: EpisodeConfig, episodes: int, seed: int, folds: int = 5) -> list:
+def _pid_baseline(ec: EpisodeConfig, episodes: int, seed: int, folds: int = 5,
+                  ctbr_hold: "int | None" = None) -> list:
 	"""Reference-baseline rows on the held-out episode set, RIVAL FIRST.
 
 	Row 0 is the comparator the WNN is judged against. Any further rows are
@@ -1413,8 +1463,19 @@ def _pid_baseline(ec: EpisodeConfig, episodes: int, seed: int, folds: int = 5) -
 	                   steps=ec.steps_per_episode, eval_folds=folds)
 	# RIVAL first. Two rollouts of the same episodes ⇒ ~2x a cost measured in
 	# seconds, against a stage measured in hours.
-	return [pid_metrics(ec, draw, TeacherFeed(use_estimator=True)),
+	rows = [pid_metrics(ec, draw, TeacherFeed(use_estimator=True)),
 	        pid_metrics(ec, draw, TeacherFeed(use_estimator=False))]
+	if ctbr_hold:
+		# ABI 38 cascade rivals (informational rows after the PID[est] RIVAL, which IS
+		# C2 — the firmware attitude stage over the rate PID at its own 500 Hz): C2 at
+		# the student's outer rate and C4, the mpcof label over the same rate PID.
+		from wnn.control.classical_baseline import cascade_rival_metrics
+		est = TeacherFeed(use_estimator=True)
+		for tid, tag in ((0, "C2 at the outer rate"), (4, "C4 — the mpcof teacher's own law")):
+			r = cascade_rival_metrics(ec, draw, est, tid, int(ctbr_hold))
+			r["role"] = f"cascade rival {tag}, est-fed"
+			rows.append(r)
+	return rows
 
 
 def _baseline_row_str(row: dict, is_rival: bool) -> str:
@@ -1422,7 +1483,8 @@ def _baseline_row_str(row: dict, is_rival: bool) -> str:
 	the part a future reader needs most: an oracle-fed row is context, and
 	saying so in the row itself is the only thing that survives being pasted
 	into a table months later."""
-	role = "RIVAL — the comparison" if is_rival else "informational, upper bound"
+	# ABI 38: the cascade rivals carry their own role (est-fed, not an upper bound).
+	role = "RIVAL — the comparison" if is_rival else row.get("role", "informational, upper bound")
 	sty, eff = row.get("mean_steady_error_deg"), row.get("mean_effort")
 	# 14/08/2026 KEY FIX. alt= used to read mean_position_error_m, which chunk D
 	# repointed at the Euclidean 3-D error (NaN on the pre-chunk-D wheel) — runs
@@ -2184,7 +2246,8 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 	errs = [m.mean_attitude_error_deg for m in metrics]
 	ds = metrics[0]            # final_population[0] = the during-search winner = THE RESULT
 	pop_max = max(stables)     # descriptive only — NOT selected (would leak)
-	pid_rows = _pid_baseline(ec, rep_eps, report_seed, getattr(args, "num_eval_folds", 5))
+	pid_rows = _pid_baseline(ec, rep_eps, report_seed, getattr(args, "num_eval_folds", 5),
+	                         ctbr_hold=_ctbr_rival_hold(args))
 	def _ms(xs):
 		return (statistics.mean(xs), statistics.pstdev(xs) if len(xs) > 1 else 0.0)
 	ms_s, ms_e = _ms(stables), _ms(errs)
@@ -2516,7 +2579,7 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 
 	# PID baseline on the val seed (the held-out reference).
 	pid_rows = _pid_baseline(ec, args.eval_episodes, seeds.val,
-	                      getattr(args, "num_eval_folds", 5))
+	                      getattr(args, "num_eval_folds", 5), ctbr_hold=_ctbr_rival_hold(args))
 
 	# Assemble the ordered 5-row result [Grid, Neurons, Bits, Connections, Memory].
 	# Stages the orchestrator ran (or skipped via --skip-stages) recorded their row;
@@ -2629,7 +2692,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	# = a structural integrator (offloads PID's I-term out of the untrained state).
 	# Banked 08/06/2026: +5pp stability vs the old hardcoded False. PARTIAL fix.
 	ap.add_argument("--delta-control", action=argparse.BooleanOptionalAction, default=True,
-	                help="Output decodes to a leaky-accumulator PWM delta (structural integrator). Default ON.")
+	                help="Output decodes to a leaky-accumulator PWM delta (structural integrator). Default ON. "
+	                     "Ignored under --output-mode ctbr, whose decode is ABSOLUTE unless --ctbr-delta-law.")
 	ap.add_argument("--delta-leak", type=float, default=0.95,
 	                help="Leak on the delta accumulator (1.0=pure integrator/can run away; <1.0 bounds offset). Default 0.95.")
 	# L3 (07/08/2026). delta_max was a ControllerSpec field the CLI never passed, so it
@@ -3004,7 +3068,33 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	# HOLD the PWM in between. Temporal abstraction for the memoryless controller
 	# (the 4-frame window then spans 4N steps; jerk drops). 1 = off (bit-identical).
 	ap.add_argument("--action-repeat", type=int, default=1,
-	                help="Hold each WNN decision for N physical steps (Sajus frame-skip). 1 = every step (default).")
+	                help="Hold each WNN decision for N physical steps (Sajus frame-skip). 1 = every step (default). "
+	                     "Under --output-mode ctbr this is the OUTER-loop period (10 = 100 Hz, the cascade "
+	                     "default); the inner rate loop keeps its own 500 Hz.")
+	# ABI 38 (CTRL-27, Luiz 06/11/2026): the CASCADE controller.
+	ap.add_argument("--output-mode", choices=["pwm", "ctbr"], default="pwm",
+	                help="What the WNN outputs. pwm (default) = 4 motor commands, the ABI-37 lineage, "
+	                     "bit-identical. ctbr = the CASCADE (docs/ctrl_cascade_design.md): the WNN is the "
+	                     "outer attitude loop and emits [collective deviation, p, q, r] (body rates, rad/s), "
+	                     "decoded absolutely and held for --action-repeat ticks; the airframe's firmware RATE "
+	                     "PID (sourced gains, 500 Hz, measured gyro) flies them. Needs a cascade airframe "
+	                     "(cf21_brushless); refuses --obs-pwm, --decouple-outputs, --obs-dhat; teacher pid "
+	                     "(the firmware attitude stage) or mpcof (its planned body rate one outer period "
+	                     "ahead). Rivals: C2 = PID[est] over the rate PID, C4 = MPCOF label over it. "
+	                     "Provenance arch=cascade|motor; marker suffix _ct38.")
+	ap.add_argument("--ctbr-rate-max", type=float, nargs=3, default=None, metavar=("P", "Q", "R"),
+	                help="ctbr: per-axis body-rate range (rad/s) of the p/q/r banks (default 4.2 4.2 1.6: "
+	                     "attitude kp 6 x 30 deg + ki x i_limit; yaw provisional, design §1.3).")
+	ap.add_argument("--ctbr-coll-max", type=float, default=None,
+	                help="ctbr: collective-deviation range (pwm) of the thrust bank (default: the altitude "
+	                     "PD's own bound --alt-pd-max-delta).")
+	ap.add_argument("--ctbr-delta-law", action="store_true",
+	                help="ctbr ABLATION: decode each bank as a leaky per-step increment (delta_max = a FRACTION "
+	                     "of the bank range, --delta-leak, the bank gamma) instead of the absolute setpoint "
+	                     "(design §2.4). Off by default; --delta-control is ignored under ctbr.")
+	ap.add_argument("--ctbr-gamma", type=float, nargs=4, default=None, metavar=("T", "P", "Q", "R"),
+	                help="ctbr: per-bank |t|^gamma alphabet (default 1 2 2 2 — gamma 2 on the rate banks keeps "
+	                     "the finest rate step at 0.004 rad/s at 64 levels; gamma 1 would be a 1.25 deg dead band).")
 	# ABI 12 granularity ablation (Luiz 12/07/2026): the controller cell format.
 	# TERNARY runs empty_value=0.5 (PLN convention); BINARY decodes antagonist-
 	# pair E/I output halves (effective neutral 0.5). QUAD is bit-identical to
@@ -3841,6 +3931,7 @@ def main():
 	# comes from the Rust calibrate_control_gains (the SAME routine the LQR/MPC/MPCOF
 	# teachers use) — deriving it in Python would be exactly the duplicated-numerics
 	# failure the Rust-first rule exists to prevent.
+	_resolve_ctbr(args, ec)
 	args._dhat_b = None
 	if getattr(args, "obs_dhat", False):
 		if ec.airframe is None:
@@ -3906,7 +3997,9 @@ def main():
 	print(collect_provenance(fitness_pools_label(args),
 	                         motor_lag=f"{float(args.motor_lag_s):g}s:{args.motor_lag_source}",
 	                         obs_pwm=obs_pwm_convention(bool(args.obs_pwm), float(args.motor_lag_s)),
-	                         train_asym=train_asym_token(ec)).line())
+	                         train_asym=train_asym_token(ec),
+	                         arch=arch_token(getattr(args, "_ctbr", None), args.teacher,
+	                                         args.action_repeat, ec.dt)).line())
 	import shlex
 	print(f"[argv] {shlex.join(args.cli_argv)}", flush=True)
 

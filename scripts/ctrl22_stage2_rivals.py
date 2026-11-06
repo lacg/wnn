@@ -31,6 +31,11 @@ def _parse():
 	ap.add_argument("--run-args-file", required=True, help="the anchor's phased_ga argv ('#' lines ignored)")
 	ap.add_argument("--xy", type=float, default=0.5, help="stage-2 --xy-offset (m, per axis)")
 	ap.add_argument("--steps", type=int, nargs="+", default=[2000, 6000])
+	ap.add_argument("--ctbr-hold", type=int, default=0,
+	                help="ABI 38 (CTRL-27): also score the CASCADE rivals over the firmware rate PID — "
+	                     "C2 'PID>rate(hN)' (the firmware attitude stage held N ticks; at N=1 it IS the PID "
+	                     "row) and C4 'MPCOF>rate(hN)' (mpcof's planned body rate). N = the student's "
+	                     "--action-repeat. 0 = motor-level rivals only (the CTRL-22 table).")
 	ap.add_argument("--out", required=True)
 	return ap.parse_args()
 
@@ -63,17 +68,24 @@ def _start_xy(ec, seed, episodes, folds):
 	return statistics.mean(math.hypot(x, y) for x, y in zip(x0, y0))
 
 
-def _cell(base_argv, xy, steps):
+def _cell(base_argv, xy, steps, ctbr_hold=0):
 	"""{teacher: [row per report seed]} + start displacement per seed, for one (xy, steps)."""
-	from wnn.control.classical_baseline import HoldoutDraw, TeacherFeed, score_all
+	from wnn.control.classical_baseline import HoldoutDraw, TeacherFeed, score_all, cascade_rival_metrics
 	args, ec = _regime(base_argv, xy, steps)
 	folds = int(args.num_eval_folds)
 	rows, starts = {}, []
 	for seed in args.report_seeds:
 		draw = HoldoutDraw(seed=int(seed), episodes=int(args.report_episodes),
 		                   steps=ec.steps_per_episode, eval_folds=folds)
-		for name, r in score_all(ec, draw, TeacherFeed(use_estimator=True)).items():
+		feed = TeacherFeed(use_estimator=True)
+		for name, r in score_all(ec, draw, feed).items():
 			rows.setdefault(name, []).append(r)
+		if ctbr_hold > 0:
+			for tid in (0, 4):
+				m = cascade_rival_metrics(ec, draw, feed, tid, ctbr_hold)
+				rows.setdefault(m["label"], []).append((
+					m["stable_rate"] * 100.0, m["mean_attitude_error_deg"], m["mean_steady_error_deg"],
+					m["mean_altitude_error_m"], m["mean_position_error_m"]))
 		starts.append(_start_xy(ec, int(seed), int(args.report_episodes), folds))
 	return rows, starts, args
 
@@ -85,21 +97,21 @@ def _ms(v):
 def main():
 	a = _parse()
 	base = _argv(a.run_args_file)
-	out = {"run_args_file": a.run_args_file, "feed": "estimator", "cells": []}
+	out = {"run_args_file": a.run_args_file, "feed": "estimator", "ctbr_hold": a.ctbr_hold, "cells": []}
 	cols = ("stable_pct", "err_deg", "steady_deg", "alt_m", "pos3d_m")
 	for xy in (0.0, a.xy):
 		for steps in a.steps:
 			t0 = time.time()
-			rows, starts, args = _cell(base, xy, steps)
+			rows, starts, args = _cell(base, xy, steps, a.ctbr_hold)
 			cell = {"xy_offset_m": xy, "steps": steps, "seeds": [int(s) for s in args.report_seeds],
 			        "episodes": int(args.report_episodes), "start_xy_m": _ms(starts), "teachers": {}}
 			print(f"\n== xy {xy} m · {steps} steps ({steps / 1000:.0f} s) · {len(starts)} seeds x "
 			      f"{args.report_episodes} ep · start |xy| {cell['start_xy_m'][0]:.3f} m · {time.time() - t0:.0f}s")
-			print(f"  {'teacher':12s} " + "  ".join(f"{c:>15s}" for c in cols))
+			print(f"  {'teacher':22s} " + "  ".join(f"{c:>15s}" for c in cols))
 			for name, rs in rows.items():
 				stats = {c: _ms([r[i] for r in rs]) for i, c in enumerate(cols)}
 				cell["teachers"][name] = {"per_seed": rs, **stats}
-				print(f"  {name:12s} " + "  ".join(f"{m:8.3f}±{s:<6.3f}" for m, s in stats.values()))
+				print(f"  {name:22s} " + "  ".join(f"{m:8.3f}±{s:<6.3f}" for m, s in stats.values()))
 			out["cells"].append(cell)
 			sys.stdout.flush()
 	with open(a.out, "w") as f:

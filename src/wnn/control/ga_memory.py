@@ -50,6 +50,12 @@ from .training import EpisodeConfig, _sample_initial_state
 # Address-universe recording
 # ----------------------------------------------------------------------------
 
+
+def _ctbr_arg(spec):
+	"""ABI 38: the WnnController `ctbr=` kwarg for a spec (evaluator.ctbr_arg)."""
+	from .evaluator import ctbr_arg
+	return ctbr_arg(spec)
+
 def _recorder_lag_kwargs(ec) -> dict:
 	"""AXIS F: `motor_lag_s=` for the recorder, from the run's EpisodeConfig.
 	Duck-typed (tests hand the recorder bare objects), inert at 0.0 / None."""
@@ -153,7 +159,7 @@ def record_address_universe(
 		obs_alt_err=getattr(spec, 'obs_alt_err', False),
 		obs_vz=getattr(spec, 'obs_vz', False),
 		obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
-		obs_att_estimator=getattr(spec, 'obs_att_estimator', False),
+		obs_att_estimator=getattr(spec, 'obs_att_estimator', False), ctbr=_ctbr_arg(spec),
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 		dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt, integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
@@ -321,7 +327,7 @@ def build_controller_from_memory(genome: MemoryGenome, thresholds: list[float]) 
 		obs_alt_err=getattr(spec, 'obs_alt_err', False),
 		obs_vz=getattr(spec, 'obs_vz', False),
 		obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
-		obs_att_estimator=getattr(spec, 'obs_att_estimator', False),
+		obs_att_estimator=getattr(spec, 'obs_att_estimator', False), ctbr=_ctbr_arg(spec),
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 		dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt, integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,

@@ -74,6 +74,15 @@ def _p(params: dict, key: str, default: Any) -> Any:
 
 def controller_spec_from_params(params: dict) -> ControllerSpec:
 	"""Build a ControllerSpec from a flow's flat params dict."""
+	# ABI 38: the cascade needs the airframe's firmware rate loop, which this
+	# adapter's EpisodeConfig does not carry — refuse rather than build a motor-level
+	# controller under a "ctbr" flow (the silently-ignored-key failure).
+	mode = str(_p(params, "controller_output_mode", "pwm"))
+	if mode != "pwm":
+		raise ValueError(
+			f"controller_output_mode={mode!r}: the dashboard flow adapter builds motor-level "
+			"controllers only (no airframe cascade to be the CTBR inner loop) — run the cascade "
+			"through phased_ga --output-mode ctbr.")
 	sn = int(_p(params, "controller_state_neurons", 4))
 	# Floor: bits must hold the forced full-state prefix + ≥1 sampled. The prefix is
 	# prefix_factor·state_neurons = 1·sn since the 08/06/2026 1-bit migration (was 2·sn).

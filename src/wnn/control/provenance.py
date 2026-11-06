@@ -46,6 +46,11 @@ class ControllerProvenance:
 	# every run with motor_asym_mag > 0, e.g. L4C), "fixed" or "off".
 	# Printed BEFORE fitness_pools.
 	train_asym: str = UNKNOWN
+	# ABI 38 (CTRL-27): the controller ARCHITECTURE — "cascade:teacher=<t>:inner=
+	# pidfw_rate@<Hz>:outer_hz=<Hz>:range=<T,p,q,r>:gamma=<T,p,q,r>" (the WNN outer
+	# loop over the firmware rate PID, lineage _ct38) or "motor:teacher=<t>" (the
+	# WNN emits motor pwm). Printed BEFORE fitness_pools.
+	arch: str = UNKNOWN
 
 	def line(self) -> str:
 		"""The single greppable line the ladder copies into the marker."""
@@ -54,6 +59,7 @@ class ControllerProvenance:
 		        f"motor_lag={self.motor_lag} "
 		        f"obs_pwm={self.obs_pwm} "
 		        f"train_asym={self.train_asym} "
+		        f"arch={self.arch} "
 		        f"fitness_pools={self.fitness_pools}")
 
 
@@ -65,8 +71,18 @@ def obs_pwm_convention(obs_pwm: bool, motor_lag_s: float) -> str:
 	return "delivered" if float(motor_lag_s) > 0.0 else "command"
 
 
+def arch_token(ctbr: "dict | None", teacher: str, action_repeat: int, dt: float) -> str:
+	"""ABI 38: the provenance arch= value (see ControllerProvenance.arch)."""
+	if ctbr is None:
+		return f"motor:teacher={teacher}"
+	fmt = lambda xs: ",".join(f"{float(x):g}" for x in xs)
+	outer_hz = 1.0 / (max(int(action_repeat), 1) * float(dt))
+	return (f"cascade:teacher={teacher}:inner=pidfw_rate@{float(ctbr['attitude_hz']):g}Hz:"
+	        f"outer_hz={outer_hz:g}:range={fmt(ctbr['range'])}:gamma={fmt(ctbr['gamma'])}")
+
+
 def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: str = UNKNOWN,
-                       train_asym: str = UNKNOWN) -> ControllerProvenance:
+                       train_asym: str = UNKNOWN, arch: str = UNKNOWN) -> ControllerProvenance:
 	"""Gather every field, never raising: each accessor degrades to UNKNOWN / 0."""
 	wheel, abi, sha = _wheel_identity()
 	return ControllerProvenance(
@@ -78,6 +94,7 @@ def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: st
 		motor_lag=motor_lag.replace(" ", "_").replace('"', ""),
 		obs_pwm=obs_pwm.replace(" ", "_").replace('"', ""),
 		train_asym=train_asym.replace(" ", "_").replace('"', ""),
+		arch=arch.replace(" ", "_").replace('"', ""),
 	)
 
 

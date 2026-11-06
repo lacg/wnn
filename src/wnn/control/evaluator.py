@@ -246,6 +246,16 @@ class ControllerSpec:
 	# H3 (18/06): the 4 output banks are CONTROLS [T, τ_roll, τ_pitch, τ_yaw] mixed to
 	# motors (orthogonal action space; per-control delta accumulator). Requires num_motors=4.
 	decouple_outputs: bool = False
+	# ABI 38 (CTRL-27, Luiz 06/11/2026): the CASCADE output contract — None ⇒ the
+	# motor-level controller (output_mode "pwm", the ABI-37 lineage); a dict ⇒
+	# output_mode "ctbr": the 4 banks are [collective deviation, p, q, r] decoded
+	# absolutely and flown through the firmware RATE PID. The dict mirrors
+	# ram_controller.CtbrSpec field-for-field (rate_gains, out_limit_n, hover_n,
+	# k_thrust, main_loop_hz, attitude_hz, lpf_hz, range, gamma) and is built ONCE by
+	# ctbr_spec_dict from the airframe's firmware cascade (EpisodeConfig.cascade_kwargs
+	# — never re-derived). ONE field on purpose: every hand-written spec copy
+	# (spec_from_arch, flow_adapter, checkpoints) carries all of it or none of it.
+	ctbr: "dict | None" = None
 	# Feature-balance cap (26/06/2026): no input feature may capture more than this ratio ×
 	# the least-wired feature's connection count (targets obs_yaw_err's 2.14x over-wiring →
 	# coupling). 0/≤1 disables. Threaded → RecurrentArchConfig.feature_balance_ratio.
@@ -357,6 +367,11 @@ class ControllerSpec:
 			return self.output_decode.lower()
 		return "antagonist" if self.memory_mode.upper() == "BINARY" else "cumulative"
 
+	@property
+	def output_mode(self) -> str:
+		"""ABI 38: "ctbr" (the cascade) or "pwm" (motor-level)."""
+		return "ctbr" if self.ctbr is not None else "pwm"
+
 	def num_features(self) -> int:
 		"""9 base sensors + enabled extras (H2 error/integral + raw accumulator)."""
 		peraxis_n = 3 if self.obs_peraxis_yaw else 2  # drop yaw → roll+pitch only
@@ -401,6 +416,52 @@ class ControllerGenome:
 	# per-cell write loop — no triple materialisation. The triple lists above
 	# remain for explicit-cell callers and stay authoritative when non-empty.
 	cells_handle: object | None = None
+
+
+CTBR_DEFAULT_RATE_MAX = (4.2, 4.2, 1.6)
+CTBR_DEFAULT_GAMMA = (1.0, 2.0, 2.0, 2.0)
+
+
+def ctbr_spec_dict(ec, rate_max=CTBR_DEFAULT_RATE_MAX, coll_max=None,
+                   gamma=CTBR_DEFAULT_GAMMA) -> dict:
+	"""ABI 38: the ControllerSpec.ctbr dict for an episode config — the inner rate
+	loop is the airframe's firmware cascade exactly as the trainer and the rivals
+	receive it (EpisodeConfig.cascade_kwargs: SI, converted once in
+	pid_firmware._SiGains), the plant's k_thrust and tick rate; the outer banks'
+	ranges (collective = the altitude PD's own bound when coll_max is None) and γ
+	(docs/ctrl_cascade_design.md §1.3). Refuses an airframe without cascade gains."""
+	ck = ec.cascade_kwargs()
+	if not ck or float(ck.get("af_pid_attitude_hz", 0.0)) <= 0.0:
+		raise ValueError("output_mode=ctbr needs an airframe with a firmware PID cascade "
+		                 "(the inner rate loop) — e.g. --airframe cf21_brushless")
+	af = ec.airframe
+	if coll_max is None:
+		coll_max = float(getattr(ec, "alt_pd_max_delta", 0.25))
+	rate_max = tuple(float(x) for x in rate_max)
+	gamma = tuple(float(x) for x in gamma)
+	if len(rate_max) != 3 or len(gamma) != 4:
+		raise ValueError(f"ctbr: rate_max needs 3 values (p q r), gamma 4 (T p q r); got {rate_max}, {gamma}")
+	return dict(
+		rate_gains=[float(v) for v in ck["af_pid_rate"]],
+		out_limit_n=float(ck["af_pid_out_limit_n"]),
+		hover_n=float(ck["af_pid_hover_n"]),
+		k_thrust=float(af.k_thrust),
+		main_loop_hz=int(round(1.0 / float(ec.dt))),
+		attitude_hz=float(ck["af_pid_attitude_hz"]),
+		lpf_hz=float(ck["af_pid_lpf_hz"]),
+		range=[float(coll_max), *rate_max],
+		gamma=list(gamma),
+	)
+
+
+def ctbr_arg(spec):
+	"""The WnnController / dagger_train_batch_inplace `ctbr=` kwarg for a spec:
+	a ram_controller.CtbrSpec, or None on the motor-level path."""
+	d = getattr(spec, "ctbr", None)
+	if d is None:
+		return None
+	from wnn.control import _accel as ra
+	return ra.CtbrSpec(**d)
 
 
 def fold_pool_seed(seed: int, fold_index: int) -> int:
@@ -545,7 +606,7 @@ def _feature_controller(spec: ControllerSpec) -> WnnController:
 		obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i,
 		obs_collective_cmd=spec.obs_collective_cmd, obs_alt_err=spec.obs_alt_err, obs_vz=spec.obs_vz,
 			obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
-		obs_att_estimator=getattr(spec, 'obs_att_estimator', False),
+		obs_att_estimator=getattr(spec, 'obs_att_estimator', False), ctbr=ctbr_arg(spec),
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 		dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
@@ -1143,7 +1204,7 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i,
 		obs_collective_cmd=spec.obs_collective_cmd, obs_alt_err=spec.obs_alt_err, obs_vz=spec.obs_vz,
 			obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
-		obs_att_estimator=getattr(spec, 'obs_att_estimator', False),
+		obs_att_estimator=getattr(spec, 'obs_att_estimator', False), ctbr=ctbr_arg(spec),
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
@@ -1259,6 +1320,7 @@ def spec_from_arch(genome: "RecurrentArchGenome", base: ControllerSpec) -> Contr
 		action_repeat=base.action_repeat,
 		memory_mode=base.memory_mode,
 		output_decode=base.output_decode,
+		ctbr=getattr(base, 'ctbr', None),
 	)
 
 
@@ -1760,7 +1822,7 @@ class ControllerEvaluator:
 			obs_vel_xy=getattr(first_spec, 'obs_vel_xy', False),
 			# ABI 32: same estimator as the scorer's controllers, or the trainer
 			# would label on accel-only features while deploy flies estimated ones.
-			obs_att_estimator=getattr(first_spec, 'obs_att_estimator', False),
+			obs_att_estimator=getattr(first_spec, 'obs_att_estimator', False), ctbr=ctbr_arg(first_spec),
 			output_full_window=getattr(first_spec, 'output_full_window', False),
 			frame_stride=int(getattr(first_spec, 'frame_stride', 1)),
 			**_target_levels_kwarg(ra, first_spec),
@@ -1865,7 +1927,7 @@ class ControllerEvaluator:
 			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i,
 			obs_collective_cmd=spec.obs_collective_cmd, obs_alt_err=spec.obs_alt_err, obs_vz=spec.obs_vz,
 			obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
-		obs_att_estimator=getattr(spec, 'obs_att_estimator', False),
+		obs_att_estimator=getattr(spec, 'obs_att_estimator', False), ctbr=ctbr_arg(spec),
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,

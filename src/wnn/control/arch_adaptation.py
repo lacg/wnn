@@ -34,6 +34,12 @@ from .arch_strategy import default_controller_arch_config, _random_arch_genome
 from .recurrent_genome import RecurrentArchGenome, RecurrentArchShape, RecurrentArchConfig
 
 
+
+def _ctbr_arg(spec):
+	"""ABI 38: the WnnController `ctbr=` kwarg for a spec (evaluator.ctbr_arg)."""
+	from .evaluator import ctbr_arg
+	return ctbr_arg(spec)
+
 def _binary_entropy(p: float) -> float:
 	"""Shannon entropy (bits) of a Bernoulli(p) input bit. 0 for constant bits."""
 	if p <= 0.0 or p >= 1.0:
@@ -70,6 +76,7 @@ def record_input_entropy(spec: ControllerSpec, thresholds: list, state_connectio
 		dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt, integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
 		action_repeat=spec.action_repeat,
 		memory_mode=spec.memory_mode_int(),
+		ctbr=_ctbr_arg(spec),
 	)
 	# axonogenesis getters (last_state_layer_input / last_output_layer_input) are live
 	# in the compiled accelerator (controller.rs:626/632) — verified 05/06/2026.
