@@ -257,6 +257,18 @@ impl CtbrInner
 		self.held
 	}
 
+	/// The inner rate loop itself (a copy: DAgger hands it to the teacher's plan).
+	pub(crate) fn rate_stage_copy(&self) -> RateStageFw
+	{
+		self.rate
+	}
+
+	/// The inner rate loop's axis state (integrator, filter, held force).
+	pub(crate) fn rate_axis_state(&self, i: usize) -> crate::pid_firmware::RateAxisState
+	{
+		self.rate.axis_state(i)
+	}
+
 	/// One physical tick of the inner loop on the held setpoint and the measured gyro.
 	pub(crate) fn fly(&mut self, gyro: [f32; 3]) -> [f32; 4]
 	{

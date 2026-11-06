@@ -1928,6 +1928,23 @@ impl AttitudeMpcOfRs
 		}
 	}
 
+	/// DAgger (ABI 39 fix, 06/11/2026): plan from the vehicle's REAL inner loop
+	/// (CtbrMpcOf::sync_inner). No-op without the cascade law.
+	pub(crate) fn ctbr_sync_inner(&mut self, real: &crate::pid_firmware::RateStageFw)
+	{
+		if let Some(c) = self.ctbr.as_mut()
+		{
+			c.sync_inner(real);
+		}
+	}
+
+	/// DIAGNOSTIC (imitation_probe): the cascade law's hidden plan inputs
+	/// (CtbrMpcOf::diag_hidden), zeros without one.
+	pub(crate) fn diag_ctbr_hidden(&self) -> [f64; 12]
+	{
+		self.ctbr.as_deref().map_or([0.0; 12], |c| c.diag_hidden())
+	}
+
 	/// The observer state (per-axis d̂) — the Option-A --state-integral target
 	/// analog (this IS the teacher's accumulated memory).
 	pub fn integrals(&self) -> [f32; 3]
@@ -2302,6 +2319,39 @@ impl Teacher
 			}
 		};
 		Ok([coll_dev, r[0], r[1], r[2]])
+	}
+
+	/// DAgger on a cascade student: hand the teacher the inner rate loop that is
+	/// actually flying (the student's, pre-tick). Only MPCOF plans from inner-loop
+	/// state; the firmware attitude stage (PidFw) reads attitude only — no-op.
+	pub(crate) fn ctbr_sync_inner(&mut self, real: &crate::pid_firmware::RateStageFw)
+	{
+		if let Teacher::MpcOf(m) = self
+		{
+			m.ctbr_sync_inner(real);
+		}
+	}
+
+	/// DIAGNOSTIC (imitation_probe, ctbr): the hidden state the teacher's CTBR
+	/// decision reads beyond (θ, ω): MPCOF's [ua, shadow I, shadow Fh, d̂] per axis;
+	/// the firmware attitude stage's integrators in slots 3..6 for PidFw.
+	pub(crate) fn diag_ctbr_hidden(&self) -> [f64; 12]
+	{
+		match self
+		{
+			Teacher::MpcOf(m) => m.diag_ctbr_hidden(),
+			Teacher::PidFw(p) =>
+			{
+				let i = p.integrals_f32();
+				let mut h = [0.0f64; 12];
+				for a in 0..3
+				{
+					h[3 + a] = i[a] as f64;
+				}
+				h
+			}
+			_ => [0.0; 12],
+		}
 	}
 
 	/// Whether `ctbr_label` is defined for this teacher (the validation every CTBR

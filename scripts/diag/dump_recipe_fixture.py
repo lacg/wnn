@@ -27,6 +27,9 @@ def _fmt(v):
 	return repr(v)
 
 
+CTBR_FIELDS = ("rate_gains", "out_limit_n", "hover_n", "k_thrust", "main_loop_hz", "attitude_hz", "lpf_hz", "range", "gamma")
+
+
 def hook(**kw):
 	cfg = kw.pop("cfg")
 	kw.pop("init_cells_per_genome")
@@ -41,6 +44,15 @@ def hook(**kw):
 		for k, v in sorted(kw.items()):
 			if k.endswith("_per_genome") or k == "fold_seeds":
 				v = v[0]
+			if k == "ctbr":
+				# ABI 38 cascade contract: a CtbrSpec pyclass, dumped field by field
+				# (its repr is a provenance line, not parseable).
+				if v is None:
+					f.write("kw.ctbr=none\n")
+				else:
+					for fld in CTBR_FIELDS:
+						f.write(f"kw.ctbr.{fld}={_fmt(getattr(v, fld))}\n")
+				continue
 			f.write(f"kw.{k}={_fmt(v)}\n")
 	print(f"[dump_recipe_fixture] wrote {out}", flush=True)
 	os._exit(0)

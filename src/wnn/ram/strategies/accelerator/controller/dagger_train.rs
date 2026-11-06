@@ -1780,8 +1780,19 @@ pub(crate) fn rollout_and_label_inner(
 		// produce (accumulator − anchor; step() decodes afterwards), recorded so
 		// the replay applies the identical value.
 		let pwm_dev_now = controller.pwm_feature_obs();
+		// CASCADE DAgger (06/11/2026 fix): when the STUDENT flies, the inner rate
+		// loop under the vehicle is the student's. Snapshot it before step() advances
+		// it, so the teacher's decision below plans from the real loop state (its
+		// shadow loop otherwise integrates the TEACHER's unflown setpoints against
+		// the student's gyro). Under expert_drives the teacher's shadow already IS
+		// the flown loop (ExpertPilot) — nothing to sync. Motor path: None.
+		let inner_pre = if cfg.expert_drives { None } else { controller.ctbr_rate_stage() };
 		// Student forward + teacher label at student-visited state.
 		let student_pwm = controller_step_4(controller, gyro, accel, target_64);
+		if let Some(r) = inner_pre.as_ref()
+		{
+			teacher.ctbr_sync_inner(r);
+		}
 		// True-delta label baseline for THIS step (pwm_prev is the pre-step
 		// accumulator right after step()). Recorded unconditionally: 16 B/step.
 		// D0: expressed in the same coordinates as the label (rebased_label_base).
@@ -1869,8 +1880,14 @@ pub(crate) fn rollout_and_label_inner(
 		controller.observe_applied(applied);
 		if let Some(c) = cap.as_deref_mut()
 		{
-			c.record_teacher_inputs(q, gyro, teacher.integrals(), controller.vert_obs());
-			c.record(controller, traj.pid_pwms[traj.pid_pwms.len() - 1], applied);
+			// CTBR: only DECISION steps are training records (the sn=0 replay skips
+			// action-repeat holds), so the probe measures the same set.
+			if c.keeps(controller)
+			{
+				c.record_teacher_inputs(q, gyro, teacher.integrals(), controller.vert_obs());
+				c.record_ctbr_hidden(teacher.diag_ctbr_hidden(), controller.diag_ctbr_inner_state());
+				c.record(controller, traj.pid_pwms[traj.pid_pwms.len() - 1], applied);
+			}
 		}
 		sim.step(applied);
 		last_applied = applied; // offset-free MPC observer: what the sim saw

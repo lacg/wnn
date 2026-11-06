@@ -47,6 +47,7 @@ mod abi35_tests; // ABI 35: bptt walk fixtures, CPU pins, CPU/GPU walk parity
 #[cfg(test)]
 mod lag_student_law_tests; // diagnostic: student output law under motor lag
 mod imitation_probe; // diagnostic (WNN_IMIT_PROBE): imitation vs closed loop under motor lag
+mod imitation_probe_ctbr; // diagnostic: the cascade (ctbr) half of imitation_probe
 #[cfg(test)]
 mod abi38_pins; // ABI 38: motor-level byte-identity pins captured on the ABI-37 build
 #[cfg(test)]

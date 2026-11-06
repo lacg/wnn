@@ -1712,6 +1712,38 @@ impl WnnController
 			.collect()
 	}
 
+	/// DIAGNOSTIC (imitation_probe): whether the LAST step() was a DECISION step
+	/// (a fresh forward + decode) rather than an action-repeat hold. step()
+	/// increments step_counter on both; a decision happens at counter % N == 0.
+	pub(crate) fn diag_last_step_was_decision(&self) -> bool
+	{
+		self.action_repeat <= 1 || self.step_counter.wrapping_sub(1) % self.action_repeat == 0
+	}
+
+	/// A cascade's inner rate loop as it stands now (None on the motor path) — the
+	/// DAgger rollout snapshots it BEFORE step() so the teacher plans from the loop
+	/// that is actually flying (dagger_train::rollout_and_label_inner).
+	pub(crate) fn ctbr_rate_stage(&self) -> Option<crate::pid_firmware::RateStageFw>
+	{
+		self.ctbr.as_ref().map(|c| c.rate_stage_copy())
+	}
+
+	/// DIAGNOSTIC (imitation_probe, ctbr): the student's REAL inner rate loop —
+	/// [integrator ×3, held axis force ×3]; None on the motor path.
+	pub(crate) fn diag_ctbr_inner_state(&self) -> Option<[f64; 6]>
+	{
+		self.ctbr.as_ref().map(|c| {
+			let mut s = [0.0f64; 6];
+			for a in 0..3
+			{
+				let st = c.rate_axis_state(a);
+				s[a] = st.integ;
+				s[3 + a] = st.held;
+			}
+			s
+		})
+	}
+
 	/// DIAGNOSTIC: the raw per-bank decode ∈ [0,1] of the LAST step()'s cells
 	/// (deterministic modes) — what the trainer's target is compared against.
 	pub(crate) fn diag_raw_decode(&self) -> [f32; 4]

@@ -252,6 +252,53 @@ fn mpcof_label_is_a_rate_decision()
 	}
 }
 
+/// DAgger on a cascade (06/11/2026 fix): when the STUDENT flies, the MPCOF teacher
+/// must plan from the student's REAL inner rate loop, not from its shadow loop driven
+/// by the teacher's own (unflown) setpoints. An untrained student flies zero rate, so
+/// before the fix the shadow integrators wandered off the real ones by ~1-2× their
+/// size (measured: |I_sh − I| 0.16-0.40 vs |I| 0.13-0.19, imitation_probe_ctbr);
+/// with the sync the only residual is the one rate update the shadow takes on the
+/// teacher's held setpoint after the decision (≈ dt_rate·|Δsp|).
+#[test]
+fn dagger_teacher_plans_from_the_flown_inner_loop()
+{
+	use rand::SeedableRng;
+	for (lag, ar) in [(0.20f32, 10usize), (0.0, 1)]
+	{
+		let mut cfg = l4c_cfg(lag, 4);
+		cfg.expert_drives = false;
+		let mut c = ctbr_student(0, ar, 7);
+		let mut teachers = crate::dagger_train::TeacherBank::new(AirframeRs::from_cfg(&cfg));
+		let mut sim = crate::dagger_train::sim_default(&cfg);
+		let mut rng = rand::rngs::SmallRng::seed_from_u64(11);
+		let mut cap = crate::imitation_probe::ImitCapture::new(false, false);
+		for _ in 0..3
+		{
+			crate::dagger_train::rollout_and_label_inner(
+				&mut c, teachers.get_mut(4), &mut sim, &cfg, 15f64.to_radians(), &mut rng, [0.0; 3], Some(&mut cap),
+			);
+		}
+		assert!(cap.hidden.len() > 50, "lag {lag}: too few decision records ({})", cap.hidden.len());
+		// Both loops start this tick from the SAME (synced) state and take at most one
+		// rate update, on the teacher's label vs the untrained student's zero setpoint:
+		// |I_sh − I| ≤ dt_rate·|label| exactly (clamping only shrinks it). Without the
+		// sync the difference is the whole episode's integral of the label.
+		let dt_rate = 1.0 / spec().attitude_hz;
+		let (mut size, mut worst) = (0.0f64, 0.0f64);
+		for ((h, r), l) in cap.hidden.iter().zip(&cap.inner).zip(&cap.label)
+		{
+			for a in 0..3
+			{
+				size += r[a].abs();
+				let excess = (h[3 + a] - r[a]).abs() - dt_rate * (l[a + 1] as f64).abs();
+				worst = worst.max(excess);
+			}
+		}
+		assert!(size > 1e-3, "lag {lag}: the inner integrators never moved");
+		assert!(worst < 1e-9, "lag {lag} ar {ar}: the teacher planned from a loop that is not the flown one (excess {worst:.3e})");
+	}
+}
+
 /// The untrained cascade holds zero body rate at the anchor's collective over the
 /// inner loop (design §2.4): from a tilted, spinning start at T = 0.20 the body rates
 /// die out and the attitude stays where it was — no tumble, no leveling.

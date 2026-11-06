@@ -46,6 +46,12 @@ pub(crate) struct ImitCapture
 	/// (3), its actuator estimate ua (3, a twin fed the same applied stream in
 	/// the same order) and its observer d̂ (3, Teacher::integrals — MPCOF's d̂).
 	pub tx: Vec<[f64; 15]>,
+	/// CTBR: the raw bank-space label [coll dev, p, q, r] per record.
+	pub label: Vec<[f32; 4]>,
+	/// CTBR: Teacher::diag_ctbr_hidden per record (MPCOF: ua, shadow I, shadow Fh, d̂).
+	pub hidden: Vec<[f64; 12]>,
+	/// CTBR: the student's REAL inner rate loop per record (integrator ×3, held force ×3).
+	pub inner: Vec<[f64; 6]>,
 	act: crate::actuator_lag::ActuatorLag,
 }
 
@@ -63,6 +69,9 @@ impl ImitCapture
 			addrs: Vec::new(),
 			tbits: Vec::new(),
 			tx: Vec::new(),
+			label: Vec::new(),
+			hidden: Vec::new(),
+			inner: Vec::new(),
 			act: crate::actuator_lag::ActuatorLag::new(0.0, 0.001),
 		}
 	}
@@ -91,9 +100,23 @@ impl ImitCapture
 		]);
 	}
 
+	/// Whether this step is a training record: every step on the motor path, the
+	/// DECISION steps of an action-repeat controller (holds are never written).
+	pub(crate) fn keeps(&self, c: &WnnController) -> bool
+	{
+		c.diag_last_step_was_decision()
+	}
+
+	pub(crate) fn record_ctbr_hidden(&mut self, hidden: [f64; 12], inner: Option<[f64; 6]>)
+	{
+		self.hidden.push(hidden);
+		self.inner.push(inner.unwrap_or([0.0; 6]));
+	}
+
 	/// `label` = the bank-space label the trajectory recorded this step.
 	pub(crate) fn record(&mut self, c: &mut WnnController, label: [f32; 4], applied: [f32; 4])
 	{
+		self.label.push(label);
 		let (d, bits) = c.diag_targets(label);
 		self.feats.push(c.last_feature_vector_ref().to_vec());
 		self.decoded.push(c.diag_raw_decode());
@@ -104,7 +127,9 @@ impl ImitCapture
 			self.addrs.push(c.diag_output_addresses());
 			self.tbits.push(bits);
 		}
-		if self.sync_accumulator
+		// The motor path's accumulator sync; a cascade decodes ABSOLUTELY (no
+		// accumulator feature, and `pwm` there holds the setpoint, not motor pwm).
+		if self.sync_accumulator && c.ctbr_ref().is_none()
 		{
 			c.set_pwm_accumulator(applied);
 		}
@@ -112,7 +137,7 @@ impl ImitCapture
 }
 
 /// Ridge LS per output bank: rows x → y[m]. Returns weights [m][feature].
-fn ridge(xs: &[Vec<f64>], ys: &[[f32; 4]], nm: usize) -> Vec<Vec<f64>>
+pub(crate) fn ridge(xs: &[Vec<f64>], ys: &[[f32; 4]], nm: usize) -> Vec<Vec<f64>>
 {
 	let nf = xs[0].len();
 	let mut a = vec![0.0f64; nf * nf];
@@ -186,12 +211,12 @@ fn solve(mut a: Vec<f64>, mut b: Vec<f64>, n: usize) -> Vec<f64>
 	(0..n).map(|i| if a[i * n + i].abs() < 1e-300 { 0.0 } else { b[i] / a[i * n + i] }).collect()
 }
 
-fn raw_rows(feats: &[Vec<f32>]) -> Vec<Vec<f64>>
+pub(crate) fn raw_rows(feats: &[Vec<f32>]) -> Vec<Vec<f64>>
 {
 	feats.iter().map(|f| f.iter().map(|&v| v as f64).chain(std::iter::once(1.0)).collect()).collect()
 }
 
-fn thermo_rows(feats: &[Vec<f32>], thr: &[f32], bpf: usize) -> Vec<Vec<f64>>
+pub(crate) fn thermo_rows(feats: &[Vec<f32>], thr: &[f32], bpf: usize) -> Vec<Vec<f64>>
 {
 	feats
 		.iter()
@@ -255,7 +280,7 @@ fn ram_mae(cap: &ImitCapture, nm: usize) -> (f64, f64)
 
 /// Aliasing floor on the held-out set's own addresses: conflict-cell rate,
 /// minority-sample fraction, and the MAE of the per-neuron-majority decode.
-fn oracle(cap: &ImitCapture, c: &WnnController) -> (f64, f64, f64, f64)
+pub(crate) fn oracle(cap: &ImitCapture, c: &WnnController) -> (f64, f64, f64, f64)
 {
 	let nn = cap.tbits[0].len();
 	let mut maps: Vec<HashMap<u64, (u32, u32)>> = (0..nn).map(|_| HashMap::new()).collect();
@@ -316,12 +341,12 @@ fn oracle(cap: &ImitCapture, c: &WnnController) -> (f64, f64, f64, f64)
 	)
 }
 
-struct Rig
+pub(crate) struct Rig
 {
-	cfg_bc: RewardGatedConfigPacked,
-	teachers: TeacherBank,
-	sim: crate::controller::AttitudeSim,
-	target: [f32; 3],
+	pub cfg_bc: RewardGatedConfigPacked,
+	pub teachers: TeacherBank,
+	pub sim: crate::controller::AttitudeSim,
+	pub target: [f32; 3],
 }
 
 impl Rig
@@ -335,7 +360,7 @@ impl Rig
 }
 
 /// Held-out teacher-driven set (and, separately, the student's own states).
-fn held_out(rig: &mut Rig, c: &mut WnnController, own: bool, episodes: usize, tilt: f64, seed: u64) -> ImitCapture
+pub(crate) fn held_out(rig: &mut Rig, c: &mut WnnController, own: bool, episodes: usize, tilt: f64, seed: u64) -> ImitCapture
 {
 	let cfg = if own
 	{
@@ -370,12 +395,13 @@ fn closed_loop(rig: &mut Rig, c: &mut WnnController, seed: u64) -> (f64, f64)
 /// The SAME controller through the production CPU scorer (cpu_score::rollout_one,
 /// the GA-fitness twin of the Metal kernel), ICs drawn from the trainer's own
 /// distributions at the scorer tilt (5°). Returns (stable %, err °, steady °).
-fn closed_loop_scorer(cfg: &RewardGatedConfigPacked, c: &WnnController, n: usize, seed: u64, asym: [f32; 4]) -> (f64, f64, f64)
+pub(crate) fn closed_loop_scorer(cfg: &RewardGatedConfigPacked, c: &WnnController, n: usize, seed: u64, asym: [f32; 4]) -> (f64, f64, f64)
 {
 	use crate::episode_regime::jitter_sym;
 	let mut rng = SmallRng::seed_from_u64(seed);
 	let (mut q0, mut w0) = (Vec::with_capacity(4 * n), Vec::with_capacity(3 * n));
 	let (mut z, mut vz, mut mass, mut coll) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+	let (mut x0, mut y0) = (Vec::new(), Vec::new());
 	for _ in 0..n
 	{
 		let (q, w) = crate::dagger_train::sample_initial_state(
@@ -392,6 +418,12 @@ fn closed_loop_scorer(cfg: &RewardGatedConfigPacked, c: &WnnController, n: usize
 		z.push(jitter_sym(&mut rng, cfg.alt_offset));
 		vz.push(jitter_sym(&mut rng, cfg.init_vz));
 		coll.push(jitter_sym(&mut rng, cfg.collective_jitter));
+		// Stage 2: displaced-at-rest horizontal starts (the scorer's own law).
+		if cfg.translation && cfg.xy_offset > 0.0
+		{
+			x0.push(jitter_sym(&mut rng, cfg.xy_offset));
+			y0.push(jitter_sym(&mut rng, cfg.xy_offset));
+		}
 	}
 	let s1 = crate::stage1::Stage1Cfg {
 		target_altitude: cfg.target_altitude,
@@ -401,10 +433,11 @@ fn closed_loop_scorer(cfg: &RewardGatedConfigPacked, c: &WnnController, n: usize
 		mass,
 		collective_frac: coll,
 		lambda_pos: 0.0,
-		init_x: Vec::new(),
-		init_y: Vec::new(),
+		init_x: x0,
+		init_y: y0,
 		plant: cfg.plant_opts(),
-		att_ref: crate::att_err_ref::AttErrRef::LEVEL,
+		// G5: the run's own reference (tilt under --att-err-ref tilt, else LEVEL).
+		att_ref: crate::episode_regime::att_err_ref_for(cfg),
 	};
 	let mut cc = c.clone();
 	let row = crate::cpu_score::rollout_one(
@@ -520,6 +553,10 @@ pub(crate) fn run(base: &WnnController, cfg: &RewardGatedConfigPacked, target: [
 	let own = held_out(&mut rig, &mut c, true, ho_eps, 5f64.to_radians(), seed ^ 0x0E1D);
 	let cl = closed_loop(&mut rig, &mut c, seed ^ 0xE7A1);
 	report("BC", lag, &c, &train, &ho, Some(&own), cl);
+	if c.ctbr_ref().is_some() && std::env::var("WNN_IMIT_PROBE_DAGGER_ONLY").is_err()
+	{
+		crate::imitation_probe_ctbr::report(&mut rig, "BC", cfg, &c, &train, &ho, &own);
+	}
 
 	if std::env::var("WNN_IMIT_PROBE_BC_ONLY").is_ok()
 	{
@@ -549,6 +586,14 @@ pub(crate) fn run(base: &WnnController, cfg: &RewardGatedConfigPacked, target: [
 	let own_d = held_out(&mut rig, &mut d, true, ho_eps, 5f64.to_radians(), seed ^ 0x0E1D);
 	let cl_d = closed_loop(&mut rig, &mut d, seed ^ 0xE7A1);
 	report("DAgger", lag, &d, &train, &ho_d, Some(&own_d), cl_d);
+	if d.ctbr_ref().is_some()
+	{
+		crate::imitation_probe_ctbr::report(&mut rig, "DAgger", cfg, &d, &train, &ho_d, &own_d);
+	}
+	if d.ctbr_ref().is_some()
+	{
+		crate::imitation_probe_ctbr::pool_axes(&mut rig, cfg, &d);
+	}
 	let sc = closed_loop_scorer(cfg, &d, 200, seed ^ 0x5C0E, cfg.dist_motor_asym);
 	eprintln!("[imitprobe] lag={lag:.2} DAgger via PRODUCTION CPU scorer (rollout_one, 200 eps @5°): stable {:.1}% err {:.2}° steady {:.2}°", sc.0, sc.1, sc.2);
 	// The production scorer's pools fly a RESOLVED per-pool motor asymmetry
@@ -621,9 +666,18 @@ pub(crate) fn from_fixture(path: &str) -> (WnnController, RewardGatedConfigPacke
 			*v = r.gen_range(0..span) as i64;
 		}
 	}
+	// WNN_IMIT_OUT_BITS=<k> (k < the recipe's bits): each output neuron keeps the
+	// FIRST k of its connections — a random k-subset of the recipe's own draw (the
+	// address-width / generalization dial at the same connectivity law).
+	let mut out_bits = us("output_bits_per_neuron_per_genome");
+	if let Some(k) = std::env::var("WNN_IMIT_OUT_BITS").ok().and_then(|v| v.parse::<usize>().ok()).filter(|&k| k < out_bits)
+	{
+		out_conn = out_conn.chunks(out_bits).flat_map(|c| c[..k].to_vec()).collect();
+		out_bits = k;
+	}
 	let mut c = WnnController::new(
 		us("num_motors"), us("levels_per_motor_per_genome"), us("bits_per_feature"), us("input_window_k"),
-		us("state_neurons_per_genome"), us("state_bits_per_neuron_per_genome"), us("output_bits_per_neuron_per_genome"),
+		us("state_neurons_per_genome"), us("state_bits_per_neuron_per_genome"), out_bits,
 		vf("thresholds"), vi("state_connections_per_genome"), out_conn,
 		b("delta_control"), f("delta_max"), f("delta_leak"), f("delta_gamma"),
 		b("obs_tilt_p"), b("obs_tilt_i"), b("obs_peraxis_p"), b("obs_peraxis_i"), b("obs_peraxis_yaw"), b("obs_pwm"), b("obs_yaw_err"), b("obs_yaw_err_i"),
@@ -634,12 +688,14 @@ pub(crate) fn from_fixture(path: &str) -> (WnnController, RewardGatedConfigPacke
 		b("output_full_window"), us("frame_stride"),
 		kw.get("delta_label_scale").map(|v| v.parse().unwrap()).unwrap_or(1.0),
 		kw.get("dagger_label_delta").map(|v| v == "true").unwrap_or(false),
-		b("obs_att_estimator"), 2.0, 0.1, None,
+		b("obs_att_estimator"), 2.0, 0.1, ctbr_from_kw(&kw),
 	)
 	.expect("fixture controller");
 	c.set_target_levels_core(kw.get("target_levels").map(|v| v.parse().unwrap()).unwrap_or(0)).unwrap();
 	let t: Vec<f32> = vf("target_rpy");
-	let seeds: Vec<u64> = g("fold_seeds").split_whitespace().map(|x| x.parse().unwrap()).collect();
+	// WNN_IMIT_SEED_XOR=<k>: a replicate of the same recipe on different training folds.
+	let sx: u64 = std::env::var("WNN_IMIT_SEED_XOR").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+	let seeds: Vec<u64> = g("fold_seeds").split_whitespace().map(|x| x.parse::<u64>().unwrap() ^ sx.wrapping_mul(0x9E37_79B9_7F4A_7C15)).collect();
 	(c, cfg, [t[0], t[1], t[2]], seeds)
 }
 
@@ -669,6 +725,32 @@ mod tests
 			super::run(&c, &cfg, [0.0; 3], &[1]);
 		}
 	}
+}
+
+/// The cascade contract a dump_recipe_fixture.py fixture carries (kw.ctbr.*), or
+/// None for a motor-level recipe (absent, or kw.ctbr=none).
+#[cfg(test)]
+fn ctbr_from_kw(kw: &HashMap<String, String>) -> Option<crate::ctbr::CtbrSpec>
+{
+	let g = |k: &str| kw.get(&format!("ctbr.{k}")).cloned();
+	let v64 = |k: &str| -> Vec<f64> { g(k).unwrap().split_whitespace().map(|x| x.parse().unwrap()).collect() };
+	let v32 = |k: &str| -> [f32; 4] { let x: Vec<f32> = g(k).unwrap().split_whitespace().map(|x| x.parse().unwrap()).collect(); [x[0], x[1], x[2], x[3]] };
+	g("rate_gains")?;
+	let rg = v64("rate_gains");
+	let f = |k: &str| -> f64 { g(k).unwrap().parse().unwrap() };
+	let spec = crate::ctbr::CtbrSpec {
+		rate_gains: std::array::from_fn(|i| rg[i]),
+		out_limit_n: f("out_limit_n"),
+		hover_n: f("hover_n"),
+		k_thrust: f("k_thrust"),
+		main_loop_hz: g("main_loop_hz").unwrap().parse().unwrap(),
+		attitude_hz: f("attitude_hz"),
+		lpf_hz: f("lpf_hz"),
+		range: v32("range"),
+		gamma: v32("gamma"),
+	};
+	spec.validate().expect("fixture CtbrSpec");
+	Some(spec)
 }
 
 /// Fixture loader (generated from RewardGatedConfigPacked's 77 fields by
@@ -734,7 +816,8 @@ fn cfg_set(c: &mut RewardGatedConfigPacked, k: &str, v: &str)
 		"dist_tau_bias" => c.dist_tau_bias = arr(v),
 		"dist_gust_sigma" => c.dist_gust_sigma = v.parse().unwrap(),
 		"dist_gust_tau_c" => c.dist_gust_tau_c = v.parse().unwrap(),
-		"dist_motor_asym" => c.dist_motor_asym = arr(v),
+			"dist_motor_asym" => c.dist_motor_asym = arr(v),
+			"dist_motor_asym_mag" => c.dist_motor_asym_mag = v.parse().unwrap(),
 		"dist_gyro_sigma" => c.dist_gyro_sigma = v.parse().unwrap(),
 		"dist_gyro_bias_walk" => c.dist_gyro_bias_walk = v.parse().unwrap(),
 		"dist_accel_sigma" => c.dist_accel_sigma = v.parse().unwrap(),

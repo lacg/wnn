@@ -795,9 +795,14 @@ def _gate_lambda_header(args, ec: EpisodeConfig) -> str:
 	"""The [GATE-λ] provenance line, at the tilt the trainer's rollouts are drawn at,
 	plus the trainer's tilt curriculum next to the scorer's tilt."""
 	easy, full = _rg_tilts(args)
+	gate = getattr(args, "rg_gate", "improvement")
+	gate_line = "" if gate == "improvement" else (
+		f"\n[RG-GATE] DAgger episode gate = {gate}"
+		+ (f" (q={getattr(args, 'rg_gate_quantile', 0.5):g})" if gate == "quantile" else " (every episode is written)"))
 	return (gate_lambda_line(args, ec, math.radians(full))
 	        + f"\n[RG-TILT] DAgger trainer tilt curriculum {easy:g}°→{full:g}° "
-	          f"(checkpoint eval at {full:g}°); scorer --tilt {getattr(args, 'tilt', float('nan')):g}°")
+	          f"(checkpoint eval at {full:g}°); scorer --tilt {getattr(args, 'tilt', float('nan')):g}°"
+	        + gate_line)
 
 
 def _rg_config(args, ec: EpisodeConfig, seed: int) -> RewardGatedConfig:
@@ -839,7 +844,25 @@ def _rg_config(args, ec: EpisodeConfig, seed: int) -> RewardGatedConfig:
 	# L4 magnitude-priority writes (Rust trainer, sn=0 path; defaults = legacy).
 	rg.write_priority_err = bool(getattr(args, "write_priority_err", False))
 	rg.write_err_floor_deg = float(getattr(args, "write_err_floor", 0.0) or 0.0)
+	_apply_rg_gate(args, rg)
 	return rg
+
+
+def _apply_rg_gate(args, rg: RewardGatedConfig) -> None:
+	"""--rg-gate (06/11/2026, cascade imitation diagnosis): which DAgger episodes the
+	trainer writes. 'improvement' (default) = the legacy ratchet (reward >= running
+	mean of every past episode); 'quantile' = reward >= the running --rg-gate-quantile;
+	'off' = every episode (quantile 0 = the running minimum). Under DAgger every label
+	is the teacher's, so the gate only decides WHICH STATES are learned — and it drops
+	the student's worst episodes, the very states the relabel exists for."""
+	gate = getattr(args, "rg_gate", "improvement")
+	if gate == "off":
+		rg.gate_mode, rg.gate_quantile = "quantile", 0.0
+	elif gate == "quantile":
+		q = float(getattr(args, "rg_gate_quantile", 0.5))
+		if not 0.0 <= q <= 1.0:
+			raise SystemExit(f"--rg-gate-quantile must be in [0, 1] (got {q})")
+		rg.gate_mode, rg.gate_quantile = "quantile", q
 
 
 def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
@@ -3225,6 +3248,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--universe-episodes", type=int, default=8)
 	# Inner reward-gated train knobs (production: leave None → 8 rounds × 24 eps);
 	# smoke tests pass tiny values to keep per-genome training under a few seconds.
+	ap.add_argument("--rg-gate", choices=["improvement", "quantile", "off"], default="improvement",
+	                help="DAgger episode gate (which student episodes are written): improvement = the "
+	                     "legacy ratchet (reward >= running mean, default); quantile = reward >= the running "
+	                     "--rg-gate-quantile; off = every episode. Under DAgger the labels are the teacher's, "
+	                     "so the gate only picks which STATES are learned (cascade diagnosis 06/11/2026).")
+	ap.add_argument("--rg-gate-quantile", type=float, default=0.5,
+	                help="--rg-gate quantile: train on episodes at or above this running reward quantile.")
 	ap.add_argument("--rg-rounds", type=int, default=None,
 	                help="Reward-gated inner-train rounds (default: 8)")
 	ap.add_argument("--rg-episodes-per-round", type=int, default=None,

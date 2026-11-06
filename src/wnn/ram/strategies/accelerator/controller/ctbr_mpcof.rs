@@ -257,6 +257,37 @@ impl CtbrMpcOf
 		self.planners.len() - 1
 	}
 
+	/// DAgger: the inner loop that FLIES is the student's, not this teacher's. The
+	/// plan's rate-loop state (integrator, D filter, last measurement, held force,
+	/// update phase) must be the vehicle's real one at the decision, or the label
+	/// answers "what would I do if the loop were where MY setpoints would have
+	/// left it" — a state the vehicle is not in (measured 06/11/2026: along the
+	/// student's own states |I_shadow − I_real| ≈ 1-2× |I_real| per axis). The
+	/// caller hands the student's rate stage as it stood BEFORE this tick's update
+	/// (the shadow's own position in label()); the shadow then steps on as usual.
+	pub(crate) fn sync_inner(&mut self, real: &RateStageFw)
+	{
+		self.shadow = *real;
+	}
+
+	/// DIAGNOSTIC (imitation_probe, ctbr): the plan's hidden inputs per axis —
+	/// [ua (measured lagged axis force, N) ×3, shadow rate-loop integrator ×3,
+	/// shadow held axis force ×3, d̂ ×3]. Read-only.
+	pub(crate) fn diag_hidden(&self) -> [f64; 12]
+	{
+		let ua = if self.seeded { self.lagged_force() } else { [0.0; 3] };
+		let mut h = [0.0f64; 12];
+		for a in 0..3
+		{
+			let st = self.shadow.axis_state(a);
+			h[a] = ua[a];
+			h[3 + a] = st.integ;
+			h[6 + a] = st.held;
+			h[9 + a] = self.dhat[a];
+		}
+		h
+	}
+
 	/// The observer state d̂ (rad/s²) — the Option-A integral-target analogue, as the
 	/// motor-level MPCOF's.
 	pub(crate) fn integrals(&self) -> [f32; 3]
