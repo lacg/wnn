@@ -3,3 +3,5 @@
 --rotor-drag 0.78
 --disturbance L4B
 --report-seeds 99990201 99990202 99990203 99990204 99990205
+# ABI 35 item I (05/11/2026): pinned LAG-FREE — this argv was flown/scored with no motor lag; without the line below it would now resolve the airframe default.
+--motor-lag-s 0
