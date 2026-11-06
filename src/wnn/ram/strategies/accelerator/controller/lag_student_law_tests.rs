@@ -258,6 +258,7 @@ fn fly_inner(id: u8, lag: f32, policy: Option<&dyn Fn(&[f64]) -> [f64; 3]>, with
 	let mut rows = Vec::new();
 	let tail_start = steps * 4 / 5;
 	let (mut se, mut st, mut n, mut nt, mut stable) = (0.0, 0.0, 0usize, 0usize, 0usize);
+	let mut noise_rng = <rand::rngs::SmallRng as rand::SeedableRng>::seed_from_u64(seed_off as u64 ^ 0x5EED);
 	for ep in 0..episodes
 	{
 		let k = ep + seed_off;
@@ -291,7 +292,21 @@ fn fly_inner(id: u8, lag: f32, policy: Option<&dyn Fn(&[f64]) -> [f64; 3]>, with
 			let target = match policy
 			{
 				None => p,
-				Some(pol) => mix_plus(hover, pol(&f)),
+				Some(pol) =>
+				{
+					let mut u = pol(&f);
+					let sig = noise_sigma();
+					if sig > 0.0
+					{
+						use rand::Rng;
+						for ax in 0..3
+						{
+							// white imitation error, triangular approx of N(0, sig)
+							u[ax] += sig * (noise_rng.gen::<f64>() + noise_rng.gen::<f64>() + noise_rng.gen::<f64>() - 1.5) * 2.0;
+						}
+					}
+					mix_plus(hover, u)
+				}
 			};
 			let mut cmd = [0.0f64; 4];
 			for m in 0..4
@@ -588,6 +603,75 @@ fn diag_ram_student_real_trainer_under_lag()
 				if lag > 0.0 && !force { "delivered" } else { "command" },
 				rounds.iter().map(|v| (v * 100.0).round()).collect::<Vec<_>>()
 			);
+		}
+	}
+}
+
+fn noise_sigma() -> f64
+{
+	std::env::var("LAGDIAG_NOISE").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0)
+}
+
+/// Probe 5: how much white imitation error (control-space pwm units) the
+/// fitted linear student tolerates, T=0 vs T=0.20 (u_a observed).
+#[test]
+#[ignore]
+fn diag_noise_tolerance_under_lag()
+{
+	for lag in [0.0f32, 0.20]
+	{
+		let (mut rows, _, _, _) = fly(4, lag, None, 2, 10, 2000, 0);
+		let mut fitted = None;
+		for it in 0..3
+		{
+			let (f, _) = fit(&rows);
+			let (r, _, _, _) = fly(4, lag, Some(&f), 2, 10, 2000, 100 + it * 10);
+			rows.extend(r);
+			fitted = Some(f);
+		}
+		let f = fitted.unwrap();
+		let (st, err, steady) = { let (_, a, b, c) = fly(4, lag, Some(&f), 2, 20, 2000, 500); (a, b, c) };
+		eprintln!("[noisediag] T={lag:.2} sigma={} stable {st:5.1}% err {err:6.2}° steady {steady:6.2}°", noise_sigma());
+	}
+}
+
+/// Probe 6: partial u_a blindness — the fitted (e, ua) student with its u_a
+/// weights scaled by kappa (a RAM whose addresses rarely sample the u_a bits
+/// under-weights them), and its whole output scaled by g (gain error).
+#[test]
+#[ignore]
+fn diag_ua_weight_and_gain_sensitivity()
+{
+	let lag = 0.20f32;
+	let (mut rows, _, _, _) = fly(4, lag, None, 2, 10, 2000, 0);
+	let mut fitted = None;
+	for it in 0..3
+	{
+		let (f, _) = fit(&rows);
+		let (r, _, _, _) = fly(4, lag, Some(&f), 2, 10, 2000, 100 + it * 10);
+		rows.extend(r);
+		fitted = Some(f);
+	}
+	let f = fitted.unwrap();
+	// features (with_ua 2): e(6) | ua(3) | bias
+	for kappa in [1.0f64, 0.75, 0.5, 0.25, 0.0]
+	{
+		for g in [1.0f64, 0.7, 1.4]
+		{
+			let pol = |x: &[f64]| {
+				let mut u = [0.0f64; 3];
+				for (j, xj) in x.iter().enumerate()
+				{
+					let k = if (6..9).contains(&j) { kappa } else { 1.0 };
+					for ax in 0..3
+					{
+						u[ax] += k * f.w[j][ax] * xj;
+					}
+				}
+				u.map(|v| v * g)
+			};
+			let (_, st, err, steady) = fly_with(4, lag, &pol, 2, 20, 2000, 700);
+			eprintln!("[uadiag] kappa={kappa:.2} gain={g:.1}: stable {st:5.1}% err {err:6.2}° steady {steady:6.2}°");
 		}
 	}
 }

@@ -2405,6 +2405,63 @@ pub(crate) fn validate_train_regime(
 	Ok(())
 }
 
+/// WNN_IMIT_DIAG: one line per DAgger round — mean |decoded − label| (decode
+/// units, per motor), mean |label − neutral|, the student's saturated-command
+/// fraction and mean episode length. The student's decode is recovered from the
+/// recorded command and its (rebased) baseline: delta = pwm − raw_base, decode =
+/// neutral + delta·(1 − n)/dmax (gamma 1, n = 0.5 BINARY).
+fn imitation_diag_line(controller: &WnnController, cfg: &RewardGatedConfigPacked, it: usize, tilt_rad: f64, trajs: &[TrajectoryRs])
+{
+	let (_dc, dmax, _leak, _g) = controller.delta_params();
+	let n = controller.neutral_f32();
+	let (mut se, mut sl, mut sat, mut cnt, mut steps) = (0.0f64, 0.0f64, 0usize, 0usize, 0usize);
+	let mut se_early = (0.0f64, 0usize);
+	for t in trajs
+	{
+		steps += t.steps;
+		let anchor = if cfg.translation { t.vert_obs.first().map(|v| v[0]).unwrap_or(0.5) } else { 0.5 };
+		for k in 0..t.steps.min(t.label_base.len())
+		{
+			for m in 0..4
+			{
+				let raw_base = if cfg.translation && cfg.teacher_hover_mode == TEACHER_HOVER_DERIVED { anchor + (t.label_base[k][m] - n) } else { t.label_base[k][m] };
+				let delta = t.student_pwms[k][m] - raw_base;
+				let dec = n + delta * (1.0 - n) / dmax;
+				let lab = t.pid_pwms[k][m].clamp(0.0, 1.0);
+				let e = (dec - lab).abs() as f64;
+				se += e;
+				if k < 200
+				{
+					se_early.0 += e;
+					se_early.1 += 1;
+				}
+				sl += (lab - n).abs() as f64;
+				if t.student_pwms[k][m] <= 0.0 || t.student_pwms[k][m] >= 1.0
+				{
+					sat += 1;
+				}
+				cnt += 1;
+			}
+		}
+	}
+	if let Some(t) = trajs.first()
+	{
+		let k = 500.min(t.steps.saturating_sub(1));
+		if k < t.label_base.len()
+		{
+			eprintln!("[imit-row] round={it} k={k} anchor={:?} label={:?} pwm={:?} base={:?}",
+				t.vert_obs.first().map(|v| v[0]), t.pid_pwms[k], t.student_pwms[k], t.label_base[k]);
+		}
+	}
+	let c = cnt.max(1) as f64;
+	eprintln!(
+		"[imit] round={it} tilt={:.1}° |dec-label| {:.4} (first 200 steps {:.4}) |label-n| {:.4} sat {:.3} mean_steps {:.0}",
+		tilt_rad.to_degrees(), se / c, se_early.0 / se_early.1.max(1) as f64, sl / c, sat as f64 / c,
+		steps as f64 / trajs.len().max(1) as f64
+	);
+}
+
+
 /// Reward-gated DAGGER-style training in place. ONE Python↔Rust crossing per
 /// genome. Mirrors `reward_gated_train` in reward_gated.py.
 ///
@@ -2499,6 +2556,13 @@ pub(crate) fn dagger_train_inplace_with(
 		}
 		let round_scores: Vec<f64> = trajs.iter().map(|t| t.cumulative_reward).collect();
 		let mean_ep_reward = round_scores.iter().sum::<f64>() / round_scores.len().max(1) as f64;
+		// DIAGNOSTIC (WNN_IMIT_DIAG=1, 06/11/2026 lag hunt): how well the student's
+		// emitted decode matches the label it is trained toward, along its OWN
+		// trajectories. Read-only; never set in production.
+		if std::env::var("WNN_IMIT_DIAG").is_ok()
+		{
+			imitation_diag_line(controller, cfg, it, tilt_rad, &trajs);
+		}
 
 		// 2. Gate + 3. train on survivors.
 		let mut n_trained = 0_usize;
