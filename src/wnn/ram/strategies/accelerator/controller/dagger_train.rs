@@ -2476,7 +2476,13 @@ pub(crate) fn dagger_train_inplace_with(
 			.unwrap_or(false)
 		&& controller.dhat_params().is_none();
 
-	let use_gpu_bptt = gpu_bptt && controller.gpu_dims().2 > 0;
+	// The GPU walk does not port the L4 magnitude-priority commit: an L4 run walks on
+	// the CPU (loud, once) instead of silently dropping write_priority_err.
+	if gpu_bptt && cfg.write_priority_err && !GPU_BPTT_FALLBACK_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed)
+	{
+		eprintln!("[controller] ⚠️ GPU bptt walk does not port write_priority_err (L4) — walking on the CPU");
+	}
+	let use_gpu_bptt = gpu_bptt && !cfg.write_priority_err && controller.gpu_dims().2 > 0;
 	for it in 0..cfg.num_rounds
 	{
 		let tilt_rad = cfg.round_tilt_rad(it);
