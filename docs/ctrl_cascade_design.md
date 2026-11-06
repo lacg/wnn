@@ -230,8 +230,13 @@ Fh = ua = −d/c and I = −d/(c·ki). The rate integrator carries the trim, and
 
 **Inner-state estimate.** The teacher runs a SHADOW firmware rate stage on the measured gyro and on its
 own held setpoints. When the teacher flies (C4 rival, expert_drives, calibration, recorder), the
-shadow IS the inner loop. Under DAgger it is the loop the teacher's policy would have produced, and
-any force mismatch reaches the plan through d̂.
+shadow IS the inner loop. Under DAgger the student's setpoints drive the real loop, so before every
+decision the rollout copies the student's rate stage (as it stood before this tick) into the shadow
+(`Teacher::ctbr_sync_inner`, fix of 06/11/2026). The earlier rule — keep the shadow on the teacher's own
+unflown setpoints and let d̂ absorb the mismatch — labelled states the vehicle was not in: along the
+student's own states |I_shadow − I_real| was 0.16-0.40 against |I_real| 0.13-0.19, and the fix took the
+asymmetry-scored probe from 47% to 76% (`_op31`) and from 20% to 35% (stage 2), 3/3 seeds
+(`logs/controller/ctbr_probe/runs.log`).
 
 **Collective.** Not planned: the altitude PD's deviation passes through as for the PID teacher. The
 mixer adds it uniformly, so the planned axis forces are unchanged.
