@@ -1887,6 +1887,29 @@ fn replay_obs_batch_guard(batch: &TrainBatch, site: &str)
 	);
 }
 
+/// The per-record GPU solve's hard limits (fixed 05/11/2026, ABI 35): the phase-1
+/// kernel holds at most CTRL_MAX_KTOP=8 candidates per neuron and the beam kernel's
+/// tri-state buffer holds CTRL_BITS_WORDS*16 = 256 input positions. Before this fix
+/// the host silently clamped topk to 8 (the CPU is uncapped → a different solve) and
+/// never checked the input width (an input window >= 2 overflowed into the next beam
+/// slot). Both now REFUSE loudly instead of computing something else.
+fn legacy_solve_limits(topk_per_neuron: usize, total_input_bits: usize) -> Result<(), String>
+{
+	if topk_per_neuron > 8
+	{
+		return Err(format!(
+			"GPU solve supports topk_per_neuron <= 8 (got {topk_per_neuron}); the CPU solver is uncapped"
+		));
+	}
+	if total_input_bits > 256
+	{
+		return Err(format!(
+			"GPU beam supports <= 256 input bits (got {total_input_bits}); wider inputs overflow the beam slot"
+		));
+	}
+	Ok(())
+}
+
 pub struct ControllerTrainer
 {
 	device: Device,
@@ -2154,7 +2177,8 @@ impl ControllerTrainer
 
 		for l in layers
 		{
-			let k_top = topk_per_neuron.min(1usize << l.n_bits.min(31)).min(8);
+			legacy_solve_limits(topk_per_neuron, l.total_input_bits)?;
+			let k_top = topk_per_neuron.min(1usize << l.n_bits.min(31));
 			let all_neurons = l.num_inst * l.neurons_per_inst;
 			let conns_i32: Vec<i32> = l.conns.iter().map(|&c| c as i32).collect();
 			let ib: Vec<u8> = l.input_bits.iter().map(|&b| b as u8).collect();
@@ -2321,7 +2345,8 @@ impl ControllerTrainer
 		memory_mode: u8,
 	) -> Result<Vec<Option<Vec<bool>>>, String>
 	{
-		let k_top = topk_per_neuron.min(1usize << n_bits.min(31)).min(8);
+		legacy_solve_limits(topk_per_neuron, total_input_bits)?;
+		let k_top = topk_per_neuron.min(1usize << n_bits.min(31));
 		let all_neurons = num_motors * levels;
 		let conns_i32: Vec<i32> = connections.iter().map(|&c| c as i32).collect();
 		let ib: Vec<u8> = input_bits.iter().map(|&b| b as u8).collect();
@@ -2471,7 +2496,8 @@ impl ControllerTrainer
 		memory_mode: u8,
 	) -> Result<Option<Vec<bool>>, String>
 	{
-		let k_top = topk_per_neuron.min(1usize << n_bits.min(31)).min(8);
+		legacy_solve_limits(topk_per_neuron, total_input_bits)?;
+		let k_top = topk_per_neuron.min(1usize << n_bits.min(31));
 		let conns_i32: Vec<i32> = connections.iter().map(|&c| c as i32).collect();
 		let ib: Vec<u8> = input_bits.iter().map(|&b| b as u8).collect();
 		let tb: Vec<u8> = target_bits.iter().map(|&b| b as u8).collect();
