@@ -38,3 +38,16 @@ agent (.claude/agents/paper-scout.md) and by hand.
   ASSUMED sim τ = 0.15 s ("common" 0.05–0.25 s, uncited) → T_ours = 0.60 s.
 - [Bitcraze 2015 — CF2.0 M1 step response plot](bitcraze2015_m1_step_response.md) —
   brushed 0→100→0% PWM: digitised τ_rise ≈ 0.064 s, τ_fall ≈ 0.23–0.26 s (coast); Greiff 2017 J−/J+ ≈ 4.2.
+
+### Action space / cascade (CTBR vs motor commands) — added 06/11/2026
+- [Kaufmann 2022 — Benchmark of learned control policies (ICRA'22)](kaufmann2022_benchmark_learned_control_policies.md) — SRT vs CTBR vs LV; SRT crashes under BEM+20 ms delay, undeployable at 60 ms real latency; CTBR wins.
+- [Kaufmann 2023 — Swift champion drone racing (Nature)](kaufmann2023_swift_champion_drone_racing.md) — CTBR → Betaflight PID, 100 Hz policy, previous action in obs.
+- [Hwangbo 2017 — Quadrotor control with RL (RA-L)](hwangbo2017_quadrotor_control_rl.md) — state→rotor thrust, NO motor model, 7 µs/step; motor dynamics named as top sim gap.
+- [Molchanov 2019 — Sim-to-(Multi)-Real (IROS)](molchanov2019_sim_to_multi_real.md) — direct thrusts, memoryless MLP, T=0.15 s U(0.1,0.2); w/o-delay 0.21 m vs 0.19 m.
+- [Eschmann 2024 — Learning to Fly in Seconds (RA-L)](eschmann2024_learning_to_fly_in_seconds.md) — addendum: RPM output + action history; no-history 0/10 traj, no-rotor-delay 0/10.
+- [Ferede 2023 — E2E RL vs CTBR→INDI (arXiv 2311.16948)](ferede2023_e2e_time_optimal_quadcopter.md) — motor-level beats INDI by 0.17 s real but with measured RPM in obs; bigger sim-real gap.
+- [Zhang 2022 — single near-hover controller, RMA (arXiv 2209.09232)](zhang2022_single_nearhover_controller.md) — classical CTBR outer → learned motor-speed inner + 400-step history adaptation.
+- [O'Connell 2022 — Neural-Fly (Sci. Robotics)](oconnell2022_neural_fly.md) — learned outer loop over PX4 attitude PID; −66% vs nonlinear, −35% vs INDI in wind.
+- [Shi 2019 — Neural Lander (ICRA'19)](shi2019_neural_lander.md) — SN-DNN residual force in position loop; z err 0.13 m → 0.
+- [Koch 2019 — Neuroflight (arXiv 1901.06553)](koch2019_neuroflight.md) — 1344-weight NN rate loop on STM32F722 at 2 kHz; argues RPM input hurts transfer (Δe input: −45.07% error in sim).
+- [Kresse 2026 — Differentiable Weightless Controllers (ICML'26)](kresse2026_differentiable_weightless_controllers.md) — LUT/thermometer policies, MuJoCo only, 2–3 cycles, ~2 nJ/action on Artix-7.
