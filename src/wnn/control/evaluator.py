@@ -418,7 +418,11 @@ class ControllerGenome:
 	cells_handle: object | None = None
 
 
-CTBR_DEFAULT_RATE_MAX = (4.2, 4.2, 1.6)
+# p/q: attitude kp 6 × 30° + ki × i_limit (design §1.3). r: set from the R6 label
+# histogram (abi38_tests::diag_ctbr_label_histogram, 06/11/2026, stage-2 L4C): the
+# PID teacher's |r| labels reach p95 1.76 / p99 1.89 rad/s (the provisional 1.6
+# clipped ~10%), mpcof's p99 0.72 — 2.0 covers both; γ 2 keeps the finest step 0.002.
+CTBR_DEFAULT_RATE_MAX = (4.2, 4.2, 2.0)
 CTBR_DEFAULT_GAMMA = (1.0, 2.0, 2.0, 2.0)
 
 

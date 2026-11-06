@@ -3083,8 +3083,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "ahead). Rivals: C2 = PID[est] over the rate PID, C4 = MPCOF label over it. "
 	                     "Provenance arch=cascade|motor; marker suffix _ct38.")
 	ap.add_argument("--ctbr-rate-max", type=float, nargs=3, default=None, metavar=("P", "Q", "R"),
-	                help="ctbr: per-axis body-rate range (rad/s) of the p/q/r banks (default 4.2 4.2 1.6: "
-	                     "attitude kp 6 x 30 deg + ki x i_limit; yaw provisional, design §1.3).")
+	                help="ctbr: per-axis body-rate range (rad/s) of the p/q/r banks (default 4.2 4.2 2.0: "
+	                     "p/q = attitude kp 6 x 30 deg + ki x i_limit (design §1.3); r from the R6 label "
+	                     "histogram — the PID teacher's yaw labels reach p99 1.89 rad/s).")
 	ap.add_argument("--ctbr-coll-max", type=float, default=None,
 	                help="ctbr: collective-deviation range (pwm) of the thrust bank (default: the altitude "
 	                     "PD's own bound --alt-pd-max-delta).")

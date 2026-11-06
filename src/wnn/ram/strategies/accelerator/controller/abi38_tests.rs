@@ -497,3 +497,121 @@ fn diag_cases() -> Vec<(u8, usize, usize)>
 		None => vec![(0, 1, 1), (0, 1, 10), (4, 1, 1), (4, 10, 1), (4, 25, 1), (4, 10, 10), (4, 25, 10)],
 	}
 }
+
+/// DIAGNOSTIC (CTRL-27 brief: "the rate PID's integral should absorb motor
+/// asymmetry — measure whether it does"). The C2 composition (firmware attitude
+/// stage over the firmware rate PID, outer hold 10 like the student) on the
+/// attitude-only cf21 plant with a FIXED per-episode motor asymmetry drawn as the
+/// scorer draws it (±20%), no other weather. Steady error (last 20%) with the
+/// rate-loop and attitude-loop integrators on/off, vs the symmetric plant.
+#[test]
+#[ignore]
+fn diag_rate_integral_absorbs_asymmetry()
+{
+	use crate::abi38_pins::{PID_ATT, PID_RATE};
+	for lag in [0.0f32, 0.20]
+	{
+		let mut cfg = l4c_cfg(lag, 0);
+		cfg.translation = false;
+		cfg.xy_offset = 0.0;
+		cfg.att_err_tilt_ref = false;
+		cfg.af_mass = 0.0;
+		let af = AirframeRs::from_cfg(&cfg);
+		for (rate_ki, att_ki) in [(true, true), (false, true), (true, false), (false, false)]
+		{
+			let mut att = PID_ATT;
+			let mut rate = PID_RATE;
+			for ax in 0..3
+			{
+				if !att_ki
+				{
+					att[ax * 4 + 1] = 0.0;
+				}
+				if !rate_ki
+				{
+					rate[ax * 4 + 1] = 0.0;
+				}
+			}
+			for asym_on in [false, true]
+			{
+				let (mut steady, mut n) = (0.0f64, 0usize);
+				let mut worst = 0.0f64;
+				for ep in 0..40u64
+				{
+					let mut p = crate::pid_firmware::AttitudePidFirmwareRs::from_si_arrays(att, rate, PID_OUT_LIMIT_N, PID_HOVER_N, KT as f64, 1000, PID_ATT_HZ, PID_LPF_HZ).unwrap();
+					let mut o = crate::ctbr::CtbrOverRate::new(p.rate_stage(), 10);
+					let mut s = af.sim();
+					s.reset(Some([0.999, 0.03, -0.02, 0.0]), Some([0.0; 3]));
+					let asym = if asym_on { crate::controller::train_motor_asym([1.0; 4], 0.2, 7000 + ep) } else { [1.0; 4] };
+					s.set_disturbance([0.0; 3], 0.0, 0.1, asym, 0.0, 0.0, 0.0, 1, 0.0, 0, 0, 0.0);
+					let steps = 4000usize;
+					let mut tail = 0.0f64;
+					for t in 0..steps
+					{
+						let (g, _) = s.read_imu();
+						let q = s.quaternion();
+						let sp = p.att_stage_step([q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64], [0.0; 3]);
+						let pwm = o.fly([0.0, sp[0], sp[1], sp[2]], g);
+						s.step(pwm.map(|v| v as f32));
+						if t >= steps * 4 / 5
+						{
+							tail += s.attitude_error(None) as f64;
+						}
+					}
+					let e = (tail / (steps / 5) as f64).to_degrees();
+					steady += e;
+					worst = worst.max(e);
+					n += 1;
+				}
+				eprintln!(
+					"[asymdiag] lag {lag:.2} rate_ki {rate_ki:5} att_ki {att_ki:5} asym {}: steady mean {:.3}° worst {:.3}°",
+					if asym_on { "±20%" } else { "none" },
+					steady / n as f64,
+					worst
+				);
+			}
+		}
+	}
+}
+
+/// DIAGNOSTIC (design R6): the CTBR label histogram per bank on the stage-2 L4C
+/// regime, for both outer teachers — sizes the r_sp range (provisional ±1.6).
+#[test]
+#[ignore]
+fn diag_ctbr_label_histogram()
+{
+	for (teacher, name) in [(0u8, "pid"), (4u8, "mpcof")]
+	{
+		for lag in [0.0f32, 0.20]
+		{
+			let cfg = l4c_cfg(lag, teacher);
+			let mut c = ctbr_student(0, 10, 0x6157);
+			let batch = batch_of(&cfg, &mut c);
+			let mut cols: [Vec<f32>; 4] = Default::default();
+			for t in &batch
+			{
+				for (k, l) in t.pid_pwms.iter().enumerate()
+				{
+					if k % 10 == 0
+					{
+						for m in 0..4
+						{
+							cols[m].push(l[m].abs());
+						}
+					}
+				}
+			}
+			let q = |v: &mut Vec<f32>, f: f32| {
+				v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+				v[((v.len() - 1) as f32 * f) as usize]
+			};
+			let mut line = String::new();
+			for (m, bank) in ["T", "p", "q", "r"].iter().enumerate()
+			{
+				let (p50, p95, p99, mx) = (q(&mut cols[m], 0.5), q(&mut cols[m], 0.95), q(&mut cols[m], 0.99), q(&mut cols[m], 1.0));
+				line += &format!(" |{bank}| p50 {p50:.3} p95 {p95:.3} p99 {p99:.3} max {mx:.3};");
+			}
+			eprintln!("[labelhist] teacher {name} lag {lag:.2}:{line}");
+		}
+	}
+}
