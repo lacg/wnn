@@ -714,6 +714,10 @@ pub struct TrajectoryRs
 	// at each step — [rate I/i_limit ×3, d̂ ×3] (WnnController::cascade_obs_last, read
 	// right AFTER controller_step_4). ReplayObs.cascade. Empty when both blocks are off.
 	pub cascade_obs: Vec<[f32; 6]>,
+	// CTRL-40 (ABI 43): the motor-level d̂ feature value compute_features produced at
+	// each step (WnnController::dhat_estimate, read right AFTER controller_step_4).
+	// ReplayObs.dhat. Empty when obs_dhat is off.
+	pub dhat_obs: Vec<[f32; 3]>,
 	pub cumulative_reward: f64,
 	pub mean_attitude_error_rad: f64,
 	pub diverged: bool,
@@ -1736,6 +1740,11 @@ pub(crate) fn rollout_and_label_inner(
 	// which the teacher ignores anyway (no prior gyro) — is harmless. No-op for
 	// every teacher except MpcOf.
 	let mut last_applied = [0.5f32; 4];
+	// CTRL-39: under expert_drives the TEACHER flies, so an obs_pwm student's
+	// accumulator is handed the command that flew (anchor at t = 0) — the state its
+	// own accumulator holds in deploy (calibration sampler / recorder protocol).
+	let expert_pwm_proxy = cfg.expert_drives && controller.obs_pwm_flag();
+	let mut flown_prev = [controller.collective_anchor(); 4];
 	if let Some(c) = cap.as_deref_mut()
 	{
 		c.begin_episode(cfg.motor_lag_s, cfg.dt as f32);
@@ -1780,6 +1789,10 @@ pub(crate) fn rollout_and_label_inner(
 		// step, at the same start-of-step snapshot as the IMU — the exact twin of
 		// the scorer's rollout (episode_regime::feed_live_obs).
 		feed_live_obs(controller, sim, cfg, ep_collective_pwm);
+		if expert_pwm_proxy
+		{
+			controller.set_pwm_accumulator(flown_prev);
+		}
 		// obs_pwm replay fix: the pwm FEATURE this step's compute_features will
 		// produce (accumulator − anchor; step() decodes afterwards), recorded so
 		// the replay applies the identical value.
@@ -1871,6 +1884,11 @@ pub(crate) fn rollout_and_label_inner(
 		{
 			traj.cascade_obs.push(controller.cascade_obs_last());
 		}
+		// CTRL-40: and the motor d̂ it produced.
+		if controller.dhat_params().is_some()
+		{
+			traj.dhat_obs.push(controller.dhat_estimate());
+		}
 		// H3: when outputs are decoupled, the output banks are CONTROLS, so the
 		// training TARGETS (teacher + student MOTOR pwms) must be un-mixed into
 		// control space [T,τr,τp,τy]. Single point ⇒ all downstream paths (split /
@@ -1907,6 +1925,7 @@ pub(crate) fn rollout_and_label_inner(
 		}
 		sim.step(applied);
 		last_applied = applied; // offset-free MPC observer: what the sim saw
+		flown_prev = applied;
 		// G5 (ABI 32): vs the position loop's tilt reference when armed; else the
 		// legacy level call (episode_regime::scored_att_err).
 		let attitude_err = scored_att_err(sim, cfg);
@@ -2049,7 +2068,7 @@ fn traj_windows(traj: &TrajectoryRs, cfg: &RewardGatedConfigPacked) -> Vec<TrajW
 			sp: opt(traj.student_pwms.len(), end).then(|| traj.student_pwms[start..end].to_vec()),
 			lb: opt(traj.label_base.len(), end).then(|| traj.label_base[start..end].to_vec()),
 			ro: ReplayObs::slice(&traj.vert_obs, &traj.horiz_obs, &traj.pwm_dev, &traj.att_up, start, end)
-				.map(|r| r.with_cascade(&traj.cascade_obs, start, end)),
+				.map(|r| r.with_cascade(&traj.cascade_obs, start, end).with_dhat(&traj.dhat_obs, start, end)),
 			first: start == 0,
 		});
 		start = end;
@@ -2311,30 +2330,32 @@ pub fn eval_closed_loop_rs(
 /// `TrainBatch` layout: ep_base/ep_count group episodes per-genome; step_base/
 /// step_count index the flat sensor arrays (gyros/accels/targets are *3 per step,
 /// pid_pwms *4); init_q is the per-episode yaw-only quaternion (w,x,y,z).
-struct GatedFlat
+pub(crate) struct GatedFlat
 {
-	ep_base: Vec<u32>,
-	ep_count: Vec<u32>,
-	step_base: Vec<u32>,
-	step_count: Vec<u32>,
-	gyros: Vec<f32>,
-	accels: Vec<f32>,
-	targets: Vec<f32>,
-	pids: Vec<f32>,
-	init_q: Vec<f32>,
+	pub(crate) ep_base: Vec<u32>,
+	pub(crate) ep_count: Vec<u32>,
+	pub(crate) step_base: Vec<u32>,
+	pub(crate) step_count: Vec<u32>,
+	pub(crate) gyros: Vec<f32>,
+	pub(crate) accels: Vec<f32>,
+	pub(crate) targets: Vec<f32>,
+	pub(crate) pids: Vec<f32>,
+	pub(crate) init_q: Vec<f32>,
 	// Stale-altitude-features fix: per-step vertical (*3) / horizontal (*4)
 	// observation, the kernels' twin of ReplayObs.
-	vert_obs: Vec<f32>,
-	horiz_obs: Vec<f32>,
-	pwm_dev: Vec<f32>, // obs_pwm replay fix: pwm feature values [total_steps*4]
-	att_up: Vec<f32>,  // ABI 32: attitude-estimate "up" per step [total_steps*3]
+	pub(crate) vert_obs: Vec<f32>,
+	pub(crate) horiz_obs: Vec<f32>,
+	pub(crate) pwm_dev: Vec<f32>, // obs_pwm replay fix: pwm feature values [total_steps*4]
+	pub(crate) att_up: Vec<f32>,  // ABI 32: attitude-estimate "up" per step [total_steps*3]
+	pub(crate) dhat_rec: Vec<f32>, // CTRL-40: motor d̂ values per step [total_steps*3]
+	pub(crate) cas_rec: Vec<f32>,  // CTRL-40: cascade blocks per step [total_steps*6]
 }
 
 /// Flatten the gated (episode-major) trajectories into `GatedFlat`. All episodes
 /// belong to the ONE genome being trained ⇒ ep_base=[0], ep_count=[N]. The CPU
 /// split path re-seeds only yaw, so init_q is the yaw-only quaternion
 /// (cos θ/2, 0, 0, sin θ/2) that `yaw_from_quat` inverts back to `init_yaw`.
-fn flatten_gated(gated: &[&TrajectoryRs]) -> GatedFlat
+pub(crate) fn flatten_gated(gated: &[&TrajectoryRs]) -> GatedFlat
 {
 	let ne = gated.len();
 	let total_steps: usize = gated.iter().map(|t| t.gyros.len()).sum();
@@ -2352,6 +2373,8 @@ fn flatten_gated(gated: &[&TrajectoryRs]) -> GatedFlat
 		horiz_obs: Vec::with_capacity(total_steps * 4),
 		pwm_dev: Vec::with_capacity(total_steps * 4),
 		att_up: Vec::with_capacity(total_steps * 3),
+		dhat_rec: Vec::with_capacity(total_steps * 3),
+		cas_rec: Vec::with_capacity(total_steps * 6),
 	};
 	let mut sbase = 0u32;
 	for t in gated
@@ -2372,6 +2395,8 @@ fn flatten_gated(gated: &[&TrajectoryRs]) -> GatedFlat
 			f.horiz_obs.extend_from_slice(&t.horiz_obs.get(s).copied().unwrap_or([0.0; 4]));
 			f.pwm_dev.extend_from_slice(&t.pwm_dev.get(s).copied().unwrap_or([0.0; 4]));
 			f.att_up.extend_from_slice(&t.att_up.get(s).copied().unwrap_or([0.0; 3]));
+			f.dhat_rec.extend_from_slice(&t.dhat_obs.get(s).copied().unwrap_or([0.0; 3]));
+			f.cas_rec.extend_from_slice(&t.cascade_obs.get(s).copied().unwrap_or([0.0; 6]));
 		}
 		let (sn, cs) = (0.5 * t.init_yaw).sin_cos();
 		f.init_q.extend_from_slice(&[cs, 0.0, 0.0, sn]);
@@ -2404,6 +2429,27 @@ fn warn_gpu_split_no_pressure()
 	});
 }
 
+/// CTRL-40: flatten_gated zero-fills a stream a trajectory lacks; for the
+/// applied-actuator inputs that would replay zeros where deploy had values — the
+/// replay_obs_guard twin for the Metal path. Fail LOUDLY.
+fn applied_streams_guard(controller: &WnnController, gated: &[&TrajectoryRs])
+{
+	for t in gated
+	{
+		let n = t.gyros.len();
+		assert!(
+			controller.dhat_params().is_none() || t.dhat_obs.len() == n,
+			"try_gpu_split: obs_dhat is on but a trajectory carries {} d̂ records for {n} steps (CTRL-40)",
+			t.dhat_obs.len()
+		);
+		assert!(
+			controller.cascade_obs_ref().is_none() || t.cascade_obs.len() == n,
+			"try_gpu_split: a cascade block is on but a trajectory carries {} cascade records for {n} steps",
+			t.cascade_obs.len()
+		);
+	}
+}
+
 /// Try to run the whole state-split loop on the GPU for `gated`. Returns
 /// `Some(planted)` on success (controller mutated in place via interior
 /// mutability), or `None` if there is no usable Metal trainer or the dispatch
@@ -2415,6 +2461,7 @@ pub(crate) fn try_gpu_split(
 	target: [f32; 3],
 ) -> Option<usize>
 {
+	applied_streams_guard(controller, gated);
 	let fb = flatten_gated(gated);
 	let batch = crate::metal_controller::TrainBatch {
 		ep_base: &fb.ep_base,
@@ -2430,6 +2477,8 @@ pub(crate) fn try_gpu_split(
 		horiz_obs: &fb.horiz_obs,
 		pwm_dev: &fb.pwm_dev,
 		att_up: &fb.att_up,
+		dhat_rec: &fb.dhat_rec,
+		cas_rec: &fb.cas_rec,
 		selective: cfg.split_selective_output,
 		target_rpy: target,
 	};
@@ -2659,9 +2708,10 @@ pub(crate) fn dagger_train_inplace_with(
 		&& controller.gpu_dims().2 > 0;
 	// Task 3: offload the split loop to Metal (only meaningful WITH state-split).
 	// Contention-negative while the IDS worker owns the GPU — opt-in, run when free.
-	// DOB Fix A: never with the observer on — the GPU twin's replay still feeds
-	// d̂ the frozen accumulator (see split_train_loop's assert; the CPU split
-	// refuses too, but try_gpu_split would run FIRST and silently diverge).
+	// CTRL-40 (ABI 43): the motor d̂ observer and the CTRL-38 cascade blocks run here
+	// too — the Metal train/record kernels re-apply the RECORDED values
+	// (TrainBatch.dhat_rec / cas_rec), the CPU split's replay_obs twin. (Until ABI 42
+	// both forced the CPU split: DOB Fix A / CTRL-38.)
 	// SCOPE C STAGE 1 (13/08/2026) used to refuse the vertical channel here
 	// because the train/record kernels replayed it as zeros — and called the CPU
 	// replay safe, which had the SAME bug (stale vert_obs). Both are fixed
@@ -2671,11 +2721,7 @@ pub(crate) fn dagger_train_inplace_with(
 	let use_gpu_split = use_split
 		&& std::env::var("WNN_CONTROLLER_GPU_TRAIN")
 			.map(|s| s == "1")
-			.unwrap_or(false)
-		&& controller.dhat_params().is_none()
-		// CTRL-38: the Metal train/record kernels do not carry the cascade blocks'
-		// replay stream — the CPU split replays it (replay_obs_guard), so walk there.
-		&& controller.cascade_obs_ref().is_none();
+			.unwrap_or(false);
 
 	// The GPU walk does not port the L4 magnitude-priority commit: an L4 run walks on
 	// the CPU (loud, once) instead of silently dropping write_priority_err.
@@ -2764,6 +2810,7 @@ pub(crate) fn dagger_train_inplace_with(
 							pwm_dev: t.pwm_dev.clone(),
 							att_up: t.att_up.clone(),
 							cascade: t.cascade_obs.clone(),
+							dhat: t.dhat_obs.clone(),
 						})
 						.collect();
 					let (_r, _cf, planted, _pr, saturation, wishes) = controller.split_train_loop(

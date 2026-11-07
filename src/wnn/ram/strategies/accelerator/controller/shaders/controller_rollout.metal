@@ -2325,6 +2325,14 @@ struct TrainParams
 	// ABI 32 (obs_att_estimator), appended in lockstep with the Rust twin: the
 	// replay kernels read the recorded attitude-estimate stream (att_up_rec).
 	uint att_est_on;
+	// CTRL-40 (ABI 43), appended in lockstep with the Rust TrainParams: the replay
+	// re-applies the RECORDED values of the student's applied-actuator inputs (the
+	// CPU replay_obs twin): cas_* = the CTRL-38 cascade blocks (written into the
+	// sensors tail before the forward), and the motor-level d̂ (dhat_on above) from
+	// dhat_rec — injected by seeding the observer state with have_last = false, so
+	// derive_features' own d̂ block emits the recorded value without an update.
+	uint cas_rate_i;
+	uint cas_dhat;
 };
 
 // Mirror of WnnController::output_decode_target (controller.rs): map a per-motor
@@ -2381,6 +2389,31 @@ inline void slot_set_direct(device atomic_uint *slot_values, uint slot, bool tar
 	atomic_store_explicit(&slot_values[slot], target_true ? 1u : 0u, memory_order_relaxed);
 }
 
+// CTRL-40: before a replay step's derive_features — the recorded applied-actuator
+// inputs (twin of controller.rs apply_replay_obs → compute_features): the motor d̂
+// value via the observer state (have_last = false ⇒ derive_features emits dhat[]
+// as-is, no update) and the cascade blocks into the sensors TAIL (derive_features
+// fills only [NUM_FEATURES, num_features − n_cas)). Kept OUT of derive_features:
+// the default score pipeline's codegen is sensitive to that function (CTRL-38).
+inline void replay_applied_inputs(constant TrainParams &P, uint s, device const float *dhat_rec,
+																	device const float *cas_rec, thread float *sensors,
+																	thread float *dhat, thread bool &dhat_have_last)
+{
+	if (P.dhat_on != 0u)
+	{
+		for (uint a = 0u; a < 3u; a++)
+			dhat[a] = dhat_rec[s * 3u + a];
+		dhat_have_last = false;
+	}
+	uint fi = P.num_features - 3u * (P.cas_rate_i + P.cas_dhat);
+	if (P.cas_rate_i != 0u)
+		for (uint a = 0u; a < 3u; a++)
+			sensors[fi++] = cas_rec[s * 6u + a];
+	if (P.cas_dhat != 0u)
+		for (uint a = 0u; a < 3u; a++)
+			sensors[fi++] = cas_rec[s * 6u + 3u + a];
+}
+
 kernel void controller_train(
 		device const int *state_conns [[buffer(0)]],
 		device const int *output_conns [[buffer(1)]],
@@ -2409,6 +2442,8 @@ kernel void controller_train(
 		device const float *horiz_obs [[buffer(24)]], // [total_steps*4]
 		device const float *pwm_dev_rec [[buffer(25)]], // obs_pwm replay fix: pwm FEATURE values [total_steps*4]
 		device const float *att_up_rec [[buffer(26)]],  // ABI 32: attitude-estimate "up" [total_steps*3]
+		device const float *dhat_rec [[buffer(27)]],    // CTRL-40: motor d̂ values [total_steps*3]
+		device const float *cas_rec [[buffer(28)]],     // CTRL-40: cascade blocks [total_steps*6]
 		uint gid [[thread_position_in_grid]])
 {
 	uint g = gid;
@@ -2514,6 +2549,8 @@ kernel void controller_train(
 					F.att_up_z = att_up_rec[s3 + 2];
 				}
 			}
+			if (P.dhat_on != 0u || P.cas_rate_i != 0u || P.cas_dhat != 0u)
+				replay_applied_inputs(P, s3 / 3u, dhat_rec, cas_rec, sensors, dhat, dhat_have_last);
 
 			// Action-repeat hold: accumulators tick; no ring push / forward /
 			// nudge (deploy reads NO addresses on hold steps). prev_state unchanged.
@@ -2622,6 +2659,8 @@ kernel void controller_record(
 		device const float *horiz_obs [[buffer(21)]], // [total_steps*4]
 		device const float *pwm_dev_rec [[buffer(22)]], // obs_pwm replay fix: pwm FEATURE values [total_steps*4]
 		device const float *att_up_rec [[buffer(23)]],  // ABI 32: attitude-estimate "up" [total_steps*3]
+		device const float *dhat_rec [[buffer(24)]],    // CTRL-40: motor d̂ values [total_steps*3]
+		device const float *cas_rec [[buffer(25)]],     // CTRL-40: cascade blocks [total_steps*6]
 		uint2 tid [[thread_position_in_grid]])
 {
 	uint g = tid.x, ej = tid.y;
@@ -2722,6 +2761,8 @@ kernel void controller_record(
 				F.att_up_z = att_up_rec[s3 + 2];
 			}
 		}
+		if (P.dhat_on != 0u || P.cas_rate_i != 0u || P.cas_dhat != 0u)
+			replay_applied_inputs(P, s3 / 3u, dhat_rec, cas_rec, sensors, dhat, dhat_have_last);
 
 		// Action-repeat hold: accumulators tick; no ring push / forward / record.
 		// Mirrors CPU split_record's hold branch (records = decision steps only).

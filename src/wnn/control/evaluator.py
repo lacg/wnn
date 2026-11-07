@@ -900,6 +900,9 @@ def fit_thresholds_from_pid_rollouts(
 				if _pwm_obs:
 					feat_ctl.set_pwm_accumulator(_prev_pwm)
 				feat_ctl.step(list(gyro), list(accel), list(target))
+				# CTRL-39: the PID flies, not feat_ctl — its d̂ observer and lagged
+				# obs_pwm actuator twin must read what the plant received.
+				feat_ctl.observe_applied([float(v) for v in pwm])
 				feats = feat_ctl.get_last_feature_vector()
 				if _pwm_obs and len(pwm) == 4:
 					_prev_pwm = [float(v) for v in pwm]

@@ -341,16 +341,6 @@ fn cascade_blocks_cpu_scorer_matches_gpu()
 	}
 }
 
-/// The Metal train/record kernels refuse the blocks (dagger_train walks the CPU split).
-#[test]
-fn metal_train_kernels_refuse_the_blocks()
-{
-	let c = obs_student(4, 1, 12, true, false);
-	let e = crate::metal_controller::cascade_blocks_refused_pub(&c).unwrap_err();
-	assert!(e.contains("not ported"), "{e}");
-	assert!(crate::metal_controller::cascade_blocks_refused_pub(&prod_student(4, 1, false, 12)).is_ok());
-}
-
 /// The MEMORY recorder: the training-cascade driver lends the flown rate loop and
 /// feeds the observer what flew; the legacy PID driver (no firmware rate loop to
 /// lend) refuses a rate-I student loudly instead of recording an unflown integrator.

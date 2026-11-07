@@ -176,9 +176,9 @@ impl Driver<'_>
 			d.pilot.lend_flown_rate_stage(c);
 		}
 	}
-	/// Advance the sim one step with the driver's action; the quad command that flew
-	/// (None for the N-rotor allocator).
-	fn drive(&mut self, sim: &mut AttitudeSim, q: [f32; 4], gyro: [f32; 3], target: [f32; 3]) -> Option<[f32; 4]>
+	/// Advance the sim one step with the driver's action; returns the command that
+	/// FLEW (every rotor) — what the student's applied-actuator state must read.
+	fn drive(&mut self, sim: &mut AttitudeSim, q: [f32; 4], gyro: [f32; 3], target: [f32; 3]) -> Vec<f32>
 	{
 		match self
 		{
@@ -186,7 +186,7 @@ impl Driver<'_>
 			{
 				let pwm = p.step_pub(q, gyro, target);
 				sim.step(pwm);
-				Some(pwm)
+				pwm.to_vec()
 			}
 			Driver::Alloc(a) =>
 			{
@@ -196,14 +196,23 @@ impl Driver<'_>
 					.map(|x| x as f32)
 					.collect();
 				let _ = sim.step_n_core(&pwm);
-				None
+				pwm
 			}
-			Driver::Cascade(c) => Some(c.drive(sim, q, gyro, target)),
+			Driver::Cascade(c) => c.drive(sim, q, gyro, target).to_vec(),
 		}
+	}
+
+	/// CTRL-39: whether the flown command is a MOTOR command the student's own
+	/// accumulator would hold in deploy (Pid/Cascade). The allocator path flies
+	/// base + residual — the student's accumulator is the residual there, in deploy
+	/// too — so it gets the applied command (observe) but no accumulator proxy.
+	fn flies_student_coordinates(&self) -> bool
+	{
+		!matches!(self, Driver::Alloc(_))
 	}
 }
 
-fn run_episode<F: FnMut(&WnnController)>(
+fn run_episode<F: FnMut(&WnnController, &[f32])>(
 	c: &mut WnnController,
 	sim: &mut AttitudeSim,
 	driver: &mut Driver<'_>,
@@ -249,6 +258,10 @@ fn run_episode<F: FnMut(&WnnController)>(
 		c.set_collective_anchor(s.cfg.collective_pwm(ep, s.gravity, s.k_thrust));
 	}
 	driver.arm_weather(sim, ep);
+	// CTRL-39: the command that flew last step, as the student's applied-actuator
+	// state must read it (the calibration sampler's protocol): at t = 0 the anchor.
+	let mut flown_prev = [c.collective_anchor(); 4];
+	let proxy_pwm = c.obs_pwm_flag() && driver.flies_student_coordinates();
 	let mut n = 0usize;
 	for _ in 0..steps
 	{
@@ -275,20 +288,51 @@ fn run_episode<F: FnMut(&WnnController)>(
 		}
 		let q = sim.quaternion();
 		driver.lend_flown_rate_stage(c); // CTRL-38 a1 (no-op unless obs_rate_i)
+		// CTRL-39: under obs_pwm the student's accumulator holds the command that
+		// FLEW, as it does in deploy (the teacher flies here, not the student).
+		if proxy_pwm
+		{
+			c.set_pwm_accumulator(flown_prev);
+		}
 		c.step(gyro, accel, target);
-		on_step(c);
 		n += 1;
 		let flown = driver.drive(sim, q, gyro, target);
-		// CTRL-38 a2: the student's d̂ observer reads what the plant ACTUALLY received
-		// (the driver's command), as in DAgger/calibration. Gated on the cascade d̂ so
-		// every other recorder stays bit-identical (see the CTRL-38 report: the
-		// motor-level obs_dhat / lagged obs_pwm recorder never had this).
-		if let (true, Some(a)) = (c.cascade_dhat_on(), flown)
+		// CTRL-39 (was CTRL-38 for the cascade d̂ only): every applied-actuator state
+		// of the student — the motor-level d̂ observer, the lagged obs_pwm actuator
+		// twin, the cascade d̂ — reads what the plant ACTUALLY received, exactly as
+		// in DAgger and calibration. Before ABI 42 the recorder left pwm_applied at
+		// the student's own (discarded) command: train ≠ deploy.
+		c.observe_applied_slice(&flown);
+		if flown.len() >= 4
 		{
-			c.observe_applied(a);
+			flown_prev = [flown[0], flown[1], flown[2], flown[3]];
 		}
+		// After observe: step()'s cached layer inputs/addresses are untouched by it,
+		// and the hook sees the command that flew this step.
+		on_step(c, &flown);
 	}
 	n
+}
+
+/// CTRL-39 test hook: one recorder episode's per-step (feature vector, command that
+/// flew) — the regression test checks the student's applied-actuator features
+/// against the flown stream.
+#[cfg(test)]
+pub(crate) fn record_feature_stream(
+	c: &mut WnnController,
+	sim: &mut AttitudeSim,
+	driver: &mut Driver<'_>,
+	q0: [f32; 4],
+	om0: [f32; 3],
+	steps: usize,
+) -> (Vec<Vec<f32>>, Vec<Vec<f32>>)
+{
+	let (mut feats, mut flown) = (Vec::new(), Vec::new());
+	run_episode(c, sim, driver, q0, om0, [0.0; 3], steps, 0, None, |c, f| {
+		feats.push(c.last_feature_vector_ref().to_vec());
+		flown.push(f.to_vec());
+	});
+	(feats, flown)
 }
 
 /// Cells the controller VISITS along reference rollouts, as sorted-unique
@@ -326,7 +370,7 @@ pub fn record_address_universe(
 			steps,
 			ep,
 			s1,
-			|c| {
+			|c, _| {
 				state_set.extend(c.last_state_addresses_pub());
 				out_set.extend(c.last_output_addresses_pub());
 			},
@@ -374,7 +418,7 @@ pub fn record_input_entropy(
 			steps,
 			ep,
 			None,
-			|c| {
+			|c, _| {
 				let si = c.last_state_layer_input_ref();
 				for i in 0..sensor_window.min(si.len())
 				{

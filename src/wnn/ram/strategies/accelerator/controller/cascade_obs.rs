@@ -61,11 +61,6 @@ impl CascadeObs
 		self.rate_i
 	}
 
-	pub(crate) fn dhat_on(&self) -> bool
-	{
-		self.dhat.is_some()
-	}
-
 	pub(crate) fn observer(&self) -> Option<&CascadeDhat>
 	{
 		self.dhat.as_ref()

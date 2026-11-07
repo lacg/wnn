@@ -354,6 +354,8 @@ def _rollout_and_label(
 			for m in range(len(applied)):
 				if rng.random() < explore_eps:
 					applied[m] = float(np.clip(applied[m] + rng.uniform(-explore_scale, explore_scale), 0.0, 1.0))
+		# CTRL-39 / DOB Fix A: the student's applied-actuator inputs read what flew.
+		controller.observe_applied(applied)
 
 		gyros.append([float(gyro[0]), float(gyro[1]), float(gyro[2])])
 		accels.append([float(accel[0]), float(accel[1]), float(accel[2])])

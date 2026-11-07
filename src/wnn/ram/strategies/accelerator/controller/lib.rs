@@ -59,6 +59,10 @@ mod ctrl38_pins; // CTRL-38: cascade byte-identity pins with both new blocks OFF
 #[cfg(test)]
 mod ctrl38_tests; // CTRL-38: rate-I / d̂ blocks — physics, train = deploy, CPU/GPU parity
 #[cfg(test)]
+mod ctrl39_tests; // CTRL-39: the MEMORY recorder reads the FLOWN command (train = deploy)
+#[cfg(test)]
+mod ctrl40_tests; // CTRL-40: Metal split train/record for the applied-actuator inputs (CPU parity)
+#[cfg(test)]
 mod abi38_tests; // ABI 38: the cascade controller — identity, rivals, CPU/GPU parity, trainers
 #[cfg(test)]
 mod abi34_tests; // ABI 34: lag-aware teachers, one pwm convention under motor lag, T=0 pins
@@ -357,7 +361,31 @@ mod metal_controller;
 ///   thermometer rows ride at the TAIL of `thresholds`. ReplayObs gains `cascade=`
 ///   (the per-step values a rollout recorded; the replay re-applies them). Both OFF
 ///   ⇒ the ABI-40 cascade and the motor path bit-identical (ctrl38_pins, abi38_pins).
-pub const ABI_VERSION: u32 = 41;
+/// ABI 42 (07/11/2026, CTRL-39): the MEMORY recorder (record_ops::run_episode) hands
+///   the student the command that FLEW every step — observe_applied (every driver) and,
+///   under obs_pwm, the accumulator proxy (the calibration sampler's protocol); under
+///   expert_drives an obs_pwm student's accumulator is handed the flown command too.
+///   Before, the motor-level obs_dhat observer and the obs_pwm feature (lagged twin and
+///   lag-off accumulator) read the student's own discarded command (train ≠ deploy).
+///   Motor-level obs_pwm/obs_dhat lineages MOVE; cascade (CTRL-38 off) and motor
+///   students without those inputs are bit-identical (ctrl39_tests, ctrl38_pins,
+///   abi38_pins). New Python method WnnController.observe_applied; module constant
+///   RECORDER_INPUTS = "flown" (provenance recorder=).
+/// ABI 43 (07/11/2026, CTRL-40): the Metal state-split train/record kernels carry the
+///   student's applied-actuator inputs — the motor-level d̂ (TrainBatch.dhat_rec,
+///   injected as the observer state with have_last = false) and the CTRL-38 cascade
+///   blocks (cas_rec, written into the sensors tail) — re-applying the RECORDED values
+///   like the CPU replay (ReplayObs.dhat, new; ReplayObs.cascade). obs_dhat now also
+///   trains through the CPU state-split (the Fix-A refusal is gone), and dagger's
+///   WNN_CONTROLLER_GPU_TRAIN gate no longer steps these lineages aside. The bptt
+///   replay re-applies the recorded d̂ — equal to the Fix-A re-derivation bit for bit
+///   (ctrl40_tests), so bptt lineages do not move. Flags off: bit-identical (pins).
+pub const ABI_VERSION: u32 = 43;
+
+/// CTRL-39: what the reference recorders feed the student's applied-actuator inputs.
+/// "flown" (ABI ≥ 42) = the command the plant received; a wheel without the constant
+/// predates the fix (its MEMORY universes read the student's own command).
+pub const RECORDER_INPUTS: &str = "flown";
 
 /// Where the sn>0 trainer walks when WNN_CONTROLLER_GPU_BPTT is unset ("cpu"|"gpu").
 /// Decided by the item-E measurement rule (05/11/2026).
@@ -1240,6 +1268,7 @@ fn desirability_fitness_combine(
 fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()>
 {
 	m.add("ABI_VERSION", ABI_VERSION)?;
+	m.add("RECORDER_INPUTS", RECORDER_INPUTS)?;
 	m.add("BPTT_DEVICE_DEFAULT", BPTT_DEVICE_DEFAULT)?;
 	m.add_function(wrap_pyfunction!(fitness_combine, m)?)?;
 	m.add_function(wrap_pyfunction!(gated_fitness_combine, m)?)?;

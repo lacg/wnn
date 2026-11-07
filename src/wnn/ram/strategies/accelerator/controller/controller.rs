@@ -1972,12 +1972,6 @@ impl WnnController
 		self.cascade_obs.as_ref().is_some_and(|o| o.rate_i_on())
 	}
 
-	/// CTRL-38 a2: true when the d̂ feature is on.
-	pub(crate) fn cascade_dhat_on(&self) -> bool
-	{
-		self.cascade_obs.as_ref().is_some_and(|o| o.dhat_on())
-	}
-
 	/// CTRL-38 a1: a teacher-flown rollout (calibration, recorder, expert_drives)
 	/// hands the student the rate loop that ACTUALLY flies, before step(), so the
 	/// rate-I feature reads the vehicle's integrator rather than the student's own
@@ -2108,6 +2102,7 @@ impl WnnController
 	/// completes cleanly while measuring nothing.
 	pub(crate) fn replay_obs_guard(&self, obs: Option<&ReplayObs>, w: usize, site: &str)
 	{
+		self.replay_dhat_guard(obs, w, site);
 		if !self.replay_obs_required()
 		{
 			return;
@@ -2155,6 +2150,25 @@ impl WnnController
 		);
 	}
 
+	/// CTRL-40: the motor d̂ stream. A replay that carries one must carry exactly `w`
+	/// values; the state-split replays (split_record / split_retrain_output — CPU and
+	/// Metal) have no applied-pwm stream at all, so for them it is REQUIRED. The bptt
+	/// replay may instead re-derive d̂ from student_pwms (Fix A, asserted there).
+	fn replay_dhat_guard(&self, obs: Option<&ReplayObs>, w: usize, site: &str)
+	{
+		if self.dhat_b.is_none()
+		{
+			return;
+		}
+		let n = obs.map_or(0, |o| o.dhat.len());
+		let required = site.starts_with("split");
+		assert!(
+			n == w || (n == 0 && !required),
+			"{site}: obs_dhat is on but the replay d̂ stream is missing or misaligned (got {n}, need {w} \
+			 steps) — the replay would re-run the observer on a stream deploy never fed it (CTRL-40)"
+		);
+	}
+
 	/// Re-apply step `t`'s recorded observation before compute_features(t), so the
 	/// replayed frame carries the SAME vertical/horizontal bits deploy addressed.
 	pub(crate) fn apply_replay_obs(&mut self, obs: Option<&ReplayObs>, t: usize)
@@ -2186,6 +2200,14 @@ impl WnnController
 			if let (Some(e), Some(u)) = (self.att_est.as_mut(), o.att_up.get(t))
 			{
 				e.set_override(*u);
+			}
+			// CTRL-40: the recorded motor d̂ (when the rollout recorded it).
+			if self.dhat_b.is_some()
+			{
+				if let Some(v) = o.dhat.get(t)
+				{
+					self.dhat_feat_override = Some(*v);
+				}
 			}
 			// CTRL-38: the recorded cascade-block values (no flown loop in a replay).
 			if let (Some(c), Some(v)) = (self.cascade_obs.as_mut(), o.cascade.get(t))
@@ -2583,6 +2605,7 @@ impl WnnController
 			input_history: VecDeque::with_capacity(input_window_k),
 			last_output_cells: vec![0u8; num_output_neurons],
 			pwm_feat_override: None,
+			dhat_feat_override: None,
 			last_state_layer_input: Vec::new(),
 			last_output_layer_input: Vec::new(),
 			delta_control,
@@ -3143,22 +3166,29 @@ pub struct ReplayObs
 	// the flown commands, so it applies these as an override (apply_replay_obs).
 	// Empty on a trajectory without the blocks.
 	pub cascade: Vec<[f32; 6]>,
+	// CTRL-40 (ABI 43): the motor-level d̂ (obs_dhat) values compute_features produced
+	// at rollout, per step (WnnController::dhat_estimate right after the step). The
+	// replay applies them as an override, so neither the CPU split nor the Metal
+	// train/record kernels re-run the observer on a stream they cannot reproduce.
+	// Empty on a trajectory without the observer.
+	pub dhat: Vec<[f32; 3]>,
 }
 
 #[pymethods]
 impl ReplayObs
 {
 	#[new]
-	#[pyo3(signature = (vert, horiz, pwm_dev = vec![], att_up = vec![], cascade = vec![]))]
+	#[pyo3(signature = (vert, horiz, pwm_dev = vec![], att_up = vec![], cascade = vec![], dhat = vec![]))]
 	fn new(
 		vert: Vec<[f32; 3]>,
 		horiz: Vec<[f32; 4]>,
 		pwm_dev: Vec<[f32; 4]>,
 		att_up: Vec<[f32; 3]>,
 		cascade: Vec<[f32; 6]>,
+		dhat: Vec<[f32; 3]>,
 	) -> Self
 	{
-		Self { vert, horiz, pwm_dev, att_up, cascade }
+		Self { vert, horiz, pwm_dev, att_up, cascade, dhat }
 	}
 }
 
@@ -3181,7 +3211,7 @@ impl ReplayObs
 		{
 			let pwm_dev = if pwm_dev.len() >= end { pwm_dev[start..end].to_vec() } else { Vec::new() };
 			let att_up = if att_up.len() >= end { att_up[start..end].to_vec() } else { Vec::new() };
-			Some(Self { vert: vert[start..end].to_vec(), horiz: horiz[start..end].to_vec(), pwm_dev, att_up, cascade: Vec::new() })
+			Some(Self { vert: vert[start..end].to_vec(), horiz: horiz[start..end].to_vec(), pwm_dev, att_up, cascade: Vec::new(), dhat: Vec::new() })
 		}
 		else
 		{
@@ -3196,6 +3226,16 @@ impl ReplayObs
 		if cascade.len() >= end
 		{
 			self.cascade = cascade[start..end].to_vec();
+		}
+		self
+	}
+
+	/// CTRL-40: attach the window [start, end) of a trajectory's motor d̂ stream.
+	pub fn with_dhat(mut self, dhat: &[[f32; 3]], start: usize, end: usize) -> Self
+	{
+		if dhat.len() >= end
+		{
+			self.dhat = dhat[start..end].to_vec();
 		}
 		self
 	}
@@ -3326,6 +3366,9 @@ pub struct WnnController
 	// obs_pwm replay: the recorded feature value for the NEXT compute_features
 	// (one-shot, set by apply_replay_obs). None on every deploy path.
 	pwm_feat_override: Option<[f32; 4]>,
+	// CTRL-40: the recorded motor d̂ for the NEXT compute_features (one-shot, set
+	// by apply_replay_obs). None on every deploy path.
+	dhat_feat_override: Option<[f32; 3]>,
 
 	// --- H3: decoupled outputs (18/06/2026) ---
 	// When true, the 4 output banks are CONTROLS [common thrust T, τ_roll, τ_pitch,
@@ -4364,6 +4407,16 @@ impl WnnController
 		self.set_pwm_accumulator(motor_pwm);
 	}
 
+	/// CTRL-39 (ABI 42): tell the controller what the plant ACTUALLY received this
+	/// step (every rotor), after step() — DOB Fix A's observe_applied, for Python
+	/// hosts where something else flies (the threshold fitter's PID rollout). The
+	/// d̂ observers and the lagged obs_pwm actuator twin read it on the next step.
+	#[pyo3(name = "observe_applied")]
+	pub fn observe_applied_py(&mut self, applied: Vec<f32>)
+	{
+		self.observe_applied_slice(&applied);
+	}
+
 	/// Number of observation features (9 base + enabled H2 error/integral extras).
 	pub fn num_features(&self) -> usize
 	{
@@ -5089,19 +5142,9 @@ impl WnnController
 		{
 			return (0, 0, 0, Vec::new(), 0, Vec::new());
 		}
-		// DOB Fix A guard (12/08/2026): the split trainer's replays (split_record,
-		// split_retrain_output) do not thread the applied-pwm stream, so with the
-		// observer on their d̂ features would diverge from deploy — the frozen-
-		// accumulator bug the DOB arm measured. No recipe combines obs_dhat with
-		// sn>0; refuse LOUDLY instead of silently reproducing it. Threading
-		// student_pwms through split_record/split_retrain_output (as
-		// bptt_train_window now does) is the fix if that combination is ever wanted.
-		assert!(
-			self.dhat_b.is_none(),
-			"split_train_loop: obs_dhat + state-split is unsupported — the split \
-			 replays would feed the d̂ observer a frozen accumulator (train/deploy \
-			 divergence). Thread the applied-pwm stream first (Fix A, 12/08/2026)."
-		);
+		// CTRL-40 (was the DOB Fix A refusal): the split replays re-apply the RECORDED
+		// d̂ (ReplayObs.dhat, required by replay_dhat_guard), so obs_dhat + state-split
+		// trains on exactly the values deploy produced.
 		// Mode-aware like split_train: planting goes through cell_mode::plant_cell.
 		self.pending_init_yaws = init_yaws;
 		// Adaptive coarse-signature bucketing when coarse_target>0 (real
@@ -5901,7 +5944,12 @@ impl WnnController
 		// deploy never read. That bug is what the 11-12/08 DOB arm measured.
 		if let Some(b) = self.dhat_b
 		{
-			if self.dhat_have_last
+			// CTRL-40: a replay re-applies the value the rollout produced (no update).
+			if let Some(v) = self.dhat_feat_override.take()
+			{
+				self.dhat = v;
+			}
+			else if self.dhat_have_last
 			{
 				// ABI 35: under motor lag the model term reads the LAGGED actuator
 				// (the plant-filter twin), never the command. Lag off ⇒ the command.
@@ -8206,7 +8254,7 @@ mod sn0_tests
 			dep_feats.push(deploy.compute_features(g[t], a[t], tg[t]));
 			deploy.set_pwm_accumulator(pp[t]);
 		}
-		let ro = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev, att_up: vec![], cascade: vec![] };
+		let ro = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev, att_up: vec![], cascade: vec![], dhat: vec![] };
 		// REPLAY with the stream restored.
 		let mut replay = sn0_controller_obs_pwm();
 		replay.reset(0.0);
@@ -8250,7 +8298,7 @@ mod sn0_tests
 		);
 		// The guard is the fail-LOUD half: an obs_pwm controller must refuse a
 		// stream without the accumulator.
-		let short = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![] };
+		let short = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![] };
 		let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
 			sn0_controller_obs_pwm().replay_obs_guard(Some(&short), n, "test")
 		}));
@@ -9486,12 +9534,12 @@ mod sn0_tests
 	fn vertical_stream(n: usize) -> ReplayObs
 	{
 		let vert: Vec<[f32; 3]> = (0..n).map(|t| [0.7, -4.0 + 0.5 * t as f32, 4.0 - 0.5 * t as f32]).collect();
-		ReplayObs { vert, horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![] }
+		ReplayObs { vert, horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![] }
 	}
 
 	fn constant_stream(n: usize, v: [f32; 3]) -> ReplayObs
 	{
-		ReplayObs { vert: vec![v; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![] }
+		ReplayObs { vert: vec![v; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![] }
 	}
 
 	fn distinct_output_addresses_per_neuron(c: &WnnController) -> Vec<usize>

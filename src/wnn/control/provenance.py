@@ -51,6 +51,11 @@ class ControllerProvenance:
 	# loop over the firmware rate PID, lineage _ct38) or "motor:teacher=<t>" (the
 	# WNN emits motor pwm). Printed BEFORE fitness_pools.
 	arch: str = UNKNOWN
+	# ABI 42 (CTRL-39): what the reference recorders fed the student's applied-actuator
+	# inputs — "flown" (the command the plant received; wheel RECORDER_INPUTS) or
+	# "student" (a pre-fix wheel: motor-level obs_dhat / obs_pwm MEMORY universes were
+	# recorded on the student's own command). Printed BEFORE fitness_pools.
+	recorder: str = UNKNOWN
 
 	def line(self) -> str:
 		"""The single greppable line the ladder copies into the marker."""
@@ -60,6 +65,7 @@ class ControllerProvenance:
 		        f"obs_pwm={self.obs_pwm} "
 		        f"train_asym={self.train_asym} "
 		        f"arch={self.arch} "
+		        f"recorder={self.recorder} "
 		        f"fitness_pools={self.fitness_pools}")
 
 
@@ -101,7 +107,17 @@ def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: st
 		obs_pwm=obs_pwm.replace(" ", "_").replace('"', ""),
 		train_asym=train_asym.replace(" ", "_").replace('"', ""),
 		arch=arch.replace(" ", "_").replace('"', ""),
+		recorder=_recorder_inputs(),
 	)
+
+
+def _recorder_inputs() -> str:
+	"""CTRL-39: "flown" on a fixed wheel, "student" on a pre-ABI-42 one, never raises."""
+	try:
+		from wnn.control import _accel
+		return str(getattr(_accel.require_accel(), "RECORDER_INPUTS", "student"))
+	except Exception:
+		return UNKNOWN
 
 
 def _wheel_identity() -> tuple[str, int, str]:

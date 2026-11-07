@@ -502,6 +502,8 @@ def train_dagger(
 				use_expert = rng.random() < beta
 				action = list(expert_pwm) if use_expert else student_action
 				sim.step(list(action))
+				# CTRL-39 / DOB Fix A: the student's applied-actuator inputs read what flew.
+				controller.observe_applied([float(v) for v in action])
 				# mpcof's observer must see the action that was ACTUALLY APPLIED —
 				# on-policy, i.e. whatever the β-mix chose to fly, not the teacher's own
 				# plan. Without this it observes its own output, the model residual is

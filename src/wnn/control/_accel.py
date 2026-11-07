@@ -121,7 +121,13 @@ import os
 # CtbrSpec (obs_rate_i=, obs_dhat_plant=) — the inner rate PID's integrator I/i_limit
 # and the cascade mpcof teacher's own d̂ observer; ReplayObs(cascade=). Off ⇒ the
 # ABI-40 cascade and motor path bit-identical.
-EXPECTED_ABI = 41
+# ABI 42 (07/11/2026, CTRL-39): the MEMORY recorder (and expert_drives) hand the
+# student the command that FLEW — motor-level obs_dhat / obs_pwm universes move;
+# WnnController.observe_applied for Python hosts; RECORDER_INPUTS = "flown".
+# ABI 43 (07/11/2026, CTRL-40): the Metal state-split train/record path carries the
+# motor-level d̂ and the CTRL-38 cascade blocks (recorded streams re-applied); obs_dhat
+# trains through the state-split; ReplayObs(dhat=). Python surface otherwise unchanged.
+EXPECTED_ABI = 43
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

@@ -397,27 +397,6 @@ impl CascadeGpu
 	}
 }
 
-/// CTRL-38: the Metal train/record kernels replay a recorded batch WITHOUT the cascade
-/// blocks' stream (dagger_train routes such controllers to the CPU split) — refuse
-/// rather than replay a feature vector shorter than the controller's.
-fn cascade_blocks_refused(c: &WnnController, site: &str) -> Result<(), String>
-{
-	if c.cascade_obs_ref().is_some()
-	{
-		return Err(format!(
-			"{site}: the cascade feature blocks (obs_rate_i / obs_cascade_dhat) are not ported to the \
-			 Metal train/record kernels — replay on the CPU (replay_obs_guard carries the stream)"
-		));
-	}
-	Ok(())
-}
-
-#[cfg(test)]
-pub(crate) fn cascade_blocks_refused_pub(c: &WnnController) -> Result<(), String>
-{
-	cascade_blocks_refused(c, "test")
-}
-
 /// ABI 38: the cascade controller as the score kernel needs it — the bank alphabet
 /// and the inner rate stage, derived from the controller's CtbrSpec through the
 /// SAME RateStageFw the CPU flies (gains, saturation, hover, decimation and the
@@ -2042,6 +2021,11 @@ struct TrainParams
 	// ABI 32 (obs_att_estimator), appended at END of BOTH structs in lockstep:
 	// the replay kernels read the recorded attitude-estimate stream (att_up).
 	att_est_on: u32,
+	// CTRL-40 (ABI 43), appended at END of BOTH structs in lockstep: the replay
+	// re-applies the recorded cascade blocks (cas_rec) and the motor d̂ (dhat_rec,
+	// gated by dhat_on above) — see TrainBatch.dhat_rec / cas_rec.
+	cas_rate_i: u32,
+	cas_dhat: u32,
 }
 
 /// Per-genome recorded trajectory batch, flat across genomes (matches the kernel's
@@ -2072,6 +2056,11 @@ pub struct TrainBatch<'a>
 	// ABI 32: per-step attitude-estimate "up" (*3) the student's estimator
 	// produced at rollout (ReplayObs.att_up twin). Zeros when the estimator is off.
 	pub att_up: &'a [f32],
+	// CTRL-40 (ABI 43): per-step recorded values of the student's applied-actuator
+	// inputs — the motor-level d̂ (*3, ReplayObs.dhat twin; zeros when off) and the
+	// CTRL-38 cascade blocks (*6, ReplayObs.cascade twin; zeros when off).
+	pub dhat_rec: &'a [f32],
+	pub cas_rec: &'a [f32],
 	pub selective: bool,
 	pub target_rpy: [f32; 3],
 }
@@ -2103,6 +2092,14 @@ fn replay_obs_batch_guard(batch: &TrainBatch, site: &str)
 		"{site}: replay attitude-estimate buffer misaligned (att_up {} floats for {} steps) — \
 		 an obs_att_estimator student would replay a wrong or zero attitude",
 		batch.att_up.len(),
+		total_steps
+	);
+	assert!(
+		batch.dhat_rec.len() == total_steps * 3 && batch.cas_rec.len() == total_steps * 6,
+		"{site}: replay applied-actuator buffers misaligned (dhat_rec {} / cas_rec {} floats for {} steps) — \
+		 an obs_dhat / cascade-block student would replay values deploy never produced (CTRL-40)",
+		batch.dhat_rec.len(),
+		batch.cas_rec.len(),
 		total_steps
 	);
 }
@@ -2458,7 +2455,6 @@ impl ControllerTrainer
 		) = controllers[0].obs_params();
 		let (delta_control, _dmax, _dleak, _dgamma) = controllers[0].delta_params();
 		kernel_feature_dims_ok("controller_train (metal)", num_features, window)?;
-		cascade_blocks_refused(controllers[0], "controller_train (metal)")?;
 		let num_out = num_motors * levels;
 		let frame_bits = num_features * bpf;
 		let sensor_total = window * frame_bits;
@@ -2573,6 +2569,8 @@ impl ControllerTrainer
 			obs_pos_err_xy: controllers[0].horiz_params().0 as u32,
 			obs_vel_xy: controllers[0].horiz_params().1 as u32,
 			att_est_on: controllers[0].att_estimator_gains().is_some() as u32,
+			cas_rate_i: CascadeGpu::from_controller(controllers[0]).rate_i as u32,
+			cas_dhat: CascadeGpu::from_controller(controllers[0]).dhat as u32,
 		};
 
 		let b_sc = self.buf(&state_conns);
@@ -2611,14 +2609,16 @@ impl ControllerTrainer
 		let b_ho = self.buf(batch.horiz_obs); // (buffer 24)
 		let b_pa = self.buf(batch.pwm_dev); // obs_pwm replay fix (buffer 25)
 		let b_au = self.buf(batch.att_up); // ABI 32 attitude estimate (buffer 26)
+		let b_dr = self.buf(batch.dhat_rec); // CTRL-40 motor d̂ (buffer 27)
+		let b_cr = self.buf(batch.cas_rec); // CTRL-40 cascade blocks (buffer 28)
 
 		let cmd = self.queue.new_command_buffer();
 		let enc = cmd.new_compute_command_encoder();
 		enc.set_compute_pipeline_state(&self.pipeline);
-		let bufs: [&Buffer; 27] = [
+		let bufs: [&Buffer; 29] = [
 			&b_sc, &b_oc, &b_sk, &b_sv, &b_so, &b_scn, &b_th, &b_epb, &b_epc, &b_stb, &b_stc, &b_gy,
 			&b_ac, &b_tg, &b_pp, &b_mk, &b_ky, &b_vl, &b_soff, &b_scap, &b_par, &b_wr, &b_iy, &b_vo,
-			&b_ho, &b_pa, &b_au,
+			&b_ho, &b_pa, &b_au, &b_dr, &b_cr,
 		];
 		for (i, b) in bufs.iter().enumerate()
 		{
@@ -2687,7 +2687,6 @@ impl ControllerTrainer
 		let (delta_control, _dmax, _dleak, _dgamma) = controllers[0].delta_params();
 		let _ = (num_motors, levels, obpn);
 		kernel_feature_dims_ok("controller_record (metal)", num_features, window)?;
-		cascade_blocks_refused(controllers[0], "controller_record (metal)")?;
 		let frame_bits = num_features * bpf;
 		let sensor_total = window * frame_bits;
 		let out_input_len = frame_bits + n_state;
@@ -2786,6 +2785,8 @@ impl ControllerTrainer
 			obs_pos_err_xy: controllers[0].horiz_params().0 as u32,
 			obs_vel_xy: controllers[0].horiz_params().1 as u32,
 			att_est_on: controllers[0].att_estimator_gains().is_some() as u32,
+			cas_rate_i: CascadeGpu::from_controller(controllers[0]).rate_i as u32,
+			cas_dhat: CascadeGpu::from_controller(controllers[0]).dhat as u32,
 		};
 
 		let rec_out = vec![0u32; total_records * out_words];
@@ -2824,13 +2825,15 @@ impl ControllerTrainer
 		let b_ho = self.buf(batch.horiz_obs); // (buffer 21)
 		let b_pa = self.buf(batch.pwm_dev); // obs_pwm replay fix (buffer 22)
 		let b_au = self.buf(batch.att_up); // ABI 32 attitude estimate (buffer 23)
+		let b_dr = self.buf(batch.dhat_rec); // CTRL-40 motor d̂ (buffer 24)
+		let b_cr = self.buf(batch.cas_rec); // CTRL-40 cascade blocks (buffer 25)
 
 		let cmd = self.queue.new_command_buffer();
 		let enc = cmd.new_compute_command_encoder();
 		enc.set_compute_pipeline_state(&self.record_pipeline);
-		let bufs: [&Buffer; 24] = [
+		let bufs: [&Buffer; 26] = [
 			&b_sc, &b_sk, &b_sv, &b_so, &b_scn, &b_th, &b_epb, &b_epc, &b_stb, &b_stc, &b_gy, &b_ac,
-			&b_tg, &b_pp, &b_ro, &b_rs, &b_rp, &b_par, &b_iy, &b_rb, &b_vo, &b_ho, &b_pa, &b_au,
+			&b_tg, &b_pp, &b_ro, &b_rs, &b_rp, &b_par, &b_iy, &b_rb, &b_vo, &b_ho, &b_pa, &b_au, &b_dr, &b_cr,
 		];
 		for (i, b) in bufs.iter().enumerate()
 		{
@@ -4514,7 +4517,7 @@ fn build_parity_fixture_variant(
 	let total_steps = gyros.len() / 3;
 	let cpu_obs: Vec<ReplayObs> = cpu_g
 		.iter()
-		.map(|g| ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![], att_up: vec![], cascade: vec![] })
+		.map(|g| ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![] })
 		.collect();
 	Ok(ParityFixture {
 		c,
@@ -4574,6 +4577,8 @@ fn controller_train_parity_once(selective: bool) -> Result<(usize, usize, usize)
 		horiz_obs: &f.horiz_obs,
 		pwm_dev: &f.pwm_dev,
 		att_up: &f.att_up,
+		dhat_rec: &vec![0.0f32; f.gyros.len()],
+		cas_rec: &vec![0.0f32; f.gyros.len() * 2],
 		selective,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -4677,6 +4682,8 @@ fn controller_train_seeded_parity_once(
 		horiz_obs: &f.horiz_obs,
 		pwm_dev: &f.pwm_dev,
 		att_up: &f.att_up,
+		dhat_rec: &vec![0.0f32; f.gyros.len()],
+		cas_rec: &vec![0.0f32; f.gyros.len() * 2],
 		selective,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -5577,6 +5584,8 @@ pub(crate) fn controller_split_train_loop_parity_variant(
 		horiz_obs: &f_gpu.horiz_obs,
 		pwm_dev: &f_gpu.pwm_dev,
 		att_up: &f_gpu.att_up,
+		dhat_rec: &vec![0.0f32; f_gpu.gyros.len()],
+		cas_rec: &vec![0.0f32; f_gpu.gyros.len() * 2],
 		selective,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -5706,6 +5715,8 @@ fn controller_record_parity_once() -> Result<(usize, usize, usize, usize), Strin
 		horiz_obs: &f.horiz_obs,
 		pwm_dev: &f.pwm_dev,
 		att_up: &f.att_up,
+		dhat_rec: &vec![0.0f32; f.gyros.len()],
+		cas_rec: &vec![0.0f32; f.gyros.len() * 2],
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -6837,6 +6848,8 @@ fn controller_record_and_scan_parity_once() -> Result<(usize, usize, usize, usiz
 		horiz_obs: &f.horiz_obs,
 		pwm_dev: &f.pwm_dev,
 		att_up: &f.att_up,
+		dhat_rec: &vec![0.0f32; f.gyros.len()],
+		cas_rec: &vec![0.0f32; f.gyros.len() * 2],
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -6941,6 +6954,8 @@ fn controller_record_search_parity_once() -> Result<(usize, usize, usize), Strin
 		horiz_obs: &f.horiz_obs,
 		pwm_dev: &f.pwm_dev,
 		att_up: &f.att_up,
+		dhat_rec: &vec![0.0f32; f.gyros.len()],
+		cas_rec: &vec![0.0f32; f.gyros.len() * 2],
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -7385,7 +7400,7 @@ fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool)
 		{
 			pwm_flat.extend_from_slice(v);
 		}
-		cpu_obs.push(ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev, att_up: vec![], cascade: vec![] });
+		cpu_obs.push(ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev, att_up: vec![], cascade: vec![], dhat: vec![] });
 	}
 	let (tau, target_min) = (0.05f32, 2usize);
 	let trainer = ControllerTrainer::new()?;
@@ -7403,6 +7418,8 @@ fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool)
 		horiz_obs: &horiz_flat,
 		pwm_dev: &pwm_flat,
 		att_up: &vec![0.0f32; f.gyros.len()],
+		dhat_rec: &vec![0.0f32; f.gyros.len()],
+		cas_rec: &vec![0.0f32; f.gyros.len() * 2],
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -7440,7 +7457,7 @@ fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool)
 	let const_obs: Vec<ReplayObs> = f
 		.cpu_g
 		.iter()
-		.map(|g| ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![[0.0; 4]; g.len()], att_up: vec![], cascade: vec![] })
+		.map(|g| ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![[0.0; 4]; g.len()], att_up: vec![], cascade: vec![], dhat: vec![] })
 		.collect();
 	let mut c2 = c.clone();
 	let (rows_const, ..) = c2.split_record_pub(
@@ -7549,6 +7566,7 @@ fn controller_record_att_est_parity_once() -> Result<(usize, usize, usize, bool)
 			pwm_dev: vec![],
 			att_up,
 			cascade: vec![],
+			dhat: vec![],
 		});
 	}
 	let (tau, target_min) = (0.05f32, 2usize);
@@ -7567,6 +7585,8 @@ fn controller_record_att_est_parity_once() -> Result<(usize, usize, usize, bool)
 		horiz_obs: &horiz_flat,
 		pwm_dev: &pwm_flat,
 		att_up: &up_flat,
+		dhat_rec: &vec![0.0f32; f.gyros.len()],
+		cas_rec: &vec![0.0f32; f.gyros.len() * 2],
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -7596,6 +7616,7 @@ fn controller_record_att_est_parity_once() -> Result<(usize, usize, usize, bool)
 			pwm_dev: vec![],
 			att_up: vec![[0.0, 0.0, 1.0]; g.len()],
 			cascade: vec![],
+			dhat: vec![],
 		})
 		.collect();
 	let mut c2 = c.clone();
@@ -7670,7 +7691,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 		{
 			vert_flat.extend_from_slice(v);
 		}
-		cpu_obs.push(ReplayObs { vert, horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![], att_up: vec![], cascade: vec![] });
+		cpu_obs.push(ReplayObs { vert, horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![] });
 	}
 	let (tau, target_min) = (0.05f32, 2usize);
 	let trainer = ControllerTrainer::new()?;
@@ -7688,6 +7709,8 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 		horiz_obs: &horiz_flat,
 		pwm_dev: &pwm_flat,
 		att_up: &vec![0.0f32; f.gyros.len()],
+		dhat_rec: &vec![0.0f32; f.gyros.len()],
+		cas_rec: &vec![0.0f32; f.gyros.len() * 2],
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -7726,7 +7749,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 	let const_obs: Vec<ReplayObs> = f
 		.cpu_g
 		.iter()
-		.map(|g| ReplayObs { vert: vec![[0.7, 0.0, 0.0]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![], att_up: vec![], cascade: vec![] })
+		.map(|g| ReplayObs { vert: vec![[0.7, 0.0, 0.0]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![] })
 		.collect();
 	let mut c2 = c.clone();
 	let (rows_const, ..) = c2.split_record_pub(
@@ -10073,6 +10096,8 @@ mod tests
 			horiz_obs: &f.horiz_obs,
 			pwm_dev: &f.pwm_dev,
 			att_up: &f.att_up,
+			dhat_rec: &vec![0.0f32; f.gyros.len()],
+			cas_rec: &vec![0.0f32; f.gyros.len() * 2],
 			selective: false,
 			target_rpy: [0.0, 0.0, 0.0],
 		};
