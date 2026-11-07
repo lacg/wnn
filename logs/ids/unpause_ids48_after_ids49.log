@@ -1,0 +1,2 @@
+2026-11-07T16:25:10Z armed; waiting for all IDS49 terminal
+2026-11-07T16:33:16Z CANCELLED by Luiz 07/11: IDS-48 goes first after all (FIFO: 7350-7367 < 7368-7379); flows re-queued by hand
