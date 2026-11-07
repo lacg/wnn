@@ -16,3 +16,5 @@
 2026-11-07T00:06:51Z END S1_ct40 steady=3.40°  err=6.17°  stable=46.2%  alt=0.223m
 2026-11-07T00:06:51Z CT40 DONE
 2026-11-07T00:07:04Z START C-S2-d_full_s2 (full pipeline)
+2026-11-07T01:20:07Z END C-S2-d_full_s2 rc=0   [report-seeds] HEADLINE-MEMORY#2 MULTI-SEED held-out (5 seeds [99990101, 99990102, 99990103, 99990104, 99990105]): stable=97.4±3.8%  err=2.86±0.24°  steady=1.64±0.11°  jerk=0.0026±0.0000  mono_viol=13±0  alt=0.186±0.029m  pos=0.409±0.026m  dx=0.226±0.017m  d
+2026-11-07T02:15:03Z START M-S2-d_full_s2 (full pipeline)
