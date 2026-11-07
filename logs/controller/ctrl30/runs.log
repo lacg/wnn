@@ -1,0 +1,32 @@
+2026-11-07T17:22:42Z START C-S2-d_werrx2_full_s2 err_sq=0.4390 stable=0.1756 steady=0.3073 pos=0.0780
+2026-11-07T17:50:46Z RESCORE35 START control
+2026-11-07T17:54:26Z RESCORE35 END control rc=0 genome=MEMORY#2 stable=82.2±25.4%  err=3.71±1.51°  steady=2.29±1.18° alt=0.188±0.053m pos=0.432±0.054m stable_fail=623/3500 
+2026-11-07T18:04:58Z END C-S2-d_werrx2_full_s2 rc=0   [stage-select] HEADLINE stage=NEURONS genome=NEURONS#0 (union rank over 9 candidates = top-3 of every stage, on 5 val seeds; NEVER on the report seeds)   [stage-select] HEADLINE held-out: stable=96.8% err=2.93°  steady=1.84°  jerk=0.0027  mono_viol=13  alt=0.213m  pos=0.436m  dx=0.236m  dy=0.204m  effort=1.923 
+2026-11-07T18:04:58Z START C-S2-d_wstabx2_full_s2 err_sq=0.2296 stable=0.3673 steady=0.3214 pos=0.0816
+2026-11-07T18:06:26Z RESCORE35 START errx2
+2026-11-07T18:09:59Z RESCORE35 END errx2 rc=0 genome=NEURONS#0 stable=83.9±24.7%  err=3.66±1.35°  steady=2.35±1.05° alt=0.211±0.074m pos=0.453±0.063m stable_fail=562/3500 
+2026-11-07T18:46:43Z END C-S2-d_wstabx2_full_s2 rc=0   [stage-select] HEADLINE stage=NEURONS genome=NEURONS#0 (union rank over 9 candidates = top-3 of every stage, on 5 val seeds; NEVER on the report seeds)   [stage-select] HEADLINE held-out: stable=97.2% err=2.91°  steady=1.79°  jerk=0.0026  mono_viol=13  alt=0.198m  pos=0.418m  dx=0.228m  dy=0.203m  effort=1.920 
+2026-11-07T18:46:43Z START C-S2-d_wsteadyx2_full_s2 err_sq=0.2018 stable=0.1614 steady=0.5650 pos=0.0717
+2026-11-07T18:47:59Z RESCORE35 START stabx2
+2026-11-07T18:51:49Z RESCORE35 END stabx2 rc=0 genome=NEURONS#0 stable=81.1±25.8%  err=3.81±1.51°  steady=2.48±1.32° alt=0.198±0.063m pos=0.439±0.057m stable_fail=660/3500 
+2026-11-07T19:27:22Z END C-S2-d_wsteadyx2_full_s2 rc=0   [stage-select] HEADLINE stage=NEURONS genome=NEURONS#0 (union rank over 9 candidates = top-3 of every stage, on 5 val seeds; NEVER on the report seeds)   [stage-select] HEADLINE held-out: stable=97.6% err=2.82°  steady=1.62°  jerk=0.0027  mono_viol=13  alt=0.197m  pos=0.414m  dx=0.227m  dy=0.198m  effort=1.916 
+2026-11-07T19:27:22Z START C-S2-d_wposx2_full_s2 err_sq=0.2557 stable=0.2045 steady=0.3580 pos=0.1818
+2026-11-07T19:27:49Z RESCORE35 START steadyx2
+2026-11-07T19:31:31Z RESCORE35 END steadyx2 rc=0 genome=NEURONS#0 stable=82.5±26.7%  err=3.69±1.63°  steady=2.28±1.26° alt=0.197±0.059m pos=0.437±0.060m stable_fail=611/3500 
+2026-11-07T20:05:46Z END C-S2-d_wposx2_full_s2 rc=0   [stage-select] HEADLINE stage=NEURONS genome=NEURONS#0 (union rank over 9 candidates = top-3 of every stage, on 5 val seeds; NEVER on the report seeds)   [stage-select] HEADLINE held-out: stable=98.8% err=2.88°  steady=1.73°  jerk=0.0026  mono_viol=13  alt=0.177m  pos=0.406m  dx=0.230m  dy=0.204m  effort=1.919 
+2026-11-07T20:05:46Z START C-S2-d_wpos0_full_s2 err_sq=0.3125 stable=0.2500 steady=0.4375 pos=0.0000
+2026-11-07T20:07:31Z RESCORE35 START posx2
+2026-11-07T20:11:17Z RESCORE35 END posx2 rc=0 genome=NEURONS#0 stable=83.1±26.3%  err=3.67±1.49°  steady=2.20±0.90° alt=0.179±0.052m pos=0.431±0.054m stable_fail=590/3500 
+2026-11-07T20:47:51Z END C-S2-d_wpos0_full_s2 rc=0   [stage-select] HEADLINE stage=NEURONS genome=NEURONS#0 (union rank over 9 candidates = top-3 of every stage, on 5 val seeds; NEVER on the report seeds)   [stage-select] HEADLINE held-out: stable=98.6% err=2.87°  steady=1.66°  jerk=0.0026  mono_viol=13  alt=0.207m  pos=0.427m  dx=0.229m  dy=0.203m  effort=1.918 
+2026-11-07T20:47:51Z START C-S2-d_wequal_full_s2 err_sq=0.2500 stable=0.2500 steady=0.2500 pos=0.2500
+2026-11-07T20:49:17Z RESCORE35 START pos0
+2026-11-07T20:53:00Z RESCORE35 END pos0 rc=0 genome=NEURONS#0 stable=83.1±25.8%  err=3.72±1.52°  steady=2.27±1.22° alt=0.207±0.068m pos=0.449±0.065m stable_fail=593/3500 
+2026-11-07T21:26:44Z END C-S2-d_wequal_full_s2 rc=0   [stage-select] HEADLINE stage=NEURONS genome=NEURONS#2 (union rank over 9 candidates = top-3 of every stage, on 5 val seeds; NEVER on the report seeds)   [stage-select] HEADLINE held-out: stable=98.2% err=2.90°  steady=1.78°  jerk=0.0026  mono_viol=13  alt=0.186m  pos=0.414m  dx=0.227m  dy=0.210m  effort=1.919 
+2026-11-07T21:26:44Z CTRL-30 ROUND A DONE
+2026-11-07T21:27:01Z RESCORE35 START equal
+2026-11-07T21:30:43Z RESCORE35 END equal rc=0 genome=NEURONS#2 stable=83.5±24.3%  err=3.71±1.34°  steady=2.39±1.24° alt=0.187±0.052m pos=0.433±0.048m stable_fail=576/3500 
+2026-11-07T21:30:43Z RESCORE35 DONE
+2026-11-07T21:31:52Z START C-S2-d_leak999_full_s2 --integral-leak 0.999 (35 airframes)
+2026-11-07T22:17:19Z END C-S2-d_leak999_full_s2 rc=0   [stage-select] HEADLINE stage=NEURONS genome=NEURONS#2 (union rank over 9 candidates = top-3 of every stage, on 5 val seeds; NEVER on the report seeds)   [stage-select] HEADLINE held-out: stable=86.2% err=3.59°  steady=2.03°  jerk=0.0025  mono_viol=12  alt=0.192m  pos=0.437m  dx=0.232m  dy=0.236m  effort=1.929 
+2026-11-07T23:05:11Z ABORTED C-S2-d_leak999_full_s2 at MEMORY gen 6 — Luiz 07/11: CTRL-37/38 fly on the posx2 weights (relaunched as ctrl37_38/chain.sh)
+2026-11-07T23:05:30Z CORRECTION: the ABORTED line above is WRONG — C-S2-d_leak999_full_s2 had COMPLETED (rc 0, END 22:17:19Z); files restored to their original names. The posx2 versions fly as new tags in logs/controller/ctrl37_38/.
