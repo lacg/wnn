@@ -123,11 +123,13 @@ def _score_with_sink(args, ec, spec, genome, report_seed: int, train_seed: int,
 def _episode_rows(sink: dict, ics: list[dict]) -> list[dict]:
 	rows = []
 	for r in sink["episodes"]:
-		gi, ep, stable, diverged, err, steady, alt, pos, effort, jerk, steps = r
+		# metal_controller.rs row: 11 fields, + mean |dx|, |dy| (m) appended by ABI 32.
+		gi, ep, stable, diverged, err, steady, alt, pos, effort, jerk, steps = r[:11]
+		dx, dy = (r[11], r[12]) if len(r) >= 13 else (None, None)
 		ep = int(ep)
 		d = dict(ep=ep, stable=bool(stable), diverged=bool(diverged),
 		         err_deg=math.degrees(err), steady_deg=math.degrees(steady),
-		         alt_m=alt, pos_m=pos, effort=effort, jerk=jerk, steps=int(steps))
+		         alt_m=alt, pos_m=pos, effort=effort, jerk=jerk, steps=int(steps), dx_m=dx, dy_m=dy)
 		d.update(ics[ep])
 		for k in ("z0", "vz0", "mass", "coll", "x0", "y0"):
 			v = sink.get(k)
@@ -142,6 +144,12 @@ def _describe(rows: list[dict]) -> None:
 	hard = sum(1 for r in fails if r["diverged"])
 	print(f"\n  episodes {len(rows)}  stable {len(passes)}  failed {len(fails)}  "
 	      f"(HARD/diverged {hard}, SOFT/>5° {len(fails) - hard})")
+	# The tail, not the mean, decides stable%: a controller with a lower mean err can
+	# still fail where a tighter one never crosses the 5° per-episode threshold.
+	for key, name in (("err_deg", "err°"), ("steady_deg", "steady°")):
+		q = np.percentile([r[key] for r in rows], [10, 50, 90, 95, 99, 100])
+		print(f"  per-episode {name:8s} p10 {q[0]:5.2f}  p50 {q[1]:5.2f}  p90 {q[2]:5.2f}  "
+		      f"p95 {q[3]:5.2f}  p99 {q[4]:5.2f}  max {q[5]:5.2f}")
 	if not fails:
 		return
 	print("\n  FAILED EPISODES (each row = one episode; ICs are the drawn values):")
