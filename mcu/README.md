@@ -1,7 +1,110 @@
-# MCU control-step cost harness (Cortex-M4)
+# MCU: on-board cascade controller + control-step cost harness (Cortex-M4)
 
-Measures per-control-step cost for the WNN controller against PID and an MLP on
-a Cortex-M4, under QEMU (`mps2-an386`).
+Two things live here:
+
+1. **The on-board CASCADE controller** (`wnn_cascade.[ch]`, 07/11/2026): the C twin
+   of the Rust `WnnController::step` for an exported `--output-mode ctbr` winner,
+   bit-identical to the simulator on the host (see *Parity* below).
+2. **The instruction-count harness** (`bench.c`, `bench_inc.c`): per-step cost of
+   the WNN lookup vs PID vs MLP under QEMU (`mps2-an386`), on synthetic inputs.
+
+## Cascade controller
+
+### What it ports (and what it refuses)
+
+| Part | Rust reference (ABI 41) | C |
+|---|---|---|
+| features: 9 raw, tilt p/i, per-axis p/i (yaw dropped or not), integral leak/scale, yaw err/err_i (dt-integrated heading), collective / alt err / vz, pos err xy / vel xy | `controller.rs compute_features` | `compute_features` |
+| Mahony attitude estimator (f64, kp/ki from the wheel's defaults) + body "up" | `estimator.rs`, `att_estimator.rs` | `mahony_*`, `up_from_quat` |
+| CTRL-38 rate-I: I / i_limit per axis (raw I when i_limit = 0) | `ctbr.rs rate_integral_norm`, `cascade_obs.rs` | `cascade_block` |
+| CTRL-38 d-hat: MPCOF offset-free observer on the APPLIED command, modelled motor lag, prime/seed protocol, clamp at c*out_limit, per-flight reset | `cascade_dhat.rs` | `dhat_*` |
+| thermometer, output-layer addresses (MSB first), TRUE on-set binary search | `step`, `neuron_memory.rs address_over` | `encode_frame`, `forward_output` |
+| BINARY antagonist decode, CTBR absolute or leaky delta law, gamma alphabet, action-repeat hold | `decode_ctbr`, `decoded_to_delta` | `decode_ctbr`, `wnn_tick` |
+| firmware rate PID (lpf2p D filter, decimation, '+' mixer, collective transport) | `pid_firmware.rs RateStageFw`, `ctbr.rs CtbrInner::fly` | `wnn_ratefw.[ch]` (reference only, see below) |
+
+The exporter **refuses** (lists every reason, writes nothing) a winner the C cannot
+run: motor-level (`pwm`) output, any memory mode but BINARY, a non-antagonist
+decode, state neurons (sn > 0), `output_full_window`, `obs_pwm`, `dhat_b`/`dhat_ff`,
+`decouple_outputs`, > 32 address bits, and runs whose thermometer cannot be
+reproduced (`--threshold-refit-from-student`, `--threshold-outer-quantile`).
+
+### Export a cascade winner
+
+    PYTHONPATH=src/wnn python scripts/export_controller_c.py \
+        --winner logs/controller/ct40/full/C-S2-d_full_s2_winner.yaml.gz --out mcu/wnn_model.h
+
+A stage checkpoint (`ckpt_<tag>/stage4_memory.yaml.gz`) works the same way. The
+thresholds are NOT in the checkpoint — every scorer refits them on the run's TRAIN
+seed (`phased_ga._report_thresholds`), and so does the exporter, from the run's
+argv in the checkpoint meta (`--run-argv <run .out>` if the meta lacks it). The
+header carries every block flag, the controller constants, the CTBR alphabet, the
+rate-loop gains, and for CTRL-38 the d-hat plant `[arm, k_drag, Ixx, Iyy, Izz]`,
+its gain (read from the wheel's `CtbrSpec`, never hand-copied) and the motor lag.
+`--tables-only` keeps the old bench-only header (no `WNN_EXPORT_CASCADE`;
+`wnn_cascade.h` refuses to compile against it).
+
+`wnn_conn` is `uint8_t` only while every index fits 0..255, else `int16_t`
+(`wnn_conn_t`). The old exporter always wrote `uint8_t`, silently truncating input
+indices >= 256 (any cascade with 32+ features x 8 bits) and -1 slots.
+
+### The firmware interface
+
+    wnn_ctrl_t ctl;
+    wnn_init(&ctl);                         /* boot */
+    wnn_reset(&ctl, init_yaw, q0);          /* every flight */
+    /* every physical tick (1 kHz): */
+    wnn_tick_in_t in = { gyro, accel, target, vert, horiz, rate_integ, applied_prev };
+    int decided = wnn_tick(&ctl, &in, sp);  /* sp = held [coll dev, p, q, r] */
+
+* `rate_integ[3]` (CTRL-38 rate-I): the firmware rate PID's integrator `pid.integ`
+  per axis, **as it stands before this tick's rate update**, in SI (rad). The C
+  normalises by the exported i_limit. On a Crazyflie that is the rate
+  controller's own state — the WNN never runs a second copy.
+* `applied_prev[4]` (CTRL-38 d-hat): the motor command the plant actually received
+  **last** tick (after the rate loop and any trim). The observer models the motor
+  lag itself and ignores the first call after `wnn_reset` (priming), exactly as
+  the teacher's observer does.
+* `sp` goes to the firmware rate loop as rate setpoints `[p, q, r]` (rad/s) and a
+  collective of `(anchor - hover_pwm) + sp[0]` pwm, added after the mixer — see
+  `wnn_ratefw_fly`, the bit-exact port of the simulator's inner stage, which the
+  parity test uses as "the firmware" and which a vehicle without its own rate loop
+  can run.
+
+### Build flags that matter
+
+* **`-ffp-contract=off` is mandatory.** Rust never fuses `a*b+c`; GCC targeting
+  the M4F does by default (VFMA). Measured on the parity run: with
+  `-ffp-contract=fast` 5,210 of 6,000 held setpoints differ from the simulator.
+* Estimator, rate-I and d-hat are f64 like the CPU reference. On an M4F (single
+  precision FPU) that means libgcc soft-double (`__aeabi_dadd`, ...): link libgcc
+  and a libm (`atan2f`, `powf`, `sqrtf`, `sqrt`). `-DWNN_DHAT_F32` selects the
+  Metal kernel's f32 observer instead: cheaper, and NOT bit-identical (every tick's
+  d-hat differs in the last bits; over the 6,000-tick parity run no thermometer
+  bit flipped, which is evidence, not a guarantee).
+* Bit parity is a host claim: an MCU libm may round `atan2f`/`powf` differently
+  in the last ulp.
+* The homebrew `arm-none-eabi-gcc` here has no newlib, so the controller was only
+  compile-checked for the M4F (with stub libc headers), not linked or flown.
+  The C-S2-d winner's tables are 7.06 MB of `.rodata` (1,761,565 keys): off-chip.
+
+### Parity test (C vs the installed Rust wheel, step for step)
+
+    PYTHONPATH=src/wnn python mcu/parity/test_cascade_parity.py   # 3 episodes x 2000 steps
+    PYTHONPATH=src/wnn python -m pytest mcu/parity/test_cascade_parity.py   # 2 x 1000
+
+The Rust C-S2-d winner flies the run's own plant (cf21_brushless, specific-force
+IMU, rotor drag, 0.2 s motor lag, translation, L4C weather incl. motor asymmetry);
+the per-tick inputs are recorded and replayed into a fresh Rust controller (which
+must reproduce the recording) and the C (`wnn_parity_shim.c` + `wnn_ratefw.c`,
+built with `cc -ffp-contract=off`). Asserted bit-for-bit every tick: features,
+decision cadence, held setpoint, motor command; every decision tick: thermometer
+frame, every neuron's address, every fire bit. Cases: the trained flags-off winner
+and three SYNTHETIC CTRL-38 models (rate-I, d-hat, both — no trained winner with
+the blocks exists yet) built through the Python API with production thresholds;
+plus a mutant (1.5x d-hat gain in the C header only) that MUST be caught, and the
+f32-observer / fp-contract builds reported for information.
+
+## Instruction-count harness
 
 ## Method and its limits
 
@@ -22,7 +125,7 @@ unchanged.
 
 ## Run
 
-    python scripts/export_controller_c.py --winner <stage4_memory.yaml.gz> --out mcu/wnn_model.h
+    python scripts/export_controller_c.py --winner <stage4_memory.yaml.gz> --out mcu/wnn_model.h --tables-only
     cc -shared -fPIC -O2 -o mcu/insncount.dylib mcu/insncount.c \
        -I/opt/homebrew/include -I/opt/homebrew/opt/glib/include/glib-2.0 \
        -I/opt/homebrew/opt/glib/lib/glib-2.0/include -L/opt/homebrew/opt/glib/lib \

@@ -28,8 +28,24 @@ static inline uint32_t xr(void) {
 	rng_s ^= rng_s << 13; rng_s ^= rng_s >> 17; rng_s ^= rng_s << 5;
 	return rng_s;
 }
+/* The WNN variants walk the MODEL's input width (export_controller_c.py emits
+ * WNN_FEATURES / WNN_BITS_PER_FEATURE since 02/09/2026). The 15x8 literals were
+ * only right for the 15-feature b30 model: any wider model (an 18-feature sweep
+ * winner is 144 bits, the C-S2-d cascade 176) indexed inbits[] out of bounds and
+ * benched garbage addresses. PID/MLP keep the 15-feature input they were sized for. */
+#if defined(BENCH_WNN) || defined(BENCH_WNN_ADDR) || defined(BENCH_WNN_FAST)
+#include "wnn_model.h"
+#endif
+#ifdef WNN_FEATURES
+#define NFEAT WNN_FEATURES
+#else
 #define NFEAT 15
+#endif
+#ifdef WNN_BITS_PER_FEATURE
+#define FBITS WNN_BITS_PER_FEATURE
+#else
 #define FBITS 8
+#endif
 static uint8_t inbits[NFEAT * FBITS];
 static uint8_t inlevel[NFEAT];
 static float   infloat[NFEAT];
@@ -38,7 +54,7 @@ static void make_input(void) {
 	for (int f = 0; f < NFEAT; f++) {
 		uint32_t lvl = xr() % (FBITS + 1u);        /* 0..8 ones, monotone */
 		inlevel[f] = (uint8_t)lvl;
-		infloat[f] = (float)lvl * 0.125f - 0.5f;
+		infloat[f] = (float)lvl / (float)FBITS - 0.5f;
 		for (uint32_t b = 0; b < FBITS; b++)
 			inbits[f * FBITS + b] = (b < lvl) ? 1u : 0u;
 	}
@@ -48,7 +64,6 @@ volatile uint32_t sink;   /* keeps the optimiser from deleting the workload */
 
 /* ---------------------------------------------------------------- WNN ---- */
 #if defined(BENCH_WNN) || defined(BENCH_WNN_ADDR) || defined(BENCH_WNN_FAST)
-#include "wnn_model.h"
 
 /* Membership in a sorted ON-set: the deployed representation. `end` is kept
  * separately because the loop clobbers hi, and the final bounds check must be
@@ -118,7 +133,7 @@ static uint32_t wnn_step_fast(void) {
 static uint32_t wnn_step(void) {
 	uint8_t fired[WNN_NEURONS];
 	for (int n = 0; n < WNN_NEURONS; n++) {
-		const uint8_t *c = &wnn_conn[n * WNN_BITS];
+		const __typeof__(wnn_conn[0]) *c = &wnn_conn[n * WNN_BITS];
 		uint32_t addr = 0;
 		for (int b = 0; b < WNN_BITS; b++)      /* MSB-first, project convention */
 			addr = (addr << 1) | inbits[c[b]];

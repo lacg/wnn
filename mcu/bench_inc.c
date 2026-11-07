@@ -259,7 +259,7 @@ static uint32_t step(void) { return 0u; }
 #ifdef BENCH_BASE
 static uint32_t step(void) {
 	for (int n = 0; n < WNN_NEURONS; n++) {
-		const uint8_t *c = &wnn_conn[n * WNN_BITS];
+		const __typeof__(wnn_conn[0]) *c = &wnn_conn[n * WNN_BITS];
 		uint32_t a = 0;
 		for (int b = 0; b < WNN_BITS; b++) a = (a << 1) | inbits[c[b]];
 		fired[n] = (uint8_t)key_present(a, wnn_off[n], wnn_off[n + 1]);
