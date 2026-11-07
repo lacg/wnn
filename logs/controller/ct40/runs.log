@@ -1,0 +1,18 @@
+2026-11-06T23:11:08Z START C1dg_ct40 --motor-lag-s 0.20 --output-mode ctbr --action-repeat 10 --ctbr-delta-law --delta-leak 0.7 --delta-max 0.6 --rg-gate off
+2026-11-06T23:12:43Z END C1dg_ct40 steady=0.96°  err=1.92°  stable=100.0%  alt=0.148m
+2026-11-06T23:12:43Z START S1dg_ct40 --motor-lag-s 0.20 --output-mode ctbr --action-repeat 10 --ctbr-delta-law --delta-leak 0.7 --delta-max 0.6 --rg-gate off
+2026-11-06T23:14:34Z END S1dg_ct40 steady=1.92°  err=3.72°  stable=84.8%  alt=0.173m
+2026-11-06T23:14:34Z START M2g_ct40 --motor-lag-s 0.20 --delta-leak 0.7 --delta-max 0.6 --rg-gate off
+2026-11-06T23:37:48Z END M2g_ct40 steady=2.64°  err=2.78°  stable=94.8%  alt=0.229m
+2026-11-06T23:37:48Z START SM2g_ct40 --motor-lag-s 0.20 --delta-leak 0.7 --delta-max 0.6 --rg-gate off
+2026-11-07T00:00:45Z END SM2g_ct40 steady=2.96°  err=3.46°  stable=89.6%  alt=0.687m
+2026-11-07T00:00:45Z START C1_ct40 --motor-lag-s 0.20 --output-mode ctbr --action-repeat 10
+2026-11-07T00:02:11Z END C1_ct40 steady=1.92°  err=3.52°  stable=84.6%  alt=0.217m
+2026-11-07T00:02:11Z START C1g_ct40 --motor-lag-s 0.20 --output-mode ctbr --action-repeat 10 --rg-gate off
+2026-11-07T00:03:49Z END C1g_ct40 steady=1.47°  err=2.81°  stable=93.2%  alt=0.186m
+2026-11-07T00:03:49Z START C1d_ct40 --motor-lag-s 0.20 --output-mode ctbr --action-repeat 10 --ctbr-delta-law --delta-leak 0.7 --delta-max 0.6
+2026-11-07T00:05:16Z END C1d_ct40 steady=1.22°  err=2.25°  stable=99.2%  alt=0.150m
+2026-11-07T00:05:16Z START S1_ct40 --motor-lag-s 0.20 --output-mode ctbr --action-repeat 10
+2026-11-07T00:06:51Z END S1_ct40 steady=3.40°  err=6.17°  stable=46.2%  alt=0.223m
+2026-11-07T00:06:51Z CT40 DONE
+2026-11-07T00:07:04Z START C-S2-d_full_s2 (full pipeline)
