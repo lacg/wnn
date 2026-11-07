@@ -36,6 +36,8 @@ pub(crate) fn spec() -> CtbrSpec
 		lpf_hz: PID_LPF_HZ,
 		range: RANGE,
 		gamma: GAMMA,
+		obs_rate_i: false,
+		obs_dhat_plant: None,
 	}
 }
 

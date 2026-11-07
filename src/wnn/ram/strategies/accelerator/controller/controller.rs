@@ -1873,7 +1873,45 @@ impl WnnController
 	///     integrator's job;
 	///   * delta_label_scale ≠ 1 — a motor-delta label knob with no CTBR meaning.
 	/// delta_control is allowed (the delta-law ablation).
+	#[cfg(test)]
 	pub(crate) fn enable_ctbr(&mut self, spec: crate::ctbr::CtbrSpec) -> Result<(), String>
+	{
+		self.enable_ctbr_with_obs(spec, Vec::new())
+	}
+
+	/// enable_ctbr + the spec's CTRL-38 feature blocks. `obs_thresholds` = the
+	/// thermometer rows of the appended features (cascade_feature_count ×
+	/// bits_per_feature, in canonical order: rate-I then d̂) — the pymethod
+	/// constructor splits them off the tail of the full ladder, because new_core
+	/// sizes the ladder before the cascade exists. Empty with both blocks off.
+	pub(crate) fn enable_ctbr_with_obs(&mut self, spec: crate::ctbr::CtbrSpec, obs_thresholds: Vec<f32>) -> Result<(), String>
+	{
+		let n_obs = spec.cascade_feature_count();
+		if obs_thresholds.len() != n_obs * self.bits_per_feature
+		{
+			return Err(format!(
+				"CTBR: the cascade feature blocks (obs_rate_i={}, obs_cascade_dhat={}) need {} thermometer \
+				 thresholds, got {}",
+				spec.obs_rate_i,
+				spec.obs_dhat_plant.is_some(),
+				n_obs * self.bits_per_feature,
+				obs_thresholds.len()
+			));
+		}
+		let obs = spec.cascade_obs(self.dt);
+		self.enable_ctbr_core(spec)?;
+		if let Some(o) = obs
+		{
+			self.thresholds.extend_from_slice(&obs_thresholds);
+			self.num_features += o.count();
+			self.last_feature_vector = vec![0.0f32; self.num_features];
+			self.cascade_obs = Some(o);
+		}
+		Ok(())
+	}
+
+	/// The refusals documented on enable_ctbr, then the inner stage itself.
+	fn enable_ctbr_core(&mut self, spec: crate::ctbr::CtbrSpec) -> Result<(), String>
 	{
 		let mut why = Vec::new();
 		if self.num_motors != 4
@@ -1912,6 +1950,48 @@ impl WnnController
 	pub(crate) fn ctbr_ref(&self) -> Option<&crate::ctbr::CtbrInner>
 	{
 		self.ctbr.as_ref()
+	}
+
+	/// CTRL-38: the cascade feature block, None when both halves are off.
+	pub(crate) fn cascade_obs_ref(&self) -> Option<&crate::cascade_obs::CascadeObs>
+	{
+		self.cascade_obs.as_ref()
+	}
+
+	/// CTRL-38: [rate I/i_limit ×3, d̂ ×3] as the LAST compute_features produced
+	/// them (zeros for an off half) — what a rollout records per step
+	/// (TrajectoryRs.cascade_obs) for the replay.
+	pub fn cascade_obs_last(&self) -> [f32; 6]
+	{
+		self.cascade_obs.as_ref().map_or([0.0; 6], |o| o.last())
+	}
+
+	/// CTRL-38 a1: true when the rate-I feature is on.
+	pub(crate) fn cascade_rate_i_on(&self) -> bool
+	{
+		self.cascade_obs.as_ref().is_some_and(|o| o.rate_i_on())
+	}
+
+	/// CTRL-38 a2: true when the d̂ feature is on.
+	pub(crate) fn cascade_dhat_on(&self) -> bool
+	{
+		self.cascade_obs.as_ref().is_some_and(|o| o.dhat_on())
+	}
+
+	/// CTRL-38 a1: a teacher-flown rollout (calibration, recorder, expert_drives)
+	/// hands the student the rate loop that ACTUALLY flies, before step(), so the
+	/// rate-I feature reads the vehicle's integrator rather than the student's own
+	/// unflown loop. No-op unless the rate-I feature is on (bit-identical off).
+	pub(crate) fn ctbr_adopt_flown_rate_stage(&mut self, flown: &crate::pid_firmware::RateStageFw)
+	{
+		if !self.cascade_rate_i_on()
+		{
+			return;
+		}
+		if let Some(c) = self.ctbr.as_mut()
+		{
+			c.adopt_rate_stage(flown);
+		}
 	}
 
 	/// TEST-ONLY: the label-replay identity — the NEXT decision step holds `sp`
@@ -2019,7 +2099,7 @@ impl WnnController
 	/// True when any feature that needs a per-step replay stream is on.
 	fn replay_obs_required(&self) -> bool
 	{
-		self.vert_horiz_obs_required() || self.obs_pwm || self.att_est.is_some()
+		self.vert_horiz_obs_required() || self.obs_pwm || self.att_est.is_some() || self.cascade_obs.is_some()
 	}
 
 	/// Fail-LOUD guard (Fix A shape): a controller whose vertical/horizontal
@@ -2063,6 +2143,16 @@ impl WnnController
 			obs.map(|o| o.att_up.len()),
 			w
 		);
+		let cas_ok = self.cascade_obs.is_none() || obs.map(|o| o.cascade.len() == w).unwrap_or(false);
+		assert!(
+			cas_ok,
+			"{site}: a cascade feature block (obs_rate_i / obs_cascade_dhat) is on but the replay \
+			 cascade stream is missing or misaligned (got cascade {:?}, need {} steps) — the replay \
+			 has no flown inner loop and no flown commands, so it would train on values deploy \
+			 never produces (CTRL-38)",
+			obs.map(|o| o.cascade.len()),
+			w
+		);
 	}
 
 	/// Re-apply step `t`'s recorded observation before compute_features(t), so the
@@ -2096,6 +2186,11 @@ impl WnnController
 			if let (Some(e), Some(u)) = (self.att_est.as_mut(), o.att_up.get(t))
 			{
 				e.set_override(*u);
+			}
+			// CTRL-38: the recorded cascade-block values (no flown loop in a replay).
+			if let (Some(c), Some(v)) = (self.cascade_obs.as_mut(), o.cascade.get(t))
+			{
+				c.set_replay(*v);
 			}
 		}
 	}
@@ -2207,6 +2302,12 @@ impl WnnController
 		};
 		self.dhat_ua = [0.0; 8];
 		self.dhat_ua_seeded = false;
+		// CTRL-38: the cascade d̂ observer models the same plant lag, with the
+		// teacher's own coefficient (actuator_lag::motor_lag_alpha).
+		if let Some(o) = self.cascade_obs.as_mut()
+		{
+			o.set_motor_lag(settling_s, self.dt);
+		}
 	}
 
 	/// The observer's lag coefficient (0.0 = lag off) — the GPU hosts check it
@@ -2530,6 +2631,7 @@ impl WnnController
 			ctbr: None,
 			#[cfg(test)]
 			ctbr_inject: None,
+			cascade_obs: None,
 			num_features,
 			integral_acc: vec![0.0f32; num_integral],
 			yaw_heading: 0.0,
@@ -3035,16 +3137,28 @@ pub struct ReplayObs
 	// step). The replay has no live filter, so it applies this as an override
 	// (apply_replay_obs). Empty on a trajectory without the estimator.
 	pub att_up: Vec<[f32; 3]>,
+	// CTRL-38 (ABI 41): the cascade blocks' values compute_features produced at
+	// rollout, per step — [rate I/i_limit ×3, d̂ ×3] (WnnController::cascade_obs_last,
+	// recorded right after the step). The replay has neither the flown inner loop nor
+	// the flown commands, so it applies these as an override (apply_replay_obs).
+	// Empty on a trajectory without the blocks.
+	pub cascade: Vec<[f32; 6]>,
 }
 
 #[pymethods]
 impl ReplayObs
 {
 	#[new]
-	#[pyo3(signature = (vert, horiz, pwm_dev = vec![], att_up = vec![]))]
-	fn new(vert: Vec<[f32; 3]>, horiz: Vec<[f32; 4]>, pwm_dev: Vec<[f32; 4]>, att_up: Vec<[f32; 3]>) -> Self
+	#[pyo3(signature = (vert, horiz, pwm_dev = vec![], att_up = vec![], cascade = vec![]))]
+	fn new(
+		vert: Vec<[f32; 3]>,
+		horiz: Vec<[f32; 4]>,
+		pwm_dev: Vec<[f32; 4]>,
+		att_up: Vec<[f32; 3]>,
+		cascade: Vec<[f32; 6]>,
+	) -> Self
 	{
-		Self { vert, horiz, pwm_dev, att_up }
+		Self { vert, horiz, pwm_dev, att_up, cascade }
 	}
 }
 
@@ -3067,12 +3181,23 @@ impl ReplayObs
 		{
 			let pwm_dev = if pwm_dev.len() >= end { pwm_dev[start..end].to_vec() } else { Vec::new() };
 			let att_up = if att_up.len() >= end { att_up[start..end].to_vec() } else { Vec::new() };
-			Some(Self { vert: vert[start..end].to_vec(), horiz: horiz[start..end].to_vec(), pwm_dev, att_up })
+			Some(Self { vert: vert[start..end].to_vec(), horiz: horiz[start..end].to_vec(), pwm_dev, att_up, cascade: Vec::new() })
 		}
 		else
 		{
 			None
 		}
+	}
+
+	/// CTRL-38: attach the window [start, end) of a trajectory's cascade stream
+	/// (left empty when the trajectory has none — the guard then decides).
+	pub fn with_cascade(mut self, cascade: &[[f32; 6]], start: usize, end: usize) -> Self
+	{
+		if cascade.len() >= end
+		{
+			self.cascade = cascade[start..end].to_vec();
+		}
+		self
 	}
 }
 
@@ -3221,6 +3346,10 @@ pub struct WnnController
 	ctbr: Option<crate::ctbr::CtbrInner>,
 	#[cfg(test)]
 	ctbr_inject: Option<[f64; 4]>,
+	// CTRL-38 (ABI 41): the cascade's two default-OFF input blocks (cascade_obs.rs):
+	// the inner rate loop's integrator and the teacher's d̂ observer. None ⇒ the
+	// ABI-40 feature layout (ctrl38_pins). Only a cascade controller can carry it.
+	cascade_obs: Option<crate::cascade_obs::CascadeObs>,
 
 	// --- H2: configurable error/integral observation features (18/06/2026) ---
 	// The base sensor frame is always the 9 raw values (NUM_FEATURES). These
@@ -3541,6 +3670,18 @@ impl WnnController
 		ctbr: Option<crate::ctbr::CtbrSpec>,
 	) -> PyResult<Self>
 	{
+		// CTRL-38: the cascade blocks' thermometer rows sit at the TAIL of the ladder
+		// (canonical order LAST); new_core sizes the ladder without them.
+		let mut thresholds = thresholds;
+		let n_obs = ctbr.as_ref().map_or(0, |s| s.cascade_feature_count()) * bits_per_feature;
+		if thresholds.len() < n_obs
+		{
+			return Err(pyo3::exceptions::PyValueError::new_err(format!(
+				"thresholds length {} is shorter than the cascade feature blocks' {n_obs} rows",
+				thresholds.len()
+			)));
+		}
+		let obs_thresholds = thresholds.split_off(thresholds.len() - n_obs);
 		let mut c = Self::new_core(
 			num_motors,
 			levels_per_motor,
@@ -3595,7 +3736,8 @@ impl WnnController
 		// ABI 38: LAST, so its refusals see the finished configuration.
 		if let Some(spec) = ctbr
 		{
-			c.enable_ctbr(spec).map_err(pyo3::exceptions::PyValueError::new_err)?;
+			c.enable_ctbr_with_obs(spec, obs_thresholds)
+				.map_err(pyo3::exceptions::PyValueError::new_err)?;
 		}
 		Ok(c)
 	}
@@ -3792,6 +3934,12 @@ impl WnnController
 		if let Some(c) = self.ctbr.as_mut()
 		{
 			c.reset();
+		}
+		// CTRL-38: the d̂ observer is per-episode state (a stale estimate would encode
+		// the PREVIOUS episode's airframe draw).
+		if let Some(o) = self.cascade_obs.as_mut()
+		{
+			o.reset();
 		}
 		let anchor = if self.ctbr.is_some() { 0.0 } else { self.collective_anchor };
 		for (m, v) in self.pwm.iter_mut().enumerate()
@@ -5814,8 +5962,24 @@ impl WnnController
 			feats.push(self.horiz_obs[2]);
 			feats.push(self.horiz_obs[3]);
 		}
+		self.append_cascade_features(&mut feats, gyro);
 		self.last_feature_vector.clone_from(&feats);
 		feats
+	}
+
+	/// CTRL-38 (canonical order LAST, after the horizontal channel): the cascade
+	/// blocks — the inner rate loop's integrator as it stands BEFORE this step's
+	/// tick (step() flies the loop after compute_features, so this is the state the
+	/// last tick left: what the firmware holds when the outer loop decides), and the
+	/// teacher's d̂ observer ticked on (this gyro, pwm_applied = the command the plant
+	/// received last step). No-op with both off.
+	fn append_cascade_features(&mut self, feats: &mut Vec<f32>, gyro: [f32; 3])
+	{
+		if let Some(o) = self.cascade_obs.as_mut()
+		{
+			let ri = self.ctbr.as_ref().map_or([0.0; 3], |c| c.rate_integral_norm());
+			o.append(feats, ri, gyro, &self.pwm_applied);
+		}
 	}
 
 	/// Subtract the observer feedforward −d̂/b from the decoded motors (no-op unless
@@ -8042,7 +8206,7 @@ mod sn0_tests
 			dep_feats.push(deploy.compute_features(g[t], a[t], tg[t]));
 			deploy.set_pwm_accumulator(pp[t]);
 		}
-		let ro = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev, att_up: vec![] };
+		let ro = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev, att_up: vec![], cascade: vec![] };
 		// REPLAY with the stream restored.
 		let mut replay = sn0_controller_obs_pwm();
 		replay.reset(0.0);
@@ -8086,7 +8250,7 @@ mod sn0_tests
 		);
 		// The guard is the fail-LOUD half: an obs_pwm controller must refuse a
 		// stream without the accumulator.
-		let short = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![] };
+		let short = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![] };
 		let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
 			sn0_controller_obs_pwm().replay_obs_guard(Some(&short), n, "test")
 		}));
@@ -9322,12 +9486,12 @@ mod sn0_tests
 	fn vertical_stream(n: usize) -> ReplayObs
 	{
 		let vert: Vec<[f32; 3]> = (0..n).map(|t| [0.7, -4.0 + 0.5 * t as f32, 4.0 - 0.5 * t as f32]).collect();
-		ReplayObs { vert, horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![] }
+		ReplayObs { vert, horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![] }
 	}
 
 	fn constant_stream(n: usize, v: [f32; 3]) -> ReplayObs
 	{
-		ReplayObs { vert: vec![v; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![] }
+		ReplayObs { vert: vec![v; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![] }
 	}
 
 	fn distinct_output_addresses_per_neuron(c: &WnnController) -> Vec<usize>

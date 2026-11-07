@@ -156,6 +156,10 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	"controller_ctbr_coll_max",       # collective-deviation range (pwm)
 	"controller_ctbr_gamma",          # [T, p, q, r] per-bank alphabet gamma
 	"controller_ctbr_delta_law",      # ablation: delta-law decode instead of absolute
+	# CTRL-38 (ABI 41): the cascade input blocks, same knobs as phased_ga --obs-rate-i /
+	# --obs-cascade-dhat. Cascade-only, so the flow adapter REFUSES them (it refuses ctbr).
+	"controller_obs_rate_i",          # cascade feature: inner rate PID integrator I/i_limit (+3)
+	"controller_obs_cascade_dhat",    # cascade feature: the mpcof teacher's d̂ observer (+3)
 	# Specialist programme (14/08/2026)
 	"controller_conn_policy",         # connection-creation policy: spread | min2 | min3
 	"controller_output_full_window",  # arm D: output layer samples ALL k frames, not just t-0

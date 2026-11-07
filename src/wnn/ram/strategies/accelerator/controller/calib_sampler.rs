@@ -112,6 +112,10 @@ impl CalibEpisode<'_>
 			{
 				controller.set_pwm_accumulator(prev_applied);
 			}
+			// CTRL-38 a1: the rate-I ladder is fitted on the integrator of the loop
+			// that FLIES (the teacher's, here) — the untrained student's own loop would
+			// integrate its zero setpoint. No-op unless obs_rate_i is on.
+			pilot.lend_flown_rate_stage(controller);
 			let _ = controller.step(gyro, accel, target);
 			for (f, col) in samples.iter_mut().enumerate()
 			{

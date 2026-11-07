@@ -351,6 +351,71 @@ struct RolloutParams
 	ctbr_gamma: [f32; 4],
 	ctbr_hover_pwm: f32,
 	ctbr_outer_pid: u32,
+	// + 10 (CTRL-38, ABI 41), appended in lockstep with the shader twin: the cascade
+	// student's input blocks (cascade_obs.rs). cas_rate_i=1 ⇒ append the inner rate
+	// loop's I/i_limit (read from the CTBR stage slots); cas_dhat=1 ⇒ run the
+	// teacher's offset-free observer (cascade_dhat.rs) on the applied command with
+	// torque gains cas_c, clamp cas_clamp, k_thrust cas_kt, gain cas_l_gain. Both 0
+	// ⇒ the ABI-40 rollout. See CascadeGpu.
+	cas_rate_i: u32,
+	cas_dhat: u32,
+	cas_c: [f32; 3],
+	cas_clamp: [f32; 3],
+	cas_kt: f32,
+	cas_l_gain: f32,
+}
+
+/// CTRL-38: the cascade feature blocks as the score kernel needs them, read off the
+/// controller's own CascadeObs (never re-derived). Default = both off.
+#[derive(Clone, Copy, PartialEq, Default)]
+struct CascadeGpu
+{
+	rate_i: bool,
+	dhat: bool,
+	c: [f32; 3],
+	clamp: [f32; 3],
+	kt: f32,
+}
+
+impl CascadeGpu
+{
+	fn from_controller(c: &WnnController) -> Self
+	{
+		let Some(o) = c.cascade_obs_ref()
+		else
+		{
+			return CascadeGpu::default();
+		};
+		let d = o.observer();
+		CascadeGpu {
+			rate_i: o.rate_i_on(),
+			dhat: d.is_some(),
+			c: d.map_or([0.0; 3], |d| d.torque_gain().map(|v| v as f32)),
+			clamp: d.map_or([0.0; 3], |d| d.clamp().map(|v| v as f32)),
+			kt: d.map_or(0.0, |d| d.k_thrust() as f32),
+		}
+	}
+}
+
+/// CTRL-38: the Metal train/record kernels replay a recorded batch WITHOUT the cascade
+/// blocks' stream (dagger_train routes such controllers to the CPU split) — refuse
+/// rather than replay a feature vector shorter than the controller's.
+fn cascade_blocks_refused(c: &WnnController, site: &str) -> Result<(), String>
+{
+	if c.cascade_obs_ref().is_some()
+	{
+		return Err(format!(
+			"{site}: the cascade feature blocks (obs_rate_i / obs_cascade_dhat) are not ported to the \
+			 Metal train/record kernels — replay on the CPU (replay_obs_guard carries the stream)"
+		));
+	}
+	Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn cascade_blocks_refused_pub(c: &WnnController) -> Result<(), String>
+{
+	cascade_blocks_refused(c, "test")
 }
 
 /// ABI 38: the cascade controller as the score kernel needs it — the bank alphabet
@@ -364,6 +429,8 @@ struct CtbrGpu
 	gamma: [f32; 4],
 	hover_pwm: f32,
 	stage: PidFwCfg,
+	/// CTRL-38: the cascade input blocks (part of the population-uniform contract).
+	cas: CascadeGpu,
 }
 
 impl CtbrGpu
@@ -388,6 +455,7 @@ impl CtbrGpu
 				lpf: lpf.map_or([0.0; 5], |l| std::array::from_fn(|i| l[i] as f32)),
 				filter_on: lpf.is_some() as u32,
 			},
+			cas: CascadeGpu::from_controller(c),
 		})
 	}
 }
@@ -437,6 +505,9 @@ pub struct ControllerRolloutEvaluator
 	// (HAS_GEOMETRY=true is implied — the legacy quad is `pipeline` above).
 	// RefCell: score() is &self and the evaluator is single-threaded per call.
 	geom_pipelines: std::cell::RefCell<std::collections::HashMap<u32, ComputePipelineState>>,
+	// CTRL-38: the FC_CASCADE_OBS=true specialization (cascade input blocks on),
+	// built on first use. The default pipeline above dead-strips the blocks.
+	cascade_obs_pipeline: std::cell::RefCell<Option<ComputePipelineState>>,
 	/// TEST-ONLY (ABI 38 label-replay identity on the GPU): Some(firmware attitude
 	/// gains) ⇒ a CTBR population's outer setpoint is the in-kernel firmware attitude
 	/// half (ctbr_outer_pid) instead of the WNN decode.
@@ -479,6 +550,7 @@ impl ControllerRolloutEvaluator
 			library,
 			pipeline,
 			geom_pipelines: std::cell::RefCell::new(std::collections::HashMap::new()),
+			cascade_obs_pipeline: std::cell::RefCell::new(None),
 			#[cfg(test)]
 			test_ctbr_outer_pid: std::cell::Cell::new(None),
 		})
@@ -511,6 +583,29 @@ impl ControllerRolloutEvaluator
 			.new_compute_pipeline_state_with_function(&func)
 			.map_err(|e| format!("geometry pipeline creation (N={n}) failed: {e}"))?;
 		self.geom_pipelines.borrow_mut().insert(n, p.clone());
+		Ok(p)
+	}
+
+	/// CTRL-38: get-or-create the FC_CASCADE_OBS(2)=true specialization (quad, no
+	/// geometry — CTBR refuses geometry). Only it appends the cascade blocks.
+	fn cascade_obs_pipeline(&self) -> Result<ComputePipelineState, String>
+	{
+		if let Some(p) = self.cascade_obs_pipeline.borrow().as_ref()
+		{
+			return Ok(p.clone());
+		}
+		let fcv = metal::FunctionConstantValues::new();
+		let on = true;
+		fcv.set_constant_value_at_index(&on as *const bool as *const _, MTLDataType::Bool, 2);
+		let func = self
+			.library
+			.get_function("controller_rollout", Some(fcv))
+			.map_err(|e| format!("controller_rollout specialization (cascade obs) failed: {e}"))?;
+		let p = self
+			.device
+			.new_compute_pipeline_state_with_function(&func)
+			.map_err(|e| format!("cascade-obs pipeline creation failed: {e}"))?;
+		*self.cascade_obs_pipeline.borrow_mut() = Some(p.clone());
 		Ok(p)
 	}
 
@@ -846,9 +941,11 @@ impl ControllerRolloutEvaluator
 		// Pipeline: legacy quad (function constants undefined → generic path
 		// dead-stripped, bit-identical pre-geometry kernel) or the N-rotor
 		// specialization. Selected ONCE — uniform across all chunks.
+		let cas_on = ctbr.is_some_and(|c| c.cas.rate_i || c.cas.dhat);
 		let geom_pipeline = match geometry
 		{
 			Some(rotors) => Some(self.geometry_pipeline(rotors.len() as u32)?),
+			None if cas_on => Some(self.cascade_obs_pipeline()?),
 			None => None,
 		};
 		let pipeline: &ComputePipelineState = geom_pipeline.as_ref().unwrap_or(&self.pipeline);
@@ -1083,6 +1180,12 @@ impl ControllerRolloutEvaluator
 				ctbr_gamma: ctbr.map_or([1.0; 4], |c| c.gamma),
 				ctbr_hover_pwm: ctbr.map_or(0.0, |c| c.hover_pwm),
 				ctbr_outer_pid: (ctbr.is_some() && outer_pid_att.is_some()) as u32,
+				cas_rate_i: ctbr.is_some_and(|c| c.cas.rate_i) as u32,
+				cas_dhat: ctbr.is_some_and(|c| c.cas.dhat) as u32,
+				cas_c: ctbr.map_or([0.0; 3], |c| c.cas.c),
+				cas_clamp: ctbr.map_or([0.0; 3], |c| c.cas.clamp),
+				cas_kt: ctbr.map_or(0.0, |c| c.cas.kt),
+				cas_l_gain: crate::ctbr_mpcof::CTBR_MPC_L_GAIN as f32,
 			};
 
 			let b_q0 = self.buf(q0_chunk);
@@ -2355,6 +2458,7 @@ impl ControllerTrainer
 		) = controllers[0].obs_params();
 		let (delta_control, _dmax, _dleak, _dgamma) = controllers[0].delta_params();
 		kernel_feature_dims_ok("controller_train (metal)", num_features, window)?;
+		cascade_blocks_refused(controllers[0], "controller_train (metal)")?;
 		let num_out = num_motors * levels;
 		let frame_bits = num_features * bpf;
 		let sensor_total = window * frame_bits;
@@ -2583,6 +2687,7 @@ impl ControllerTrainer
 		let (delta_control, _dmax, _dleak, _dgamma) = controllers[0].delta_params();
 		let _ = (num_motors, levels, obpn);
 		kernel_feature_dims_ok("controller_record (metal)", num_features, window)?;
+		cascade_blocks_refused(controllers[0], "controller_record (metal)")?;
 		let frame_bits = num_features * bpf;
 		let sensor_total = window * frame_bits;
 		let out_input_len = frame_bits + n_state;
@@ -4409,7 +4514,7 @@ fn build_parity_fixture_variant(
 	let total_steps = gyros.len() / 3;
 	let cpu_obs: Vec<ReplayObs> = cpu_g
 		.iter()
-		.map(|g| ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![], att_up: vec![] })
+		.map(|g| ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![], att_up: vec![], cascade: vec![] })
 		.collect();
 	Ok(ParityFixture {
 		c,
@@ -7280,7 +7385,7 @@ fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool)
 		{
 			pwm_flat.extend_from_slice(v);
 		}
-		cpu_obs.push(ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev, att_up: vec![] });
+		cpu_obs.push(ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev, att_up: vec![], cascade: vec![] });
 	}
 	let (tau, target_min) = (0.05f32, 2usize);
 	let trainer = ControllerTrainer::new()?;
@@ -7335,7 +7440,7 @@ fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool)
 	let const_obs: Vec<ReplayObs> = f
 		.cpu_g
 		.iter()
-		.map(|g| ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![[0.0; 4]; g.len()], att_up: vec![] })
+		.map(|g| ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![[0.0; 4]; g.len()], att_up: vec![], cascade: vec![] })
 		.collect();
 	let mut c2 = c.clone();
 	let (rows_const, ..) = c2.split_record_pub(
@@ -7443,6 +7548,7 @@ fn controller_record_att_est_parity_once() -> Result<(usize, usize, usize, bool)
 			horiz: vec![[0.0; 4]; g.len()],
 			pwm_dev: vec![],
 			att_up,
+			cascade: vec![],
 		});
 	}
 	let (tau, target_min) = (0.05f32, 2usize);
@@ -7489,6 +7595,7 @@ fn controller_record_att_est_parity_once() -> Result<(usize, usize, usize, bool)
 			horiz: vec![[0.0; 4]; g.len()],
 			pwm_dev: vec![],
 			att_up: vec![[0.0, 0.0, 1.0]; g.len()],
+			cascade: vec![],
 		})
 		.collect();
 	let mut c2 = c.clone();
@@ -7563,7 +7670,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 		{
 			vert_flat.extend_from_slice(v);
 		}
-		cpu_obs.push(ReplayObs { vert, horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![], att_up: vec![] });
+		cpu_obs.push(ReplayObs { vert, horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![], att_up: vec![], cascade: vec![] });
 	}
 	let (tau, target_min) = (0.05f32, 2usize);
 	let trainer = ControllerTrainer::new()?;
@@ -7619,7 +7726,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 	let const_obs: Vec<ReplayObs> = f
 		.cpu_g
 		.iter()
-		.map(|g| ReplayObs { vert: vec![[0.7, 0.0, 0.0]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![], att_up: vec![] })
+		.map(|g| ReplayObs { vert: vec![[0.7, 0.0, 0.0]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![], att_up: vec![], cascade: vec![] })
 		.collect();
 	let mut c2 = c.clone();
 	let (rows_const, ..) = c2.split_record_pub(
@@ -7901,7 +8008,9 @@ mod tests
 		// est_kp(1) + est_ki(1). Same lockstep rule.
 		// + 11 (ABI 38 CTBR): ctbr_on(1) + ctbr_range(4) + ctbr_gamma(4) +
 		// ctbr_hover_pwm(1) + ctbr_outer_pid(1). Same lockstep rule.
-		assert_eq!(mem::size_of::<RolloutParams>(), 154 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
+		// + 10 (CTRL-38, ABI 41): cas_rate_i(1) + cas_dhat(1) + cas_c(3) + cas_clamp(3)
+		// + cas_kt(1) + cas_l_gain(1). Same lockstep rule.
+		assert_eq!(mem::size_of::<RolloutParams>(), 164 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============
@@ -8554,6 +8663,8 @@ mod tests
 			lpf_hz: 30.0,
 			range: [0.25, 4.2, 4.2, 1.6],
 			gamma: [1.0, 2.0, 2.0, 2.0],
+			obs_rate_i: false,
+			obs_dhat_plant: None,
 		};
 		assert_eq!(spec.rate_stage().decimation(), rs.decimation());
 		let att = bl_pidfw_cfg(2).att;

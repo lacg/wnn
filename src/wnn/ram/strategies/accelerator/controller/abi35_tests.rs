@@ -114,7 +114,7 @@ pub(crate) fn walk_episodes(seed: u64, eps: usize, steps: usize) -> Vec<WalkEpis
 				a: vec![],
 				t: vec![],
 				p: vec![],
-				obs: ReplayObs { vert: vec![], horiz: vec![], pwm_dev: vec![], att_up: vec![] },
+				obs: ReplayObs { vert: vec![], horiz: vec![], pwm_dev: vec![], att_up: vec![], cascade: vec![] },
 			};
 			for _ in 0..steps
 			{
@@ -140,6 +140,7 @@ fn slice_obs(o: &ReplayObs, s: usize, e: usize) -> ReplayObs
 		horiz: o.horiz[s..e].to_vec(),
 		pwm_dev: o.pwm_dev[s..e].to_vec(),
 		att_up: vec![],
+		cascade: vec![],
 	}
 }
 

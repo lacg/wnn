@@ -32,6 +32,7 @@
 //! decision ticks are the teacher's own tick % n_o == 0 since reset, which every host
 //! aligns with its hold (all reset at the episode start and step every tick).
 
+use crate::cascade_dhat::{torque_gains, CascadeDhat};
 use crate::ctbr_axis_mpc::{AxisPlant, AxisWeights, CtbrAxisMpc, NS};
 use crate::pid_firmware::RateStageFw;
 
@@ -49,19 +50,12 @@ pub(crate) const CTBR_MPC_L_GAIN: f64 = 0.02;
 pub(crate) struct CtbrMpcOf
 {
 	axes: [AxisPlant; 3],
-	k_thrust: f64,
-	dt: f64,
 	/// Lazily built per (n_o, rate-loop phase at the decision tick).
 	planners: Vec<(usize, u32, Vec<CtbrAxisMpc>)>,
 	shadow: RateStageFw,
-	// measured actuator: per-motor lagged pwm, ActuatorLag's prime/seed protocol
-	lag_pwm: [f64; 4],
-	alpha: f64,
-	primed: bool,
-	seeded: bool,
-	dhat: [f64; 3],
-	dhat_clamp: [f64; 3],
-	last_gyro: Option<[f64; 3]>,
+	/// The measured actuator + offset-free observer (cascade_dhat.rs — CTRL-38 factored
+	/// it out so the cascade student's d̂ feature runs the same law).
+	obs: CascadeDhat,
 	tick: usize,
 	held: [f64; 3],
 	/// A CTBR label has been asked for (the host is a cascade) — integrals() then
@@ -86,8 +80,7 @@ impl CtbrMpcOf
 	{
 		let alpha = crate::actuator_lag::motor_lag_alpha(motor_lag_s, dt);
 		let lpf = rate.lpf_coeffs();
-		let (arm, kd) = (arm_length as f64, k_drag as f64);
-		let c = [arm / inertia[0] as f64, arm / inertia[1] as f64, 4.0 * kd / inertia[2] as f64];
+		let c = torque_gains(arm_length, k_drag, inertia);
 		let axis = |i: usize| {
 			let g = rate.axis_gains(i);
 			AxisPlant {
@@ -107,17 +100,9 @@ impl CtbrMpcOf
 		shadow.reset();
 		CtbrMpcOf {
 			axes: [axis(0), axis(1), axis(2)],
-			k_thrust: k_thrust as f64,
-			dt: dt as f64,
 			planners: Vec::new(),
 			shadow,
-			lag_pwm: [0.0; 4],
-			alpha,
-			primed: false,
-			seeded: false,
-			dhat: [0.0; 3],
-			dhat_clamp: [c[0] * out, c[1] * out, c[2] * out],
-			last_gyro: None,
+			obs: CascadeDhat::new(c, k_thrust as f64, dt, motor_lag_s, out),
 			tick: 0,
 			held: [0.0; 3],
 			active: false,
@@ -127,11 +112,7 @@ impl CtbrMpcOf
 	pub(crate) fn reset(&mut self)
 	{
 		self.shadow.reset();
-		self.lag_pwm = [0.0; 4];
-		self.primed = false;
-		self.seeded = false;
-		self.dhat = [0.0; 3];
-		self.last_gyro = None;
+		self.obs.reset();
 		self.tick = 0;
 		self.held = [0.0; 3];
 		for (_, _, p) in self.planners.iter_mut()
@@ -149,49 +130,7 @@ impl CtbrMpcOf
 	/// (first call after reset = the t=0 placeholder: prime only).
 	pub(crate) fn observe(&mut self, gyro: [f32; 3], applied_pwm: [f64; 4])
 	{
-		let g = [gyro[0] as f64, gyro[1] as f64, gyro[2] as f64];
-		if let (Some(ua), Some(prev)) = (self.track_lag(applied_pwm), self.last_gyro)
-		{
-			for a in 0..3
-			{
-				let rate_dot = (g[a] - prev[a]) / self.dt;
-				let residual = rate_dot - self.axes[a].c * ua[a] - self.dhat[a];
-				let lim = self.dhat_clamp[a];
-				self.dhat[a] = (self.dhat[a] + CTBR_MPC_L_GAIN * residual).clamp(-lim, lim);
-			}
-		}
-		self.last_gyro = Some(g);
-	}
-
-	/// Advance the measured-actuator filter; the lagged axis forces once seeded.
-	fn track_lag(&mut self, applied: [f64; 4]) -> Option<[f64; 3]>
-	{
-		if !self.primed
-		{
-			self.primed = true;
-			return None;
-		}
-		let cmd = applied.map(|v| v.clamp(0.0, 1.0));
-		if !self.seeded
-		{
-			self.lag_pwm = cmd;
-			self.seeded = true;
-		}
-		else
-		{
-			for m in 0..4
-			{
-				self.lag_pwm[m] += self.alpha * (cmd[m] - self.lag_pwm[m]);
-			}
-		}
-		Some(self.lagged_force())
-	}
-
-	/// The rotors' differential thrust in the rate stage's axis-force coordinates.
-	fn lagged_force(&self) -> [f64; 3]
-	{
-		let t = self.lag_pwm.map(|p| self.k_thrust * p * p);
-		[t[3] - t[1], t[2] - t[0], (t[0] - t[1] + t[2] - t[3]) * 0.25]
+		self.obs.observe(gyro, applied_pwm);
 	}
 
 	/// The body-rate setpoint (rad/s, BODY axes) for this tick: a fresh plan on
@@ -213,7 +152,7 @@ impl CtbrMpcOf
 	{
 		let x = crate::optimal::state_error(q, gyro, target_rpy);
 		let idx = self.planner_index(n_o, self.shadow.phase());
-		let ua = if self.seeded { Some(self.lagged_force()) } else { None };
+		let ua = self.obs.measured_force();
 		let mut sp = [0.0f64; 3];
 		for a in 0..3
 		{
@@ -231,7 +170,7 @@ impl CtbrMpcOf
 				if st.first { x[3 + a] } else { st.prev_measured },
 				st.held,
 			];
-			let (xss, sp_ss) = self.axes[a].equilibrium(self.dhat[a]);
+			let (xss, sp_ss) = self.axes[a].equilibrium(self.obs.dhat()[a]);
 			let mut xt = [0.0f64; NS];
 			for i in 0..NS
 			{
@@ -275,7 +214,8 @@ impl CtbrMpcOf
 	/// shadow held axis force ×3, d̂ ×3]. Read-only.
 	pub(crate) fn diag_hidden(&self) -> [f64; 12]
 	{
-		let ua = if self.seeded { self.lagged_force() } else { [0.0; 3] };
+		let ua = self.obs.measured_force().unwrap_or([0.0; 3]);
+		let dhat = self.obs.dhat();
 		let mut h = [0.0f64; 12];
 		for a in 0..3
 		{
@@ -283,7 +223,7 @@ impl CtbrMpcOf
 			h[a] = ua[a];
 			h[3 + a] = st.integ;
 			h[6 + a] = st.held;
-			h[9 + a] = self.dhat[a];
+			h[9 + a] = dhat[a];
 		}
 		h
 	}
@@ -292,12 +232,12 @@ impl CtbrMpcOf
 	/// motor-level MPCOF's.
 	pub(crate) fn integrals(&self) -> [f32; 3]
 	{
-		self.dhat.map(|v| v as f32)
+		self.obs.dhat().map(|v| v as f32)
 	}
 
 	/// d̂'s clamp: the most torque the rate loop's output limit can cancel (c·out_limit).
 	pub(crate) fn i_clamps(&self) -> [f32; 3]
 	{
-		self.dhat_clamp.map(|v| v as f32)
+		self.obs.clamp().map(|v| v as f32)
 	}
 }

@@ -748,6 +748,8 @@ fn ctbr_from_kw(kw: &HashMap<String, String>) -> Option<crate::ctbr::CtbrSpec>
 		lpf_hz: f("lpf_hz"),
 		range: v32("range"),
 		gamma: v32("gamma"),
+		obs_rate_i: false,
+		obs_dhat_plant: None,
 	};
 	spec.validate().expect("fixture CtbrSpec");
 	Some(spec)

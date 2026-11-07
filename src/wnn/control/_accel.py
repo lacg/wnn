@@ -117,7 +117,11 @@ import os
 # closed inner loop (rate PID + motor lag + rigid body); surface unchanged.
 # ABI 40 (06/11/2026, CTRL-34): the cascade mpcof teacher plans from the flown rate
 # loop under DAgger (ctbr_sync_inner) + --rg-gate {improvement,quantile,off}.
-EXPECTED_ABI = 40
+# ABI 41 (07/11/2026, CTRL-38): two default-OFF cascade input blocks carried on
+# CtbrSpec (obs_rate_i=, obs_dhat_plant=) — the inner rate PID's integrator I/i_limit
+# and the cascade mpcof teacher's own d̂ observer; ReplayObs(cascade=). Off ⇒ the
+# ABI-40 cascade and motor path bit-identical.
+EXPECTED_ABI = 41
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

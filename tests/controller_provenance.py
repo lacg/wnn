@@ -34,15 +34,23 @@ def test_line_is_single_token_per_field() -> None:
 	fields = dict(re.findall(r" (\w+)=(\S+)", line.split(" fitness_pools=")[0]))
 	check("wheel/abi/sha/git/motor_lag are space-free tokens", fields,
 	      {"wheel": "ram_controller-2026.212.37", "abi": "27", "wheel_sha256": "08cdd0462eac0d15", "git": "3b5fc37d+dirty",
-	       "motor_lag": "unknown", "obs_pwm": "unknown"})
+	       "motor_lag": "unknown", "obs_pwm": "unknown", "train_asym": "unknown", "arch": "unknown"})
 	q = ControllerProvenance("w", 35, "s", "g", "rotation(1 pool/gen)", "0.2s:airframe:grafe2026")
 	check("ABI 35 item I: resolved motor lag is printed before fitness_pools",
-	      " motor_lag=0.2s:airframe:grafe2026 obs_pwm=unknown fitness_pools=rotation(1 pool/gen)" in q.line(), True)
+	      " motor_lag=0.2s:airframe:grafe2026 obs_pwm=unknown " in q.line()
+	      and q.line().endswith(" fitness_pools=rotation(1 pool/gen)"), True)
 	from wnn.control.provenance import obs_pwm_convention
 	check("ABI 36: obs_pwm convention token", [obs_pwm_convention(True, 0.2), obs_pwm_convention(True, 0.0), obs_pwm_convention(False, 0.2)],
 	      ["delivered", "command", "off"])
 	r = ControllerProvenance("w", 36, "s", "g", "CRN", "0.2s:airframe:grafe2026", "delivered")
-	check("ABI 36: obs_pwm token printed before fitness_pools", " obs_pwm=delivered fitness_pools=CRN" in r.line(), True)
+	check("ABI 36: obs_pwm token printed before fitness_pools",
+	      r.line().index(" obs_pwm=delivered ") < r.line().index(" fitness_pools=CRN"), True)
+	# CTRL-38 (ABI 41): the cascade input blocks are named in arch= only when on.
+	from wnn.control.provenance import arch_token
+	ct = {"attitude_hz": 500.0, "range": [0.25, 4.2, 4.2, 2.0], "gamma": [1, 2, 2, 2]}
+	check("CTRL-38: arch token unchanged with both blocks off", ":obs=" in arch_token(ct, "mpcof", 10, 0.001), False)
+	check("CTRL-38: arch token names both blocks",
+	      arch_token({**ct, "obs_rate_i": True, "obs_dhat_plant": [1, 1, 1, 1, 1]}, "mpcof", 10, 0.001).endswith(":obs=rate_i:obs=dhat"), True)
 	check("fitness_pools is the LAST field (may contain spaces)", line.endswith(" fitness_pools=CRN(all 5 pools/gen)"), True)
 	check("no double quotes anywhere (the marker is printf'd JSON)", '"' in line, False)
 

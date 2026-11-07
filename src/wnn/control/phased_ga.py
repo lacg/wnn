@@ -399,7 +399,13 @@ def _resolve_ctbr(args, ec) -> None:
 	carries the same inner loop. The inner loop is the airframe's firmware rate PID
 	as EpisodeConfig.cascade_kwargs hands it to the trainer and the rivals."""
 	args._ctbr = None
+	cascade_obs = {"--obs-rate-i": bool(getattr(args, "obs_rate_i", False)),
+	               "--obs-cascade-dhat": bool(getattr(args, "obs_cascade_dhat", False))}
 	if getattr(args, "output_mode", "pwm") != "ctbr":
+		on = [f for f, v in cascade_obs.items() if v]
+		if on:
+			raise SystemExit(f"{', '.join(on)} need --output-mode ctbr (they read the cascade's inner rate "
+			                 "loop / run the cascade teacher's observer) — on the motor path they would be inert.")
 		return
 	# The cascade decodes ABSOLUTELY (design §2.4: the inner rate integrator replaces
 	# the accumulator); the delta law is the explicit --ctbr-delta-law ablation.
@@ -426,12 +432,17 @@ def _resolve_ctbr(args, ec) -> None:
 		ec,
 		rate_max=tuple(args.ctbr_rate_max) if args.ctbr_rate_max else CTBR_DEFAULT_RATE_MAX,
 		coll_max=args.ctbr_coll_max,
-		gamma=tuple(args.ctbr_gamma) if args.ctbr_gamma else CTBR_DEFAULT_GAMMA)
+		gamma=tuple(args.ctbr_gamma) if args.ctbr_gamma else CTBR_DEFAULT_GAMMA,
+		obs_rate_i=cascade_obs["--obs-rate-i"],
+		obs_cascade_dhat=cascade_obs["--obs-cascade-dhat"])
 	c = args._ctbr
 	print(f"[CTBR] output_mode=ctbr: WNN outer loop at {1000.0 / max(int(args.action_repeat), 1) / (ec.dt * 1000.0):g} Hz "
 	      f"(action_repeat {args.action_repeat}) over the firmware rate PID at {c['attitude_hz']:g} Hz; "
 	      f"banks [T, p, q, r] range={c['range']} gamma={c['gamma']}; teacher={args.teacher}; "
 	      f"delta_control={'on (ablation)' if args.delta_control else 'off (absolute)'}")
+	if c.get("obs_rate_i") or c.get("obs_dhat_plant") is not None:
+		print(f"[CTRL-38] cascade input blocks: rate-I {'ON (+3: I/i_limit)' if c.get('obs_rate_i') else 'off'}; "
+		      f"d̂ {'ON (+3: teacher observer, plant ' + str(c['obs_dhat_plant']) + ')' if c.get('obs_dhat_plant') is not None else 'off'}")
 
 
 def _ctbr_rival_hold(args) -> "int | None":
@@ -3119,6 +3130,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--ctbr-gamma", type=float, nargs=4, default=None, metavar=("T", "P", "Q", "R"),
 	                help="ctbr: per-bank |t|^gamma alphabet (default 1 2 2 2 — gamma 2 on the rate banks keeps "
 	                     "the finest rate step at 0.004 rad/s at 64 levels; gamma 1 would be a 1.25 deg dead band).")
+	# CTRL-38 (ABI 41, Luiz 07/11/2026): the cascade's hidden-disturbance inputs, an A/B of two
+	# independent blocks. Both default OFF (the ABI-40 cascade, bit-identical).
+	ap.add_argument("--obs-rate-i", action="store_true",
+	                help="ctbr CTRL-38 a1: +3 input features = the inner firmware rate PID's own integrator "
+	                     "I per axis, normalised by its integral clamp (I/i_limit, in [-1, 1]) — the state the "
+	                     "real vehicle holds onboard; at trim it reads the disturbance as a fraction of the "
+	                     "integrator's authority. Requires --output-mode ctbr. Default OFF.")
+	ap.add_argument("--obs-cascade-dhat", action="store_true",
+	                help="ctbr CTRL-38 a2: +3 input features = d̂ (estimated external angular acceleration "
+	                     "roll/pitch/yaw, rad/s^2) from the cascade MPCOF teacher's own offset-free observer "
+	                     "(same law and gain, ctrl cascade_dhat.rs) run inside the student on the APPLIED motor "
+	                     "command (post rate loop, the plant's motor lag modelled) and the gyro; the airframe "
+	                     "constants come from --airframe. Requires --output-mode ctbr. Default OFF.")
 	# ABI 12 granularity ablation (Luiz 12/07/2026): the controller cell format.
 	# TERNARY runs empty_value=0.5 (PLN convention); BINARY decodes antagonist-
 	# pair E/I output halves (effective neutral 0.5). QUAD is bit-identical to

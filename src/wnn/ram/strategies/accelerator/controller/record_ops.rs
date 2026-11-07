@@ -108,7 +108,7 @@ impl<'a> CascadeDriver<'a>
 		}
 	}
 
-	fn drive(&mut self, sim: &mut AttitudeSim, q: [f32; 4], gyro: [f32; 3], target: [f32; 3])
+	fn drive(&mut self, sim: &mut AttitudeSim, q: [f32; 4], gyro: [f32; 3], target: [f32; 3]) -> [f32; 4]
 	{
 		self.teacher.observe(gyro, self.last_applied.map(|v| v as f64));
 		let pwm = self
@@ -118,6 +118,7 @@ impl<'a> CascadeDriver<'a>
 			.map(|v| v as f32);
 		sim.step(pwm);
 		self.last_applied = pwm;
+		pwm
 	}
 }
 
@@ -166,12 +167,27 @@ impl Driver<'_>
 	{
 		matches!(self, Driver::Cascade(_))
 	}
-	/// Advance the sim one step with the driver's action.
-	fn drive(&mut self, sim: &mut AttitudeSim, q: [f32; 4], gyro: [f32; 3], target: [f32; 3])
+	/// CTRL-38 a1: lend the student the rate loop that flies (Cascade driver only —
+	/// the other drivers have none; run_episode refuses rate-I with them).
+	fn lend_flown_rate_stage(&self, c: &mut WnnController)
+	{
+		if let Driver::Cascade(d) = self
+		{
+			d.pilot.lend_flown_rate_stage(c);
+		}
+	}
+	/// Advance the sim one step with the driver's action; the quad command that flew
+	/// (None for the N-rotor allocator).
+	fn drive(&mut self, sim: &mut AttitudeSim, q: [f32; 4], gyro: [f32; 3], target: [f32; 3]) -> Option<[f32; 4]>
 	{
 		match self
 		{
-			Driver::Pid(p) => sim.step(p.step_pub(q, gyro, target)),
+			Driver::Pid(p) =>
+			{
+				let pwm = p.step_pub(q, gyro, target);
+				sim.step(pwm);
+				Some(pwm)
+			}
 			Driver::Alloc(a) =>
 			{
 				let pwm: Vec<f32> = a
@@ -180,8 +196,9 @@ impl Driver<'_>
 					.map(|x| x as f32)
 					.collect();
 				let _ = sim.step_n_core(&pwm);
+				None
 			}
-			Driver::Cascade(c) => c.drive(sim, q, gyro, target),
+			Driver::Cascade(c) => Some(c.drive(sim, q, gyro, target)),
 		}
 	}
 }
@@ -199,6 +216,14 @@ fn run_episode<F: FnMut(&WnnController)>(
 	mut on_step: F,
 ) -> usize
 {
+	// CTRL-38 a1: only the training cascade has a flown rate loop to lend; the
+	// legacy drivers would leave the rate-I feature integrating the untrained
+	// student's zero setpoint — a universe deploy never visits. Refuse loudly.
+	assert!(
+		!c.cascade_rate_i_on() || driver.is_cascade(),
+		"record_address_universe: obs_rate_i needs the training-cascade recorder (pass reference_cfg) — \
+		 the legacy PID/allocator drivers fly no firmware rate loop to read the integrator from"
+	);
 	sim.reset(Some(q0), Some(om0));
 	driver.reset();
 	// The cascade (translating) recorder seeds the heading from the episode's true
@@ -249,10 +274,19 @@ fn run_episode<F: FnMut(&WnnController)>(
 			c.set_horizontal_obs(-hx, -hy, hvx, hvy);
 		}
 		let q = sim.quaternion();
+		driver.lend_flown_rate_stage(c); // CTRL-38 a1 (no-op unless obs_rate_i)
 		c.step(gyro, accel, target);
 		on_step(c);
 		n += 1;
-		driver.drive(sim, q, gyro, target);
+		let flown = driver.drive(sim, q, gyro, target);
+		// CTRL-38 a2: the student's d̂ observer reads what the plant ACTUALLY received
+		// (the driver's command), as in DAgger/calibration. Gated on the cascade d̂ so
+		// every other recorder stays bit-identical (see the CTRL-38 report: the
+		// motor-level obs_dhat / lagged obs_pwm recorder never had this).
+		if let (true, Some(a)) = (c.cascade_dhat_on(), flown)
+		{
+			c.observe_applied(a);
+		}
 	}
 	n
 }

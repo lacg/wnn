@@ -275,6 +275,19 @@ impl ExpertPilot
 		}
 	}
 
+	/// CTRL-38 a1: before the student's step(), hand it the rate loop that is
+	/// FLYING the vehicle (this pilot's), so its rate-I feature reads the vehicle's
+	/// integrator — what it reads from its own loop when it flies (deploy). Called
+	/// by every host where the teacher drives (calibration, recorder,
+	/// expert_drives). No-op on the motor path and with obs_rate_i off.
+	pub(crate) fn lend_flown_rate_stage(&self, controller: &mut WnnController)
+	{
+		if let Some((p, _)) = self.ctbr.as_ref()
+		{
+			controller.ctbr_adopt_flown_rate_stage(p.rate());
+		}
+	}
+
 	/// The teacher's LABEL for this step (motor command, or CTBR bank vector) and
 	/// the pwm the teacher's cascade puts on the motors.
 	#[allow(clippy::too_many_arguments)]
@@ -338,6 +351,24 @@ pub(crate) fn validate_ctbr_regime(controller: &WnnController, cfg: &RewardGated
 			 CtbrSpec from the SAME airframe cascade the config carries",
 			s.provenance_line()
 		));
+	}
+	if let Some(p) = s.obs_dhat_plant
+	{
+		let cfg_plant = [
+			cfg.af_arm_length as f64,
+			cfg.af_k_drag as f64,
+			cfg.af_inertia[0] as f64,
+			cfg.af_inertia[1] as f64,
+			cfg.af_inertia[2] as f64,
+		];
+		// f32 compare: the packed config carries the plant at f32 precision.
+		if p.map(|v| v as f32) != cfg_plant.map(|v| v as f32)
+		{
+			return Err(format!(
+				"CTBR: the student's d̂ observer plant {p:?} [arm, k_drag, Ixx, Iyy, Izz] is not the training \
+				 config's airframe {cfg_plant:?} — the student would estimate a vehicle it is not flying"
+			));
+		}
 	}
 	let af = crate::dagger_train::AirframeRs::from_cfg(cfg);
 	let mut ids: Vec<u8> = vec![cfg.teacher];

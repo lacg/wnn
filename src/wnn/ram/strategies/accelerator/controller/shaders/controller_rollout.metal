@@ -54,6 +54,15 @@ constant bool FC_HAS_GEOMETRY [[function_constant(0)]];
 constant uint FC_NUM_ROTORS [[function_constant(1)]];
 constant bool USE_GEOMETRY = is_function_constant_defined(FC_HAS_GEOMETRY) ? FC_HAS_GEOMETRY : false;
 constant uint NUM_ROTORS = is_function_constant_defined(FC_NUM_ROTORS) ? FC_NUM_ROTORS : 4u;
+// CTRL-38 (ABI 41): the cascade input blocks live in their OWN specialization
+// (FC_CASCADE_OBS=true, ControllerRolloutEvaluator::cascade_obs_pipeline); the
+// default and geometry pipelines leave it undefined ⇒ false ⇒ dead-stripped. Found
+// the hard way: a runtime-gated (never taken) append inside derive_features moved
+// the default pipeline's fast-math codegen (abi38_gpu_pidfw_residual_rows pin), so
+// the blocks are written by cas_step OUTSIDE derive_features and behind this
+// constant — derive_features is byte-for-byte the ABI-40 text.
+constant bool FC_CASCADE_OBS [[function_constant(2)]];
+constant bool CAS_OBS = is_function_constant_defined(FC_CASCADE_OBS) ? FC_CASCADE_OBS : false;
 
 // One rotor of the geometry buffer — 48 B, all-float, mirrors the Rust-side
 // RotorGpu upload. k_thrust is the EFFECTIVE coefficient (nominal x per-rotor
@@ -253,6 +262,17 @@ struct Params
 	float ctbr_gamma[4];
 	float ctbr_hover_pwm;
 	uint ctbr_outer_pid;
+	// CTRL-38 (ABI 41), appended in lockstep with RolloutParams: the cascade student's
+	// input blocks (controller/cascade_obs.rs). cas_rate_i=1 ⇒ append the inner rate
+	// loop's I/i_limit (the CTBR stage's integrator slots 3..6 over pidfw_rate's
+	// i_limit); cas_dhat=1 ⇒ run the teacher's offset-free observer (cascade_dhat.rs)
+	// on pwm_applied + the measured gyro and append d̂. Both 0 ⇒ the ABI-40 rollout.
+	uint cas_rate_i;
+	uint cas_dhat;
+	float cas_c[3];
+	float cas_clamp[3];
+	float cas_kt;
+	float cas_l_gain;
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -933,6 +953,80 @@ inline void derive_features(
 	}
 }
 
+// CTRL-38: the cascade MPCOF teacher's offset-free observer, f32 twin of
+// controller/cascade_dhat.rs CascadeDhat::observe (prime on the first call, seed the
+// actuator filter AT the first command, then the plant's lag; d̂ ← clamp(d̂ +
+// l·(ω' − c·ua − d̂), ±c·out_limit)). One call per physical step with (the gyro just
+// read, the command the plant received last step).
+struct CasObs
+{
+	float lag[4];
+	float dhat[3];
+	float last_g[3];
+	bool primed, seeded, have_g;
+};
+
+inline void cas_observe(constant Params &P, thread CasObs &o, thread const float *gyro,
+												thread const float *applied)
+{
+	bool upd = false;
+	if (o.primed)
+	{
+		float a_lag = 4.0f * P.dt / max(P.motor_settling_time_s, 4.0f * P.dt);
+		for (uint m = 0u; m < 4u; m++)
+		{
+			float cmd = clamp(applied[m], 0.0f, 1.0f);
+			o.lag[m] = o.seeded ? (o.lag[m] + a_lag * (cmd - o.lag[m])) : cmd;
+		}
+		o.seeded = true;
+		upd = o.have_g;
+	}
+	o.primed = true;
+	if (upd)
+	{
+		float t[4];
+		for (uint m = 0u; m < 4u; m++)
+			t[m] = P.cas_kt * o.lag[m] * o.lag[m];
+		float ua[3] = {t[3] - t[1], t[2] - t[0], (t[0] - t[1] + t[2] - t[3]) * 0.25f};
+		for (uint a = 0u; a < 3u; a++)
+		{
+			float rate_dot = (gyro[a] - o.last_g[a]) / P.dt;
+			float residual = rate_dot - P.cas_c[a] * ua[a] - o.dhat[a];
+			o.dhat[a] = clamp(o.dhat[a] + P.cas_l_gain * residual, -P.cas_clamp[a], P.cas_clamp[a]);
+		}
+	}
+	for (uint a = 0u; a < 3u; a++)
+		o.last_g[a] = gyro[a];
+	o.have_g = true;
+}
+
+// CTRL-38: this step's cascade-block values, written straight into the TAIL of
+// sensors[] (canonical order LAST, rate-I before d̂ — twin of controller.rs
+// append_cascade_features) BEFORE derive_features runs; derive_features fills
+// [NUM_FEATURES, num_features − n_cas) and never touches the tail. (Appending inside
+// derive_features moved the default pipeline's codegen — see FC_CASCADE_OBS.)
+// rate-I = the CTBR stage as the LAST tick left it (ctbr_inner_tick runs after the
+// decision); the observer ticks once per physical step, holds included.
+inline void cas_step(constant Params &P, thread float *sensors, thread CasObs &o,
+										 thread const float *ctbr_st, thread const float *applied)
+{
+	uint fi = P.num_features - 3u * (P.cas_rate_i + P.cas_dhat);
+	if (P.cas_rate_i != 0u)
+	{
+		for (uint a = 0u; a < 3u; a++)
+		{
+			float lim = P.pidfw_rate[a * 4u + 3u];
+			sensors[fi++] = (lim > 0.0f) ? (ctbr_st[3u + a] / lim) : ctbr_st[3u + a];
+		}
+	}
+	if (P.cas_dhat != 0u)
+	{
+		cas_observe(P, o, sensors, applied);
+		for (uint a = 0u; a < 3u; a++)
+			sensors[fi++] = o.dhat[a];
+	}
+}
+
 // =============================================================================
 // forward_state — shared per-step forward THROUGH the state layer. Given base
 // sensors[0..NUM_FEATURES) prefilled by the caller (sim-derived in scoring,
@@ -1366,6 +1460,18 @@ kernel void controller_rollout(
 								 P.out_full_window, P.frame_stride,
 								 P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
 								 P.memory_mode, P.output_decode};
+	// CTRL-38: the cascade d̂ observer's per-episode state (cascade_dhat.rs reset).
+	CasObs cas_o;
+	for (uint m = 0u; m < 4u; m++)
+		cas_o.lag[m] = 0.0f;
+	for (uint a = 0u; a < 3u; a++)
+	{
+		cas_o.dhat[a] = 0.0f;
+		cas_o.last_g[a] = 0.0f;
+	}
+	cas_o.primed = false;
+	cas_o.seeded = false;
+	cas_o.have_g = false;
 
 	for (uint t = 0u; t < P.steps; t++)
 	{
@@ -1518,6 +1624,11 @@ kernel void controller_rollout(
 		// (derive_features) and re-emit the last DECISION step's PWM — no ring
 		// push, no forward, no decode; prev_state and mono_last stay the decision
 		// step's (mirrors controller.rs step()'s hold branch). t=0 is a decision.
+		// CTRL-38: the cascade blocks for THIS step, on the observed gyro and the
+		// command the plant received last step (pwm_applied) — before derive_features.
+		if (CAS_OBS && (P.cas_rate_i != 0u || P.cas_dhat != 0u))
+			cas_step(P, sensors, cas_o, ctbr_st, pwm_applied);
+
 		float pwm[MAX_ROTORS];
 		bool hold = (P.action_repeat > 1u) && (t % P.action_repeat != 0u);
 		// obs_pwm feature = accumulator − bank anchor (torque banks anchor 0 under

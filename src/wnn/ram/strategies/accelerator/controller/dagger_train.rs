@@ -710,6 +710,10 @@ pub struct TrajectoryRs
 	// produced at each step (WnnController::att_up_obs, read right AFTER
 	// controller_step_4). ReplayObs.att_up. Zeros when the estimator is off.
 	pub att_up: Vec<[f32; 3]>,
+	// CTRL-38 (ABI 41): the cascade feature blocks' values compute_features produced
+	// at each step — [rate I/i_limit ×3, d̂ ×3] (WnnController::cascade_obs_last, read
+	// right AFTER controller_step_4). ReplayObs.cascade. Empty when both blocks are off.
+	pub cascade_obs: Vec<[f32; 6]>,
 	pub cumulative_reward: f64,
 	pub mean_attitude_error_rad: f64,
 	pub diverged: bool,
@@ -1787,6 +1791,13 @@ pub(crate) fn rollout_and_label_inner(
 		// the student's gyro). Under expert_drives the teacher's shadow already IS
 		// the flown loop (ExpertPilot) — nothing to sync. Motor path: None.
 		let inner_pre = if cfg.expert_drives { None } else { controller.ctbr_rate_stage() };
+		// CTRL-38 a1: under expert_drives the loop under the vehicle is the TEACHER's
+		// (ExpertPilot) — the student's rate-I feature reads that integrator, as it
+		// would read its own in deploy. No-op unless obs_rate_i is on.
+		if cfg.expert_drives
+		{
+			pilot.lend_flown_rate_stage(controller);
+		}
 		// Student forward + teacher label at student-visited state.
 		let student_pwm = controller_step_4(controller, gyro, accel, target_64);
 		if let Some(r) = inner_pre.as_ref()
@@ -1855,6 +1866,11 @@ pub(crate) fn rollout_and_label_inner(
 		traj.pwm_dev.push(pwm_dev_now);
 		// ABI 32: what this step's compute_features read from the estimator.
 		traj.att_up.push(controller.att_up_obs());
+		// CTRL-38: what this step's compute_features produced for the cascade blocks.
+		if controller.cascade_obs_ref().is_some()
+		{
+			traj.cascade_obs.push(controller.cascade_obs_last());
+		}
 		// H3: when outputs are decoupled, the output banks are CONTROLS, so the
 		// training TARGETS (teacher + student MOTOR pwms) must be un-mixed into
 		// control space [T,τr,τp,τy]. Single point ⇒ all downstream paths (split /
@@ -2032,7 +2048,8 @@ fn traj_windows(traj: &TrajectoryRs, cfg: &RewardGatedConfigPacked) -> Vec<TrajW
 			ae: opt(traj.att_errs.len(), end).then(|| traj.att_errs[start..end].to_vec()),
 			sp: opt(traj.student_pwms.len(), end).then(|| traj.student_pwms[start..end].to_vec()),
 			lb: opt(traj.label_base.len(), end).then(|| traj.label_base[start..end].to_vec()),
-			ro: ReplayObs::slice(&traj.vert_obs, &traj.horiz_obs, &traj.pwm_dev, &traj.att_up, start, end),
+			ro: ReplayObs::slice(&traj.vert_obs, &traj.horiz_obs, &traj.pwm_dev, &traj.att_up, start, end)
+				.map(|r| r.with_cascade(&traj.cascade_obs, start, end)),
 			first: start == 0,
 		});
 		start = end;
@@ -2655,7 +2672,10 @@ pub(crate) fn dagger_train_inplace_with(
 		&& std::env::var("WNN_CONTROLLER_GPU_TRAIN")
 			.map(|s| s == "1")
 			.unwrap_or(false)
-		&& controller.dhat_params().is_none();
+		&& controller.dhat_params().is_none()
+		// CTRL-38: the Metal train/record kernels do not carry the cascade blocks'
+		// replay stream — the CPU split replays it (replay_obs_guard), so walk there.
+		&& controller.cascade_obs_ref().is_none();
 
 	// The GPU walk does not port the L4 magnitude-priority commit: an L4 run walks on
 	// the CPU (loud, once) instead of silently dropping write_priority_err.
@@ -2743,6 +2763,7 @@ pub(crate) fn dagger_train_inplace_with(
 							horiz: t.horiz_obs.clone(),
 							pwm_dev: t.pwm_dev.clone(),
 							att_up: t.att_up.clone(),
+							cascade: t.cascade_obs.clone(),
 						})
 						.collect();
 					let (_r, _cf, planted, _pr, saturation, wishes) = controller.split_train_loop(

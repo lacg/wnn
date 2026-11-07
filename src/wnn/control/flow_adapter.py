@@ -78,6 +78,12 @@ def controller_spec_from_params(params: dict) -> ControllerSpec:
 	# adapter's EpisodeConfig does not carry — refuse rather than build a motor-level
 	# controller under a "ctbr" flow (the silently-ignored-key failure).
 	mode = str(_p(params, "controller_output_mode", "pwm"))
+	# CTRL-38: the cascade input blocks only exist under ctbr — refuse them here too
+	# rather than build a controller that silently lacks them.
+	for key in ("controller_obs_rate_i", "controller_obs_cascade_dhat"):
+		if bool(_p(params, key, False)):
+			raise ValueError(f"{key}: a cascade (ctbr) input block — the dashboard flow adapter builds "
+			                 "motor-level controllers only; run it through phased_ga --output-mode ctbr.")
 	if mode != "pwm":
 		raise ValueError(
 			f"controller_output_mode={mode!r}: the dashboard flow adapter builds motor-level "

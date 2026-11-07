@@ -22,6 +22,8 @@ mod controller_split;
 mod ctbr; // ABI 38 (CTRL-27): the cascade controller's output contract + inner stage
 mod ctbr_axis_mpc; // ABI 39 (CTRL-33): the cascade outer MPC, one axis — model = the closed rate loop
 mod ctbr_mpcof; // ABI 39 (CTRL-33): the cascade's MPCOF outer teacher (shadow rate loop + observer)
+mod cascade_dhat; // CTRL-38 (ABI 41): the cascade MPCOF's offset-free observer, shared teacher/student
+mod cascade_obs; // CTRL-38 (ABI 41): the cascade student's rate-I / d̂ input blocks
 mod controller_training;
 mod cpu_score; // CPU (rayon) batch scorer — twin of score_controllers_metal
 mod dagger_train;
@@ -52,6 +54,10 @@ mod imitation_probe_ctbr; // diagnostic: the cascade (ctbr) half of imitation_pr
 mod abi38_pins; // ABI 38: motor-level byte-identity pins captured on the ABI-37 build
 #[cfg(test)]
 mod train_asym_tests; // ABI 38: per-episode training motor asymmetry
+#[cfg(test)]
+mod ctrl38_pins; // CTRL-38: cascade byte-identity pins with both new blocks OFF (captured on ABI 40)
+#[cfg(test)]
+mod ctrl38_tests; // CTRL-38: rate-I / d̂ blocks — physics, train = deploy, CPU/GPU parity
 #[cfg(test)]
 mod abi38_tests; // ABI 38: the cascade controller — identity, rivals, CPU/GPU parity, trainers
 #[cfg(test)]
@@ -342,7 +348,16 @@ mod metal_controller;
 ///   before each label — the shadow had drifted 0.16–0.40 vs a real integrator ~0.15) and
 ///   the reward gate is selectable (--rg-gate improvement|quantile|off; default improvement
 ///   = 39). Cascade+mpcof labels change → new lineage; motor-level path bit-identical to 39.
-pub const ABI_VERSION: u32 = 40;
+/// ABI 41 (07/11/2026, CTRL-38): two default-OFF input blocks for the CASCADE student,
+///   carried on CtbrSpec (obs_rate_i=, obs_dhat_plant=[arm, k_drag, Ixx, Iyy, Izz]) so
+///   every host that builds a cascade gets them with no extra plumbing: a1 the inner
+///   rate PID's integrator I/i_limit ×3, a2 the cascade MPCOF teacher's own d̂ observer
+///   (cascade_dhat.rs, factored out of ctbr_mpcof.rs) on the applied command ×3 —
+///   appended LAST in compute_features, mirrored in controller_rollout.metal. The
+///   thermometer rows ride at the TAIL of `thresholds`. ReplayObs gains `cascade=`
+///   (the per-step values a rollout recorded; the replay re-applies them). Both OFF
+///   ⇒ the ABI-40 cascade and the motor path bit-identical (ctrl38_pins, abi38_pins).
+pub const ABI_VERSION: u32 = 41;
 
 /// Where the sn>0 trainer walks when WNN_CONTROLLER_GPU_BPTT is unset ("cpu"|"gpu").
 /// Decided by the item-E measurement rule (05/11/2026).

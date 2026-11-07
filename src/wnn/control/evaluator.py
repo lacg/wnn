@@ -381,7 +381,8 @@ class ControllerSpec:
 			+ int(self.obs_yaw_err) + int(self.obs_yaw_err_i) \
 			+ 3 * int(self.dhat_b is not None) \
 			+ int(self.obs_collective_cmd) + int(self.obs_alt_err) + int(self.obs_vz) \
-			+ 2 * int(self.obs_pos_err_xy) + 2 * int(self.obs_vel_xy)
+			+ 2 * int(self.obs_pos_err_xy) + 2 * int(self.obs_vel_xy) \
+			+ ctbr_cascade_feature_count(getattr(self, "ctbr", None))
 
 
 @dataclass
@@ -427,7 +428,8 @@ CTBR_DEFAULT_GAMMA = (1.0, 2.0, 2.0, 2.0)
 
 
 def ctbr_spec_dict(ec, rate_max=CTBR_DEFAULT_RATE_MAX, coll_max=None,
-                   gamma=CTBR_DEFAULT_GAMMA) -> dict:
+                   gamma=CTBR_DEFAULT_GAMMA, obs_rate_i: bool = False,
+                   obs_cascade_dhat: bool = False) -> dict:
 	"""ABI 38: the ControllerSpec.ctbr dict for an episode config — the inner rate
 	loop is the airframe's firmware cascade exactly as the trainer and the rivals
 	receive it (EpisodeConfig.cascade_kwargs: SI, converted once in
@@ -445,7 +447,7 @@ def ctbr_spec_dict(ec, rate_max=CTBR_DEFAULT_RATE_MAX, coll_max=None,
 	gamma = tuple(float(x) for x in gamma)
 	if len(rate_max) != 3 or len(gamma) != 4:
 		raise ValueError(f"ctbr: rate_max needs 3 values (p q r), gamma 4 (T p q r); got {rate_max}, {gamma}")
-	return dict(
+	d = dict(
 		rate_gains=[float(v) for v in ck["af_pid_rate"]],
 		out_limit_n=float(ck["af_pid_out_limit_n"]),
 		hover_n=float(ck["af_pid_hover_n"]),
@@ -456,6 +458,21 @@ def ctbr_spec_dict(ec, rate_max=CTBR_DEFAULT_RATE_MAX, coll_max=None,
 		range=[float(coll_max), *rate_max],
 		gamma=list(gamma),
 	)
+	# CTRL-38 (ABI 41): the cascade input blocks. Keys present ONLY when on, so every
+	# ABI-40 spec dict (checkpoints, provenance, spec equality) is unchanged.
+	if obs_rate_i:
+		d["obs_rate_i"] = True
+	if obs_cascade_dhat:
+		d["obs_dhat_plant"] = [float(af.arm_length), float(af.k_drag),
+		                       *(float(x) for x in af.inertia)]
+	return d
+
+
+def ctbr_cascade_feature_count(ctbr: "dict | None") -> int:
+	"""CTRL-38: input features the cascade blocks append (CtbrSpec::cascade_feature_count)."""
+	if not ctbr:
+		return 0
+	return 3 * int(bool(ctbr.get("obs_rate_i", False))) + 3 * int(ctbr.get("obs_dhat_plant") is not None)
 
 
 def ctbr_arg(spec):
@@ -895,7 +912,34 @@ def fit_thresholds_from_pid_rollouts(
 			if sim.is_unstable():
 				break
 
+	_cascade_columns_from_training_cascade(samples_per_feature, spec, episode_config, num_episodes, seed)
 	return _thresholds_from_samples(samples_per_feature, spec, method, outer_quantile, extra_samples)
+
+
+def _cascade_columns_from_training_cascade(samples_per_feature, spec, episode_config,
+                                           num_episodes: int, seed: int) -> None:
+	"""CTRL-38: refit the cascade blocks' columns (the LAST ctbr_cascade_feature_count
+	features) on rollouts that actually PRODUCE them. This Python rollout flies a PID
+	the feature controller does not see: the controller's rate integrator would
+	integrate its own zero setpoint and its d̂ observer would read its own untrained
+	command. The Rust sampler flies the training cascade (teacher through the cascade's
+	inner stage), lends the student the flown rate loop and feeds its observer the
+	applied command (calib_sampler.rs). Only the new columns are replaced, so every
+	other feature's ladder is byte-identical to the blocks-off control arm."""
+	n_cas = ctbr_cascade_feature_count(getattr(spec, "ctbr", None))
+	if n_cas == 0:
+		return
+	if episode_config is None or getattr(episode_config, "airframe", None) is None:
+		raise ValueError("--obs-rate-i / --obs-cascade-dhat: the threshold fit needs the run's "
+		                 "EpisodeConfig with its airframe (the cascade blocks are sampled on the "
+		                 "training cascade) — got none.")
+	from wnn.control import _accel as ra
+	rust = ra.sample_calibration_features(
+		_feature_controller(spec), reference_packed_config(episode_config),
+		int(num_episodes), int(seed))
+	nf = spec.num_features()
+	for f in range(nf - n_cas, nf):
+		samples_per_feature[f] = [float(v) for v in rust[f]]
 
 
 def random_connectivity(spec: ControllerSpec, seed: int = 0) -> tuple[list[int], list[int]]:

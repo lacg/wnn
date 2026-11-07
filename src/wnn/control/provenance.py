@@ -77,8 +77,14 @@ def arch_token(ctbr: "dict | None", teacher: str, action_repeat: int, dt: float)
 		return f"motor:teacher={teacher}"
 	fmt = lambda xs: ",".join(f"{float(x):g}" for x in xs)
 	outer_hz = 1.0 / (max(int(action_repeat), 1) * float(dt))
-	return (f"cascade:teacher={teacher}:inner=pidfw_rate@{float(ctbr['attitude_hz']):g}Hz:"
-	        f"outer_hz={outer_hz:g}:range={fmt(ctbr['range'])}:gamma={fmt(ctbr['gamma'])}")
+	tok = (f"cascade:teacher={teacher}:inner=pidfw_rate@{float(ctbr['attitude_hz']):g}Hz:"
+	       f"outer_hz={outer_hz:g}:range={fmt(ctbr['range'])}:gamma={fmt(ctbr['gamma'])}")
+	# CTRL-38: the cascade input blocks, named only when on (ABI-40 tokens unchanged).
+	if ctbr.get("obs_rate_i"):
+		tok += ":obs=rate_i"
+	if ctbr.get("obs_dhat_plant") is not None:
+		tok += ":obs=dhat"
+	return tok
 
 
 def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: str = UNKNOWN,

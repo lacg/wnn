@@ -64,6 +64,16 @@ pub struct CtbrSpec
 	/// keeps the smallest step below the steady-error budget (design §1.3).
 	#[pyo3(get)]
 	pub gamma: [f32; CTBR_BANKS],
+	/// CTRL-38 a1 (`--obs-rate-i`): append the inner rate loop's integrator I/i_limit
+	/// per axis (cascade_obs.rs). false ⇒ the ABI-40 feature layout.
+	#[pyo3(get)]
+	pub obs_rate_i: bool,
+	/// CTRL-38 a2 (`--obs-cascade-dhat`): the airframe constants [arm_length, k_drag,
+	/// Ixx, Iyy, Izz] the student's copy of the teacher's offset-free observer needs
+	/// (its torque gains c; k_thrust and out_limit come from the fields above). Some ⇒
+	/// append d̂ roll/pitch/yaw; None ⇒ the ABI-40 feature layout.
+	#[pyo3(get)]
+	pub obs_dhat_plant: Option<[f64; 5]>,
 }
 
 impl CtbrSpec
@@ -88,6 +98,15 @@ impl CtbrSpec
 		if self.rate_gains.iter().any(|v| !v.is_finite())
 		{
 			return Err("CtbrSpec: rate gains must be finite".into());
+		}
+		if let Some(p) = self.obs_dhat_plant
+		{
+			if p.iter().any(|v| !(v.is_finite() && *v > 0.0))
+			{
+				return Err(format!(
+					"CtbrSpec: obs_dhat_plant [arm_length, k_drag, Ixx, Iyy, Izz] = {p:?} must all be positive and finite"
+				));
+			}
 		}
 		for m in 0..CTBR_BANKS
 		{
@@ -151,13 +170,47 @@ impl CtbrSpec
 		crate::controller::delta_to_decoded(delta, delta_max * self.range[m], neutral, self.gamma[m])
 	}
 
-	/// The provenance token's CTBR half.
+	/// The provenance token's CTBR half. The CTRL-38 blocks appear only when on, so
+	/// every ABI-40 token is unchanged.
 	pub(crate) fn provenance_line(&self) -> String
 	{
-		format!(
+		let mut s = format!(
 			"inner=pidfw_rate rate_hz={} range={:?} gamma={:?}",
 			self.attitude_hz, self.range, self.gamma
-		)
+		);
+		if self.obs_rate_i
+		{
+			s.push_str(" obs=rate_i");
+		}
+		if let Some(p) = self.obs_dhat_plant
+		{
+			s.push_str(&format!(" obs=dhat(l={},plant={p:?})", crate::ctbr_mpcof::CTBR_MPC_L_GAIN));
+		}
+		s
+	}
+
+	/// CTRL-38: the features the two cascade blocks append (0 when both are off).
+	pub(crate) fn cascade_feature_count(&self) -> usize
+	{
+		3 * (self.obs_rate_i as usize) + 3 * (self.obs_dhat_plant.is_some() as usize)
+	}
+
+	/// CTRL-38: the student's cascade feature block, None when both halves are off.
+	/// The observer is the teacher's (cascade_dhat.rs) on this spec's airframe:
+	/// torque gains from the plant constants, k_thrust and the rate loop's output
+	/// limit from the contract; lag off until a host sets the plant's
+	/// (set_observer_motor_lag), exactly like the motor-level observer.
+	pub(crate) fn cascade_obs(&self, dt: f32) -> Option<crate::cascade_obs::CascadeObs>
+	{
+		if self.cascade_feature_count() == 0
+		{
+			return None;
+		}
+		let dhat = self.obs_dhat_plant.map(|p| {
+			let c = crate::cascade_dhat::torque_gains(p[0] as f32, p[1] as f32, [p[2] as f32, p[3] as f32, p[4] as f32]);
+			crate::cascade_dhat::CascadeDhat::new(c, self.k_thrust, dt, 0.0, self.out_limit_n)
+		});
+		Some(crate::cascade_obs::CascadeObs::new(self.obs_rate_i, dhat))
 	}
 }
 
@@ -165,7 +218,8 @@ impl CtbrSpec
 impl CtbrSpec
 {
 	#[new]
-	#[pyo3(signature = (rate_gains, out_limit_n, hover_n, k_thrust, main_loop_hz, attitude_hz, lpf_hz, range, gamma))]
+	#[pyo3(signature = (rate_gains, out_limit_n, hover_n, k_thrust, main_loop_hz, attitude_hz, lpf_hz, range, gamma,
+	                    obs_rate_i = false, obs_dhat_plant = None))]
 	#[allow(clippy::too_many_arguments)]
 	fn py_new(
 		rate_gains: [f64; 12],
@@ -177,9 +231,23 @@ impl CtbrSpec
 		lpf_hz: f64,
 		range: [f32; CTBR_BANKS],
 		gamma: [f32; CTBR_BANKS],
+		obs_rate_i: bool,
+		obs_dhat_plant: Option<[f64; 5]>,
 	) -> PyResult<Self>
 	{
-		let s = CtbrSpec { rate_gains, out_limit_n, hover_n, k_thrust, main_loop_hz, attitude_hz, lpf_hz, range, gamma };
+		let s = CtbrSpec {
+			rate_gains,
+			out_limit_n,
+			hover_n,
+			k_thrust,
+			main_loop_hz,
+			attitude_hz,
+			lpf_hz,
+			range,
+			gamma,
+			obs_rate_i,
+			obs_dhat_plant,
+		};
 		s.validate().map_err(pyo3::exceptions::PyValueError::new_err)?;
 		Ok(s)
 	}
@@ -269,6 +337,26 @@ impl CtbrInner
 		self.rate.axis_state(i)
 	}
 
+	/// CTRL-38 a1: the integrator I per axis over the firmware's own clamp i_limit
+	/// (∈ [−1, 1]); an unclamped axis (i_limit = 0) reports I itself.
+	pub(crate) fn rate_integral_norm(&self) -> [f32; 3]
+	{
+		std::array::from_fn(|i| {
+			let lim = self.rate.axis_gains(i).i_limit;
+			let integ = self.rate.axis_state(i).integ;
+			(if lim > 0.0 { integ / lim } else { integ }) as f32
+		})
+	}
+
+	/// CTRL-38: adopt the state of the rate loop that is ACTUALLY flying (a teacher's
+	/// ExpertPilot) — the rate-I feature then reads the vehicle's integrator when the
+	/// student's own loop does not drive the plant (calibration, recorder,
+	/// expert_drives). The held setpoint and transport are untouched.
+	pub(crate) fn adopt_rate_stage(&mut self, flown: &RateStageFw)
+	{
+		self.rate = *flown;
+	}
+
 	/// One physical tick of the inner loop on the held setpoint and the measured gyro.
 	pub(crate) fn fly(&mut self, gyro: [f32; 3]) -> [f32; 4]
 	{
@@ -313,6 +401,13 @@ impl CtbrOverRate
 		self.rate.reset();
 		self.tick = 0;
 		self.held = [0.0; CTBR_BANKS];
+	}
+
+	/// The rate loop as it stands (CTRL-38: the flown integrator a teacher-driven
+	/// rollout lends the student's rate-I feature).
+	pub(crate) fn rate(&self) -> &RateStageFw
+	{
+		&self.rate
 	}
 
 	/// One physical tick: take the outer label on a decision tick, fly the held one.
