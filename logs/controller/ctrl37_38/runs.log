@@ -1,0 +1,3 @@
+2026-11-07T23:07:20Z START C-S2-d_wposx2_leak999_full_s2 --integral-leak 0.999 (posx2 weights, 35 units)
+2026-11-07T23:35:54Z DROPPED C-S2-d_wposx2_leak999_full_s2 (partial) + the queued posx2 rateI — Luiz 07/11: no reruns; the control-weights leak999/rateI results stand (weights move results <=2 pp over 35 units)
+2026-11-07T23:36:17Z CORRECTION: DROP REVERSED (Luiz 07/11: 'no, don't stop') — the kill had failed, C-S2-d_wposx2_leak999_full_s2 never stopped (pid 48553); its .out restored. Its stage0_grid checkpoint file was deleted by mistake (in-memory run unaffected). rateI/dhat posx2 re-queued (resume.sh).
