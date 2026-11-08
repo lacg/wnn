@@ -91,7 +91,7 @@ def test_bit_map_covers_the_actual_encoded_layout(dedupe):
 	df = _unsw_frame()
 	enc = ThermometerEncoder(n_bits=16, dedupe=dedupe).fit(df)
 	_, total = enc.transform(df)
-	bit_family, names = bit_families(enc, total, "unsw-nb15")
+	bit_family, names, _ = bit_families(enc, total, "unsw-nb15")
 	assert len(bit_family) == total, "every encoded bit mapped"
 	owner, _ = load_family_map("unsw-nb15")
 	for feature, (start, end) in enc.feature_bit_ranges().items():
@@ -106,7 +106,7 @@ def test_flag_bit_belongs_to_its_feature():
 	df.loc[::7, "dur"] = np.nan
 	enc = ThermometerEncoder(n_bits=8, invalid_encoding="single_bit").fit(df)
 	_, total = enc.transform(df)
-	bit_family, names = bit_families(enc, total, "unsw-nb15")
+	bit_family, names, _ = bit_families(enc, total, "unsw-nb15")
 	start, end = enc.feature_bit_ranges()["dur"]
 	assert {names[f] for f in bit_family[start:end]} == {"timing"}
 
@@ -264,3 +264,79 @@ def test_grid_genomes_are_projected_and_off_is_unchanged():
 	from wnn.ram.genome import generate_connections
 	expect = generate_connections([16] * 40, 128, random.Random(9).randint(0, 2**63))
 	assert off1.connections == expect, "off grid genome = the original single draw"
+
+
+# ---------------------------------------------------------------- merge_into (IDS-55 follow-up)
+
+def _layout(dedupe: bool, max_bits: int = 34, cross: float = 0.2):
+	from wnn.ids.feature_families import host_bits
+	df = _unsw_frame()
+	enc = ThermometerEncoder(n_bits=16, dedupe=dedupe).fit(df)
+	_, total = enc.transform(df)
+	return enc, total, bit_families(enc, total, "unsw-nb15", host_bits(max_bits, cross))
+
+
+def test_ttl_state_merges_into_context_when_dedupe_leaves_it_too_small():
+	enc, total, (bit_family, names, merges) = _layout(dedupe=True)
+	assert len(merges) == 1 and merges[0].startswith("ttl_state(") and merges[0].endswith(")->context")
+	assert "ttl_state" not in names
+	ctx = names.index("context")
+	owner, _ = load_family_map("unsw-nb15")
+	moved = [f for f in enc.feature_names_ if owner[f] in ("ttl_state", "context")]
+	assert {"sttl", "dttl", "state", "ct_srv_src"} <= set(moved)
+	for feature in moved:
+		start, end = enc.feature_bit_ranges()[feature]
+		assert set(bit_family[start:end]) == {ctx}, feature
+
+
+def test_no_merge_when_the_family_can_host_and_the_map_is_unchanged():
+	enc, total, (bit_family, names, merges) = _layout(dedupe=False)
+	assert merges == [] and "ttl_state" in names
+	assert (bit_family, names, []) == bit_families(enc, total, "unsw-nb15", 0), "dedupe-off map = the pre-merge map"
+
+
+def test_host_threshold_is_the_rust_eligibility_rule_at_max_bits():
+	from wnn.ids.feature_families import host_bits
+	assert host_bits(34, 0.2) == 28 and host_bits(24, 0.2) == 20 and host_bits(10, 0.0) == 10
+
+
+def test_budget_invariant_holds_on_a_merged_map():
+	_, _, (bit_family, names, merges) = _layout(dedupe=True)
+	rf = ReceptiveFields(bit_family=tuple(bit_family), family_names=tuple(names), cross=0.2,
+		version=FAMILY_MAP_VERSION, source="test", merges=tuple(merges), host_bits=28)
+	widths = [4 + i % 31 for i in range(300)]
+	from wnn.ram.genome import ClusterGenome
+	rng = np.random.default_rng(1)
+	g = ClusterGenome(bits_per_neuron=widths, neurons_per_cluster=[300],
+		connections=rng.integers(0, len(bit_family), size=sum(widths)).tolist())
+	rf.project_genome(g, random.Random(2))
+	_assert_satisfied(rf, g)
+	assert "merged (< 28 bits to host max_bits): ttl_state(" in rf.provenance()
+
+
+def test_merge_declarations_are_validated(tmp_path, monkeypatch):
+	import wnn.ids.feature_families as ff
+	monkeypatch.setattr(ff, "_DIR", tmp_path)
+	def write(families):
+		(tmp_path / "unsw-nb15.json").write_text(json.dumps({"families": families}))
+	write({"a": {"why": "x", "merge_into": "nope", "features": ["f"]}})
+	with pytest.raises(ValueError, match="not another family"):
+		ff.merge_targets("unsw-nb15")
+	write({"a": {"why": "x", "merge_into": "b", "features": ["f"]}, "b": {"why": "y", "merge_into": "a", "features": ["g"]}})
+	with pytest.raises(ValueError, match="cycle"):
+		ff.merge_targets("unsw-nb15")
+
+
+def test_a_merge_chain_follows_a_partner_that_is_still_too_small():
+	from wnn.ids.feature_families import _merge_small_families
+	owner = {"f1": "a", "f2": "b", "f3": "c"}
+	ranges = {"f1": (0, 4), "f2": (4, 8), "f3": (8, 40)}
+	merged, merges = _merge_small_families(owner, ranges, {"a": "b", "b": "c"}, host_bits=20)
+	assert set(merged.values()) == {"c"} and merges == ["a(4b)->b", "b(8b)->c"]
+
+
+def test_settings_carry_the_worker_ids_max_bits_default():
+	from wnn.ram.experiments.IdsEvaluatorSettings import IdsEvaluatorSettings
+	from wnn.ram.experiments.ids_param_resolution import IDS_DEFAULT_MAX_BITS
+	assert IdsEvaluatorSettings.from_params({}).max_bits == IDS_DEFAULT_MAX_BITS == 24
+	assert IdsEvaluatorSettings.from_params({"max_bits": 34}).max_bits == 34

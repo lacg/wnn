@@ -37,11 +37,13 @@ class IdsEvaluatorFactory:
 		dataset's ACTUAL encoded bits (dedupe on/off, flag bits); "off" -> None."""
 		if s.receptive_fields == "off":
 			return None
-		from wnn.ids.feature_families import FAMILY_MAP_VERSION, bit_families, family_file
+		from wnn.ids.feature_families import FAMILY_MAP_VERSION, bit_families, family_file, host_bits
 		from wnn.ram.strategies.connectivity.receptive_fields import ReceptiveFields
-		bit_family, names = bit_families(dataset.encoder, dataset.X_train.total_bits, s.dataset_name)
+		hosting = host_bits(s.max_bits, s.rf_cross)
+		bit_family, names, merges = bit_families(dataset.encoder, dataset.X_train.total_bits, s.dataset_name, hosting)
 		rf = ReceptiveFields(bit_family=tuple(bit_family), family_names=tuple(names), cross=s.rf_cross,
-			version=FAMILY_MAP_VERSION, source=family_file(s.dataset_name).name)
+			version=FAMILY_MAP_VERSION, source=family_file(s.dataset_name).name, merges=tuple(merges),
+			host_bits=hosting)
 		self._log(rf.provenance())
 		return rf
 

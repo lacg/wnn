@@ -15,7 +15,7 @@ from dataclasses import dataclass
 PHASES = ("ga_neurons", "grid_search")
 
 _QUERY = """
-	SELECT vs.genome_hash, e.name, g.tiers_json, g.connections_json, vs.threshold_metadata
+	SELECT vs.genome_hash, e.name, g.tiers_json, g.connections_json, vs.threshold_metadata, vs.worker_abi
 	FROM validation_summaries vs
 	JOIN experiments e ON vs.experiment_id = e.id AND e.phase_type = ?
 	JOIN genomes g ON g.experiment_id = e.id AND g.config_hash = vs.genome_hash
@@ -34,6 +34,10 @@ class FlowGenomeSource:
 	neurons_per_cluster: list[int]
 	connections: list[int]
 	threshold_metadata: dict
+	# The worker ABI that recorded the row (NULL on rows before the scoped
+	# validation cache, 10/10/2026). FlowLayerTrainer refuses a rate < 1 row
+	# older than the IDS-50 sampling mask (ABI 25): not reproducible by design.
+	worker_abi: int | None = None
 
 	@classmethod
 	def read(cls, db_path: str, flow_id: int, genome_type: str, phase: str | None, point: str = "final") -> FlowGenomeSource:
@@ -43,12 +47,13 @@ class FlowGenomeSource:
 			row = cls._row(con, flow_id, genome_type, phase, point)
 		finally:
 			con.close()
-		genome_hash, phase_name, tiers_json, connections_json, metadata_json = row
+		genome_hash, phase_name, tiers_json, connections_json, metadata_json, worker_abi = row
 		tiers = json.loads(tiers_json)
 		return cls(
 			flow_id=flow_id, params=params, genome_hash=genome_hash, phase_name=phase_name,
 			bits_per_neuron=list(tiers["bits_per_neuron"]), neurons_per_cluster=list(tiers["neurons_per_cluster"]),
 			connections=cls._connections(connections_json), threshold_metadata=json.loads(metadata_json or "{}"),
+			worker_abi=worker_abi,
 		)
 
 	@staticmethod

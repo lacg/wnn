@@ -30,7 +30,7 @@ from wnn.ram.experiments.experiment_setting_resolver import ExperimentSettingRes
 from wnn.ram.experiments.inert_params import refuse_inert_experiment_knobs
 from wnn.ram.experiments.tracker import create_tracker, ExperimentTracker
 from wnn.ram.experiments import scheduler
-from wnn.ram.experiments.ids_param_resolution import LM_MEMORY_MODES, memory_mode_code, resolve_memory_mode
+from wnn.ram.experiments.ids_param_resolution import IDS_DEFAULT_MAX_BITS, LM_MEMORY_MODES, memory_mode_code, resolve_memory_mode
 
 # How often to send heartbeats (seconds)
 HEARTBEAT_INTERVAL = 30
@@ -904,7 +904,7 @@ class FlowWorker:
         flow_config.ids_feature_selection = params.get("ids_feature_selection", "all")
         # Global and per-stage bounds (shared with bitwise/multi_stage)
         flow_config.min_bits = params.get("min_bits", 4)
-        flow_config.max_bits = params.get("max_bits", 24)
+        flow_config.max_bits = params.get("max_bits", IDS_DEFAULT_MAX_BITS)
         flow_config.min_neurons = params.get("min_neurons", 5)
         flow_config.max_neurons = params.get("max_neurons", 300)
         flow_config.stage_min_bits_list = params.get("stage_min_bits")

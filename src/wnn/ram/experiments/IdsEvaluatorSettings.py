@@ -21,6 +21,7 @@ from wnn.ram.experiments.ids_param_resolution import (
 	resolve_calib_sample,
 	resolve_kfold_per_gen,
 	resolve_memory_mode,
+	IDS_DEFAULT_MAX_BITS,
 	resolve_offspring_folds,
 	resolve_receptive_fields,
 	resolve_rf_cross,
@@ -71,6 +72,7 @@ class IdsEvaluatorSettings:
 	feature_ranking: str
 	receptive_fields: str
 	rf_cross: float
+	max_bits: int
 	fitness_weights: tuple[float, float, float, float]
 	order_independent_train: bool
 
@@ -116,6 +118,8 @@ class IdsEvaluatorSettings:
 			feature_ranking=resolve_feature_ranking(params),
 			receptive_fields=resolve_receptive_fields(params),
 			rf_cross=resolve_rf_cross(params),
+			# The run's widest neuron: receptive-field family hosting (merge_into).
+			max_bits=int(params.get("max_bits", IDS_DEFAULT_MAX_BITS)),
 			fitness_weights=(
 				params.get("fitness_weight_ce", 0), params.get("fitness_weight_f1", 0),
 				params.get("fitness_weight_fpr", 0), params.get("fitness_weight_acc", 0),

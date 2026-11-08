@@ -10,11 +10,13 @@
 	"fallback": "A family is a HOME for a w-bit neuron only if it has at least w - floor(rf_cross*w) distinct ENCODED bits (after ids_encoding_dedupe, if on). A smaller family is reachable at that width only through the cross budget; a neuron whose width no family can host is exempt (left as drawn). Nothing is ever placed out-of-family to cover a deficit, so a projected neuron's family always holds a strict majority of its connections (rf_cross < 0.5).",
 	"notes": [
 		"Upper/lower-case spellings are both listed: the HF random split uses Sload/Dload/Djit/res_bdy_len, the temporal split sload/dload/djit/response_body_len.",
-		"proto/service/state are categorical (log2(#categories) bits), so protocol is a small family on the legacy list (~12 encoded bits): at wide neurons it is reachable only via the cross budget."
+		"proto/service/state are categorical (log2(#categories) bits), so protocol is a small family on the legacy list (~12 encoded bits): at wide neurons it is reachable only via the cross budget.",
+		"ttl_state merge_into context (Luiz, IDS-55 follow-up): with ids_encoding_dedupe on, ttl_state keeps ~15 encoded bits (sttl/dttl/ct_state_ttl have few distinct values), too few to host a neuron, so it joins context (UNSW's connection-window counters; ct_state_ttl is itself a window feature). Dedupe off: 196 bits on unswr, no merge, map unchanged."
 	],
 	"families": {
 		"ttl_state": {
 			"why": "Hop count / OS fingerprint of each side plus the connection state machine; ct_state_ttl is UNSW's own joint feature of the two, so the four move together.",
+			"merge_into": "context",
 			"features": [
 				"sttl",
 				"dttl",

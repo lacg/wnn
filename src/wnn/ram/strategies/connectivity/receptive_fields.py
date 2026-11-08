@@ -31,6 +31,10 @@ class ReceptiveFields:
 	cross: float
 	version: str
 	source: str
+	# Declared merge_into merges applied ("family(Nb)->partner") and the hosting
+	# threshold that triggered them (wnn/ids/feature_families.py); () = none.
+	merges: tuple[str, ...] = ()
+	host_bits: int = 0
 
 	def __post_init__(self) -> None:
 		if not 0.0 <= self.cross < 0.5:
@@ -78,7 +82,12 @@ class ReceptiveFields:
 		sizes = ", ".join(f"{n}={s}" for n, s in zip(self.family_names, self.family_sizes()))
 		return (f"  [RF] ids_receptive_fields=family map={self.version}/{self.source} "
 		        f"ids_rf_cross={self.cross} (budget floor({self.cross} x bits) out-of-family connections "
-		        f"per neuron) over {self.total_input_bits} encoded bits: {sizes}")
+		        f"per neuron) over {self.total_input_bits} encoded bits: {sizes}{self._merge_note()}")
+
+	def _merge_note(self) -> str:
+		if not self.merges:
+			return ""
+		return f"; merged (< {self.host_bits} bits to host max_bits): {', '.join(self.merges)}"
 
 
 def project_if_on(rf: ReceptiveFields | None, genome: "ClusterGenome", rng: random.Random) -> "ClusterGenome":

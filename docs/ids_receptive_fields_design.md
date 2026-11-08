@@ -45,6 +45,17 @@ that width only through the cross budget. A neuron no family can host is EXEMPT 
 drawn, no draw). Nothing is ever placed out-of-family to cover a deficit (the
 controller's corner), so the majority rule — and therefore idempotence — always holds.
 
+**Declared merge (IDS-55 follow-up, Luiz "merge ttl_state").** A family may declare
+`"merge_into": "<family>"` in the map. When its encoded-bit count (after dedupe) is below
+`host_bits = max_bits - floor(ids_rf_cross * max_bits)` — what the run's widest neuron
+needs, the eligibility rule above — its features join the partner (chained through the
+partner's own `merge_into`). Families that can host are untouched, so every dedupe-off map
+is identical to before and the map version stays `families_v1`. UNSW `ttl_state` declares
+`merge_into: context`: with dedupe on it keeps 12–16 bits (unswr/unswt, both rankings) and
+merges; off it has 196 (unswr) / 48–52 (unswt) and does not. The `[RF]` line names each
+merge. Other dedupe-on families below the threshold (unswt handshake=10, protocol=12)
+declare no merge and stay cross-budget-only.
+
 ## The projection
 
 ram_core `receptive_fields.rs`: per neuron, if it is satisfied (or exempt) nothing

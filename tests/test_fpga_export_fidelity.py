@@ -10,6 +10,15 @@ count_u x quarters(cell_u)), must equal the Rust score x 4N on held-out vectors
 
 Reads the dashboard DB read-only; skipped where it is absent. Needs the ABI-17
 wheel (IDSCacheWrapper.export_trained).
+
+The rate-0.25 reference (flow 6928) is NOT its DB row: that row is stamped
+worker_abi=16, and since ABI 25 (IDS-50) the rate < 1 training-sample mask is
+keyed on neuron identity, so it cannot be reproduced by design (the ABI-24 tree +
+wheel still reproduce it bit-exact). The reference is the same genome's final
+validation re-recorded under the current trainer by
+scripts/ids55/rerecord_fidelity_reference.py (Experiment.revalidate_genome, the
+worker's own path, captured — the DB is untouched), in
+tests/fixtures/fpga_fidelity/. Re-record it when a trainer change moves rate < 1.
 """
 import os
 import sys
@@ -23,6 +32,8 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "fpga" / "scripts"
 pytestmark = pytest.mark.skipif(not DB.exists(), reason="dashboard DB not mounted")
 sys.path.insert(0, str(SCRIPTS))
 OI_AT_IMPORT = os.environ.get("WNN_ORDER_INDEPENDENT_TRAIN")
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "fpga_fidelity"
+GAF_REFERENCE = FIXTURES / "gaf_6928_best_f1_ga_neurons.json"
 
 
 def _adder_sums(trained, rows: np.ndarray) -> np.ndarray:
@@ -44,14 +55,36 @@ def _adder_sums(trained, rows: np.ndarray) -> np.ndarray:
 	return total
 
 
-@pytest.fixture(scope="module", params=[(6945, 1.0), (6928, 0.25)], ids=["SR1-rate1.0", "GAF-rate0.25"])
+def _with_reference(source, path: Path):
+	"""The flow's genome + params, verified against a re-recorded reference row."""
+	import dataclasses
+	import json
+	ref = json.loads(path.read_text())
+	assert ref["flow_id"] == source.flow_id and ref["genome_hash"] == source.genome_hash, "reference is for another genome"
+	return dataclasses.replace(source, threshold_metadata=ref["threshold_metadata"], worker_abi=ref["worker_abi"])
+
+
+@pytest.fixture(scope="module", params=[(6945, 1.0, None), (6928, 0.25, GAF_REFERENCE)], ids=["SR1-rate1.0", "GAF-rate0.25"])
 def trained(request):
 	from flow_genome_source import FlowGenomeSource
 	from flow_layer_trainer import FlowLayerTrainer
-	flow_id, rate = request.param
+	flow_id, rate, reference = request.param
 	source = FlowGenomeSource.read(str(DB), flow_id, "best_f1", "ga_neurons")
 	assert source.params["neuron_sample_rate"] == rate
+	if reference is not None:
+		source = _with_reference(source, reference)
 	return FlowLayerTrainer(log=lambda m: None).train(source)
+
+
+def test_a_pre_ids50_rate_below_one_row_is_refused_with_the_reason():
+	"""Flow 6928's own DB row (worker ABI 16, rate 0.25) cannot be reproduced by the
+	identity-keyed sampling mask: refused up front, never a vague fidelity mismatch."""
+	from flow_genome_source import FlowGenomeSource
+	from flow_layer_trainer import NotReproducible, FlowLayerTrainer
+	source = FlowGenomeSource.read(str(DB), 6928, "best_f1", "ga_neurons")
+	assert source.worker_abi == 16
+	with pytest.raises(NotReproducible, match="IDS-50"):
+		FlowLayerTrainer(log=lambda m: None).train(source)
 
 
 def test_export_leaves_the_environment_alone(trained):

@@ -205,6 +205,9 @@ def resolve_encoding_dedupe(params: dict) -> bool:
 	return value == "on"
 
 
+# The IDS flow default for max_bits (worker._apply_ids_config reads the same).
+IDS_DEFAULT_MAX_BITS = 24
+
 RECEPTIVE_FIELDS_VALUES = ("off", "family")
 DEFAULT_RF_CROSS = 0.2
 

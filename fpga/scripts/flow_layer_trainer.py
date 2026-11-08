@@ -21,6 +21,14 @@ from fidelity_gate import FidelityGate  # noqa: E402
 from flow_genome_source import FlowGenomeSource  # noqa: E402
 
 
+# Worker ABI of the IDS-50 identity-keyed training-sample mask (rate < 1).
+SAMPLING_MASK_ABI = 25
+
+
+class NotReproducible(RuntimeError):
+	pass
+
+
 @dataclass(frozen=True)
 class TrainedFlowGenome:
 	source: FlowGenomeSource
@@ -41,6 +49,7 @@ class FlowLayerTrainer:
 		from wnn.ram.experiments.IdsEvaluatorSettings import IdsEvaluatorSettings
 		settings = IdsEvaluatorSettings.from_params(source.params)
 		self._require_exportable(settings)
+		self._require_reproducible(source, settings)
 		factory = IdsEvaluatorFactory(self._log)
 		dataset = factory.load(settings)
 		_, test_eval = factory.flat(dataset, settings)
@@ -66,6 +75,21 @@ class FlowLayerTrainer:
 			os.environ.pop(OI_ENV, None)
 			if previous is not None:
 				os.environ[OI_ENV] = previous
+
+	@staticmethod
+	def _require_reproducible(source: FlowGenomeSource, settings) -> None:
+		"""At neuron_sample_rate < 1 the training-sample mask is keyed on the
+		neuron's IDENTITY since worker ABI 25 (IDS-50; flat position before), so a
+		row recorded by an older trainer — or an unstamped one — describes a memory
+		this trainer cannot rebuild. Refuse with the reason instead of a generic
+		fidelity mismatch. Rate 1.0 trains every row, bit-identical across ABIs."""
+		if settings.neuron_sample_rate >= 1.0:
+			return
+		if source.worker_abi is None or source.worker_abi < SAMPLING_MASK_ABI:
+			raise NotReproducible(
+				f"flow {source.flow_id} {source.phase_name}: rate {settings.neuron_sample_rate} row recorded by "
+				f"worker ABI {source.worker_abi} < {SAMPLING_MASK_ABI} (pre-IDS-50 position-keyed sampling mask); "
+				f"re-validate it under the current trainer (scripts/ids55/rerecord_fidelity_reference.py)")
 
 	@staticmethod
 	def _require_exportable(settings) -> None:
