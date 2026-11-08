@@ -270,3 +270,18 @@ STAGE 3   chosen ciciot config, seeds 20419..20421, encoding = NOT E*; name pref
 - Params diff vs base = exactly the listed keys.
 - `ids_feature_ranking="train_only"` on every cicids/ciciot flow.
 - Worker ABI ≥ the new wheel on the first completed flow's validation_summaries.worker_abi.
+
+---
+
+## PRE-REGISTRATION — FIXED 08/11/2026 by Luiz, BEFORE any dedupe-on flow exists
+
+- **IDS-52 dedupe adoption = NON-INFERIORITY** (the recommended framing, accepted). Primary readout: best_f1 genome on the held-out
+  TEST partition, threshold mode fixed per dataset: val_cal for QUAD (cicids, ciciot QUAD), margin_val_cal for unswt/unswr BINARY,
+  argmax for ciciot BINARY. Paired by seed (on − off). For each dataset, dedupe is NON-INFERIOR iff the paired one-sided 95% bound
+  of ΔF1 ≥ −0.25 pp AND the paired one-sided 95% bound of ΔFPR ≤ max(0.05 pp, 25% of the control's mean FPR).
+  ADOPT on all four datasets iff no dataset is clearly worse (both bounds violated) AND ≥ 2 of the 3 stage-1 datasets
+  (unswt, unswr, cicids) are non-inferior. Secondary (reported, never decisive): each arm's own best genome × mode, the low-FPR zone.
+- **IDS-53 leak size:** measured with RF/XGB (legacy vs train_only lists), no WNN legacy cell (Luiz).
+- **unswt cap:** max250 per cluster (= IDS-46/47; equivalent to tot500 in practice: 490 vs 444 neurons, F1 90.82 vs 90.78).
+- **IDS-49:** the 12 legacy flows (7368-7379) CANCELLED; IDS-49b (§2) runs after the dedupe decision on the adopted encoding.
+- **IDS-48:** moved to cicids, flows 7380-7389 (queued 08/11).
