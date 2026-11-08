@@ -33,7 +33,7 @@ fn spec(c: &WnnController) -> &crate::ctbr::CtbrSpec
 }
 
 /// A raw decode ∈ [0,1] in bank units.
-fn phys(c: &WnnController, m: usize, dec: f32) -> f64
+pub(crate) fn phys(c: &WnnController, m: usize, dec: f32) -> f64
 {
 	spec(c).decode(m, dec, c.neutral_f32()) as f64
 }
@@ -46,7 +46,7 @@ fn clipped(c: &WnnController, l: [f32; 4]) -> [f64; 4]
 }
 
 /// What a PERFECT memoriser emits for this label: target bits → cells → decode.
-fn memoriser(c: &WnnController, l: [f32; 4]) -> [f64; 4]
+pub(crate) fn memoriser(c: &WnnController, l: [f32; 4]) -> [f64; 4]
 {
 	let (_d, bits) = c.diag_targets(l);
 	let mode = c.memory_mode_u8();
@@ -58,7 +58,7 @@ fn memoriser(c: &WnnController, l: [f32; 4]) -> [f64; 4]
 	})
 }
 
-fn ys(c: &WnnController, cap: &ImitCapture) -> Vec<[f64; 4]>
+pub(crate) fn ys(c: &WnnController, cap: &ImitCapture) -> Vec<[f64; 4]>
 {
 	cap.label.iter().map(|&l| clipped(c, l)).collect()
 }
@@ -69,7 +69,7 @@ fn ram(c: &WnnController, cap: &ImitCapture) -> Vec<[f64; 4]>
 }
 
 /// Per bank: (MAE, RMSE, R²) of pred vs y.
-fn score(pred: &[[f64; 4]], y: &[[f64; 4]]) -> [(f64, f64, f64); 4]
+pub(crate) fn score(pred: &[[f64; 4]], y: &[[f64; 4]]) -> [(f64, f64, f64); 4]
 {
 	let n = y.len().max(1) as f64;
 	std::array::from_fn(|m| {
@@ -96,7 +96,7 @@ fn fmt_mae(s: &[(f64, f64, f64); 4]) -> String
 }
 
 /// Ridge on the physical labels (f32 rows the shared ridge takes), predicting unclamped.
-fn ls(train_x: &[Vec<f64>], train_y: &[[f64; 4]], test_x: &[Vec<f64>]) -> Vec<[f64; 4]>
+pub(crate) fn ls(train_x: &[Vec<f64>], train_y: &[[f64; 4]], test_x: &[Vec<f64>]) -> Vec<[f64; 4]>
 {
 	let y32: Vec<[f32; 4]> = train_y.iter().map(|v| v.map(|x| x as f32)).collect();
 	let w = ridge(train_x, &y32, 4);

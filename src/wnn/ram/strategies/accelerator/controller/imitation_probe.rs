@@ -351,7 +351,7 @@ pub(crate) struct Rig
 
 impl Rig
 {
-	fn roll(&mut self, c: &mut WnnController, cfg: &RewardGatedConfigPacked, it: usize, ep: usize, tilt: f64, rng: &mut SmallRng, cap: &mut ImitCapture)
+	pub(crate) fn roll(&mut self, c: &mut WnnController, cfg: &RewardGatedConfigPacked, it: usize, ep: usize, tilt: f64, rng: &mut SmallRng, cap: &mut ImitCapture)
 		-> crate::dagger_train::TrajectoryRs
 	{
 		let teacher = self.teachers.get_mut(cfg.teacher_id_for(it, ep));
