@@ -1,0 +1,12 @@
+{
+ "dataset": "ciciot2023",
+ "current": "lacg030175/CIC-IoT-2023-neto-subsample:random_3way",
+ "ranking": "lacg030175/CIC-IoT-2023-neto-full:random_3way train",
+ "columns": 47,
+ "ranking_rows": 37349263,
+ "test_rows": 142975,
+ "validation_rows": 142976,
+ "ranking_in_test": 119814,
+ "ranking_in_validation": 119731,
+ "baseline_train_in_test": 5735
+}

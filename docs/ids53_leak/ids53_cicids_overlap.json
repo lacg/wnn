@@ -1,0 +1,12 @@
+{
+ "dataset": "cicids2017",
+ "current": "lacg030175/CICIDS2017:random_3way",
+ "ranking": "lacg030175/CICIDS2017:temporal_3way train",
+ "columns": 79,
+ "ranking_rows": 2125158,
+ "test_rows": 282788,
+ "validation_rows": 282788,
+ "ranking_in_test": 215859,
+ "ranking_in_validation": 216265,
+ "baseline_train_in_test": 37962
+}
