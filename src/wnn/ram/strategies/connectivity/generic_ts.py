@@ -258,6 +258,15 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 		best_item = pop[best_idx]
 		return (self.clone_genome(best_item[0]),) + best_item[1:]
 
+	@staticmethod
+	def _patience_stop(early_stopper: Any, iteration: int, best_fitness: float, best_f1: Optional[float], best_fpr: Optional[float]) -> bool:
+		"""Patience check, mirroring GenericGA: the IDS magnitude core (F1 up /
+		FPR down of the best genome) when magnitude_aware_patience is on and the
+		metrics exist, else the rank-WHM check (LM, or the flag off)."""
+		if getattr(early_stopper._config, "magnitude_aware", False) and best_f1 is not None and best_fpr is not None:
+			return early_stopper.check_magnitude_ids(iteration, best_f1, best_fpr)
+		return early_stopper.check(iteration, best_fitness)
+
 	# =========================================================================
 	# Core TS loop (Template Method: called by OptimizationTemplate.optimize())
 	# =========================================================================
@@ -429,6 +438,9 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 		best = self.clone_genome(pop[best_idx][0])
 		best_fitness = init_scores[best_idx]
 		best_accuracy: Optional[float] = ts_init_metrics[best_idx].acc
+		# The best genome's own F1/FPR — what magnitude-aware patience watches.
+		best_f1_val = getattr(ts_init_metrics[best_idx], "f1", None)
+		best_fpr_val = getattr(ts_init_metrics[best_idx], "fpr", None)
 		start_fitness = best_fitness if not initial_fitness else initial_fitness
 
 		# Best ranked genome
@@ -592,6 +604,8 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 					best = self.clone_genome(pop[iter_best_idx][0])
 					best_fitness = iter_scores[iter_best_idx]
 					best_accuracy = iter_metrics[iter_best_idx].acc
+					best_f1_val = getattr(iter_metrics[iter_best_idx], "f1", None)
+					best_fpr_val = getattr(iter_metrics[iter_best_idx], "fpr", None)
 					improved_iterations += 1
 
 			history.append((iteration + 1, best_fitness))
@@ -728,8 +742,8 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 					import traceback
 					traceback.print_exc()
 
-			# Early stopping check
-			if early_stopper.check(iteration, best_fitness):
+			# Early stopping check (magnitude-aware F1/FPR when enabled, as the GA)
+			if self._patience_stop(early_stopper, iteration, best_fitness, best_f1_val, best_fpr_val):
 				break
 
 			# Overfitting callback

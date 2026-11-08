@@ -1252,6 +1252,9 @@ class Flow:
 			self.evaluator._max_bit_delta = cfg.max_bit_delta
 			if self.full_evaluator:
 				self.full_evaluator._max_bit_delta = cfg.max_bit_delta
+			# Hierarchical IDS: the S1 optimizer searches with the same knob.
+			if getattr(self, "_s1_evaluator", None) is not None:
+				self._s1_evaluator._max_bit_delta = cfg.max_bit_delta
 
 	def _empty_flow_result(
 		self,

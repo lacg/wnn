@@ -903,7 +903,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
 					total_input_bits,
 					empty_value,
 					neuron_sample_rate,
-					rng_seed.wrapping_add(genome_idx as u64),
+					rng_seed, // IDS-50: one seed per call, never the genome's batch position (cf. eval_hybrid train_seed)
 					None, // class_weights: adaptive path doesn't use class balancing
 					memory_mode,
 					settings.write_rule(),
@@ -945,7 +945,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
 							total_input_bits,
 							gpu_addresses.as_deref(),
 							neuron_sample_rate,
-							rng_seed.wrapping_add(genome_idx as u64),
+							rng_seed, // IDS-50: one seed per call, never the genome's batch position (cf. eval_hybrid train_seed)
 							memory_mode,
 							settings.write_rule(),
 							None,
@@ -1160,7 +1160,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
 						total_input_bits,
 						empty_value,
 						neuron_sample_rate,
-						rng_seed.wrapping_add(adapted.genome_idx as u64),
+						rng_seed, // IDS-50: one seed per call, never the genome's batch position (cf. eval_hybrid train_seed)
 						None, // class_weights
 						memory_mode,
 						settings.write_rule(),
@@ -1210,7 +1210,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
 							total_input_bits,
 							gpu_addresses.as_deref(),
 							neuron_sample_rate,
-							rng_seed.wrapping_add(adapted.genome_idx as u64),
+							rng_seed, // IDS-50: one seed per call, never the genome's batch position (cf. eval_hybrid train_seed)
 							memory_mode,
 							settings.write_rule(),
 							None,

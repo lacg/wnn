@@ -50,7 +50,7 @@
 		</div>
 		<div class="info-card">
 			<span class="info-label">Encoding</span>
-			<span class="info-value">{flow.config.params?.ids_n_bits ?? 8}-bit thermometer</span>
+			<span class="info-value">{flow.config.params?.ids_n_bits ?? 8}-bit thermometer{flow.config.params?.ids_encoding_dedupe === 'on' ? ' (dedupe)' : ''}{flow.config.params?.ids_feature_ranking === 'train_only' ? ' · train-only ranking' : ''}</span>
 		</div>
 		<div class="info-card">
 			<span class="info-label">Bits</span>

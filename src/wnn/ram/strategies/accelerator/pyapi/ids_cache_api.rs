@@ -932,7 +932,8 @@ impl IDSCacheWrapper
         phase_type = 0,
         train_folds = None,
         neuron_sample_rate = 1.0,
-        max_neurons_total = None
+        max_neurons_total = None,
+        max_bit_delta = 0
     ))]
 	fn search_neighbors(
 		&self,
@@ -965,6 +966,8 @@ impl IDSCacheWrapper
 		neuron_sample_rate: f32,
 		// ABI 21 (flow param `max_neurons_total`): whole-genome neuron cap.
 		max_neurons_total: Option<usize>,
+		// ABI 26 (flow param `max_bit_delta`): largest BITS step; 0 = auto.
+		max_bit_delta: usize,
 	) -> PyResult<Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64, f64)>>
 	{
 		if let Some(folds) = &train_folds
@@ -993,6 +996,7 @@ impl IDSCacheWrapper
 			total_input_bits,
 			phase_type: phase,
 			max_neurons_total,
+			max_bit_delta,
 		};
 
 		let lp_arc = self.inner.live_progress.clone();
@@ -1134,7 +1138,8 @@ impl IDSCacheWrapper
         dedupe_fill = true,
         train_folds = None,
         crossover_bits = "inherit",
-        max_neurons_total = None
+        max_neurons_total = None,
+        max_bit_delta = 0
     ))]
 	fn search_offspring(
 		&self,
@@ -1188,6 +1193,8 @@ impl IDSCacheWrapper
 		// ABI 21 (flow param `max_neurons_total`): cap on the genome's SUM of
 		// neurons, enforced on every offspring (None = per-cluster cap only).
 		max_neurons_total: Option<usize>,
+		// ABI 26 (flow param `max_bit_delta`): largest BITS step; 0 = auto.
+		max_bit_delta: usize,
 	) -> PyResult<(
 		Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64, f64)>,
 		usize,
@@ -1236,6 +1243,7 @@ impl IDSCacheWrapper
 			crossover_bits: ram_core::crossover_bits::CrossoverBits::parse(crossover_bits)
 				.map_err(pyo3::exceptions::PyValueError::new_err)?,
 			max_neurons_total,
+			max_bit_delta,
 		};
 
 		let lp_arc = self.inner.live_progress.clone();

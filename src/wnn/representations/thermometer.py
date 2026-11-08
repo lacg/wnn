@@ -11,6 +11,8 @@ import numpy as np
 import pandas as pd
 from enum import Enum
 
+from wnn.representations.thermometer_dedupe import column_digests, has_invalid, informative_thresholds, is_constant
+
 
 class ThermometerType(Enum):
 	LINEAR = "linear"
@@ -51,7 +53,8 @@ class ThermometerEncoder:
 
 	def __init__(self, n_bits: int | str = 8, method: ThermometerType = ThermometerType.DISTRIBUTIVE,
 				 auto_max_bits: int = 32,
-				 invalid_encoding: InvalidEncoding | str = InvalidEncoding.NONE):
+				 invalid_encoding: InvalidEncoding | str = InvalidEncoding.NONE,
+				 dedupe: bool = False):
 		"""
 		Args:
 			n_bits: int for uniform width, or "auto" for per-feature adaptive width.
@@ -61,6 +64,11 @@ class ThermometerEncoder:
 				NONE (default)       -- replace with 0 / first category (back-compat).
 				SINGLE_BIT           -- prepend 1 is_invalid flag per feature (+1 bit/feature);
 				                        when flag=1, the feature's value bits are cleared.
+			dedupe: IDS-52 (flow param ids_encoding_dedupe). False = the original
+				encoding, bit-identical. True = keep only bits informative on the
+				TRAIN data (thermometer_dedupe.py): constant / duplicate threshold
+				columns and uninformative features are dropped, and the is_invalid
+				flag is kept only for features with invalid train rows.
 		"""
 		self.n_bits = n_bits
 		self.method = method
@@ -72,6 +80,9 @@ class ThermometerEncoder:
 		self.categories_: dict[str, list] = {}  # feature_name → sorted unique values
 		self.feature_names_: list[str] = []
 		self.feature_types_: dict[str, str] = {}  # "numeric", "binary", "categorical"
+		self.dedupe = dedupe
+		self.dropped_features_: list[str] = []  # dedupe: features with no informative bit
+		self.flagged_features_: set[str] | None = None  # dedupe: features that keep the flag (None = all)
 
 	def fit(self, df, feature_config: dict[str, str] | None = None):
 		"""Learn thresholds from training data.
@@ -85,37 +96,22 @@ class ThermometerEncoder:
 		self.thresholds_ = {}
 		self.categories_ = {}
 		self.feature_types_ = {}
+		self.dropped_features_ = []
+		self.flagged_features_ = set() if self.dedupe else None
 
 		for col in df.columns:
 			if col in ("id", "label", "Label", "attack_cat", "Attack_cat"):
 				continue
-
-			# Determine feature type
-			if feature_config and col in feature_config:
-				ftype = feature_config[col]
+			ftype = feature_config[col] if feature_config and col in feature_config else self._detect_type(df[col])
+			if self._fit_column(col, df[col], ftype):
+				self.feature_names_.append(col)
+				self.feature_types_[col] = ftype
 			else:
-				ftype = self._detect_type(df[col])
-
-			self.feature_names_.append(col)
-			self.feature_types_[col] = ftype
-
-			if ftype == "binary":
-				# No thresholds needed — pass through as single bit
-				pass
-			elif ftype == "categorical":
-				# Store sorted unique values for one-hot-ish encoding
-				self.categories_[col] = sorted(df[col].dropna().unique())
-			else:
-				# Numeric — compute thresholds
-				values = df[col].dropna().values.astype(np.float64)
-				n_unique = len(np.unique(values))
-				if self.n_bits == "auto":
-					# Adaptive: use min(unique_values - 1, max_cap)
-					feat_bits = min(max(n_unique - 1, 1), self.auto_max_bits)
-				else:
-					feat_bits = self.n_bits
-				self.per_feature_bits_[col] = feat_bits
-				self.thresholds_[col] = self._compute_thresholds(values, feat_bits)
+				self.dropped_features_.append(col)
+		if self.dedupe:
+			self._drop_cross_feature_duplicates(df)
+		if self.dropped_features_:
+			print(f"  Encoder dedupe: dropped {len(self.dropped_features_)} uninformative features {self.dropped_features_}")
 
 		if self.n_bits == "auto" and self.per_feature_bits_:
 			bits_list = list(self.per_feature_bits_.values())
@@ -128,6 +124,61 @@ class ThermometerEncoder:
 				print(f"    {col:<22s}: {nb:>3} bits  ({lossless})")
 
 		return self
+
+	def _fit_column(self, col: str, series, ftype: str) -> bool:
+		"""Fit one feature; False = dedupe found no informative bit (drop it)."""
+		if ftype == "categorical":
+			self.categories_[col] = sorted(series.dropna().unique())
+		elif ftype == "numeric":
+			self._fit_numeric(col, series)
+		if not self.dedupe:
+			return True
+		raw = series.values.astype(np.float64) if ftype == "numeric" else np.where(series.isna().values, np.nan, 0.0)
+		flag_informative = self.invalid_encoding == InvalidEncoding.SINGLE_BIT and has_invalid(raw)
+		if flag_informative:
+			self.flagged_features_.add(col)
+		value_informative = len(self.thresholds_[col]) > 0 if ftype == "numeric" else not is_constant(series)
+		return value_informative or flag_informative
+
+	def _fit_numeric(self, col: str, series) -> None:
+		"""Thresholds of a numeric feature (dedupe: only train-informative ones)."""
+		values = series.dropna().values.astype(np.float64)
+		n_unique = len(np.unique(values))
+		if self.n_bits == "auto":
+			# Adaptive: use min(unique_values - 1, max_cap)
+			feat_bits = min(max(n_unique - 1, 1), self.auto_max_bits)
+		else:
+			feat_bits = self.n_bits
+		thresholds = self._compute_thresholds(values, feat_bits)
+		if self.dedupe:
+			flagged = self.invalid_encoding == InvalidEncoding.SINGLE_BIT
+			thresholds = informative_thresholds(series.values.astype(np.float64), thresholds, flagged)
+		self.per_feature_bits_[col] = len(thresholds) if self.dedupe else feat_bits
+		self.thresholds_[col] = thresholds
+
+	def _drop_cross_feature_duplicates(self, df) -> None:
+		"""dedupe: drop a numeric threshold / binary feature whose train bit
+		column copies a bit kept for an EARLIER feature (thermometer_dedupe.py)."""
+		seen = set()
+		for col in list(self.feature_names_):
+			value_bits, invalid = self._value_bits(col, df[col])
+			if self.invalid_encoding == InvalidEncoding.SINGLE_BIT:
+				value_bits = value_bits & ~invalid[:, np.newaxis]
+			digests = column_digests(value_bits)
+			fresh = [d not in seen for d in digests]
+			if self.feature_types_[col] == "numeric":
+				self.thresholds_[col] = self.thresholds_[col][np.asarray(fresh, dtype=bool)]
+				self.per_feature_bits_[col] = len(self.thresholds_[col])
+			seen.update(digests)
+			if not any(fresh) and self.feature_types_[col] != "categorical" and not self._has_flag(col):
+				self.feature_names_.remove(col)
+				self.dropped_features_.append(col)
+
+	def _has_flag(self, col: str) -> bool:
+		"""Does this feature emit the is_invalid flag bit?"""
+		if self.invalid_encoding != InvalidEncoding.SINGLE_BIT:
+			return False
+		return self.flagged_features_ is None or col in self.flagged_features_
 
 	def transform(self, df) -> tuple[np.ndarray, int]:
 		"""Transform DataFrame to bit-packed binary matrix.
@@ -151,54 +202,7 @@ class ThermometerEncoder:
 		`iter_chunks()` which yields packed slabs without materializing
 		the full matrix.
 		"""
-		parts = []
-		use_flag = (self.invalid_encoding == InvalidEncoding.SINGLE_BIT)
-		n_rows = len(df)
-
-		for col in self.feature_names_:
-			ftype = self.feature_types_[col]
-
-			# Detect invalid (NaN for all types; +Inf/-Inf also invalid for numeric)
-			if ftype == "numeric":
-				raw = df[col].values.astype(np.float64)  # np.float64 represents NaN/±Inf natively
-				invalid_mask = ~np.isfinite(raw)
-			else:
-				invalid_mask = df[col].isna().values  # binary & categorical: only NaN is invalid
-
-			if ftype == "binary":
-				bits = df[col].fillna(0).values.astype(bool).reshape(-1, 1)
-				value_bits = bits
-
-			elif ftype == "categorical":
-				cats = self.categories_[col]
-				n_cat_bits = max(int(np.ceil(np.log2(max(len(cats), 2)))), 1)
-				cat_to_idx = {c: i for i, c in enumerate(cats)}
-				indices = df[col].fillna(cats[0]).map(
-					lambda x, m=cat_to_idx: m.get(x, 0)
-				).values.astype(int)
-				bit_matrix = np.zeros((n_rows, n_cat_bits), dtype=bool)
-				for b in range(n_cat_bits):
-					bit_matrix[:, b] = (indices >> b) & 1
-				value_bits = bit_matrix
-
-			else:
-				# Numeric — thermometer encoding
-				thresholds = self.thresholds_[col]
-				# Replace NaN/±Inf with 0 for the dot-product comparison; flag (if used)
-				# carries the is_invalid signal. This prevents comparisons against NaN
-				# from producing undefined behavior.
-				values = np.where(invalid_mask, 0.0, raw)
-				bit_matrix = values[:, np.newaxis] >= thresholds[np.newaxis, :]
-				value_bits = bit_matrix
-
-			if use_flag:
-				# Clear value bits for invalid rows — flag=1 is the only non-zero output
-				value_bits = value_bits & ~invalid_mask[:, np.newaxis]
-				flag_col = invalid_mask.astype(bool).reshape(-1, 1)
-				# Layout: [is_invalid, value_bits...]
-				parts.append(np.hstack([flag_col, value_bits]))
-			else:
-				parts.append(value_bits)
+		parts = [self._encode_column(col, df[col]) for col in self.feature_names_]
 
 		bool_matrix = np.hstack(parts)
 		total_bits = int(bool_matrix.shape[1])
@@ -208,6 +212,49 @@ class ThermometerEncoder:
 		# a second full-matrix copy on top of the hstack.
 		packed = np.packbits(bool_matrix, axis=1, bitorder='little')
 		return packed, total_bits
+
+	def _encode_column(self, col: str, series) -> np.ndarray:
+		"""One feature's output bits: [is_invalid flag?, value bits...]."""
+		value_bits, invalid_mask = self._value_bits(col, series)
+		if self.invalid_encoding != InvalidEncoding.SINGLE_BIT:
+			return value_bits
+		# Clear value bits for invalid rows — flag=1 is the only non-zero output
+		value_bits = value_bits & ~invalid_mask[:, np.newaxis]
+		if not self._has_flag(col):
+			# dedupe: no invalid row in train — the flag column would be constant.
+			# Invalid values met later (val/test) still clear the value bits.
+			return value_bits
+		# Layout: [is_invalid, value_bits...]
+		return np.hstack([invalid_mask.astype(bool).reshape(-1, 1), value_bits])
+
+	def _value_bits(self, col: str, series) -> tuple[np.ndarray, np.ndarray]:
+		"""(value bits before flag clearing, invalid mask) of one feature.
+		Invalid = NaN for all types; +Inf/-Inf also invalid for numeric."""
+		ftype = self.feature_types_[col]
+		if ftype == "numeric":
+			raw = series.values.astype(np.float64)  # np.float64 represents NaN/±Inf natively
+			invalid_mask = ~np.isfinite(raw)
+			# Replace NaN/±Inf with 0 for the comparison; the flag (if used) carries
+			# the is_invalid signal (comparisons against NaN are undefined).
+			values = np.where(invalid_mask, 0.0, raw)
+			return values[:, np.newaxis] >= self.thresholds_[col][np.newaxis, :], invalid_mask
+		invalid_mask = series.isna().values  # binary & categorical: only NaN is invalid
+		if ftype == "binary":
+			return series.fillna(0).values.astype(bool).reshape(-1, 1), invalid_mask
+		return self._categorical_bits(col, series), invalid_mask
+
+	def _categorical_bits(self, col: str, series) -> np.ndarray:
+		"""Binary code of the category index (unknown / NaN -> index 0)."""
+		cats = self.categories_[col]
+		n_cat_bits = max(int(np.ceil(np.log2(max(len(cats), 2)))), 1)
+		cat_to_idx = {c: i for i, c in enumerate(cats)}
+		indices = series.fillna(cats[0]).map(
+			lambda x, m=cat_to_idx: m.get(x, 0)
+		).values.astype(int)
+		bit_matrix = np.zeros((len(series), n_cat_bits), dtype=bool)
+		for b in range(n_cat_bits):
+			bit_matrix[:, b] = (indices >> b) & 1
+		return bit_matrix
 
 	def iter_chunks(self, df, chunk_size: int):
 		"""Yield (packed_chunk, total_bits) tuples by encoding `df` in row slabs.
@@ -249,7 +296,6 @@ class ThermometerEncoder:
 		"""
 		ranges = {}
 		offset = 0
-		extra_per_feature = 1 if self.invalid_encoding == InvalidEncoding.SINGLE_BIT else 0
 		for col in self.feature_names_:
 			ftype = self.feature_types_[col]
 			if ftype == "binary":
@@ -258,7 +304,7 @@ class ThermometerEncoder:
 				n = max(int(np.ceil(np.log2(max(len(self.categories_[col]), 2)))), 1)
 			else:
 				n = self.per_feature_bits_.get(col, self.n_bits if isinstance(self.n_bits, int) else 8)
-			n += extra_per_feature
+			n += 1 if self._has_flag(col) else 0
 			ranges[col] = (offset, offset + n)
 			offset += n
 		return ranges
@@ -345,6 +391,11 @@ class ThermometerEncoder:
 		    feature_types: explicit type assignment for every feature
 		        the encoder will see. Must be consistent across chunks.
 		"""
+		if self.dedupe:
+			raise NotImplementedError(
+				"ThermometerEncoder(dedupe=True) needs exact train counts; the streaming "
+				"t-digest fit cannot provide them (ids_encoding_dedupe='on' + ids_streaming is refused)"
+			)
 		self.feature_names_ = [c for c in feature_types if c not in
 			("id", "label", "Label", "attack_cat", "Attack_cat")]
 		self.feature_types_ = {c: feature_types[c] for c in self.feature_names_}

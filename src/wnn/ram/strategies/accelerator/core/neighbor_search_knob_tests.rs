@@ -74,6 +74,29 @@ fn dedupe_fills_shortfall_at_mode_bits()
 	assert!(cluster_keys(&a)[0].contains(&(10, neuron)), "the inherited neuron survives");
 }
 
+/// 08/11/2026: with dedupe OFF the pool-shuffle child2 takes what child1 left;
+/// its neurons_per_cluster must match the neurons it actually received (it
+/// recorded the drawn count — bits/connections and counts disagreed).
+#[test]
+fn pool_shuffle_child2_counts_match_its_neurons()
+{
+	let xo = NeuronXo { dedupe: false, total_input_bits: 200, fill: true, min_neurons: 0 };
+	let p1: Genome = (vec![10; 9], vec![6, 3], (0..90).collect(), 1.0);
+	let p2: Genome = (vec![12; 3], vec![2, 1], (0..36).collect(), 1.0);
+	let mut short = 0;
+	for seed in 0..64
+	{
+		let (a, b) = crossover_ps_neurons(&p1, &p2, 2, xo, &mut StdRng::seed_from_u64(seed));
+		for child in [&a, &b]
+		{
+			assert_eq!(child.1.iter().sum::<usize>(), child.0.len(), "seed {seed}: counts vs neurons");
+			assert_eq!(child.0.iter().sum::<usize>(), child.2.len(), "seed {seed}: bits vs connections");
+		}
+		short += (b.1.iter().sum::<usize>() < 7) as usize;
+	}
+	assert!(short > 0, "fixture must exercise the short pool");
+}
+
 #[test]
 fn dedupe_off_still_duplicates()
 {

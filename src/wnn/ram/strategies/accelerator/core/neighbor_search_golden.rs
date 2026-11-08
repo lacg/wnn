@@ -112,6 +112,7 @@ pub(super) fn ga_config(pop: &[Genome], phase: PhaseType, tib: usize, ratios: (f
 		dedupe_fill: true,
 		crossover_bits: crate::crossover_bits::CrossoverBits::Inherit,
 		max_neurons_total: None,
+		max_bit_delta: 0,
 	}
 }
 
@@ -263,7 +264,11 @@ const GOLDEN_SEARCH: [u64; 64] = [
 	6586341560205424606, 3920298506046487352, 1614834662338920092, 434380721649012505,
 	13291588902284855060, 4185706927628993487, 572036171412239197, 10008416046545043935,
 ];
-const GOLDEN_OPERATORS: u64 = 0xee4c_ed71_4e31_832b;
+/// Re-recorded 08/11/2026: the pool-shuffle CHILD2 (dedupe off) now records the
+/// neuron count it actually received (it overstated it when both children drew
+/// the larger parent count). Was 0xee4c_ed71_4e31_832b. GOLDEN_SEARCH — the
+/// production search_offspring, which keeps child1 only — is unchanged.
+const GOLDEN_OPERATORS: u64 = 0xbe88_a611_4677_bdb7;
 
 #[test]
 fn golden_print()

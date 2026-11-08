@@ -181,6 +181,30 @@ def resolve_invalid_encoding(params: dict) -> Optional[str]:
 	return params.get("ids_invalid_encoding", "single_bit" if is_raw else "none")
 
 
+def resolve_feature_ranking(params: dict) -> str:
+	"""ids_feature_ranking (IDS-53): "legacy" (default, byte-identical) |
+	"train_only" (the ranking re-derived on the flow's own train split,
+	wnn/ids/feature_ranking.py). Anything else is refused."""
+	from wnn.ids.feature_ranking import FEATURE_RANKINGS
+	value = params.get("ids_feature_ranking", "legacy")
+	if value not in FEATURE_RANKINGS:
+		raise ValueError(f"ids_feature_ranking={value!r}: expected one of {FEATURE_RANKINGS}")
+	return value
+
+
+ENCODING_DEDUPE_VALUES = ("off", "on")
+
+
+def resolve_encoding_dedupe(params: dict) -> bool:
+	"""ids_encoding_dedupe (IDS-52): "off" (default, bit-identical encoding) |
+	"on" (train-informative thermometer bits + exact-duplicate columns dropped).
+	Anything else is refused — a typo must not silently encode the old way."""
+	value = params.get("ids_encoding_dedupe", "off")
+	if value not in ENCODING_DEDUPE_VALUES:
+		raise ValueError(f"ids_encoding_dedupe={value!r}: expected one of {ENCODING_DEDUPE_VALUES}")
+	return value == "on"
+
+
 def oi_env_enabled(env_value: Optional[str]) -> bool:
 	"""Mirror of ram_core neuron_memory::order_independent_training_enabled():
 	WNN_ORDER_INDEPENDENT_TRAIN is on iff "1" or "true" (any case)."""

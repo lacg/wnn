@@ -562,7 +562,7 @@ pub(crate) fn run_marker_train_parity_test(
 			slot_offset: (n * slot_capacity) as u32,
 			slot_capacity: slot_capacity as u32,
 			cluster_idx: 0,
-			_pad: 0,
+			sample_key: n as u32, // LM: the pre-ABI-25 positional hash input (bit-identical)
 		});
 	}
 
@@ -618,7 +618,6 @@ pub(crate) fn run_marker_train_parity_test(
 		oi_mode: 0,
 		example_offset: 0,
 		examples_in_dispatch: 0,
-		neuron_index_offset: 0,
 		vote_write: 0,
 	};
 
@@ -866,7 +865,7 @@ pub(crate) fn run_marker_train_batched_parity_test(
 				slot_offset: ((g * num_neurons + n) * slot_capacity_per_neuron) as u32,
 				slot_capacity: slot_capacity_per_neuron as u32,
 				cluster_idx: 0,
-				_pad: 0,
+				sample_key: n as u32, // LM: the pre-ABI-25 positional hash input (bit-identical)
 			});
 		}
 	}
@@ -919,7 +918,6 @@ pub(crate) fn run_marker_train_batched_parity_test(
 		oi_mode: 0,
 		example_offset: 0,
 		examples_in_dispatch: 0,
-		neuron_index_offset: 0,
 		vote_write: 0,
 	};
 
@@ -1148,7 +1146,7 @@ pub(crate) fn run_marker_train_multicluster_parity_test(
 					slot_offset: ((g * num_neurons_per_genome + n_global) * slot_capacity_per_neuron) as u32,
 					slot_capacity: slot_capacity_per_neuron as u32,
 					cluster_idx: c as u32,
-					_pad: 0,
+					sample_key: n_global as u32, // LM: the pre-ABI-25 positional hash input (bit-identical)
 				});
 			}
 		}
@@ -1201,7 +1199,6 @@ pub(crate) fn run_marker_train_multicluster_parity_test(
 		oi_mode: 0,
 		example_offset: 0,
 		examples_in_dispatch: 0,
-		neuron_index_offset: 0,
 		vote_write: 0,
 	};
 

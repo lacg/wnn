@@ -337,6 +337,13 @@ mod calib_sample_tests;
 
 #[cfg(target_os = "macos")]
 mod marker_probe;
+// IDS-50: the rate < 1 neuron-sampling mask keyed on neuron identity (ABI 25).
+mod neuron_sample_key;
+#[cfg(all(test, target_os = "macos"))]
+mod sample_key_parity_tests;
+// The legacy clamped nudge trains deterministically on CPU and GPU (08/11/2026).
+#[cfg(all(test, target_os = "macos"))]
+mod legacy_nudge_determinism_tests;
 
 // Drone-controller hot-path (paper #1) moved to the ram_controller crate
 // (controller.rs, controller_training.rs, controller_split.rs, dagger_train.rs,
@@ -454,7 +461,25 @@ use pyapi::*;
 /// FIXED stratified subsample of the train rows (adaptive/calib_sample.rs)
 /// instead of every row. Default 0 = every row, bit-identical to ABI 23;
 /// validation / final thresholds never use it.
-pub const ABI_VERSION: u32 = 24;
+/// 25 (08/11/2026, IDS-50): no surface change — a RESULTS change at
+/// neuron_sample_rate < 1. The per-(neuron, example) sampling mask is keyed on
+/// the neuron's IDENTITY (cluster, bits, connections, duplicate ordinal —
+/// neuron_sample_key.rs; CPU trainer and marker_train.metal alike), not its
+/// flat position, so a neurons mutation / pool-shuffle crossover no longer
+/// re-draws every later neuron's training subset. Also: the adaptive (genesis)
+/// and LM evaluate_genomes_parallel paths seed sampling with the call seed, not
+/// rng_seed + genome position. Rate 1.0 is bit-identical to ABI 24 (the kernel
+/// and skip_sample return before reading the key). A rate-0.25 result from an
+/// ABI-24 wheel is not comparable — the stale wheel must fail loudly.
+/// 26 (08/11/2026): additive — IDSCacheWrapper.search_offspring / search_neighbors
+/// take max_bit_delta (default 0 = auto, bit-identical): the flow param now reaches
+/// ram_core MutationConfig (it was Python-mutate-only). Also RESULTS changes, all
+/// outside production IDS (which trains OI): the legacy clamped nudge (non-OI QUAD
+/// family) trains deterministically — CPU over neuron lanes in example order, GPU
+/// at z = 1 — instead of in scheduling order; the CPU CE reductions sum in example
+/// order (ulp drift run to run). ram_core: the pool-shuffle child2 records the
+/// neuron count it received (dormant: production keeps child1 only).
+pub const ABI_VERSION: u32 = 26;
 
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()>

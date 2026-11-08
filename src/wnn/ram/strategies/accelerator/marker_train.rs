@@ -43,8 +43,11 @@ pub mod metal_impl
 		/// this is always 0. For multi-cluster, set by the dispatcher from
 		/// neurons_per_cluster[].
 		pub cluster_idx: u32,
-		/// Padding for natural alignment (24-byte struct). Reserved for future use.
-		pub _pad: u32,
+		/// IDS-50 (ABI 25): the rate < 1 sampling key — the neuron's IDENTITY
+		/// (`neuron_sample_key`), never its position. Read by the kernel only at
+		/// rate < 1. LM callers pass the within-genome neuron index (their
+		/// pre-ABI-25 hash input, bit-identical).
+		pub sample_key: u32,
 	}
 
 	#[repr(C)]
@@ -90,13 +93,6 @@ pub mod metal_impl
 		/// examples_in_dispatch=num_examples.
 		pub example_offset: u32,
 		pub examples_in_dispatch: u32,
-		/// 05/07/2026: neuron-axis chunking for over-budget single genomes. The
-		/// sampling hash keys on the neuron's index within the dispatch; when a
-		/// genome is trained in neuron chunks, each chunk passes its start index
-		/// here so `should_skip_sample(neuron_idx + offset, ...)` sees the same
-		/// GLOBAL neuron index as an unchunked dispatch — keeping chunked output
-		/// bit-exact vs unchunked (and vs the CPU path). 0 for unchunked calls.
-		pub neuron_index_offset: u32,
 		/// 16/10/2026: per-flow MAJORITY-VOTE selector — 1 iff the resolved
 		/// writer is `WriteRule::Vote` (the kernel re-derives it through
 		/// common.metal `wnn_write_rule(memory_mode, vote_write)`). 0 keeps the
@@ -540,8 +536,8 @@ pub mod batched_path
 	/// call is transparently routed through `train_single_genome_neuron_chunked`
 	/// — the neuron axis is split into budget-sized dispatches and the per-neuron
 	/// exports concatenated. Output is bit-exact vs an unchunked dispatch (the
-	/// sampling hash receives the global neuron index via
-	/// `TrainParams::neuron_index_offset`). Previously this case fell back to the
+	/// sampling hash receives each neuron's IDENTITY key, the chunk's slice of
+	/// the full genome's keys — IDS-50). Previously this case fell back to the
 	/// CPU DashMap path, whose OI counters held a ~61 GB heap per genome.
 	#[allow(clippy::too_many_arguments)]
 	pub fn batched_train_offspring(
@@ -629,7 +625,7 @@ pub mod batched_path
 				neuron_sample_rate,
 				rng_seed,
 				class_weights,
-				0,
+				None,
 				memory_mode,
 				write_rule,
 			)?)
@@ -702,7 +698,7 @@ pub mod batched_path
 			neuron_sample_rate,
 			rng_seed,
 			class_weights,
-			0,
+			None,
 			memory_mode,
 			write_rule,
 		);
@@ -787,7 +783,7 @@ pub mod batched_path
 	/// export/probe → free per chunk). RESULTS DO NOT DEPEND ON IT: every
 	/// neuron owns its own slot region of the same capacity
 	/// (`marker_capacity_for_train` never sees the chunk), the sampling hash
-	/// gets the GLOBAL neuron index (`neuron_index_offset`), and per-neuron
+	/// gets the full genome's identity keys (IDS-50), and per-neuron
 	/// ranges concatenate in neuron order — pinned by
 	/// `chunk_budget_does_not_change_results` (export AND probe paths).
 	fn chunk_memory_budget() -> usize
@@ -800,7 +796,7 @@ pub mod batched_path
 	/// Train ONE single-cluster genome whose marker table exceeds the batch
 	/// budget by splitting its neurons into budget-sized chunks. Each chunk is a
 	/// normal `batched_train_core` dispatch (1 genome, chunk_n neurons) with
-	/// `neuron_index_offset` = the chunk's global start, so sampling matches an
+	/// its slice of the full genome's sampling keys (IDS-50), so sampling matches an
 	/// unchunked dispatch bit-for-bit. Per-neuron sparse exports concatenate in
 	/// neuron order; groups/connections are rebuilt from the FULL genome so the
 	/// merged `GenomeExport` is indistinguishable from an unchunked one.
@@ -853,6 +849,8 @@ pub mod batched_path
 				conn_prefix.last().unwrap()
 			));
 		}
+		// IDS-50: the FULL genome's sampling keys; each chunk trains with its slice.
+		let full_keys = crate::neuron_sample_key::keys_for_genome(genomes_bits_flat, &[n_total], genomes_connections_flat);
 
 		// Train each chunk and concatenate the per-neuron sparse exports.
 		let mut keys: Vec<u64> = Vec::new();
@@ -882,7 +880,7 @@ pub mod batched_path
 				neuron_sample_rate,
 				rng_seed,
 				class_weights,
-				start as u32,
+				Some(&full_keys[start..end]),
 				memory_mode,
 				write_rule,
 				crate::train_knobs::TrainKnobs::from_env(),
@@ -1001,7 +999,7 @@ pub mod batched_path
 	/// Eval-in-place for the over-budget chunked regime: train ONE single-cluster
 	/// genome in neuron chunks (identical dispatches to
 	/// `train_single_genome_neuron_chunked` — same capacity, params and
-	/// neuron_index_offset), but after each chunk trains, probe the STILL-RESIDENT
+	/// sampling-key slices), but after each chunk trains, probe the STILL-RESIDENT
 	/// GPU hash table with the eval (and optionally train) examples, accumulating
 	/// per-example integer vote sums. The sorted sparse export is never built.
 	///
@@ -1159,6 +1157,8 @@ pub mod batched_path
 				conn_prefix.last().unwrap()
 			));
 		}
+		// IDS-50: the FULL genome's sampling keys; each chunk trains with its slice.
+		let full_keys = crate::neuron_sample_key::keys_for_genome(genomes_bits_flat, &[n_total], genomes_connections_flat);
 
 		let trainer = get_trainer()?;
 		let device = trainer.device();
@@ -1203,7 +1203,7 @@ pub mod batched_path
 				neuron_sample_rate,
 				rng_seed,
 				class_weights,
-				start as u32,
+				Some(&full_keys[start..end]),
 				memory_mode,
 				ram_core::cell_mode::WriteRule::Nudge,
 				crate::train_knobs::TrainKnobs::from_env(),
@@ -1320,8 +1320,10 @@ pub mod batched_path
 		}
 	}
 
-	/// The original batched dispatch body. `neuron_index_offset` is threaded to
-	/// the kernel's sampling hash (0 = unchunked; chunk start otherwise).
+	/// The original batched dispatch body. `chunk_sample_keys` (IDS-50): None =
+	/// derive each neuron's sampling key from this dispatch's genomes; Some =
+	/// a neuron chunk of a larger genome passes ITS slice of the full genome's
+	/// keys (the duplicate ordinal is genome-scoped).
 	/// Split 07/07/2026 into train_batch_to_table + export_trained_batch so the
 	/// eval-in-place path can probe the resident table without materializing the
 	/// sorted export.
@@ -1342,7 +1344,7 @@ pub mod batched_path
 		neuron_sample_rate: f32,
 		rng_seed: u64,
 		class_weights: Option<&[u32]>,
-		neuron_index_offset: u32,
+		chunk_sample_keys: Option<&[u32]>,
 		memory_mode: u8,
 		write_rule: ram_core::cell_mode::WriteRule,
 	) -> Result<Vec<GenomeExport>, String>
@@ -1369,7 +1371,7 @@ pub mod batched_path
 			neuron_sample_rate,
 			rng_seed,
 			class_weights,
-			neuron_index_offset,
+			chunk_sample_keys,
 			memory_mode,
 			write_rule,
 			crate::train_knobs::TrainKnobs::from_env(),
@@ -1408,7 +1410,7 @@ pub mod batched_path
 		neuron_sample_rate: f32,
 		rng_seed: u64,
 		class_weights: Option<&[u32]>,
-		neuron_index_offset: u32,
+		chunk_sample_keys: Option<&[u32]>,
 		memory_mode: u8,
 		write_rule: ram_core::cell_mode::WriteRule,
 		knobs: crate::train_knobs::TrainKnobs,
@@ -1760,7 +1762,7 @@ pub mod batched_path
 						slot_offset: (cluster_base + n_local * cap_c) as u32,
 						slot_capacity: cap_c as u32,
 						cluster_idx: c as u32,
-						_pad: 0,
+						sample_key: 0, // set from the connections below (IDS-50)
 					});
 					// Heterogeneous: fixed stride of max_bits per neuron.
 					// Uniform: increment by actual bits (compact, sum(bpn) total).
@@ -1863,6 +1865,16 @@ pub mod batched_path
 			all
 		};
 
+		assign_sample_keys(
+			&mut neuron_meta,
+			&connections_i32,
+			num_genomes,
+			num_neurons_per_genome,
+			conn_per_genome,
+			neuron_sample_rate,
+			chunk_sample_keys,
+		)?;
+
 		// Metal buffers (the input aliases train_input_bits; dropped at return,
 		// after trainer.train has waited for the dispatch to complete)
 		let packed_input = ram_core::metal_input_buffer::NoCopyInputBuffer::new(device, train_input_bits);
@@ -1908,9 +1920,11 @@ pub mod batched_path
 		// Only chunk when ng×n is well below the GPU's effective parallel
 		// capacity. At ng×n ≥ 320 the kernel already gets enough work per
 		// thread that the contention from chunking exceeds the benefit.
-		const GPU_BUSY_THRESHOLD: u64 = 320;
+		//
+		// 08/11/2026: the legacy clamped nudge (non-OI QUAD family) no longer
+		// chunks at all — see the z = 1 arm below. The heuristic now only
+		// documents the history; GPU_TARGET_THREADS stays for the trace line.
 		const GPU_TARGET_THREADS: u64 = 1280;
-		const MAX_EXAMPLE_CHUNKS: u64 = 8;
 		let ng_n_product = (num_genomes as u64) * (num_neurons_per_genome as u64);
 		// OI gating for the batched Metal path (hoisted above the chunk heuristic
 		// — the z-axis policy depends on it). OI exists for the 4-state nudging
@@ -1962,14 +1976,16 @@ pub mod batched_path
 					.min(work_cap) as u32
 			}
 		}
-		else if ng_n_product == 0 || ng_n_product >= GPU_BUSY_THRESHOLD
-		{
-			1
-		}
 		else
 		{
-			let raw = (GPU_TARGET_THREADS + ng_n_product - 1) / ng_n_product;
-			raw.next_power_of_two().min(MAX_EXAMPLE_CHUNKS) as u32
+			// The legacy clamped nudge is NOT commutative (+1,+1,+1,-1 from
+			// WEAK_FALSE ends at WEAK_TRUE; -1,+1,+1,+1 ends at TRUE), and nothing
+			// merges duplicate claims: with z <= 8 threads per neuron the cells
+			// depended on GPU scheduling. z = 1 walks each neuron's examples in
+			// order — deterministic, and equal to the CPU trainer's example-order
+			// result (`legacy_nudge_determinism_tests`). Production IDS flows train
+			// OI (order-independent) and never take this arm.
+			1
 		};
 		if trace
 		{
@@ -2009,7 +2025,6 @@ pub mod batched_path
 			// Set per-chunk inside the host loop below (in MarkerTrainer::train).
 			example_offset: 0,
 			examples_in_dispatch: num_train as u32,
-			neuron_index_offset,
 			vote_write: (write_rule == ram_core::cell_mode::WriteRule::Vote) as u32,
 		};
 
@@ -2063,6 +2078,48 @@ pub mod batched_path
 			conn_per_genome,
 			knobs,
 		})
+	}
+
+	/// IDS-50: write each neuron's sampling key (its IDENTITY) into the meta the
+	/// kernel reads. Only at rate < 1 — at rate 1.0 the kernel never reads it
+	/// (keys stay 0; bit-identical). `given` = a neuron chunk's slice of its
+	/// full genome's keys; otherwise derived per genome from the exact i32
+	/// connections the kernel addresses with (genome-relative `conn_offset`).
+	fn assign_sample_keys(
+		neuron_meta: &mut [NeuronTrainMeta],
+		connections_i32: &[i32],
+		num_genomes: usize,
+		num_neurons_per_genome: usize,
+		conn_per_genome: usize,
+		neuron_sample_rate: f32,
+		given: Option<&[u32]>,
+	) -> Result<(), String>
+	{
+		if neuron_sample_rate >= 1.0
+		{
+			return Ok(());
+		}
+		if let Some(keys) = given
+		{
+			if num_genomes != 1 || keys.len() != num_neurons_per_genome
+			{
+				return Err(format!("chunk sample keys: {} keys for {} genomes x {} neurons", keys.len(), num_genomes, num_neurons_per_genome));
+			}
+			neuron_meta.iter_mut().zip(keys).for_each(|(m, &k)| m.sample_key = k);
+			return Ok(());
+		}
+		for (g, metas) in neuron_meta.chunks_mut(num_neurons_per_genome.max(1)).enumerate()
+		{
+			let base = g * conn_per_genome;
+			let mut builder = crate::neuron_sample_key::SampleKeyBuilder::new();
+			for m in metas.iter_mut()
+			{
+				let lo = base + m.conn_offset as usize;
+				let conns = &connections_i32[lo..lo + m.bits as usize];
+				m.sample_key = builder.key(m.cluster_idx, m.bits, conns.iter().map(|&c| c as i64));
+			}
+		}
+		Ok(())
 	}
 
 	/// Step 13 of the former batched_train_core: walk the resident table and build
@@ -2598,8 +2655,9 @@ pub mod batched_path
 		/// pattern observed through a per-neuron permutation of all 16 input
 		/// bits), so slot content is order-independent by construction and the
 		/// comparison is exact in both legacy and OI modes. sample_rate=0.5
-		/// exercises `neuron_index_offset`: without it, chunk-local neuron
-		/// indices would sample different example subsets and the test fails.
+		/// exercises the chunk's slice of the full genome's sampling keys
+		/// (IDS-50: keys are neuron IDENTITY, so a chunk samples as it would
+		/// inside the whole genome).
 		#[test]
 		fn neuron_chunked_matches_unchunked()
 		{
@@ -2704,56 +2762,45 @@ pub mod batched_path
 				total
 			);
 
-			// Negative control: the same chunk trained with offset=0 instead of
-			// its global start must sample DIFFERENT examples — proves the
-			// parity above is earned by neuron_index_offset, not vacuous.
+			// IDS-50 position independence: the same chunk trained ALONE (keys
+			// derived from the chunk) samples exactly as inside the full genome
+			// (its slice of the full keys) — these neurons are all distinct.
+			// Negative control: foreign keys must sample DIFFERENT examples, so
+			// the parity is earned by the keys, not vacuous.
 			let chunk_bits = &bits_flat[2..4];
 			let chunk_conns = &conns[2 * bits..4 * bits];
-			let with_offset = batched_train_core(
-				chunk_bits,
-				&[2],
-				chunk_conns,
-				1,
-				1,
-				&packed,
-				&targets,
-				&[],
-				num_train,
-				0,
-				total_input_bits,
-				0.5,
-				0.5,
-				42,
-				None,
-				2,
-				ram_core::neuron_memory::QUAD_WEIGHTED,
-				ram_core::cell_mode::WriteRule::of_code(ram_core::neuron_memory::QUAD_WEIGHTED),
-			)
-			.expect("offset chunk failed");
-			let without_offset = batched_train_core(
-				chunk_bits,
-				&[2],
-				chunk_conns,
-				1,
-				1,
-				&packed,
-				&targets,
-				&[],
-				num_train,
-				0,
-				total_input_bits,
-				0.5,
-				0.5,
-				42,
-				None,
-				0,
-				ram_core::neuron_memory::QUAD_WEIGHTED,
-				ram_core::cell_mode::WriteRule::of_code(ram_core::neuron_memory::QUAD_WEIGHTED),
-			)
-			.expect("no-offset chunk failed");
+			let full_keys = crate::neuron_sample_key::keys_for_genome(&bits_flat, &neurons_flat, &conns);
+			let chunk_with = |keys: Option<&[u32]>| {
+				batched_train_core(
+					chunk_bits,
+					&[2],
+					chunk_conns,
+					1,
+					1,
+					&packed,
+					&targets,
+					&[],
+					num_train,
+					0,
+					total_input_bits,
+					0.5,
+					0.5,
+					42,
+					None,
+					keys,
+					ram_core::neuron_memory::QUAD_WEIGHTED,
+					ram_core::cell_mode::WriteRule::of_code(ram_core::neuron_memory::QUAD_WEIGHTED),
+				)
+				.expect("chunk train failed")
+			};
+			let alone = chunk_with(None);
+			let in_genome = chunk_with(Some(&full_keys[2..4]));
+			let foreign = chunk_with(Some(&full_keys[4..6]));
+			assert_eq!(alone[0].sparse_exports[0].keys, in_genome[0].sparse_exports[0].keys, "chunk sampling depends on position");
+			assert_eq!(alone[0].sparse_exports[0].values, in_genome[0].sparse_exports[0].values);
 			assert_ne!(
-				with_offset[0].sparse_exports[0].keys, without_offset[0].sparse_exports[0].keys,
-				"offset had no effect on sampling — negative control failed"
+				alone[0].sparse_exports[0].keys, foreign[0].sparse_exports[0].keys,
+				"sample keys had no effect on sampling — negative control failed"
 			);
 		}
 
@@ -3033,7 +3080,7 @@ pub mod batched_path
 			let npc = [bits_flat.len()];
 			let tb = train_batch_to_table(
 				bits_flat, &npc, conns, 1, 1, packed, targets, &[], targets.len(), 0, total_input_bits, 0.5,
-				sample_rate, 42, None, 0, memory_mode, ram_core::cell_mode::WriteRule::of_code(memory_mode), knobs,
+				sample_rate, 42, None, None, memory_mode, ram_core::cell_mode::WriteRule::of_code(memory_mode), knobs,
 			)
 			.expect("train_one_with: train failed");
 			export_trained_batch(&tb, bits_flat, &npc).expect("train_one_with: export failed").remove(0)
@@ -3374,7 +3421,7 @@ pub mod batched_path
 		/// patterns → address collisions + duplicate-key slots at high z), and the
 		/// eval set contains both trained addresses (v < 256) and guaranteed
 		/// misses (v ≥ 256 sets input bit 8, always 0 in training). sr=0.5
-		/// exercises neuron_index_offset across chunks.
+		/// exercises the per-chunk sampling-key slices (IDS-50).
 		#[test]
 		fn eval_in_place_vote_parity()
 		{
@@ -3439,6 +3486,7 @@ pub mod batched_path
 
 			// 3 neurons per chunk forces ceil(8/3) = 3 chunks.
 			let chunk_n = 3usize;
+			let full_keys = crate::neuron_sample_key::keys_for_genome(&bits_flat, &[n_neurons], &conns);
 			let trainer = get_trainer().expect("trainer");
 			let device = trainer.device();
 			let prober = crate::marker_probe::get_prober(device).expect("prober");
@@ -3489,7 +3537,7 @@ pub mod batched_path
 					sample_rate,
 					42,
 					None,
-					start as u32,
+					Some(&full_keys[start..end]),
 					ram_core::neuron_memory::QUAD_WEIGHTED,
 					ram_core::cell_mode::WriteRule::Nudge,
 					knobs,

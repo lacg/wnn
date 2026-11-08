@@ -1,0 +1,252 @@
+{
+ "dataset": "ciciot2023_neto_subsample",
+ "config": "random_3way",
+ "partition": "train",
+ "rows": 1143802,
+ "method": "RandomForestClassifier(n_estimators=100, random_state=42), median-imputed, sorted columns",
+ "excluded": [
+  "Label",
+  "Label_orig",
+  "attack_class",
+  "label"
+ ],
+ "top20": [
+  "IAT",
+  "rst_count",
+  "urg_count",
+  "flow_duration",
+  "Header_Length",
+  "HTTPS",
+  "Srate",
+  "Duration",
+  "Rate",
+  "Weight",
+  "Number",
+  "Max",
+  "Variance",
+  "Tot size",
+  "Radius",
+  "Tot sum",
+  "syn_count",
+  "AVG",
+  "Magnitue",
+  "Min"
+ ],
+ "worker_top20": [
+  "IAT",
+  "rst_count",
+  "urg_count",
+  "flow_duration",
+  "Duration",
+  "Number",
+  "Weight",
+  "Header_Length",
+  "Variance",
+  "Rate",
+  "Srate",
+  "Covariance",
+  "HTTPS",
+  "Tot size",
+  "Max",
+  "AVG",
+  "Radius",
+  "Min",
+  "Std",
+  "Tot sum"
+ ],
+ "overlap_with_worker": 18,
+ "added_vs_worker": [
+  "syn_count",
+  "Magnitue"
+ ],
+ "dropped_vs_worker": [
+  "Covariance",
+  "Std"
+ ],
+ "ranking": [
+  {
+   "feature": "IAT",
+   "importance": 0.2035193437354751
+  },
+  {
+   "feature": "rst_count",
+   "importance": 0.11580284378645375
+  },
+  {
+   "feature": "urg_count",
+   "importance": 0.10753816192656604
+  },
+  {
+   "feature": "flow_duration",
+   "importance": 0.08827036512894904
+  },
+  {
+   "feature": "Header_Length",
+   "importance": 0.06306983013734091
+  },
+  {
+   "feature": "HTTPS",
+   "importance": 0.048727547489674956
+  },
+  {
+   "feature": "Srate",
+   "importance": 0.03504765890465431
+  },
+  {
+   "feature": "Duration",
+   "importance": 0.03496050208640684
+  },
+  {
+   "feature": "Rate",
+   "importance": 0.03450182079793462
+  },
+  {
+   "feature": "Weight",
+   "importance": 0.027109181987343228
+  },
+  {
+   "feature": "Number",
+   "importance": 0.02360171969396157
+  },
+  {
+   "feature": "Max",
+   "importance": 0.02255283665679767
+  },
+  {
+   "feature": "Variance",
+   "importance": 0.01590293577878616
+  },
+  {
+   "feature": "Tot size",
+   "importance": 0.01560015311567819
+  },
+  {
+   "feature": "Radius",
+   "importance": 0.015017408333648617
+  },
+  {
+   "feature": "Tot sum",
+   "importance": 0.014487053486907132
+  },
+  {
+   "feature": "syn_count",
+   "importance": 0.01407218319785437
+  },
+  {
+   "feature": "AVG",
+   "importance": 0.014020385653009894
+  },
+  {
+   "feature": "Magnitue",
+   "importance": 0.013780536309852565
+  },
+  {
+   "feature": "Min",
+   "importance": 0.013690413651951236
+  },
+  {
+   "feature": "Std",
+   "importance": 0.013623516082922931
+  },
+  {
+   "feature": "Covariance",
+   "importance": 0.01304266606730329
+  },
+  {
+   "feature": "Protocol Type",
+   "importance": 0.011391311866964637
+  },
+  {
+   "feature": "ack_count",
+   "importance": 0.011175552908150099
+  },
+  {
+   "feature": "ack_flag_number",
+   "importance": 0.010450726029865902
+  },
+  {
+   "feature": "fin_count",
+   "importance": 0.008370910483307223
+  },
+  {
+   "feature": "HTTP",
+   "importance": 0.00479452687540308
+  },
+  {
+   "feature": "psh_flag_number",
+   "importance": 0.0020335506396192775
+  },
+  {
+   "feature": "UDP",
+   "importance": 0.0016520371149566571
+  },
+  {
+   "feature": "TCP",
+   "importance": 0.0014095129295561407
+  },
+  {
+   "feature": "syn_flag_number",
+   "importance": 0.00027685207969271804
+  },
+  {
+   "feature": "SSH",
+   "importance": 0.0001783621790752622
+  },
+  {
+   "feature": "rst_flag_number",
+   "importance": 0.00012306588063968599
+  },
+  {
+   "feature": "DNS",
+   "importance": 7.517139934499994e-05
+  },
+  {
+   "feature": "LLC",
+   "importance": 4.501702242382909e-05
+  },
+  {
+   "feature": "IPv",
+   "importance": 3.939970771765948e-05
+  },
+  {
+   "feature": "ICMP",
+   "importance": 2.243442307812378e-05
+  },
+  {
+   "feature": "ARP",
+   "importance": 2.0420606140215664e-05
+  },
+  {
+   "feature": "fin_flag_number",
+   "importance": 1.7277562257624505e-06
+  },
+  {
+   "feature": "cwr_flag_number",
+   "importance": 2.3865073346905063e-07
+  },
+  {
+   "feature": "ece_flag_number",
+   "importance": 1.1743763291154599e-07
+  },
+  {
+   "feature": "DHCP",
+   "importance": 0.0
+  },
+  {
+   "feature": "Drate",
+   "importance": 0.0
+  },
+  {
+   "feature": "IRC",
+   "importance": 0.0
+  },
+  {
+   "feature": "SMTP",
+   "importance": 0.0
+  },
+  {
+   "feature": "Telnet",
+   "importance": 0.0
+  }
+ ]
+}

@@ -315,7 +315,13 @@ pub fn evaluate_genome_with_gating(
 
 			(ce, correct)
 		})
-		.reduce(|| (0.0, 0), |(ce1, c1), (ce2, c2)| (ce1 + ce2, c1 + c2));
+		
+		// Deterministic: collect in example order, sum sequentially (a rayon
+		// reduce re-associates the f64 sum by work-stealing — CE moved by ulps
+		// run to run, 08/11/2026).
+		.collect::<Vec<(f64, u64)>>()
+		.into_iter()
+		.fold((0.0, 0), |(ce1, c1), (ce2, c2)| (ce1 + ce2, c1 + c2));
 
 	let ce = total_ce / num_eval as f64;
 	let accuracy = total_correct as f64 / num_eval as f64;
@@ -393,7 +399,13 @@ pub fn evaluate_genome_with_gating(
 				(ce, correct)
 			}
 		})
-		.reduce(|| (0.0, 0), |(ce1, c1), (ce2, c2)| (ce1 + ce2, c1 + c2));
+		
+		// Deterministic: collect in example order, sum sequentially (a rayon
+		// reduce re-associates the f64 sum by work-stealing — CE moved by ulps
+		// run to run, 08/11/2026).
+		.collect::<Vec<(f64, u64)>>()
+		.into_iter()
+		.fold((0.0, 0), |(ce1, c1), (ce2, c2)| (ce1 + ce2, c1 + c2));
 
 	let gated_ce = total_gated_ce / num_eval as f64;
 	let gated_accuracy = total_gated_correct as f64 / num_eval as f64;

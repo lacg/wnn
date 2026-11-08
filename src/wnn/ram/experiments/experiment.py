@@ -170,6 +170,11 @@ class ExperimentConfig:
 	# Random-search baseline (Review C): GA loop with zero selection pressure —
 	# offspring are fresh random genomes; eval protocol/budget identical to GA.
 	random_search: bool = False
+	# IDS-54: flow param mutation_rate (registered, never read before 08/11/2026).
+	# The GA/TS per-phase mutation probability (OptimizationConfig.mutation_rate,
+	# forwarded to the Rust offspring/neighbour search). 0.1 = the long-standing
+	# OptimizationConfig default, so absent = bit-identical.
+	mutation_rate: float = 0.1
 	threshold_delta: float = 0.01
 	threshold_reference: int = 1000
 	threshold_start: float = 0.0  # Starting threshold (fraction, e.g. 0.01 = 1%)
@@ -789,6 +794,10 @@ class Experiment:
 			)
 		elif is_adaptation:
 			phase_name = cfg.name
+			if cfg.magnitude_aware_patience:
+				# IDS-51: adaptation's loop has only a scalar CE patience — say so
+				# instead of silently dropping the flow's patience mode.
+				self.log("  [patience] note: adaptation uses scalar-CE patience; magnitude_aware_patience does not apply")
 			opt_config = AdaptationConfig(
 				num_clusters=num_clusters,
 				min_bits=min_bits,
@@ -836,6 +845,7 @@ class Experiment:
 				patience=cfg.patience,
 				magnitude_aware_patience=cfg.magnitude_aware_patience,
 				random_search=cfg.random_search,
+				mutation_rate=cfg.mutation_rate,
 				immigrant_fraction=cfg.immigrant_fraction,
 				check_interval=cfg.check_interval,
 				min_improvement_pct=0.05,
@@ -863,6 +873,10 @@ class Experiment:
 				neighbors_per_iter=cfg.neighbors_per_iter,
 				total_neighbors_size=cfg.population_size,
 				patience=cfg.patience,
+				# IDS-51: TS never received the flow's patience mode (it ran rank-WHM
+				# while the GA ran F1/FPR magnitude patience under the same flow).
+				magnitude_aware_patience=cfg.magnitude_aware_patience,
+				mutation_rate=cfg.mutation_rate,
 				check_interval=cfg.check_interval,
 				min_improvement_pct=0.5,
 				initial_threshold=resolved_initial_threshold,

@@ -206,15 +206,14 @@ fn golden_cases() -> Vec<(&'static str, Shape, usize)>
 	]
 }
 
-/// Digest of every golden case x writer x rate, in a fixed order.
-fn golden_digest() -> u64
+/// Digest of every golden case x writer at `rate`, in a fixed order.
+fn golden_digest(rate: f32) -> u64
 {
 	let fixtures = [fixture(60_000, 1), fixture(60_000, 3)];
 	let mut h = 0xCBF2_9CE4_8422_2325u64;
 	for (name, s, k) in golden_cases()
 	{
 		let f = &fixtures[(k == 3) as usize];
-		for &rate in &[0.25f32, 1.0]
 		{
 			for (mode, rule) in writers()
 			{
@@ -227,11 +226,19 @@ fn golden_digest() -> u64
 	h
 }
 
-/// Recorded on the PRE-FIX trainer (hashed slots everywhere), 01/11/2026.
-const GOLDEN_WITH_OI: u64 = 0xf6b5_8db9_a8c7_211b;
-const GOLDEN_WITHOUT_OI: u64 = 0x7ede_e1d9_fbe9_c184;
+/// Rate 1.0: recorded on the ABI-24 trainer (08/11/2026) from the SAME per-case
+/// digests the combined 01/11/2026 golden (0xf6b5_8db9_a8c7_211b with OI /
+/// 0x7ede_e1d9_fbe9_c184 without — re-derived from them byte-for-byte) was built from — IDS-50 must not move one
+/// rate-1.0 cell (the kernel returns before reading the sampling key).
+const GOLDEN_RATE1_WITH_OI: u64 = 0x224e_2c3f_36c3_7697;
+const GOLDEN_RATE1_WITHOUT_OI: u64 = 0x4119_accc_5cc7_4cf2;
+/// Rate 0.25: re-recorded on the ABI-25 trainer (08/11/2026). IDS-50 keys the
+/// sampling mask on neuron IDENTITY instead of position — an intended change.
+const GOLDEN_QUARTER_WITH_OI: u64 = 0x9fa8_933f_94b4_abd5;
+const GOLDEN_QUARTER_WITHOUT_OI: u64 = 0x8935_a8ef_1b6a_0ae6;
 
-/// b >= 16 exports are unchanged by the direct-addressing fix.
+/// b >= 16 exports are unchanged by the direct-addressing fix; rate 1.0 is
+/// unchanged by IDS-50.
 #[test]
 fn marker_repeatability_golden_wide_bits()
 {
@@ -241,7 +248,8 @@ fn marker_repeatability_golden_wide_bits()
 		return;
 	}
 	let oi = training_is_order_independent(QUAD_WEIGHTED);
-	let got = golden_digest();
-	eprintln!("[marker_golden] oi={oi} TOTAL={got:#x}");
-	assert_eq!(got, if oi { GOLDEN_WITH_OI } else { GOLDEN_WITHOUT_OI });
+	let (one, quarter) = (golden_digest(1.0), golden_digest(0.25));
+	eprintln!("[marker_golden] oi={oi} RATE1={one:#x} RATE0.25={quarter:#x}");
+	assert_eq!(one, if oi { GOLDEN_RATE1_WITH_OI } else { GOLDEN_RATE1_WITHOUT_OI }, "rate 1.0 moved");
+	assert_eq!(quarter, if oi { GOLDEN_QUARTER_WITH_OI } else { GOLDEN_QUARTER_WITHOUT_OI });
 }

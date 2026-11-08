@@ -50,10 +50,16 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	# thresholds (train_cal, val_cal, platt, beta, empirical*) never subsample.
 	# Rejected (non-zero) on two-cluster, multiclass and hierarchical flows.
 	"ids_calib_sample",
+	# max_bit_delta: wired 08/11/2026 (IDS-54, worker ABI 26) — before, only the
+	# Python mutate read it; the Rust GA/TS search derived its own delta. Now
+	# FlowConfig -> evaluator._max_bit_delta -> search_offspring/_neighbors ->
+	# ram_core MutationConfig.max_bit_delta. 0 = auto (10% of min+max).
 	"min_bits", "max_bits", "min_neurons", "max_neurons", "max_bit_delta",
 	"neuron_sample_rate", "sparse_threshold", "seed",
 	# GA / TS / SA / grid
 	"population_size", "ga_generations", "ts_iterations", "neighbors_per_iter",
+	# mutation_rate: wired 08/11/2026 (IDS-54) -> ExperimentConfig -> GAConfig /
+	# TSConfig.mutation_rate (default 0.1 = the OptimizationConfig default).
 	"patience", "check_interval", "mutation_rate", "magnitude_aware_patience",
 	"random_search",
 	"neurons_grid", "bits_grid", "grid_top_k", "grid_source", "top_m",
@@ -77,10 +83,11 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	"fitness_weight_ce", "fitness_weight_acc", "fitness_weight_f1", "fitness_weight_fpr",
 	# Rank-combine step (20/08/2026): harmonic (the banked WHM) | arithmetic | zscore.
 	# Absent means harmonic, so every flow queued before this key stays comparable.
-	"fitness_aggregation", "fitness_zrank_clamp", # DEPRECATED 27/08/2026: the CE anchor is now derived automatically per task
+	"fitness_aggregation", "fitness_zrank_clamp",
+	# DEPRECATED 27/08/2026: the CE anchor is now derived automatically per task
 	# (ram_core NORMALIZED_CE_ANCHOR x the task's own base-rate entropy). Kept
-	# registered ONLY so flows queued while it existed do not trip the
-	# unknown-param warning; nothing reads it.
+	# registered ONLY so the 875 flows that carry it keep ingesting; nothing
+	# reads it — ingestion logs "DEPRECATED and not applied" (inert_params.py).
 	"fitness_ce_anchor_normalized",
 	"fitness_f1_anchor", "fitness_acc_anchor",
 	"threshold_start", "threshold_step",
@@ -89,8 +96,9 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	# Tiers / stages (LM multistage + tiered)
 	"tier_config", "tier0_only", "optimize_tier0_only",
 	# Read at cli.py:353 (params.get("phase_order", "neurons_first")) and carried
-	# by 3,878 flows, but never registered — every one of them logged a false
-	# UNKNOWN PARAM warning, which is exactly how a real typo would hide.
+	# by 5,670 flows (all default). Applied at flow CREATION (it orders the
+	# experiment rows); ingestion refuses a non-default value whose rows do not
+	# follow it (inert_params.enforce_phase_order, IDS-54).
 	"phase_order",
 	"num_stages", "stage_k", "stage_mode", "stage_context_size",
 	"stage_cluster_type", "stage_min_bits", "stage_max_bits",
@@ -99,7 +107,9 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	"bigram_lambda", "unigram_lambda", "label_smoothing",
 	"invalid_mode", "flip_labels",
 	# IDS
-	"ids_dataset", "ids_split", "ids_arch_type", "ids_classification",
+	# ids_arch_type: REMOVED 08/11/2026 (IDS-54) — copied into an unread field;
+	# "tiered" accepted with a note, "bitwise" REFUSED (inert_params.py).
+	"ids_dataset", "ids_split", "ids_classification",
 	"ids_n_bits", "ids_rest_bits", "ids_auto_max_bits", "ids_raw",
 	"ids_num_parts", "ids_k_folds", "ids_kfold_per_gen", "ids_val_fraction",
 	"ids_single_cluster", "ids_feature_selection", "ids_invalid_encoding",
@@ -110,11 +120,22 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	"ids_tier_sizing", "ids_tier_neuron_cap", "ids_tier_bits_min", "ids_tier_bits_max",
 	"ids_fitness_weight_f1", "ids_fitness_weight_fpr",
 	"ids_streaming", "ids_streaming_chunk_size",
-	# Multiclass (docs/MULTICLASS_DESIGN.md §3): decode rule for K-class flows —
-	# "argmax" (baseline) | "benign_margin" (2-stage decode with τ threshold).
-	# Consumed by the Rust K-class eval stage; registered here so flows can set
-	# it without tripping the unknown-param warning.
-	"decode_mode",
+	# ids_encoding_dedupe (08/11/2026, IDS-52): "off" (default — bit-identical
+	# encoding) | "on": the thermometer keeps only thresholds whose bit is
+	# non-constant and distinct on the TRAIN partition (per-feature width shrinks
+	# to what the feature's values support), drops features left with no
+	# informative bit, and drops exact-duplicate feature columns (train only).
+	# Pinned in the validation-cache key. Refused with ids_streaming.
+	"ids_encoding_dedupe",
+	# ids_feature_ranking (08/11/2026, IDS-53): "legacy" (default — the
+	# TOP20_RF_FEATURES constants, byte-identical) | "train_only" (the top-N
+	# re-derived on the flow's OWN train split; wnn/ids/feature_ranking.py,
+	# versioned files under wnn/ids/feature_rankings/). The legacy lists were
+	# ranked on partitions holding 76% (cicids) / 84% (ciciot) of today's
+	# random_3way test/val. Pinned in the validation-cache key ("fr=").
+	"ids_feature_ranking",
+	# decode_mode: REMOVED 08/11/2026 (IDS-54) — never read; "argmax" accepted
+	# with a note, anything else REFUSED (inert_params.py).
 	"ids_encoded_storage", "ids_encoded_storage_dir", "ids_memmap_prefetch",
 	"balance_classes", "class_weight_multiplier", "undersample_majority",
 	"reweight_rounds", "reweight_max_boost",
@@ -194,9 +215,14 @@ def validate_flow_params(params: dict, log=print, flow_id=None) -> list[str]:
 	- Unknown keys produce a LOUD warning naming the likely intent (a typo'd
 	  key previously fell back to a default silently — the Rule-6 bug class).
 	- The provided (non-default) config is logged once for reproducibility.
+	- IDS-54: inert keys are noted at their default and REFUSED (ValueError) at
+	  any other value; keys with no effect for the flow's architecture warn.
 	"""
+	from wnn.ram.experiments.inert_params import INERT_KEYS, enforce_inert_params, warn_inapplicable_params
 	prefix = f"[PARAMS]{f' flow={flow_id}' if flow_id is not None else ''}"
-	unknown = sorted(k for k in params if k not in KNOWN_PARAMS)
+	enforce_inert_params(params, log, prefix)
+	warn_inapplicable_params(params, log, prefix)
+	unknown = sorted(k for k in params if k not in KNOWN_PARAMS and k not in INERT_KEYS)
 	if unknown:
 		import difflib
 		for k in unknown:

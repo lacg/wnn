@@ -318,7 +318,7 @@ pub(crate) fn evaluate_genomes_parallel_legacy(
             total_input_bits,
             gpu_addresses.as_deref(),
             neuron_sample_rate,
-            rng_seed.wrapping_add(genome_idx as u64),
+            rng_seed, // IDS-50: one seed per call, never the genome's batch position (cf. eval_hybrid train_seed)
             memory_mode,
             settings.write_rule(),
             None, // class_weights: only used by IDS via evaluate_genomes_parallel_hybrid
@@ -460,7 +460,13 @@ pub(crate) fn evaluate_genomes_parallel_legacy(
             let ce = -(target_prob + epsilon).ln();
 
             (ce, correct)
-        }).reduce(|| (0.0, 0), |(ce1, c1), (ce2, c2)| (ce1 + ce2, c1 + c2));
+        })
+		// Deterministic: collect in example order, sum sequentially (a rayon
+		// reduce re-associates the f64 sum by work-stealing — CE moved by ulps
+		// run to run, 08/11/2026).
+		.collect::<Vec<(f64, u64)>>()
+		.into_iter()
+		.fold((0.0, 0), |(ce1, c1), (ce2, c2)| (ce1 + ce2, c1 + c2));
 
         let avg_ce = total_ce / num_eval as f64;
         let accuracy = total_correct as f64 / num_eval as f64;

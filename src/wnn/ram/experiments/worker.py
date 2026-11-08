@@ -26,6 +26,8 @@ from wnn.ram.fitness import FitnessCalculatorType
 from wnn.ram.experiments.dashboard_client import DashboardClient, DashboardClientConfig
 from wnn.ram.experiments.flow import Flow, FlowConfig
 from wnn.ram.experiments.experiment import ExperimentConfig, ExperimentType, GridSource
+from wnn.ram.experiments.experiment_setting_resolver import ExperimentSettingResolver
+from wnn.ram.experiments.inert_params import refuse_inert_experiment_knobs
 from wnn.ram.experiments.tracker import create_tracker, ExperimentTracker
 from wnn.ram.experiments import scheduler
 from wnn.ram.experiments.ids_param_resolution import LM_MEMORY_MODES, memory_mode_code, resolve_memory_mode
@@ -960,6 +962,10 @@ class FlowWorker:
         # Fetch experiments from API (normalized design: experiments stored in DB table)
         experiments = self.client.list_flow_experiments(flow_id)
         self._log(f"Fetched {len(experiments)} experiments from API")
+        # IDS-54: phase_order is applied at creation — refuse a non-default
+        # value the rows do not follow (before any dataset is loaded).
+        from wnn.ram.experiments.inert_params import enforce_phase_order
+        enforce_phase_order(params, [e.get("phase_type", "") for e in experiments])
 
         # Get context size from params or use default
         context_size = params.get("context_size", self.context_size)
@@ -1327,11 +1333,6 @@ class FlowWorker:
         per_phase_delta = threshold_step_pct / 100.0  # 1% → 0.01
         min_accuracy_floor = params.get("min_accuracy_floor", 0.0)
 
-        # Fitness calculator defaults from flow params
-        default_fitness_type = self._parse_fitness_calculator(params.get("fitness_calculator"))
-        default_weight_ce = params.get("fitness_weight_ce", 1.0)
-        default_weight_acc = params.get("fitness_weight_acc", 1.0)
-
         exp_configs = []
         for exp_data in experiments:
             # Merge per-experiment params into exp_data for uniform access
@@ -1388,17 +1389,16 @@ class FlowWorker:
                 optimize_bits = exp_data.get("optimize_bits", False)
                 optimize_connections = exp_data.get("optimize_connections", False)
 
-            # Get experiment-specific settings or fall back to flow params
+            # IDS-51: ONE precedence rule — live flow params win over the row's
+            # creation-time snapshot, `is not None` (0.0 is a value), loud on
+            # disagreement (experiment_setting_resolver.py).
+            settings = ExperimentSettingResolver(params, exp_data, self._log)
             exp_tier_config = self._parse_tier_config(exp_data.get("tier_config")) or tier_config
-            exp_fitness_type = (
-                self._parse_fitness_calculator(exp_data["fitness_calculator"])
-                if exp_data.get("fitness_calculator")
-                else default_fitness_type
-            )
-            exp_weight_ce = exp_data.get("fitness_weight_ce") or default_weight_ce
-            exp_weight_acc = exp_data.get("fitness_weight_acc") or default_weight_acc
-            exp_weight_f1 = exp_data.get("fitness_weight_f1") or params.get("fitness_weight_f1", params.get("ids_fitness_weight_f1", 0.0))
-            exp_weight_fpr = exp_data.get("fitness_weight_fpr") or params.get("fitness_weight_fpr", params.get("ids_fitness_weight_fpr", 0.0))
+            exp_fitness_type = self._parse_fitness_calculator(settings.resolve("fitness_calculator"))
+            exp_weight_ce = settings.resolve("fitness_weight_ce", default=1.0)
+            exp_weight_acc = settings.resolve("fitness_weight_acc", default=1.0)
+            exp_weight_f1 = settings.resolve("fitness_weight_f1", ("fitness_weight_f1", "ids_fitness_weight_f1"), 0.0)
+            exp_weight_fpr = settings.resolve("fitness_weight_fpr", ("fitness_weight_fpr", "ids_fitness_weight_fpr"), 0.0)
 
             # Determine architecture_type and target_stage early (needed for grid selection)
             architecture_type = params.get("architecture_type", "tiered")
@@ -1479,23 +1479,16 @@ class FlowWorker:
                     bits_grid = [mb] + list(range(((mb // step) + 1) * step, xb, step)) + [xb]
             num_grid_configs = len(neurons_grid) * len(bits_grid)
             grid_top_k = params.get("grid_top_k", 15)  # Default: top-15 configs (balanced seeding)
-            # Prefer the LIVE flow config param over the experiment's creation-time
-            # snapshot: exp_data.population_size is copied from the flow config when the
-            # experiment is created, so a later config PATCH (e.g. pop 50→40 to escape the
-            # plateau-escalation OOM) only updates params — the stale exp_data value must
-            # NOT shadow it. They are equal except after a PATCH, where params is the intent.
-            pop_size = params.get("population_size") or exp_data.get("population_size") or 50
+            # Live flow param over the row snapshot (a config PATCH, e.g. pop 50→40,
+            # only updates params) — the same IDS-51 rule as every other setting.
+            pop_size = settings.resolve("population_size", default=50)
 
             is_adaptation = experiment_type in (
                 ExperimentType.LAMARCKIAN,
                 ExperimentType.NEUROGENESIS, ExperimentType.SYNAPTOGENESIS, ExperimentType.AXONOGENESIS,
             )
-            if experiment_type == ExperimentType.GRID_SEARCH:
-                max_iters = num_grid_configs  # One iteration per (neurons, bits) config
-            elif is_adaptation:
-                max_iters = exp_data.get("max_iterations") or params.get("adaptation_iterations", 50)
-            else:
-                max_iters = exp_data.get("max_iterations") or params.get("ga_generations", 250)
+            max_iters = self._resolve_max_iters(settings, experiment_type, is_adaptation, num_grid_configs)
+            refuse_inert_experiment_knobs(params, self._experiment_kind(experiment_type, is_adaptation))
 
             # Determine cluster_type from architecture_type
             from wnn.ram.experiments.experiment import ClusterType
@@ -1517,10 +1510,9 @@ class FlowWorker:
                 optimize_connections=optimize_connections,
                 generations=max_iters,
                 population_size=pop_size,
-                iterations=exp_data.get("max_iterations") or (
-                    params.get("adaptation_iterations", 50) if is_adaptation
-                    else params.get("ts_iterations", 250)
-                ),
+                # Grid search is ONE step (the dashboard's row is always 1); its
+                # generations carry the grid size.
+                iterations=1 if experiment_type == ExperimentType.GRID_SEARCH else max_iters,
                 neighbors_per_iter=params.get("neighbors_per_iter", 50),
                 patience=patience,
                 # Magnitude-aware patience: default ON for worker flows since
@@ -1530,6 +1522,7 @@ class FlowWorker:
                 # Random-search baseline (Review C): zero selection pressure,
                 # same eval protocol/budget as the GA. Default OFF.
                 random_search=params.get("random_search", False),
+                mutation_rate=float(params.get("mutation_rate", 0.1)),
                 check_interval=check_interval,
                 tier_config=exp_tier_config,
                 optimize_tier0_only=tier0_only,
@@ -1804,6 +1797,28 @@ class FlowWorker:
                 for m in raw_mode
             ]
         return [int(raw_mode)]
+
+    @staticmethod
+    def _experiment_kind(experiment_type, is_adaptation: bool) -> str:
+        """'ga' | 'ts' | 'adaptation' | 'other' (grid / lambda sweep)."""
+        if is_adaptation:
+            return "adaptation"
+        return {ExperimentType.GA: "ga", ExperimentType.TS: "ts"}.get(experiment_type, "other")
+
+    @staticmethod
+    def _resolve_max_iters(settings, experiment_type, is_adaptation: bool, num_grid_configs: int) -> int:
+        """Budget of one experiment (IDS-51). Grid = one step per (n, b) config;
+        lambda sweep = its row (structurally 1); GA / TS / adaptation = the
+        explicit per-experiment value, else the LIVE flow key of THAT type."""
+        if experiment_type == ExperimentType.GRID_SEARCH:
+            return num_grid_configs
+        if experiment_type == ExperimentType.LAMBDA_SWEEP:
+            return settings.resolve("max_iterations", ("max_iterations",), 1)
+        if is_adaptation:
+            return settings.max_iterations("adaptation_iterations", 50)
+        if experiment_type == ExperimentType.GA:
+            return settings.max_iterations("ga_generations", 250)
+        return settings.max_iterations("ts_iterations", 250)
 
     def _parse_fitness_calculator(self, fitness_calculator: Optional[str]) -> FitnessCalculatorType:
         """Parse fitness calculator string to enum."""

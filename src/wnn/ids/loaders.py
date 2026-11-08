@@ -43,6 +43,8 @@ class LoadSpec:
 	encoded_storage: str = "memory"
 	storage_dir: object = None
 	raw: bool = False
+	encoding_dedupe: bool = False      # IDS-52 (ids_encoding_dedupe="on"); in-memory loads only
+	feature_ranking: str = "legacy"    # IDS-53 (ids_feature_ranking): "legacy" | "train_only"
 
 
 class BaseIDSLoader(ABC):
@@ -66,6 +68,21 @@ class BaseIDSLoader(ABC):
 	def _feature_list(self, spec: "LoadSpec") -> list:
 		return self._FEATURES
 
+	def ranking_key(self) -> str:
+		"""File key of this dataset's train-only rankings (feature_ranking.py)."""
+		return self.name
+
+	def _ranked_features(self, spec: "LoadSpec") -> list:
+		"""The top-N list this flow encodes with — the legacy constant or the
+		train-only ranking (IDS-53) — logged once as provenance."""
+		from .feature_ranking import provenance, train_only_features
+		if spec.feature_ranking == "train_only":
+			feats = train_only_features(self.ranking_key(), spec.split, spec.feature_selection)
+		else:
+			feats = self._feature_list(spec)
+		print(provenance(spec.feature_ranking, self.ranking_key(), spec.split, list(feats or [])))
+		return feats
+
 	def _resolve_invalid(self, spec: "LoadSpec") -> str:
 		if spec.invalid_encoding is not None:
 			return spec.invalid_encoding
@@ -76,7 +93,7 @@ class BaseIDSLoader(ABC):
 			raise ValueError(f"{self.name}: split must be one of {self.valid_splits}, got {spec.split!r}")
 		if spec.raw and not self.supports_raw:
 			raise NotImplementedError(f"{self.name} has no raw variant (its HuggingFace copy is pre-cleaned)")
-		feats = self._feature_list(spec)
+		feats = self._ranked_features(spec)
 		inv = self._resolve_invalid(spec)
 
 		# Chained build: the DataFrames live ONLY as encode_and_build_dataset params,
@@ -95,6 +112,7 @@ class BaseIDSLoader(ABC):
 				rest_bits=spec.rest_bits, invalid_encoding=inv,
 				auto_max_bits=spec.auto_max_bits,
 				encoded_storage=spec.encoded_storage, storage_dir=spec.storage_dir,
+				encoding_dedupe=spec.encoding_dedupe,
 			)
 
 		return _build(*self._fetch(spec))
@@ -175,6 +193,9 @@ class CICIoTLoader(BaseIDSLoader):
 		from .ciciot2023 import ATTACK_CLASSES
 		return ATTACK_CLASSES
 
+	def ranking_key(self) -> str:
+		return f"ciciot2023_{self.dataset_size}"
+
 	def _feature_list(self, spec):
 		from .ciciot2023 import FEATURE_LIST_BY_NAME, _load_ranked_features
 		if spec.feature_selection in FEATURE_LIST_BY_NAME:
@@ -202,7 +223,12 @@ class CICIoTLoader(BaseIDSLoader):
 			raise NotImplementedError(
 				f"streaming=True is incompatible with encoded_storage={spec.encoded_storage!r}."
 			)
-		feats = self._feature_list(spec)
+		if spec.encoding_dedupe:
+			raise NotImplementedError(
+				"streaming=True is incompatible with encoding_dedupe (ids_encoding_dedupe='on' needs "
+				"exact train counts; the streaming encoder fits by t-digest)."
+			)
+		feats = self._ranked_features(spec)
 		inv = self._resolve_invalid(spec)
 		(train_f, test_f, val_f, n_tr, n_te, n_va, common) = _load_from_huggingface_streaming(
 			spec.split, self.dataset_size, raw=spec.raw,
@@ -237,7 +263,7 @@ def get_loader(dataset: str) -> BaseIDSLoader:
 def load_ids_dataset(dataset: str, **kwargs) -> IDSDataset:
 	"""Unified entry point. `dataset` is a registry key; `kwargs` map to LoadSpec
 	(split, n_bits, method, feature_selection, rest_bits, auto_max_bits,
-	invalid_encoding, encoded_storage, storage_dir, raw). Streaming kwargs
+	invalid_encoding, encoded_storage, storage_dir, raw, encoding_dedupe, feature_ranking). Streaming kwargs
 	(streaming, streaming_chunk_size) are accepted and forwarded to CIC-IoT."""
 	# streaming is CIC-IoT-only and not a LoadSpec field; stash it on the spec.
 	streaming = kwargs.pop("streaming", False)

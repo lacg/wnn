@@ -13,6 +13,10 @@
 	export let idsMaxBits = 16
 	export let idsMinNeurons = 5
 	export let idsMaxNeurons = 500
+	// IDS-52: "on" = train-informative thermometer bits (flow param ids_encoding_dedupe)
+	export let idsEncodingDedupe = 'off'
+	// IDS-53: "train_only" = top-N ranked on the flow's own train split (ids_feature_ranking)
+	export let idsFeatureRanking = 'legacy'
 	export let idsMaxBitDelta = 0
 	export let idsNeuronSampleRate = 0.25
 	export let idsBalanceClasses = true
@@ -69,13 +73,11 @@
 				<option value="binary">Binary (attack vs normal)</option>
 				<option value="hierarchical">Hierarchical S0→S1 (binary + 9 attack types)</option>
 				<option value="multi_tiered">Multi-class Tiered (10 categories)</option>
-				<option value="multi_bitwise">Multi-class Bitwise (10 categories)</option>
 			</select>
 			<span class="field-hint">
 				{#if idsClassification === 'binary'}2 classes — tiered architecture
 				{:else if idsClassification === 'hierarchical'}S0: Normal vs Attack → S1: 9 attack types (separate genomes)
-				{:else if idsClassification === 'multi_tiered'}10 classes — frequency-based tier allocation
-				{:else}10 classes — per-cluster independent bits/neurons
+				{:else}10 classes — frequency-based tier allocation
 				{/if}
 			</span>
 		</div>
@@ -103,6 +105,16 @@
 				{/if}
 			</span>
 		</div>
+		{#if idsFeatureSelection !== 'all'}
+			<div class="form-group">
+				<label for="idsFeatureRanking">Feature Ranking</label>
+				<select id="idsFeatureRanking" bind:value={idsFeatureRanking}>
+					<option value="legacy">Legacy (original top-20 lists)</option>
+					<option value="train_only">Train-only (ranked on this split's train)</option>
+				</select>
+				<span class="field-hint">Train-only never sees the held-out rows; the legacy cicids / ciciot lists did</span>
+			</div>
+		{/if}
 		{#if idsFeatureSelection === 'top20_split'}
 			<div class="form-group">
 				<label for="idsRestBits">Rest Features Bits</label>
@@ -185,7 +197,19 @@
 		<div class="form-group">
 			<label for="idsMaxBitDelta">Max Bit Delta</label>
 			<input type="number" id="idsMaxBitDelta" bind:value={idsMaxBitDelta} min="0" max="16" />
-			<span class="field-hint">0 = auto (~10% of range). Limits bit jumps per mutation to prevent overfitting</span>
+			<span class="field-hint">0 = auto (~10% of range). Largest bits step one mutation may take</span>
+		</div>
+		<div class="form-group">
+			<label for="idsEncodingDedupe">Encoding Dedupe</label>
+			<select id="idsEncodingDedupe" bind:value={idsEncodingDedupe}>
+				<option value="off">Off (original encoding)</option>
+				<option value="on">On (train-informative bits only)</option>
+			</select>
+			<span class="field-hint">
+				{#if idsEncodingDedupe === 'on'}Drops constant / duplicate thermometer bits and duplicate features, decided on the train split
+				{:else}Every feature at the full thermometer width
+				{/if}
+			</span>
 		</div>
 	</div>
 </div>

@@ -13,7 +13,9 @@ INCLUDED (changes the trained memory or the reported score of a fixed genome):
   dataset/encoding  ids_dataset, ids_n_bits, ids_split, ids_feature_selection,
                     ids_rest_bits, ids_auto_max_bits, ids_raw, ids_invalid_encoding
                     (resolved incl. its dataset-dependent default), ids_streaming
-                    (+ chunk size: the streaming encoder fits by t-digest)
+                    (+ chunk size: the streaming encoder fits by t-digest),
+                    ids_encoding_dedupe (encoder version, only when "on"),
+                    ids_feature_ranking (list version, only when "train_only")
   model/training    ids_classification, ids_single_cluster, memory_mode (resolved),
                     seed (QSR/PLN coin run_seed; hierarchical split seed),
                     ids_write_rule (only when "vote"; lattice keys unchanged),
@@ -41,12 +43,17 @@ import json
 
 from wnn.ram.experiments.ids_param_resolution import (
 	DEFAULT_WRITE_RULE,
+	resolve_encoding_dedupe,
+	resolve_feature_ranking,
 	resolve_invalid_encoding,
 	resolve_memory_mode,
 	resolve_write_rule,
 )
 
 VALIDATION_CACHE_VERSION = 2
+# Bump when the deduped encoder's semantics change (thermometer_dedupe.py /
+# duplicate_columns.py) — it re-keys only ids_encoding_dedupe="on" flows.
+ENCODER_VERSION_DEDUPE = "dedupe1"
 
 
 def build_validation_cache_key(params: dict, oi_enabled: bool) -> str:
@@ -81,7 +88,20 @@ def _dataset_parts(params: dict) -> list:
 		("raw", bool(params.get("ids_raw", False))),
 		("inv", resolve_invalid_encoding(params)),
 		("strm", params.get("ids_streaming_chunk_size", 1_000_000) if streaming else None),
-	]
+	] + _encoder_version_parts(params) + _feature_ranking_parts(params)
+
+
+def _feature_ranking_parts(params: dict) -> list:
+	"""IDS-53 ranking version: emitted ONLY for ids_feature_ranking="train_only"
+	(the directory version of the list file), so legacy keys stay byte-identical."""
+	from wnn.ids.feature_ranking import TRAIN_ONLY_VERSION
+	return [("fr", TRAIN_ONLY_VERSION)] if resolve_feature_ranking(params) == "train_only" else []
+
+
+def _encoder_version_parts(params: dict) -> list:
+	"""IDS-52 encoder version: emitted ONLY for ids_encoding_dedupe="on" (a
+	different bit layout), so every default-encoding key stays byte-identical."""
+	return [("enc", ENCODER_VERSION_DEDUPE)] if resolve_encoding_dedupe(params) else []
 
 
 def _model_parts(params: dict) -> list:

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from sklearn.model_selection import train_test_split
 
 from wnn.representations.thermometer import ThermometerEncoder, ThermometerType
+from .duplicate_columns import distinct_columns
 from .encoded_array import (
 	LazyEncodedArray,
 	InMemoryEncoded,
@@ -121,6 +122,7 @@ def encode_features(
 	invalid_encoding: str = "none",
 	encoded_storage: str = "memory",
 	storage_dir: "Path | str | None" = None,
+	encoding_dedupe: bool = False,
 ) -> tuple[LazyEncodedArray, LazyEncodedArray, ThermometerEncoder, list[str], LazyEncodedArray | None]:
 	"""Shared thermometer encoding logic for all IDS datasets.
 
@@ -139,6 +141,10 @@ def encode_features(
 		method: thermometer encoding strategy
 		feature_selection: "all", "top20", or "top20_split"
 		rest_bits: bits for non-top features in top20_split (defaults to n_bits)
+		encoding_dedupe: IDS-52 (ids_encoding_dedupe="on"). Drop exact-duplicate
+			feature columns and keep only train-informative thermometer bits —
+			both decided on df_train ONLY (duplicate_columns.py,
+			thermometer_dedupe.py). False = the original encoding, bit-identical.
 
 	Returns:
 		(X_train, X_test, encoder, used_features, X_val) — X_val is None if df_val not provided
@@ -149,8 +155,10 @@ def encode_features(
 	X_val = None
 
 	if feature_selection == "all":
+		if encoding_dedupe:
+			common_features, _ = distinct_columns(df_train, common_features)
 		encoder = ThermometerEncoder(n_bits=n_bits, method=method, auto_max_bits=auto_max_bits,
-									 invalid_encoding=invalid_encoding)
+									 invalid_encoding=invalid_encoding, dedupe=encoding_dedupe)
 		encoder.fit(df_train[common_features])
 		if encoded_storage == "memmap":
 			# Chunked encode straight to disk — the one-shot transform() would
@@ -170,7 +178,7 @@ def encode_features(
 				X_val_raw, _ = encoder.transform(df_val[common_features])
 			else:
 				X_val_raw = None
-		used_features = common_features
+		used_features = encoder.feature_names_ if encoding_dedupe else common_features
 		print(f"  Encoder: {encoder.total_bits} total bits "
 			  f"({method.value}, {n_bits} bits/feature, feature_selection=all, {len(common_features)} features)")
 
@@ -183,8 +191,10 @@ def encode_features(
 			selected = available[:top_n]
 			if len(selected) < top_n:
 				print(f"  WARNING: Only {len(selected)} of {top_n} top features found in dataset")
+		if encoding_dedupe:
+			selected, _ = distinct_columns(df_train, selected)
 		encoder = ThermometerEncoder(n_bits=n_bits, method=method, auto_max_bits=auto_max_bits,
-									 invalid_encoding=invalid_encoding)
+									 invalid_encoding=invalid_encoding, dedupe=encoding_dedupe)
 		encoder.fit(df_train[selected])
 		if encoded_storage == "memmap":
 			# Chunked encode straight to disk (see feature_selection="all" note).
@@ -201,7 +211,7 @@ def encode_features(
 				X_val_raw, _ = encoder.transform(df_val[selected])
 			else:
 				X_val_raw = None
-		used_features = selected
+		used_features = encoder.feature_names_ if encoding_dedupe else selected
 		print(f"  Encoder: {encoder.total_bits} total bits "
 			  f"({method.value}, {n_bits} bits/feature, feature_selection={feature_selection}, {len(selected)} features)")
 
@@ -209,18 +219,21 @@ def encode_features(
 		rb = rest_bits if rest_bits is not None else n_bits
 		top = [f for f in top_features if f in common_features]
 		rest = [f for f in common_features if f not in top_features]
+		if encoding_dedupe:
+			distinct, _ = distinct_columns(df_train, top + rest)
+			top, rest = [f for f in top if f in distinct], [f for f in rest if f in distinct]
 		if len(top) < len(top_features):
 			missing = set(top_features) - set(common_features)
 			print(f"  WARNING: {len(missing)} top features not in dataset: {missing}")
 
-		enc_top = ThermometerEncoder(n_bits=16, method=method, invalid_encoding=invalid_encoding)
+		enc_top = ThermometerEncoder(n_bits=16, method=method, invalid_encoding=invalid_encoding, dedupe=encoding_dedupe)
 		enc_top.fit(df_train[top])
 		# top20_split joins two encoders' outputs at the bit-level — easiest to do
 		# in bool form, then re-pack at the end.
 		X_train_top_packed, top_bits = enc_top.transform(df_train[top])
 		X_test_top_packed, _ = enc_top.transform(df_test[top])
 
-		enc_rest = ThermometerEncoder(n_bits=rb, method=method, invalid_encoding=invalid_encoding)
+		enc_rest = ThermometerEncoder(n_bits=rb, method=method, invalid_encoding=invalid_encoding, dedupe=encoding_dedupe)
 		enc_rest.fit(df_train[rest])
 		X_train_rest_packed, rest_bits_count = enc_rest.transform(df_train[rest])
 		X_test_rest_packed, _ = enc_rest.transform(df_test[rest])
@@ -251,7 +264,7 @@ def encode_features(
 		else:
 			X_val_raw = None
 		encoder = enc_top
-		used_features = top + rest
+		used_features = enc_top.feature_names_ + enc_rest.feature_names_ if encoding_dedupe else top + rest
 		print(f"  Encoder: {total_bits} total bits "
 			  f"({method.value}, top-{len(top)}@16b + {len(rest)} rest@{rb}b, feature_selection=top20_split)")
 
@@ -327,6 +340,7 @@ def encode_and_build_dataset(
 	auto_max_bits: int = 32,
 	encoded_storage: str = "memory",
 	storage_dir: "Path | str | None" = None,
+	encoding_dedupe: bool = False,
 ) -> IDSDataset:
 	"""Build an IDSDataset from DataFrames in one call, releasing them inline.
 
@@ -358,7 +372,7 @@ def encode_and_build_dataset(
 	    label_multi_col: column name for multi-class string label (default
 	        "attack_class"); if None, multi_class labels mirror binary
 	    n_bits, method, feature_selection, rest_bits, invalid_encoding,
-	    auto_max_bits: passed through to encode_features().
+	    auto_max_bits, encoding_dedupe: passed through to encode_features().
 
 	Returns:
 	    IDSDataset with LazyEncodedArray-wrapped X matrices and int64 labels.
@@ -390,6 +404,7 @@ def encode_and_build_dataset(
 		auto_max_bits=auto_max_bits,
 		encoded_storage=encoded_storage,
 		storage_dir=storage_dir,
+		encoding_dedupe=encoding_dedupe,
 	)
 
 	# 3. Release source DataFrames. This is the load-bearing memory drop —

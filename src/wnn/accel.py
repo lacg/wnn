@@ -130,7 +130,18 @@ import os
 #   train subsample (Rust adaptive/calib_sample.rs). Default 0 = every row,
 #   bit-identical to 23; validation thresholds never subsample. IDSEvaluator only
 #   calls the setter when the flow sets the param. Supersedes 23.
-EXPECTED_ABI = 24
+# 25 (08/11/2026, IDS-50): no surface change — a RESULTS change at
+#   neuron_sample_rate < 1. The training-sample mask is keyed on the neuron's
+#   IDENTITY (cluster, bits, connections, duplicate ordinal; Rust
+#   neuron_sample_key.rs, CPU and Metal alike), not its flat position — a neurons
+#   mutation / pool-shuffle crossover no longer re-draws other neurons' subsets.
+#   Rate 1.0 bit-identical to 24. The validation cache pins worker_abi, so this
+#   bump re-validates. Lands with the IDS-51..54 Python at a worker-idle swap.
+# 26 (08/11/2026, same swap as 25): additive — search_offspring / search_neighbors
+#   take max_bit_delta (flow param, 0 = auto = bit-identical; IDSEvaluator passes
+#   it). Non-OI legacy-nudge training is now deterministic (CPU neuron lanes, GPU
+#   z = 1) and CPU CE sums in example order — production IDS trains OI, unaffected.
+EXPECTED_ABI = 26
 
 BUILD_HINT = (
 	"Rebuild the accelerator: cd src/wnn/ram/strategies/accelerator && "

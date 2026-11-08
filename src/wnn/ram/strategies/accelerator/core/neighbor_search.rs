@@ -87,13 +87,20 @@ pub struct MutationConfig
 	/// Flow param `max_neurons_total`: cap on the genome's SUM of neurons
 	/// (`max_neurons` caps each cluster). None = no total cap (original).
 	pub max_neurons_total: Option<usize>,
+	/// Flow param `max_bit_delta` (08/11/2026, IDS-54): the largest bits step one
+	/// BITS mutation may take. 0 = auto (10% of min + max) — the original.
+	pub max_bit_delta: usize,
 }
 
 impl MutationConfig
 {
-	/// Calculate delta range as 10% of (min + max), minimum 1.
+	/// Bits step range: `max_bit_delta` when set, else 10% of (min + max), min 1.
 	fn bits_delta_max(&self) -> i32
 	{
+		if self.max_bit_delta > 0
+		{
+			return self.max_bit_delta as i32;
+		}
 		((0.1 * (self.min_bits + self.max_bits) as f64).round() as i32).max(1)
 	}
 }
@@ -1036,6 +1043,8 @@ pub struct GAConfig
 	pub crossover_bits: crate::crossover_bits::CrossoverBits,
 	/// Flow param `max_neurons_total` (see MutationConfig).
 	pub max_neurons_total: Option<usize>,
+	/// Flow param `max_bit_delta` (see MutationConfig; 0 = auto).
+	pub max_bit_delta: usize,
 }
 
 /// Neuron-crossover options. `dedupe` false = the original operators, same RNG draws.
@@ -1296,11 +1305,15 @@ fn crossover_ps_neurons(
 		}
 	}
 	let child1 = (c1_bits, c1_neurons, c1_conns);
-	let child2 = (c2_bits, c2_neurons, c2_conns);
 	if !dedupe
 	{
-		return (child1, child2);
+		// child2 takes what is LEFT of the pool after child1: when both drew the
+		// larger parent count the pool runs short, and the drawn c2_n overstated
+		// the neurons it received (bits/connections vs neurons_per_cluster
+		// disagreed, 08/11/2026). Record the count it actually got.
+		return (child1, (c2_bits, c2_taken, c2_conns));
 	}
+	let child2 = (c2_bits, c2_neurons, c2_conns);
 	let modes = parent_cluster_modes(parent1, parent2, num_clusters);
 	let child1 = dedupe_fill(&child1, &c1_taken, &modes, xo, rng);
 	let child2 = dedupe_fill(&child2, &c2_taken, &modes, xo, rng);
@@ -2008,6 +2021,7 @@ fn mutate_ga(
 		total_input_bits: config.total_input_bits,
 		phase_type: config.phase_type,
 		max_neurons_total: config.max_neurons_total,
+		max_bit_delta: config.max_bit_delta,
 	};
 	mutate_genome(bits, neurons, connections, &mutation_config, rng)
 }
@@ -2352,9 +2366,11 @@ mod tests
 			total_input_bits: 64,
 			phase_type: PhaseType::Bits,
 			max_neurons_total: None,
+			max_bit_delta: 0,
 		};
 
 		assert_eq!(config.bits_delta_max(), 2); // 10% of 24 = 2.4 -> 2
+		assert_eq!(MutationConfig { max_bit_delta: 5, ..config.clone() }.bits_delta_max(), 5, "flow max_bit_delta overrides auto");
 		                                      // neurons_delta_max is no longer used — delta is computed per-cluster
 		                                      // as 3% of current neuron count (min 1) inside mutate_neurons_phase
 	}
@@ -2374,6 +2390,7 @@ mod tests
 			total_input_bits: 64,
 			phase_type: phase,
 			max_neurons_total: None,
+			max_bit_delta: 0,
 		}
 	}
 

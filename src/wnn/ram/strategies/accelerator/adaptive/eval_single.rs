@@ -427,7 +427,13 @@ pub(crate) fn multiclass_ce_acc(all_scores: &[Vec<f64>], eval_targets: &[i64]) -
 			let target_prob = (scores[target_idx] - max_score).exp() / sum_exp;
 			(-(target_prob + epsilon).ln(), (predictions[ex_idx] as usize == target_idx) as u64)
 		})
-		.reduce(|| (0.0, 0), |(ce1, c1), (ce2, c2)| (ce1 + ce2, c1 + c2));
+		
+		// Deterministic: collect in example order, sum sequentially (a rayon
+		// reduce re-associates the f64 sum by work-stealing — CE moved by ulps
+		// run to run, 08/11/2026).
+		.collect::<Vec<(f64, u64)>>()
+		.into_iter()
+		.fold((0.0, 0), |(ce1, c1), (ce2, c2)| (ce1 + ce2, c1 + c2));
 	let n = all_scores.len().max(1) as f64;
 	(total_ce / n, total_correct as f64 / n, predictions)
 }

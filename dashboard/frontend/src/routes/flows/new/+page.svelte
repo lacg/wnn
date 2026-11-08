@@ -42,6 +42,8 @@
 	let idsMaxBits = 16
 	let idsMinNeurons = 5
 	let idsMaxNeurons = 500
+	let idsEncodingDedupe = 'off'
+	let idsFeatureRanking = 'legacy'
 	let idsMaxBitDelta = 0
 	let idsNeuronSampleRate = 0.25
 	let idsBalanceClasses = true
@@ -648,16 +650,14 @@
 			{
 				params.architecture_type = 'ids'
 				params.ids_dataset = idsDataset
-				// Split combined classification into classification + ids_arch_type
-				const isBitwiseIds = idsClassification === 'multi_bitwise'
+				// IDS genomes are always tiered clusters: ids_arch_type is no longer sent
+				// (IDS-54 — it was never read; "bitwise" is refused at ingestion).
 				const classMap: Record<string, string> = {
 					'binary': 'binary',
 					'hierarchical': 'hierarchical',
 					'multi_tiered': 'multi',
-					'multi_bitwise': 'multi',
 				}
 				params.ids_classification = classMap[idsClassification] || 'binary'
-				params.ids_arch_type = isBitwiseIds ? 'bitwise' : 'tiered'
 				params.ids_n_bits = idsNBits
 				params.ids_val_fraction = idsValFraction
 				params.ids_num_parts = idsKFolds > 1 ? idsKFolds : 3
@@ -669,6 +669,8 @@
 				params.ids_fitness_weight_f1 = idsFitnessWeightF1
 				params.ids_split = idsSplit
 				params.ids_feature_selection = idsFeatureSelection
+				if (idsEncodingDedupe === 'on') params.ids_encoding_dedupe = 'on'
+				if (idsFeatureRanking === 'train_only' && idsFeatureSelection !== 'all') params.ids_feature_ranking = 'train_only'
 				if (idsFeatureSelection === 'top20_split')
 				{
 					params.ids_rest_bits = idsRestBits
@@ -860,6 +862,8 @@
 							bind:idsMaxBits
 							bind:idsMinNeurons
 							bind:idsMaxNeurons
+							bind:idsEncodingDedupe
+							bind:idsFeatureRanking
 							bind:idsMaxBitDelta
 							bind:idsNeuronSampleRate
 							bind:idsBalanceClasses

@@ -1,0 +1,246 @@
+{
+ "dataset": "unsw-nb15",
+ "config": "random_3way",
+ "partition": "train",
+ "rows": 1267407,
+ "method": "RandomForestClassifier(n_estimators=100, random_state=42), median-imputed, sorted columns",
+ "excluded": [
+  "Ltime",
+  "Stime",
+  "attack_cat",
+  "dsport",
+  "dstip",
+  "label",
+  "sport",
+  "srcip"
+ ],
+ "top20": [
+  "sttl",
+  "ct_state_ttl",
+  "dttl",
+  "ackdat",
+  "tcprtt",
+  "Sload",
+  "dmeansz",
+  "Dload",
+  "smeansz",
+  "sbytes",
+  "synack",
+  "ct_srv_dst",
+  "dbytes",
+  "Dintpkt",
+  "dur",
+  "ct_srv_src",
+  "state",
+  "ct_dst_src_ltm",
+  "Dpkts",
+  "Sintpkt"
+ ],
+ "worker_top20": [
+  "ct_dst_sport_ltm",
+  "ct_src_dport_ltm",
+  "ct_srv_dst",
+  "ct_state_ttl",
+  "Dintpkt",
+  "dmeansz",
+  "Dpkts",
+  "dttl",
+  "dur",
+  "sbytes",
+  "Sintpkt",
+  "Sjit",
+  "smeansz",
+  "Spkts",
+  "sttl",
+  "swin",
+  "tcprtt",
+  "proto",
+  "service",
+  "state"
+ ],
+ "overlap_with_worker": 13,
+ "added_vs_worker": [
+  "ackdat",
+  "Sload",
+  "Dload",
+  "synack",
+  "dbytes",
+  "ct_srv_src",
+  "ct_dst_src_ltm"
+ ],
+ "dropped_vs_worker": [
+  "ct_dst_sport_ltm",
+  "ct_src_dport_ltm",
+  "Sjit",
+  "Spkts",
+  "swin",
+  "proto",
+  "service"
+ ],
+ "ranking": [
+  {
+   "feature": "sttl",
+   "importance": 0.1736281828952968
+  },
+  {
+   "feature": "ct_state_ttl",
+   "importance": 0.15418183741426578
+  },
+  {
+   "feature": "dttl",
+   "importance": 0.07066871561661306
+  },
+  {
+   "feature": "ackdat",
+   "importance": 0.05719703411553162
+  },
+  {
+   "feature": "tcprtt",
+   "importance": 0.050998979406715536
+  },
+  {
+   "feature": "Sload",
+   "importance": 0.048266483241735034
+  },
+  {
+   "feature": "dmeansz",
+   "importance": 0.04568380507217757
+  },
+  {
+   "feature": "Dload",
+   "importance": 0.04307870669438293
+  },
+  {
+   "feature": "smeansz",
+   "importance": 0.037708890685802396
+  },
+  {
+   "feature": "sbytes",
+   "importance": 0.03748439563751329
+  },
+  {
+   "feature": "synack",
+   "importance": 0.02837517780332699
+  },
+  {
+   "feature": "ct_srv_dst",
+   "importance": 0.025142932812792552
+  },
+  {
+   "feature": "dbytes",
+   "importance": 0.02297252316559601
+  },
+  {
+   "feature": "Dintpkt",
+   "importance": 0.02252111658319138
+  },
+  {
+   "feature": "dur",
+   "importance": 0.02160320679361418
+  },
+  {
+   "feature": "ct_srv_src",
+   "importance": 0.019014641945184006
+  },
+  {
+   "feature": "state",
+   "importance": 0.0182589724408574
+  },
+  {
+   "feature": "ct_dst_src_ltm",
+   "importance": 0.015240050264468088
+  },
+  {
+   "feature": "Dpkts",
+   "importance": 0.014940226373756487
+  },
+  {
+   "feature": "Sintpkt",
+   "importance": 0.011379981154934084
+  },
+  {
+   "feature": "service",
+   "importance": 0.00896384123562765
+  },
+  {
+   "feature": "Djit",
+   "importance": 0.00762243032830655
+  },
+  {
+   "feature": "Sjit",
+   "importance": 0.006924583469222388
+  },
+  {
+   "feature": "ct_dst_sport_ltm",
+   "importance": 0.0061864287609647165
+  },
+  {
+   "feature": "dtcpb",
+   "importance": 0.005600006954195014
+  },
+  {
+   "feature": "ct_src_ltm",
+   "importance": 0.005406221413311606
+  },
+  {
+   "feature": "stcpb",
+   "importance": 0.005297581346140846
+  },
+  {
+   "feature": "Spkts",
+   "importance": 0.005042141544321981
+  },
+  {
+   "feature": "sloss",
+   "importance": 0.004697534746270107
+  },
+  {
+   "feature": "ct_src_dport_ltm",
+   "importance": 0.004620498817708996
+  },
+  {
+   "feature": "ct_dst_ltm",
+   "importance": 0.004371755802864239
+  },
+  {
+   "feature": "proto",
+   "importance": 0.0041810416280464915
+  },
+  {
+   "feature": "swin",
+   "importance": 0.0027923914077999153
+  },
+  {
+   "feature": "dloss",
+   "importance": 0.0027501038186051787
+  },
+  {
+   "feature": "ct_ftp_cmd",
+   "importance": 0.0024310816579637016
+  },
+  {
+   "feature": "res_bdy_len",
+   "importance": 0.0013642439786687008
+  },
+  {
+   "feature": "is_sm_ips_ports",
+   "importance": 0.0013269031121181968
+  },
+  {
+   "feature": "ct_flw_http_mthd",
+   "importance": 0.0009900520781564168
+  },
+  {
+   "feature": "trans_depth",
+   "importance": 0.0009004260753240509
+  },
+  {
+   "feature": "dwin",
+   "importance": 9.614557343160329e-05
+  },
+  {
+   "feature": "is_ftp_login",
+   "importance": 8.872613319655744e-05
+  }
+ ]
+}

@@ -15,6 +15,8 @@ from wnn.ram.experiments.ids_param_resolution import (
 	RAW_BY_CONSTRUCTION_DATASETS,
 	empty_value_for,
 	memory_mode_code,
+	resolve_encoding_dedupe,
+	resolve_feature_ranking,
 	resolve_invalid_encoding,
 	resolve_calib_sample,
 	resolve_kfold_per_gen,
@@ -63,6 +65,8 @@ class IdsEvaluatorSettings:
 	streaming_chunk_size: int
 	memmap_prefetch: str
 	invalid_encoding: str
+	encoding_dedupe: bool
+	feature_ranking: str
 	fitness_weights: tuple[float, float, float, float]
 	order_independent_train: bool
 
@@ -104,6 +108,8 @@ class IdsEvaluatorSettings:
 			streaming_chunk_size=params.get("ids_streaming_chunk_size", 1_000_000),
 			memmap_prefetch=params.get("ids_memmap_prefetch", "touch"),
 			invalid_encoding=resolve_invalid_encoding(params),
+			encoding_dedupe=resolve_encoding_dedupe(params),
+			feature_ranking=resolve_feature_ranking(params),
 			fitness_weights=(
 				params.get("fitness_weight_ce", 0), params.get("fitness_weight_f1", 0),
 				params.get("fitness_weight_fpr", 0), params.get("fitness_weight_acc", 0),

@@ -483,6 +483,15 @@ pub(crate) fn train_genome_in_slot_range(
 )
 {
 	let use_sampling = neuron_sample_rate < 1.0;
+	// IDS-50: one identity key per logical neuron (empty at rate 1.0 — unread).
+	let sample_keys = if use_sampling
+	{
+		crate::neuron_sample_key::keys_from_layout(original_connections, per_neuron_bits, cluster_neuron_starts, neuron_conn_offsets)
+	}
+	else
+	{
+		Vec::new()
+	};
 	// The writer comes from `CellMode::write_rule` (GPU twin: common.metal
 	// `wnn_write_rule`), never a mode literal — `!= TERNARY` sent PLN's ternary
 	// cells through the QUAD nudge until 12/10/2026 (inverted training).
@@ -503,7 +512,17 @@ pub(crate) fn train_genome_in_slot_range(
 	let use_oi = ram_core::cell_mode::CounterBin::for_training(write_rule, memory_mode).is_some();
 	let chunk_start = example_range.start;
 
-	let train_one_example = |ex_idx: usize| {
+	// The legacy clamped nudge (non-OI QUAD family) is ORDER-DEPENDENT: a cell
+	// saturates, so +1,+1,+1,-1 and -1,+1,+1,+1 end in different states. Fanning
+	// examples out over rayon applied each cell's nudges in scheduling order —
+	// the same genome trained to different cells run to run (found 08/11/2026).
+	// Such writers are parallelised over NEURON LANES instead: lane l owns the
+	// neurons with global_n % lanes == l and walks the examples IN ORDER, so
+	// every cell sees its nudges in example order (= the sequential result,
+	// independent of the lane count). OI / lattice / set writes commute and keep
+	// the example-parallel fan-out.
+	let order_dependent = use_nudge && !use_oi;
+	let train_one_example = |ex_idx: usize, lane: Option<(usize, usize)>| {
 		let input_bits = train_input_bits.packed_row(ex_idx);
 
 		let num_clusters = cluster_to_group.len();
@@ -546,25 +565,16 @@ pub(crate) fn train_genome_in_slot_range(
 			for n in 0..actual_neurons
 			{
 				let global_n = cluster_neuron_starts[true_cluster] + n;
-
-				// Per-(neuron, example) deterministic sampling
-				// Uses hash of (rng_seed, neuron_idx, example_idx) for parallel-safe decisions
-				if use_sampling
+				if lane.is_some_and(|(l, k)| global_n % k != l)
 				{
-					let mut rng = (rng_seed as u32)
-						.wrapping_add((global_n as u32).wrapping_mul(1000003))
-						.wrapping_add((ex_idx as u32).wrapping_mul(2654435761));
-					if rng == 0
-					{
-						rng = 1;
-					}
-					rng ^= rng << 13;
-					rng ^= rng >> 17;
-					rng ^= rng << 5;
-					if (rng >> 8) as f32 / 16777216.0 >= neuron_sample_rate
-					{
-						continue;
-					}
+					continue;
+				}
+
+				// Per-(neuron, example) deterministic sampling keyed on the
+				// neuron's IDENTITY (IDS-50), not its position.
+				if use_sampling && crate::neuron_sample_key::skip_sample(sample_keys[global_n], ex_idx, rng_seed, neuron_sample_rate)
+				{
+					continue;
 				}
 
 				let address = if let Some(addrs) = gpu_addresses
@@ -665,24 +675,15 @@ pub(crate) fn train_genome_in_slot_range(
 			for n in 0..actual_neurons
 			{
 				let global_n = cluster_neuron_starts[false_cluster] + n;
-
-				// Same per-(neuron, example) sampling for negative examples
-				if use_sampling
+				if lane.is_some_and(|(l, k)| global_n % k != l)
 				{
-					let mut rng = (rng_seed as u32)
-						.wrapping_add((global_n as u32).wrapping_mul(1000003))
-						.wrapping_add((ex_idx as u32).wrapping_mul(2654435761));
-					if rng == 0
-					{
-						rng = 1;
-					}
-					rng ^= rng << 13;
-					rng ^= rng >> 17;
-					rng ^= rng << 5;
-					if (rng >> 8) as f32 / 16777216.0 >= neuron_sample_rate
-					{
-						continue;
-					}
+					continue;
+				}
+
+				// Same identity-keyed sampling for negative examples
+				if use_sampling && crate::neuron_sample_key::skip_sample(sample_keys[global_n], ex_idx, rng_seed, neuron_sample_rate)
+				{
+					continue;
 				}
 
 				let address = if let Some(addrs) = gpu_addresses
@@ -722,20 +723,30 @@ pub(crate) fn train_genome_in_slot_range(
 	};
 
 	let range_len = example_range.end - example_range.start;
-	if parallel
+	if parallel && order_dependent
+	{
+		let lanes = rayon::current_num_threads().max(1);
+		(0..lanes).into_par_iter().for_each(|l| {
+			for ex_idx in example_range.clone()
+			{
+				train_one_example(ex_idx, Some((l, lanes)));
+			}
+		});
+	}
+	else if parallel
 	{
 		let chunk_size = 10_000.max(range_len / 20);
 		example_range
 			.clone()
 			.into_par_iter()
 			.with_min_len(chunk_size)
-			.for_each(|ex_idx| train_one_example(ex_idx));
+			.for_each(|ex_idx| train_one_example(ex_idx, None));
 	}
 	else
 	{
 		for ex_idx in example_range.clone()
 		{
-			train_one_example(ex_idx);
+			train_one_example(ex_idx, None);
 		}
 	}
 }

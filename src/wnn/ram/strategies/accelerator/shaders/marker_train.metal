@@ -40,7 +40,8 @@ struct NeuronTrainMeta
 	uint slot_offset;		// start of this neuron's slots within markers/keys/values
 	uint slot_capacity; // slot count (power of 2)
 	uint cluster_idx;		// which cluster this neuron belongs to (0 for single-cluster)
-	uint _pad;					// alignment / reserved
+	uint sample_key;		// IDS-50: rate < 1 sampling key = the neuron's IDENTITY
+											// (neuron_sample_key.rs), not its position
 };
 
 struct TrainParams
@@ -76,29 +77,26 @@ struct TrainParams
 														 // arrays. With examples_in_dispatch ==
 														 // num_examples this matches the original
 														 // single-dispatch behaviour exactly.
-	uint neuron_index_offset;	 // 05/07/2026: neuron-axis chunking. Added to
-														 // neuron_idx in should_skip_sample so a
-														 // chunked dispatch samples with the GLOBAL
-														 // neuron index (bit-exact vs unchunked and
-														 // vs CPU). 0 for unchunked dispatches.
 	uint vote_write;					 // 16/10/2026: 1 = per-flow MAJORITY-VOTE selector
 														 // (wnn_write_rule(memory_mode, vote_write)).
 														 // 0 = the mode's own writer (bit-identical).
 };
 
-// xorshift32-based per-(neuron, example) sampling decision. Matches CPU
-// path at adaptive.rs:2867-2880 byte-for-byte.
-// Returns true if this (neuron_idx, ex_idx) pair should be SKIPPED.
+// xorshift32-based per-(neuron, example) sampling decision. Matches the CPU
+// twin neuron_sample_key.rs::skip_sample byte-for-byte.
+// Returns true if this (neuron, ex_idx) pair should be SKIPPED.
+// IDS-50 (ABI 25): `sample_key` is the neuron's IDENTITY key (cluster, bits,
+// connections, duplicate ordinal) — before, the neuron's flat POSITION, so a
+// mutation in one cluster re-drew every later neuron's training subset.
 // INVARIANT (IDS-37 multiplicity layer): at sample_rate >= 1.0 this returns
-// BEFORE reading neuron_idx/rng_seed — the only place training depends on a
-// neuron's position. Same-key neurons therefore receive identical writes, which
-// is what lets `multiplicity_applies` train duplicates once. Keep the early
-// return first.
-inline bool should_skip_sample(uint neuron_idx, uint ex_idx, uint rng_seed, float sample_rate)
+// BEFORE reading sample_key/rng_seed. Same-key neurons therefore receive
+// identical writes, which is what lets `multiplicity_applies` train duplicates
+// once. Keep the early return first.
+inline bool should_skip_sample(uint sample_key, uint ex_idx, uint rng_seed, float sample_rate)
 {
 	if (sample_rate >= 1.0f)
 		return false;
-	uint rng = rng_seed + neuron_idx * 1000003u + ex_idx * 2654435761u;
+	uint rng = rng_seed + sample_key * 1000003u + ex_idx * 2654435761u;
 	if (rng == 0u)
 		rng = 1u;
 	rng ^= rng << 13;
@@ -204,7 +202,7 @@ kernel void marker_train(
 		// Sampling skip: same xorshift hash as CPU path. Applied uniformly
 		// before the cluster/negative checks so the kernel skips this
 		// (neuron, example) pair entirely when sample_rate < 1.0.
-		if (should_skip_sample(neuron_idx + params.neuron_index_offset, example_idx, params.rng_seed, params.neuron_sample_rate))
+		if (should_skip_sample(meta.sample_key, example_idx, params.rng_seed, params.neuron_sample_rate))
 		{
 			continue;
 		}

@@ -1399,6 +1399,8 @@ class IDSEvaluator(BaseEvaluator):
 			train_folds=self.ga_fitness_folds(),
 			neuron_sample_rate=self._neuron_sample_rate if self.ga_fitness_folds() is not None else 1.0,
 			max_neurons_total=max_neurons_total,
+			# IDS-54 (ABI 26): flow param max_bit_delta (Flow._propagate_max_bit_delta); 0 = auto.
+			max_bit_delta=getattr(self, "_max_bit_delta", 0),
 		)
 
 		genomes = []
@@ -1512,6 +1514,8 @@ class IDSEvaluator(BaseEvaluator):
 			max_neurons_total=max_neurons_total,
 			# ids_offspring_folds="all": the K-fold CV mean (None = legacy fold).
 			train_folds=self.ga_fitness_folds(),
+			# IDS-54 (ABI 26): flow param max_bit_delta (Flow._propagate_max_bit_delta); 0 = auto.
+			max_bit_delta=getattr(self, "_max_bit_delta", 0),
 		)
 
 		genomes = []
