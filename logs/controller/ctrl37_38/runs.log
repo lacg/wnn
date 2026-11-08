@@ -1,3 +1,40 @@
 2026-11-07T23:07:20Z START C-S2-d_wposx2_leak999_full_s2 --integral-leak 0.999 (posx2 weights, 35 units)
 2026-11-07T23:35:54Z DROPPED C-S2-d_wposx2_leak999_full_s2 (partial) + the queued posx2 rateI — Luiz 07/11: no reruns; the control-weights leak999/rateI results stand (weights move results <=2 pp over 35 units)
 2026-11-07T23:36:17Z CORRECTION: DROP REVERSED (Luiz 07/11: 'no, don't stop') — the kill had failed, C-S2-d_wposx2_leak999_full_s2 never stopped (pid 48553); its .out restored. Its stage0_grid checkpoint file was deleted by mistake (in-memory run unaffected). rateI/dhat posx2 re-queued (resume.sh).
+2026-11-08T00:24:03Z END C-S2-d_wposx2_leak999_full_s2 (pid 48553) genome=NEURONS#1 stable=86.3±23.4%  err=3.54±1.34°  steady=2.20±1.33° alt=0.194±0.053m pos=0.433±0.043m stable_fail=480/3500 
+2026-11-08T00:24:03Z START C-S2-d_wposx2_rateI_full_s2 --obs-rate-i (posx2 weights, 35 units)
+2026-11-08T01:26:46Z END C-S2-d_wposx2_rateI_full_s2 rc=0 genome=NEURONS#0 stable=86.8±23.7%  err=3.41±1.53°  steady=2.07±0.98° alt=0.201±0.066m pos=0.444±0.062m stable_fail=462/3500 
+2026-11-08T01:26:46Z START C-S2-d_wposx2_dhat_full_s2 --obs-cascade-dhat (posx2 weights, 35 units)
+2026-11-08T02:26:16Z END C-S2-d_wposx2_dhat_full_s2 rc=0 genome=NEURONS#1 stable=86.3±24.2%  err=3.58±1.79°  steady=2.31±0.96° alt=0.235±0.081m pos=0.478±0.078m stable_fail=481/3500 
+2026-11-08T02:26:16Z CTRL-37/38 posx2 DONE
+2026-11-08T02:26:38Z START C-S2-d_wposx2_leak999_rateI_full_s2 --integral-leak 0.999 --obs-rate-i (posx2 weights, 35 units)
+2026-11-08T03:29:45Z END C-S2-d_wposx2_leak999_rateI_full_s2 rc=0 genome=NEURONS#1 stable=85.7±23.3%  err=3.50±1.63°  steady=2.10±1.01° alt=0.207±0.061m pos=0.449±0.058m stable_fail=501/3500 
+2026-11-08T03:30:25Z START C-S2-d_wposx2_leak999_rateI_dhat_full_s2 --integral-leak 0.999 --obs-rate-i --obs-cascade-dhat (posx2 weights, 35 units)
+2026-11-08T04:24:52Z END C-S2-d_wposx2_leak999_rateI_dhat_full_s2 rc=0 genome=NEURONS#0 stable=86.6±22.4%  err=3.53±1.30°  steady=2.67±1.47° alt=0.215±0.075m pos=0.461±0.064m stable_fail=469/3500 
+2026-11-08T04:25:22Z START C-S2-d_wposx2_full_s3 (baseline) (posx2, seed 31337003, 35 units)
+2026-11-08T05:15:07Z END C-S2-d_wposx2_full_s3 rc=0 genome=NEURONS#0 stable=86.5±23.8%  err=3.44±1.43°  steady=2.26±1.22° alt=0.182±0.059m pos=0.426±0.055m stable_fail=474/3500 
+2026-11-08T05:15:08Z START C-S2-d_wposx2_leak999_full_s3 --integral-leak 0.999 (posx2, seed 31337003, 35 units)
+2026-11-08T06:01:46Z END C-S2-d_wposx2_leak999_full_s3 rc=0 genome=NEURONS#0 stable=87.9±20.9%  err=3.38±1.41°  steady=1.97±0.84° alt=0.200±0.074m pos=0.443±0.066m stable_fail=423/3500 
+2026-11-08T06:01:46Z START C-S2-d_wposx2_rateI_full_s3 --obs-rate-i (posx2, seed 31337003, 35 units)
+2026-11-08T06:58:59Z END C-S2-d_wposx2_rateI_full_s3 rc=0 genome=MEMORY#2 stable=86.8±20.8%  err=3.43±1.31°  steady=2.29±1.25° alt=0.201±0.070m pos=0.441±0.060m stable_fail=463/3500 
+2026-11-08T06:58:59Z START C-S2-d_wposx2_dhat_full_s3 --obs-cascade-dhat (posx2, seed 31337003, 35 units)
+2026-11-08T07:59:48Z END C-S2-d_wposx2_dhat_full_s3 rc=0 genome=NEURONS#2 stable=83.0±29.0%  err=3.71±1.79°  steady=2.68±1.53° alt=0.197±0.063m pos=0.443±0.059m stable_fail=596/3500 
+2026-11-08T07:59:48Z START C-S2-d_wposx2_leak999_rateI_full_s3 --integral-leak 0.999 --obs-rate-i (posx2, seed 31337003, 35 units)
+2026-11-08T08:50:15Z END C-S2-d_wposx2_leak999_rateI_full_s3 rc=0 genome=NEURONS#2 stable=85.6±26.1%  err=3.58±1.55°  steady=2.45±1.84° alt=0.192±0.062m pos=0.436±0.051m stable_fail=505/3500 
+2026-11-08T08:50:15Z START C-S2-d_wposx2_leak999_rateI_dhat_full_s3 --integral-leak 0.999 --obs-rate-i --obs-cascade-dhat (posx2, seed 31337003, 35 units)
+2026-11-08T09:38:11Z END C-S2-d_wposx2_leak999_rateI_dhat_full_s3 rc=0 genome=NEURONS#1 stable=84.3±27.1%  err=3.63±1.70°  steady=2.72±1.89° alt=0.222±0.072m pos=0.461±0.062m stable_fail=551/3500 
+2026-11-08T09:38:11Z REPLICATE seed s3 DONE
+2026-11-08T09:38:11Z START C-S2-d_wposx2_full_s4 (baseline) (posx2, seed 31337004, 35 units)
+2026-11-08T10:31:51Z END C-S2-d_wposx2_full_s4 rc=0 genome=MEMORY#2 stable=89.6±17.1%  err=3.44±0.96°  steady=2.16±0.56° alt=0.185±0.054m pos=0.430±0.039m stable_fail=365/3500 
+2026-11-08T10:31:51Z START C-S2-d_wposx2_leak999_full_s4 --integral-leak 0.999 (posx2, seed 31337004, 35 units)
+2026-11-08T11:27:48Z END C-S2-d_wposx2_leak999_full_s4 rc=0 genome=MEMORY#1 stable=92.5±14.0%  err=3.29±0.87°  steady=2.00±0.37° alt=0.178±0.046m pos=0.423±0.035m stable_fail=261/3500 
+2026-11-08T11:27:48Z START C-S2-d_wposx2_rateI_full_s4 --obs-rate-i (posx2, seed 31337004, 35 units)
+2026-11-08T12:19:58Z END C-S2-d_wposx2_rateI_full_s4 rc=0 genome=NEURONS#2 stable=85.8±24.0%  err=3.63±1.53°  steady=2.38±0.98° alt=0.218±0.065m pos=0.457±0.057m stable_fail=498/3500 
+2026-11-08T12:19:58Z START C-S2-d_wposx2_dhat_full_s4 --obs-cascade-dhat (posx2, seed 31337004, 35 units)
+2026-11-08T13:08:23Z END C-S2-d_wposx2_dhat_full_s4 rc=0 genome=NEURONS#0 stable=83.4±26.7%  err=3.85±1.86°  steady=2.54±1.09° alt=0.217±0.061m pos=0.469±0.062m stable_fail=582/3500 
+2026-11-08T13:08:24Z START C-S2-d_wposx2_leak999_rateI_full_s4 --integral-leak 0.999 --obs-rate-i (posx2, seed 31337004, 35 units)
+2026-11-08T13:59:21Z END C-S2-d_wposx2_leak999_rateI_full_s4 rc=0 genome=MEMORY#2 stable=89.2±16.8%  err=3.48±1.09°  steady=2.29±0.64° alt=0.214±0.065m pos=0.456±0.051m stable_fail=377/3500 
+2026-11-08T13:59:21Z START C-S2-d_wposx2_leak999_rateI_dhat_full_s4 --integral-leak 0.999 --obs-rate-i --obs-cascade-dhat (posx2, seed 31337004, 35 units)
+2026-11-08T14:55:37Z END C-S2-d_wposx2_leak999_rateI_dhat_full_s4 rc=0 genome=GRID#0 stable=78.4±24.4%  err=4.09±1.38°  steady=3.14±1.42° alt=0.248±0.097m pos=0.488±0.077m stable_fail=755/3500 
+2026-11-08T14:55:37Z REPLICATE seed s4 DONE
+2026-11-08T14:55:37Z REPLICATE DONE

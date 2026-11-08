@@ -124,7 +124,12 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	# Env-forwarded knobs (worker maps these to WNN_* env vars)
 	"wnn_batch_size", "wnn_grid_search_parallel", "wnn_hybrid_speed_ratio",
 	"wnn_no_metal", "wnn_num_threads", "wnn_order_independent_train",
-	# Controller (drone) flows
+	# Controller (drone) flows — the shape/episode keys wnn.control.flow_adapter
+	# builds (ADAPTER_KEYS; registered 08/11/2026, they tripped the UNKNOWN warning).
+	"controller_num_motors", "controller_levels_per_motor", "controller_bits_per_feature",
+	"controller_input_window_k", "controller_state_neurons", "controller_state_bits",
+	"controller_output_bits", "controller_delta_control",
+	"controller_eval_episodes", "controller_steps", "controller_tilt_deg",
 	"controller_disturbance_level",
 	"controller_memory_mode",  # ABI 12 granularity ablation (QUAD_WEIGHTED/TERNARY/BINARY)
 	# Scope C stage 1 (13/08/2026): the vertical channel. Registered here so a
@@ -161,9 +166,13 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	"controller_obs_rate_i",          # cascade feature: inner rate PID integrator I/i_limit (+3)
 	"controller_obs_cascade_dhat",    # cascade feature: the mpcof teacher's d̂ observer (+3)
 	# Specialist programme (14/08/2026)
-	"controller_conn_policy",         # connection-creation policy: spread | min2 | min3
+	"controller_conn_policy",         # connection-creation policy: spread | min1 | min2 | min3 (flow adapter; framed1 = CLI only)
 	"controller_output_full_window",  # arm D: output layer samples ALL k frames, not just t-0
 	"controller_frame_stride",        # K-window shifts every N pushes (spans N*K steps; 1 = legacy)
+	# CTRL-45 (ABI 44): phased_ga --receptive-fields / --rf-cross. CTBR/decouple-only, so
+	# the flow adapter REFUSES them (it builds motor-level PWM controllers only).
+	"controller_receptive_fields",    # off | axis — output neurons keep to their bank's axis family
+	"controller_rf_cross",            # cross-family connection budget, fraction of width
 	# Trainer tilt curriculum (27/09/2026): phased_ga --rg-easy-tilt-deg / --rg-full-tilt-deg.
 	"controller_rg_easy_tilt_deg",    # DAgger round-0 initial-tilt bound (deg; default 8)
 	"controller_rg_full_tilt_deg",    # DAgger last-round + checkpoint-eval tilt (deg; default 30)

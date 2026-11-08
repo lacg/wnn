@@ -51,6 +51,7 @@ DESIGN DECISIONS (locked 2026-05-25)
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -76,7 +77,12 @@ class RecurrentArchShape:
 	prefix_factor: int        # bits emitted per state neuron (QSR → 2)
 	state_input_space: int    # size of the region the STATE layer samples from
 	output_input_space: int   # size of the region the OUTPUT layer samples from
-	output_quantum: int       # output-neurogenesis granularity (drone: num_motors)
+	# Output-neurogenesis granularity AND the output layer's role layout: the layer
+	# is `output_quantum` equal contiguous SEGMENTS, a neuron's role = (segment,
+	# rank). Drone: one segment per bank (cumulative decode, quantum = num_motors)
+	# or per E/I half per bank (antagonist, quantum = 2 x num_motors). Neurogenesis
+	# resizes every segment at its own tail (_output_role_map), never the flat tail.
+	output_quantum: int
 
 
 # ---- mutation bounds (mirror of AdaptiveClusterConfig) ----------------------
@@ -161,10 +167,37 @@ class RecurrentArchConfig:
 	# OUTPUT maps only — state maps keep the free draw (same convention as
 	# conn_policy). Implementation: arch_ops::resample_suffix_scoped (Rust).
 	conn_mutation_scope: str = "free"
+	# AXIS RECEPTIVE FIELDS (CTRL-45, 08/11/2026). An INVARIANT on the OUTPUT maps,
+	# re-projected after every operator that can create or move an output connection
+	# (random, mutate, both crossovers, genesis): output neuron n serves bank
+	# n // (output_neurons // len(rf_bank_masks)) and may hold at most
+	# floor(rf_cross x width) connections whose feature mask (rf_feature_masks, per
+	# feature) shares no bit with its bank's mask. Domain-free here (group masks, no
+	# axis names); the drone builder fills them from feature_layout. "off" = no call,
+	# no RNG draw (bit-identical). Rust: receptive_fields.rs. State maps untouched.
+	receptive_fields: str = "off"
+	rf_cross: float = 0.2
+	rf_bank_masks: tuple = ()
+	rf_feature_masks: tuple = ()
 	# Memory mode (ABI 12 granularity ablation): "QUAD_WEIGHTED" (±1 lattice
 	# cell mutation, values 0..3) / "TERNARY"/"BINARY" (flip FALSE↔TRUE, values
 	# {0,1}). Threaded from ControllerSpec.memory_mode like feature_balance_ratio.
 	memory_mode: str = "QUAD_WEIGHTED"
+
+
+# The CLI / flow vocabulary of the connection-creation policy (--conn-policy,
+# flow param controller_conn_policy) -> (RecurrentArchConfig.conn_policy,
+# conn_policy_min). ONE parser for both entry points.
+CONN_POLICY_NAMES = ("spread", "min1", "min2", "min3", "framed1")
+
+
+def conn_policy_from_name(name: str) -> tuple[str, int]:
+	"""'spread' | 'min1'..'min3' | 'framed1' -> (policy, m). Loud on anything else."""
+	if name not in CONN_POLICY_NAMES:
+		raise ValueError(f"unknown conn policy {name!r} — one of {list(CONN_POLICY_NAMES)}")
+	if name.startswith("min"):
+		return "min_per_cluster", int(name[3:])
+	return name, 2
 
 
 # ---- small sampling helpers --------------------------------------------------
@@ -292,6 +325,33 @@ def _framed1_slot_schedule(n_neurons: int, k: int, quantum: int,
 		int(n_neurons), int(k), int(quantum), seed, 0, 0, 0)]
 
 
+def _output_role_map(old_n: int, new_n: int, quantum: int) -> list[int]:
+	"""Old output index -> new index (-1 = dropped) for an old_n -> new_n resize of
+	a layer laid out as `quantum` equal segments (bank / E-I half). Every neuron
+	keeps its (segment, rank); grows add fresh neurons at each segment's tail.
+	Rust: arch_ops::output_segment_map (refuses a non-multiple of the quantum)."""
+	return [int(j) for j in ra.arch_output_segment_map(int(old_n), int(new_n), int(quantum))]
+
+
+def _place_by_role(layer: list, role: list[int], new_n: int) -> list:
+	"""`layer` re-laid for new_n neurons: slot role[i] holds layer[i]; slots no
+	old neuron maps to are None (fresh tail neurons of each segment)."""
+	out: list = [None] * new_n
+	for i, j in enumerate(role):
+		if j >= 0:
+			out[j] = layer[i]
+	return out
+
+
+def _align_output_layer(layer: list, new_n: int, quantum: int) -> list:
+	"""`layer`'s neurons at the indices that carry the same (segment, rank) in a
+	new_n-neuron layout (None where `layer` has no such neuron). Identity when
+	the counts already agree, so same-shape crossover is unchanged."""
+	if len(layer) == new_n:
+		return list(layer)
+	return _place_by_role(layer, _output_role_map(len(layer), new_n, quantum), new_n)
+
+
 def _fresh_output_suffix(space: int, width: int, rng: np.random.Generator,
                          config: "RecurrentArchConfig | None") -> list[int]:
 	"""Policy dispatch for a fresh OUTPUT-layer map. None/spread = the exact
@@ -319,16 +379,47 @@ def _rebalance_features(sampled: list[list[int]], space: int, frame_bits: int,
 	if nfeat <= 1:
 		return
 	# Rust: the move loop is data-dependent and per-neuron; see arch_ops.
-	flat: list[int] = []
-	offsets: list[int] = [0]
-	for suf in sampled:
-		flat.extend(int(b) for b in suf)
-		offsets.append(len(flat))
+	flat, offsets = _flatten_suffixes(sampled)
 	seed = int(rng.integers(0, 1 << 63))
 	out = ra.arch_rebalance_features(
 		flat, offsets, int(space), int(frame_bits), int(bpf), float(ratio), seed, 0, 0, 0)
 	for ni, suf in enumerate(sampled):
 		suf[:] = [int(b) for b in out[offsets[ni]:offsets[ni + 1]]]
+
+
+def _rf_max_cross(config: "RecurrentArchConfig", width: int) -> int:
+	"""The cross-family COUNT budget: floor(rf_cross x width) (24 bits, 0.2 -> 4).
+	The epsilon keeps a product like 0.29 x 100 = 28.999... at 29."""
+	return int(math.floor(float(config.rf_cross) * width + 1e-9))
+
+
+def _project_receptive_fields(sampled: list[list[int]], space: int,
+                              config: "RecurrentArchConfig | None",
+                              rng: np.random.Generator) -> list[int]:
+	"""CTRL-45: re-project OUTPUT suffixes onto their bank's axis family + cross
+	budget IN PLACE; returns the changed neuron indices. Off (or no config): returns
+	at once WITHOUT drawing from `rng`, so every banked stream reproduces."""
+	if config is None or config.receptive_fields != "axis" or not sampled:
+		return []
+	flat, offsets = _flatten_suffixes(sampled)
+	frame_bits = space // max(1, config.input_window_k)
+	out, changed = ra.arch_project_receptive_fields(
+		flat, offsets, int(space), int(frame_bits), int(config.bits_per_feature),
+		len(sampled) // len(config.rf_bank_masks), [int(m) for m in config.rf_bank_masks],
+		[int(m) for m in config.rf_feature_masks], _rf_max_cross(config, len(sampled[0])),
+		int(rng.integers(0, 1 << 63)), 0, 0, 0)
+	for ni in changed:
+		sampled[ni][:] = [int(b) for b in out[offsets[ni]:offsets[ni + 1]]]
+	return [int(n) for n in changed]
+
+
+def _flatten_suffixes(sampled: list[list[int]]) -> tuple[list[int], list[int]]:
+	flat: list[int] = []
+	offsets: list[int] = [0]
+	for suf in sampled:
+		flat.extend(int(b) for b in suf)
+		offsets.append(len(flat))
+	return flat, offsets
 
 
 # ---- memory payload: the optional "content" dimension ------------------------
@@ -557,6 +648,7 @@ class RecurrentArchGenome:
 			fb, bpf, r = shape.output_input_space, config.bits_per_feature, config.feature_balance_ratio
 			_rebalance_features(ss, shape.state_input_space, fb, bpf, r, rng)
 			_rebalance_features(os, shape.output_input_space, fb, bpf, r, rng)
+		_project_receptive_fields(os, shape.output_input_space, config, rng)
 		return cls(shape=shape, state_neurons=state_neurons, output_neurons=output_neurons,
 		           state_sampled=ss, output_sampled=os)
 
@@ -703,8 +795,20 @@ class RecurrentArchGenome:
 		else:
 			raise ValueError(f"unknown optimization dimension: {dim!r}")
 		# Single-point feature-balance enforcement: every connectivity-changing mutation
-		# is re-projected into the balanced set (cell-safe; no-op when the cap is off).
-		return g._apply_feature_balance(config, rng)
+		# is re-projected into the balanced set (cell-safe; no-op when the cap is off),
+		# then onto the axis receptive fields (CTRL-45; no-op, no draw, when off).
+		return g._apply_feature_balance(config, rng).apply_receptive_fields(config, rng)
+
+	def apply_receptive_fields(self, config: "RecurrentArchConfig | None",
+	                           rng: np.random.Generator) -> "RecurrentArchGenome":
+		"""Project the OUTPUT maps onto the axis receptive fields IN PLACE, dropping
+		the cells of any neuron whose wiring changed. No-op when off. Every operator
+		that creates or moves an output connection ends here (one enforcement point)."""
+		changed = _project_receptive_fields(self.output_sampled, self.shape.output_input_space,
+		                                    config, rng)
+		if changed and self.cells is not None:
+			self.cells.drop_changed_output(sorted(changed))
+		return self
 
 	def _apply_feature_balance(self, config: RecurrentArchConfig,
 	                           rng: np.random.Generator) -> "RecurrentArchGenome":
@@ -760,9 +864,10 @@ class RecurrentArchGenome:
 	def _mutate_neurons(self, rate: float, config: RecurrentArchConfig,
 	                    rng: np.random.Generator) -> "RecurrentArchGenome":
 		"""State + output neurogenesis. Survivors keep their suffixes verbatim;
-		growth appends fresh tail blocks (small-neighborhood rule). Cells, if
-		present, are remapped: STATE neuro reshapes the prefix in BOTH layers;
-		OUTPUT neuro keeps survivors verbatim and drops removed blocks."""
+		growth appends fresh tail blocks (small-neighborhood rule; OUTPUT: at the
+		tail of every bank/E-I segment). Cells, if present, are remapped: STATE
+		neuro reshapes the prefix in BOTH layers; OUTPUT neuro moves survivors'
+		cells with them and drops removed neurons'."""
 		g = self.clone()
 		at_budget = self._cells_at_budget(config)
 		saturation = self.pressure[0] if self.pressure else 0
@@ -924,14 +1029,19 @@ class RecurrentArchGenome:
 	def set_output_neurons(self, target: int, rng: np.random.Generator,
 	                       config: "RecurrentArchConfig | None" = None) -> None:
 		"""OUTPUT neurogenesis to `target` neurons (multiple of output_quantum).
-		Survivors keep cells verbatim; removed tail blocks' cells are dropped.
+		Bank-aware (08/11/2026): every segment (bank, or E/I half under the
+		antagonist decode) grows/shrinks at its OWN tail, and each surviving neuron
+		keeps its (segment, rank) — its wiring AND its cells move to its new index.
+		The old flat-tail resize remapped nearly every neuron outside segment 0 to
+		another bank/level/half (Lamarckian cells then drove the wrong output).
 		`config` carries the connection-creation policy for the FRESH maps grown
 		neurons receive (None = legacy spread)."""
 		if target == self.output_neurons:
 			return
-		if self.cells is not None and target < self.output_neurons:
-			self.cells.drop_output_neurons_ge(target)
-		self._resize_output_neurons(target, rng, config)
+		role = _output_role_map(self.output_neurons, target, self.shape.output_quantum)
+		if self.cells is not None:
+			self.cells.reindex_output_neurons(role)
+		self._resize_output_neurons(target, role, rng, config)
 
 	def set_state_suffix(self, target: int, rng: np.random.Generator) -> None:
 		"""Synaptogenesis: set state sampled-suffix width to `target`; remap cells."""
@@ -1009,22 +1119,24 @@ class RecurrentArchGenome:
 				self.state_sampled.append(_sample_distinct(self.shape.state_input_space, width, rng))
 		self.state_neurons = target
 
-	def _resize_output_neurons(self, target: int, rng: np.random.Generator,
+	def _resize_output_neurons(self, target: int, role: list[int], rng: np.random.Generator,
 	                           config: "RecurrentArchConfig | None" = None) -> None:
+		"""Re-lay the output maps by `role`; fresh maps fill each segment's new tail
+		(drawn in index order — the same draw COUNT as the old flat append)."""
 		width = self.output_suffix_width or 1
-		if target < self.output_neurons:
-			del self.output_sampled[target:]
-		else:
-			for _ in range(target - self.output_neurons):
-				self.output_sampled.append(
-					_fresh_output_suffix(self.shape.output_input_space, width, rng, config))
+		laid = _place_by_role(self.output_sampled, role, target)
+		for j, suffix in enumerate(laid):
+			if suffix is None:
+				laid[j] = _fresh_output_suffix(self.shape.output_input_space, width, rng, config)
+		self.output_sampled = laid
 		self.output_neurons = target
 
 	# ---- crossover (handles parents of DIFFERENT shape) ---------------------
 
 	@staticmethod
 	def crossover(a: "RecurrentArchGenome", b: "RecurrentArchGenome",
-	              rng: np.random.Generator) -> "RecurrentArchGenome":
+	              rng: np.random.Generator,
+	              config: "RecurrentArchConfig | None" = None) -> "RecurrentArchGenome":
 		"""Whole-block uniform crossover. The child inherits ONE parent's shape
 		(counts + suffix widths); for each block it then takes the other parent's
 		suffix only when shape-compatible, else keeps the shape-parent's. This
@@ -1033,12 +1145,19 @@ class RecurrentArchGenome:
 			int(rng.integers(0, 1 << 63)), 0, 0, 0, 0, 0) < 0.5 else (b, a)
 		child = shape_parent.clone()
 		_mix_blocks(child.state_sampled, other.state_sampled, rng)
-		_mix_blocks(child.output_sampled, other.output_sampled, rng)
-		return child
+		# Output blocks pair by ROLE (segment, rank), not flat index: with different
+		# level counts the same index is a different bank/level/half (identity when
+		# the counts agree, so same-shape crossover is unchanged).
+		_mix_blocks(child.output_sampled, _align_output_layer(
+			other.output_sampled, child.output_neurons, child.shape.output_quantum), rng)
+		# Mixed blocks keep their families only when the parents share a level
+		# count; the projection repairs the rest (no-op, no draw, when off).
+		return child.apply_receptive_fields(config, rng)
 
 	@staticmethod
 	def crossover_average(a: "RecurrentArchGenome", b: "RecurrentArchGenome",
-	                      rng: np.random.Generator) -> "RecurrentArchGenome":
+	                      rng: np.random.Generator,
+	                      config: "RecurrentArchConfig | None" = None) -> "RecurrentArchGenome":
 		"""Average-shape variable crossover (the user's spec, 2026-05-28).
 
 		Target shape = ELEMENT-WISE AVERAGE of parent shapes:
@@ -1089,13 +1208,14 @@ class RecurrentArchGenome:
 			max(target_state_n, target_output_n, 1),
 			int(rng.integers(0, 1 << 63)), 0, 0, 0)
 
-		def _pick_or_resample(layer_a: list[list[int]], layer_b: list[list[int]],
+		def _pick_or_resample(layer_a: list, layer_b: list,
 		                      i: int, space: int, target_width: int) -> list[int]:
 			"""Pick parent suffix at index i (uniform if both have it, else the
 			one that does, else random sample), resize to target_width.
+			A None entry = that parent has no neuron in this role.
 			Parent coins come from a precomputed Rust mask (counter RNG)."""
-			a_has = i < len(layer_a)
-			b_has = i < len(layer_b)
+			a_has = i < len(layer_a) and layer_a[i] is not None
+			b_has = i < len(layer_b) and layer_b[i] is not None
 			if a_has and b_has:
 				src = layer_a[i] if _pick[i % len(_pick)] else layer_b[i]
 			elif a_has:
@@ -1113,9 +1233,11 @@ class RecurrentArchGenome:
 			                  shape.state_input_space, target_state_suf)
 			for i in range(target_state_n)
 		]
+		# Output neurons pair by ROLE (segment, rank) in the target layout.
+		out_a = _align_output_layer(a.output_sampled, target_output_n, q)
+		out_b = _align_output_layer(b.output_sampled, target_output_n, q)
 		new_output_sampled = [
-			_pick_or_resample(a.output_sampled, b.output_sampled, i,
-			                  shape.output_input_space, target_output_suf)
+			_pick_or_resample(out_a, out_b, i, shape.output_input_space, target_output_suf)
 			for i in range(target_output_n)
 		]
 
@@ -1126,7 +1248,7 @@ class RecurrentArchGenome:
 			state_sampled=new_state_sampled,
 			output_sampled=new_output_sampled,
 			cells=None,  # universe is shape-keyed; let evaluator handle/re-record
-		)
+		).apply_receptive_fields(config, rng)   # resized suffixes grew free bits
 
 	@staticmethod
 	def crossover_memory(a: "RecurrentArchGenome", b: "RecurrentArchGenome",
@@ -1169,13 +1291,16 @@ class RecurrentArchGenome:
 	def assert_valid(self) -> None:
 		"""Raise AssertionError if any structural invariant is violated."""
 		sh = self.shape
-		assert self.state_neurons >= 1, "need ≥1 state neuron"
+		# sn = 0 is the single-layer controller (the production recipe since 19/07/2026:
+		# --grid-state-neurons 0 --max-state-neurons 0); the old ">= 1" made every
+		# sn=0 genome "invalid" (crossover_average/genesis fell back or raised).
+		assert self.state_neurons >= 0, "negative state-neuron count"
 		assert len(self.state_sampled) == self.state_neurons, "state count mismatch"
 		assert len(self.output_sampled) == self.output_neurons, "output count mismatch"
 		assert sh.output_quantum > 0 and self.output_neurons % sh.output_quantum == 0, \
 			"output_neurons must be a multiple of output_quantum"
 		sw, ow = self.state_suffix_width, self.output_suffix_width
-		assert sw >= 1 and ow >= 1, "≥1 sampled bit floor violated"
+		assert ow >= 1 and (sw >= 1 or self.state_neurons == 0), "≥1 sampled bit floor violated"
 		for s in self.state_sampled:
 			assert len(s) == sw, "non-uniform state suffix width"
 			assert len(set(s)) == len(s), "duplicate state sampled bit"
@@ -1201,7 +1326,8 @@ class RecurrentArchGenome:
 
 def _mix_blocks(into: list[list[int]], other: list[list[int]], rng: np.random.Generator) -> None:
 	"""For each block in `into`, with p=0.5 take `other`'s block of the same
-	index — but only if it exists and has matching width (keeps suffix uniform)."""
+	index — but only if it exists (not None) and has matching width (keeps
+	suffix uniform)."""
 	if not into:
 		return
 	width = len(into[0])
@@ -1211,8 +1337,9 @@ def _mix_blocks(into: list[list[int]], other: list[list[int]], rng: np.random.Ge
 	seed = int(rng.integers(0, 1 << 63))
 	take = ra.arch_pick_mask(len(into), seed, 0, 0, 0)
 	for i in range(len(into)):
-		if take[i] and i < len(other) and len(other[i]) == width:
+		if take[i] and i < len(other) and other[i] is not None and len(other[i]) == width:
 			into[i] = list(other[i])
 
 
-__all__ = ["RecurrentArchGenome", "RecurrentArchShape", "RecurrentArchConfig", "MemoryPayload"]
+__all__ = ["RecurrentArchGenome", "RecurrentArchShape", "RecurrentArchConfig", "MemoryPayload",
+           "CONN_POLICY_NAMES", "conn_policy_from_name"]

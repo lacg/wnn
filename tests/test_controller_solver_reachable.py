@@ -18,7 +18,7 @@ from __future__ import annotations
 import sys
 import numpy as np
 
-import ram_accelerator as ra
+from wnn.control import _accel as ra   # controller symbols live in ram_controller since the 19/06 split
 
 EMPTY = 2  # default unwritten cell value (neuron_memory::EMPTY_U8)
 

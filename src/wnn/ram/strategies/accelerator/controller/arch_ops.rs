@@ -565,10 +565,68 @@ pub fn framed1_slot_schedule(
 	schedule
 }
 
+/// OUTPUT-layer neuron roles under neurogenesis (bank-growth fix, 08/11/2026).
+///
+/// The output layer is `segments` equal CONTIGUOUS blocks, and a neuron's role is
+/// (segment, rank-in-segment). `segments` is the genome's output_quantum: one
+/// block per bank under the cumulative decode (n / levels = bank), one block per
+/// E/I half per bank under the antagonist decode (quantum = 2 x banks, half =
+/// level >= L/2), bank-major. Growing or shrinking by whole quanta therefore
+/// changes EVERY block's length, and the old tail-append/tail-truncate remapped
+/// nearly every neuron outside block 0 to another bank / level / half (with
+/// --lamarckian its inherited cells then drove the wrong output).
+///
+/// Returns old-index -> new-index, with -1 for a neuron dropped by a shrink.
+/// Each block keeps its ranks [0, min(old, new)) in place; a grow adds fresh
+/// neurons at the TAIL of every block (the indices the map never names).
+pub fn output_segment_map(old_n: usize, new_n: usize, segments: usize) -> Result<Vec<i64>, String>
+{
+	if segments == 0 || old_n % segments != 0 || new_n % segments != 0
+	{
+		return Err(format!(
+			"output_segment_map: {old_n} -> {new_n} neurons is not a whole number of \
+			 {segments} segments (output_quantum)"
+		));
+	}
+	let (s_old, s_new) = (old_n / segments, new_n / segments);
+	let place = |i: usize| -> i64
+	{
+		let (seg, rank) = (i / s_old, i % s_old);
+		if rank < s_new
+		{
+			(seg * s_new + rank) as i64
+		}
+		else
+		{
+			-1
+		}
+	};
+	Ok((0..old_n).map(place).collect())
+}
+
 #[cfg(test)]
 mod tests
 {
 	use super::*;
+
+	#[test]
+	fn segment_map_keeps_block_and_rank()
+	{
+		// 8 segments (BINARY antagonist, 4 banks x E/I): 256 -> 264 -> 256.
+		let up = output_segment_map(256, 264, 8).unwrap();
+		for (i, &j) in up.iter().enumerate()
+		{
+			assert_eq!((i / 32, i % 32), (j as usize / 33, j as usize % 33), "neuron {i} moved");
+		}
+		let down = output_segment_map(264, 256, 8).unwrap();
+		let dropped: Vec<usize> = (0..264).filter(|&i| down[i] < 0).collect();
+		assert_eq!(dropped, (0..8).map(|s| s * 33 + 32).collect::<Vec<_>>(), "shrink drops each tail");
+		for i in 0..256
+		{
+			assert_eq!(down[up[i] as usize], i as i64, "round trip lost neuron {i}");
+		}
+		assert!(output_segment_map(256, 260, 8).is_err(), "non-multiple must refuse");
+	}
 
 	#[test]
 	fn resample_keeps_entries_distinct_and_in_range()

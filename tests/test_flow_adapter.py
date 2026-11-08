@@ -100,7 +100,50 @@ def test_batch_eval_fn_selection():
 	print("✓ batch_eval_fn_selection")
 
 
+def test_conn_policy_wired_through():
+	"""controller_conn_policy reaches the GA's RecurrentArchConfig (it was registered
+	in KNOWN_PARAMS but never read, 08/11/2026); framed1 and typos are refused."""
+	from wnn.control.arch_strategy import default_controller_arch_config
+	for name, want in (("spread", ("spread", 2)), ("min1", ("min_per_cluster", 1)),
+	                   ("min3", ("min_per_cluster", 3))):
+		spec = controller_spec_from_params({"controller_conn_policy": name})
+		cfg = default_controller_arch_config(spec)
+		assert (cfg.conn_policy, cfg.conn_policy_min) == want, (name, cfg.conn_policy, cfg.conn_policy_min)
+	p = {"controller_conn_policy": "min2", "controller_eval_episodes": 2, "controller_steps": 20}
+	strat = build_controller_strategy(p, "ga_neurons", build_controller_evaluator(p))
+	assert (strat._arch_config.conn_policy, strat._arch_config.conn_policy_min) == ("min_per_cluster", 2)
+	for bad in ("framed1", "min9"):
+		try:
+			controller_spec_from_params({"controller_conn_policy": bad})
+		except ValueError:
+			continue
+		raise AssertionError(f"controller_conn_policy={bad} must be refused")
+	print("✓ conn_policy wired (spread/min1-3), framed1 + typos refused")
+
+
+def test_unbuilt_controller_keys_refused():
+	"""Every registered controller_* key is either built by the adapter or refused —
+	none is silently dropped."""
+	from wnn.control.flow_adapter import ADAPTER_KEYS
+	from wnn.ram.experiments.params import KNOWN_PARAMS
+	ctl = sorted(k for k in KNOWN_PARAMS if k.startswith("controller_"))
+	assert ADAPTER_KEYS <= set(KNOWN_PARAMS), f"unregistered: {sorted(ADAPTER_KEYS - set(KNOWN_PARAMS))}"
+	unbuilt = [k for k in ctl if k not in ADAPTER_KEYS]
+	assert unbuilt, "expected phased_ga-only keys in the registry"
+	for k in unbuilt:
+		try:
+			controller_spec_from_params({k: 1})
+		except ValueError:
+			continue
+		raise AssertionError(f"{k} silently ignored by the flow adapter")
+	for unset in (None, False):   # an explicitly-off flag is the default, not a request
+		assert controller_spec_from_params({"controller_translation": unset}).num_motors == 4
+	print(f"✓ {len(unbuilt)} phased_ga-only controller_* keys refused, {len(ctl) - len(unbuilt)} built")
+
+
 if __name__ == "__main__":
+	test_conn_policy_wired_through()
+	test_unbuilt_controller_keys_refused()
 	test_spec_from_params()
 	test_resolve_phase_full_matrix()
 	test_build_evaluator_and_strategies()

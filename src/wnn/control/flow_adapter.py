@@ -21,6 +21,12 @@ Param keys (all optional, sensible defaults; namespaced `controller_*`):
   controller_input_window_k(4) controller_state_neurons(4) controller_state_bits(24)
   controller_output_bits(24) controller_delta_control(False)
   controller_eval_episodes(20) controller_steps(1500) controller_tilt_deg(15.0) seed(0)
+  controller_memory_mode(QUAD_WEIGHTED) controller_disturbance_level(OFF)
+  controller_conn_policy(spread | min1 | min2 | min3 — framed1 refused)
+
+Every OTHER controller_* key in KNOWN_PARAMS is a phased_ga knob this adapter does
+not build (vertical/horizontal channel, cascade, arm D, ...). It is REFUSED with a
+pointer to phased_ga instead of silently dropped (08/11/2026: 23 keys were dropped).
 """
 
 from __future__ import annotations
@@ -36,6 +42,7 @@ from wnn.ram.strategies.optimization_dimension import OptimizationDimension as D
 import wnn.control.arch_strategy  # noqa: F401
 
 from .evaluator import ControllerSpec, ControllerEvaluator
+from .recurrent_genome import conn_policy_from_name
 from .training import DisturbanceConfig, EpisodeConfig
 
 
@@ -72,6 +79,41 @@ def _p(params: dict, key: str, default: Any) -> Any:
 	return default if v is None else v
 
 
+# The controller_* keys this adapter honours. Any other controller_* key with a
+# value is refused (see _refuse_unbuilt_keys).
+ADAPTER_KEYS = frozenset({
+	"controller_num_motors", "controller_levels_per_motor", "controller_bits_per_feature",
+	"controller_input_window_k", "controller_state_neurons", "controller_state_bits",
+	"controller_output_bits", "controller_delta_control", "controller_memory_mode",
+	"controller_output_mode", "controller_conn_policy",
+	"controller_eval_episodes", "controller_steps", "controller_tilt_deg",
+	"controller_disturbance_level",
+})
+
+
+def _refuse_unbuilt_keys(params: dict) -> None:
+	"""Refuse controller_* keys this adapter does not build (the silently-ignored-
+	key failure): a flow asking for e.g. controller_translation must not run a
+	controller without it."""
+	bad = sorted(k for k, v in params.items()   # None / False = the flag's off default
+	             if k.startswith("controller_") and v is not None and v is not False
+	             and k not in ADAPTER_KEYS)
+	if bad:
+		raise ValueError(f"{bad}: not built by the dashboard flow adapter (motor-level, legacy "
+		                 "plant only) — run these through phased_ga.")
+
+
+def _conn_policy(params: dict) -> tuple[str, int]:
+	"""controller_conn_policy -> (policy, m), the same parser as phased_ga --conn-policy.
+	framed1 is refused: it needs arm D (output_full_window), which this adapter
+	does not build — without it every neuron would silently draw as min1."""
+	name = str(_p(params, "controller_conn_policy", "spread"))
+	if name == "framed1":
+		raise ValueError("controller_conn_policy=framed1 needs output_full_window (arm D), which "
+		                 "the dashboard flow adapter does not build — run it through phased_ga.")
+	return conn_policy_from_name(name)
+
+
 def controller_spec_from_params(params: dict) -> ControllerSpec:
 	"""Build a ControllerSpec from a flow's flat params dict."""
 	# ABI 38: the cascade needs the airframe's firmware rate loop, which this
@@ -84,6 +126,7 @@ def controller_spec_from_params(params: dict) -> ControllerSpec:
 		if bool(_p(params, key, False)):
 			raise ValueError(f"{key}: a cascade (ctbr) input block — the dashboard flow adapter builds "
 			                 "motor-level controllers only; run it through phased_ga --output-mode ctbr.")
+	_refuse_unbuilt_keys(params)
 	if mode != "pwm":
 		raise ValueError(
 			f"controller_output_mode={mode!r}: the dashboard flow adapter builds motor-level "
@@ -94,6 +137,7 @@ def controller_spec_from_params(params: dict) -> ControllerSpec:
 	# prefix_factor·state_neurons = 1·sn since the 08/06/2026 1-bit migration (was 2·sn).
 	sbits = max(int(_p(params, "controller_state_bits", 24)), sn + 1)
 	obits = max(int(_p(params, "controller_output_bits", 24)), sn + 1)
+	policy, policy_min = _conn_policy(params)
 	return ControllerSpec(
 		num_motors=int(_p(params, "controller_num_motors", 4)),
 		levels_per_motor=int(_p(params, "controller_levels_per_motor", 16)),
@@ -104,15 +148,13 @@ def controller_spec_from_params(params: dict) -> ControllerSpec:
 		output_bits_per_neuron=obits,
 		delta_control=bool(_p(params, "controller_delta_control", False)),
 		memory_mode=str(_p(params, "controller_memory_mode", "QUAD_WEIGHTED")),
+		conn_policy=policy, conn_policy_min=policy_min,
 	)
 
 
 def _episode_config(params: dict) -> EpisodeConfig:
 	tilt = math.radians(float(_p(params, "controller_tilt_deg", 15.0)))
-	# W2 disturbance passthrough: level preset name (OFF/L1/L2/L3/L2D/L3D). TODO: the
-	# key `controller_disturbance_level` must be added to KNOWN_PARAMS in
-	# wnn/ram/experiments/params.py (outside this change's allowed scope) or
-	# dashboard-flow ingestion will emit the UNKNOWN PARAM warning.
+	# W2 disturbance passthrough: level preset name (OFF/L1/L2/L3/L2D/L3D).
 	level = str(_p(params, "controller_disturbance_level", "OFF"))
 	return EpisodeConfig(
 		dt=0.001, steps_per_episode=int(_p(params, "controller_steps", 1500)),

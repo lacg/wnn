@@ -296,6 +296,7 @@ from wnn.control.evaluator import (
 	collect_student_feature_samples,
 	calib_episode_config as _calib_ec,
 	train_asym_token,
+	resolve_output_decode,
 )
 from wnn.control.arch_strategy import (
 	ControllerArchGAStrategy, ControllerArchTSStrategy,
@@ -307,7 +308,9 @@ from wnn.control.ga_strategy import (default_controller_ga_config,
                                      select_aggregation as _select_aggregation,
                                      gate_args as _gate_args)
 from wnn.control.ga_memory import record_address_universe
-from wnn.control.recurrent_genome import RecurrentArchGenome, MemoryPayload
+from wnn.control.recurrent_genome import (
+	RecurrentArchGenome, MemoryPayload, CONN_POLICY_NAMES, conn_policy_from_name,
+)
 from wnn.control.controller_grid_search import _steady_str
 from wnn.control.training import EpisodeConfig, make_pid_action_fn
 from wnn.control.dagger import eval_closed_loop_reset
@@ -344,13 +347,19 @@ def grid_output_neuron_axis(args) -> list[int]:
 	pre-flag behaviour. Every value must be a whole multiple of the OUTPUT QUANTUM,
 	else the floor division silently truncates the resolution the user asked for.
 
-	The quantum is num_motors, DOUBLED under BINARY: the antagonist E/I decode needs
-	an even levels_per_motor for a symmetric split (odd L drifts neutral off 0.5),
-	so arch_shape_from_spec sets output_quantum = 2·num_motors there. Validating
+	The quantum is num_motors, DOUBLED under the antagonist decode (BINARY's default,
+	or --output-decode antagonist): the E/I split needs an even levels_per_motor for a
+	symmetric split (odd L drifts neutral off 0.5), so arch_shape_from_spec sets
+	output_quantum = 2·num_motors there. Validating
 	against num_motors alone would let a BINARY run request an odd level count that
 	neurogenesis can never actually hold."""
 	num_motors = int(getattr(args, "_geometry_num_motors", 4))
-	quantum = num_motors * 2 if getattr(args, "memory_mode", "") == "BINARY" else num_motors
+	# Keyed on the DECODE (like arch_shape_from_spec), not the memory mode: QUAD +
+	# --output-decode antagonist also needs even levels (08/11/2026 — the mode-keyed
+	# check let it request an odd level count the Rust controller then refused).
+	antagonist = resolve_output_decode(getattr(args, "output_decode", None),
+	                                   getattr(args, "memory_mode", "")) == "antagonist"
+	quantum = num_motors * 2 if antagonist else num_motors
 	requested = getattr(args, "grid_output_neurons", None)
 	if not requested:
 		return [num_motors * int(args.levels)]
@@ -359,7 +368,7 @@ def grid_output_neuron_axis(args) -> list[int]:
 		raise ValueError(
 			f"--grid-output-neurons {bad} is not a positive multiple of the output quantum "
 			f"{quantum} (num_motors={num_motors}"
-			f"{', doubled for BINARY even-levels' if quantum != num_motors else ''}). "
+			f"{', doubled for the antagonist decode (even levels)' if quantum != num_motors else ''}). "
 			f"output_neurons = num_motors · levels_per_motor, so use e.g. "
 			f"{' '.join(str(num_motors * lv) for lv in (16, 24, 32))} for 16/24/32 levels.")
 	return [int(on) for on in requested]
@@ -473,6 +482,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                feature_balance_ratio: float = 0.0,
                conn_policy: str = "spread", conn_policy_min: int = 2,
                conn_mutation_scope: str = "free",
+               receptive_fields: str = "off", rf_cross: float = 0.2,
                output_full_window: bool = False, frame_stride: int = 1,
                target_levels: int = 0,
                threshold_gamma: float = 1.0,
@@ -524,6 +534,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		feature_balance_ratio=feature_balance_ratio,
 		conn_policy=conn_policy, conn_policy_min=conn_policy_min,
 		conn_mutation_scope=conn_mutation_scope,
+		receptive_fields=receptive_fields, rf_cross=rf_cross,
 		output_full_window=output_full_window, frame_stride=frame_stride,
 		target_levels=target_levels,
 		threshold_gamma=threshold_gamma,
@@ -781,6 +792,31 @@ def _print_stage_result(idx: int, name: str, res, gens: int, dt: float, ev: Cont
 	      f"{dt/max(res.iterations_run,1):.1f}s/gen)")
 	_log_split_pressure(res, name)
 	return m
+
+
+def _refuse_rf_combos(args) -> None:
+	"""CTRL-45 v1 refusals (design §4.4): combinations the axis projection would
+	silently break, refused at arg-parse instead of flying a meaningless arm."""
+	if getattr(args, "receptive_fields", "off") == "off":
+		return
+	if not 0.0 <= float(args.rf_cross) <= 1.0:
+		raise SystemExit(f"--rf-cross must be in [0, 1] (got {args.rf_cross}).")
+	if args.conn_policy != "spread":
+		raise SystemExit(f"--receptive-fields axis refuses --conn-policy {args.conn_policy}: the "
+		                 "projection would break its min-m / frame structure (v1 is spread only).")
+	if float(getattr(args, "feature_balance_ratio", 0.0)) > 1.0:
+		raise SystemExit("--receptive-fields axis refuses --feature-balance-ratio > 1: a global "
+		                 "per-feature cap contradicts per-bank families.")
+	if args.output_mode != "ctbr" and not getattr(args, "decouple_outputs", False):
+		raise SystemExit("--receptive-fields axis needs --output-mode ctbr or --decouple-outputs: "
+		                 "in PWM mode a bank is a MOTOR, which needs every axis (the drawn-family "
+		                 "variant is the future answer there).")
+
+
+def rf_token(args) -> str:
+	"""Provenance rf= value: 'off' or 'axis:cross=<c>'."""
+	mode = getattr(args, "receptive_fields", "off")
+	return "off" if mode == "off" else f"{mode}:cross={float(args.rf_cross):g}"
 
 
 def _parse_teacher_list(spec: str, flag: str) -> list[str]:
@@ -2932,7 +2968,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "sum decode is unchanged, so redundant-group errors average out while "
 	                     "thresholds stay learnable). 0 = legacy. Requires the >=16/08 wheel — "
 	                     "the evaluator fails loudly on an older one rather than train legacy targets.")
-	ap.add_argument("--conn-policy", choices=["spread", "min1", "min2", "min3", "framed1"], default="spread",
+	ap.add_argument("--conn-policy", choices=list(CONN_POLICY_NAMES), default="spread",
 	                help="Connection-creation policy for fresh OUTPUT maps (14/08 specialist "
 	                     "programme): spread = legacy uniform; min1 = full FEATURE COVERAGE (every "
 	                     "feature gets >=1 threshold — at b=num_features, exactly one each); "
@@ -2941,6 +2977,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "--output-full-window. min2/min3 = MIN_PER_CLUSTER(m) — "
 	                     "every touched feature gets >= m thresholds (m=2 makes interval "
 	                     "detection the floor), unaffordable features dropped, remainder donated.")
+	ap.add_argument("--receptive-fields", choices=["off", "axis"], default="off",
+	                help="CTRL-45 axis receptive fields: 'axis' keeps every OUTPUT neuron's "
+	                     "connections inside its bank's control-axis family (CTBR banks "
+	                     "[T, p, q, r] -> thrust/roll/pitch/yaw features, feature_layout.py) except "
+	                     "a cross-family budget of floor(--rf-cross x width). An invariant re-applied "
+	                     "after init, mutation, crossover and genesis. off = bit-identical. Needs "
+	                     "--output-mode ctbr or --decouple-outputs; refuses min*/framed1 policies and "
+	                     "--feature-balance-ratio > 1.")
+	ap.add_argument("--rf-cross", type=float, default=0.2,
+	                help="CTRL-45: fraction of an output neuron's connections allowed OUTSIDE its "
+	                     "bank's axis family (a COUNT budget, floor(c x width); 24 bits at 0.2 -> 4). "
+	                     "In [0, 1]; 1 = no constraint, 0 = pure family.")
 	ap.add_argument("--conn-mutation-scope", choices=["free", "window", "feature"], default="free",
 	                help="GA-connectivity mutation scope (16/08, Luiz's connectivity types): where a "
 	                     "CONNECTIONS-stage rewire may land. free = legacy (anywhere — can leave the "
@@ -3948,13 +3996,7 @@ def main():
 	# Connection-creation policy (14/08 specialist programme): parse "min2"/"min3"
 	# into (policy, m) ONCE and stash on args — same pattern as _dhat_b below.
 	_cp = getattr(args, "conn_policy", "spread")
-	if _cp == "framed1":
-		args._conn_policy = "framed1"
-	elif _cp.startswith("min"):
-		args._conn_policy = "min_per_cluster"
-	else:
-		args._conn_policy = "spread"
-	args._conn_policy_min = int(_cp[3:]) if _cp.startswith("min") else 2
+	args._conn_policy, args._conn_policy_min = conn_policy_from_name(_cp)
 	# framed1 is meaningless without arm D: with sn=0 and the legacy layout the
 	# output layer sees ONE frame whatever k is, so every neuron would land in
 	# the same frame and the arm would silently be min1. Fail at arg-parse.
@@ -3962,6 +4004,7 @@ def main():
 		raise SystemExit("--conn-policy framed1 requires --output-full-window: without it the "
 		                 "output layer sees only frame t-0, so per-frame specialisation is a no-op "
 		                 "(it would silently run as min1).")
+	_refuse_rf_combos(args)
 	if args._conn_policy == "min_per_cluster":
 		print(f"[conn-policy] {_cp}: fresh OUTPUT maps drawn MIN_PER_CLUSTER"
 		      f"(m={args._conn_policy_min}) — touched features get >= m thresholds, "
@@ -4054,7 +4097,8 @@ def main():
 	                         obs_pwm=obs_pwm_convention(bool(args.obs_pwm), float(args.motor_lag_s)),
 	                         train_asym=train_asym_token(ec),
 	                         arch=arch_token(getattr(args, "_ctbr", None), args.teacher,
-	                                         args.action_repeat, ec.dt)).line())
+	                                         args.action_repeat, ec.dt),
+	                         rf=rf_token(args)).line())
 	import shlex
 	print(f"[argv] {shlex.join(args.cli_argv)}", flush=True)
 

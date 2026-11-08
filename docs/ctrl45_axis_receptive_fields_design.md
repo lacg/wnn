@@ -1,7 +1,20 @@
 # CTRL-45: axis-grouped receptive fields for the cascade WNN controller (DESIGN)
 
-Status: DESIGN ONLY, 08/11/2026. Nothing implemented, nothing queued. Needs Luiz's go on
-the points in section 9 before anything is built.
+Status: BUILT 08/11/2026 (controller ABI 44, increments 0-3), not deployed, nothing queued.
+Luiz's answers to section 9: B1/B2 fixed; `controller_conn_policy` wired (flow adapter);
+family = the OUTPUT BANK, `--rf-cross` default 0.2, `--receptive-fields {off,axis}` default
+off. Implementation notes that differ from the text below:
+- B1 generalises: the output layer is `output_quantum` equal segments (bank, or E/I half
+  under the antagonist decode), so the role map is `arch_ops::output_segment_map` and needs
+  no decode knowledge. Crossover (both variants) and Lamarckian inheritance also pair output
+  neurons by role when level counts differ.
+- Found + fixed alongside: `spec_from_arch` dropped `feature_balance_ratio`, `conn_policy`,
+  `conn_policy_min`, `conn_mutation_scope` (stages after the first GA stage ran on defaults);
+  `default_controller_arch_config` passed the STATE window k to the one-frame output space
+  (conn-scope `window` cut it into 44-bit pieces); the flow adapter silently dropped 23
+  registered `controller_*` keys (now refused) and 11 keys it does read were unregistered.
+- The operator lives in `controller/receptive_fields.rs` (`arch_project_receptive_fields`),
+  not inline in arch_ops.rs.
 
 ## 1. Problem, hypothesis, constraints
 

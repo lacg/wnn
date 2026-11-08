@@ -21,6 +21,7 @@ own spec + connectivity and scores shape-uniform groups on the GPU.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Callable, Optional
 
 import numpy as np
@@ -130,9 +131,67 @@ def default_controller_arch_config(spec: ControllerSpec) -> RecurrentArchConfig:
 		conn_policy=getattr(spec, "conn_policy", "spread"),
 		conn_policy_min=getattr(spec, "conn_policy_min", 2),
 		conn_mutation_scope=getattr(spec, "conn_mutation_scope", "free"),
-		input_window_k=int(getattr(spec, "input_window_k", 1)),
+		# Frames in the OUTPUT input space (framed1 / conn-scope "window" read it as
+		# output_input_space // k): spec.input_window_k only under arm D
+		# (output_full_window); the legacy output layer sees ONE frame. Passing the
+		# state window here (k=4) cut a one-frame space into quarter-"frames"
+		# (e.g. 176/4 = 44 bits, not even a feature boundary) — fixed 08/11/2026.
+		input_window_k=int(spec.input_window_k) if getattr(spec, "output_full_window", False) else 1,
 		memory_mode=getattr(spec, "memory_mode", "QUAD_WEIGHTED"),
+		**_rf_fields(spec),
 	)
+
+
+def rf_summary(spec: ControllerSpec, widths: list[int]) -> str:
+	"""The one greppable startup line naming what an RF run flies: per-bank family
+	sizes (features) and the cross budget at each output suffix width."""
+	from .feature_layout import BANK_FAMILIES, feature_layout
+	layout = feature_layout(spec)
+	sizes = "/".join(str(sum(1 for d in layout if d.family & f)) for f in BANK_FAMILIES)
+	budget = ", ".join(f"{int(math.floor(spec.rf_cross * w + 1e-9))}/{w}" for w in widths)
+	return (f"[rf] {spec.receptive_fields}: bank families T/R/P/Y = {sizes} features "
+	        f"(of {len(layout)}), cross budget {budget}")
+
+
+def _rf_fields(spec: ControllerSpec) -> dict:
+	"""CTRL-45 receptive-field config, DERIVED from the spec (never stored in the
+	genome): bank masks from feature_layout.BANK_FAMILIES, one per output bank;
+	feature masks from the spec's own feature table. Off -> the dataclass defaults."""
+	mode = getattr(spec, "receptive_fields", "off")
+	if mode == "off":
+		return {}
+	from .feature_layout import BANK_FAMILIES, feature_layout
+	if spec.num_motors != len(BANK_FAMILIES):
+		raise ValueError(f"receptive_fields={mode} needs {len(BANK_FAMILIES)} axis banks "
+		                 f"(T, roll, pitch, yaw), got num_motors={spec.num_motors}")
+	return dict(receptive_fields=mode, rf_cross=float(spec.rf_cross),
+	            rf_bank_masks=tuple(int(f) for f in BANK_FAMILIES),
+	            rf_feature_masks=tuple(int(d.family) for d in feature_layout(spec)))
+
+
+def _inherit_cells(child: "RecurrentArchGenome", parent: "RecurrentArchGenome"):
+	"""`parent`'s cells re-expressed in `child`'s layout, kept only for neurons whose
+	wiring `child` carries verbatim (bank-growth fix, 08/11/2026).
+
+	Output neurons pair by ROLE (segment, rank) — with different level counts the
+	same flat index is another bank/level/E-I half, so parent cells are first
+	reindexed to the child's layout. A different STATE-neuron count changes the
+	forced prefix width of EVERY address in both layers (the cells would be read
+	under the wrong bit layout), so nothing is inherited then. Same-shape parents:
+	identical to the historical index-keyed filter."""
+	from .recurrent_genome import MemoryPayload, _output_role_map, _place_by_role
+	if parent.cells is None or child.state_neurons != parent.state_neurons:
+		return MemoryPayload([], [], [], [])
+	src, p_out = parent, parent.output_sampled
+	if child.output_neurons != parent.output_neurons:
+		role = _output_role_map(parent.output_neurons, child.output_neurons,
+		                        child.shape.output_quantum)
+		src = parent.clone()
+		src.cells.reindex_output_neurons(role)
+		p_out = _place_by_role(parent.output_sampled, role, child.output_neurons)
+	cs = {i for i in range(child.state_neurons) if child.state_sampled[i] != parent.state_sampled[i]}
+	co = {j for j in range(child.output_neurons) if child.output_sampled[j] != p_out[j]}
+	return _filter_inherited_cells(child, src, changed_state=cs, changed_output=co)
 
 
 def _filter_inherited_cells(child: "RecurrentArchGenome", parent: "RecurrentArchGenome",
@@ -247,15 +306,12 @@ class ControllerArchGAStrategy(ControllerCancelMixin, GenericGAStrategy):
 
 	def crossover_genomes(self, parent1: RecurrentArchGenome,
 	                      parent2: RecurrentArchGenome) -> RecurrentArchGenome:
-		child = RecurrentArchGenome.crossover(parent1, parent2, self._np_rng)
+		child = RecurrentArchGenome.crossover(parent1, parent2, self._np_rng, self._arch_config)
 		if self._lamarckian:
-			# Inherit parent1's cells, connectivity-aware: drop cells of neurons whose
-			# suffix changed (parent2 blocks mixed in) — they index a different input now.
-			cs = {i for i in range(min(child.state_neurons, parent1.state_neurons))
-			      if child.state_sampled[i] != parent1.state_sampled[i]}
-			co = {i for i in range(min(child.output_neurons, parent1.output_neurons))
-			      if child.output_sampled[i] != parent1.output_sampled[i]}
-			child.cells = _filter_inherited_cells(child, parent1, changed_state=cs, changed_output=co)
+			# Inherit parent1's cells, connectivity- AND role-aware: drop cells of
+			# neurons whose suffix changed (parent2 blocks mixed in), and pair output
+			# neurons by (bank, level) when the parents' level counts differ.
+			child.cells = _inherit_cells(child, parent1)
 		return child
 
 	def _lamarckian_evaluate_batch(self, genomes, *a, **kw):
@@ -540,7 +596,8 @@ class ControllerMixedGAStrategy(_ControllerMemoryOps, ControllerArchGAStrategy):
 		Used if `crossover_average` raises or produces an invalid genome.
 		"""
 		try:
-			child = RecurrentArchGenome.crossover_average(parent1, parent2, self._np_rng)
+			child = RecurrentArchGenome.crossover_average(parent1, parent2, self._np_rng,
+			                                              self._arch_config)
 			# Inherit + filter cells from one parent so the MEMORY mutator has
 			# valid input. Cells inherited from a different-shape parent are
 			# partially stale (addresses derive from parent's suffixes, child's
@@ -549,14 +606,18 @@ class ControllerMixedGAStrategy(_ControllerMemoryOps, ControllerArchGAStrategy):
 			# hit most of these addresses, but the cells that ARE hit on the
 			# rare matching pattern contribute signal.
 			src = parent1 if self._np_rng.random() < 0.5 else parent2
-			child.cells = self._filter_inherited_cells(child, src)
+			# Role-aware + connectivity-aware (08/11/2026): the old address-range-only
+			# filter kept cells of neurons whose wiring came from the OTHER parent or
+			# whose flat index now names another bank/level.
+			child.cells = _inherit_cells(child, src)
 			child.assert_valid()
 			return child
 		except AssertionError:
 			# Pathological average-shape recombination — fall back to the
 			# Plan B one-parent-shape variant which is structurally safe.
 			try:
-				child = RecurrentArchGenome.crossover(parent1, parent2, self._np_rng)
+				child = RecurrentArchGenome.crossover(parent1, parent2, self._np_rng,
+				                                      self._arch_config)
 				child.assert_valid()
 				return child
 			except AssertionError:

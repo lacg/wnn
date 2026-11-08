@@ -28,31 +28,9 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "wnn"))
 from wnn.control.checkpoint_io import load_controller_checkpoint  # noqa: E402
 
-# Canonical feature order (controller.rs): base 9, then enabled extras in the
-# num_features expression's order. Names resolved per spec's obs flags.
-BASE = ["gyro_x", "gyro_y", "gyro_z", "acc_x", "acc_y", "acc_z", "tgt_r", "tgt_p", "tgt_y"]
-
-
-def feature_names(spec) -> list[str]:
-	n = list(BASE)
-	if getattr(spec, "obs_tilt_p", False): n.append("tilt")
-	if getattr(spec, "obs_tilt_i", False): n.append("tilt_i")
-	if getattr(spec, "obs_peraxis_p", False):
-		n += ["roll_err", "pitch_err"] + (["yaw_err_pa"] if getattr(spec, "obs_peraxis_yaw", False) else [])
-	if getattr(spec, "obs_peraxis_i", False):
-		n += ["roll_i", "pitch_i"] + (["yaw_i_pa"] if getattr(spec, "obs_peraxis_yaw", False) else [])
-	if getattr(spec, "obs_pwm", False):
-		n += [f"pwm_{m}" for m in range(4)]
-	if getattr(spec, "obs_yaw_err", False): n.append("yaw_err")
-	if getattr(spec, "obs_yaw_err_i", False): n.append("yaw_err_i")
-	if getattr(spec, "dhat_b", None) is not None:
-		n += ["dhat_r", "dhat_p", "dhat_y"]
-	if getattr(spec, "obs_collective_cmd", False): n.append("coll_cmd")
-	if getattr(spec, "obs_alt_err", False): n.append("alt_err")
-	if getattr(spec, "obs_vz", False): n.append("vz")
-	if getattr(spec, "obs_pos_err_xy", False): n += ["e_x", "e_y"]
-	if getattr(spec, "obs_vel_xy", False): n += ["v_x", "v_y"]
-	return n
+# Feature names come from the ONE table (feature_layout.py, held equal to Rust
+# compute_features by tests/controller_feature_layout.py).
+from wnn.control.feature_layout import feature_names  # noqa: E402
 
 
 def per_neuron_stats(suffixes: list[list[int]], F: int, b: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

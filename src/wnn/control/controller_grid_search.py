@@ -32,7 +32,8 @@ from wnn.control.evaluator import (
 	fit_thresholds_from_pid_rollouts,
 	calib_episode_config as _calib_ec,
 )
-from wnn.control.recurrent_genome import RecurrentArchGenome, RecurrentArchConfig
+from wnn.control.recurrent_genome import RecurrentArchGenome
+from wnn.control.arch_strategy import default_controller_arch_config, rf_summary
 from wnn.control.ga_strategy import default_controller_ga_config, gate_args, search_aggregation
 
 
@@ -191,6 +192,8 @@ class ControllerGridSearch(GenericGridSearch):
 			conn_policy=getattr(args, "_conn_policy", "spread"),
 			conn_policy_min=getattr(args, "_conn_policy_min", 2),
 			conn_mutation_scope=getattr(args, "conn_mutation_scope", "free"),
+			receptive_fields=getattr(args, "receptive_fields", "off"),
+			rf_cross=float(getattr(args, "rf_cross", 0.2)),
 			output_full_window=getattr(args, "output_full_window", False),
 			frame_stride=int(getattr(args, "frame_stride", 1)),
 			target_levels=int(getattr(args, "target_levels", 0)),
@@ -251,6 +254,8 @@ class ControllerGridSearch(GenericGridSearch):
 				f"or lower --grid-min-suffix (currently {min_suffix}). "
 				f"Requested sn={list(args.grid_state_neurons)}, bits={list(args.grid_bits)}.")
 		probe_spec = self._spec(*valid_pairs[0])
+		if probe_spec.receptive_fields != "off":
+			print(rf_summary(probe_spec, sorted({ob - sn for (sn, _sb, ob, _on) in valid_pairs})))
 		return valid_pairs, probe_spec
 
 	# ---- GenericGridSearch hooks -----------------------------------------
@@ -266,17 +271,16 @@ class ControllerGridSearch(GenericGridSearch):
 		return points
 
 	def _random_genome(self, point: _GridPoint) -> RecurrentArchGenome:
-		args = self._args
+		"""A fresh grid genome under the SAME RecurrentArchConfig the GA stages use
+		(arch_strategy.default_controller_arch_config — the one builder). The old
+		inline copy omitted input_window_k, so --conn-policy framed1 drew grid
+		genomes with k=1 = min1 over the whole K-window, not one frame (08/11/2026)."""
 		rng = np.random.default_rng(int(self._rng_master.integers(0, 2**32 - 1)))
 		genome = RecurrentArchGenome.random(
 			point.shape, state_neurons=point.sn,
 			output_neurons=point.on,
 			state_suffix=point.state_suffix, output_suffix=point.output_suffix, rng=rng,
-			config=RecurrentArchConfig(conn_policy=getattr(args, "_conn_policy", "spread"),
-			                           conn_policy_min=getattr(args, "_conn_policy_min", 2),
-			                           feature_balance_ratio=args.feature_balance_ratio,
-			                           bits_per_feature=args.bits_per_feature,
-			                           memory_mode=args.memory_mode))
+			config=default_controller_arch_config(point.spec))
 		genome.cells = None   # evaluate_batch trains via reward-gated adaptation
 		return genome
 

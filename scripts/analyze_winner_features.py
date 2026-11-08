@@ -15,23 +15,20 @@ import yaml
 sys.path.insert(0, "/Users/lacg/wnn/src/wnn")
 from wnn.control.recurrent_genome import RecurrentArchGenome, _feature_of  # noqa: E402
 
-BASE9 = ["gyro_x", "gyro_y", "gyro_z", "acc_x", "acc_y", "acc_z", "tgt_roll", "tgt_pitch", "tgt_yaw"]
+from dataclasses import fields  # noqa: E402
+
+from wnn.control.evaluator import ControllerSpec  # noqa: E402
+from wnn.control.feature_layout import feature_names as _layout_names  # noqa: E402
 
 
 def feature_names(spec: dict, nf: int) -> list[str]:
-	"""Canonical compute_features order: base 9 + enabled extras."""
-	names = list(BASE9)
-	pax = 3 if spec.get("obs_peraxis_yaw", True) else 2
-	if spec.get("obs_tilt_p"):    names.append("tilt_p")
-	if spec.get("obs_tilt_i"):    names.append("tilt_i")
-	if spec.get("obs_peraxis_p"): names += [f"peraxis_p[{a}]" for a in (["r", "p", "y"][:pax])]
-	if spec.get("obs_peraxis_i"): names += [f"peraxis_i[{a}]" for a in (["r", "p", "y"][:pax])]
-	if spec.get("obs_pwm"):       names += [f"pwm[{m}]" for m in range(spec.get("num_motors", 4))]
-	if spec.get("obs_yaw_err"):   names.append("yaw_err")
-	if spec.get("obs_yaw_err_i"): names.append("yaw_err_i")
-	while len(names) < nf:  # safety pad
-		names.append(f"feat[{len(names)}]")
-	return names[:nf]
+	"""Canonical compute_features order from the ONE table (feature_layout.py),
+	for the spec dict a winner file carries."""
+	known = {f.name for f in fields(ControllerSpec)}
+	names = _layout_names(ControllerSpec(**{k: v for k, v in spec.items() if k in known}))
+	if len(names) != nf:
+		raise ValueError(f"winner spec names {len(names)} features, its genome space holds {nf}")
+	return names
 
 
 def per_feature_counts(sampled: list[list[int]], frame_bits: int, bpf: int, nf: int) -> list[int]:

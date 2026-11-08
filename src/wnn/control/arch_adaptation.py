@@ -239,6 +239,7 @@ class ControllerAdaptationStrategy:
 			self._neurogenesis(g, stats)
 		if mode in ("axonogenesis", "all"):
 			self._axonogenesis(g, stats)
+		g.apply_receptive_fields(self._arch_config, self._np_rng)   # CTRL-45 (off: no-op)
 		g.assert_valid()
 		return g
 

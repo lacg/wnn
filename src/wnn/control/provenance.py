@@ -56,6 +56,13 @@ class ControllerProvenance:
 	# "student" (a pre-fix wheel: motor-level obs_dhat / obs_pwm MEMORY universes were
 	# recorded on the student's own command). Printed BEFORE fitness_pools.
 	recorder: str = UNKNOWN
+	# ABI 44 (08/11/2026): how output neurogenesis lays out the output layer —
+	# "segment" (every bank / E-I half resizes at its own tail: the bank-growth fix)
+	# or "flat" (a pre-44 wheel: the flat-tail resize that remapped banks). Printed
+	# BEFORE fitness_pools.
+	neuro: str = UNKNOWN
+	# CTRL-45: the axis receptive-field setting — "off" or "axis:cross=<c>".
+	rf: str = UNKNOWN
 
 	def line(self) -> str:
 		"""The single greppable line the ladder copies into the marker."""
@@ -66,6 +73,8 @@ class ControllerProvenance:
 		        f"train_asym={self.train_asym} "
 		        f"arch={self.arch} "
 		        f"recorder={self.recorder} "
+		        f"neuro={self.neuro} "
+		        f"rf={self.rf} "
 		        f"fitness_pools={self.fitness_pools}")
 
 
@@ -94,7 +103,8 @@ def arch_token(ctbr: "dict | None", teacher: str, action_repeat: int, dt: float)
 
 
 def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: str = UNKNOWN,
-                       train_asym: str = UNKNOWN, arch: str = UNKNOWN) -> ControllerProvenance:
+                       train_asym: str = UNKNOWN, arch: str = UNKNOWN,
+                       rf: str = UNKNOWN) -> ControllerProvenance:
 	"""Gather every field, never raising: each accessor degrades to UNKNOWN / 0."""
 	wheel, abi, sha = _wheel_identity()
 	return ControllerProvenance(
@@ -108,6 +118,8 @@ def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: st
 		train_asym=train_asym.replace(" ", "_").replace('"', ""),
 		arch=arch.replace(" ", "_").replace('"', ""),
 		recorder=_recorder_inputs(),
+		neuro=_neuro_layout(),
+		rf=rf.replace(" ", "_").replace('"', ""),
 	)
 
 
@@ -116,6 +128,15 @@ def _recorder_inputs() -> str:
 	try:
 		from wnn.control import _accel
 		return str(getattr(_accel.require_accel(), "RECORDER_INPUTS", "student"))
+	except Exception:
+		return UNKNOWN
+
+
+def _neuro_layout() -> str:
+	"""ABI 44: "segment" on a bank-aware wheel, "flat" on a pre-44 one, never raises."""
+	try:
+		from wnn.control import _accel
+		return str(getattr(_accel.require_accel(), "NEURO_LAYOUT", "flat"))
 	except Exception:
 		return UNKNOWN
 

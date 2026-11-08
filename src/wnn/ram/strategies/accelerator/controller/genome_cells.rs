@@ -1018,6 +1018,16 @@ impl GenomeCells
 		(self.on_, self.oa, self.ov) = (NeurCol::from_wide(n), AddrCol::from_wide(a), v);
 	}
 
+	/// OUTPUT neurogenesis (bank-growth fix): move every output cell to its
+	/// neuron's new index (`old_to_new`, -1 = neuron removed), so Lamarckian cells
+	/// keep driving the bank / level / E-I half they were trained for.
+	pub fn reindex_output_neurons(&mut self, old_to_new: Vec<i64>)
+	{
+		let (wn, wa) = (self.on_.to_wide(), self.oa.to_wide());
+		let (n, a, v) = cell_remap::reindex_neurons(&wn, &wa, &self.ov, &old_to_new);
+		(self.on_, self.oa, self.ov) = (NeurCol::from_wide(n), AddrCol::from_wide(a), v);
+	}
+
 	pub fn drop_changed_state(&mut self, changed: Vec<u32>)
 	{
 		let (wn, wa) = (self.sn.to_wide(), self.sa.to_wide());

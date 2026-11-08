@@ -267,6 +267,28 @@ pub fn drop_neurons_ge(neurons: &[u32], addrs: &[u64], values: &[u8], limit: u32
 	(on, oa, ov)
 }
 
+/// Neuron RE-INDEX (bank-growth fix, 08/11/2026): every cell follows its neuron
+/// to `old_to_new[n]`; a cell whose neuron maps to -1 (or lies past the map) is
+/// dropped. Addresses and values are untouched — the neuron's wiring moved WITH
+/// it, so the same address still indexes the same input pattern.
+pub fn reindex_neurons(neurons: &[u32], addrs: &[u64], values: &[u8], old_to_new: &[i64]) -> Cells
+{
+	let mut on = Vec::with_capacity(neurons.len());
+	let mut oa = Vec::with_capacity(addrs.len());
+	let mut ov = Vec::with_capacity(values.len());
+	for i in 0..neurons.len()
+	{
+		let to = old_to_new.get(neurons[i] as usize).copied().unwrap_or(-1);
+		if to >= 0
+		{
+			on.push(to as u32);
+			oa.push(addrs[i]);
+			ov.push(values[i]);
+		}
+	}
+	(on, oa, ov)
+}
+
 /// CONNECTIONS remap: drop cells of neurons whose sampled suffix changed (their
 /// address semantics are scrambled); keep the rest verbatim.
 pub fn drop_changed_neurons(neurons: &[u32], addrs: &[u64], values: &[u8], changed: &[u32])
@@ -338,5 +360,15 @@ mod tests
 		let (n2, _a2, v2) = drop_changed_neurons(&[0, 1, 2], &[1, 2, 3], &[1, 2, 3], &[1]);
 		assert_eq!(n2, vec![0, 2]);
 		assert_eq!(v2, vec![1, 3]);
+	}
+
+	#[test]
+	fn reindex_moves_cells_with_their_neuron()
+	{
+		// neuron 0 -> 0, 1 -> dropped, 2 -> 5; neuron 7 lies past the map -> dropped.
+		let (n, a, v) = reindex_neurons(&[0, 1, 2, 7], &[10, 11, 12, 13], &[1, 2, 3, 0], &[0, -1, 5]);
+		assert_eq!(n, vec![0, 5]);
+		assert_eq!(a, vec![10, 12], "addresses must travel unchanged");
+		assert_eq!(v, vec![1, 3]);
 	}
 }

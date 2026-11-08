@@ -127,7 +127,10 @@ import os
 # ABI 43 (07/11/2026, CTRL-40): the Metal state-split train/record path carries the
 # motor-level d̂ and the CTRL-38 cascade blocks (recorded streams re-applied); obs_dhat
 # trains through the state-split; ReplayObs(dhat=). Python surface otherwise unchanged.
-EXPECTED_ABI = 43
+# ABI 44 (08/11/2026, CTRL-45): bank-aware output neurogenesis (arch_output_segment_map,
+# GenomeCells.reindex_output_neurons; NEURO_LAYOUT = "segment") + the axis receptive-field
+# projection arch_project_receptive_fields (host-side GA operator; off draws nothing).
+EXPECTED_ABI = 44
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

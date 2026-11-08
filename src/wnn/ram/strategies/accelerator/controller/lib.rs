@@ -13,6 +13,7 @@ mod actuator_lag; // ABI 34: the lag-aware teachers' actuator-state estimate
 mod altitude_pd; // scope C stage 1: outer altitude loop handing a collective to a teacher
 mod box_qp; // exact box-QP solver for the MPC teachers (PDAS + primal active-set)
 mod arch_ops; // architecture (connectivity) operators (counter_rng, Rust-first)
+mod receptive_fields; // ABI 44 (CTRL-45): axis receptive-field projection (GA connectivity operator)
 mod cell_mode;
 mod bptt_plan; // ABI 35: a bptt window's memory-independent inputs (CPU + GPU walk)
 mod solver_view; // ABI 35 B: window-lived solver view (no per-record entry clone)
@@ -380,7 +381,19 @@ mod metal_controller;
 ///   WNN_CONTROLLER_GPU_TRAIN gate no longer steps these lineages aside. The bptt
 ///   replay re-applies the recorded d̂ — equal to the Fix-A re-derivation bit for bit
 ///   (ctrl40_tests), so bptt lineages do not move. Flags off: bit-identical (pins).
-pub const ABI_VERSION: u32 = 43;
+/// ABI 44 (08/11/2026, CTRL-45 + increment-0 fixes): (a) BANK-AWARE output
+///   neurogenesis — arch_output_segment_map (old -> new index, the output layer is
+///   output_quantum equal segments = bank or E/I half; each resizes at its own tail)
+///   and GenomeCells.reindex_output_neurons (cells follow their neuron). Any run whose
+///   output level count changes (NEURONS stage, different-N crossover) MOVES; NEURO_LAYOUT
+///   = "segment" (provenance neuro=). (b) Axis receptive fields: arch_project_receptive_fields
+///   (receptive_fields.rs) — a host-side GA connectivity operator, no kernel change;
+///   off (the default) draws nothing. Every runtime path is unchanged (pins).
+pub const ABI_VERSION: u32 = 44;
+
+/// ABI 44: how output neurogenesis lays out the output layer — "segment" = every
+/// bank / E-I half resizes at its own tail (pre-44 Python resized the flat tail).
+pub const NEURO_LAYOUT: &str = "segment";
 
 /// CTRL-39: what the reference recorders feed the student's applied-actuator inputs.
 /// "flown" (ABI ≥ 42) = the command the plant received; a wheel without the constant
@@ -770,6 +783,52 @@ fn arch_rebalance_features(
 		&mut s, &offsets, space, frame_bits, bpf, ratio, seed, generation, genome, layer,
 	);
 	s
+}
+
+/// Output-neurogenesis role map (bank-growth fix): old index -> new index (-1 =
+/// dropped) when the output layer goes old_n -> new_n neurons in `segments`
+/// (= output_quantum) equal blocks. See arch_ops::output_segment_map.
+#[pyfunction]
+fn arch_output_segment_map(old_n: usize, new_n: usize, segments: usize) -> PyResult<Vec<i64>>
+{
+	arch_ops::output_segment_map(old_n, new_n, segments).map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+/// CTRL-45 axis receptive fields over a flat output-suffix list (`offsets`, len =
+/// neurons + 1): returns (projected flat suffixes, changed neuron indices). Neuron n
+/// belongs to bank n / levels; see receptive_fields.rs.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn arch_project_receptive_fields(
+	sampled: Vec<i64>,
+	offsets: Vec<usize>,
+	space: usize,
+	frame_bits: usize,
+	bpf: usize,
+	levels: usize,
+	bank_family: Vec<u8>,
+	feature_family: Vec<u8>,
+	max_cross: usize,
+	seed: u64,
+	generation: u64,
+	genome: u64,
+	layer: u64,
+) -> PyResult<(Vec<i64>, Vec<u32>)>
+{
+	let mut s = sampled;
+	let layout = receptive_fields::RfLayout {
+		space,
+		frame_bits,
+		bpf,
+		levels,
+		bank_family: &bank_family,
+		feature_family: &feature_family,
+		max_cross,
+	};
+	let draw = receptive_fields::RfDraw { seed, generation, genome, layer };
+	let changed = receptive_fields::project_receptive_fields(&mut s, &offsets, &layout, draw)
+		.map_err(pyo3::exceptions::PyValueError::new_err)?;
+	Ok((s, changed))
 }
 
 /// n independent fair coins (per-position / per-block parent picks).
@@ -1269,6 +1328,7 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()>
 {
 	m.add("ABI_VERSION", ABI_VERSION)?;
 	m.add("RECORDER_INPUTS", RECORDER_INPUTS)?;
+	m.add("NEURO_LAYOUT", NEURO_LAYOUT)?;
 	m.add("BPTT_DEVICE_DEFAULT", BPTT_DEVICE_DEFAULT)?;
 	m.add_function(wrap_pyfunction!(fitness_combine, m)?)?;
 	m.add_function(wrap_pyfunction!(gated_fitness_combine, m)?)?;
@@ -1296,6 +1356,8 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()>
 	m.add_function(wrap_pyfunction!(arch_framed1_slot_schedule, m)?)?;
 	m.add_function(wrap_pyfunction!(arch_rebalance_features, m)?)?;
 	m.add_function(wrap_pyfunction!(arch_pick_mask, m)?)?;
+	m.add_function(wrap_pyfunction!(arch_output_segment_map, m)?)?;
+	m.add_function(wrap_pyfunction!(arch_project_receptive_fields, m)?)?;
 	m.add_function(wrap_pyfunction!(record_address_universe, m)?)?;
 	m.add_function(wrap_pyfunction!(record_input_entropy, m)?)?;
 	m.add_function(wrap_pyfunction!(sample_calibration_features, m)?)?;

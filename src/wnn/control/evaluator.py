@@ -26,13 +26,14 @@ from __future__ import annotations
 
 import math
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 import numpy as np
 
 from wnn.control._accel import AttitudeSim, WnnController
 
+from .feature_layout import feature_layout
 from .pid import AttitudePID, AttitudePIDConfig
 from .training import (
 	EpisodeConfig,
@@ -256,6 +257,13 @@ class ControllerSpec:
 	# — never re-derived). ONE field on purpose: every hand-written spec copy
 	# (spec_from_arch, flow_adapter, checkpoints) carries all of it or none of it.
 	ctbr: "dict | None" = None
+	# CTRL-45 axis receptive fields (08/11/2026): "axis" keeps every OUTPUT neuron's
+	# connections inside its bank's axis family (feature_layout.FAMILY, bank ->
+	# BANK_FAMILIES) except a count budget of floor(rf_cross x width) cross-family
+	# connections; "off" (default) is bit-identical and draws nothing. Derivable, never
+	# stored in the genome: default_controller_arch_config builds the masks from here.
+	receptive_fields: str = "off"
+	rf_cross: float = 0.2
 	# Feature-balance cap (26/06/2026): no input feature may capture more than this ratio ×
 	# the least-wired feature's connection count (targets obs_yaw_err's 2.14x over-wiring →
 	# coupling). 0/≤1 disables. Threaded → RecurrentArchConfig.feature_balance_ratio.
@@ -363,9 +371,7 @@ class ControllerSpec:
 		Mirrors cell_mode.rs:83 default_output_decode — BINARY→antagonist (a 1-bit
 		cell reads 0 untrained, so one bank could only push up from the floor),
 		everything else→cumulative."""
-		if self.output_decode is not None:
-			return self.output_decode.lower()
-		return "antagonist" if self.memory_mode.upper() == "BINARY" else "cumulative"
+		return resolve_output_decode(self.output_decode, self.memory_mode)
 
 	@property
 	def output_mode(self) -> str:
@@ -373,16 +379,10 @@ class ControllerSpec:
 		return "ctbr" if self.ctbr is not None else "pwm"
 
 	def num_features(self) -> int:
-		"""9 base sensors + enabled extras (H2 error/integral + raw accumulator)."""
-		peraxis_n = 3 if self.obs_peraxis_yaw else 2  # drop yaw → roll+pitch only
-		return 9 + int(self.obs_tilt_p) + int(self.obs_tilt_i) \
-			+ peraxis_n * int(self.obs_peraxis_p) + peraxis_n * int(self.obs_peraxis_i) \
-			+ self.num_motors * int(self.obs_pwm) \
-			+ int(self.obs_yaw_err) + int(self.obs_yaw_err_i) \
-			+ 3 * int(self.dhat_b is not None) \
-			+ int(self.obs_collective_cmd) + int(self.obs_alt_err) + int(self.obs_vz) \
-			+ 2 * int(self.obs_pos_err_xy) + 2 * int(self.obs_vel_xy) \
-			+ ctbr_cascade_feature_count(getattr(self, "ctbr", None))
+		"""9 base sensors + enabled extras — the length of the ONE feature table
+		(feature_layout.py, held equal to Rust compute_features by
+		tests/controller_feature_layout.py)."""
+		return len(feature_layout(self))
 
 
 @dataclass
@@ -466,6 +466,16 @@ def ctbr_spec_dict(ec, rate_max=CTBR_DEFAULT_RATE_MAX, coll_max=None,
 		d["obs_dhat_plant"] = [float(af.arm_length), float(af.k_drag),
 		                       *(float(x) for x in af.inertia)]
 	return d
+
+
+def resolve_output_decode(output_decode: "str | None", memory_mode: str) -> str:
+	"""The decode a run WILL use: the explicit topology, else the mode default
+	(cell_mode.rs default_output_decode: BINARY -> antagonist, else cumulative). The
+	one Python mirror — ControllerSpec.resolved_output_decode and the grid's
+	output-quantum check both call it."""
+	if output_decode is not None:
+		return output_decode.lower()
+	return "antagonist" if memory_mode.upper() == "BINARY" else "cumulative"
 
 
 def ctbr_cascade_feature_count(ctbr: "dict | None") -> int:
@@ -1340,38 +1350,20 @@ def arch_shape_from_spec(spec: ControllerSpec) -> "RecurrentArchShape":
 
 def spec_from_arch(genome: "RecurrentArchGenome", base: ControllerSpec) -> ControllerSpec:
 	"""Rebuild a concrete ControllerSpec from a genome's evolved shape, inheriting
-	the fixed environment params (motors, sensor encoding, delta config) from
-	`base`. `levels_per_motor` is DERIVED from output_neurons / num_motors."""
-	return ControllerSpec(
-		num_motors=base.num_motors,
+	EVERY other field from `base`. `levels_per_motor` is DERIVED from
+	output_neurons / num_motors.
+
+	dataclasses.replace, not a hand-written field copy (08/11/2026): the copy had
+	silently dropped feature_balance_ratio, conn_policy, conn_policy_min and
+	conn_mutation_scope, so every stage AFTER the first GA stage built its
+	RecurrentArchConfig from the defaults (spread / free / no cap) whatever the CLI
+	said — and it would have dropped the CTRL-45 receptive-field fields too."""
+	return replace(
+		base,
 		levels_per_motor=genome.output_neurons // base.num_motors,
-		bits_per_feature=base.bits_per_feature,
-		input_window_k=base.input_window_k,
 		state_neurons=genome.state_neurons,
 		state_bits_per_neuron=genome.state_bits_per_neuron,
 		output_bits_per_neuron=genome.output_bits_per_neuron,
-		delta_control=base.delta_control,
-		delta_max=base.delta_max,
-		delta_leak=base.delta_leak, delta_gamma=getattr(base, 'delta_gamma', 1.0), delta_label_scale=getattr(base, 'delta_label_scale', 1.0), dagger_label_delta=getattr(base, 'dagger_label_delta', False),
-		obs_tilt_p=base.obs_tilt_p,
-		obs_tilt_i=base.obs_tilt_i,
-		obs_peraxis_p=base.obs_peraxis_p,
-		obs_peraxis_i=base.obs_peraxis_i, obs_peraxis_yaw=base.obs_peraxis_yaw, obs_pwm=base.obs_pwm, obs_yaw_err=base.obs_yaw_err, obs_yaw_err_i=base.obs_yaw_err_i,
-		obs_collective_cmd=base.obs_collective_cmd, obs_alt_err=base.obs_alt_err, obs_vz=base.obs_vz,
-		obs_pos_err_xy=getattr(base, 'obs_pos_err_xy', False), obs_vel_xy=getattr(base, 'obs_vel_xy', False),
-		obs_att_estimator=getattr(base, 'obs_att_estimator', False),
-		output_full_window=getattr(base, 'output_full_window', False),
-		frame_stride=int(getattr(base, 'frame_stride', 1)),
-		target_levels=int(getattr(base, 'target_levels', 0)),
-		dhat_b=base.dhat_b, dhat_l_gain=base.dhat_l_gain,
-		dhat_ff=base.dhat_ff, dhat_ff_clamp=base.dhat_ff_clamp, dt=base.dt,
-		integral_leak=base.integral_leak,
-		integral_scale=base.integral_scale, decouple_outputs=base.decouple_outputs,
-		threshold_gamma=base.threshold_gamma,
-		action_repeat=base.action_repeat,
-		memory_mode=base.memory_mode,
-		output_decode=base.output_decode,
-		ctbr=getattr(base, 'ctbr', None),
 	)
 
 
