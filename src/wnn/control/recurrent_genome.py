@@ -175,6 +175,10 @@ class RecurrentArchConfig:
 	# feature) shares no bit with its bank's mask. Domain-free here (group masks, no
 	# axis names); the drone builder fills them from feature_layout. "off" = no call,
 	# no RNG draw (bit-identical). Rust: receptive_fields.rs. State maps untouched.
+	# EXCLUDED FEATURES (CTRL-48, --drop-features / --drop-constant-features): a feature
+	# mask of 0 is never allowed in ANY layer's map (Rust receptive_fields.rs). Excluded-
+	# only runs carry one all-axes bank (0xFF,) and rf_cross 1.0. The projection is
+	# active iff rf_feature_masks is non-empty.
 	receptive_fields: str = "off"
 	rf_cross: float = 0.2
 	rf_bank_masks: tuple = ()
@@ -395,18 +399,24 @@ def _rf_max_cross(config: "RecurrentArchConfig", width: int) -> int:
 
 def _project_receptive_fields(sampled: list[list[int]], space: int,
                               config: "RecurrentArchConfig | None",
-                              rng: np.random.Generator) -> list[int]:
-	"""CTRL-45: re-project OUTPUT suffixes onto their bank's axis family + cross
-	budget IN PLACE; returns the changed neuron indices. Off (or no config): returns
-	at once WITHOUT drawing from `rng`, so every banked stream reproduces."""
-	if config is None or config.receptive_fields != "axis" or not sampled:
+                              rng: np.random.Generator, state_layer: bool = False) -> list[int]:
+	"""CTRL-45/48: re-project suffixes onto their bank's axis family + cross budget
+	and off every EXCLUDED feature, IN PLACE; returns the changed neuron indices.
+	The OUTPUT layer takes the configured banks; the STATE layer only the exclusion
+	(one all-axes bank, full budget). Inactive (or no config, or a state layer with
+	nothing excluded): returns at once WITHOUT drawing from `rng`."""
+	if config is None or not config.rf_feature_masks or not sampled or not sampled[0]:
 		return []
+	if state_layer and 0 not in config.rf_feature_masks:
+		return []
+	banks = (0xFF,) if state_layer else tuple(config.rf_bank_masks)
+	budget = len(sampled[0]) if state_layer else _rf_max_cross(config, len(sampled[0]))
 	flat, offsets = _flatten_suffixes(sampled)
-	frame_bits = space // max(1, config.input_window_k)
+	frame_bits = len(config.rf_feature_masks) * int(config.bits_per_feature)
 	out, changed = ra.arch_project_receptive_fields(
 		flat, offsets, int(space), int(frame_bits), int(config.bits_per_feature),
-		len(sampled) // len(config.rf_bank_masks), [int(m) for m in config.rf_bank_masks],
-		[int(m) for m in config.rf_feature_masks], _rf_max_cross(config, len(sampled[0])),
+		len(sampled) // len(banks), [int(m) for m in banks],
+		[int(m) for m in config.rf_feature_masks], int(budget),
 		int(rng.integers(0, 1 << 63)), 0, 0, 0)
 	for ni in changed:
 		sampled[ni][:] = [int(b) for b in out[offsets[ni]:offsets[ni + 1]]]
@@ -649,6 +659,7 @@ class RecurrentArchGenome:
 			_rebalance_features(ss, shape.state_input_space, fb, bpf, r, rng)
 			_rebalance_features(os, shape.output_input_space, fb, bpf, r, rng)
 		_project_receptive_fields(os, shape.output_input_space, config, rng)
+		_project_receptive_fields(ss, shape.state_input_space, config, rng, state_layer=True)
 		return cls(shape=shape, state_neurons=state_neurons, output_neurons=output_neurons,
 		           state_sampled=ss, output_sampled=os)
 
@@ -801,13 +812,18 @@ class RecurrentArchGenome:
 
 	def apply_receptive_fields(self, config: "RecurrentArchConfig | None",
 	                           rng: np.random.Generator) -> "RecurrentArchGenome":
-		"""Project the OUTPUT maps onto the axis receptive fields IN PLACE, dropping
-		the cells of any neuron whose wiring changed. No-op when off. Every operator
-		that creates or moves an output connection ends here (one enforcement point)."""
+		"""Project the maps onto the axis receptive fields (output layer) and off the
+		excluded features (both layers) IN PLACE, dropping the cells of any neuron whose
+		wiring changed. No-op when off. Every operator that creates or moves a
+		connection ends here (one enforcement point)."""
 		changed = _project_receptive_fields(self.output_sampled, self.shape.output_input_space,
 		                                    config, rng)
-		if changed and self.cells is not None:
+		changed_s = _project_receptive_fields(self.state_sampled, self.shape.state_input_space,
+		                                      config, rng, state_layer=True)
+		if self.cells is not None and changed:
 			self.cells.drop_changed_output(sorted(changed))
+		if self.cells is not None and changed_s:
+			self.cells.drop_changed_state(sorted(changed_s))
 		return self
 
 	def _apply_feature_balance(self, config: RecurrentArchConfig,

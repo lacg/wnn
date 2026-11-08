@@ -363,6 +363,13 @@ struct RolloutParams
 	cas_clamp: [f32; 3],
 	cas_kt: f32,
 	cas_l_gain: f32,
+	// + 7 (CTRL-48, ABI 45), appended in lockstep with the shader twin: the unabsorbed-
+	// disturbance block (cascade_obs.rs a3). cas_resid=1 ⇒ the rate-I value and the
+	// observer run even when a1/a2 are not emitted, and d̂·inv_a + w·(I/L) is appended
+	// after them. 0 ⇒ the ABI-44 rollout.
+	cas_resid: u32,
+	cas_resid_inv_a: [f32; 3],
+	cas_resid_w: [f32; 3],
 }
 
 /// CTRL-38: the cascade feature blocks as the score kernel needs them, read off the
@@ -370,11 +377,15 @@ struct RolloutParams
 #[derive(Clone, Copy, PartialEq, Default)]
 struct CascadeGpu
 {
+	/// a1 / a2 EMITTED (the observer may run for a3 alone — its constants below are
+	/// filled whenever it exists).
 	rate_i: bool,
 	dhat: bool,
 	c: [f32; 3],
 	clamp: [f32; 3],
 	kt: f32,
+	/// CTRL-48 a3: the residual's scale; None ⇒ off.
+	resid: Option<crate::cascade_obs::CasResidual>,
 }
 
 impl CascadeGpu
@@ -389,7 +400,8 @@ impl CascadeGpu
 		let d = o.observer();
 		CascadeGpu {
 			rate_i: o.rate_i_on(),
-			dhat: d.is_some(),
+			dhat: o.dhat_on(),
+			resid: o.residual(),
 			c: d.map_or([0.0; 3], |d| d.torque_gain().map(|v| v as f32)),
 			clamp: d.map_or([0.0; 3], |d| d.clamp().map(|v| v as f32)),
 			kt: d.map_or(0.0, |d| d.k_thrust() as f32),
@@ -920,7 +932,7 @@ impl ControllerRolloutEvaluator
 		// Pipeline: legacy quad (function constants undefined → generic path
 		// dead-stripped, bit-identical pre-geometry kernel) or the N-rotor
 		// specialization. Selected ONCE — uniform across all chunks.
-		let cas_on = ctbr.is_some_and(|c| c.cas.rate_i || c.cas.dhat);
+		let cas_on = ctbr.is_some_and(|c| c.cas.rate_i || c.cas.dhat || c.cas.resid.is_some());
 		let geom_pipeline = match geometry
 		{
 			Some(rotors) => Some(self.geometry_pipeline(rotors.len() as u32)?),
@@ -1165,6 +1177,9 @@ impl ControllerRolloutEvaluator
 				cas_clamp: ctbr.map_or([0.0; 3], |c| c.cas.clamp),
 				cas_kt: ctbr.map_or(0.0, |c| c.cas.kt),
 				cas_l_gain: crate::ctbr_mpcof::CTBR_MPC_L_GAIN as f32,
+				cas_resid: ctbr.is_some_and(|c| c.cas.resid.is_some()) as u32,
+				cas_resid_inv_a: ctbr.and_then(|c| c.cas.resid).map_or([0.0; 3], |r| r.inv_a),
+				cas_resid_w: ctbr.and_then(|c| c.cas.resid).map_or([0.0; 3], |r| r.w),
 			};
 
 			let b_q0 = self.buf(q0_chunk);
@@ -2026,6 +2041,11 @@ struct TrainParams
 	// gated by dhat_on above) — see TrainBatch.dhat_rec / cas_rec.
 	cas_rate_i: u32,
 	cas_dhat: u32,
+	// CTRL-48 (ABI 45), appended at END of BOTH structs in lockstep: the residual
+	// block, recomputed from the SAME recorded six values (d̂·inv_a + w·(I/L)).
+	cas_resid: u32,
+	cas_resid_inv_a: [f32; 3],
+	cas_resid_w: [f32; 3],
 }
 
 /// Per-genome recorded trajectory batch, flat across genomes (matches the kernel's
@@ -2571,6 +2591,9 @@ impl ControllerTrainer
 			att_est_on: controllers[0].att_estimator_gains().is_some() as u32,
 			cas_rate_i: CascadeGpu::from_controller(controllers[0]).rate_i as u32,
 			cas_dhat: CascadeGpu::from_controller(controllers[0]).dhat as u32,
+			cas_resid: CascadeGpu::from_controller(controllers[0]).resid.is_some() as u32,
+			cas_resid_inv_a: CascadeGpu::from_controller(controllers[0]).resid.map_or([0.0; 3], |r| r.inv_a),
+			cas_resid_w: CascadeGpu::from_controller(controllers[0]).resid.map_or([0.0; 3], |r| r.w),
 		};
 
 		let b_sc = self.buf(&state_conns);
@@ -2787,6 +2810,9 @@ impl ControllerTrainer
 			att_est_on: controllers[0].att_estimator_gains().is_some() as u32,
 			cas_rate_i: CascadeGpu::from_controller(controllers[0]).rate_i as u32,
 			cas_dhat: CascadeGpu::from_controller(controllers[0]).dhat as u32,
+			cas_resid: CascadeGpu::from_controller(controllers[0]).resid.is_some() as u32,
+			cas_resid_inv_a: CascadeGpu::from_controller(controllers[0]).resid.map_or([0.0; 3], |r| r.inv_a),
+			cas_resid_w: CascadeGpu::from_controller(controllers[0]).resid.map_or([0.0; 3], |r| r.w),
 		};
 
 		let rec_out = vec![0u32; total_records * out_words];
@@ -8033,7 +8059,8 @@ mod tests
 		// ctbr_hover_pwm(1) + ctbr_outer_pid(1). Same lockstep rule.
 		// + 10 (CTRL-38, ABI 41): cas_rate_i(1) + cas_dhat(1) + cas_c(3) + cas_clamp(3)
 		// + cas_kt(1) + cas_l_gain(1). Same lockstep rule.
-		assert_eq!(mem::size_of::<RolloutParams>(), 164 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
+		// + 7 (CTRL-48, ABI 45): cas_resid(1) + cas_resid_inv_a(3) + cas_resid_w(3).
+		assert_eq!(mem::size_of::<RolloutParams>(), 171 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============
@@ -8688,6 +8715,7 @@ mod tests
 			gamma: [1.0, 2.0, 2.0, 2.0],
 			obs_rate_i: false,
 			obs_dhat_plant: None,
+			obs_dhat_residual_plant: None,
 		};
 		assert_eq!(spec.rate_stage().decimation(), rs.decimation());
 		let att = bl_pidfw_cfg(2).att;

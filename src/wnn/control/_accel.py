@@ -130,7 +130,10 @@ import os
 # ABI 44 (08/11/2026, CTRL-45): bank-aware output neurogenesis (arch_output_segment_map,
 # GenomeCells.reindex_output_neurons; NEURO_LAYOUT = "segment") + the axis receptive-field
 # projection arch_project_receptive_fields (host-side GA operator; off draws nothing).
-EXPECTED_ABI = 44
+# ABI 45 (08/11/2026, CTRL-48): CtbrSpec(obs_dhat_residual_plant=) — the cascade
+# unabsorbed-disturbance block; arch_project_receptive_fields mask 0 = excluded feature
+# (--drop-features / --drop-constant-features). Default-off ⇒ ABI 44 bit-identical.
+EXPECTED_ABI = 45
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

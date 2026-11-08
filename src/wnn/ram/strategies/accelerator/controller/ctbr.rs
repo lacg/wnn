@@ -74,6 +74,12 @@ pub struct CtbrSpec
 	/// append d̂ roll/pitch/yaw; None ⇒ the ABI-40 feature layout.
 	#[pyo3(get)]
 	pub obs_dhat_plant: Option<[f64; 5]>,
+	/// CTRL-48 a3 (`--obs-cascade-dhat-residual`, ABI 45): the same airframe constants,
+	/// for the observer the UNABSORBED-disturbance block runs on (cascade_obs.rs). Some
+	/// ⇒ append (d̂ + c·ki·I)/(c·ki·i_limit) per axis, independent of a2 (must equal
+	/// obs_dhat_plant when both are set); None ⇒ the ABI-44 feature layout.
+	#[pyo3(get)]
+	pub obs_dhat_residual_plant: Option<[f64; 5]>,
 }
 
 impl CtbrSpec
@@ -99,12 +105,21 @@ impl CtbrSpec
 		{
 			return Err("CtbrSpec: rate gains must be finite".into());
 		}
-		if let Some(p) = self.obs_dhat_plant
+		for p in [self.obs_dhat_plant, self.obs_dhat_residual_plant].into_iter().flatten()
 		{
 			if p.iter().any(|v| !(v.is_finite() && *v > 0.0))
 			{
 				return Err(format!(
 					"CtbrSpec: obs_dhat_plant [arm_length, k_drag, Ixx, Iyy, Izz] = {p:?} must all be positive and finite"
+				));
+			}
+		}
+		if let (Some(a), Some(b)) = (self.obs_dhat_plant, self.obs_dhat_residual_plant)
+		{
+			if a != b
+			{
+				return Err(format!(
+					"CtbrSpec: obs_dhat_plant {a:?} and obs_dhat_residual_plant {b:?} must name the same airframe"
 				));
 			}
 		}
@@ -186,13 +201,27 @@ impl CtbrSpec
 		{
 			s.push_str(&format!(" obs=dhat(l={},plant={p:?})", crate::ctbr_mpcof::CTBR_MPC_L_GAIN));
 		}
+		if self.obs_dhat_residual_plant.is_some()
+		{
+			s.push_str(" obs=dhat_resid");
+		}
 		s
 	}
 
-	/// CTRL-38: the features the two cascade blocks append (0 when both are off).
+	/// CTRL-38/48: the features the cascade blocks append (0 when all are off).
 	pub(crate) fn cascade_feature_count(&self) -> usize
 	{
-		3 * (self.obs_rate_i as usize) + 3 * (self.obs_dhat_plant.is_some() as usize)
+		3 * (self.obs_rate_i as usize)
+			+ 3 * (self.obs_dhat_plant.is_some() as usize)
+			+ 3 * (self.obs_dhat_residual_plant.is_some() as usize)
+	}
+
+	/// CTRL-48 a3: the residual's scale from this spec's rate loop and airframe.
+	fn residual_scale(&self, d: &crate::cascade_dhat::CascadeDhat) -> crate::cascade_obs::CasResidual
+	{
+		let rs = self.rate_stage();
+		let ki_lim = std::array::from_fn(|i| (rs.axis_gains(i).ki, rs.axis_gains(i).i_limit));
+		crate::cascade_obs::CasResidual::new(d.torque_gain(), ki_lim, d.clamp())
 	}
 
 	/// CTRL-38: the student's cascade feature block, None when both halves are off.
@@ -206,11 +235,16 @@ impl CtbrSpec
 		{
 			return None;
 		}
-		let dhat = self.obs_dhat_plant.map(|p| {
+		let dhat = self.obs_dhat_plant.or(self.obs_dhat_residual_plant).map(|p| {
 			let c = crate::cascade_dhat::torque_gains(p[0] as f32, p[1] as f32, [p[2] as f32, p[3] as f32, p[4] as f32]);
 			crate::cascade_dhat::CascadeDhat::new(c, self.k_thrust, dt, 0.0, self.out_limit_n)
 		});
-		Some(crate::cascade_obs::CascadeObs::new(self.obs_rate_i, dhat))
+		let resid = match (self.obs_dhat_residual_plant, dhat.as_ref())
+		{
+			(Some(_), Some(d)) => Some(self.residual_scale(d)),
+			_ => None,
+		};
+		Some(crate::cascade_obs::CascadeObs::new(self.obs_rate_i, dhat, self.obs_dhat_plant.is_some(), resid))
 	}
 }
 
@@ -219,7 +253,7 @@ impl CtbrSpec
 {
 	#[new]
 	#[pyo3(signature = (rate_gains, out_limit_n, hover_n, k_thrust, main_loop_hz, attitude_hz, lpf_hz, range, gamma,
-	                    obs_rate_i = false, obs_dhat_plant = None))]
+	                    obs_rate_i = false, obs_dhat_plant = None, obs_dhat_residual_plant = None))]
 	#[allow(clippy::too_many_arguments)]
 	fn py_new(
 		rate_gains: [f64; 12],
@@ -233,6 +267,7 @@ impl CtbrSpec
 		gamma: [f32; CTBR_BANKS],
 		obs_rate_i: bool,
 		obs_dhat_plant: Option<[f64; 5]>,
+		obs_dhat_residual_plant: Option<[f64; 5]>,
 	) -> PyResult<Self>
 	{
 		let s = CtbrSpec {
@@ -247,6 +282,7 @@ impl CtbrSpec
 			gamma,
 			obs_rate_i,
 			obs_dhat_plant,
+			obs_dhat_residual_plant,
 		};
 		s.validate().map_err(pyo3::exceptions::PyValueError::new_err)?;
 		Ok(s)

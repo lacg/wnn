@@ -12,6 +12,14 @@
 //! parity. Families are bitmasks (a feature may serve several axes); the masks come
 //! from Python's feature_layout.py, the single name/family table.
 //!
+//! EXCLUDED FEATURES (CTRL-48, ABI 45, `--drop-features` / `--drop-constant-features`):
+//! a feature whose mask is 0 belongs to no family and is never allowed, not even as
+//! a cross connection — every connection on it is redrawn (in-family first, then any
+//! allowed bit). With receptive fields off the host passes one all-axes bank and a
+//! cross budget = width, so the projection only clears excluded features. The frame
+//! layout (and therefore every kernel, the thresholds and the MCU export) is
+//! unchanged: an excluded feature is still encoded, no neuron reads it.
+//!
 //! Draw coordinates (index, sub) = (0x4000 + neuron, t) — disjoint from every other
 //! operator in arch_ops.rs (0x10, 0x2000+j, 0x30, 0xF0, per-position j).
 
@@ -41,6 +49,7 @@ pub struct RfDraw
 
 const RF_INDEX: u64 = 0x4000;
 const RF_POOL_SUB: u64 = 0x10_0000;
+const RF_ANY_SUB: u64 = 0x20_0000;
 
 impl RfLayout<'_>
 {
@@ -73,10 +82,15 @@ impl RfLayout<'_>
 	}
 
 	#[inline]
+	fn mask_of(&self, bit: i64) -> u8
+	{
+		self.feature_family[(bit as usize % self.frame_bits) / self.bpf]
+	}
+
+	#[inline]
 	fn in_family(&self, bit: i64, family: u8) -> bool
 	{
-		let f = (bit as usize % self.frame_bits) / self.bpf;
-		self.feature_family[f] & family != 0
+		self.mask_of(bit) & family != 0
 	}
 }
 
@@ -102,7 +116,7 @@ pub fn project_receptive_fields(
 	for n in 0..n_neurons
 	{
 		let family = layout.bank_family[n / layout.levels];
-		if project_neuron(&mut sampled[offsets[n]..offsets[n + 1]], n, family, layout, draw)
+		if project_neuron(&mut sampled[offsets[n]..offsets[n + 1]], n, family, layout, draw)?
 		{
 			changed.push(n as u32);
 		}
@@ -110,23 +124,55 @@ pub fn project_receptive_fields(
 	Ok(changed)
 }
 
-/// One neuron. Returns true when any connection was replaced.
-fn project_neuron(suffix: &mut [i64], n: usize, family: u8, layout: &RfLayout, draw: RfDraw) -> bool
+/// One neuron. Returns true when any connection was replaced. Excluded slots are
+/// redrawn first (so they win the family pool); with no excluded feature this is the
+/// ABI-44 projection draw for draw.
+fn project_neuron(suffix: &mut [i64], n: usize, family: u8, layout: &RfLayout, draw: RfDraw) -> Result<bool, String>
 {
-	let mut out: Vec<usize> = (0..suffix.len()).filter(|&j| !layout.in_family(suffix[j], family)).collect();
-	if out.len() <= layout.max_cross
+	let excluded: Vec<usize> = (0..suffix.len()).filter(|&j| layout.mask_of(suffix[j]) == 0).collect();
+	let mut cross: Vec<usize> = (0..suffix.len())
+		.filter(|&j| layout.mask_of(suffix[j]) != 0 && !layout.in_family(suffix[j], family))
+		.collect();
+	if excluded.is_empty() && cross.len() <= layout.max_cross
 	{
-		return false;
+		return Ok(false);
 	}
 	let index = RF_INDEX + n as u64;
-	shuffle_prefix(&mut out, layout.max_cross, index, 0, draw);
-	let redraw = &out[layout.max_cross..];
+	let keep = layout.max_cross.min(cross.len());
+	shuffle_prefix(&mut cross, keep, index, 0, draw);
+	let mut redraw = excluded.clone();
+	redraw.extend_from_slice(&cross[keep..]);
 	let fresh = draw_family_bits(suffix, family, redraw.len(), layout, index, draw);
 	for (&slot, &bit) in redraw.iter().zip(fresh.iter())
 	{
 		suffix[slot] = bit;
 	}
-	!fresh.is_empty()
+	if fresh.len() < excluded.len()
+	{
+		fill_excluded_anywhere(suffix, &excluded[fresh.len()..], layout, index, draw)?;
+	}
+	Ok(!fresh.is_empty() || !excluded.is_empty())
+}
+
+/// Family pool exhausted: the remaining excluded slots take any allowed (mask != 0)
+/// bit the neuron does not hold. Refuses when even that cannot clear them.
+fn fill_excluded_anywhere(suffix: &mut [i64], slots: &[usize], layout: &RfLayout, index: u64, draw: RfDraw)
+	-> Result<(), String>
+{
+	let fresh = draw_family_bits(suffix, 0xFF, slots.len(), layout, index, RfDraw { layer: draw.layer ^ RF_ANY_SUB, ..draw });
+	if fresh.len() < slots.len()
+	{
+		return Err(format!(
+			"excluded features: a {}-bit neuron cannot be wired without them ({} allowed bits left)",
+			suffix.len(),
+			fresh.len()
+		));
+	}
+	for (&slot, &bit) in slots.iter().zip(fresh.iter())
+	{
+		suffix[slot] = bit;
+	}
+	Ok(())
 }
 
 /// Partial Fisher-Yates: after it, v[..k] is a uniform k-subset of v. Draw t uses
@@ -253,6 +299,36 @@ mod tests
 		let before = g.clone();
 		assert!(project_receptive_fields(&mut g, &off, &layout(6), DRAW).unwrap().is_empty());
 		assert_eq!(g, before, "budget = width must not touch anything");
+	}
+
+	#[test]
+	fn excluded_features_are_cleared_even_with_a_full_budget()
+	{
+		// RF off shape: one all-axes bank, budget = width; feature 5 (T) excluded.
+		let (mut flat, off) = genome();
+		let feat = [1u8, 1, 2, 2, 4, 0];
+		let l = RfLayout { levels: 8, bank_family: &[0xFF], feature_family: &feat, ..layout(6) };
+		let changed = project_receptive_fields(&mut flat, &off, &l, DRAW).unwrap();
+		assert_eq!(changed.len(), 8, "every neuron held a bit of the excluded feature");
+		assert!(flat.iter().all(|&b| (b as usize) / BPF != 5), "an excluded bit survived");
+		for n in 0..8
+		{
+			let s: std::collections::HashSet<i64> = flat[off[n]..off[n + 1]].iter().copied().collect();
+			assert_eq!(s.len(), 6, "neuron {n} lost distinctness");
+		}
+		let again = flat.clone();
+		assert!(project_receptive_fields(&mut flat, &off, &l, DRAW).unwrap().is_empty() && flat == again);
+		// With receptive fields on: excluded never survives as a cross connection.
+		let (mut flat, off) = genome();
+		let feat = [1u8, 1, 2, 2, 0, 8];
+		let l = RfLayout { feature_family: &feat, ..layout(6) };
+		project_receptive_fields(&mut flat, &off, &l, DRAW).unwrap();
+		assert!(flat.iter().all(|&b| (b as usize) / BPF != 4), "excluded kept as cross");
+		// No allowed bit left for a full-width neuron -> refused, never silently kept.
+		let (mut flat, off) = genome();
+		let feat = [0u8, 0, 0, 0, 0, 8];
+		let l = RfLayout { levels: 8, bank_family: &[0xFF], feature_family: &feat, ..layout(6) };
+		assert!(project_receptive_fields(&mut flat, &off, &l, DRAW).is_err());
 	}
 
 	#[test]

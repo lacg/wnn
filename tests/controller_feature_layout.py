@@ -55,8 +55,8 @@ def _cascade_dicts() -> list[dict]:
 	ec = episode_config_from_args(build_arg_parser().parse_args(
 		["--airframe", "cf21_brushless", "--translation", "--output-mode", "ctbr",
 		 "--imu-inclinometer", "--no-rotor-drag"]))
-	return [ctbr_spec_dict(ec, obs_rate_i=r, obs_cascade_dhat=d)
-	        for r, d in itertools.product((False, True), repeat=2)]
+	return [ctbr_spec_dict(ec, obs_rate_i=r, obs_cascade_dhat=d, obs_cascade_dhat_residual=x)
+	        for r, d, x in itertools.product((False, True), repeat=3)]
 
 
 def test_count_every_flag_combination():
@@ -68,7 +68,8 @@ def test_count_every_flag_combination():
 	for ctbr in _cascade_dicts():
 		spec = _spec(dict(obs_peraxis_p=True, obs_vel_xy=True), ctbr=ctbr)
 		assert _controller(spec).num_features() == len(feature_layout(spec)), ctbr
-	print(f"✓ feature count: {n} motor-level combinations + 4 cascade variants agree with Rust")
+	print(f"✓ feature count: {n} motor-level combinations + 8 cascade variants (rate-I, d-hat, "
+	      f"residual) agree with Rust")
 
 
 def _expected(spec: ControllerSpec) -> dict[str, float]:

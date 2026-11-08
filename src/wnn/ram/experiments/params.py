@@ -173,6 +173,15 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	# the flow adapter REFUSES them (it builds motor-level PWM controllers only).
 	"controller_receptive_fields",    # off | axis — output neurons keep to their bank's axis family
 	"controller_rf_cross",            # cross-family connection budget, fraction of width
+	# CTRL-48 (ABI 45): phased_ga --calib-episodes/--calib-regime/--calib-ladder,
+	# --drop-features/--drop-constant-features, --obs-cascade-dhat-residual. The flow
+	# adapter builds none of them (no training-cascade sampler, motor-level only): REFUSED.
+	"controller_calib_episodes",      # thermometer calibration episodes (10 = ABI 44)
+	"controller_calib_regime",        # flown | train_mix
+	"controller_calib_ladder",        # quantile | centred
+	"controller_drop_features",       # comma-separated layout names no connection may land on
+	"controller_drop_constant_features",  # exclude features measured constant at calibration
+	"controller_obs_cascade_dhat_residual",  # cascade feature: unabsorbed d̂ (+3)
 	# Trainer tilt curriculum (27/09/2026): phased_ga --rg-easy-tilt-deg / --rg-full-tilt-deg.
 	"controller_rg_easy_tilt_deg",    # DAgger round-0 initial-tilt bound (deg; default 8)
 	"controller_rg_full_tilt_deg",    # DAgger last-round + checkpoint-eval tilt (deg; default 30)

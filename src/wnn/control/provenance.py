@@ -63,6 +63,10 @@ class ControllerProvenance:
 	neuro: str = UNKNOWN
 	# CTRL-45: the axis receptive-field setting — "off" or "axis:cross=<c>".
 	rf: str = UNKNOWN
+	# CTRL-48: the thermometer calibration "eps:N,regime:R,ladder:L" and the excluded
+	# features "off" | "constant" | "names:a+b" | "constant+names:a+b".
+	calib: str = UNKNOWN
+	drop: str = UNKNOWN
 
 	def line(self) -> str:
 		"""The single greppable line the ladder copies into the marker."""
@@ -75,6 +79,8 @@ class ControllerProvenance:
 		        f"recorder={self.recorder} "
 		        f"neuro={self.neuro} "
 		        f"rf={self.rf} "
+		        f"calib={self.calib} "
+		        f"drop={self.drop} "
 		        f"fitness_pools={self.fitness_pools}")
 
 
@@ -99,12 +105,15 @@ def arch_token(ctbr: "dict | None", teacher: str, action_repeat: int, dt: float)
 		tok += ":obs=rate_i"
 	if ctbr.get("obs_dhat_plant") is not None:
 		tok += ":obs=dhat"
+	if ctbr.get("obs_dhat_residual_plant") is not None:   # CTRL-48
+		tok += ":obs=dhat_resid"
 	return tok
 
 
 def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: str = UNKNOWN,
                        train_asym: str = UNKNOWN, arch: str = UNKNOWN,
-                       rf: str = UNKNOWN) -> ControllerProvenance:
+                       rf: str = UNKNOWN, calib: str = UNKNOWN,
+                       drop: str = UNKNOWN) -> ControllerProvenance:
 	"""Gather every field, never raising: each accessor degrades to UNKNOWN / 0."""
 	wheel, abi, sha = _wheel_identity()
 	return ControllerProvenance(
@@ -120,6 +129,8 @@ def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: st
 		recorder=_recorder_inputs(),
 		neuro=_neuro_layout(),
 		rf=rf.replace(" ", "_").replace('"', ""),
+		calib=calib.replace(" ", "_").replace('"', ""),
+		drop=drop.replace(" ", "_").replace('"', ""),
 	)
 
 

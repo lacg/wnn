@@ -1969,7 +1969,7 @@ impl WnnController
 	/// CTRL-38 a1: true when the rate-I feature is on.
 	pub(crate) fn cascade_rate_i_on(&self) -> bool
 	{
-		self.cascade_obs.as_ref().is_some_and(|o| o.rate_i_on())
+		self.cascade_obs.as_ref().is_some_and(|o| o.needs_rate_i())
 	}
 
 	/// CTRL-38 a1: a teacher-flown rollout (calibration, recorder, expert_drives)

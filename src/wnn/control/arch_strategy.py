@@ -154,19 +154,41 @@ def rf_summary(spec: ControllerSpec, widths: list[int]) -> str:
 
 
 def _rf_fields(spec: ControllerSpec) -> dict:
-	"""CTRL-45 receptive-field config, DERIVED from the spec (never stored in the
-	genome): bank masks from feature_layout.BANK_FAMILIES, one per output bank;
-	feature masks from the spec's own feature table. Off -> the dataclass defaults."""
+	"""CTRL-45 receptive fields + CTRL-48 excluded features, DERIVED from the spec
+	(never stored in the genome): bank masks from feature_layout.BANK_FAMILIES (or one
+	all-axes bank when only features are excluded), feature masks from the spec's own
+	feature table with every excluded feature at 0. Both off -> the dataclass defaults."""
+	from .feature_layout import feature_layout
 	mode = getattr(spec, "receptive_fields", "off")
-	if mode == "off":
+	drops = tuple(getattr(spec, "drop_features", ()) or ())
+	if mode == "off" and not drops:
 		return {}
-	from .feature_layout import BANK_FAMILIES, feature_layout
+	layout = feature_layout(spec)
+	_refuse_unknown_drops(drops, layout)
+	if mode == "off":
+		banks, fam, cross = (0xFF,), [0xFF] * len(layout), 1.0
+	else:
+		banks, fam, cross = _axis_banks(spec, mode), [int(d.family) for d in layout], float(spec.rf_cross)
+	masks = tuple(0 if d.name in drops else m for d, m in zip(layout, fam))
+	return dict(receptive_fields=mode, rf_cross=cross, rf_bank_masks=banks, rf_feature_masks=masks)
+
+
+def _axis_banks(spec: ControllerSpec, mode: str) -> tuple:
+	from .feature_layout import BANK_FAMILIES
 	if spec.num_motors != len(BANK_FAMILIES):
 		raise ValueError(f"receptive_fields={mode} needs {len(BANK_FAMILIES)} axis banks "
 		                 f"(T, roll, pitch, yaw), got num_motors={spec.num_motors}")
-	return dict(receptive_fields=mode, rf_cross=float(spec.rf_cross),
-	            rf_bank_masks=tuple(int(f) for f in BANK_FAMILIES),
-	            rf_feature_masks=tuple(int(d.family) for d in feature_layout(spec)))
+	return tuple(int(f) for f in BANK_FAMILIES)
+
+
+def _refuse_unknown_drops(drops: tuple, layout) -> None:
+	"""--drop-features names must be features of THIS run's layout."""
+	names = {d.name for d in layout}
+	bad = [n for n in drops if n not in names]
+	if bad:
+		raise ValueError(f"--drop-features {bad}: not in this run's feature layout {sorted(names)}")
+	if len(set(drops)) >= len(layout):
+		raise ValueError("--drop-features would exclude every input feature")
 
 
 def _inherit_cells(child: "RecurrentArchGenome", parent: "RecurrentArchGenome"):

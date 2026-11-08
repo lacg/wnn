@@ -29,9 +29,11 @@ from wnn.ram.strategies.connectivity.generic_grid_search import GenericGridSearc
 from wnn.control.evaluator import (
 	ControllerEvaluator,
 	arch_shape_from_spec,
-	fit_thresholds_from_pid_rollouts,
+	fit_calibration,
 	calib_episode_config as _calib_ec,
 )
+from wnn.control.feature_layout import feature_names
+from wnn.control.threshold_calibration import calibration_from_args
 from wnn.control.recurrent_genome import RecurrentArchGenome
 from wnn.control.arch_strategy import default_controller_arch_config, rf_summary
 from wnn.control.ga_strategy import default_controller_ga_config, gate_args, search_aggregation
@@ -111,12 +113,7 @@ class ControllerGridSearch(GenericGridSearch):
 		# re-derive the teacher-only one. Everything downstream (the shared
 		# evaluator, every genome's address function) then uses the refitted ladder.
 		self.thresholds = thresholds_override if thresholds_override is not None else \
-			fit_thresholds_from_pid_rollouts(
-				probe_spec, num_episodes=10, seed=seed,
-				geometry=getattr(ec, "geometry", None),
-				alloc=getattr(ec, "alloc_residual", None),
-				episode_config=_calib_ec(args, ec),
-				outer_quantile=getattr(args, "threshold_outer_quantile", None))
+			self._fit_thresholds(probe_spec, seed)
 		# ONE shared mixed-shape evaluator for every grid point (kills the old
 		# throwaway-evaluator-per-point).
 		self._evaluator = ControllerEvaluator(
@@ -154,13 +151,30 @@ class ControllerGridSearch(GenericGridSearch):
 		super().__init__(top_k=args.grid_top_k, population_size=args.pop, log=print)
 
 	# ---- setup helpers ----------------------------------------------------
+	def _fit_thresholds(self, probe_spec, seed: int) -> list:
+		"""The run's ladder (--calib-* config). Under --drop-constant-features the
+		fit's MEASURED zero-spread features are resolved to layout names onto
+		args._drop_auto — the grid points are enumerated after this, so every genome
+		of the run is drawn with them excluded (CTRL-48 B; never a name list)."""
+		args, ec = self._args, self._ec
+		fit = fit_calibration(
+			probe_spec, calibration=calibration_from_args(args), seed=seed,
+			geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None),
+			episode_config=_calib_ec(args, ec),
+			outer_quantile=getattr(args, "threshold_outer_quantile", None))
+		if getattr(args, "drop_constant_features", False):
+			names = feature_names(probe_spec)
+			args._drop_auto = tuple(names[f] for f in fit.constant_features)
+			print(f"[drop-features] constant at calibration (zero spread): {list(args._drop_auto) or 'none'}")
+		return fit.thresholds
+
 	def _spec(self, sn: int, b: int, ob: int, on: "int | None" = None):
 		"""Build a ControllerSpec for a grid point. Lazy-imports `_make_spec`
 		from phased_ga (module-level import would be circular).
 
 		`on` (output_neurons) selects the point's PWM resolution: levels_per_motor
 		= on // num_motors, matching evaluator.spec_from_arch. None → --levels."""
-		from wnn.control.phased_ga import _make_spec
+		from wnn.control.phased_ga import _make_spec, resolved_drop_features
 		args = self._args
 		num_motors = getattr(args, '_geometry_num_motors', 4)
 		levels = args.levels if on is None else int(on) // num_motors
@@ -194,6 +208,7 @@ class ControllerGridSearch(GenericGridSearch):
 			conn_mutation_scope=getattr(args, "conn_mutation_scope", "free"),
 			receptive_fields=getattr(args, "receptive_fields", "off"),
 			rf_cross=float(getattr(args, "rf_cross", 0.2)),
+			drop_features=resolved_drop_features(args),
 			output_full_window=getattr(args, "output_full_window", False),
 			frame_stride=int(getattr(args, "frame_stride", 1)),
 			target_levels=int(getattr(args, "target_levels", 0)),
@@ -254,6 +269,7 @@ class ControllerGridSearch(GenericGridSearch):
 				f"or lower --grid-min-suffix (currently {min_suffix}). "
 				f"Requested sn={list(args.grid_state_neurons)}, bits={list(args.grid_bits)}.")
 		probe_spec = self._spec(*valid_pairs[0])
+		default_controller_arch_config(probe_spec)   # refuses unknown --drop-features names now
 		if probe_spec.receptive_fields != "off":
 			print(rf_summary(probe_spec, sorted({ob - sn for (sn, _sb, ob, _on) in valid_pairs})))
 		return valid_pairs, probe_spec

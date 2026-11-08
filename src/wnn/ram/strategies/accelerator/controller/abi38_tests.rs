@@ -38,6 +38,7 @@ pub(crate) fn spec() -> CtbrSpec
 		gamma: GAMMA,
 		obs_rate_i: false,
 		obs_dhat_plant: None,
+		obs_dhat_residual_plant: None,
 	}
 }
 

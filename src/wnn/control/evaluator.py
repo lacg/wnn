@@ -34,6 +34,7 @@ import numpy as np
 from wnn.control._accel import AttitudeSim, WnnController
 
 from .feature_layout import feature_layout
+from .threshold_calibration import CalibrationFit, ThresholdCalibration
 from .pid import AttitudePID, AttitudePIDConfig
 from .training import (
 	EpisodeConfig,
@@ -264,6 +265,11 @@ class ControllerSpec:
 	# stored in the genome: default_controller_arch_config builds the masks from here.
 	receptive_fields: str = "off"
 	rf_cross: float = 0.2
+	# CTRL-48 (--drop-features / --drop-constant-features): layout NAMES no connection
+	# may land on (the explicit list plus the features MEASURED constant at the grid's
+	# calibration). Connection-space only: the frame layout, thresholds and kernels are
+	# unchanged; default_controller_arch_config turns it into feature masks of 0.
+	drop_features: tuple = ()
 	# Feature-balance cap (26/06/2026): no input feature may capture more than this ratio ×
 	# the least-wired feature's connection count (targets obs_yaw_err's 2.14x over-wiring →
 	# coupling). 0/≤1 disables. Threaded → RecurrentArchConfig.feature_balance_ratio.
@@ -429,7 +435,7 @@ CTBR_DEFAULT_GAMMA = (1.0, 2.0, 2.0, 2.0)
 
 def ctbr_spec_dict(ec, rate_max=CTBR_DEFAULT_RATE_MAX, coll_max=None,
                    gamma=CTBR_DEFAULT_GAMMA, obs_rate_i: bool = False,
-                   obs_cascade_dhat: bool = False) -> dict:
+                   obs_cascade_dhat: bool = False, obs_cascade_dhat_residual: bool = False) -> dict:
 	"""ABI 38: the ControllerSpec.ctbr dict for an episode config — the inner rate
 	loop is the airframe's firmware cascade exactly as the trainer and the rivals
 	receive it (EpisodeConfig.cascade_kwargs: SI, converted once in
@@ -462,9 +468,13 @@ def ctbr_spec_dict(ec, rate_max=CTBR_DEFAULT_RATE_MAX, coll_max=None,
 	# ABI-40 spec dict (checkpoints, provenance, spec equality) is unchanged.
 	if obs_rate_i:
 		d["obs_rate_i"] = True
+	plant = [float(af.arm_length), float(af.k_drag), *(float(x) for x in af.inertia)]
 	if obs_cascade_dhat:
-		d["obs_dhat_plant"] = [float(af.arm_length), float(af.k_drag),
-		                       *(float(x) for x in af.inertia)]
+		d["obs_dhat_plant"] = list(plant)
+	# CTRL-48 (ABI 45): the unabsorbed-disturbance block — same observer constants,
+	# key present only when on (ABI-44 dicts unchanged).
+	if obs_cascade_dhat_residual:
+		d["obs_dhat_residual_plant"] = list(plant)
 	return d
 
 
@@ -482,7 +492,8 @@ def ctbr_cascade_feature_count(ctbr: "dict | None") -> int:
 	"""CTRL-38: input features the cascade blocks append (CtbrSpec::cascade_feature_count)."""
 	if not ctbr:
 		return 0
-	return 3 * int(bool(ctbr.get("obs_rate_i", False))) + 3 * int(ctbr.get("obs_dhat_plant") is not None)
+	return (3 * int(bool(ctbr.get("obs_rate_i", False))) + 3 * int(ctbr.get("obs_dhat_plant") is not None)
+	        + 3 * int(ctbr.get("obs_dhat_residual_plant") is not None))
 
 
 def ctbr_arg(spec):
@@ -644,12 +655,29 @@ def _feature_controller(spec: ControllerSpec) -> WnnController:
 		integral_leak=spec.integral_leak, integral_scale=spec.integral_scale)
 
 
-def _thresholds_from_samples(samples_per_feature, spec, method, outer_quantile, extra_samples) -> list[float]:
+def _centred_thresholds(arr: np.ndarray, bpf: int, outer_quantile) -> np.ndarray:
+	"""CTRL-48 centred ladder for a zero-referenced feature: symmetric thresholds at
+	±Q_|x|(p_j), p_j = (j/h)^1.5 · p_max (h = bpf//2), so bins are finest near 0 and
+	the outermost pair covers the same |x| mass (p_max = 1 − 2·q0) as the quantile
+	ladder's outer quantiles q0. Odd bpf puts one threshold at 0."""
+	q0 = float(outer_quantile) if outer_quantile is not None else 1.0 / (bpf + 1)
+	h = bpf // 2
+	p = (np.arange(1, h + 1) / h) ** 1.5 * (1.0 - 2.0 * q0)
+	mags = np.quantile(np.abs(arr), p)
+	mid = [0.0] if bpf % 2 else []
+	return np.concatenate([-mags[::-1], mid, mags])
+
+
+def _thresholds_from_samples(samples_per_feature, spec, method, outer_quantile, extra_samples,
+                             ladder: str = "quantile") -> list[float]:
 	"""Per-feature thermometer thresholds from the sampled operating distribution
 	(base 9 + enabled H2 extras) — shared by the Python reference-rollout fitter and
-	the Rust training-cascade sampler (CTRL-17 G1)."""
+	the Rust training-cascade sampler (CTRL-17 G1). ladder="centred" (CTRL-48) swaps
+	the quantile rule for _centred_thresholds on feature_layout.ZERO_REFERENCED
+	features; every other feature keeps the quantile ladder."""
 	nf = spec.num_features()
 	bpf = spec.bits_per_feature
+	zero_ref = [d.zero_ref for d in feature_layout(spec)] if ladder == "centred" else [False] * nf
 	thresholds = []
 	for f in range(nf):
 		# STUDENT STATES (option A, 10/08/2026). The fitter rolls out PID — a BETTER
@@ -667,7 +695,9 @@ def _thresholds_from_samples(samples_per_feature, spec, method, outer_quantile, 
 		if arr.size == 0:
 			# Feature never observed (constant target?). Fall back to [-1, 1] linear.
 			arr = np.array([-1.0, 1.0])
-		if method == "quantile":
+		if method == "quantile" and zero_ref[f]:
+			ts = _centred_thresholds(arr, bpf, outer_quantile)
+		elif method == "quantile":
 			# Uniform percentiles 1/(bpf+1)..bpf/(bpf+1)
 			# COVERAGE MARGIN (option C, 10/08/2026). The default outer quantiles are
 			# 1/(b+1) and b/(b+1) — with b=8 that is 0.111/0.889, so ~22% of the
@@ -713,9 +743,73 @@ def fit_thresholds_from_pid_rollouts(
 	episode_config=None,  # Optional[EpisodeConfig] — the OPERATING regime (see below)
 	outer_quantile=None,  # Optional[float] — coverage margin, see below
 	extra_samples=None,   # Optional[list[list[float]]] — per-feature student states
+	calibration: "ThresholdCalibration | None" = None,   # CTRL-48; None = num_episodes, flown, quantile
 ) -> list[float]:
-	"""Fit per-feature thermometer thresholds by running reference-driven
-	rollouts and collecting the empirical sensor distributions.
+	"""Per-feature thermometer thresholds — fit_calibration(...).thresholds (see there)."""
+	return fit_calibration(spec, num_episodes, seed, method, geometry, alloc, episode_config,
+	                       outer_quantile, extra_samples, calibration).thresholds
+
+
+def fit_calibration(
+	spec: ControllerSpec,
+	num_episodes: int = 20,
+	seed: int = 0,
+	method: str = "quantile",
+	geometry=None,
+	alloc=None,
+	episode_config=None,
+	outer_quantile=None,
+	extra_samples=None,
+	calibration: "ThresholdCalibration | None" = None,
+) -> CalibrationFit:
+	"""Fit the ladder AND report the features whose calibration samples have ZERO
+	spread (CTRL-48 B, --drop-constant-features: measured, never a name list).
+	`calibration` (ThresholdCalibration) sets episodes / regime / ladder; None keeps
+	the legacy call (num_episodes, flown, quantile), byte-identical."""
+	cal = calibration or ThresholdCalibration(episodes=int(num_episodes))
+	samples = _calibration_samples(spec, cal, seed, geometry, alloc, episode_config)
+	thresholds = _thresholds_from_samples(samples, spec, method, outer_quantile, extra_samples,
+	                                      ladder=cal.ladder)
+	return CalibrationFit(thresholds=thresholds,
+	                      constant_features=_zero_spread_features(samples, extra_samples))
+
+
+def _zero_spread_features(samples_per_feature, extra_samples) -> tuple[int, ...]:
+	"""Features whose pooled samples (teacher + student) never vary (max == min)."""
+	out = []
+	for f, col in enumerate(samples_per_feature):
+		extra = list(extra_samples[f]) if extra_samples is not None and f < len(extra_samples) else []
+		vals = list(col) + extra
+		if vals and max(vals) == min(vals):
+			out.append(f)
+	return tuple(out)
+
+
+def _calibration_segments(episode_config, cal: "ThresholdCalibration", seed: int) -> list:
+	"""(episode config, episodes, seed) blocks the ladder is pooled over: the flown
+	regime, plus under train_mix one episode per curriculum tilt (own seed stream)."""
+	import dataclasses
+	segs = [(episode_config, int(cal.episodes), int(seed))]
+	for i, tilt in enumerate(cal.mix_tilts_deg()):
+		ss = int(np.random.SeedSequence([int(seed), 0x48, i]).generate_state(1, np.uint64)[0]) & ((1 << 63) - 1)
+		segs.append((dataclasses.replace(episode_config, max_initial_tilt_rad=math.radians(tilt)), 1, ss))
+	return segs
+
+
+def _training_cascade_samples(spec, episode_config, cal: "ThresholdCalibration", seed: int):
+	"""Per-feature samples from the Rust training-cascade sampler, pooled over the
+	calibration segments (one segment = the ABI-44 call exactly)."""
+	from wnn.control import _accel as ra
+	pooled = None
+	for ec_s, n, seed_s in _calibration_segments(episode_config, cal, seed):
+		part = ra.sample_calibration_features(
+			_feature_controller(spec), reference_packed_config(ec_s), int(n), int(seed_s))
+		pooled = [list(c) for c in part] if pooled is None else [p + list(c) for p, c in zip(pooled, part)]
+	return pooled
+
+
+def _calibration_samples(spec, cal: "ThresholdCalibration", seed, geometry, alloc, episode_config):
+	"""Per-feature calibration samples by running reference-driven rollouts.
 
 	⚠️ CALIBRATE ON THE REGIME YOU FLY (09/08/2026). The rollout config used to be
 	hardcoded at 30° initial tilt while every production recipe flies `--tilt 5.0`,
@@ -742,9 +836,10 @@ def fit_thresholds_from_pid_rollouts(
 		              thermometer) or 'linear' (min/max linear spacing).
 
 	Returns:
-		thresholds: flat list of length NUM_FEATURES * bits_per_feature.
+		samples_per_feature: one list of samples per feature.
 	"""
 	rng = np.random.default_rng(seed)
+	num_episodes = int(cal.episodes)
 	# SCOPE C STAGE 1 (13/08/2026): when the run flies TRANSLATION, the ladder
 	# must be fit on that plant. Otherwise z/vz/collective are identically 0
 	# during calibration and their thermometer thresholds all come out 0.0 —
@@ -773,11 +868,12 @@ def fit_thresholds_from_pid_rollouts(
 	# drift. Attitude-only and overactuated runs keep the Python rollout below,
 	# byte-identical.
 	if _stage1_cal and _ec_translation and geometry is None:
-		from wnn.control import _accel as ra
-		samples = ra.sample_calibration_features(
-			_feature_controller(spec), reference_packed_config(episode_config),
-			int(num_episodes), int(seed))
-		return _thresholds_from_samples(samples, spec, method, outer_quantile, extra_samples)
+		return _training_cascade_samples(spec, episode_config, cal, seed)
+	# CTRL-48: the curriculum-tilt pool is built from the training cascade's sampler;
+	# the legacy Python rollout below has no such sampler — refuse, never ignore.
+	if cal.regime != "flown":
+		raise ValueError(f"calibration regime {cal.regime!r} needs the training-cascade sampler "
+		                 "(--translation with an --airframe); this run calibrates on the Python rollout.")
 	sim = _calib_plant_sim(episode_config)
 	_hover_pwm, _target_alt = 0.5, 0.0
 	if _stage1_cal:
@@ -925,12 +1021,12 @@ def fit_thresholds_from_pid_rollouts(
 			if sim.is_unstable():
 				break
 
-	_cascade_columns_from_training_cascade(samples_per_feature, spec, episode_config, num_episodes, seed)
-	return _thresholds_from_samples(samples_per_feature, spec, method, outer_quantile, extra_samples)
+	_cascade_columns_from_training_cascade(samples_per_feature, spec, episode_config, cal, seed)
+	return samples_per_feature
 
 
 def _cascade_columns_from_training_cascade(samples_per_feature, spec, episode_config,
-                                           num_episodes: int, seed: int) -> None:
+                                           cal: "ThresholdCalibration", seed: int) -> None:
 	"""CTRL-38: refit the cascade blocks' columns (the LAST ctbr_cascade_feature_count
 	features) on rollouts that actually PRODUCE them. This Python rollout flies a PID
 	the feature controller does not see: the controller's rate integrator would
@@ -943,13 +1039,10 @@ def _cascade_columns_from_training_cascade(samples_per_feature, spec, episode_co
 	if n_cas == 0:
 		return
 	if episode_config is None or getattr(episode_config, "airframe", None) is None:
-		raise ValueError("--obs-rate-i / --obs-cascade-dhat: the threshold fit needs the run's "
+		raise ValueError("--obs-rate-i / --obs-cascade-dhat(-residual): the threshold fit needs the run's "
 		                 "EpisodeConfig with its airframe (the cascade blocks are sampled on the "
 		                 "training cascade) — got none.")
-	from wnn.control import _accel as ra
-	rust = ra.sample_calibration_features(
-		_feature_controller(spec), reference_packed_config(episode_config),
-		int(num_episodes), int(seed))
+	rust = _training_cascade_samples(spec, episode_config, cal, seed)
 	nf = spec.num_features()
 	for f in range(nf - n_cas, nf):
 		samples_per_feature[f] = [float(v) for v in rust[f]]

@@ -32,14 +32,27 @@ fn plant() -> [f64; 5]
 
 fn obs_spec(rate_i: bool, dhat: bool) -> CtbrSpec
 {
+	obs_spec3(rate_i, dhat, false)
+}
+
+/// CTRL-48: + the unabsorbed-disturbance block (a3).
+pub(crate) fn obs_spec3(rate_i: bool, dhat: bool, resid: bool) -> CtbrSpec
+{
 	let mut s = spec();
 	s.obs_rate_i = rate_i;
 	s.obs_dhat_plant = dhat.then(plant);
+	s.obs_dhat_residual_plant = resid.then(plant);
 	s
 }
 
 /// Thermometer rows for the blocks: rate-I lives in [−1, 1], d̂ in rad/s² (~±15).
 fn obs_thresholds(rate_i: bool, dhat: bool, seed: u64) -> Vec<f32>
+{
+	obs_thresholds3(rate_i, dhat, false, seed)
+}
+
+/// CTRL-48: the residual lives in authority units (a fraction of c·ki·i_limit).
+fn obs_thresholds3(rate_i: bool, dhat: bool, resid: bool, seed: u64) -> Vec<f32>
 {
 	let mut rng = SmallRng::seed_from_u64(seed ^ 0x38_7E);
 	let mut th = Vec::new();
@@ -51,6 +64,10 @@ fn obs_thresholds(rate_i: bool, dhat: bool, seed: u64) -> Vec<f32>
 	{
 		th.extend((0..3 * BPF).map(|_| rng.gen_range(-12.0f32..12.0)));
 	}
+	if resid
+	{
+		th.extend((0..3 * BPF).map(|_| rng.gen_range(-0.3f32..0.3)));
+	}
 	th
 }
 
@@ -60,9 +77,15 @@ fn obs_thresholds(rate_i: bool, dhat: bool, seed: u64) -> Vec<f32>
 /// would read the new bits and every test below would pass on an inert feature.
 pub(crate) fn obs_student(sn: usize, ar: usize, seed: u64, rate_i: bool, dhat: bool) -> WnnController
 {
+	obs_student3(sn, ar, seed, rate_i, dhat, false)
+}
+
+/// CTRL-48: obs_student + the residual block (a3).
+pub(crate) fn obs_student3(sn: usize, ar: usize, seed: u64, rate_i: bool, dhat: bool, resid: bool) -> WnnController
+{
 	let (levels, window, obpn, sbpn) = (8usize, 2usize, 10usize, 6usize);
 	let base_nf = 9 + 2 + 2 + 2 + 3 + 4;
-	let nf = base_nf + 3 * (rate_i as usize) + 3 * (dhat as usize);
+	let nf = base_nf + 3 * (rate_i as usize) + 3 * (dhat as usize) + 3 * (resid as usize);
 	let mut rng = SmallRng::seed_from_u64(seed);
 	let thresholds: Vec<f32> = (0..base_nf * BPF).map(|_| rng.gen_range(-0.4f32..0.4)).collect();
 	let (state_in, out_in) = (window * nf * BPF + sn, nf * BPF + sn);
@@ -77,27 +100,27 @@ pub(crate) fn obs_student(sn: usize, ar: usize, seed: u64, rate_i: bool, dhat: b
 		true, true, true, true, true, false, 1,
 	)
 	.expect("ctrl38 student must construct");
-	c.enable_ctbr_with_obs(obs_spec(rate_i, dhat), obs_thresholds(rate_i, dhat, seed))
+	c.enable_ctbr_with_obs(obs_spec3(rate_i, dhat, resid), obs_thresholds3(rate_i, dhat, resid, seed))
 		.expect("ctrl38 student");
 	assert_eq!(c.num_features(), nf);
 	c
 }
 
 /// The cf21 attitude-only plant of the stage-2 config (lag `lag`).
-fn cf21_sim(lag: f32) -> AttitudeSim
+pub(crate) fn cf21_sim(lag: f32) -> AttitudeSim
 {
 	AirframeRs::from_cfg(&l4c_cfg(lag, 4)).sim()
 }
 
 /// A plant with only motor asymmetry (or only a torque bias) — no noise.
-fn arm_plant(sim: &mut AttitudeSim, tau: [f32; 3], asym: [f32; 4])
+pub(crate) fn arm_plant(sim: &mut AttitudeSim, tau: [f32; 3], asym: [f32; 4])
 {
 	sim.set_disturbance(tau, 0.0, 0.1, asym, 0.0, 0.0, 0.0, 1, 0.0, 0, 0, 0.0);
 }
 
 /// Hand-flown DEPLOY loop (the scorer's protocol): the student flies its own command.
 /// Returns (cascade_obs_last per step, last command).
-fn fly(c: &mut WnnController, sim: &mut AttitudeSim, steps: usize) -> (Vec<[f32; 6]>, [f32; 4])
+pub(crate) fn fly(c: &mut WnnController, sim: &mut AttitudeSim, steps: usize) -> (Vec<[f32; 6]>, [f32; 4])
 {
 	c.set_observer_motor_lag_core(sim.motor_lag());
 	sim.reset(Some([1.0, 0.0, 0.0, 0.0]), Some([0.05, -0.04, 0.02]));
@@ -195,7 +218,7 @@ fn rate_i_converges_to_trim_under_torque_bias()
 
 /// The DAgger rollout config whose plant is the deploy loop's: fixed asymmetry, no
 /// noise, the student flies (no expert, no exploration).
-fn asym_cfg(asym: [f32; 4], lag: f32) -> RewardGatedConfigPacked
+pub(crate) fn asym_cfg(asym: [f32; 4], lag: f32) -> RewardGatedConfigPacked
 {
 	let mut cfg = l4c_cfg(lag, 4);
 	cfg.dist_motor_asym = asym;

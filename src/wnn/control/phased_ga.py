@@ -290,6 +290,9 @@ def _resume_ga_state_if_targeted(strat, args, stage_num: int) -> None:
 	      f"{strat._resume_start_gen} with the dumped GA state", flush=True)
 
 from wnn.control.provenance import arch_token, collect_provenance, obs_pwm_convention
+from wnn.control.threshold_calibration import (
+	CALIB_LADDERS, CALIB_REGIMES, calibration_from_args,
+)
 from wnn.control.evaluator import (
 	ControllerSpec, ControllerEvaluator, arch_shape_from_spec, spec_from_arch,
 	fit_thresholds_from_pid_rollouts,
@@ -409,7 +412,8 @@ def _resolve_ctbr(args, ec) -> None:
 	as EpisodeConfig.cascade_kwargs hands it to the trainer and the rivals."""
 	args._ctbr = None
 	cascade_obs = {"--obs-rate-i": bool(getattr(args, "obs_rate_i", False)),
-	               "--obs-cascade-dhat": bool(getattr(args, "obs_cascade_dhat", False))}
+	               "--obs-cascade-dhat": bool(getattr(args, "obs_cascade_dhat", False)),
+	               "--obs-cascade-dhat-residual": bool(getattr(args, "obs_cascade_dhat_residual", False))}
 	if getattr(args, "output_mode", "pwm") != "ctbr":
 		on = [f for f, v in cascade_obs.items() if v]
 		if on:
@@ -443,7 +447,8 @@ def _resolve_ctbr(args, ec) -> None:
 		coll_max=args.ctbr_coll_max,
 		gamma=tuple(args.ctbr_gamma) if args.ctbr_gamma else CTBR_DEFAULT_GAMMA,
 		obs_rate_i=cascade_obs["--obs-rate-i"],
-		obs_cascade_dhat=cascade_obs["--obs-cascade-dhat"])
+		obs_cascade_dhat=cascade_obs["--obs-cascade-dhat"],
+		obs_cascade_dhat_residual=cascade_obs["--obs-cascade-dhat-residual"])
 	c = args._ctbr
 	print(f"[CTBR] output_mode=ctbr: WNN outer loop at {1000.0 / max(int(args.action_repeat), 1) / (ec.dt * 1000.0):g} Hz "
 	      f"(action_repeat {args.action_repeat}) over the firmware rate PID at {c['attitude_hz']:g} Hz; "
@@ -483,6 +488,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                conn_policy: str = "spread", conn_policy_min: int = 2,
                conn_mutation_scope: str = "free",
                receptive_fields: str = "off", rf_cross: float = 0.2,
+               drop_features: tuple = (),
                output_full_window: bool = False, frame_stride: int = 1,
                target_levels: int = 0,
                threshold_gamma: float = 1.0,
@@ -535,6 +541,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		conn_policy=conn_policy, conn_policy_min=conn_policy_min,
 		conn_mutation_scope=conn_mutation_scope,
 		receptive_fields=receptive_fields, rf_cross=rf_cross,
+		drop_features=tuple(drop_features),
 		output_full_window=output_full_window, frame_stride=frame_stride,
 		target_levels=target_levels,
 		threshold_gamma=threshold_gamma,
@@ -794,23 +801,61 @@ def _print_stage_result(idx: int, name: str, res, gens: int, dt: float, ev: Cont
 	return m
 
 
+def resolved_drop_features(args) -> tuple:
+	"""CTRL-48: the run's excluded features — --drop-features names plus the set the
+	grid MEASURED constant (args._drop_auto, --drop-constant-features). Sorted, unique."""
+	explicit = [n.strip() for n in (getattr(args, "drop_features", "") or "").split(",") if n.strip()]
+	return tuple(sorted(set(explicit) | set(getattr(args, "_drop_auto", ()) or ())))
+
+
+def drop_token(args) -> str:
+	"""Provenance drop= value: off | names:<a+b> | constant | constant+names:<a+b>."""
+	names = [n.strip() for n in (getattr(args, "drop_features", "") or "").split(",") if n.strip()]
+	parts = (["constant"] if getattr(args, "drop_constant_features", False) else []) \
+		+ ([f"names:{'+'.join(sorted(set(names)))}"] if names else [])
+	return "+".join(parts) or "off"
+
+
+def _refuse_projection_combos(args) -> None:
+	"""CTRL-45/48: both connection projections (receptive fields, excluded features)
+	re-draw connections after every operator, so they refuse the creation laws they
+	would silently break and the global feature-balance cap."""
+	rf = getattr(args, "receptive_fields", "off") != "off"
+	drops = bool(getattr(args, "drop_features", "")) or getattr(args, "drop_constant_features", False)
+	if not (rf or drops):
+		return
+	flag = "--receptive-fields axis" if rf else "--drop-features/--drop-constant-features"
+	if args.conn_policy != "spread":
+		raise SystemExit(f"{flag} refuses --conn-policy {args.conn_policy}: the projection would break "
+		                 "its min-m / frame structure (spread only).")
+	if float(getattr(args, "feature_balance_ratio", 0.0)) > 1.0:
+		raise SystemExit(f"{flag} refuses --feature-balance-ratio > 1: a global per-feature cap fights "
+		                 "the projection (it moves bits TO an excluded / out-of-family feature).")
+
+
 def _refuse_rf_combos(args) -> None:
 	"""CTRL-45 v1 refusals (design §4.4): combinations the axis projection would
 	silently break, refused at arg-parse instead of flying a meaningless arm."""
+	_refuse_projection_combos(args)
 	if getattr(args, "receptive_fields", "off") == "off":
 		return
 	if not 0.0 <= float(args.rf_cross) <= 1.0:
 		raise SystemExit(f"--rf-cross must be in [0, 1] (got {args.rf_cross}).")
-	if args.conn_policy != "spread":
-		raise SystemExit(f"--receptive-fields axis refuses --conn-policy {args.conn_policy}: the "
-		                 "projection would break its min-m / frame structure (v1 is spread only).")
-	if float(getattr(args, "feature_balance_ratio", 0.0)) > 1.0:
-		raise SystemExit("--receptive-fields axis refuses --feature-balance-ratio > 1: a global "
-		                 "per-feature cap contradicts per-bank families.")
 	if args.output_mode != "ctbr" and not getattr(args, "decouple_outputs", False):
 		raise SystemExit("--receptive-fields axis needs --output-mode ctbr or --decouple-outputs: "
 		                 "in PWM mode a bank is a MOTOR, which needs every axis (the drawn-family "
 		                 "variant is the future answer there).")
+
+
+def _refuse_calib_combos(args, ec) -> None:
+	"""CTRL-48: calibration settings that cannot do what they say on this run."""
+	cal = calibration_from_args(args)   # validates episodes / regime / ladder
+	if cal.regime == "train_mix" and not (ec.translation and ec.airframe is not None):
+		raise SystemExit("--calib-regime train_mix pools curriculum-tilt episodes from the training-cascade "
+		                 "sampler, which needs --translation with an --airframe.")
+	if cal.ladder == "centred" and float(getattr(args, "threshold_gamma", 1.0)) != 1.0:
+		raise SystemExit("--calib-ladder centred places its own near-zero density; it refuses "
+		                 "--threshold-gamma != 1 (two warps of the same ladder).")
 
 
 def rf_token(args) -> str:
@@ -924,7 +969,7 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	Stages 2-3 — with the winner already at index 0 so it lands in gen-0 elites.
 	Single-genome warm-starting was removed (a normal run never begins from one
 	genome; the prior winner is inside the carried population by construction)."""
-	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=seed,
+	thresholds = fit_thresholds_from_pid_rollouts(spec, calibration=calibration_from_args(args), seed=seed,
 		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None),
 		episode_config=_calib_ec(args, ec))
 	ev = ControllerEvaluator(spec, num_eval_episodes=args.eval_episodes,
@@ -1196,7 +1241,7 @@ def _report_thresholds(args, ec, spec, report_seed: int, train_seed: int, use_sc
 	"""
 	seed = train_seed if use_score else report_seed
 	return fit_thresholds_from_pid_rollouts(
-		spec, num_episodes=10, seed=seed,
+		spec, calibration=calibration_from_args(args), seed=seed,
 		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None),
 		episode_config=_calib_ec(args, ec))
 
@@ -1319,7 +1364,7 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	new fitness weight schema — strictly stronger than seeding with just the
 	single winner because 200 evolved genomes carry more diversity than 1
 	winner + 199 random ones."""
-	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=seed,
+	thresholds = fit_thresholds_from_pid_rollouts(spec, calibration=calibration_from_args(args), seed=seed,
 		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None),
 		episode_config=_calib_ec(args, ec))
 	mem_eps = getattr(args, "memory_eval_episodes", None) or args.eval_episodes
@@ -1770,7 +1815,7 @@ def _refit_thresholds_from_student(args, ec, seeds, grid, winner_genome):
 		print("  [thr-refit] collector returned nothing — keeping the teacher fit")
 		return None
 	thr = fit_thresholds_from_pid_rollouts(
-		grid._probe_spec, num_episodes=10, seed=seeds.train,
+		grid._probe_spec, calibration=calibration_from_args(args), seed=seeds.train,
 		geometry=getattr(ec, "geometry", None),
 		alloc=getattr(ec, "alloc_residual", None),
 		episode_config=_calib_ec(args, ec),
@@ -2989,6 +3034,29 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                help="CTRL-45: fraction of an output neuron's connections allowed OUTSIDE its "
 	                     "bank's axis family (a COUNT budget, floor(c x width); 24 bits at 0.2 -> 4). "
 	                     "In [0, 1]; 1 = no constraint, 0 = pure family.")
+	# CTRL-48 (ABI 45): thermometer calibration (docs/ctrl44b_thermometer_encoding_audit.md)
+	# and excluded features. Every default reproduces ABI 44 bit-identically.
+	ap.add_argument("--calib-episodes", type=int, default=10,
+	                help="CTRL-48: calibration episodes the thermometer ladder is fitted on (default 10 = "
+	                     "the ABI-44 fit exactly: episodes 0-9 of the stream). Per-episode-constant features "
+	                     "(d-hat, rate-I, coll_cmd, alt_err, e_x/e_y, yaw_err) get one independent value per "
+	                     "episode, so 10 makes their ladder a per-seed draw; the audit recommends 200.")
+	ap.add_argument("--calib-regime", choices=list(CALIB_REGIMES), default="flown",
+	                help="CTRL-48: flown = the run's own episode config (legacy); train_mix = the flown "
+	                     "episodes POOLED with as many again spread over the DAgger curriculum tilts "
+	                     "(--rg-easy-tilt-deg .. --rg-full-tilt-deg). Needs the training-cascade sampler "
+	                     "(--translation with an --airframe).")
+	ap.add_argument("--calib-ladder", choices=list(CALIB_LADDERS), default="quantile",
+	                help="CTRL-48: quantile (legacy) or centred = symmetric +-Q_|x|(p) thresholds, p on a "
+	                     "^1.5 curve (finer near 0), for the zero-referenced features only "
+	                     "(feature_layout.ZERO_REFERENCED); the rest keep quantile.")
+	ap.add_argument("--drop-features", type=str, default="",
+	                help="CTRL-48: comma-separated feature-layout names no connection may land on (e.g. "
+	                     "acc_x,acc_y under the specific-force IMU). Connection space only: the frame, "
+	                     "thresholds and kernels are unchanged. Unknown names are refused.")
+	ap.add_argument("--drop-constant-features", action="store_true",
+	                help="CTRL-48: exclude every feature whose calibration samples have ZERO spread, "
+	                     "MEASURED at the grid's threshold fit (never a name list).")
 	ap.add_argument("--conn-mutation-scope", choices=["free", "window", "feature"], default="free",
 	                help="GA-connectivity mutation scope (16/08, Luiz's connectivity types): where a "
 	                     "CONNECTIONS-stage rewire may land. free = legacy (anywhere — can leave the "
@@ -3191,6 +3259,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "(same law and gain, ctrl cascade_dhat.rs) run inside the student on the APPLIED motor "
 	                     "command (post rate loop, the plant's motor lag modelled) and the gyro; the airframe "
 	                     "constants come from --airframe. Requires --output-mode ctbr. Default OFF.")
+	ap.add_argument("--obs-cascade-dhat-residual", action="store_true",
+	                help="ctbr CTRL-48 a3: +3 input features = the UNABSORBED disturbance the teacher plans "
+	                     "on, (d̂ + c·ki·I)/(c·ki·i_limit) per axis (≡ I − I_ss(d̂) in integrator-authority "
+	                     "units): decays to 0 as the rate loop absorbs d, so a held vehicle reads ~0 on "
+	                     "roll/pitch while yaw keeps its deficit. Independent of --obs-rate-i / "
+	                     "--obs-cascade-dhat. Requires --output-mode ctbr. Default OFF.")
 	# ABI 12 granularity ablation (Luiz 12/07/2026): the controller cell format.
 	# TERNARY runs empty_value=0.5 (PLN convention); BINARY decodes antagonist-
 	# pair E/I output halves (effective neutral 0.5). QUAD is bit-identical to
@@ -4005,6 +4079,7 @@ def main():
 		                 "output layer sees only frame t-0, so per-frame specialisation is a no-op "
 		                 "(it would silently run as min1).")
 	_refuse_rf_combos(args)
+	_refuse_calib_combos(args, ec)
 	if args._conn_policy == "min_per_cluster":
 		print(f"[conn-policy] {_cp}: fresh OUTPUT maps drawn MIN_PER_CLUSTER"
 		      f"(m={args._conn_policy_min}) — touched features get >= m thresholds, "
@@ -4098,7 +4173,8 @@ def main():
 	                         train_asym=train_asym_token(ec),
 	                         arch=arch_token(getattr(args, "_ctbr", None), args.teacher,
 	                                         args.action_repeat, ec.dt),
-	                         rf=rf_token(args)).line())
+	                         rf=rf_token(args), calib=calibration_from_args(args).token(),
+	                         drop=drop_token(args)).line())
 	import shlex
 	print(f"[argv] {shlex.join(args.cli_argv)}", flush=True)
 

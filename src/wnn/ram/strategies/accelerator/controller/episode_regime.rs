@@ -352,7 +352,8 @@ pub(crate) fn validate_ctbr_regime(controller: &WnnController, cfg: &RewardGated
 			s.provenance_line()
 		));
 	}
-	if let Some(p) = s.obs_dhat_plant
+	// CTRL-48: the residual block's observer must fly the same airframe too.
+	if let Some(p) = s.obs_dhat_plant.or(s.obs_dhat_residual_plant)
 	{
 		let cfg_plant = [
 			cfg.af_arm_length as f64,

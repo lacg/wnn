@@ -64,6 +64,8 @@ mod ctrl39_tests; // CTRL-39: the MEMORY recorder reads the FLOWN command (train
 #[cfg(test)]
 mod ctrl40_tests; // CTRL-40: Metal split train/record for the applied-actuator inputs (CPU parity)
 #[cfg(test)]
+mod ctrl48_tests; // CTRL-48: the cascade unabsorbed-disturbance block — physics, replay, CPU/GPU parity
+#[cfg(test)]
 mod abi38_tests; // ABI 38: the cascade controller — identity, rivals, CPU/GPU parity, trainers
 #[cfg(test)]
 mod abi34_tests; // ABI 34: lag-aware teachers, one pwm convention under motor lag, T=0 pins
@@ -389,7 +391,16 @@ mod metal_controller;
 ///   = "segment" (provenance neuro=). (b) Axis receptive fields: arch_project_receptive_fields
 ///   (receptive_fields.rs) — a host-side GA connectivity operator, no kernel change;
 ///   off (the default) draws nothing. Every runtime path is unchanged (pins).
-pub const ABI_VERSION: u32 = 44;
+/// ABI 45 (08/11/2026, CTRL-48, every item default-OFF ⇒ ABI 44 bit-identical):
+///   (a) CtbrSpec.obs_dhat_residual_plant (`--obs-cascade-dhat-residual`): the cascade
+///   block r = (d̂ + c·ki·I)/(c·ki·i_limit) per axis (cascade_obs.rs a3), computed from
+///   the same recorded six values as rate-I / d̂ (record format unchanged), CPU + Metal
+///   (score kernel cas_step, replay_applied_inputs; RolloutParams +7 / TrainParams +7);
+///   (b) arch_project_receptive_fields treats a feature mask of 0 as EXCLUDED (never
+///   kept, not even as cross) — the connection-space mechanism of `--drop-features` /
+///   `--drop-constant-features`; the frame layout and every kernel are unchanged.
+///   Calibration (`--calib-*`) is Python orchestration over the existing sampler.
+pub const ABI_VERSION: u32 = 45;
 
 /// ABI 44: how output neurogenesis lays out the output layer — "segment" = every
 /// bank / E-I half resizes at its own tail (pre-44 Python resized the flat tail).

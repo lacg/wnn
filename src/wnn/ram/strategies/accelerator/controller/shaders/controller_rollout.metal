@@ -273,6 +273,13 @@ struct Params
 	float cas_clamp[3];
 	float cas_kt;
 	float cas_l_gain;
+	// CTRL-48 (ABI 45), appended in lockstep with RolloutParams: the unabsorbed-
+	// disturbance block (cascade_obs.rs a3) = d̂·inv_a + w·(I/L), after rate-I and d̂.
+	// It needs both values, so rate-I and the observer run when it is on even if they
+	// are not emitted. 0 ⇒ the ABI-44 rollout.
+	uint cas_resid;
+	float cas_resid_inv_a[3];
+	float cas_resid_w[3];
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -1010,21 +1017,28 @@ inline void cas_observe(constant Params &P, thread CasObs &o, thread const float
 inline void cas_step(constant Params &P, thread float *sensors, thread CasObs &o,
 										 thread const float *ctbr_st, thread const float *applied)
 {
-	uint fi = P.num_features - 3u * (P.cas_rate_i + P.cas_dhat);
-	if (P.cas_rate_i != 0u)
+	uint fi = P.num_features - 3u * (P.cas_rate_i + P.cas_dhat + P.cas_resid);
+	float ri[3] = {0.0f, 0.0f, 0.0f};
+	if (P.cas_rate_i != 0u || P.cas_resid != 0u)
 	{
 		for (uint a = 0u; a < 3u; a++)
 		{
 			float lim = P.pidfw_rate[a * 4u + 3u];
-			sensors[fi++] = (lim > 0.0f) ? (ctbr_st[3u + a] / lim) : ctbr_st[3u + a];
+			ri[a] = (lim > 0.0f) ? (ctbr_st[3u + a] / lim) : ctbr_st[3u + a];
 		}
 	}
-	if (P.cas_dhat != 0u)
-	{
+	if (P.cas_rate_i != 0u)
+		for (uint a = 0u; a < 3u; a++)
+			sensors[fi++] = ri[a];
+	if (P.cas_dhat != 0u || P.cas_resid != 0u)
 		cas_observe(P, o, sensors, applied);
+	if (P.cas_dhat != 0u)
 		for (uint a = 0u; a < 3u; a++)
 			sensors[fi++] = o.dhat[a];
-	}
+	// CTRL-48 a3, the CPU's CasResidual::of on the same (f32) values.
+	if (P.cas_resid != 0u)
+		for (uint a = 0u; a < 3u; a++)
+			sensors[fi++] = o.dhat[a] * P.cas_resid_inv_a[a] + P.cas_resid_w[a] * ri[a];
 }
 
 // =============================================================================
@@ -1626,7 +1640,7 @@ kernel void controller_rollout(
 		// step's (mirrors controller.rs step()'s hold branch). t=0 is a decision.
 		// CTRL-38: the cascade blocks for THIS step, on the observed gyro and the
 		// command the plant received last step (pwm_applied) — before derive_features.
-		if (CAS_OBS && (P.cas_rate_i != 0u || P.cas_dhat != 0u))
+		if (CAS_OBS && (P.cas_rate_i != 0u || P.cas_dhat != 0u || P.cas_resid != 0u))
 			cas_step(P, sensors, cas_o, ctbr_st, pwm_applied);
 
 		float pwm[MAX_ROTORS];
@@ -2333,6 +2347,11 @@ struct TrainParams
 	// derive_features' own d̂ block emits the recorded value without an update.
 	uint cas_rate_i;
 	uint cas_dhat;
+	// CTRL-48 (ABI 45), appended in lockstep: the residual block, recomputed from the
+	// SAME recorded six values (cas_rec) as the CPU replay.
+	uint cas_resid;
+	float cas_resid_inv_a[3];
+	float cas_resid_w[3];
 };
 
 // Mirror of WnnController::output_decode_target (controller.rs): map a per-motor
@@ -2405,13 +2424,17 @@ inline void replay_applied_inputs(constant TrainParams &P, uint s, device const 
 			dhat[a] = dhat_rec[s * 3u + a];
 		dhat_have_last = false;
 	}
-	uint fi = P.num_features - 3u * (P.cas_rate_i + P.cas_dhat);
+	uint fi = P.num_features - 3u * (P.cas_rate_i + P.cas_dhat + P.cas_resid);
 	if (P.cas_rate_i != 0u)
 		for (uint a = 0u; a < 3u; a++)
 			sensors[fi++] = cas_rec[s * 6u + a];
 	if (P.cas_dhat != 0u)
 		for (uint a = 0u; a < 3u; a++)
 			sensors[fi++] = cas_rec[s * 6u + 3u + a];
+	// CTRL-48 a3 from the same recorded six (CasResidual::of).
+	if (P.cas_resid != 0u)
+		for (uint a = 0u; a < 3u; a++)
+			sensors[fi++] = cas_rec[s * 6u + 3u + a] * P.cas_resid_inv_a[a] + P.cas_resid_w[a] * cas_rec[s * 6u + a];
 }
 
 kernel void controller_train(
@@ -2549,7 +2572,7 @@ kernel void controller_train(
 					F.att_up_z = att_up_rec[s3 + 2];
 				}
 			}
-			if (P.dhat_on != 0u || P.cas_rate_i != 0u || P.cas_dhat != 0u)
+			if (P.dhat_on != 0u || P.cas_rate_i != 0u || P.cas_dhat != 0u || P.cas_resid != 0u)
 				replay_applied_inputs(P, s3 / 3u, dhat_rec, cas_rec, sensors, dhat, dhat_have_last);
 
 			// Action-repeat hold: accumulators tick; no ring push / forward /
@@ -2761,7 +2784,7 @@ kernel void controller_record(
 				F.att_up_z = att_up_rec[s3 + 2];
 			}
 		}
-		if (P.dhat_on != 0u || P.cas_rate_i != 0u || P.cas_dhat != 0u)
+		if (P.dhat_on != 0u || P.cas_rate_i != 0u || P.cas_dhat != 0u || P.cas_resid != 0u)
 			replay_applied_inputs(P, s3 / 3u, dhat_rec, cas_rec, sensors, dhat, dhat_have_last);
 
 		// Action-repeat hold: accumulators tick; no ring push / forward / record.

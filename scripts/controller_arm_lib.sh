@@ -71,7 +71,7 @@ provenance_json() {
 		printf 'null'
 		return 0
 	fi
-	local wheel abi sha git pools lag obsp neuro rf
+	local wheel abi sha git pools lag obsp neuro rf calib drop
 	wheel=$(printf '%s' "$line" | sed -nE 's/.* wheel=([^ ]+).*/\1/p')
 	lag=$(printf '%s' "$line"   | sed -nE 's/.* motor_lag=([^ ]+).*/\1/p')
 	obsp=$(printf '%s' "$line"  | sed -nE 's/.* obs_pwm=([^ ]+).*/\1/p')
@@ -80,10 +80,12 @@ provenance_json() {
 	git=$(printf '%s' "$line"   | sed -nE 's/.* git=([^ ]+).*/\1/p')
 	neuro=$(printf '%s' "$line" | sed -nE 's/.* neuro=([^ ]+).*/\1/p')   # ABI 44: segment | flat
 	rf=$(printf '%s' "$line"    | sed -nE 's/.* rf=([^ ]+).*/\1/p')      # CTRL-45: off | axis:cross=c
+	calib=$(printf '%s' "$line" | sed -nE 's/.* calib=([^ ]+).*/\1/p')   # CTRL-48: eps:N,regime:R,ladder:L
+	drop=$(printf '%s' "$line"  | sed -nE 's/.* drop=([^ ]+).*/\1/p')    # CTRL-48: off | constant | names:a+b
 	pools=$(printf '%s' "$line" | sed -nE 's/.* fitness_pools=(.*)$/\1/p')
-	printf '{"wheel":"%s","abi":%s,"wheel_sha256":"%s","git":"%s","motor_lag":"%s","obs_pwm":"%s","neuro":"%s","rf":"%s","fitness_pools":"%s"}' \
+	printf '{"wheel":"%s","abi":%s,"wheel_sha256":"%s","git":"%s","motor_lag":"%s","obs_pwm":"%s","neuro":"%s","rf":"%s","calib":"%s","drop":"%s","fitness_pools":"%s"}' \
 		"${wheel:-unknown}" "${abi:-0}" "${sha:-unknown}" "${git:-unknown}" "${lag:-unknown}" "${obsp:-unknown}" \
-		"${neuro:-unknown}" "${rf:-unknown}" "$(printf '%s' "${pools:-unknown}" | tr -d '"')"
+		"${neuro:-unknown}" "${rf:-unknown}" "${calib:-unknown}" "${drop:-unknown}" "$(printf '%s' "${pools:-unknown}" | tr -d '"')"
 }
 
 run_controller_arm() {

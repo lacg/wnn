@@ -52,9 +52,12 @@ BANK_FAMILIES: tuple[AxisFamily, ...] = (
 
 @dataclass(frozen=True)
 class FeatureDesc:
-	"""One input feature (tightly-coupled helper of the layout)."""
+	"""One input feature (tightly-coupled helper of the layout). `zero_ref`: the
+	feature's natural reference is 0 (an error, a rate, a deviation), so the CTRL-48
+	centred ladder (--calib-ladder centred) applies to it."""
 	name: str
 	family: AxisFamily
+	zero_ref: bool = False
 
 
 _R, _P, _Y, _T = AxisFamily.ROLL, AxisFamily.PITCH, AxisFamily.YAW, AxisFamily.THRUST
@@ -85,16 +88,34 @@ FAMILY: dict[str, AxisFamily] = {
 	"e_x": _P, "e_y": _R, "v_x": _P, "v_y": _R,         # world frame — see CAVEAT
 	"rate_i_x": _R, "rate_i_y": _P, "rate_i_z": _Y,     # CTRL-38 a1 inner-loop I
 	"cdhat_x": _R, "cdhat_y": _P, "cdhat_z": _Y,        # CTRL-38 a2 cascade d-hat
+	"cresid_x": _R, "cresid_y": _P, "cresid_z": _Y,     # CTRL-48 a3 unabsorbed d-hat
 }
+
+
+# Features whose natural reference is 0 (errors, body rates, deviations, observers,
+# integrators). NOT acc_z (≈ g), coll_cmd (≈ hover pwm) or tilt (≥ 0): their
+# operating point is elsewhere, so they keep the quantile ladder.
+ZERO_REFERENCED: frozenset[str] = frozenset({
+	"gyro_x", "gyro_y", "gyro_z", "acc_x", "acc_y", "tgt_r", "tgt_p", "tgt_y",
+	"roll_err", "pitch_err", "yaw_err_pa", "roll_i", "pitch_i", "yaw_i_pa",
+	"pwm", "yaw_err", "yaw_err_i", "dhat_r", "dhat_p", "dhat_y", "alt_err", "vz",
+	"e_x", "e_y", "v_x", "v_y", "rate_i_x", "rate_i_y", "rate_i_z",
+	"cdhat_x", "cdhat_y", "cdhat_z", "cresid_x", "cresid_y", "cresid_z",
+})
+
+
+def _block_name(name: str) -> str:
+	"""Per-motor names ("pwm_3") belong to their block ("pwm")."""
+	return name if name in FAMILY else name.rsplit("_", 1)[0]
 
 
 def _family_of(name: str) -> AxisFamily:
 	"""Per-motor names ("pwm_3") share their block's family ("pwm")."""
-	return FAMILY[name] if name in FAMILY else FAMILY[name.rsplit("_", 1)[0]]
+	return FAMILY[_block_name(name)]
 
 
 def _descs(names: list[str]) -> tuple[FeatureDesc, ...]:
-	return tuple(FeatureDesc(n, _family_of(n)) for n in names)
+	return tuple(FeatureDesc(n, _family_of(n), _block_name(n) in ZERO_REFERENCED) for n in names)
 
 
 def _base_block(spec: "ControllerSpec") -> list[str]:
@@ -124,10 +145,12 @@ def _translation_block(spec: "ControllerSpec") -> list[str]:
 
 
 def _cascade_block(spec: "ControllerSpec") -> list[str]:
-	"""CTRL-38 cascade blocks, appended LAST (cascade_obs.rs::append)."""
+	"""CTRL-38/48 cascade blocks, appended LAST (cascade_obs.rs::append): rate-I,
+	d-hat, then the unabsorbed residual."""
 	c = spec.ctbr or {}
 	return (["rate_i_x", "rate_i_y", "rate_i_z"] * bool(c.get("obs_rate_i", False))
-	        + ["cdhat_x", "cdhat_y", "cdhat_z"] * (c.get("obs_dhat_plant") is not None))
+	        + ["cdhat_x", "cdhat_y", "cdhat_z"] * (c.get("obs_dhat_plant") is not None)
+	        + ["cresid_x", "cresid_y", "cresid_z"] * (c.get("obs_dhat_residual_plant") is not None))
 
 
 _BLOCKS = (_base_block, _attitude_block, _actuator_block, _translation_block, _cascade_block)
@@ -142,5 +165,5 @@ def feature_names(spec: "ControllerSpec") -> list[str]:
 	return [d.name for d in feature_layout(spec)]
 
 
-__all__ = ["AxisFamily", "ALL_AXES", "BANK_FAMILIES", "FeatureDesc", "FAMILY",
+__all__ = ["AxisFamily", "ALL_AXES", "BANK_FAMILIES", "FeatureDesc", "FAMILY", "ZERO_REFERENCED",
            "feature_layout", "feature_names"]

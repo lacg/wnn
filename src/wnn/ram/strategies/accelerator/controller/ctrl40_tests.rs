@@ -45,7 +45,7 @@ fn motor_student(seed: u64) -> WnnController
 
 /// Zero-yaw starts (the split replays seed yaw from init_q; the CPU split_record_pub
 /// reference has no per-episode yaw seed) — every other draw is the config's.
-fn zero_yaw(mut cfg: RewardGatedConfigPacked, lag: f32) -> RewardGatedConfigPacked
+pub(crate) fn zero_yaw(mut cfg: RewardGatedConfigPacked, lag: f32) -> RewardGatedConfigPacked
 {
 	cfg.max_initial_yaw_rad = 0.0;
 	cfg.motor_lag_s = lag;
@@ -62,7 +62,7 @@ fn motor_cfg(lag: f32) -> RewardGatedConfigPacked
 	zero_yaw(cfg, lag)
 }
 
-fn rollouts(c: &mut WnnController, cfg: &RewardGatedConfigPacked, n: usize) -> Vec<TrajectoryRs>
+pub(crate) fn rollouts(c: &mut WnnController, cfg: &RewardGatedConfigPacked, n: usize) -> Vec<TrajectoryRs>
 {
 	let af = AirframeRs::from_cfg(cfg);
 	let (mut teacher, mut sim) = (af.teacher(cfg.teacher), af.sim());
@@ -97,7 +97,7 @@ fn streams(trs: &[TrajectoryRs]) -> Streams
 
 /// GPU record + train vs the CPU split replays on `trs`. Returns (record mismatches,
 /// records, train cell mismatches, cells, sensitivity) or None without a GPU.
-fn parity(c: &WnnController, trs: &[TrajectoryRs], blank: impl Fn(&mut ReplayObs)) -> Option<(usize, usize, usize, usize, bool)>
+pub(crate) fn parity(c: &WnnController, trs: &[TrajectoryRs], blank: impl Fn(&mut ReplayObs)) -> Option<(usize, usize, usize, usize, bool)>
 {
 	if std::env::var("WNN_SKIP_GPU_TESTS").is_ok() || metal::Device::system_default().is_none()
 	{
@@ -161,7 +161,7 @@ fn parity(c: &WnnController, trs: &[TrajectoryRs], blank: impl Fn(&mut ReplayObs
 	Some((rec_mism, cpu_rows.len(), mism, cells, rows_blank != cpu_rows))
 }
 
-fn check(name: &str, r: Option<(usize, usize, usize, usize, bool)>)
+pub(crate) fn check(name: &str, r: Option<(usize, usize, usize, usize, bool)>)
 {
 	let Some((rm, rn, tm, tn, sens)) = r
 	else
