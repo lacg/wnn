@@ -334,6 +334,9 @@ mod ce_path_tests;
 // ids_calib_sample: search-time threshold calibration subsample (02/11/2026).
 #[cfg(all(test, target_os = "macos"))]
 mod calib_sample_tests;
+// ids_receptive_fields through the genesis (train -> adapt -> retrain) cycle (ABI 27).
+#[cfg(all(test, target_os = "macos"))]
+mod receptive_fields_genesis_tests;
 
 #[cfg(target_os = "macos")]
 mod marker_probe;
@@ -479,7 +482,17 @@ use pyapi::*;
 /// at z = 1 — instead of in scheduling order; the CPU CE reductions sum in example
 /// order (ulp drift run to run). ram_core: the pool-shuffle child2 records the
 /// neuron count it received (dormant: production keeps child1 only).
-pub const ABI_VERSION: u32 = 26;
+/// 27 (08/11/2026, IDS receptive fields): additive — flow params
+/// ids_receptive_fields ("off" default = bit-identical, no RNG draw) |
+/// "family" + ids_rf_cross. IDSCacheWrapper.search_offspring / search_neighbors /
+/// evaluate_genomes_hybrid_adaptive take rf_bit_family (None = off) + rf_cross:
+/// every GA child / TS neighbour (ram_core mutate_genome) and every genesis pass
+/// is re-projected so each neuron holds at most floor(rf_cross x bits) connections
+/// outside its feature family (ram_core receptive_fields.rs). New module functions
+/// rf_project_connections / rf_neuron_fields serve the Python creators (grid,
+/// GA init, immigrants, Python mutate/crossover fallbacks). Bumped so a Python
+/// tree that sends rf_bit_family cannot run on a wheel that ignores it.
+pub const ABI_VERSION: u32 = 27;
 
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()>
@@ -491,6 +504,9 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()>
 	// Whole-genome neuron budget (max_neurons_total, ABI 21) — pyapi/neuron_budget_api.rs.
 	m.add_function(wrap_pyfunction!(neuron_budget_counts, m)?)?;
 	m.add_function(wrap_pyfunction!(neuron_budget_fit_genome, m)?)?;
+	// Receptive fields (ids_receptive_fields, ABI 27) — pyapi/receptive_fields_api.rs.
+	m.add_function(wrap_pyfunction!(rf_project_connections, m)?)?;
+	m.add_function(wrap_pyfunction!(rf_neuron_fields, m)?)?;
 	m.add_function(wrap_pyfunction!(metal_available, m)?)?;
 	m.add_function(wrap_pyfunction!(reset_metal_evaluators, m)?)?;
 	m.add_function(wrap_pyfunction!(cpu_cores, m)?)?;

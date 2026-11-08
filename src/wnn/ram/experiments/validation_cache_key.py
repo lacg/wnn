@@ -15,7 +15,11 @@ INCLUDED (changes the trained memory or the reported score of a fixed genome):
                     (resolved incl. its dataset-dependent default), ids_streaming
                     (+ chunk size: the streaming encoder fits by t-digest),
                     ids_encoding_dedupe (encoder version, only when "on"),
-                    ids_feature_ranking (list version, only when "train_only")
+                    ids_feature_ranking (list version, only when "train_only"),
+                    ids_receptive_fields (family-map version + ids_rf_cross, only
+                    when "family" — strictly it steers the search, which
+                    genome_hash already pins; kept CONSERVATIVELY so a row is never
+                    shared across family-map versions)
   model/training    ids_classification, ids_single_cluster, memory_mode (resolved),
                     seed (QSR/PLN coin run_seed; hierarchical split seed),
                     ids_write_rule (only when "vote"; lattice keys unchanged),
@@ -47,6 +51,8 @@ from wnn.ram.experiments.ids_param_resolution import (
 	resolve_feature_ranking,
 	resolve_invalid_encoding,
 	resolve_memory_mode,
+	resolve_receptive_fields,
+	resolve_rf_cross,
 	resolve_write_rule,
 )
 
@@ -88,7 +94,16 @@ def _dataset_parts(params: dict) -> list:
 		("raw", bool(params.get("ids_raw", False))),
 		("inv", resolve_invalid_encoding(params)),
 		("strm", params.get("ids_streaming_chunk_size", 1_000_000) if streaming else None),
-	] + _encoder_version_parts(params) + _feature_ranking_parts(params)
+	] + _encoder_version_parts(params) + _feature_ranking_parts(params) + _receptive_field_parts(params)
+
+
+def _receptive_field_parts(params: dict) -> list:
+	"""ids_receptive_fields (ABI 27): emitted ONLY for "family" (map version +
+	cross budget), so every default key stays byte-identical."""
+	if resolve_receptive_fields(params) == "off":
+		return []
+	from wnn.ids.feature_families import FAMILY_MAP_VERSION
+	return [("rf", f"{FAMILY_MAP_VERSION}:{resolve_rf_cross(params)}")]
 
 
 def _feature_ranking_parts(params: dict) -> list:

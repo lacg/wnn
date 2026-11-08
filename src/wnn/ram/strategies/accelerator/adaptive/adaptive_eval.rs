@@ -1120,11 +1120,20 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
 				}
 			}
 
+			// Receptive fields (ABI 27): the adapted genome — grown/rewired
+			// connections, neurogenesis' fresh neurons — re-projected before the
+			// retrain, so the trained + scored genome satisfies the constraint.
+			let rf_changed = match &adapt_config.receptive_fields
+			{
+				Some(rf) => rf.project(&adapt_bits, &mut adapt_conns, &mut rng).expect("receptive fields: adapted layout"),
+				None => 0,
+			};
 			let changed = total_pruned > 0
 				|| total_grown > 0
 				|| total_added > 0
 				|| total_removed > 0
-				|| total_rewired > 0;
+				|| total_rewired > 0
+				|| rf_changed > 0;
 			adapted_states.push(AdaptedState {
 				bits: adapt_bits,
 				neurons: adapt_neurons,

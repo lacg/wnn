@@ -90,6 +90,10 @@ pub struct MutationConfig
 	/// Flow param `max_bit_delta` (08/11/2026, IDS-54): the largest bits step one
 	/// BITS mutation may take. 0 = auto (10% of min + max) — the original.
 	pub max_bit_delta: usize,
+	/// Flow param `ids_receptive_fields="family"` (worker ABI 27): every mutated
+	/// genome is re-projected onto per-neuron feature families
+	/// (receptive_fields.rs). None = off: no projection, no RNG draw.
+	pub receptive_fields: Option<std::sync::Arc<crate::receptive_fields::ReceptiveFields>>,
 }
 
 impl MutationConfig
@@ -312,11 +316,33 @@ pub fn mutate_genome(
 	let g = mutate_genome_phase(bits_per_neuron, neurons_per_cluster, connections, config, rng);
 	// Every GA child and TS neighbour passes through here: the one place the
 	// whole-genome budget is enforced in Rust (no RNG → default bit-identical).
-	match config.max_neurons_total
+	let g = match config.max_neurons_total
 	{
 		Some(total) => crate::neuron_budget::fit_genome(&g.0, &g.1, &g.2, total, config.min_neurons),
 		None => g,
+	};
+	project_receptive_fields(g, config.receptive_fields.as_deref(), rng)
+}
+
+/// The receptive-field invariant on a finished child (ABI 27). Every crossover
+/// (uniform, pool-shuffle, cluster), every crossover_bits blend and dedupe_fill
+/// output reaches evaluation only through `mutate_genome` (search_offspring
+/// mutates every child, clones included; search_neighbors mutates every
+/// neighbour), so this ONE site covers them all — the neuron_budget pattern.
+fn project_receptive_fields(
+	mut g: (Vec<usize>, Vec<usize>, Vec<i64>),
+	rf: Option<&crate::receptive_fields::ReceptiveFields>,
+	rng: &mut impl Rng,
+) -> (Vec<usize>, Vec<usize>, Vec<i64>)
+{
+	if let Some(rf) = rf
+	{
+		if !g.2.is_empty()
+		{
+			rf.project(&g.0, &mut g.2, rng).expect("receptive fields: genome layout");
+		}
 	}
+	g
 }
 
 fn mutate_genome_phase(
@@ -1045,6 +1071,8 @@ pub struct GAConfig
 	pub max_neurons_total: Option<usize>,
 	/// Flow param `max_bit_delta` (see MutationConfig; 0 = auto).
 	pub max_bit_delta: usize,
+	/// Flow param `ids_receptive_fields` (see MutationConfig; None = off).
+	pub receptive_fields: Option<std::sync::Arc<crate::receptive_fields::ReceptiveFields>>,
 }
 
 /// Neuron-crossover options. `dedupe` false = the original operators, same RNG draws.
@@ -2022,6 +2050,7 @@ fn mutate_ga(
 		phase_type: config.phase_type,
 		max_neurons_total: config.max_neurons_total,
 		max_bit_delta: config.max_bit_delta,
+		receptive_fields: config.receptive_fields.clone(),
 	};
 	mutate_genome(bits, neurons, connections, &mutation_config, rng)
 }
@@ -2367,6 +2396,7 @@ mod tests
 			phase_type: PhaseType::Bits,
 			max_neurons_total: None,
 			max_bit_delta: 0,
+			receptive_fields: None,
 		};
 
 		assert_eq!(config.bits_delta_max(), 2); // 10% of 24 = 2.4 -> 2
@@ -2391,6 +2421,7 @@ mod tests
 			phase_type: phase,
 			max_neurons_total: None,
 			max_bit_delta: 0,
+			receptive_fields: None,
 		}
 	}
 
@@ -2878,6 +2909,9 @@ mod tests
 #[path = "neighbor_search_golden.rs"]
 mod golden;
 
+#[cfg(test)]
+#[path = "neighbor_search_rf_tests.rs"]
+mod rf_tests;
 #[cfg(test)]
 #[path = "neighbor_search_knob_tests.rs"]
 mod knob_tests;

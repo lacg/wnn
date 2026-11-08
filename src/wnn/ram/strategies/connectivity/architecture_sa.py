@@ -82,4 +82,6 @@ class ArchitectureSAStrategy(ArchitectureStrategyMixin, GenericSAStrategy['Clust
 		)
 		tib = cfg.total_input_bits or 64
 		mutant = genome.mutate(self._phase_type, mutation_rate, mutation_config, tib, self._rng)
-		return mutant, None
+		# ids_receptive_fields (ABI 27): the Python neighbour path projects like Rust's.
+		from wnn.ram.strategies.connectivity.receptive_fields import project_if_on
+		return project_if_on(cfg.receptive_fields, mutant, self._rng), None

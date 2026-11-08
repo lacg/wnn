@@ -44,6 +44,8 @@
 	let idsMaxNeurons = 500
 	let idsEncodingDedupe = 'off'
 	let idsFeatureRanking = 'legacy'
+	let idsReceptiveFields = 'off'
+	let idsRfCross = 0.2
 	let idsMaxBitDelta = 0
 	let idsNeuronSampleRate = 0.25
 	let idsBalanceClasses = true
@@ -671,6 +673,11 @@
 				params.ids_feature_selection = idsFeatureSelection
 				if (idsEncodingDedupe === 'on') params.ids_encoding_dedupe = 'on'
 				if (idsFeatureRanking === 'train_only' && idsFeatureSelection !== 'all') params.ids_feature_ranking = 'train_only'
+				if (idsReceptiveFields === 'family')
+				{
+					params.ids_receptive_fields = 'family'
+					params.ids_rf_cross = idsRfCross
+				}
 				if (idsFeatureSelection === 'top20_split')
 				{
 					params.ids_rest_bits = idsRestBits
@@ -864,6 +871,8 @@
 							bind:idsMaxNeurons
 							bind:idsEncodingDedupe
 							bind:idsFeatureRanking
+							bind:idsReceptiveFields
+							bind:idsRfCross
 							bind:idsMaxBitDelta
 							bind:idsNeuronSampleRate
 							bind:idsBalanceClasses

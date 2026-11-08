@@ -65,6 +65,11 @@ class AdaptationConfig:
 	acc_anchor: Optional[float] = None
 	zrank_clamp: float = 3.0
 	min_accuracy_floor: Optional[float] = None
+	# ids_receptive_fields="family" (worker ABI 27): every genome this strategy
+	# builds or edits in Python is projected onto per-neuron feature families
+	# (Rust does the GA children / TS neighbours / genesis). None = off: no
+	# projection, no RNG draw. A ReceptiveFields (connectivity/receptive_fields.py).
+	receptive_fields: Optional[Any] = None
 
 
 class AdaptationStrategy(ArchitectureStrategyMixin):
@@ -153,6 +158,9 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 			clone = base.clone()
 			if hasattr(clone, 'initialize_connections') and cfg.total_input_bits:
 				clone.initialize_connections(cfg.total_input_bits)
+				# ids_receptive_fields (ABI 27): fresh wiring obeys the families.
+				from wnn.ram.strategies.connectivity.receptive_fields import project_if_on
+				clone = project_if_on(cfg.receptive_fields, clone, self._rng)
 			population.append(clone)
 
 		from wnn.ram.metrics import FitnessWeights

@@ -727,6 +727,14 @@ class Experiment:
 			mutable_clusters = list(range(tier0_clusters))
 			self.log(f"  Tier0-only mode: mutating first {tier0_clusters} clusters")
 
+		# ids_receptive_fields (ABI 27): the IDS evaluator carries the flow's
+		# ReceptiveFields (IdsEvaluatorFactory); every strategy config gets it.
+		from wnn.ram.strategies.connectivity.receptive_fields import ReceptiveFields
+		receptive_fields = getattr(self.evaluator, "receptive_fields", None)
+		receptive_fields = receptive_fields if isinstance(receptive_fields, ReceptiveFields) else None
+		if receptive_fields is not None:
+			self.log(f"  Receptive fields: {receptive_fields.version} cross={receptive_fields.cross} "
+			         f"({len(receptive_fields.family_names)} families)")
 		default_bits, default_neurons = _phase_defaults(
 			initial_population or ([initial_genome] if initial_genome else []),
 			min_bits, max_bits, min_neurons, max_neurons)
@@ -752,6 +760,7 @@ class Experiment:
 			crossover_bits=cfg.ga_crossover_bits,
 			max_neurons_total=cfg.max_neurons_total,
 			joint_mutation=cfg.ga_joint_mutation,
+			receptive_fields=receptive_fields,
 			neuron_bounds_per_cluster=(
 				[(max(1, int(c * 0.5 + 0.5)), max(1, int(c * 1.5 + 0.5))) for c in tier[0]]
 				if tier else None),
@@ -791,6 +800,7 @@ class Experiment:
 				max_neurons_total=cfg.max_neurons_total,
 				tier_bits_min=cfg.ids_tier_bits_min,
 				tier_bits_max=cfg.ids_tier_bits_max,
+				receptive_fields=receptive_fields,
 			)
 		elif is_adaptation:
 			phase_name = cfg.name
@@ -825,6 +835,7 @@ class Experiment:
 				f1_anchor=cfg.fitness_f1_anchor,
 				acc_anchor=cfg.fitness_acc_anchor,
 				min_accuracy_floor=min_accuracy_floor,
+				receptive_fields=receptive_fields,
 			)
 		elif is_ga:
 			phase_name = cfg.name

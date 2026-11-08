@@ -141,7 +141,12 @@ import os
 #   take max_bit_delta (flow param, 0 = auto = bit-identical; IDSEvaluator passes
 #   it). Non-OI legacy-nudge training is now deterministic (CPU neuron lanes, GPU
 #   z = 1) and CPU CE sums in example order — production IDS trains OI, unaffected.
-EXPECTED_ABI = 26
+# 27 (08/11/2026, IDS receptive fields): additive — search_offspring /
+#   search_neighbors / evaluate_genomes_hybrid_adaptive take rf_bit_family (None =
+#   off = bit-identical, no RNG draw) + rf_cross; module functions
+#   rf_project_connections / rf_neuron_fields (ram_core receptive_fields.rs) for
+#   the Python creators. Flow params ids_receptive_fields / ids_rf_cross.
+EXPECTED_ABI = 27
 
 BUILD_HINT = (
 	"Rebuild the accelerator: cd src/wnn/ram/strategies/accelerator && "

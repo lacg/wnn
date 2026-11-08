@@ -17,6 +17,10 @@
 	export let idsEncodingDedupe = 'off'
 	// IDS-53: "train_only" = top-N ranked on the flow's own train split (ids_feature_ranking)
 	export let idsFeatureRanking = 'legacy'
+	// Worker ABI 27: "family" = per-neuron feature-family receptive fields (ids_receptive_fields)
+	export let idsReceptiveFields = 'off'
+	// Out-of-family share per neuron, [0, 0.5) (ids_rf_cross)
+	export let idsRfCross = 0.2
 	export let idsMaxBitDelta = 0
 	export let idsNeuronSampleRate = 0.25
 	export let idsBalanceClasses = true
@@ -211,6 +215,27 @@
 				{/if}
 			</span>
 		</div>
+	</div>
+	<div class="form-row">
+		<div class="form-group">
+			<label for="idsReceptiveFields">Receptive Fields</label>
+			<select id="idsReceptiveFields" bind:value={idsReceptiveFields}>
+				<option value="off">Off (spread wiring)</option>
+				<option value="family">Family (each neuron wires to one feature family)</option>
+			</select>
+			<span class="field-hint">
+				{#if idsReceptiveFields === 'family'}Each neuron's family holds the majority of its connections; at most the cross share may go to other families
+				{:else}Connections drawn uniformly over every encoded bit
+				{/if}
+			</span>
+		</div>
+		{#if idsReceptiveFields === 'family'}
+			<div class="form-group">
+				<label for="idsRfCross">Cross-Family Share</label>
+				<input type="number" id="idsRfCross" bind:value={idsRfCross} min="0" max="0.49" step="0.05" />
+				<span class="field-hint">Out-of-family connections per neuron = floor(share x bits); 0.2 = the controller's value</span>
+			</div>
+		{/if}
 	</div>
 </div>
 

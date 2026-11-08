@@ -1,0 +1,98 @@
+{
+	"version": "v1",
+	"dataset": "unsw-nb15",
+	"covers": [
+		"legacy TOP20_RF_FEATURES (wnn/ids/dataset.py)",
+		"train_only_v1/unsw-nb15_random_3way.json (all 41 ranked)",
+		"train_only_v1/unsw-nb15_temporal_3way.json (all 42 ranked; lower-case HF temporal names)"
+	],
+	"assignment_rule": "A neuron's family is the family holding the majority of its connections; a neuron with no majority family (fresh, or scrambled by a per-connection crossover) draws one weighted by its own connections per eligible family, i.e. for a fresh uniform neuron P(family) = the family's share of the encoded bits ('my first connection picks the family'). Aggregate wiring per family therefore matches spread; only its concentration changes.",
+	"fallback": "A family is a HOME for a w-bit neuron only if it has at least w - floor(rf_cross*w) distinct ENCODED bits (after ids_encoding_dedupe, if on). A smaller family is reachable at that width only through the cross budget; a neuron whose width no family can host is exempt (left as drawn). Nothing is ever placed out-of-family to cover a deficit, so a projected neuron's family always holds a strict majority of its connections (rf_cross < 0.5).",
+	"notes": [
+		"Upper/lower-case spellings are both listed: the HF random split uses Sload/Dload/Djit/res_bdy_len, the temporal split sload/dload/djit/response_body_len.",
+		"proto/service/state are categorical (log2(#categories) bits), so protocol is a small family on the legacy list (~12 encoded bits): at wide neurons it is reachable only via the cross budget."
+	],
+	"families": {
+		"ttl_state": {
+			"why": "Hop count / OS fingerprint of each side plus the connection state machine; ct_state_ttl is UNSW's own joint feature of the two, so the four move together.",
+			"features": [
+				"sttl",
+				"dttl",
+				"ct_state_ttl",
+				"state"
+			]
+		},
+		"handshake": {
+			"why": "TCP setup timing (SYN-SYNACK-ACK) and the header fields fixed at setup (window advertisement, initial sequence numbers). Every non-TCP flow reads 0 in all of them, so they co-vary by construction.",
+			"features": [
+				"tcprtt",
+				"synack",
+				"ackdat",
+				"swin",
+				"dwin",
+				"stcpb",
+				"dtcpb"
+			]
+		},
+		"volume": {
+			"why": "How much each side sent: bytes, packets, mean packet size, retransmitted/dropped packets, HTTP response body size.",
+			"features": [
+				"sbytes",
+				"dbytes",
+				"smeansz",
+				"dmeansz",
+				"Spkts",
+				"Dpkts",
+				"sloss",
+				"dloss",
+				"res_bdy_len",
+				"response_body_len"
+			]
+		},
+		"rate": {
+			"why": "Throughput: bits per second per direction and the overall packet rate.",
+			"features": [
+				"Sload",
+				"Dload",
+				"sload",
+				"dload",
+				"rate"
+			]
+		},
+		"timing": {
+			"why": "Time structure of the flow: duration, inter-packet arrival, jitter.",
+			"features": [
+				"dur",
+				"Sintpkt",
+				"Dintpkt",
+				"Sjit",
+				"Djit",
+				"djit"
+			]
+		},
+		"context": {
+			"why": "UNSW's 100-connection window counters (same service/host/port pairs) and the same-address flag: what the surrounding traffic looks like, not this flow.",
+			"features": [
+				"ct_srv_src",
+				"ct_srv_dst",
+				"ct_dst_ltm",
+				"ct_src_ltm",
+				"ct_src_dport_ltm",
+				"ct_dst_sport_ltm",
+				"ct_dst_src_ltm",
+				"is_sm_ips_ports"
+			]
+		},
+		"protocol": {
+			"why": "Which protocol / application the flow speaks and what it does in it (HTTP methods, FTP commands and login, pipelined transaction depth).",
+			"features": [
+				"proto",
+				"service",
+				"trans_depth",
+				"ct_flw_http_mthd",
+				"ct_ftp_cmd",
+				"is_ftp_login"
+			]
+		}
+	}
+}

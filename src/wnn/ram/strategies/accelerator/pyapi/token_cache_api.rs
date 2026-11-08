@@ -439,6 +439,7 @@ impl TokenCacheWrapper
 			phase_type: phase,
 			max_neurons_total: None,
 			max_bit_delta: 0,
+			receptive_fields: None,
 		};
 
 		// Set up live progress for observer thread
@@ -664,6 +665,7 @@ impl TokenCacheWrapper
 			crossover_bits: ram_core::crossover_bits::CrossoverBits::Inherit,
 			max_neurons_total: None,
 			max_bit_delta: 0,
+			receptive_fields: None,
 		};
 
 		// Set up live progress for observer thread

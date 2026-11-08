@@ -288,6 +288,7 @@ impl BitwiseCacheWrapper
 			phase_type: phase,
 			max_neurons_total: None,
 			max_bit_delta: 0,
+			receptive_fields: None,
 		};
 
 		let override_val = self.sparse_threshold_override;
@@ -510,6 +511,7 @@ impl BitwiseCacheWrapper
 			crossover_bits: ram_core::crossover_bits::CrossoverBits::Inherit,
 			max_neurons_total: None,
 			max_bit_delta: 0,
+			receptive_fields: None,
 		};
 
 		let override_val = self.sparse_threshold_override;
@@ -691,6 +693,7 @@ impl BitwiseCacheWrapper
 			total_input_bits,
 			stats_sample_size,
 			neuron_sample_rate,
+			receptive_fields: None,
 		};
 
 		py.allow_threads(|| {

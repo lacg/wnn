@@ -92,6 +92,9 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 		)
 		tib = cfg.total_input_bits or 64
 		mutant = genome.mutate(self._phase_type, mutation_rate, mutation_config, tib, self._rng)
+		# ids_receptive_fields (ABI 27): the Python neighbour path projects like Rust's.
+		from wnn.ram.strategies.connectivity.receptive_fields import project_if_on
+		mutant = project_if_on(cfg.receptive_fields, mutant, self._rng)
 
 		# Compute move info for tabu tracking: tuple of changed cluster indices
 		if self._phase_type == PhaseType.NEURONS:
@@ -461,6 +464,13 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				for g in initial_neighbors:
 					if not g.has_connections():
 						g.initialize_connections(self._cached_evaluator.total_input_bits)
+			# ids_receptive_fields: the start genome + seeded neighbours obey the families.
+			rf = self._arch_config.receptive_fields
+			if rf is not None:
+				from wnn.ram.strategies.connectivity.receptive_fields import project_if_on
+				self._ensure_rng()
+				initial_genome = project_if_on(rf, initial_genome.clone(), self._rng)
+				initial_neighbors = [project_if_on(rf, g.clone(), self._rng) for g in initial_neighbors or []] or initial_neighbors
 
 			# Wrap cached evaluator as batch_evaluate_fn
 			evaluator = self._cached_evaluator

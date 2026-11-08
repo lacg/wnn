@@ -96,6 +96,10 @@ pub struct AdaptationConfig
 	/// Neuron sample rate (0.0-1.0). Each neuron trains on this fraction of examples.
 	/// Used to scale expected_fill_rate correctly in growth conditions.
 	pub neuron_sample_rate: f32,
+	/// Flow param `ids_receptive_fields` (ABI 27): the adapted genome is
+	/// re-projected onto per-neuron feature families after every pass set,
+	/// before the retrain. None = off (no projection, no RNG draw).
+	pub receptive_fields: Option<std::sync::Arc<ram_core::receptive_fields::ReceptiveFields>>,
 }
 
 impl Default for AdaptationConfig
@@ -129,6 +133,7 @@ impl Default for AdaptationConfig
 			total_input_bits: 64,
 			stats_sample_size: 10_000,
 			neuron_sample_rate: 1.0,
+			receptive_fields: None,
 		}
 	}
 }

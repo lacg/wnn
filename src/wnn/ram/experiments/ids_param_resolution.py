@@ -205,6 +205,36 @@ def resolve_encoding_dedupe(params: dict) -> bool:
 	return value == "on"
 
 
+RECEPTIVE_FIELDS_VALUES = ("off", "family")
+DEFAULT_RF_CROSS = 0.2
+
+
+def resolve_receptive_fields(params: dict) -> str:
+	"""ids_receptive_fields (ABI 27): "off" (default — no projection, no RNG draw,
+	bit-identical) | "family" (every neuron holds at most floor(ids_rf_cross x
+	bits) connections outside its feature family; wnn/ids/feature_families.py).
+	Anything else is refused — a typo must not silently run spread wiring."""
+	value = params.get("ids_receptive_fields", "off")
+	if value not in RECEPTIVE_FIELDS_VALUES:
+		raise ValueError(f"ids_receptive_fields={value!r}: expected one of {RECEPTIVE_FIELDS_VALUES}")
+	return value
+
+
+def resolve_rf_cross(params: dict) -> float:
+	"""ids_rf_cross (ABI 27): the out-of-family share per neuron, in [0, 0.5)
+	(the family must keep the majority). Default 0.2 — the controller's CTRL-45
+	value. Refused when set without ids_receptive_fields="family" (it would be
+	inert) or out of range."""
+	value = params.get("ids_rf_cross")
+	if value is None:
+		return DEFAULT_RF_CROSS
+	if resolve_receptive_fields(params) == "off":
+		raise ValueError(f"ids_rf_cross={value!r} has no effect with ids_receptive_fields='off'")
+	if not 0.0 <= float(value) < 0.5:
+		raise ValueError(f"ids_rf_cross={value!r}: must be in [0, 0.5)")
+	return float(value)
+
+
 def oi_env_enabled(env_value: Optional[str]) -> bool:
 	"""Mirror of ram_core neuron_memory::order_independent_training_enabled():
 	WNN_ORDER_INDEPENDENT_TRAIN is on iff "1" or "true" (any case)."""

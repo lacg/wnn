@@ -26,9 +26,33 @@ class IdsEvaluatorFactory:
 	def create(self, params: dict) -> tuple:
 		s = IdsEvaluatorSettings.from_params(params)
 		dataset = self.load(s)
-		if s.classification == "hierarchical":
-			return self._hierarchical(dataset, s)
-		return self.flat(dataset, s)
+		evaluators = self._hierarchical(dataset, s) if s.classification == "hierarchical" else self.flat(dataset, s)
+		self._attach_receptive_fields(self.receptive_fields(dataset, s), evaluators)
+		return evaluators
+
+	# ------------------------------------------------------------------ receptive fields
+
+	def receptive_fields(self, dataset, s: IdsEvaluatorSettings):
+		"""ids_receptive_fields="family" -> the flow's ReceptiveFields over the
+		dataset's ACTUAL encoded bits (dedupe on/off, flag bits); "off" -> None."""
+		if s.receptive_fields == "off":
+			return None
+		from wnn.ids.feature_families import FAMILY_MAP_VERSION, bit_families, family_file
+		from wnn.ram.strategies.connectivity.receptive_fields import ReceptiveFields
+		bit_family, names = bit_families(dataset.encoder, dataset.X_train.total_bits, s.dataset_name)
+		rf = ReceptiveFields(bit_family=tuple(bit_family), family_names=tuple(names), cross=s.rf_cross,
+			version=FAMILY_MAP_VERSION, source=family_file(s.dataset_name).name)
+		self._log(rf.provenance())
+		return rf
+
+	@staticmethod
+	def _attach_receptive_fields(rf, evaluators: tuple) -> None:
+		"""Every evaluator of the flow carries it: the optimizers drive the GA/TS/
+		genesis search; the test / route evaluators only score (never project)."""
+		if rf is None:
+			return
+		for evaluator in evaluators:
+			evaluator.set_receptive_fields(rf)
 
 	# ------------------------------------------------------------------ dataset
 

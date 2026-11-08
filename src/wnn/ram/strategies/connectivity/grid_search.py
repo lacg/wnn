@@ -64,6 +64,11 @@ class GridSearchConfig:
 	# exceeds it are EXCLUDED loudly, like tier_total_cap; leaderboard seeds are
 	# fitted (Rust neuron_budget). None = no total cap (original).
 	max_neurons_total: Optional[int] = None
+	# ids_receptive_fields="family" (worker ABI 27): every genome this strategy
+	# builds or edits in Python is projected onto per-neuron feature families
+	# (Rust does the GA children / TS neighbours / genesis). None = off: no
+	# projection, no RNG draw. A ReceptiveFields (connectivity/receptive_fields.py).
+	receptive_fields: Optional[Any] = None
 
 
 class GridSearchStrategy:
@@ -123,7 +128,8 @@ class GridSearchStrategy:
 			from wnn.ram.strategies.connectivity.adaptive_cluster import generate_connections
 			connections = generate_connections(bits, cfg.total_input_bits, self._rng.randint(0, 2**63))
 
-		return ClusterGenome(bits_per_neuron=bits, neurons_per_cluster=neurons, connections=connections)
+		genome = ClusterGenome(bits_per_neuron=bits, neurons_per_cluster=neurons, connections=connections)
+		return self._project_rf(genome)
 
 	def _create_genome_from_shape(self, neurons_per_cluster: list[int],
 	                              bits_per_cluster: list[int]) -> 'ClusterGenome':
@@ -138,9 +144,16 @@ class GridSearchStrategy:
 		if cfg.total_input_bits is not None:
 			from wnn.ram.strategies.connectivity.adaptive_cluster import generate_connections
 			connections = generate_connections(bits, cfg.total_input_bits, self._rng.randint(0, 2**63))
-		return ClusterGenome(bits_per_neuron=bits,
-		                     neurons_per_cluster=list(neurons_per_cluster),
-		                     connections=connections)
+		genome = ClusterGenome(bits_per_neuron=bits,
+		                       neurons_per_cluster=list(neurons_per_cluster),
+		                       connections=connections)
+		return self._project_rf(genome)
+
+	def _project_rf(self, genome: 'ClusterGenome') -> 'ClusterGenome':
+		"""ids_receptive_fields: project a grid genome (fresh, variant or
+		leaderboard seed). Off = untouched, no RNG draw (grid parity)."""
+		from wnn.ram.strategies.connectivity.receptive_fields import project_if_on
+		return project_if_on(self._config.receptive_fields, genome, self._rng)
 
 	def optimize(
 		self,
@@ -195,6 +208,8 @@ class GridSearchStrategy:
 		if cfg.grid_source == "leaderboard" and initial_population:
 			from wnn.ram.strategies.connectivity.neuron_budget import fit_genome
 			seeds = [fit_genome(g, cfg.max_neurons_total, 1) for g in initial_population]
+			if cfg.receptive_fields is not None:
+				seeds = [self._project_rf(g.clone()) for g in seeds]
 			config_list = [
 				(g.neurons_per_cluster[0] if g.neurons_per_cluster else 0,
 				 g.bits_per_neuron[0] if g.bits_per_neuron else 0, g)

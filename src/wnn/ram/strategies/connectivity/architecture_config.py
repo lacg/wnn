@@ -113,6 +113,11 @@ class ArchitectureConfig:
 	# Per-cluster (min, max) bounds — MCST support tiering (None = global bounds)
 	neuron_bounds_per_cluster: Optional[list[tuple[int, int]]] = None
 	bits_bounds_per_cluster: Optional[list[tuple[int, int]]] = None
+	# ids_receptive_fields="family" (worker ABI 27): every genome this strategy
+	# builds or edits in Python is projected onto per-neuron feature families
+	# (Rust does the GA children / TS neighbours / genesis). None = off: no
+	# projection, no RNG draw. A ReceptiveFields (connectivity/receptive_fields.py).
+	receptive_fields: Any = None
 
 	def __post_init__(self) -> None:
 		"""VALIDATE the fixed defaults against their bands — never clamp. An

@@ -156,12 +156,20 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			bits_bounds_per_cluster=cfg.bits_bounds_per_cluster,
 		)
 		tib = cfg.total_input_bits or 64
-		return genome.mutate(self._phase_type, mutation_rate, mutation_config, tib, self._rng)
+		mutant = genome.mutate(self._phase_type, mutation_rate, mutation_config, tib, self._rng)
+		return self._project_rf(mutant)
 
 	def crossover_genomes(self, parent1: 'ClusterGenome', parent2: 'ClusterGenome') -> 'ClusterGenome':
 		"""Phase-aware crossover dispatching to ClusterGenome.crossover()."""
 		self._ensure_rng()
-		return parent1.crossover(parent2, self._phase_type, self._rng)
+		return self._project_rf(parent1.crossover(parent2, self._phase_type, self._rng))
+
+	def _project_rf(self, genome: 'ClusterGenome') -> 'ClusterGenome':
+		"""ids_receptive_fields: every genome this strategy builds or edits in
+		Python (random init, immigrants, seed-population mutants, the Python
+		breeding fallback). Off = untouched, no RNG draw."""
+		from wnn.ram.strategies.connectivity.receptive_fields import project_if_on
+		return project_if_on(self._arch_config.receptive_fields, genome, self._rng)
 
 	def create_random_genome(self, reference: Sequence['ClusterGenome'] | None = None) -> 'ClusterGenome':
 		"""
@@ -225,7 +233,8 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		connections = None
 		if cfg.total_input_bits is not None:
 			connections = generate_connections(bits_per_neuron, cfg.total_input_bits, self._rng.randint(0, 2**63))
-		return ClusterGenome(bits_per_neuron=bits_per_neuron, neurons_per_cluster=neurons, connections=connections)
+		genome = ClusterGenome(bits_per_neuron=bits_per_neuron, neurons_per_cluster=neurons, connections=connections)
+		return self._project_rf(genome)
 
 	def _phase_optimizes(self, flag: bool) -> bool:
 		"""Whether this phase optimizes a dimension: its optimize_* flag, or JOINT
@@ -558,6 +567,12 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 				# join the GA inside the budget, like every Rust offspring.
 				initial_population = [fit_genome(g, self._arch_config.max_neurons_total, self._arch_config.min_neurons)
 				                      for g in initial_population]
+
+			if initial_population and self._arch_config.receptive_fields is not None:
+				# ids_receptive_fields: seeds (grid top-K, resumed or leaderboard
+				# pops) and their mutants join the GA inside the families. Seeds
+				# from an RF grid are already valid -> unchanged, metrics kept.
+				initial_population = [self._project_rf(g.clone()) for g in initial_population]
 
 			if cfg.fresh_population:
 				initial_population = None

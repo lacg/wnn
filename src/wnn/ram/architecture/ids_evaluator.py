@@ -161,6 +161,8 @@ class IDSEvaluator(BaseEvaluator):
 
 		# Override the total_input_bits computed by BaseEvaluator
 		self._total_input_bits = total_features
+		# ids_receptive_fields (ABI 27): set by IdsEvaluatorFactory; None = off.
+		self.receptive_fields = None
 		self._empty_value = empty_value
 		self._num_classes = num_classes
 		self._classification = classification
@@ -728,6 +730,18 @@ class IDSEvaluator(BaseEvaluator):
 				f"(classification={classification!r}, single_cluster={single_cluster})"
 			)
 		return value
+
+	def set_receptive_fields(self, rf) -> None:
+		"""ids_receptive_fields="family" (ABI 27): the GA / TS / genesis search
+		re-projects every genome it makes onto `rf` (a ReceptiveFields over THIS
+		evaluator's encoded bits — refused otherwise)."""
+		if rf.total_input_bits != self._total_input_bits:
+			raise ValueError(f"receptive fields cover {rf.total_input_bits} bits, the evaluator encodes {self._total_input_bits}")
+		self.receptive_fields = rf
+
+	def _rf_kwargs(self) -> dict:
+		"""The Rust search kwargs: empty when off, so the call is the ABI-26 call."""
+		return self.receptive_fields.rust_args() if self.receptive_fields is not None else {}
 
 	def set_fitness_weights(self, w_ce: float, w_f1: float, w_fpr: float, w_acc: float):
 		"""Set fitness weights for threshold optimization.
@@ -1324,6 +1338,7 @@ class IDSEvaluator(BaseEvaluator):
 			total_input_bits=self._total_input_bits,
 			stats_sample_size=stats_sample_size,
 			passes_per_eval=passes_per_eval,
+			**self._rf_kwargs(),
 			**kwargs,
 		)
 
@@ -1401,6 +1416,8 @@ class IDSEvaluator(BaseEvaluator):
 			max_neurons_total=max_neurons_total,
 			# IDS-54 (ABI 26): flow param max_bit_delta (Flow._propagate_max_bit_delta); 0 = auto.
 			max_bit_delta=getattr(self, "_max_bit_delta", 0),
+			# ABI 27: ids_receptive_fields (empty when off -> the ABI-26 call).
+			**self._rf_kwargs(),
 		)
 
 		genomes = []
@@ -1516,6 +1533,8 @@ class IDSEvaluator(BaseEvaluator):
 			train_folds=self.ga_fitness_folds(),
 			# IDS-54 (ABI 26): flow param max_bit_delta (Flow._propagate_max_bit_delta); 0 = auto.
 			max_bit_delta=getattr(self, "_max_bit_delta", 0),
+			# ABI 27: ids_receptive_fields (empty when off -> the ABI-26 call).
+			**self._rf_kwargs(),
 		)
 
 		genomes = []

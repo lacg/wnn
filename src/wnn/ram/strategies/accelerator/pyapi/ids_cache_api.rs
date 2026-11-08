@@ -569,7 +569,8 @@ impl IDSCacheWrapper
         prune_entropy_ratio = 0.3, grow_fill_utilization = 0.5, grow_error_baseline = 0.35,
         min_neurons = 3, max_neurons_per_pass = 3, max_growth_ratio = 1.5,
         cooldown_iterations = 5, stabilize_fraction = 0.25,
-        axon_entropy_threshold = 0.3, axon_improvement_factor = 1.2, axon_rewire_count = 2
+        axon_entropy_threshold = 0.3, axon_improvement_factor = 1.2, axon_rewire_count = 2,
+        rf_bit_family = None, rf_cross = 0.2
     ))]
 	fn evaluate_genomes_hybrid_adaptive(
 		&self,
@@ -604,6 +605,9 @@ impl IDSCacheWrapper
 		axon_entropy_threshold: f32,
 		axon_improvement_factor: f32,
 		axon_rewire_count: usize,
+		// ABI 27 (flow param `ids_receptive_fields`): genesis output re-projected; None = off.
+		rf_bit_family: Option<Vec<u8>>,
+		rf_cross: f64,
 	) -> PyResult<
 		Vec<(
 			f64,
@@ -628,6 +632,7 @@ impl IDSCacheWrapper
 			num_genomes,
 			self.inner.num_genome_clusters(),
 		)?;
+		let receptive_fields = receptive_fields_arg(rf_bit_family, rf_cross, self.inner.total_features())?;
 		py.allow_threads(|| {
 			let adapt_config = adaptation::AdaptationConfig {
 				synaptogenesis_enabled,
@@ -652,6 +657,7 @@ impl IDSCacheWrapper
 				axon_entropy_threshold,
 				axon_improvement_factor,
 				axon_rewire_count,
+				receptive_fields: receptive_fields.clone(),
 				..Default::default()
 			};
 			let results = ids_cache::evaluate_genomes_ids_cached_hybrid_adaptive(
@@ -933,7 +939,9 @@ impl IDSCacheWrapper
         train_folds = None,
         neuron_sample_rate = 1.0,
         max_neurons_total = None,
-        max_bit_delta = 0
+        max_bit_delta = 0,
+        rf_bit_family = None,
+        rf_cross = 0.2
     ))]
 	fn search_neighbors(
 		&self,
@@ -968,6 +976,9 @@ impl IDSCacheWrapper
 		max_neurons_total: Option<usize>,
 		// ABI 26 (flow param `max_bit_delta`): largest BITS step; 0 = auto.
 		max_bit_delta: usize,
+		// ABI 27 (flow param `ids_receptive_fields`): bit -> family map; None = off.
+		rf_bit_family: Option<Vec<u8>>,
+		rf_cross: f64,
 	) -> PyResult<Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64, f64)>>
 	{
 		if let Some(folds) = &train_folds
@@ -997,6 +1008,7 @@ impl IDSCacheWrapper
 			phase_type: phase,
 			max_neurons_total,
 			max_bit_delta,
+			receptive_fields: receptive_fields_arg(rf_bit_family, rf_cross, total_input_bits)?,
 		};
 
 		let lp_arc = self.inner.live_progress.clone();
@@ -1139,7 +1151,9 @@ impl IDSCacheWrapper
         train_folds = None,
         crossover_bits = "inherit",
         max_neurons_total = None,
-        max_bit_delta = 0
+        max_bit_delta = 0,
+        rf_bit_family = None,
+        rf_cross = 0.2
     ))]
 	fn search_offspring(
 		&self,
@@ -1195,6 +1209,9 @@ impl IDSCacheWrapper
 		max_neurons_total: Option<usize>,
 		// ABI 26 (flow param `max_bit_delta`): largest BITS step; 0 = auto.
 		max_bit_delta: usize,
+		// ABI 27 (flow param `ids_receptive_fields`): bit -> family map; None = off.
+		rf_bit_family: Option<Vec<u8>>,
+		rf_cross: f64,
 	) -> PyResult<(
 		Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64, f64)>,
 		usize,
@@ -1244,6 +1261,7 @@ impl IDSCacheWrapper
 				.map_err(pyo3::exceptions::PyValueError::new_err)?,
 			max_neurons_total,
 			max_bit_delta,
+			receptive_fields: receptive_fields_arg(rf_bit_family, rf_cross, total_input_bits)?,
 		};
 
 		let lp_arc = self.inner.live_progress.clone();

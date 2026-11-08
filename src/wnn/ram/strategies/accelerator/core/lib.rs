@@ -50,6 +50,10 @@ pub mod crossover_bits;
 // Whole-genome neuron budget (flow param max_neurons_total), enforced in
 // neighbor_search::mutate_genome and exported for the Python grid/immigrants.
 pub mod neuron_budget;
+// Receptive fields (flow param ids_receptive_fields, worker ABI 27): per-neuron
+// feature-family connectivity constraint, enforced in neighbor_search::mutate_genome
+// (every GA child / TS neighbour) and exported for the Python creators + genesis.
+pub mod receptive_fields;
 // Counter-based RNG shared by both substrates AND both languages (Python
 // mirror: src/wnn/ram/counter_rng.py). Order-independent by construction,
 // so genome operators can move to Rust and run under rayon without the

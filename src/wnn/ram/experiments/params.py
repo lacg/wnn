@@ -134,6 +134,17 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	# ranked on partitions holding 76% (cicids) / 84% (ciciot) of today's
 	# random_3way test/val. Pinned in the validation-cache key ("fr=").
 	"ids_feature_ranking",
+	# ids_receptive_fields (08/11/2026, worker ABI 27): "off" (default — no
+	# projection, no RNG draw, bit-identical) | "family": every neuron holds at
+	# most floor(ids_rf_cross x bits) connections outside its feature FAMILY
+	# (versioned maps wnn/ids/feature_families/v1/<dataset>.json; a neuron's family
+	# = the family holding the majority of its connections, a fresh neuron draws
+	# one by its connections' families). Enforced in Rust after every GA/TS/genesis
+	# operator and in Python on every grid / init / immigrant genome. IDS port of
+	# the controller's CTRL-45. Pinned in the validation-cache key ("rf=").
+	# ids_rf_cross (float in [0, 0.5), default 0.2): the out-of-family share;
+	# refused when set with receptive fields off.
+	"ids_receptive_fields", "ids_rf_cross",
 	# decode_mode: REMOVED 08/11/2026 (IDS-54) — never read; "argmax" accepted
 	# with a note, anything else REFUSED (inert_params.py).
 	"ids_encoded_storage", "ids_encoded_storage_dir", "ids_memmap_prefetch",

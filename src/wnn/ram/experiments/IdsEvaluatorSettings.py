@@ -22,6 +22,8 @@ from wnn.ram.experiments.ids_param_resolution import (
 	resolve_kfold_per_gen,
 	resolve_memory_mode,
 	resolve_offspring_folds,
+	resolve_receptive_fields,
+	resolve_rf_cross,
 	resolve_two_cluster_fitness_f1,
 	resolve_write_rule,
 )
@@ -67,6 +69,8 @@ class IdsEvaluatorSettings:
 	invalid_encoding: str
 	encoding_dedupe: bool
 	feature_ranking: str
+	receptive_fields: str
+	rf_cross: float
 	fitness_weights: tuple[float, float, float, float]
 	order_independent_train: bool
 
@@ -110,6 +114,8 @@ class IdsEvaluatorSettings:
 			invalid_encoding=resolve_invalid_encoding(params),
 			encoding_dedupe=resolve_encoding_dedupe(params),
 			feature_ranking=resolve_feature_ranking(params),
+			receptive_fields=resolve_receptive_fields(params),
+			rf_cross=resolve_rf_cross(params),
 			fitness_weights=(
 				params.get("fitness_weight_ce", 0), params.get("fitness_weight_f1", 0),
 				params.get("fitness_weight_fpr", 0), params.get("fitness_weight_acc", 0),

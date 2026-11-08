@@ -1,0 +1,87 @@
+{
+	"version": "v1",
+	"dataset": "ciciot2023 (neto_full, neto_subsample)",
+	"covers": [
+		"legacy TOP20_RF_FEATURES, TOP20_MI_8B_FEATURES, TOP20_MI_96B_FEATURES (wnn/ids/ciciot2023.py)",
+		"train_only_v1/ciciot2023_neto_subsample_random_3way.json (all 46 ranked)"
+	],
+	"assignment_rule": "A neuron's family is the family holding the majority of its connections; a neuron with no majority family (fresh, or scrambled by a per-connection crossover) draws one weighted by its own connections per eligible family, i.e. for a fresh uniform neuron P(family) = the family's share of the encoded bits ('my first connection picks the family'). Aggregate wiring per family therefore matches spread; only its concentration changes.",
+	"fallback": "A family is a HOME for a w-bit neuron only if it has at least w - floor(rf_cross*w) distinct ENCODED bits (after ids_encoding_dedupe, if on). A smaller family is reachable at that width only through the cross budget; a neuron whose width no family can host is exempt (left as drawn). Nothing is ever placed out-of-family to cover a deficit, so a projected neuron's family always holds a strict majority of its connections (rf_cross < 0.5).",
+	"notes": [
+		"'Duration' is the packet TTL in CIC-IoT-2023's feature table (Neto et al. 2023), not a time, so it is context, not timing (refined from the first proposal).",
+		"HTTPS is binary (1 bit) and could never be a home on its own; it sits in context with the other protocol indicators and the window counts, as first proposed."
+	],
+	"families": {
+		"flags": {
+			"why": "TCP flag counters and flag indicators.",
+			"features": [
+				"syn_count",
+				"rst_count",
+				"urg_count",
+				"ack_count",
+				"fin_count",
+				"syn_flag_number",
+				"rst_flag_number",
+				"ack_flag_number",
+				"fin_flag_number",
+				"psh_flag_number",
+				"cwr_flag_number",
+				"ece_flag_number"
+			]
+		},
+		"rate": {
+			"why": "Packet transmission rates (overall, outgoing, incoming).",
+			"features": [
+				"Rate",
+				"Srate",
+				"Drate"
+			]
+		},
+		"size": {
+			"why": "Packet-length statistics of the window (sum, mean, min, max, spread, the in/out radius/magnitude/covariance combinations) and header length.",
+			"features": [
+				"Tot size",
+				"Tot sum",
+				"AVG",
+				"Min",
+				"Max",
+				"Std",
+				"Variance",
+				"Covariance",
+				"Radius",
+				"Magnitue",
+				"Header_Length"
+			]
+		},
+		"timing": {
+			"why": "Time structure: inter-arrival time and flow duration.",
+			"features": [
+				"IAT",
+				"flow_duration"
+			]
+		},
+		"context": {
+			"why": "Window-level counts (Number = packets in the window, Weight = in x out packets), the packet TTL and the protocol / application indicators.",
+			"features": [
+				"Number",
+				"Weight",
+				"Duration",
+				"Protocol Type",
+				"HTTPS",
+				"HTTP",
+				"TCP",
+				"UDP",
+				"DNS",
+				"SSH",
+				"ICMP",
+				"ARP",
+				"LLC",
+				"IPv",
+				"DHCP",
+				"IRC",
+				"SMTP",
+				"Telnet"
+			]
+		}
+	}
+}
