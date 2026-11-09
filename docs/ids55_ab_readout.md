@@ -37,3 +37,22 @@ partition), from `validation_summaries`. Cells = logical cells of that genome.
 So on unswt the families trade ~0.8 pp F1 for half the memory. Not adoptable as an accuracy
 change; an open question is whether the memory saving is worth it (e.g. vs an `off` genome at
 equal cells), and whether ciciot (coverage-limited in the probe) behaves differently.
+
+## Round 2a — EQUAL MEMORY (flows 7461/64/67/70/73, rf off, max_neurons_total 262, ABI 27, 09/11)
+
+GA best_f1 margin_val_cal, F1 / FPR / Acc · neurons / cells:
+
+| seed | off (500n) | family 0.2 (v1) | off (262n, equal memory) |
+|---|---|---|---|
+| r20419 | 90.82 / 4.29 / 90.84 · 498 / 216.7K | 90.58 / 6.89 / 90.62 · 496 / 115.5K | 90.47 / 8.70 / 90.54 · 262 / 116.4K |
+| r20420 | 90.87 / 4.95 / 90.89 · 498 / 210.6K | 89.65 / 6.49 / 89.68 · 500 / 114.2K | 90.20 / 4.52 / 90.22 · 247 / 109.8K |
+| r20421 | 90.85 / 6.21 / 90.89 · 497 / 207.2K | 90.04 / 4.71 / 90.05 · 480 / 106.3K | 90.73 / 5.77 / 90.76 · 258 / 116.0K |
+| r20422 | 90.79 / 4.71 / 90.82 · 500 / 215.7K | 89.33 / 4.23 / 89.34 · 500 / 114.3K | 90.41 / 5.74 / 90.44 · 232 / 102.6K |
+| r20423 | 90.45 / 4.61 / 90.47 · 500 / 217.4K | 90.02 / 6.84 / 90.06 · 481 / 108.5K | 90.86 / 4.65 / 90.88 · 261 / 114.8K |
+| **mean±SD** | **90.75±0.17 / 4.95±0.74 / 90.78** · 213.5K | **89.92±0.47 / 5.83±1.26 / 89.95** · 111.8K | **90.53±0.26 / 5.88±1.68 / 90.57** · 111.9K |
+
+At the SAME memory (111.9K vs 111.8K cells), plain spread neurons beat family by +0.61 pp F1 (4/5 seeds), at
+equal FPR (5.88 vs 5.83). Halving memory by halving neurons costs only 0.22 pp. So family's memory saving is not
+special: you get the same saving, with better F1, from fewer spread neurons. Matches the ids-security prediction
+(~90.6; docs/ids55_why_family_loses.md): the loss is structural (benign-side saturation + protocol starvation),
+not capacity.
