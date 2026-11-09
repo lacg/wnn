@@ -366,6 +366,13 @@ pub async fn update_flow(
 		{
 			set_clauses.push("completed_at = ?4");
 		}
+		else if status == Some("queued")
+		{
+			// Queued means runnable: a leftover pause_requested=1 (from POST /pause)
+			// made every re-queued flow self-pause at its first generation
+			// (09/11/2026, 7381-7406). POST /resume already clears it; PATCH must too.
+			set_clauses.push("pause_requested = 0");
+		}
 	}
 	if config.is_some()
 	{
@@ -508,4 +515,39 @@ pub(crate) fn row_to_flow(row: &sqlx::sqlite::SqliteRow) -> Result<Flow>
 		status_message: row.get("status_message"),
 		pause_requested: row.get::<Option<i64>, _>("pause_requested").unwrap_or(0),
 	})
+}
+
+#[cfg(test)]
+mod pause_flag_tests
+{
+	use super::*;
+
+	async fn test_pool() -> DbPool
+	{
+		let path = std::env::temp_dir().join(format!("wnn_pauseflag_{}.db", std::process::id()));
+		let _ = std::fs::remove_file(&path);
+		crate::db::init_db(&format!("sqlite://{}?mode=rwc", path.display()))
+			.await
+			.expect("init_db")
+	}
+
+	/// 09/11/2026: flows paused via POST /pause (pause_requested=1) and re-queued
+	/// with PATCH status=queued kept the flag and self-paused on admission.
+	#[tokio::test]
+	async fn patch_to_queued_clears_pause_requested()
+	{
+		let pool = test_pool().await;
+		let id = sqlx::query("INSERT INTO flows (name, status, pause_requested) VALUES ('t', 'paused', 1)")
+			.execute(&pool)
+			.await
+			.unwrap()
+			.last_insert_rowid();
+		assert!(update_flow(&pool, id, None, None, Some("queued"), None, None, None).await.unwrap());
+		let (status, flag): (String, i64) = sqlx::query_as("SELECT status, pause_requested FROM flows WHERE id = ?")
+			.bind(id)
+			.fetch_one(&pool)
+			.await
+			.unwrap();
+		assert_eq!((status.as_str(), flag), ("queued", 0));
+	}
 }
