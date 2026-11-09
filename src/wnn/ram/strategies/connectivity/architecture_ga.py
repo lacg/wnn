@@ -167,8 +167,13 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 	def _project_rf(self, genome: 'ClusterGenome') -> 'ClusterGenome':
 		"""ids_receptive_fields: every genome this strategy builds or edits in
 		Python (random init, immigrants, seed-population mutants, the Python
-		breeding fallback). Off = untouched, no RNG draw."""
+		breeding fallback). Off = untouched, no RNG draw.
+		_ensure_rng here, not at the call sites: optimize() seeds the RNG only
+		when it picks a random train subset, so a phased run (train_subset_idx
+		given) reached the seed projection with _rng=None (flows 7452/7454)."""
 		from wnn.ram.strategies.connectivity.receptive_fields import project_if_on
+		if self._arch_config.receptive_fields is not None:
+			self._ensure_rng()
 		return project_if_on(self._arch_config.receptive_fields, genome, self._rng)
 
 	def create_random_genome(self, reference: Sequence['ClusterGenome'] | None = None) -> 'ClusterGenome':

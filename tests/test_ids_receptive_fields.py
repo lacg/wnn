@@ -244,6 +244,16 @@ def test_ga_random_genomes_immigrants_and_mutants_are_projected():
 		_assert_satisfied(rf, g)
 
 
+def test_ga_projects_seeds_before_any_rng_use():
+	"""Flows 7452/7454 (08/11): a phased GA (train_subset_idx given) projects
+	its seed population before anything seeded the RNG -> _rng was None."""
+	rf = _rf()
+	ga = _ga(rf)
+	seed = _genome([20, 16, 12])
+	assert ga._rng is None
+	_assert_satisfied(rf, ga._project_rf(seed.clone()))
+
+
 def test_ga_off_builds_the_same_genomes_as_before():
 	"""Off: the config carries None, no projection seed is drawn -> the exact
 	pre-ABI-27 draw sequence (compared with an RF strategy that consumed draws)."""
