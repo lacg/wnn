@@ -137,7 +137,11 @@ import os
 # dagger_label_estimate=) — the DAgger vote write rule and estimate-built labels;
 # WnnController(obs_att_bias_pred=) + dagger_train_batch_inplace(obs_att_bias_pred=) +
 # ReplayObs(att_bias=) — the Mahony-bias predictor block. Default-off ⇒ ABI 45 bit-identical.
-EXPECTED_ABI = 46
+# ABI 47 (09/11/2026): score-kernel FIX — the Metal scorer indexed the per-episode
+# translational draws (z/vz/mass/collective/x/y) by the chunk-local episode, so GPU
+# scores of translation runs with > 25 episodes replayed episodes 0..24's draws. GPU
+# rows of those runs MOVE to the CPU scorer's value. No Python surface change.
+EXPECTED_ABI = 47
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

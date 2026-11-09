@@ -166,7 +166,7 @@ def test_att_bias_pred_refusals_and_provenance():
 	from wnn.control.provenance import collect_provenance
 	line = collect_provenance("x", **pg.ctrl46_tokens(on)).line()
 	assert "write=vote:0.3 label=estimate abp=on" in line, line
-	assert ra.ABI_VERSION == 46
+	assert ra.ABI_VERSION >= 46  # ABI 47 = the score-kernel chunk-index fix, surface unchanged
 	print("✓ 3 refusals (no vel_xy / no estimator); provenance write= label= abp=; ABI 46")
 
 

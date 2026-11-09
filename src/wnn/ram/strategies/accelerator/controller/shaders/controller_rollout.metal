@@ -149,7 +149,7 @@ struct Params
 	uint dist_seed;			 // base seed, PRE-FOLDED to u32 (dist_seed32)
 	uint dist_ep_offset; // global index of episode 0 in this dispatch
 											 // (score() chunks episodes; per-episode seeds
-											 // must not depend on the chunk size)
+											 // AND the whole-call ep_vert buffer index by it)
 	// --- E5 residual hybrid (APPENDED at END; layout must match Rust RolloutParams).
 	//     residual_enabled=0 ⇒ pure-WNN (pre-E5). When 1, the WNN output is a signed
 	//     residual composed on an analytic PID baseline (compose_residual). ---
@@ -1407,11 +1407,17 @@ kernel void controller_rollout(
 	// SCOPE C STAGE 1: vertical state, episode-scoped like the lag filter.
 	// Initial (z, vz) ride in with the episode's ICs (init_z/init_vz buffers);
 	// zero when translation is off, so the fields cost one load and nothing else.
-	float zpos = (P.translation_on != 0u) ? ep_vert[e * 6u + 0u] : 0.0f;
-	float vz = (P.translation_on != 0u) ? ep_vert[e * 6u + 1u] : 0.0f;
+	// ep_vert is bound WHOLE (every episode of the call) while q0/omega0 arrive
+	// sliced per chunk, so it is indexed by the GLOBAL episode (chunk offset + e).
+	// Indexing it by the chunk-local e (until 09/11/2026) replayed episodes
+	// 0..chunk-1's z/vz/mass/collective/x/y in every later chunk — the GPU scored
+	// only `chunk` (25) distinct translational draws, the CPU scorer all of them.
+	uint ep_v = (P.dist_ep_offset + e) * 6u;
+	float zpos = (P.translation_on != 0u) ? ep_vert[ep_v + 0u] : 0.0f;
+	float vz = (P.translation_on != 0u) ? ep_vert[ep_v + 1u] : 0.0f;
 	// STAGE 2 horizontal state (slots 4/5; zeros on a stage-1 dispatch).
-	float xpos = (P.translation_on != 0u) ? ep_vert[e * 6u + 4u] : 0.0f;
-	float ypos = (P.translation_on != 0u) ? ep_vert[e * 6u + 5u] : 0.0f;
+	float xpos = (P.translation_on != 0u) ? ep_vert[ep_v + 4u] : 0.0f;
+	float ypos = (P.translation_on != 0u) ? ep_vert[ep_v + 5u] : 0.0f;
 	float vxh = 0.0f, vyh = 0.0f;
 	// ABI 32: the specific force the LAST step produced (body frame) — what the
 	// accelerometer reads under imu_specific_force. Hover (0,0,g) at reset, twin
@@ -1422,8 +1428,8 @@ kernel void controller_rollout(
 	float4 mq = q;
 	float mint[3] = {0.0f, 0.0f, 0.0f};
 	// Per-episode PLANT draw (never a feature) and commanded collective.
-	float ep_mass_kg = (P.translation_on != 0u) ? ep_vert[e * 6u + 2u] : P.mass;
-	float ep_coll_frac = (P.translation_on != 0u) ? ep_vert[e * 6u + 3u] : 0.0f;
+	float ep_mass_kg = (P.translation_on != 0u) ? ep_vert[ep_v + 2u] : P.mass;
+	float ep_coll_frac = (P.translation_on != 0u) ? ep_vert[ep_v + 3u] : 0.0f;
 	// STAGE 1: the operating point the delta accumulator rides on, in absolute
 	// pwm — hover for THIS episode's mass, scaled by the commanded fraction.
 	// 0.5 when translation is off ⇒ the legacy neutral, bit-identical.

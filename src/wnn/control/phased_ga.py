@@ -1444,7 +1444,8 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 
 def _save_winner(path: str, args, spec: ControllerSpec,
                  best_genome, final_population, metrics,
-                 stage_num=None, stage_name=None, async_save: bool = False) -> None:
+                 stage_num=None, stage_name=None, async_save: bool = False,
+                 headline_key: str | None = None) -> None:
 	"""Persist the WINNER + the entire FINAL POPULATION + spec + provenance to
 	PATH (schema-2 yaml.gz, cells packed; no pickle).
 
@@ -1503,6 +1504,9 @@ def _save_winner(path: str, args, spec: ControllerSpec,
 		payload["stage_num"] = stage_num
 	if stage_name is not None:
 		payload["stage_name"] = stage_name
+	if headline_key is not None:
+		# Which published row this file IS (e.g. "NEURONS#2"): best_genome = pop[0] = it.
+		payload["meta"]["headline"] = headline_key
 	pop_n = len(payload["population"])
 	if async_save:
 		p, t = _ctl_save_async(path, payload)
@@ -2085,7 +2089,8 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 	just multiply cost. Extending this to the full carried populations is a follow-up —
 	it needs bounded top-K retention before `_release_prior_populations` frees them.
 
-	`stage_entries` is [(label, spec, res), ...]. Returns the winning label (or None)."""
+	`stage_entries` is [(label, spec, res), ...]. Returns the headline pick
+	(`_headline_pick`: label, key, spec, genome, population) or None."""
 	import statistics
 	from types import SimpleNamespace
 	from wnn.control.controller_orchestrator import ControllerOrchestrator
@@ -2249,6 +2254,7 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 	if winner is None:
 		print("  [stage-select] no stage could be scored on val — headline falls back to MEMORY")
 		return None
+	headline = _headline_pick(stage_entries, winner, cand_meta)
 	print(f"  [stage-select] HEADLINE stage={win_label} genome={winner} (union rank over "
 	      f"{len(scored)} candidates = top-{_TOP_K} of every stage, on {len(VAL_SEEDS)} val "
 	      f"seeds; NEVER on the report seeds)")
@@ -2281,7 +2287,26 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 		# is a weight that silently cannot be applied — jerk is 20% of C10.
 		print(f"  [stage-select] HEADLINE held-out: stable={wh.acc * 100:.1f}% "
 		      f"err={wh.mean_attitude_error_deg:.2f}°{_heldout_row_str(wh)}")
-	return win_label
+	return headline
+
+
+def _headline_pick(stage_entries, winner: str, cand_meta: dict):
+	"""The selected genome as --save-winner must write it (09/11/2026).
+
+	Returns SimpleNamespace(label, key, spec, genome, population): `population` is the
+	headline STAGE's carried population re-ordered so the headline genome is pop[0] —
+	every consumer reads either best_genome or pop[0] (ensemble_teachers.load_winner),
+	so both must name the published genome. The population is the headline stage's own
+	(its spec), never MEMORY's, so a NEURONS headline is not saved under a foreign spec."""
+	from types import SimpleNamespace
+	label, spec, genome = cand_meta[winner]
+	stage_pop = []
+	for lbl, _spec, res in stage_entries:
+		if lbl == label and res is not None:
+			stage_pop = list(getattr(res, "final_population", None) or [])
+			break
+	population = [genome] + [g for g in stage_pop if g is not genome]
+	return SimpleNamespace(label=label, key=winner, spec=spec, genome=genome, population=population)
 
 
 def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population,
@@ -2671,7 +2696,7 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 		res4 = _SNS(best_genome=resume_warm_genome, final_population=resume_population)
 
 	# Publish every stage; headline the val-selected one (see _select_headline_stage).
-	# Report-only: this changes NOTHING about the search, the carry, or --save-winner.
+	# Report-only for the search and the carry; --save-winner writes the pick (09/11/2026).
 	_all_ho = dict(orch.stage_holdouts)
 	if stage_holdouts is not None:
 		_all_ho.update(stage_holdouts)
@@ -2696,8 +2721,7 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 	# stage checkpoint is already on disk, so --recalc-headline re-selects without a
 	# re-fly. The one recoverable case — the union ranking itself failing — keeps its
 	# own narrow fallback inside _select_headline_stage.
-	if _entries:
-		_select_headline_stage(args, ec, seeds, _entries, _all_ho)
+	headline = _select_headline_stage(args, ec, seeds, _entries, _all_ho) if _entries else None
 
 	# PID baseline on the val seed (the held-out reference).
 	pid_rows = _pid_baseline(ec, args.eval_episodes, seeds.val,
@@ -2714,8 +2738,41 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 	# final_population: memory-stage population, sorted by fitness. Used by
 	# --save-winner so Plan B can warm-start its GA from Plan A's evolved pool.
 	if res4 is None:
-		return stage_results, None, None, pid_rows
-	return stage_results, res4.best_genome, res4.final_population, pid_rows
+		return stage_results, None, None, pid_rows, headline
+	return stage_results, res4.best_genome, res4.final_population, pid_rows, headline
+
+
+def _winner_payload(stage_results, final_population, headline):
+	"""(spec, genome, population, metrics, stage_label) for --save-winner.
+
+	Until 09/11/2026 --save-winner wrote MEMORY's `best_genome` — the K-fold
+	lucky-fold snapshot, which differs from pop[0] in most checkpoints — under
+	MEMORY's spec, whatever the stage-select HEADLINE was. The file therefore named
+	a genome no published row describes (CTRL-48 s1: headline NEURONS#2). It now
+	writes the HEADLINE genome as best_genome AND pop[0]. A MEMORY headline keeps
+	MEMORY's full population behind it (the Plan B warm-start pool); another stage
+	saves its own carried top-K under its own spec. No headline (no stage could be
+	scored on val) = the MEMORY fallback the log announces: pop[0], not best_genome."""
+	mem_spec, mem_metrics = stage_results[-1][1], stage_results[-1][2]
+	mem_pop = list(final_population or [])
+	if headline is None:
+		return mem_spec, (mem_pop[0] if mem_pop else None), mem_pop, mem_metrics, "MEMORY"
+	src = mem_pop if headline.label == "MEMORY" and mem_pop else headline.population
+	population = [headline.genome] + [g for g in src if g is not headline.genome]
+	metrics = next((row[2] for row in stage_results
+	                if str(row[0]).upper().startswith(headline.label)), None)
+	return headline.spec, headline.genome, population, metrics, headline.key
+
+
+def _save_published_winner(args, stage_results, final_population, headline) -> None:
+	"""--save-winner: persist the genome the HEADLINE row reports (see _winner_payload)."""
+	spec, genome, population, metrics, key = _winner_payload(stage_results, final_population, headline)
+	if genome is None:
+		print("\n[save-winner] no published genome to save (empty MEMORY population, no headline)")
+		return
+	print(f"\n[save-winner] best_genome = pop[0] = the published HEADLINE genome {key}")
+	_save_winner(args.save_winner, args, spec, genome, population, metrics,
+	             headline_key=key)
 
 
 def _print_final_summary(args, stage_results, best_final, pid_rows, total_dt: float):
@@ -4294,7 +4351,7 @@ def main():
 		})
 		from wnn.control.cancel_state import RunInterrupted
 		try:
-			stage_results, best_final, final_population, pid_rows = _run_one(
+			stage_results, best_final, final_population, pid_rows, headline = _run_one(
 				args, ec, s, resume_state=resume_state)
 		except RunInterrupted as e:
 			# The ONE exit for a shutdown (15/10/2026): no summary, no winner save,
@@ -4305,21 +4362,17 @@ def main():
 			      f"--resume-from-emergency <emergency_stage*.yaml.gz> --resume-mode same",
 			      flush=True)
 			return 143
-		val_runs.append((stage_results, best_final, final_population, pid_rows))
+		val_runs.append((stage_results, best_final, final_population, pid_rows, headline))
 
 	# Single-run path: print the per-run summary directly.
-	stage_results, best_final, final_population, pid_rows = val_runs[-1]
+	stage_results, best_final, final_population, pid_rows, headline = val_runs[-1]
 	_print_final_summary(args, stage_results, best_final, pid_rows, time.time() - t_start)
 
 	# Held-out (REPORT ONLY) now fires PER-STAGE inside _run_one (N→B→C→M trajectory);
 	# the MEMORY-stage per-stage held-out IS the final number, so nothing to add here.
 
 	if args.save_winner is not None and best_final is not None:
-		# stage_results[-1] is the Memory stage tuple (name, spec, metrics, dt, iters).
-		mem_spec    = stage_results[-1][1]
-		mem_metrics = stage_results[-1][2]
-		_save_winner(args.save_winner, args, mem_spec,
-		             best_final, final_population, mem_metrics)
+		_save_published_winner(args, stage_results, final_population, headline)
 
 	# Multi-run aggregation: mean±std of the FINAL (memory-stage) metrics.
 	if args.runs > 1:

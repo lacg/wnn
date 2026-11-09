@@ -28,7 +28,7 @@ use ram_core::cancel::check_cancel;
 ///     call) — middle ground between the original "stall under IDS load"
 ///     and "no cancel granularity at all". Override via WNN_CONTROLLER_CHUNK
 ///     for tighter cancel (set to 5) or larger chunks (set to 100+).
-fn episodes_per_chunk() -> usize
+pub(crate) fn episodes_per_chunk() -> usize
 {
 	std::env::var("WNN_CONTROLLER_CHUNK")
 		.ok()
@@ -224,7 +224,8 @@ struct RolloutParams
 	dist_accel_sigma: f32,
 	dist_seed: u32,
 	// Global index of episode 0 in this dispatch — score() chunks episodes;
-	// per-episode seeds (channel-15 hash) must not depend on the chunk size.
+	// per-episode seeds (channel-15 hash) must not depend on the chunk size, and
+	// the per-episode stage-1/2 blob (buffer 30, bound whole) is indexed by it.
 	dist_ep_offset: u32,
 	// --- E5 residual hybrid (APPENDED at END; layout must match Metal Params). ---
 	// residual_enabled=0 ⇒ pure-WNN (pre-E5). When 1, the WNN output is a signed

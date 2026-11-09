@@ -69,6 +69,8 @@ mod ctrl40_tests; // CTRL-40: Metal split train/record for the applied-actuator 
 #[cfg(test)]
 mod ctrl46_tests; // CTRL-46 (ABI 46): vote write rule (CPU/GPU, order independence) + estimate-built labels
 #[cfg(test)]
+mod scorer_chunk_tests; // 09/11: CPU scorer vs Metal across score chunks on the rf_c200_dres recipe (ep_vert global index)
+#[cfg(test)]
 mod ctrl48_tests; // CTRL-48: the cascade unabsorbed-disturbance block — physics, replay, CPU/GPU parity
 #[cfg(test)]
 mod abi38_tests; // ABI 38: the cascade controller — identity, rivals, CPU/GPU parity, trainers
@@ -420,7 +422,15 @@ mod metal_controller;
 ///   the onboard predictor of the Mahony specific-force bias (att_bias_pred.rs), CPU +
 ///   Metal score (FC_ATT_BIAS_PRED, RolloutParams.abp_on) + Metal split replay
 ///   (TrainParams.abp_on, abp_rec buffers 29/26).
-pub const ABI_VERSION: u32 = 46;
+/// ABI 47 (09/11/2026, score-kernel FIX, NOT default-off): the Metal score kernel read
+///   the per-episode stage-1/2 blob (buffer 30: z0, vz0, mass, collective, x0, y0) by
+///   the CHUNK-local episode while that buffer is bound whole, so with translation on
+///   and > episodes_per_chunk() (25) episodes every later chunk replayed episodes
+///   0..24's translational draws (the CPU scorer never did). Fixed to the global index
+///   (dist_ep_offset + e). Every GPU-scored translation row over > 25 episodes MOVES
+///   to the CPU scorer's value; attitude-only runs and <= 25-episode calls are
+///   bit-identical. No Python surface change. Pin: scorer_chunk_tests.rs.
+pub const ABI_VERSION: u32 = 47;
 
 /// ABI 44: how output neurogenesis lays out the output layer — "segment" = every
 /// bank / E-I half resizes at its own tail (pre-44 Python resized the flat tail).
