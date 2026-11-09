@@ -56,3 +56,18 @@ equal FPR (5.88 vs 5.83). Halving memory by halving neurons costs only 0.22 pp. 
 special: you get the same saving, with better F1, from fewer spread neurons. Matches the ids-security prediction
 (~90.6; docs/ids55_why_family_loses.md): the loss is structural (benign-side saturation + protocol starvation),
 not capacity.
+
+## Round 2c — family 0.2 on families_v2 (protocol->context), flows 7476-7480, ABI 27, 09/11
+
+| arm | F1 | FPR | Acc | cells |
+|---|---|---|---|---|
+| off (500n) | 90.75±0.17 | 4.95±0.74 | 90.78 | 213.5K |
+| family v1 | 89.92±0.47 | 5.83±1.26 | 89.95 | 111.8K |
+| **family v2** | **89.88±0.36** | 6.37±1.01 | 89.91 | 128.3K |
+| off (262n, equal memory) | 90.53±0.26 | 5.88±1.68 | 90.57 | 111.9K |
+
+v2 does NOT close the gap: 89.88 vs v1 89.92 (v2 better on 3/5 seeds, mean equal), still −0.87 pp vs off-500 (0/5),
+FPR slightly worse. The harness predicted v2 at −0.45 pp (90.70 there): protocol starvation was overestimated as a
+production cause — the harness scored random genomes, production's GA already compensated. Consistent with
+docs/ids55_family_fix_decomposition.md: families stay off for accuracy; the levers worth testing are cell/encoding
+ones (IDS-56: min-share vote × dedupe, flows 7481-7520).
