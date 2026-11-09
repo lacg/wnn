@@ -137,7 +137,7 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	# ids_receptive_fields (08/11/2026, worker ABI 27): "off" (default — no
 	# projection, no RNG draw, bit-identical) | "family": every neuron holds at
 	# most floor(ids_rf_cross x bits) connections outside its feature FAMILY
-	# (versioned maps wnn/ids/feature_families/v1/<dataset>.json; a neuron's family
+	# (versioned maps wnn/ids/feature_families/v2/<dataset>.json; a neuron's family
 	# = the family holding the majority of its connections, a fresh neuron draws
 	# one by its connections' families). Enforced in Rust after every GA/TS/genesis
 	# operator and in Python on every grid / init / immigrant genome. IDS port of

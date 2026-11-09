@@ -49,12 +49,15 @@ controller's corner), so the majority rule — and therefore idempotence — alw
 `"merge_into": "<family>"` in the map. When its encoded-bit count (after dedupe) is below
 `host_bits = max_bits - floor(ids_rf_cross * max_bits)` — what the run's widest neuron
 needs, the eligibility rule above — its features join the partner (chained through the
-partner's own `merge_into`). Families that can host are untouched, so every dedupe-off map
-is identical to before and the map version stays `families_v1`. UNSW `ttl_state` declares
+partner's own `merge_into`). Families that can host are untouched. UNSW `ttl_state` declares
 `merge_into: context`: with dedupe on it keeps 12–16 bits (unswr/unswt, both rankings) and
 merges; off it has 196 (unswr) / 48–52 (unswt) and does not. The `[RF]` line names each
-merge. Other dedupe-on families below the threshold (unswt handshake=10, protocol=12)
-declare no merge and stay cross-budget-only.
+merge. **v2 (Luiz 08/11):** UNSW `handshake` declares `merge_into: timing` (tcprtt/synack/ackdat
+are the setup round-trip timings; 10 bits with dedupe on, 32 off on unswt legacy → merges only
+with dedupe on at max_bits 34) and `protocol` declares `merge_into: context` (12 bits on unswt
+legacy even with dedupe OFF → merges there too). Because a dedupe-off map changes, the map
+version moved to `families_v2` (the validation cache re-keys); the IDS-55 unswt A/B
+(flows 7451–7460) ran on `families_v1`, where protocol stayed cross-budget-only.
 
 ## The projection
 
@@ -82,7 +85,7 @@ training and scoring is untouched by construction.
 ## Family maps
 
 Versioned package data: `src/wnn/ids/feature_families/v1/{unsw-nb15,cicids2017,ciciot2023}.json`
-(`FAMILY_MAP_VERSION = families_v1`), each family with its mechanism. They cover the
+(`FAMILY_MAP_VERSION = families_v2`; v1 kept as the A/B provenance), each family with its mechanism. They cover the
 legacy top-20 lists, the CIC-IoT MI lists and the FULL train_only_v1 rankings (so top15 /
 top25 / all work too). A feature without a family, or in two, is refused. The bit map is
 built from the encoder's actual layout (`feature_bit_ranges`, after dedupe; the
@@ -95,7 +98,7 @@ feature table, so it sits in context, not timing. CICIDS per-second rates join t
 
 ## Provenance
 
-The factory logs `[RF] ids_receptive_fields=family map=families_v1/<file> ids_rf_cross=...`
+The factory logs `[RF] ids_receptive_fields=family map=families_v2/<file> ids_rf_cross=...`
 with each family's encoded-bit count; the experiment logs the version per phase; the
-validation-cache key carries `rf=families_v1:<cross>` when on (conservative: RF steers
+validation-cache key carries `rf=families_v2:<cross>` when on (conservative: RF steers
 the search, which genome_hash already pins).

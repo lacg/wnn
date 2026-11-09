@@ -22,16 +22,17 @@ When its encoded-bit count (after dedupe) is below `host_bits` — the bits a
 family needs to host the run's WIDEST neuron, max_bits - floor(rf_cross x
 max_bits), the Rust eligibility rule — its features join the declared partner
 (chained through the partner's own merge_into if that is still too small).
-A family that can host keeps exactly today's map, so dedupe-off maps are
-unchanged (UNSW ttl_state has 196 bits there; 15 with dedupe on).
+A family that can host keeps exactly its own map. v2 (08/11) added UNSW
+handshake->timing and protocol->context; protocol (~12 bits on the legacy list)
+merges with dedupe OFF too, hence the version bump (v1 = the IDS-55 A/B's map).
 """
 
 import json
 import math
 from pathlib import Path
 
-FAMILY_MAP_VERSION = "families_v1"
-_DIR = Path(__file__).resolve().parent / "feature_families" / "v1"
+FAMILY_MAP_VERSION = "families_v2"
+_DIR = Path(__file__).resolve().parent / "feature_families" / "v2"
 
 
 def family_file(dataset_name: str) -> Path:

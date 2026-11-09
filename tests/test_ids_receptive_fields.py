@@ -52,7 +52,7 @@ def test_every_listed_feature_maps_to_exactly_one_family(dataset):
 	assert not missing, f"{dataset}: no family for {missing}"
 	assert len(families) >= 5
 	raw = json.loads(family_file(dataset).read_text())
-	assert raw["version"] == "v1" and FAMILY_MAP_VERSION == "families_v1"
+	assert raw["version"] == "v2" and FAMILY_MAP_VERSION == "families_v2"
 	assert all(spec["why"] for spec in raw["families"].values()), "every family documents its mechanism"
 
 
@@ -286,23 +286,46 @@ def _layout(dedupe: bool, max_bits: int = 34, cross: float = 0.2):
 	return enc, total, bit_families(enc, total, "unsw-nb15", host_bits(max_bits, cross))
 
 
-def test_ttl_state_merges_into_context_when_dedupe_leaves_it_too_small():
+_V2_PARTNERS = {"ttl_state": "context", "handshake": "timing", "protocol": "context"}
+
+
+def _merged_sizes(merges: list[str]) -> dict[str, tuple[int, str]]:
+	""""family(Nb)->partner" -> {family: (N, partner)}."""
+	out = {}
+	for m in merges:
+		head, partner = m.split("->")
+		family, size = head.rstrip("b)").split("(")
+		out[family] = (int(size), partner)
+	return out
+
+
+def test_small_families_merge_into_their_declared_partner_when_dedupe_shrinks_them():
 	enc, total, (bit_family, names, merges) = _layout(dedupe=True)
-	assert len(merges) == 1 and merges[0].startswith("ttl_state(") and merges[0].endswith(")->context")
-	assert "ttl_state" not in names
-	ctx = names.index("context")
+	merged = _merged_sizes(merges)
+	assert {f: p for f, (_, p) in merged.items()} == _V2_PARTNERS
+	assert not set(_V2_PARTNERS) & set(names)
 	owner, _ = load_family_map("unsw-nb15")
-	moved = [f for f in enc.feature_names_ if owner[f] in ("ttl_state", "context")]
-	assert {"sttl", "dttl", "state", "ct_srv_src"} <= set(moved)
-	for feature in moved:
+	for feature in enc.feature_names_:
+		home = _V2_PARTNERS.get(owner[feature], owner[feature])
 		start, end = enc.feature_bit_ranges()[feature]
-		assert set(bit_family[start:end]) == {ctx}, feature
+		assert set(bit_family[start:end]) == {names.index(home)}, feature
 
 
-def test_no_merge_when_the_family_can_host_and_the_map_is_unchanged():
+def test_only_families_below_host_bits_merge_and_hosting_families_keep_their_bits():
 	enc, total, (bit_family, names, merges) = _layout(dedupe=False)
-	assert merges == [] and "ttl_state" in names
-	assert (bit_family, names, []) == bit_families(enc, total, "unsw-nb15", 0), "dedupe-off map = the pre-merge map"
+	merged = _merged_sizes(merges)
+	assert "ttl_state" in names and "ttl_state" not in merged
+	assert all(size < 28 for size, _ in merged.values())
+	base, base_names, _ = bit_families(enc, total, "unsw-nb15", 0)
+	for i, fam in enumerate(base_names):
+		if fam in merged or fam in {p for _, p in merged.values()}:
+			continue
+		assert [b == i for b in base] == [b == names.index(fam) for b in bit_family], fam
+
+
+def test_host_bits_zero_never_merges():
+	enc, total, _ = _layout(dedupe=True)
+	assert bit_families(enc, total, "unsw-nb15", 0)[2] == []
 
 
 def test_host_threshold_is_the_rust_eligibility_rule_at_max_bits():

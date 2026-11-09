@@ -1,0 +1,124 @@
+{
+	"version": "v2",
+	"dataset": "cicids2017",
+	"covers": [
+		"legacy TOP20_RF_FEATURES (wnn/ids/cicids2017.py)",
+		"train_only_v1/cicids2017_random_3way.json (all 78 ranked)"
+	],
+	"assignment_rule": "A neuron's family is the family holding the majority of its connections; a neuron with no majority family (fresh, or scrambled by a per-connection crossover) draws one weighted by its own connections per eligible family, i.e. for a fresh uniform neuron P(family) = the family's share of the encoded bits ('my first connection picks the family'). Aggregate wiring per family therefore matches spread; only its concentration changes.",
+	"fallback": "A family is a HOME for a w-bit neuron only if it has at least w - floor(rf_cross*w) distinct ENCODED bits (after ids_encoding_dedupe, if on). A smaller family is reachable at that width only through the cross budget; a neuron whose width no family can host is exempt (left as drawn). Nothing is ever placed out-of-family to cover a deficit, so a projected neuron's family always holds a strict majority of its connections (rf_cross < 0.5).",
+	"notes": [
+		"Rates (Flow Packets/s, ...) join timing rather than a family of their own: they are counts over the flow duration, and on the legacy list a rate family would be one feature.",
+		"port is one feature: a home only for neurons narrower than its encoded width + budget; otherwise reachable via the cross budget."
+	],
+	"families": {
+		"size": {
+			"why": "Bidirectional packet-size statistics and the down/up ratio: the shape of the packets regardless of direction.",
+			"features": [
+				"Average Packet Size",
+				"Packet Length Mean",
+				"Packet Length Std",
+				"Packet Length Variance",
+				"Max Packet Length",
+				"Min Packet Length",
+				"Down/Up Ratio"
+			]
+		},
+		"bwd_size": {
+			"why": "What the RESPONDER sent: backward packet sizes, totals, subflow and bulk statistics.",
+			"features": [
+				"Bwd Packet Length Std",
+				"Bwd Packet Length Max",
+				"Bwd Packet Length Mean",
+				"Bwd Packet Length Min",
+				"Avg Bwd Segment Size",
+				"Total Length of Bwd Packets",
+				"Subflow Bwd Bytes",
+				"Total Backward Packets",
+				"Subflow Bwd Packets",
+				"Bwd Avg Bytes/Bulk",
+				"Bwd Avg Packets/Bulk",
+				"Bwd Avg Bulk Rate"
+			]
+		},
+		"fwd_size": {
+			"why": "What the INITIATOR sent: forward packet sizes, totals, subflow, payload-carrying packets and bulk statistics.",
+			"features": [
+				"Fwd Packet Length Mean",
+				"Fwd Packet Length Max",
+				"Fwd Packet Length Min",
+				"Fwd Packet Length Std",
+				"Avg Fwd Segment Size",
+				"Total Length of Fwd Packets",
+				"Subflow Fwd Bytes",
+				"Total Fwd Packets",
+				"Subflow Fwd Packets",
+				"act_data_pkt_fwd",
+				"Fwd Avg Bytes/Bulk",
+				"Fwd Avg Packets/Bulk",
+				"Fwd Avg Bulk Rate"
+			]
+		},
+		"header_window": {
+			"why": "TCP header fields: initial windows, header lengths, minimum segment size and the flag counters (set by the TCP stack, not by the payload).",
+			"features": [
+				"Init_Win_bytes_forward",
+				"Init_Win_bytes_backward",
+				"Fwd Header Length",
+				"Bwd Header Length",
+				"Fwd Header Length.1",
+				"min_seg_size_forward",
+				"PSH Flag Count",
+				"ACK Flag Count",
+				"URG Flag Count",
+				"FIN Flag Count",
+				"SYN Flag Count",
+				"RST Flag Count",
+				"CWE Flag Count",
+				"ECE Flag Count",
+				"Fwd PSH Flags",
+				"Bwd PSH Flags",
+				"Fwd URG Flags",
+				"Bwd URG Flags"
+			]
+		},
+		"timing": {
+			"why": "Time structure: flow / forward / backward inter-arrival times, active and idle periods, duration, and the per-second rates derived from duration.",
+			"features": [
+				"Flow IAT Max",
+				"Flow IAT Std",
+				"Flow IAT Mean",
+				"Flow IAT Min",
+				"Fwd IAT Std",
+				"Fwd IAT Max",
+				"Fwd IAT Min",
+				"Fwd IAT Mean",
+				"Fwd IAT Total",
+				"Bwd IAT Std",
+				"Bwd IAT Max",
+				"Bwd IAT Min",
+				"Bwd IAT Mean",
+				"Bwd IAT Total",
+				"Idle Min",
+				"Idle Mean",
+				"Idle Max",
+				"Idle Std",
+				"Active Min",
+				"Active Mean",
+				"Active Max",
+				"Active Std",
+				"Flow Duration",
+				"Flow Packets/s",
+				"Flow Bytes/s",
+				"Fwd Packets/s",
+				"Bwd Packets/s"
+			]
+		},
+		"port": {
+			"why": "The service identifier.",
+			"features": [
+				"Destination Port"
+			]
+		}
+	}
+}
