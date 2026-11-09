@@ -8,6 +8,9 @@ Seeds 20419-20423, worker ABI 27, receptive fields on families_v2. Two A/Bs, eve
  (b) CIC-IoT QUAD: clone 7344 (IDS-47 ciciot QUAD 1m), off vs family cross 0.2 (96-bit neurons -> 19 out-of-family).
      The probe's coverage-limited dataset. Both arms fresh on ABI 27 (the IDS-47 rows ran an older ABI: never pair).
 
+ (c) families_v2 (Luiz 09/11, after docs/ids55_why_family_loses.md): unswt family 0.2 on the v2 map (protocol->context),
+     isolates the protocol-starvation cause; harness predicts the gap shrinks to ~-0.45 pp. Cross 0.4 deferred.
+
 Usage: python scripts/queue_ids55_round2.py [--dry-run]"""
 import json, sqlite3, ssl, sys, time, urllib.request
 
@@ -43,6 +46,8 @@ def plan(db) -> list[tuple[str, int, dict, str]]:
 	for s in SEEDS:
 		out.append((f"{unswt}-rfoff-tot262-r{s}", 7125, {**common, **OFF, "max_neurons_total": 262},
 			"IDS-55 round 2a EQUAL MEMORY (Luiz 08/11): rf off at ~112K cells, pairs with round-1 family flow, ABI 27."))
+		out.append((f"{unswt}-rffam02v2-r{s}", 7125, {**common, **FAMILY},
+			"IDS-55 round 2c (Luiz 09/11): family 0.2 on families_v2 (protocol->context), pairs with round-1 v1 family + off, ABI 27."))
 		for arm, extra in (("rfoff", OFF), ("rffam02", FAMILY)):
 			out.append((f"{ciciot}-{arm}-r{s}", 7344, {**common, **extra, "memory_mode": "QUAD_WEIGHTED"},
 				"IDS-55 round 2b CIC-IoT QUAD (Luiz 08/11): receptive fields off vs family 0.2, families_v2, ABI 27."))
