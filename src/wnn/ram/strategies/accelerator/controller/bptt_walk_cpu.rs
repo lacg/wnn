@@ -386,6 +386,9 @@ impl WnnController
 			None
 		};
 		let walk_order = self.bptt_walk_order(plan, l4);
+		// CTRL-46: the open vote round (taken for the walk, restored at the end). Under
+		// the vote the memory is frozen, so the views are never updated either.
+		let mut vote = self.vote_tally.take();
 		let mut s_writes = 0usize;
 		let mut o_writes = 0usize;
 		let mut d_next: Option<Vec<bool>> = None;
@@ -393,6 +396,7 @@ impl WnnController
 		{
 			if ram_core::cancel::check_cancel()
 			{
+				self.vote_tally = vote;
 				return (s_writes, o_writes);
 			}
 			let tgt = &plan.out_target[d * num_out..(d + 1) * num_out];
@@ -495,6 +499,13 @@ impl WnnController
 					&self.state_connections[cs..cs + self.state_bits_per_neuron],
 					self.state_bits_per_neuron,
 				);
+				// CTRL-46: under the vote rule the visit goes to the round's tally and the
+				// memory stays frozen (no write, no view update).
+				if let Some(t) = vote.as_mut()
+				{
+					t.visit_state_value(n, addr, target_val, mode);
+					continue;
+				}
 				let cur = self.state_memory.read_cell(n, addr);
 				if protect_learned
 					&& cur != ram_core::neuron_memory::EMPTY_U8
@@ -520,6 +531,11 @@ impl WnnController
 				let target_true = tgt[n];
 				let cs = n * obpn;
 				let addr = compute_address_sparse(&rec_out_input[d], &self.output_connections[cs..cs + obpn], obpn);
+				if let Some(t) = vote.as_mut()
+				{
+					t.visit(false, n, addr, target_true);
+					continue;
+				}
 				let cur = self.output_memory.read_cell(n, addr);
 				if protect_learned
 					&& cur != ram_core::neuron_memory::EMPTY_U8
@@ -540,6 +556,42 @@ impl WnnController
 			}
 			d_next = Some(d_s);
 		}
+		self.vote_tally = vote;
 		(s_writes, o_writes)
+	}
+
+	/// CTRL-46: open a DAgger round under `WriteRule::Vote(share)` — every walk until
+	/// `vote_commit_round` records its visits in the tally and writes nothing.
+	pub(crate) fn vote_begin_round(&mut self, share: ram_core::vote_share::VoteShare) -> Result<(), String>
+	{
+		if self.vote_tally.is_some()
+		{
+			return Err("vote_begin_round: a round is already open (missing vote_commit_round)".into());
+		}
+		self.vote_tally = Some(crate::vote_tally::VoteTally::for_mode(self.memory_mode, share)?);
+		Ok(())
+	}
+
+	/// CTRL-46: commit the open round's tally (ram_core vote_net_to_cell) and close it.
+	/// Returns (state cells changed, output cells changed); (0, 0) with no round open.
+	pub(crate) fn vote_commit_round(&mut self) -> (usize, usize)
+	{
+		match self.vote_tally.take()
+		{
+			Some(t) => t.commit(&self.state_memory, &self.output_memory),
+			None => (0, 0),
+		}
+	}
+
+	/// The open round's tally (the GPU walk host adds its visits here).
+	pub(crate) fn vote_tally_mut(&mut self) -> Option<&mut crate::vote_tally::VoteTally>
+	{
+		self.vote_tally.as_mut()
+	}
+
+	#[cfg(test)]
+	pub(crate) fn vote_tally_ref(&self) -> Option<&crate::vote_tally::VoteTally>
+	{
+		self.vote_tally.as_ref()
 	}
 }

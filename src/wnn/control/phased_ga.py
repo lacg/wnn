@@ -481,6 +481,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                obs_vz: bool = False,
                obs_pos_err_xy: bool = False, obs_vel_xy: bool = False,
                obs_att_estimator: bool = False,
+               obs_att_bias_pred: bool = False,
                integral_leak: float = 0.99, integral_scale: float = 1.0,
                dt: float = 0.001,
                decouple_outputs: bool = False, bits_per_feature: int = 8,
@@ -534,6 +535,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		obs_collective_cmd=obs_collective_cmd, obs_alt_err=obs_alt_err, obs_vz=obs_vz,
 		obs_pos_err_xy=obs_pos_err_xy, obs_vel_xy=obs_vel_xy,
 		obs_att_estimator=obs_att_estimator,
+		obs_att_bias_pred=obs_att_bias_pred,
 		integral_leak=integral_leak, integral_scale=integral_scale,
 		dt=dt,
 		decouple_outputs=decouple_outputs,
@@ -918,6 +920,11 @@ def _rg_config(args, ec: EpisodeConfig, seed: int) -> RewardGatedConfig:
 		args, ec, math.radians(rg.full_tilt_deg))
 	# Pure BC (19/07/2026): teacher drives the training rollouts (see reward_gated).
 	rg.expert_drives = bool(getattr(args, "expert_drives", False))
+	# CTRL-46 (ABI 46): the DAgger write rule and the label attitude (resolved and
+	# validated at arg-parse by resolve_ctrl46_args).
+	rg.write_vote = getattr(args, "write_rule", "last") == "vote"
+	rg.vote_share = getattr(args, "_vote_share", None)
+	rg.dagger_label_estimate = getattr(args, "dagger_label_attitude", "true") == "estimate"
 	if args.rg_rounds is not None:
 		rg.num_rounds = args.rg_rounds
 	if args.rg_episodes_per_round is not None:
@@ -2929,6 +2936,30 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "accelerometer. DEFAULT ON whenever the specific-force IMU is on (the "
 	                     "accelerometer then carries no tilt); --no-obs-att-estimator with "
 	                     "specific force is REFUSED unless --force-blind-attitude.")
+	# CTRL-46 (ABI 46). Every default reproduces ABI 45 bit-identically.
+	ap.add_argument("--write-rule", choices=list(CONTROLLER_WRITE_RULES), default="last",
+	                help="CTRL-46: how the DAgger walk writes a cell (memory mode = what a cell IS). "
+	                     "last = today's last-write-wins direct set (BINARY/TERNARY/PLN; QUAD keeps its "
+	                     "nudge). vote = the IDS-56 min-share vote: every visit of a DAgger round adds "
+	                     "+(1-θ) toward TRUE / -θ toward FALSE to a per-(neuron, address) tally, committed "
+	                     "once per round (>0 TRUE, <0 FALSE, 0 untrained). Order-independent. "
+	                     "BINARY/TERNARY/PLN only (QUAD refused: its nudge already tallies).")
+	ap.add_argument("--vote-share", type=float, default=None, metavar="THETA",
+	                help="CTRL-46: the vote's min-share θ in (0, 0.5] on the 1/100 grid (a cell commits "
+	                     "TRUE iff its TRUE visits are not a clear minority, p_true > θ). Only with "
+	                     "--write-rule vote; default (unset) = 0.5, the plain majority.")
+	ap.add_argument("--dagger-label-attitude", choices=list(DAGGER_LABEL_ATTITUDES), default="true",
+	                help="CTRL-46: the attitude the DAgger LABEL is built from. true = the simulator's "
+	                     "quaternion (default, ABI 45). estimate = the student's own Mahony estimate (what "
+	                     "it observes), so the label carries no estimator-bias term the student cannot "
+	                     "see. Only the label: rival/scoring rows are untouched. Needs --obs-att-estimator; "
+	                     "refuses --expert-drives.")
+	ap.add_argument("--obs-att-bias-pred", action="store_true", default=False,
+	                help="CTRL-46: +2 input features (roll, pitch) = the ONBOARD prediction of the Mahony "
+	                     "estimator's specific-force bias: the filter's own linearised error dynamics "
+	                     "(kp, ki) driven by the change of the horizontal velocity estimate, rotated into "
+	                     "the body by the estimate's quaternion. Uses no simulator truth. Needs "
+	                     "--obs-att-estimator and --obs-vel-xy. Default OFF.")
 	ap.add_argument("--force-blind-attitude", action="store_true", default=False,
 	                help="ABI 32: allow a specific-force run whose attitude features read the "
 	                     "raw accelerometer (or that has none). Refused by default — it flies a "
@@ -3838,6 +3869,66 @@ def resolve_abi32_plant(args) -> None:
 	_resolve_motor_lag_args(args)
 
 
+# CTRL-46 (ABI 46): the controller's write rules, in the IDS vocabulary
+# (ids_write_rule / ids_vote_share). "last" = the controller's own direct write
+# (ram_core WriteRule::LastWrite for BINARY/TERNARY/PLN, the nudge for QUAD).
+CONTROLLER_WRITE_RULES = ("last", "vote")
+DAGGER_LABEL_ATTITUDES = ("true", "estimate")
+
+
+def resolve_ctrl46_args(args) -> None:
+	"""CTRL-46 (ABI 46): validate --write-rule / --vote-share / --dagger-label-attitude /
+	--obs-att-bias-pred IN PLACE (args._vote_share = the snapped θ or None). Run after
+	resolve_abi32_plant (it reads the resolved obs_att_estimator). The vote gates are
+	the IDS ones (ids_param_resolution.require_vote_mode / validate_vote_share), so a
+	θ or a mode is accepted here exactly when an IDS flow would accept it."""
+	from wnn.ram.experiments.ids_param_resolution import require_vote_mode, validate_vote_share
+	rule = getattr(args, "write_rule", "last")
+	if rule not in CONTROLLER_WRITE_RULES:
+		raise SystemExit(f"--write-rule {rule!r}: expected one of {list(CONTROLLER_WRITE_RULES)}")
+	theta = getattr(args, "vote_share", None)
+	args._vote_share = None
+	try:
+		if rule == "vote":
+			require_vote_mode(getattr(args, "memory_mode", "QUAD_WEIGHTED"), "--write-rule")
+		if theta is not None:
+			if rule != "vote":
+				raise ValueError(f"--vote-share={theta!r} is only valid with --write-rule vote")
+			args._vote_share = validate_vote_share(theta, "--vote-share")
+	except ValueError as e:
+		raise SystemExit(str(e))
+	if rule == "vote" and bool(getattr(args, "protect_learned", False)):
+		raise SystemExit("--write-rule vote refuses protect_learned (a tally has no learned cell to protect).")
+	label = getattr(args, "dagger_label_attitude", "true")
+	if label not in DAGGER_LABEL_ATTITUDES:
+		raise SystemExit(f"--dagger-label-attitude {label!r}: expected one of {list(DAGGER_LABEL_ATTITUDES)}")
+	if label == "estimate":
+		if not getattr(args, "obs_att_estimator", False):
+			raise SystemExit("--dagger-label-attitude estimate builds the label from the student's Mahony "
+			                 "estimate — it needs --obs-att-estimator (the attitude the student observes).")
+		if getattr(args, "expert_drives", False):
+			raise SystemExit("--dagger-label-attitude estimate refuses --expert-drives: the teacher would "
+			                 "fly its estimate-built label, changing the trajectory, not only the label.")
+	if getattr(args, "obs_att_bias_pred", False):
+		if not getattr(args, "obs_att_estimator", False):
+			raise SystemExit("--obs-att-bias-pred predicts the Mahony estimator's bias: it needs "
+			                 "--obs-att-estimator.")
+		if not getattr(args, "obs_vel_xy", False):
+			raise SystemExit("--obs-att-bias-pred is driven by the horizontal velocity the student "
+			                 "already reads: it needs --obs-vel-xy (no new signal is allowed in).")
+
+
+def ctrl46_tokens(args) -> dict:
+	"""Provenance write= / label= / abp= values (defaults = ABI 45: last / true / off)."""
+	rule = getattr(args, "write_rule", "last")
+	theta = getattr(args, "_vote_share", None)
+	return dict(
+		write=rule if rule != "vote" else f"vote:{0.5 if theta is None else theta:g}",
+		label=getattr(args, "dagger_label_attitude", "true"),
+		abp="on" if getattr(args, "obs_att_bias_pred", False) else "off",
+	)
+
+
 def _plant_header(args, ec) -> str:
 	"""One greppable line per run stating the plant mode (ABI 32)."""
 	return (f"[PLANT] imu={'specific-force' if ec.imu_specific_force else 'inclinometer'} "
@@ -3857,6 +3948,7 @@ def episode_config_from_args(args) -> EpisodeConfig:
 	from wnn.control.training import DisturbanceConfig
 	from wnn.control.airframe import Airframe as _Airframe
 	resolve_abi32_plant(args)  # ABI 32 (idempotent): real-life defaults under translation
+	resolve_ctrl46_args(args)  # CTRL-46 (idempotent): write rule, label attitude, abp
 	dist = DisturbanceConfig.preset(args.disturbance, seed=911)
 	if getattr(args, "motor_fault", None):
 		if dist is None:
@@ -4174,7 +4266,7 @@ def main():
 	                         arch=arch_token(getattr(args, "_ctbr", None), args.teacher,
 	                                         args.action_repeat, ec.dt),
 	                         rf=rf_token(args), calib=calibration_from_args(args).token(),
-	                         drop=drop_token(args)).line())
+	                         drop=drop_token(args), **ctrl46_tokens(args)).line())
 	import shlex
 	print(f"[argv] {shlex.join(args.cli_argv)}", flush=True)
 

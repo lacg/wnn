@@ -15,6 +15,7 @@ mod box_qp; // exact box-QP solver for the MPC teachers (PDAS + primal active-se
 mod arch_ops; // architecture (connectivity) operators (counter_rng, Rust-first)
 mod receptive_fields; // ABI 44 (CTRL-45): axis receptive-field projection (GA connectivity operator)
 mod cell_mode;
+mod vote_tally; // CTRL-46 (ABI 46): per-round DAgger vote tally storage (rule = ram_core WriteRule::Vote)
 mod bptt_plan; // ABI 35: a bptt window's memory-independent inputs (CPU + GPU walk)
 mod solver_view; // ABI 35 B: window-lived solver view (no per-record entry clone)
 mod cell_remap; // cell ADDRESS remaps on architecture change (bit-exact port)
@@ -66,11 +67,14 @@ mod ctrl39_tests; // CTRL-39: the MEMORY recorder reads the FLOWN command (train
 #[cfg(test)]
 mod ctrl40_tests; // CTRL-40: Metal split train/record for the applied-actuator inputs (CPU parity)
 #[cfg(test)]
+mod ctrl46_tests; // CTRL-46 (ABI 46): vote write rule (CPU/GPU, order independence) + estimate-built labels
+#[cfg(test)]
 mod ctrl48_tests; // CTRL-48: the cascade unabsorbed-disturbance block — physics, replay, CPU/GPU parity
 #[cfg(test)]
 mod abi38_tests; // ABI 38: the cascade controller — identity, rivals, CPU/GPU parity, trainers
 #[cfg(test)]
 mod abi34_tests; // ABI 34: lag-aware teachers, one pwm convention under motor lag, T=0 pins
+mod att_bias_pred; // CTRL-46 (ABI 46): onboard predictor of the Mahony specific-force bias (--obs-att-bias-pred)
 mod att_estimator; // ABI 32: the WNN's Mahony attitude estimate (obs_att_estimator)
 mod att_err_ref; // CTRL-17 G5 (ABI 32): attitude error vs the position loop tilt reference
 mod plant_opts; // ABI 32: specific-force IMU + rotor drag as ONE value every sim host applies
@@ -402,7 +406,21 @@ mod metal_controller;
 ///   kept, not even as cross) — the connection-space mechanism of `--drop-features` /
 ///   `--drop-constant-features`; the frame layout and every kernel are unchanged.
 ///   Calibration (`--calib-*`) is Python orchestration over the existing sampler.
-pub const ABI_VERSION: u32 = 45;
+/// ABI 46 (09/11/2026, CTRL-46, every item default-OFF ⇒ ABI 45 bit-identical):
+///   (a) RewardGatedConfigPacked(write_vote=, vote_share=) — `--write-rule vote
+///   [--vote-share θ]`: the DAgger walk tallies every visit of a round per (neuron,
+///   address) and commits once (ram_core WriteRule::Vote / VoteShare /
+///   vote_net_to_cell — the IDS-56 rule, shared), CPU walk + GPU walk (vote buffers
+///   29/30 of controller_bptt_walk); QUAD refused (ram_core resolve_controller);
+///   (b) RewardGatedConfigPacked(dagger_label_estimate=) — `--dagger-label-attitude
+///   estimate`: the DAgger LABEL is built from the student's Mahony estimate, not the
+///   true quaternion (labels are CPU-only);
+///   (c) WnnController(obs_att_bias_pred=) + dagger_train_batch_inplace(obs_att_bias_pred=)
+///   + ReplayObs(att_bias=) — `--obs-att-bias-pred`: +2 features at the layout tail,
+///   the onboard predictor of the Mahony specific-force bias (att_bias_pred.rs), CPU +
+///   Metal score (FC_ATT_BIAS_PRED, RolloutParams.abp_on) + Metal split replay
+///   (TrainParams.abp_on, abp_rec buffers 29/26).
+pub const ABI_VERSION: u32 = 46;
 
 /// ABI 44: how output neurogenesis lays out the output layer — "segment" = every
 /// bank / E-I half resizes at its own tail (pre-44 Python resized the flat tail).

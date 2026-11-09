@@ -242,6 +242,11 @@ class ControllerSpec:
 	# accelerometer. Needed under the specific-force IMU, where the accelerometer
 	# carries no tilt. Changes feature VALUES, not the layout (num_features).
 	obs_att_estimator: bool = False
+	# CTRL-46 (ABI 46, --obs-att-bias-pred): +2 features at the layout tail — the
+	# onboard predictor of THAT estimator's specific-force bias (att_bias_pred.rs),
+	# driven only by the velocity estimate the student already reads (obs_vel_xy) and
+	# the estimate's own quaternion/gains. Requires obs_att_estimator and obs_vel_xy.
+	obs_att_bias_pred: bool = False
 	integral_leak: float = 0.99   # leaky-integral decay for "_i" (≠ delta_leak)
 	integral_scale: float = 1.0   # pre-threshold scale for integral features
 	dt: float = 0.001             # physics step (s); MUST match episode/plant dt (yaw integ.)
@@ -649,6 +654,7 @@ def _feature_controller(spec: ControllerSpec) -> WnnController:
 		obs_collective_cmd=spec.obs_collective_cmd, obs_alt_err=spec.obs_alt_err, obs_vz=spec.obs_vz,
 			obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
 		obs_att_estimator=getattr(spec, 'obs_att_estimator', False), ctbr=ctbr_arg(spec),
+		obs_att_bias_pred=getattr(spec, 'obs_att_bias_pred', False),  # CTRL-46 (ABI 46)
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 		dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
@@ -1359,6 +1365,7 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		obs_collective_cmd=spec.obs_collective_cmd, obs_alt_err=spec.obs_alt_err, obs_vz=spec.obs_vz,
 			obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
 		obs_att_estimator=getattr(spec, 'obs_att_estimator', False), ctbr=ctbr_arg(spec),
+		obs_att_bias_pred=getattr(spec, 'obs_att_bias_pred', False),  # CTRL-46 (ABI 46)
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
@@ -1896,6 +1903,10 @@ class ControllerEvaluator:
 			**_train_asym_kwargs(getattr(rg, "episode_config", None)),
 			expert_drives=getattr(rg, "expert_drives", False),
 			write_priority_err=getattr(rg, "write_priority_err", False),
+			# CTRL-46 (ABI 46): write rule + label attitude (defaults = ABI 45).
+			write_vote=bool(getattr(rg, "write_vote", False)),
+			vote_share=getattr(rg, "vote_share", None),
+			dagger_label_estimate=bool(getattr(rg, "dagger_label_estimate", False)),
 			write_err_floor_deg=getattr(rg, "write_err_floor_deg", 0.0),
 			teacher_hover_mode=_TEACHER_HOVER_MODES[getattr(rg, "teacher_hover_mode", "derived")],
 			# The TRAINING rollout must fly the same plant the scorer does: the
@@ -1959,6 +1970,7 @@ class ControllerEvaluator:
 			# ABI 32: same estimator as the scorer's controllers, or the trainer
 			# would label on accel-only features while deploy flies estimated ones.
 			obs_att_estimator=getattr(first_spec, 'obs_att_estimator', False), ctbr=ctbr_arg(first_spec),
+			obs_att_bias_pred=getattr(first_spec, 'obs_att_bias_pred', False),  # CTRL-46 (ABI 46)
 			output_full_window=getattr(first_spec, 'output_full_window', False),
 			frame_stride=int(getattr(first_spec, 'frame_stride', 1)),
 			**_target_levels_kwarg(ra, first_spec),
@@ -2034,6 +2046,10 @@ class ControllerEvaluator:
 			**_train_asym_kwargs(getattr(rg, "episode_config", None)),
 			expert_drives=getattr(rg, "expert_drives", False),
 			write_priority_err=getattr(rg, "write_priority_err", False),
+			# CTRL-46 (ABI 46): write rule + label attitude (defaults = ABI 45).
+			write_vote=bool(getattr(rg, "write_vote", False)),
+			vote_share=getattr(rg, "vote_share", None),
+			dagger_label_estimate=bool(getattr(rg, "dagger_label_estimate", False)),
 			write_err_floor_deg=getattr(rg, "write_err_floor_deg", 0.0),
 			teacher_hover_mode=_TEACHER_HOVER_MODES[getattr(rg, "teacher_hover_mode", "derived")],
 			# The TRAINING rollout must fly the same plant the scorer does: the
@@ -2064,6 +2080,7 @@ class ControllerEvaluator:
 			obs_collective_cmd=spec.obs_collective_cmd, obs_alt_err=spec.obs_alt_err, obs_vz=spec.obs_vz,
 			obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
 		obs_att_estimator=getattr(spec, 'obs_att_estimator', False), ctbr=ctbr_arg(spec),
+		obs_att_bias_pred=getattr(spec, 'obs_att_bias_pred', False),  # CTRL-46 (ABI 46)
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,

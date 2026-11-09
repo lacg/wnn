@@ -133,7 +133,11 @@ import os
 # ABI 45 (08/11/2026, CTRL-48): CtbrSpec(obs_dhat_residual_plant=) — the cascade
 # unabsorbed-disturbance block; arch_project_receptive_fields mask 0 = excluded feature
 # (--drop-features / --drop-constant-features). Default-off ⇒ ABI 44 bit-identical.
-EXPECTED_ABI = 45
+# ABI 46 (09/11/2026, CTRL-46): RewardGatedConfigPacked(write_vote=, vote_share=,
+# dagger_label_estimate=) — the DAgger vote write rule and estimate-built labels;
+# WnnController(obs_att_bias_pred=) + dagger_train_batch_inplace(obs_att_bias_pred=) +
+# ReplayObs(att_bias=) — the Mahony-bias predictor block. Default-off ⇒ ABI 45 bit-identical.
+EXPECTED_ABI = 46
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

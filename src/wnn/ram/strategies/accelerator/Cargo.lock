@@ -916,6 +916,7 @@ dependencies = [
  "ram_core",
  "rand",
  "rayon",
+ "rustc-hash 1.1.0",
 ]
 
 [[package]]

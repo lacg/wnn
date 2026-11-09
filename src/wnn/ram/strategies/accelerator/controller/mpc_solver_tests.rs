@@ -65,6 +65,7 @@ fn regime(xy: f32, steps: usize, expert_drives: bool) -> RewardGatedConfigPacked
 		motor_lag_s: 0.0,
 		imu_specific_force: true, rotor_drag: 0.78, att_err_tilt_ref: xy > 0.0,
 		dist_motor_asym_mag: 0.0,
+		write_vote: false, vote_share: None, dagger_label_estimate: false,
 	}
 }
 

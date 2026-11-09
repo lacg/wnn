@@ -1862,6 +1862,61 @@ impl WnnController
 		Ok(())
 	}
 
+	/// CTRL-46 item 3: append the Mahony-bias predictor block (att_bias_pred.rs) — 2
+	/// features at the layout's TAIL, `obs_thresholds` their 2·bpf thermometer rows.
+	/// Refused unless the student runs the estimator (its quaternion and gains drive
+	/// the model) AND already reads the horizontal velocity (`obs_vel_xy`) — the
+	/// predictor may use no signal the student is not already given.
+	pub(crate) fn enable_att_bias_pred(&mut self, obs_thresholds: Vec<f32>) -> Result<(), String>
+	{
+		let Some((kp, ki)) = self.att_est.as_ref().map(|e| e.gains())
+		else
+		{
+			return Err("obs_att_bias_pred needs obs_att_estimator: it predicts THAT filter's bias \
+			            from its own quaternion and gains"
+				.into());
+		};
+		if !self.obs_vel_xy
+		{
+			return Err("obs_att_bias_pred needs obs_vel_xy: its only motion input is the horizontal \
+			            velocity estimate the student already reads (no new signal)"
+				.into());
+		}
+		if self.att_bias.is_some()
+		{
+			return Err("obs_att_bias_pred is already on".into());
+		}
+		let n = crate::att_bias_pred::ABP_FEATURES;
+		if obs_thresholds.len() != n * self.bits_per_feature
+		{
+			return Err(format!(
+				"obs_att_bias_pred: need {} thermometer thresholds ({n} features × {} bits), got {}",
+				n * self.bits_per_feature,
+				self.bits_per_feature,
+				obs_thresholds.len()
+			));
+		}
+		self.thresholds.extend_from_slice(&obs_thresholds);
+		self.num_features += n;
+		self.last_feature_vector = vec![0.0f32; self.num_features];
+		self.att_bias = Some(crate::att_bias_pred::AttBiasPredictor::new(kp, ki, self.dt));
+		Ok(())
+	}
+
+	/// CTRL-46: the predictor's last emitted [abp_r, abp_p] (what a rollout records);
+	/// zeros when the block is off.
+	pub(crate) fn att_bias_last(&self) -> [f32; 2]
+	{
+		self.att_bias.as_ref().map_or([0.0; 2], |p| p.last())
+	}
+
+	/// CTRL-46: the block is on (the GPU's abp_on; it reads the estimator's gains,
+	/// att_estimator_gains).
+	pub(crate) fn att_bias_pred_on(&self) -> bool
+	{
+		self.att_bias.is_some()
+	}
+
 	/// ABI 38 (CTRL-27): make this a CASCADE controller (ctbr.rs). Refused on the
 	/// combinations the design rules out (docs/ctrl_cascade_design.md §1.2, §5.1):
 	///   * a non-quad airframe — the inner stage is the firmware '+' mixer;
@@ -2093,7 +2148,7 @@ impl WnnController
 	/// True when any feature that needs a per-step replay stream is on.
 	fn replay_obs_required(&self) -> bool
 	{
-		self.vert_horiz_obs_required() || self.obs_pwm || self.att_est.is_some() || self.cascade_obs.is_some()
+		self.vert_horiz_obs_required() || self.obs_pwm || self.att_est.is_some() || self.cascade_obs.is_some() || self.att_bias.is_some()
 	}
 
 	/// Fail-LOUD guard (Fix A shape): a controller whose vertical/horizontal
@@ -2146,6 +2201,15 @@ impl WnnController
 			 has no flown inner loop and no flown commands, so it would train on values deploy \
 			 never produces (CTRL-38)",
 			obs.map(|o| o.cascade.len()),
+			w
+		);
+		let abp_ok = self.att_bias.is_none() || obs.map(|o| o.att_bias.len() == w).unwrap_or(false);
+		assert!(
+			abp_ok,
+			"{site}: obs_att_bias_pred is on but the replay bias-prediction stream is missing or \
+			 misaligned (got att_bias {:?}, need {} steps) — the predictor's state lives in the \
+			 rollout; a replay window cannot rebuild it (CTRL-46)",
+			obs.map(|o| o.att_bias.len()),
 			w
 		);
 	}
@@ -2213,6 +2277,11 @@ impl WnnController
 			if let (Some(c), Some(v)) = (self.cascade_obs.as_mut(), o.cascade.get(t))
 			{
 				c.set_replay(*v);
+			}
+			// CTRL-46: the recorded bias prediction (its state lives in the rollout).
+			if let (Some(p), Some(v)) = (self.att_bias.as_mut(), o.att_bias.get(t))
+			{
+				p.set_replay(*v);
 			}
 		}
 	}
@@ -2726,6 +2795,8 @@ impl WnnController
 			vert_obs: [0.0f32; 3],
 			horiz_obs: [0.0f32; 4],
 			att_est: None,
+			vote_tally: None,
+			att_bias: None,
 			collective_anchor: 0.5,
 		})
 	}
@@ -3172,13 +3243,18 @@ pub struct ReplayObs
 	// train/record kernels re-run the observer on a stream they cannot reproduce.
 	// Empty on a trajectory without the observer.
 	pub dhat: Vec<[f32; 3]>,
+	// CTRL-46 (ABI 46): the Mahony-bias prediction [abp_r, abp_p] compute_features
+	// produced at rollout, per step (WnnController::att_bias_last, read right AFTER the
+	// step). The predictor's state lives in the rollout, so a replay applies it as an
+	// override. Empty on a trajectory without the block.
+	pub att_bias: Vec<[f32; 2]>,
 }
 
 #[pymethods]
 impl ReplayObs
 {
 	#[new]
-	#[pyo3(signature = (vert, horiz, pwm_dev = vec![], att_up = vec![], cascade = vec![], dhat = vec![]))]
+	#[pyo3(signature = (vert, horiz, pwm_dev = vec![], att_up = vec![], cascade = vec![], dhat = vec![], att_bias = vec![]))]
 	fn new(
 		vert: Vec<[f32; 3]>,
 		horiz: Vec<[f32; 4]>,
@@ -3186,9 +3262,10 @@ impl ReplayObs
 		att_up: Vec<[f32; 3]>,
 		cascade: Vec<[f32; 6]>,
 		dhat: Vec<[f32; 3]>,
+		att_bias: Vec<[f32; 2]>,
 	) -> Self
 	{
-		Self { vert, horiz, pwm_dev, att_up, cascade, dhat }
+		Self { vert, horiz, pwm_dev, att_up, cascade, dhat, att_bias }
 	}
 }
 
@@ -3211,7 +3288,15 @@ impl ReplayObs
 		{
 			let pwm_dev = if pwm_dev.len() >= end { pwm_dev[start..end].to_vec() } else { Vec::new() };
 			let att_up = if att_up.len() >= end { att_up[start..end].to_vec() } else { Vec::new() };
-			Some(Self { vert: vert[start..end].to_vec(), horiz: horiz[start..end].to_vec(), pwm_dev, att_up, cascade: Vec::new(), dhat: Vec::new() })
+			Some(Self {
+				vert: vert[start..end].to_vec(),
+				horiz: horiz[start..end].to_vec(),
+				pwm_dev,
+				att_up,
+				cascade: Vec::new(),
+				dhat: Vec::new(),
+				att_bias: Vec::new(),
+			})
 		}
 		else
 		{
@@ -3226,6 +3311,16 @@ impl ReplayObs
 		if cascade.len() >= end
 		{
 			self.cascade = cascade[start..end].to_vec();
+		}
+		self
+	}
+
+	/// CTRL-46: attach the window [start, end) of a trajectory's bias-prediction stream.
+	pub fn with_att_bias(mut self, att_bias: &[[f32; 2]], start: usize, end: usize) -> Self
+	{
+		if att_bias.len() >= end
+		{
+			self.att_bias = att_bias[start..end].to_vec();
 		}
 		self
 	}
@@ -3494,6 +3589,13 @@ pub struct WnnController
 	// estimate (att_estimator.rs) instead of the raw accelerometer. None ⇒ the
 	// legacy accel-only features, bit-identical.
 	att_est: Option<crate::att_estimator::AttEstimator>,
+	// CTRL-46 (ABI 46): the DAgger round's vote tally while `--write-rule vote` trains a
+	// round (vote_begin_round .. vote_commit_round); None ⇒ the walk writes cells directly
+	// (LastWrite / Nudge, bit-identical). Transient — never persisted or exported.
+	vote_tally: Option<crate::vote_tally::VoteTally>,
+	// CTRL-46 item 3 (--obs-att-bias-pred): the onboard predictor of the Mahony
+	// estimator's specific-force bias, 2 features at the layout tail. None ⇒ off.
+	att_bias: Option<crate::att_bias_pred::AttBiasPredictor>,
 	// L1 (06/08/2026) — d̂ disturbance observer, the mpcof teacher's instrument moved
 	// into the student. Some(b) ⇒ 3 extra features (roll/pitch/yaw estimated external
 	// angular acceleration). The screen's D2 decomposition showed the student's error
@@ -3662,6 +3764,7 @@ impl WnnController
 		est_kp = 2.0,
 		est_ki = 0.1,
 		ctbr = None,
+		obs_att_bias_pred = false,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -3711,11 +3814,22 @@ impl WnnController
 		est_kp: f32,
 		est_ki: f32,
 		ctbr: Option<crate::ctbr::CtbrSpec>,
+		obs_att_bias_pred: bool,
 	) -> PyResult<Self>
 	{
+		// CTRL-46: the bias-predictor rows are the VERY tail (after the cascade blocks).
+		let mut thresholds = thresholds;
+		let n_abp = if obs_att_bias_pred { crate::att_bias_pred::ABP_FEATURES * bits_per_feature } else { 0 };
+		if thresholds.len() < n_abp
+		{
+			return Err(pyo3::exceptions::PyValueError::new_err(format!(
+				"thresholds length {} is shorter than the att-bias block's {n_abp} rows",
+				thresholds.len()
+			)));
+		}
+		let abp_thresholds = thresholds.split_off(thresholds.len() - n_abp);
 		// CTRL-38: the cascade blocks' thermometer rows sit at the TAIL of the ladder
 		// (canonical order LAST); new_core sizes the ladder without them.
-		let mut thresholds = thresholds;
 		let n_obs = ctbr.as_ref().map_or(0, |s| s.cascade_feature_count()) * bits_per_feature;
 		if thresholds.len() < n_obs
 		{
@@ -3782,7 +3896,20 @@ impl WnnController
 			c.enable_ctbr_with_obs(spec, obs_thresholds)
 				.map_err(pyo3::exceptions::PyValueError::new_err)?;
 		}
+		// CTRL-46: after the cascade blocks (its features are the layout's tail).
+		if obs_att_bias_pred
+		{
+			c.enable_att_bias_pred(abp_thresholds)
+				.map_err(pyo3::exceptions::PyValueError::new_err)?;
+		}
 		Ok(c)
+	}
+
+	/// CTRL-46: whether the Mahony-bias predictor block (`--obs-att-bias-pred`) is on.
+	#[getter]
+	pub fn obs_att_bias_pred(&self) -> bool
+	{
+		self.att_bias.is_some()
 	}
 
 	/// ABI 38: "pwm" (motor-level, the ABI-37 lineage) or "ctbr" (the cascade).
@@ -3817,6 +3944,13 @@ impl WnnController
 		{
 			e.seed(q0);
 		}
+	}
+
+	/// CTRL-46 item 2: the Mahony estimate quaternion this step's compute_features
+	/// read (None: estimator off, not yet stepped, or a replay step).
+	pub(crate) fn att_est_quat(&self) -> Option<[f32; 4]>
+	{
+		self.att_est.as_ref().and_then(|e| e.last_quat())
 	}
 
 	/// ABI 32: whether the attitude features read the Mahony estimate.
@@ -3980,6 +4114,11 @@ impl WnnController
 		}
 		// CTRL-38: the d̂ observer is per-episode state (a stale estimate would encode
 		// the PREVIOUS episode's airframe draw).
+		// CTRL-46: the bias model starts each episode at 0 (the estimator is re-seeded).
+		if let Some(p) = self.att_bias.as_mut()
+		{
+			p.reset();
+		}
 		if let Some(o) = self.cascade_obs.as_mut()
 		{
 			o.reset();
@@ -6011,6 +6150,7 @@ impl WnnController
 			feats.push(self.horiz_obs[3]);
 		}
 		self.append_cascade_features(&mut feats, gyro);
+		self.append_att_bias_features(&mut feats);
 		self.last_feature_vector.clone_from(&feats);
 		feats
 	}
@@ -6021,6 +6161,34 @@ impl WnnController
 	/// last tick left: what the firmware holds when the outer loop decides), and the
 	/// teacher's d̂ observer ticked on (this gyro, pwm_applied = the command the plant
 	/// received last step). No-op with both off.
+	/// CTRL-46 item 3 (canonical order LAST, after the cascade blocks): the predicted
+	/// Mahony bias [abp_r, abp_p], ticked once per physical step (holds included, like
+	/// the estimator it models) on the horizontal velocity the student reads
+	/// (horiz_obs[2..4]) and the estimate quaternion this compute_features just
+	/// produced. A replay re-applies the recorded value. No-op when off.
+	fn append_att_bias_features(&mut self, feats: &mut Vec<f32>)
+	{
+		let Some(p) = self.att_bias.as_mut()
+		else
+		{
+			return;
+		};
+		let v = if p.has_replay()
+		{
+			p.step([0.0; 2], [1.0, 0.0, 0.0, 0.0]) // returns the recorded value, advances nothing
+		}
+		else
+		{
+			let q = self
+				.att_est
+				.as_ref()
+				.and_then(|e| e.last_quat())
+				.expect("obs_att_bias_pred: live step without a live estimator quaternion (enable_att_bias_pred guarantees the estimator)");
+			p.step([self.horiz_obs[2], self.horiz_obs[3]], q)
+		};
+		feats.extend_from_slice(&v);
+	}
+
 	fn append_cascade_features(&mut self, feats: &mut Vec<f32>, gyro: [f32; 3])
 	{
 		if let Some(o) = self.cascade_obs.as_mut()
@@ -8254,7 +8422,7 @@ mod sn0_tests
 			dep_feats.push(deploy.compute_features(g[t], a[t], tg[t]));
 			deploy.set_pwm_accumulator(pp[t]);
 		}
-		let ro = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev, att_up: vec![], cascade: vec![], dhat: vec![] };
+		let ro = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev, att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![] };
 		// REPLAY with the stream restored.
 		let mut replay = sn0_controller_obs_pwm();
 		replay.reset(0.0);
@@ -8298,7 +8466,7 @@ mod sn0_tests
 		);
 		// The guard is the fail-LOUD half: an obs_pwm controller must refuse a
 		// stream without the accumulator.
-		let short = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![] };
+		let short = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![] };
 		let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
 			sn0_controller_obs_pwm().replay_obs_guard(Some(&short), n, "test")
 		}));
@@ -9534,12 +9702,12 @@ mod sn0_tests
 	fn vertical_stream(n: usize) -> ReplayObs
 	{
 		let vert: Vec<[f32; 3]> = (0..n).map(|t| [0.7, -4.0 + 0.5 * t as f32, 4.0 - 0.5 * t as f32]).collect();
-		ReplayObs { vert, horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![] }
+		ReplayObs { vert, horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![] }
 	}
 
 	fn constant_stream(n: usize, v: [f32; 3]) -> ReplayObs
 	{
-		ReplayObs { vert: vec![v; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![] }
+		ReplayObs { vert: vec![v; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![] }
 	}
 
 	fn distinct_output_addresses_per_neuron(c: &WnnController) -> Vec<usize>

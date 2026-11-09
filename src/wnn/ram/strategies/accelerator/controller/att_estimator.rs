@@ -34,6 +34,10 @@ pub struct AttEstimator
 	seeded: bool,
 	last_up: [f32; 3],
 	override_up: Option<[f32; 3]>,
+	/// CTRL-46 item 2: the full quaternion of the LAST live update (None after a
+	/// replay override or before the first step) — the attitude
+	/// `--dagger-label-attitude estimate` builds the teacher's label from.
+	last_q: Option<[f32; 4]>,
 }
 
 impl AttEstimator
@@ -53,6 +57,7 @@ impl AttEstimator
 			seeded: false,
 			last_up: [0.0, 0.0, 1.0],
 			override_up: None,
+			last_q: None,
 		})
 	}
 
@@ -68,6 +73,7 @@ impl AttEstimator
 		self.seeded = false;
 		self.override_up = None;
 		self.last_up = [0.0, 0.0, 1.0];
+		self.last_q = None;
 	}
 
 	/// Warm-start from the episode's initial attitude (the rivals' reset).
@@ -89,13 +95,24 @@ impl AttEstimator
 		self.last_up
 	}
 
+	/// The estimate quaternion (w, x, y, z) of the last LIVE `up()` — exactly the
+	/// filter output the up vector was derived from. None on a replay step.
+	pub fn last_quat(&self) -> Option<[f32; 4]>
+	{
+		self.last_q
+	}
+
 	/// This step's body "up": the replay override when set, else one live
 	/// Mahony update on (gyro, accel). Called exactly once per physical step.
 	pub fn up(&mut self, gyro: [f32; 3], accel: [f32; 3]) -> [f32; 3]
 	{
 		let up = match self.override_up.take()
 		{
-			Some(u) => u,
+			Some(u) =>
+			{
+				self.last_q = None;
+				u
+			}
 			None =>
 			{
 				assert!(
@@ -104,7 +121,9 @@ impl AttEstimator
 					 must call seed_att_estimator(q0) after reset (the filter would \
 					 otherwise start from identity: a silent wrong-attitude start)"
 				);
-				up_from_quat(self.filter.update(gyro, accel))
+				let q = self.filter.update(gyro, accel);
+				self.last_q = Some(q);
+				up_from_quat(q)
 			}
 		};
 		self.last_up = up;
@@ -142,6 +161,21 @@ mod tests
 	{
 		let mut e = AttEstimator::new(0.001, 2.0, 0.1).unwrap();
 		e.up([0.0; 3], [0.0, 0.0, 9.81]);
+	}
+
+	/// CTRL-46: the live quaternion is what up() was derived from; a replay step has none.
+	#[test]
+	fn last_quat_is_the_live_filter_output()
+	{
+		let mut e = AttEstimator::new(0.001, 2.0, 0.1).unwrap();
+		e.seed([0.99, 0.1, 0.0, 0.0]);
+		assert_eq!(e.last_quat(), None);
+		let up = e.up([0.1, 0.0, 0.0], [0.0, 1.0, 9.7]);
+		let q = e.last_quat().expect("live step");
+		assert_eq!(up_from_quat(q), up);
+		e.set_override([0.0, 0.0, 1.0]);
+		e.up([0.0; 3], [0.0, 0.0, 9.81]);
+		assert_eq!(e.last_quat(), None);
 	}
 
 	/// Override is one-shot and is what last_up reports.

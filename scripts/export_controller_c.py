@@ -192,6 +192,8 @@ def _feature_refusals(spec) -> list:
 			why.append(f"{flag}: not ported (CTBR refuses it in Rust as well)")
 	if spec.dhat_b is not None:
 		why.append("dhat_b (the motor-level d-hat observer): not ported")
+	if bool(getattr(spec, "obs_att_bias_pred", False)):
+		why.append("obs_att_bias_pred (CTRL-46 Mahony-bias predictor): not ported to the on-board C yet")
 	return why
 
 

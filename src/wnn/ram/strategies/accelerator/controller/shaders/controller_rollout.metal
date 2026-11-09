@@ -63,6 +63,11 @@ constant uint NUM_ROTORS = is_function_constant_defined(FC_NUM_ROTORS) ? FC_NUM_
 // constant — derive_features is byte-for-byte the ABI-40 text.
 constant bool FC_CASCADE_OBS [[function_constant(2)]];
 constant bool CAS_OBS = is_function_constant_defined(FC_CASCADE_OBS) ? FC_CASCADE_OBS : false;
+// CTRL-46 (ABI 46): the Mahony-bias predictor block (att_bias_pred.rs) lives in its own
+// specialization for the same reason (FC_ATT_BIAS_PRED=true; every other pipeline
+// leaves it undefined ⇒ dead-stripped ⇒ the ABI-45 codegen).
+constant bool FC_ATT_BIAS_PRED [[function_constant(3)]];
+constant bool ABP = is_function_constant_defined(FC_ATT_BIAS_PRED) ? FC_ATT_BIAS_PRED : false;
 
 // One rotor of the geometry buffer — 48 B, all-float, mirrors the Rust-side
 // RotorGpu upload. k_thrust is the EFFECTIVE coefficient (nominal x per-rotor
@@ -280,6 +285,11 @@ struct Params
 	uint cas_resid;
 	float cas_resid_inv_a[3];
 	float cas_resid_w[3];
+	// CTRL-46 (ABI 46), appended in lockstep with RolloutParams: the Mahony-bias
+	// predictor block (2 features at the very tail, after the cascade blocks), driven
+	// by the horizontal velocity obs and this thread's Mahony quaternion with the
+	// estimator's own gains (est_kp / est_ki). 0 ⇒ the ABI-45 rollout.
+	uint abp_on;
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -1017,7 +1027,7 @@ inline void cas_observe(constant Params &P, thread CasObs &o, thread const float
 inline void cas_step(constant Params &P, thread float *sensors, thread CasObs &o,
 										 thread const float *ctbr_st, thread const float *applied)
 {
-	uint fi = P.num_features - 3u * (P.cas_rate_i + P.cas_dhat + P.cas_resid);
+	uint fi = P.num_features - 2u * P.abp_on - 3u * (P.cas_rate_i + P.cas_dhat + P.cas_resid);
 	float ri[3] = {0.0f, 0.0f, 0.0f};
 	if (P.cas_rate_i != 0u || P.cas_resid != 0u)
 	{
@@ -1039,6 +1049,44 @@ inline void cas_step(constant Params &P, thread float *sensors, thread CasObs &o
 	if (P.cas_resid != 0u)
 		for (uint a = 0u; a < 3u; a++)
 			sensors[fi++] = o.dhat[a] * P.cas_resid_inv_a[a] + P.cas_resid_w[a] * ri[a];
+}
+
+// CTRL-46: the bias predictor's per-episode state (att_bias_pred.rs AttBiasPredictor).
+struct AbpState
+{
+	float eps[2];
+	float j[2];
+	float v_prev[2];
+	bool have_prev;
+};
+
+// CTRL-46: one physical step of the bias predictor — twin of AttBiasPredictor::step
+// (same f32 expressions, same order) — written into the sensors' LAST two slots.
+inline void abp_step(constant Params &P, thread float *sensors, thread AbpState &s, float vx, float vy, float4 mq)
+{
+	float ux = 0.0f, uy = 0.0f;
+	if (s.have_prev)
+	{
+		ux = (vx - s.v_prev[0]) / 9.81f;
+		uy = (vy - s.v_prev[1]) / 9.81f;
+	}
+	s.v_prev[0] = vx;
+	s.v_prev[1] = vy;
+	s.have_prev = true;
+	float w = mq.x, x = mq.y, y = mq.z, z = mq.w;
+	float r00 = 1.0f - 2.0f * (y * y + z * z);
+	float r01 = 2.0f * (x * y - w * z);
+	float r10 = 2.0f * (x * y + w * z);
+	float r11 = 1.0f - 2.0f * (x * x + z * z);
+	float d[2] = {r00 * ux + r10 * uy, r01 * ux + r11 * uy};
+	for (uint a = 0u; a < 2u; a++)
+	{
+		float innov = d[a] - P.dt * s.eps[a];
+		s.eps[a] += P.est_kp * innov + P.dt * s.j[a];
+		s.j[a] += P.est_ki * innov;
+	}
+	sensors[P.num_features - 2u] = s.eps[1];
+	sensors[P.num_features - 1u] = -s.eps[0];
 }
 
 // =============================================================================
@@ -1486,6 +1534,15 @@ kernel void controller_rollout(
 	cas_o.primed = false;
 	cas_o.seeded = false;
 	cas_o.have_g = false;
+	// CTRL-46: the bias predictor starts each episode at 0 (AttBiasPredictor::reset).
+	AbpState abp_s;
+	for (uint a = 0u; a < 2u; a++)
+	{
+		abp_s.eps[a] = 0.0f;
+		abp_s.j[a] = 0.0f;
+		abp_s.v_prev[a] = 0.0f;
+	}
+	abp_s.have_prev = false;
 
 	for (uint t = 0u; t < P.steps; t++)
 	{
@@ -1633,6 +1690,11 @@ kernel void controller_rollout(
 			F.att_up_y = up.y;
 			F.att_up_z = up.z;
 		}
+		// CTRL-46: the bias predictor ticks once per physical step (holds included),
+		// on this step's horizontal velocity obs and the quaternion just updated —
+		// twin of compute_features' append_att_bias_features.
+		if (ABP && P.abp_on != 0u)
+			abp_step(P, sensors, abp_s, F.horiz_vx, F.horiz_vy, mq);
 
 		// Action-repeat: hold steps tick ONLY the physical-time accumulators
 		// (derive_features) and re-emit the last DECISION step's PWM — no ring
@@ -2352,6 +2414,9 @@ struct TrainParams
 	uint cas_resid;
 	float cas_resid_inv_a[3];
 	float cas_resid_w[3];
+	// CTRL-46 (ABI 46), appended in lockstep: the replay writes the RECORDED Mahony-bias
+	// prediction (abp_rec) into the sensors' last two slots (the CPU replay_obs twin).
+	uint abp_on;
 };
 
 // Mirror of WnnController::output_decode_target (controller.rs): map a per-motor
@@ -2424,7 +2489,7 @@ inline void replay_applied_inputs(constant TrainParams &P, uint s, device const 
 			dhat[a] = dhat_rec[s * 3u + a];
 		dhat_have_last = false;
 	}
-	uint fi = P.num_features - 3u * (P.cas_rate_i + P.cas_dhat + P.cas_resid);
+	uint fi = P.num_features - 2u * P.abp_on - 3u * (P.cas_rate_i + P.cas_dhat + P.cas_resid);
 	if (P.cas_rate_i != 0u)
 		for (uint a = 0u; a < 3u; a++)
 			sensors[fi++] = cas_rec[s * 6u + a];
@@ -2467,6 +2532,7 @@ kernel void controller_train(
 		device const float *att_up_rec [[buffer(26)]],  // ABI 32: attitude-estimate "up" [total_steps*3]
 		device const float *dhat_rec [[buffer(27)]],    // CTRL-40: motor d̂ values [total_steps*3]
 		device const float *cas_rec [[buffer(28)]],     // CTRL-40: cascade blocks [total_steps*6]
+		device const float *abp_rec [[buffer(29)]],     // CTRL-46: bias prediction [total_steps*2]
 		uint gid [[thread_position_in_grid]])
 {
 	uint g = gid;
@@ -2574,6 +2640,12 @@ kernel void controller_train(
 			}
 			if (P.dhat_on != 0u || P.cas_rate_i != 0u || P.cas_dhat != 0u || P.cas_resid != 0u)
 				replay_applied_inputs(P, s3 / 3u, dhat_rec, cas_rec, sensors, dhat, dhat_have_last);
+			// CTRL-46: the recorded bias prediction into the sensors' tail.
+			if (P.abp_on != 0u)
+			{
+				sensors[P.num_features - 2u] = abp_rec[(s3 / 3u) * 2u];
+				sensors[P.num_features - 1u] = abp_rec[(s3 / 3u) * 2u + 1u];
+			}
 
 			// Action-repeat hold: accumulators tick; no ring push / forward /
 			// nudge (deploy reads NO addresses on hold steps). prev_state unchanged.
@@ -2684,6 +2756,7 @@ kernel void controller_record(
 		device const float *att_up_rec [[buffer(23)]],  // ABI 32: attitude-estimate "up" [total_steps*3]
 		device const float *dhat_rec [[buffer(24)]],    // CTRL-40: motor d̂ values [total_steps*3]
 		device const float *cas_rec [[buffer(25)]],     // CTRL-40: cascade blocks [total_steps*6]
+		device const float *abp_rec [[buffer(26)]],     // CTRL-46: bias prediction [total_steps*2]
 		uint2 tid [[thread_position_in_grid]])
 {
 	uint g = tid.x, ej = tid.y;
@@ -2786,6 +2859,12 @@ kernel void controller_record(
 		}
 		if (P.dhat_on != 0u || P.cas_rate_i != 0u || P.cas_dhat != 0u || P.cas_resid != 0u)
 			replay_applied_inputs(P, s3 / 3u, dhat_rec, cas_rec, sensors, dhat, dhat_have_last);
+		// CTRL-46: the recorded bias prediction into the sensors' tail.
+		if (P.abp_on != 0u)
+		{
+			sensors[P.num_features - 2u] = abp_rec[(s3 / 3u) * 2u];
+			sensors[P.num_features - 1u] = abp_rec[(s3 / 3u) * 2u + 1u];
+		}
 
 		// Action-repeat hold: accumulators tick; no ring push / forward / record.
 		// Mirrors CPU split_record's hold branch (records = decision steps only).

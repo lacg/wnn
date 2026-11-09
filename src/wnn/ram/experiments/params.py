@@ -220,6 +220,13 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	"controller_drop_features",       # comma-separated layout names no connection may land on
 	"controller_drop_constant_features",  # exclude features measured constant at calibration
 	"controller_obs_cascade_dhat_residual",  # cascade feature: unabsorbed d̂ (+3)
+	# CTRL-46 (ABI 46): phased_ga --write-rule/--vote-share, --dagger-label-attitude,
+	# --obs-att-bias-pred. The flow adapter builds none of them (no DAgger write rule,
+	# no estimator plant): REFUSED by _refuse_unbuilt_keys.
+	"controller_write_rule",          # last | vote (the IDS ids_write_rule vocabulary)
+	"controller_vote_share",          # vote min-share θ in (0, 0.5], 1/100 grid
+	"controller_dagger_label_attitude",  # true | estimate — the DAgger label's attitude
+	"controller_obs_att_bias_pred",   # +2 features: onboard Mahony-bias prediction
 	# Trainer tilt curriculum (27/09/2026): phased_ga --rg-easy-tilt-deg / --rg-full-tilt-deg.
 	"controller_rg_easy_tilt_deg",    # DAgger round-0 initial-tilt bound (deg; default 8)
 	"controller_rg_full_tilt_deg",    # DAgger last-round + checkpoint-eval tilt (deg; default 30)

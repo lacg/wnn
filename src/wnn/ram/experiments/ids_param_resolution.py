@@ -59,12 +59,20 @@ def resolve_write_rule(params: dict) -> str:
 	if rule not in WRITE_RULES:
 		raise ValueError(f"ids_write_rule={rule!r}: expected one of {sorted(WRITE_RULES)}")
 	mode = resolve_memory_mode(params)
-	if rule == "vote" and mode not in VOTE_MODES:
+	if rule == "vote":
+		require_vote_mode(mode, "ids_write_rule")
+	return rule
+
+
+def require_vote_mode(mode: str, label: str) -> None:
+	"""THE vote-writer mode gate, shared by the IDS flow param (ids_write_rule) and
+	the controller CLI (phased_ga --write-rule vote, CTRL-46): only the direct-write
+	modes have a vote writer; the 4-state family tallies through its own lattice."""
+	if mode not in VOTE_MODES:
 		raise ValueError(
-			f"ids_write_rule='vote' needs memory_mode in {sorted(VOTE_MODES)}; got {mode} "
+			f"{label}='vote' needs memory_mode in {sorted(VOTE_MODES)}; got {mode} "
 			"(the 4-state modes already train through vote-tallying OI counters)"
 		)
-	return rule
 
 
 # ids_vote_share (IDS-56, worker ABI 28): the MIN-SHARE theta of the vote writer.
@@ -87,14 +95,22 @@ def resolve_vote_share(params: dict) -> Optional[float]:
 		return None
 	if resolve_write_rule(params) != "vote":
 		raise ValueError(f"ids_vote_share={theta!r} is only valid with ids_write_rule='vote'")
+	return validate_vote_share(theta, "ids_vote_share")
+
+
+def validate_vote_share(theta, label: str) -> float:
+	"""THE min-share theta validation, shared by the IDS flow param (ids_vote_share)
+	and the controller CLI (phased_ga --vote-share, CTRL-46): a real number in
+	(0, 0.5] on the 1/100 grid (ram_core VoteShare::from_theta refuses the same set),
+	returned snapped to the grid."""
 	if isinstance(theta, bool) or not isinstance(theta, (int, float)):
-		raise ValueError(f"ids_vote_share={theta!r}: expected a number in (0, 0.5]")
+		raise ValueError(f"{label}={theta!r}: expected a number in (0, 0.5]")
 	theta = float(theta)
 	if not (0.0 < theta <= VOTE_SHARE_MAJORITY):
-		raise ValueError(f"ids_vote_share={theta!r}: expected a number in (0, 0.5]")
+		raise ValueError(f"{label}={theta!r}: expected a number in (0, 0.5]")
 	steps = theta * VOTE_SHARE_GRID
 	if abs(steps - round(steps)) > 1e-6:
-		raise ValueError(f"ids_vote_share={theta!r}: must be a multiple of 1/{VOTE_SHARE_GRID}")
+		raise ValueError(f"{label}={theta!r}: must be a multiple of 1/{VOTE_SHARE_GRID}")
 	return round(steps) / VOTE_SHARE_GRID
 
 

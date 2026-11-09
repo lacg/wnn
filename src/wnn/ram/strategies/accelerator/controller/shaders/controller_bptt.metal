@@ -58,6 +58,10 @@ struct BpttParams
 	uint si_words;
 	uint oi_words;
 	uint threads;
+	// CTRL-46 (ABI 46): 1 ⇒ the vote round — the commits write NOTHING (memory frozen);
+	// each task's (address, direction) goes to visit_addr / visit_dir for the host's
+	// VoteTally (direction 1 TRUE, 0 FALSE, 255 no vote). 0 ⇒ the direct writes.
+	uint vote;
 };
 
 inline bool bw_bit(device const uint *w, uint j)
@@ -373,6 +377,8 @@ kernel void controller_bptt_walk(
 		device atomic_uint *stats [[buffer(26)]], // s_writes, o_writes, overflow
 		constant BpttParams &P [[buffer(27)]],
 		device uchar *task_tgt [[buffer(28)]], // [num_out + sn] this record's solve targets
+		device ulong *visit_addr [[buffer(29)]], // CTRL-46 vote: [chunk records * (num_out + sn)]
+		device uchar *visit_dir [[buffer(30)]],  // CTRL-46 vote: same shape (1 / 0 / 255)
 		uint tid [[thread_index_in_threadgroup]])
 {
 	const uint T = P.threads;
@@ -630,10 +636,17 @@ kernel void controller_bptt_walk(
 			// (c) state + (d) output commits — one writer per neuron
 			for (uint n = tid; n < ntask; n += T)
 			{
+				const uint vslot = (rec0 + d) * ntask + n;
 				if (n < P.num_out)
 				{
 					bool t = bw_bit(td, n);
 					ulong addr = bw_address(oid, o_conn + n * P.obpn, P.obpn);
+					if (P.vote != 0u)
+					{
+						visit_addr[vslot] = addr;
+						visit_dir[vslot] = t ? 1u : 0u;
+						continue;
+					}
 					uint cur = bw_read(o_idx, o_ent, o_meta[n], addr);
 					if (P.protect != 0u && cur != WNN_CELL_EMPTY && ctrl_fire_bit(cur, mode) != t)
 						continue;
@@ -650,6 +663,13 @@ kernel void controller_bptt_walk(
 					uint ov = P.has_override != 0u ? (uint)sover[(rec0 + d) * sn + sn_i] : 255u;
 					uint tv = ov != 255u ? ov : (ds[sn_i] != 0u ? bw_true_cell(mode) : WNN_CELL_FALSE);
 					ulong addr = bw_address(sid, s_conn + sn_i * P.sbpn, P.sbpn);
+					if (P.vote != 0u)
+					{
+						// VoteTally::visit_state_value: TRUE cell +, FALSE cell −, else no vote.
+						visit_addr[vslot] = addr;
+						visit_dir[vslot] = tv == bw_true_cell(mode) ? 1u : (tv == WNN_CELL_FALSE ? 0u : 255u);
+						continue;
+					}
 					uint cur = bw_read(s_idx, s_ent, s_meta[sn_i], addr);
 					if (P.protect != 0u && cur != WNN_CELL_EMPTY && ctrl_fire_bit(cur, mode) != ctrl_fire_bit(tv, mode))
 						continue;

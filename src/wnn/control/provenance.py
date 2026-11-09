@@ -67,6 +67,11 @@ class ControllerProvenance:
 	# features "off" | "constant" | "names:a+b" | "constant+names:a+b".
 	calib: str = UNKNOWN
 	drop: str = UNKNOWN
+	# CTRL-46 (ABI 46): the DAgger write rule ("last" | "vote:<θ>"), the label attitude
+	# ("true" | "estimate") and the Mahony-bias predictor block ("off" | "on").
+	write: str = UNKNOWN
+	label: str = UNKNOWN
+	abp: str = UNKNOWN
 
 	def line(self) -> str:
 		"""The single greppable line the ladder copies into the marker."""
@@ -81,6 +86,9 @@ class ControllerProvenance:
 		        f"rf={self.rf} "
 		        f"calib={self.calib} "
 		        f"drop={self.drop} "
+		        f"write={self.write} "
+		        f"label={self.label} "
+		        f"abp={self.abp} "
 		        f"fitness_pools={self.fitness_pools}")
 
 
@@ -113,7 +121,8 @@ def arch_token(ctbr: "dict | None", teacher: str, action_repeat: int, dt: float)
 def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: str = UNKNOWN,
                        train_asym: str = UNKNOWN, arch: str = UNKNOWN,
                        rf: str = UNKNOWN, calib: str = UNKNOWN,
-                       drop: str = UNKNOWN) -> ControllerProvenance:
+                       drop: str = UNKNOWN, write: str = UNKNOWN, label: str = UNKNOWN,
+                       abp: str = UNKNOWN) -> ControllerProvenance:
 	"""Gather every field, never raising: each accessor degrades to UNKNOWN / 0."""
 	wheel, abi, sha = _wheel_identity()
 	return ControllerProvenance(
@@ -131,6 +140,9 @@ def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: st
 		rf=rf.replace(" ", "_").replace('"', ""),
 		calib=calib.replace(" ", "_").replace('"', ""),
 		drop=drop.replace(" ", "_").replace('"', ""),
+		write=write.replace(" ", "_").replace('"', ""),
+		label=label.replace(" ", "_").replace('"', ""),
+		abp=abp.replace(" ", "_").replace('"', ""),
 	)
 
 
