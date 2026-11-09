@@ -44,7 +44,7 @@ impl IDSGenomeStreamerWrapper
 	/// mode or `write_rule="vote"` on a 4-state mode.
 	#[new]
 	#[allow(clippy::too_many_arguments)]
-	#[pyo3(signature = (bits_flat, neurons_flat, connections, num_classes, num_negatives, single_cluster, total_features, empty_value=0.5, neuron_sample_rate=1.0, rng_seed=42, normal_class=0, class_weights=None, memory_mode=ram_core::neuron_memory::QUAD_WEIGHTED, run_seed=0, coverage_aware=false, write_rule="lattice", fitness_weights=None, two_cluster_fitness_f1="macro"))]
+	#[pyo3(signature = (bits_flat, neurons_flat, connections, num_classes, num_negatives, single_cluster, total_features, empty_value=0.5, neuron_sample_rate=1.0, rng_seed=42, normal_class=0, class_weights=None, memory_mode=ram_core::neuron_memory::QUAD_WEIGHTED, run_seed=0, coverage_aware=false, write_rule="lattice", fitness_weights=None, two_cluster_fitness_f1="macro", vote_share=None))]
 	fn new(
 		bits_flat: Vec<usize>,
 		neurons_flat: Vec<usize>,
@@ -64,6 +64,7 @@ impl IDSGenomeStreamerWrapper
 		write_rule: &str,
 		fitness_weights: Option<(f32, f32, f32, f32)>,
 		two_cluster_fitness_f1: &str,
+		vote_share: Option<f64>,
 	) -> PyResult<Self>
 	{
 		let _ = total_features; // used by Python-side validation; not needed in Rust ctor
@@ -74,7 +75,7 @@ impl IDSGenomeStreamerWrapper
 			fitness_weights,
 			run_seed,
 			coverage_aware,
-			write_vote: parse_write_rule(write_rule)?,
+			write_vote: parse_write_rule(write_rule, vote_share)?,
 			fitness_attack_f1: parse_two_cluster_fitness_f1(
 				two_cluster_fitness_f1,
 				num_classes,

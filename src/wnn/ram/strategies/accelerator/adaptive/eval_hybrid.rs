@@ -2017,7 +2017,7 @@ mod tests
 			fitness_weights: None,
 			run_seed: 0,
 			coverage_aware: false,
-			write_vote: false,
+			write_vote: None,
 			fitness_attack_f1: false,
 		};
 		std::env::set_var("WNN_BATCH_SIZE", batch_size);

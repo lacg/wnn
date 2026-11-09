@@ -236,7 +236,7 @@ impl IDSGenomeStreamer
 			return Err(format!("IDSGenomeStreamer: unknown memory_mode code {}", settings.memory_mode));
 		}
 		let rule = settings.write_rule();
-		if settings.write_vote && rule != WriteRule::Vote
+		if settings.write_vote.is_some() && !rule.is_vote()
 		{
 			return Err(format!(
 				"IDSGenomeStreamer: write_rule=\"vote\" applies to BINARY/TERNARY/PLN only; \

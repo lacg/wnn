@@ -43,10 +43,12 @@ MODES = {"TERNARY": 0, "QUAD_BINARY": 1, "QUAD_WEIGHTED": 2, "BINARY": 3, "QSR":
 VOTE_MODES = ("TERNARY", "BINARY", "PLN")
 # (classification, single_cluster): single-cluster binary, binary two-cluster, multiclass K=4
 LAYOUTS = [("binary", True), ("binary", False), ("multi", False)]
+# (rule, ids_vote_share): IDS-56 adds the min-share vote (theta 0.1, worker ABI 28).
+VOTE_RULES = (("lattice", None), ("vote", None)) + ((("vote", 0.1),) if _abi() >= 28 else ())
 CASES = [
-	(mode, rule, cls, sc, bits)
+	(mode, rule, share, cls, sc, bits)
 	for mode in MODES
-	for rule in (("lattice", "vote") if mode in VOTE_MODES else ("lattice",))
+	for rule, share in (VOTE_RULES if mode in VOTE_MODES else (("lattice", None),))
 	for cls, sc in LAYOUTS
 	for bits in (8, 14)
 ]
@@ -67,13 +69,13 @@ def _genome(num_clusters: int, bits: int):
 	return g
 
 
-def _evaluators(mode, rule, cls, sc):
+def _evaluators(mode, rule, share, cls, sc):
 	from test_ids_evaluator_streaming import _make_multiclass_dataset
 	from wnn.ram.architecture.ids_evaluator import IDSEvaluator
 	inmem, stream = _make_multiclass_dataset()
 	kw = dict(
 		classification=cls, num_parts=5, single_cluster=sc, seed=42, empty_value=0.5,
-		memory_mode=MODES[mode], write_rule=rule, run_seed=13, neuron_sample_rate=1.0,
+		memory_mode=MODES[mode], write_rule=rule, vote_share=share, run_seed=13, neuron_sample_rate=1.0,
 	)
 	return IDSEvaluator(inmem, **kw), IDSEvaluator(stream, **kw)
 
@@ -83,10 +85,10 @@ def _close(a: float, b: float) -> bool:
 	return (math.isnan(a) and math.isnan(b)) or abs(a - b) <= 1e-6 * max(1.0, abs(b))
 
 
-@pytest.mark.parametrize("mode,rule,cls,sc,bits", CASES)
-def test_streaming_matches_in_memory(monkeypatch, mode, rule, cls, sc, bits):
+@pytest.mark.parametrize("mode,rule,share,cls,sc,bits", CASES)
+def test_streaming_matches_in_memory(monkeypatch, mode, rule, share, cls, sc, bits):
 	monkeypatch.setenv("WNN_ORDER_INDEPENDENT_TRAIN", "1")
-	ev_mem, ev_str = _evaluators(mode, rule, cls, sc)
+	ev_mem, ev_str = _evaluators(mode, rule, share, cls, sc)
 	assert ev_str._streaming_mode and not ev_mem._streaming_mode
 	k = 1 if sc else (2 if cls == "binary" else 4)
 

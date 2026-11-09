@@ -328,7 +328,7 @@ pub(crate) fn budget_batch_size(
 	write_rule: ram_core::cell_mode::WriteRule,
 ) -> usize
 {
-	let vote_tallies = write_rule == ram_core::cell_mode::WriteRule::Vote;
+	let vote_tallies = write_rule.is_vote();
 	genomes
 		.iter()
 		.map(|g| {
@@ -510,6 +510,12 @@ pub(crate) fn train_genome_in_slot_range(
 	// through `nudge_oi`; only the commit binning differs. The caller
 	// (`train_genome_in_slot` or a chunked driver) owns init/commit.
 	let use_oi = ram_core::cell_mode::CounterBin::for_training(write_rule, memory_mode).is_some();
+	// IDS-56 min-share: the vote writer scales each visit's class weight by
+	// its share (own·w TRUE-direction, other·w otherwise; MAJORITY = 1/1 =
+	// the plain ±w vote, bit-identical). The QUAD OI nudge has no share.
+	// GPU twin: marker_train.metal's WNN_WRITE_VOTE arm.
+	let vote_share = write_rule.vote_share();
+	let oi_weight = |toward_true: bool, repeats: u32| vote_share.map_or(repeats, |s| s.weight(toward_true, repeats));
 	let chunk_start = example_range.start;
 
 	// The legacy clamped nudge (non-OI QUAD family) is ORDER-DEPENDENT: a cell
@@ -609,7 +615,7 @@ pub(crate) fn train_genome_in_slot_range(
 					// OI: one accumulating call per example with weight = class_weight.
 					// Semantically counts this as a single observation (obs += 1)
 					// regardless of weight, while the net moves by ±weight.
-					memory.nudge_oi(neuron_base + n, address, nudge_direction, repeats);
+					memory.nudge_oi(neuron_base + n, address, nudge_direction, oi_weight(nudge_direction, repeats));
 				}
 				else if use_nudge
 				{
@@ -705,7 +711,7 @@ pub(crate) fn train_genome_in_slot_range(
 				let repeats = class_weights.map_or(1u32, |w| w[true_cluster]);
 				if use_oi
 				{
-					memory.nudge_oi(neuron_base + n, address, false, repeats);
+					memory.nudge_oi(neuron_base + n, address, false, oi_weight(false, repeats));
 				}
 				else if use_nudge
 				{

@@ -26,6 +26,7 @@ from wnn.ram.experiments.ids_param_resolution import (
 	resolve_receptive_fields,
 	resolve_rf_cross,
 	resolve_two_cluster_fitness_f1,
+	resolve_vote_share,
 	resolve_write_rule,
 )
 
@@ -53,6 +54,7 @@ class IdsEvaluatorSettings:
 	empty_value: float
 	coverage_aware: bool
 	write_rule: str
+	vote_share: Optional[float]
 	two_cluster_fitness_f1: str
 	offspring_folds: str
 	calib_sample: int
@@ -99,6 +101,7 @@ class IdsEvaluatorSettings:
 			empty_value=empty_value_for(mode_str),
 			coverage_aware=bool(params.get("ids_coverage_aware", False)),
 			write_rule=resolve_write_rule(params),
+			vote_share=resolve_vote_share(params),
 			two_cluster_fitness_f1=resolve_two_cluster_fitness_f1(params),
 			offspring_folds=resolve_offspring_folds(params),
 			calib_sample=resolve_calib_sample(params),

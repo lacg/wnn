@@ -113,8 +113,16 @@ fn writers() -> Vec<(u8, WriteRule)>
 		.filter(|&m| training_is_order_independent(m))
 		.map(|m| (m, WriteRule::of_code(m)))
 		.collect();
-	out.push((BINARY, WriteRule::Vote));
+	out.push((BINARY, WriteRule::Vote(ram_core::vote_share::VoteShare::MAJORITY)));
 	out
+}
+
+/// IDS-56: the min-share vote (θ = 0.1) — repeatability only, kept OUT of
+/// `writers()` so the combined goldens below stay the ABI-27 digests.
+fn min_share_writers() -> Vec<(u8, WriteRule)>
+{
+	let share = ram_core::vote_share::VoteShare::from_theta(0.1).expect("θ");
+	[BINARY, TERNARY, PLN].into_iter().map(|m| (m, WriteRule::Vote(share))).collect()
 }
 
 fn fnv(h: &mut u64, bytes: &[u8])
@@ -179,7 +187,7 @@ fn marker_repeatability_low_bits()
 		let s = shape(vec![b; n], vec![n], (n * 131 + b) as u64);
 		for &rate in &[0.25f32, 1.0]
 		{
-			for (mode, rule) in writers()
+			for (mode, rule) in writers().into_iter().chain(min_share_writers())
 			{
 				let reference = digest(&train(&f, &s, rate, mode, rule));
 				for rep in 1..5

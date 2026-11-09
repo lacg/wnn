@@ -16,7 +16,7 @@
 //!   - CPU == GPU (storage and scores);
 //!   - vote == `train::SparseTrainer`'s signed-vote TERNARY (the public
 //!     package's reference semantics).
-//! Default-unset bit-identity is pinned by `WriteRule::resolve(m, false) ==
+//! Default-unset bit-identity is pinned by `WriteRule::resolve(m, None) ==
 //! of_code(m)` (core) plus every pre-existing parity suite, which now routes
 //! through `resolve(.., false)` unchanged.
 
@@ -25,6 +25,7 @@ use crate::adaptive::{
 	reorganize_connections_for_gpu, train_genome_in_slot, GenomeExport, GroupMemory,
 };
 use ram_core::cell_mode::{CellMode, WriteRule};
+use ram_core::vote_share::VoteShare;
 use ram_core::neuron_memory::{BINARY, EMPTY, FALSE, PLN, TERNARY, TRUE};
 use ram_core::packed_bits::PackedBits;
 use rand::rngs::SmallRng;
@@ -214,7 +215,7 @@ fn rows_at(addrs_labels: &[(u32, i64)], num_clusters: usize) -> Data
 
 fn vote(mode: u8) -> WriteRule
 {
-	WriteRule::resolve(mode, true)
+	WriteRule::resolve(mode, Some(VoteShare::MAJORITY))
 }
 
 /// 1 attack + 3 normals on address 5: TRUE under the default writer (one
@@ -423,3 +424,7 @@ fn vote_matches_sparse_trainer_reference()
 		}
 	}
 }
+
+// IDS-56 min-share vote (θ, worker ABI 28) — reuses this harness's helpers.
+#[path = "vote_share_tests.rs"]
+mod min_share;

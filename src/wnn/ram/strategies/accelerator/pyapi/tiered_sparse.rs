@@ -619,6 +619,8 @@ pub(crate) fn run_marker_train_parity_test(
 		example_offset: 0,
 		examples_in_dispatch: 0,
 		vote_write: 0,
+		vote_own_weight: 1,
+		vote_other_weight: 1,
 	};
 
 	let t_gpu_start = std::time::Instant::now();
@@ -919,6 +921,8 @@ pub(crate) fn run_marker_train_batched_parity_test(
 		example_offset: 0,
 		examples_in_dispatch: 0,
 		vote_write: 0,
+		vote_own_weight: 1,
+		vote_other_weight: 1,
 	};
 
 	let t_gpu_start = std::time::Instant::now();
@@ -1200,6 +1204,8 @@ pub(crate) fn run_marker_train_multicluster_parity_test(
 		example_offset: 0,
 		examples_in_dispatch: 0,
 		vote_write: 0,
+		vote_own_weight: 1,
+		vote_other_weight: 1,
 	};
 
 	let t_gpu_start = std::time::Instant::now();

@@ -32,6 +32,7 @@ use crate::ids_cache::{
 };
 use crate::ids_streaming::IDSGenomeStreamer;
 use ram_core::cell_mode::{CellMode, WriteRule};
+use ram_core::vote_share::VoteShare;
 use ram_core::neuron_memory::{EvalSettings, BINARY, PLN, QSR, QUAD_BINARY, QUAD_WEIGHTED, TERNARY};
 use ram_core::packed_bits::PackedBits;
 use rand::rngs::SmallRng;
@@ -102,7 +103,7 @@ impl Dataset
 struct Case
 {
 	mode: u8,
-	vote: bool,
+	vote: Option<VoteShare>,
 	clusters: usize, // 1 = single-cluster binary; 2 = binary two-cluster; 3 = multiclass
 	bits: usize,     // 8 = dense groups, 14 = sparse
 	balance: bool,
@@ -311,7 +312,9 @@ fn cases() -> Vec<Case>
 			eprintln!("[streamer_parity] mode {mode}: needs WNN_ORDER_INDEPENDENT_TRAIN=1 (legacy nudge is order-dependent) — skipped");
 			continue;
 		}
-		let votes: &[bool] = if four_state { &[false] } else { &[false, true] };
+		// IDS-56: the min-share vote (θ = 0.1) streams at parity too.
+		let shares = [None, Some(VoteShare::MAJORITY), Some(VoteShare::from_theta(0.1).expect("θ"))];
+		let votes: &[Option<VoteShare>] = if four_state { &shares[..1] } else { &shares };
 		for &vote in votes
 		{
 			for clusters in [1usize, 2, 3]
@@ -366,19 +369,19 @@ fn streamer_parity_every_mode_rule_and_cluster_layout()
 #[test]
 fn streamer_refuses_vote_on_four_state_and_unknown_modes()
 {
-	let case = Case { mode: QUAD_WEIGHTED, vote: false, clusters: 1, bits: 8, balance: false, coverage_aware: false, rate: 1.0, attack_f1: false };
+	let case = Case { mode: QUAD_WEIGHTED, vote: None, clusters: 1, bits: 8, balance: false, coverage_aware: false, rate: 1.0, attack_f1: false };
 	let (bits, npc, conns) = case.genome();
 	let build = |settings: EvalSettings| {
 		IDSGenomeStreamer::new(bits.clone(), npc.clone(), conns.clone(), 2, 1, true, settings, 1.0, 0, None).err()
 	};
 	for mode in [QUAD_BINARY, QUAD_WEIGHTED, QSR]
 	{
-		let err = build(EvalSettings { memory_mode: mode, write_vote: true, ..EvalSettings::default() });
+		let err = build(EvalSettings { memory_mode: mode, write_vote: Some(VoteShare::MAJORITY), ..EvalSettings::default() });
 		assert!(err.is_some_and(|e| e.contains("BINARY/TERNARY/PLN only")), "mode {mode}");
 	}
 	for mode in [BINARY, TERNARY, PLN]
 	{
-		assert!(build(EvalSettings { memory_mode: mode, write_vote: true, ..EvalSettings::default() }).is_none());
+		assert!(build(EvalSettings { memory_mode: mode, write_vote: Some(VoteShare::MAJORITY), ..EvalSettings::default() }).is_none());
 	}
 	let err = build(EvalSettings { memory_mode: 99, ..EvalSettings::default() });
 	assert!(err.is_some_and(|e| e.contains("unknown memory_mode")));
@@ -391,7 +394,7 @@ fn streamer_mode_reaches_the_cells()
 {
 	let data = Dataset::new(2);
 	let score = |mode: u8| {
-		let case = Case { mode, vote: false, clusters: 1, bits: 8, balance: false, coverage_aware: false, rate: 1.0, attack_f1: false };
+		let case = Case { mode, vote: None, clusters: 1, bits: 8, balance: false, coverage_aware: false, rate: 1.0, attack_f1: false };
 		let cache = case.cache(&data);
 		let mut s = case.streamer(&data, &cache);
 		bits_of(&stream_scores(&mut s, &data.eval))
@@ -413,7 +416,7 @@ fn two_cluster_fitness_f1_attack_and_macro()
 	for bits in [8usize, 14]
 	{
 		let search = |attack_f1: bool| {
-			let case = Case { mode, vote: false, clusters: 2, bits, balance: false, coverage_aware: false, rate: 1.0, attack_f1 };
+			let case = Case { mode, vote: None, clusters: 2, bits, balance: false, coverage_aware: false, rate: 1.0, attack_f1 };
 			let cache = case.cache(&data);
 			let (b, npc, conns) = case.genome();
 			let mem = evaluate_genomes_ids_cached_full_hybrid(&cache, &b, &npc, &conns, 1, 0.5, 1.0, 0, None)[0];
@@ -432,10 +435,10 @@ fn two_cluster_fitness_f1_attack_and_macro()
 		assert_ne!(attack_run.2, macro_run.2, "bits {bits}: the selector must change the F1 here");
 		assert_eq!((attack_run.0, attack_run.1, attack_run.3), (macro_run.0, macro_run.1, macro_run.3), "bits {bits}: only F1 moves");
 	}
-	let (b, npc, conns) = Case { mode, vote: false, clusters: 1, bits: 8, balance: false, coverage_aware: false, rate: 1.0, attack_f1: false }.genome();
+	let (b, npc, conns) = Case { mode, vote: None, clusters: 1, bits: 8, balance: false, coverage_aware: false, rate: 1.0, attack_f1: false }.genome();
 	let attack = EvalSettings { fitness_attack_f1: true, ..EvalSettings::default() };
 	assert!(IDSGenomeStreamer::new(b.clone(), npc.clone(), conns.clone(), 2, 1, true, attack, 1.0, 0, None).is_err(), "single-cluster");
-	let (b3, npc3, conns3) = Case { mode, vote: false, clusters: 3, bits: 8, balance: false, coverage_aware: false, rate: 1.0, attack_f1: false }.genome();
+	let (b3, npc3, conns3) = Case { mode, vote: None, clusters: 3, bits: 8, balance: false, coverage_aware: false, rate: 1.0, attack_f1: false }.genome();
 	assert!(IDSGenomeStreamer::new(b3, npc3, conns3, 3, 2, false, attack, 1.0, 0, None).is_err(), "multiclass");
 }
 
@@ -449,7 +452,7 @@ fn kfold_mean_is_the_per_fold_average_bit_for_bit()
 	let data = Dataset::new(2);
 	for clusters in [1usize, 2]
 	{
-		let case = Case { mode: TERNARY, vote: false, clusters, bits: 8, balance: false, coverage_aware: false, rate: 1.0, attack_f1: false };
+		let case = Case { mode: TERNARY, vote: None, clusters, bits: 8, balance: false, coverage_aware: false, rate: 1.0, attack_f1: false };
 		let cache = case.cache(&data);
 		let (b, npc, conns) = case.genome();
 		// Two genomes in one batch (the offspring path scores batches).

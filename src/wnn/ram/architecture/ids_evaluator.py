@@ -100,6 +100,7 @@ class IDSEvaluator(BaseEvaluator):
 		memory_mode: int = 2,  # TERNARY=0/QUAD_BINARY=1/QUAD_WEIGHTED=2/BINARY=3/QSR=4/PLN=5
 		coverage_aware: bool = False,  # sparse miss scores 0.0, not the mode empty cell
 		write_rule: str = "lattice",  # "lattice" (mode's own writer) | "vote" (majority vote; BINARY/TERNARY/PLN)
+		vote_share: Optional[float] = None,  # IDS-56 min-share theta of "vote" (None = 0.5 = plain vote)
 		two_cluster_fitness_f1: str = "macro",  # binary two-cluster search F1: "macro" (2-class) | "attack"
 		offspring_folds: str = "all",  # GA/TS fitness folds: "all" (K-fold CV mean for every genome) | "phase" (legacy)
 		run_seed: int = 0,     # QSR/PLN stochastic-coin seed (ignored by deterministic modes)
@@ -279,6 +280,7 @@ class IDSEvaluator(BaseEvaluator):
 		self._memory_mode = memory_mode
 		self._coverage_aware = coverage_aware
 		self._write_rule = write_rule
+		self._vote_share = vote_share
 		self._two_cluster_fitness_f1 = self._validated_two_cluster_fitness_f1(
 			two_cluster_fitness_f1, classification, single_cluster,
 		)
@@ -430,8 +432,12 @@ class IDSEvaluator(BaseEvaluator):
 			# running every existing flow; "vote" on a wheel without the setter
 			# refuses LOUDLY. Set after set_memory_mode (the setter validates
 			# the mode) and on a reused cache too (idempotent).
+			# ids_vote_share (worker ABI 28) rides on the same setter; None is
+			# not passed, so the plain-vote / lattice call is the ABI-27 call.
 			_set_wr = getattr(self._cache, "set_write_rule", None)
-			if _set_wr is not None:
+			if _set_wr is not None and vote_share is not None:
+				_set_wr(write_rule, vote_share=vote_share)
+			elif _set_wr is not None:
 				_set_wr(write_rule)
 			elif write_rule != "lattice":
 				raise RuntimeError(
@@ -1078,6 +1084,7 @@ class IDSEvaluator(BaseEvaluator):
 			run_seed=self._run_seed,
 			coverage_aware=self._coverage_aware,
 			write_rule=self._write_rule,
+			vote_share=self._vote_share,
 			fitness_weights=self._fitness_weights,
 			two_cluster_fitness_f1=self._two_cluster_fitness_f1,
 		)

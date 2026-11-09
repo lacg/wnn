@@ -25,6 +25,7 @@
 use crate::neuron_memory::{
 	BINARY, EMPTY_U8, FALSE_U8, PLN, QSR, QUAD_BINARY, QUAD_WEAK_FALSE, QUAD_WEIGHTED, TERNARY,
 };
+use crate::vote_share::VoteShare;
 
 /// How one training visit writes a cell. THE dispatch every IDS trainer keys
 /// on — the CPU slot trainer (`train_genome_in_slot_range`), the GPU marker
@@ -55,7 +56,13 @@ pub enum WriteRule
 	/// semantics as `train::SparseTrainer`'s TERNARY votes. Fixes the
 	/// TRUE-wins floor: one attack on an address no longer outvotes any
 	/// number of normals.
-	Vote,
+	///
+	/// IDS-56 MIN-SHARE (`ids_vote_share` θ, worker ABI 28): the payload sets
+	/// the per-visit weights — +own·w on a TRUE-direction visit, −other·w on
+	/// any other, own:other = (1−θ):θ exact on a 1/100 grid (`VoteShare`).
+	/// `VoteShare::MAJORITY` (θ = 0.5, 1:1) is the plain vote above,
+	/// bit-identical. The binning is the same sign rule for every θ.
+	Vote(VoteShare),
 }
 
 /// How a counter-accumulated training pass bins each packed counter into a
@@ -97,7 +104,7 @@ impl CounterBin
 	{
 		match rule
 		{
-			WriteRule::Vote => Some(CounterBin::Vote {
+			WriteRule::Vote(_) => Some(CounterBin::Vote {
 				tie: CellMode::from_u8(memory_mode).map_or(EMPTY_U8, |m| m.default_cell()),
 			}),
 			WriteRule::Nudge if crate::neuron_memory::order_independent_training_active(memory_mode) =>
@@ -119,18 +126,36 @@ impl WriteRule
 	}
 
 	/// The rule a trainer applies for `memory_mode` under the per-flow
-	/// selector: `vote == false` is EXACTLY `of_code` (bit-identical default);
-	/// `vote == true` swaps the direct writers (BINARY Set, TERNARY/PLN
-	/// Lattice) for `Vote`. The 4-state family keeps its nudge either way
+	/// selector: `vote == None` is EXACTLY `of_code` (bit-identical default);
+	/// `vote == Some(share)` swaps the direct writers (BINARY Set, TERNARY/PLN
+	/// Lattice) for `Vote(share)` (`VoteShare::MAJORITY` = the plain vote). The 4-state family keeps its nudge either way
 	/// (its OI counters already tally votes; the Python facade refuses
 	/// `ids_write_rule="vote"` on those modes so it never silently no-ops).
 	/// GPU twin: common.metal `wnn_write_rule(memory_mode, vote)`.
-	pub fn resolve(memory_mode: u8, vote: bool) -> WriteRule
+	pub fn resolve(memory_mode: u8, vote: Option<VoteShare>) -> WriteRule
 	{
-		match WriteRule::of_code(memory_mode)
+		match (WriteRule::of_code(memory_mode), vote)
 		{
-			WriteRule::Set | WriteRule::Lattice if vote => WriteRule::Vote,
-			rule => rule,
+			(WriteRule::Set | WriteRule::Lattice, Some(share)) => WriteRule::Vote(share),
+			(rule, _) => rule,
+		}
+	}
+
+	/// True for the vote writer (any share).
+	#[inline]
+	pub fn is_vote(self) -> bool
+	{
+		matches!(self, WriteRule::Vote(_))
+	}
+
+	/// The min-share weights when this is the vote writer.
+	#[inline]
+	pub fn vote_share(self) -> Option<VoteShare>
+	{
+		match self
+		{
+			WriteRule::Vote(share) => Some(share),
+			_ => None,
 		}
 	}
 
@@ -142,7 +167,7 @@ impl WriteRule
 			WriteRule::Set => 0,
 			WriteRule::Lattice => 1,
 			WriteRule::Nudge => 2,
-			WriteRule::Vote => 3,
+			WriteRule::Vote(_) => 3,
 		}
 	}
 
@@ -479,15 +504,20 @@ mod tests
 		for mode in CellMode::ALL
 		{
 			let code = mode.as_u8();
-			assert_eq!(WriteRule::resolve(code, false), WriteRule::of_code(code), "{mode}");
-			let expected = match mode.write_rule()
+			assert_eq!(WriteRule::resolve(code, None), WriteRule::of_code(code), "{mode}");
+			let share = VoteShare::from_theta(0.1).unwrap();
+			for vote in [VoteShare::MAJORITY, share]
 			{
-				WriteRule::Set | WriteRule::Lattice => WriteRule::Vote,
-				other => other,
-			};
-			assert_eq!(WriteRule::resolve(code, true), expected, "{mode}");
+				let expected = match mode.write_rule()
+				{
+					WriteRule::Set | WriteRule::Lattice => WriteRule::Vote(vote),
+					other => other,
+				};
+				assert_eq!(WriteRule::resolve(code, Some(vote)), expected, "{mode}");
+				assert_eq!(WriteRule::resolve(code, Some(vote)).vote_share().is_some(), expected.is_vote());
+			}
 		}
-		assert!(!crate::neuron_memory::EvalSettings::default().write_vote);
+		assert!(crate::neuron_memory::EvalSettings::default().write_vote.is_none());
 		assert_eq!(crate::neuron_memory::EvalSettings::default().write_rule(), WriteRule::Nudge);
 	}
 
@@ -500,8 +530,10 @@ mod tests
 		let tally = |deltas: &[i32]| deltas.iter().fold(OI_INITIAL, |acc, &d| oi_apply_nudge(acc, d));
 		for mode in [CellMode::Binary, CellMode::Ternary, CellMode::Pln]
 		{
-			let bin = CounterBin::for_training(WriteRule::Vote, mode.as_u8()).expect("vote always counts");
+			let bin = CounterBin::for_training(WriteRule::Vote(VoteShare::MAJORITY), mode.as_u8()).expect("vote always counts");
 			assert_eq!(bin, CounterBin::Vote { tie: mode.default_cell() });
+			let share = VoteShare::from_theta(0.1).unwrap();
+			assert_eq!(CounterBin::for_training(WriteRule::Vote(share), mode.as_u8()), Some(bin), "{mode}: θ never changes the binning");
 			assert_eq!(bin.cell(tally(&[1, -1, -1, -1])), FALSE_U8, "{mode}: 1 vs 3");
 			assert_eq!(bin.cell(tally(&[3, -1, -1])), TRUE_U8, "{mode}: weighted 3 vs 2");
 			assert_eq!(bin.cell(tally(&[1, -1])), mode.default_cell(), "{mode}: tie");
@@ -520,7 +552,7 @@ mod tests
 			(WriteRule::Set, "WNN_WRITE_SET"),
 			(WriteRule::Lattice, "WNN_WRITE_LATTICE"),
 			(WriteRule::Nudge, "WNN_WRITE_NUDGE"),
-			(WriteRule::Vote, "WNN_WRITE_VOTE"),
+			(WriteRule::Vote(VoteShare::MAJORITY), "WNN_WRITE_VOTE"),
 		]
 		{
 			let decl = format!("constant uint {name} = {};", rule.code());

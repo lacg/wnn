@@ -329,12 +329,17 @@ impl IDSCacheWrapper
 	/// and Metal). The 4-state family (QUAD_*/QSR) already tallies through
 	/// its OI counters, so "vote" on those modes is REJECTED (ValueError)
 	/// rather than silently ignored. Call after set_memory_mode.
-	fn set_write_rule(&mut self, write_rule: &str) -> PyResult<()>
+	///
+	/// `vote_share` (IDS-56, worker ABI 28): the min-share θ of the vote —
+	/// own-class visits weigh (1−θ), other visits θ; θ ∈ (0, 0.5] on a 1/100
+	/// grid. None = 0.5 = the plain vote (bit-identical to ABI 27). Only valid
+	/// with "vote" (ValueError otherwise).
+	#[pyo3(signature = (write_rule, vote_share=None))]
+	fn set_write_rule(&mut self, write_rule: &str, vote_share: Option<f64>) -> PyResult<()>
 	{
-		let vote = parse_write_rule(write_rule)?;
-		if vote
-			&& ram_core::cell_mode::WriteRule::resolve(self.inner.memory_mode, true)
-				!= ram_core::cell_mode::WriteRule::Vote
+		let vote = parse_write_rule(write_rule, vote_share)?;
+		if vote.is_some()
+			&& !ram_core::cell_mode::WriteRule::resolve(self.inner.memory_mode, vote).is_vote()
 		{
 			return Err(pyo3::exceptions::PyValueError::new_err(format!(
 				"write_rule=\"vote\" applies to BINARY/TERNARY/PLN only; memory_mode {} trains \
@@ -1420,16 +1425,28 @@ fn trained_layer_to_py(layer: crate::trained_layer::TrainedLayer) -> TrainedLaye
 	)
 }
 
-/// The `ids_write_rule` wire string → `EvalSettings::write_vote`. Shared by
-/// `IDSCacheWrapper.set_write_rule` and the `IDSGenomeStreamerWrapper`
-/// constructor so both surfaces accept exactly the same values.
-pub(crate) fn parse_write_rule(write_rule: &str) -> PyResult<bool>
+/// The `ids_write_rule` wire string (+ the optional `ids_vote_share` θ) →
+/// `EvalSettings::write_vote`. Shared by `IDSCacheWrapper.set_write_rule` and
+/// the `IDSGenomeStreamerWrapper` constructor so both surfaces accept exactly
+/// the same values. θ is only meaningful for "vote" — passing it with
+/// "lattice" raises rather than silently no-opping.
+pub(crate) fn parse_write_rule(
+	write_rule: &str,
+	vote_share: Option<f64>,
+) -> PyResult<Option<ram_core::vote_share::VoteShare>>
 {
-	match write_rule
+	use ram_core::vote_share::VoteShare;
+	match (write_rule, vote_share)
 	{
-		"lattice" => Ok(false),
-		"vote" => Ok(true),
-		other => Err(pyo3::exceptions::PyValueError::new_err(format!(
+		("lattice", None) => Ok(None),
+		("lattice", Some(theta)) => Err(pyo3::exceptions::PyValueError::new_err(format!(
+			"vote_share={theta} is only valid with write_rule=\"vote\""
+		))),
+		("vote", None) => Ok(Some(VoteShare::MAJORITY)),
+		("vote", Some(theta)) => VoteShare::from_theta(theta)
+			.map(Some)
+			.map_err(pyo3::exceptions::PyValueError::new_err),
+		(other, _) => Err(pyo3::exceptions::PyValueError::new_err(format!(
 			"unknown write_rule {other:?} (expected \"lattice\" or \"vote\")"
 		))),
 	}

@@ -487,6 +487,20 @@ mod cache_scope_tests
 		}
 	}
 
+	/// IDS-56: a min-share vote row (ids_vote_share 0.1) never serves the
+	/// plain vote and vice versa; θ = 0.5 IS the plain vote (same key).
+	#[tokio::test]
+	async fn vote_share_splits_the_cache_and_half_is_the_plain_vote()
+	{
+		let pool = test_pool("vote_share").await;
+		let (plain, half, tenth) =
+			(fixture_key("binary_vote"), fixture_key("binary_vote_share_0p5"), fixture_key("binary_vote_share_0p1"));
+		assert_eq!(plain, half);
+		write_row(&pool, scope(&plain, 28), 0.9).await;
+		assert!(get_cached_validation(&pool, "g1", scope(&tenth, 28)).await.unwrap().is_none(), "θ=0.1 hit a plain-vote row");
+		assert!(get_cached_validation(&pool, "g1", scope(&half, 28)).await.unwrap().is_some(), "θ=0.5 missed the plain-vote row");
+	}
+
 	/// IDS-37 stage 3: the footprint round-trips through the row, the summary
 	/// listing and the cache, and a re-upsert without one clears it.
 	#[tokio::test]

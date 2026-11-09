@@ -30,6 +30,12 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	# (MAJORITY VOTE: signed class-weighted tally per cell, committed by sign).
 	# BINARY/TERNARY/PLN only — "vote" on a QUAD-family mode is rejected.
 	"ids_write_rule",
+	# ids_vote_share (09/11/2026, IDS-56, worker ABI 28): float theta in (0, 0.5]
+	# on a 1/100 grid, ONLY with ids_write_rule="vote" (raises otherwise). The
+	# MIN-SHARE vote: an own-class visit weighs (1 - theta), any other theta
+	# (times the class weight); TRUE iff the tally is > 0. Absent/None/0.5 = the
+	# plain vote (bit-identical). docs/ids55_family_fix_decomposition.md Lever B.
+	"ids_vote_share",
 	# ids_two_cluster_fitness_f1 (16/10/2026, worker ABI 20): "macro" (default —
 	# the 2-class macro F1, bit-identical) | "attack" (the attack class's F1)
 	# feeds the GA fitness + patience of a binary TWO-cluster search. Rejected

@@ -67,6 +67,37 @@ def resolve_write_rule(params: dict) -> str:
 	return rule
 
 
+# ids_vote_share (IDS-56, worker ABI 28): the MIN-SHARE theta of the vote writer.
+# An own-class visit weighs (1 - theta), any other visit theta (times the usual
+# class weight); a cell commits TRUE iff the weighted tally is > 0. theta = 0.5
+# is the plain majority vote (bit-identical to "vote" without the param). The
+# accelerator holds theta as an exact integer ratio on a 1/100 grid, so off-grid
+# values are rejected here rather than silently rounded there.
+VOTE_SHARE_GRID = 100
+VOTE_SHARE_MAJORITY = 0.5
+
+
+def resolve_vote_share(params: dict) -> Optional[float]:
+	"""Canonical ids_vote_share theta, or None (absent/None = the plain vote,
+	or no vote at all). Raises when set without ids_write_rule='vote', when not
+	a real number, outside (0, 0.5], or off the 1/100 grid — a mislabelled A/B
+	arm is worse than a refused flow."""
+	theta = params.get("ids_vote_share")
+	if theta is None:
+		return None
+	if resolve_write_rule(params) != "vote":
+		raise ValueError(f"ids_vote_share={theta!r} is only valid with ids_write_rule='vote'")
+	if isinstance(theta, bool) or not isinstance(theta, (int, float)):
+		raise ValueError(f"ids_vote_share={theta!r}: expected a number in (0, 0.5]")
+	theta = float(theta)
+	if not (0.0 < theta <= VOTE_SHARE_MAJORITY):
+		raise ValueError(f"ids_vote_share={theta!r}: expected a number in (0, 0.5]")
+	steps = theta * VOTE_SHARE_GRID
+	if abs(steps - round(steps)) > 1e-6:
+		raise ValueError(f"ids_vote_share={theta!r}: must be a multiple of 1/{VOTE_SHARE_GRID}")
+	return round(steps) / VOTE_SHARE_GRID
+
+
 # ids_two_cluster_fitness_f1 values (IDSCacheWrapper.set_two_cluster_fitness_f1):
 # which F1 a binary TWO-cluster search reports to the GA fitness calculators and
 # the patience tracker. "macro" = the 2-class macro F1 (today, bit-identical);

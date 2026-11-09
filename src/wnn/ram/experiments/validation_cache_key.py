@@ -23,6 +23,8 @@ INCLUDED (changes the trained memory or the reported score of a fixed genome):
   model/training    ids_classification, ids_single_cluster, memory_mode (resolved),
                     seed (QSR/PLN coin run_seed; hierarchical split seed),
                     ids_write_rule (only when "vote"; lattice keys unchanged),
+                    ids_vote_share (only when set AND != 0.5 — theta 0.5 trains
+                    the plain vote bit-identically, so it shares that key),
                     neuron_sample_rate, ids_coverage_aware, ids_suppress_negatives,
                     balance_classes, undersample_majority, flip_labels,
                     class_weight_multiplier, ids_val_fraction (hierarchical only),
@@ -53,7 +55,9 @@ from wnn.ram.experiments.ids_param_resolution import (
 	resolve_memory_mode,
 	resolve_receptive_fields,
 	resolve_rf_cross,
+	resolve_vote_share,
 	resolve_write_rule,
+	VOTE_SHARE_MAJORITY,
 )
 
 VALIDATION_CACHE_VERSION = 2
@@ -140,7 +144,18 @@ def _write_rule_parts(params: dict) -> list:
 	"""ids_write_rule changes the trained cells. Emitted ONLY when non-default,
 	so every pre-ABI-19 (lattice) key stays byte-identical."""
 	rule = resolve_write_rule(params)
-	return [] if rule == DEFAULT_WRITE_RULE else [("wr", rule)]
+	share = _vote_share_parts(params)  # validates first: raises on θ without "vote"
+	if rule == DEFAULT_WRITE_RULE:
+		return []
+	return [("wr", rule)] + share
+
+
+def _vote_share_parts(params: dict) -> list:
+	"""ids_vote_share (IDS-56) changes the trained cells. Emitted ONLY for a
+	theta that trains differently from the plain vote, so every ABI-27 "vote"
+	key (and an explicit 0.5) stays byte-identical."""
+	theta = resolve_vote_share(params)
+	return [] if theta is None or theta == VOTE_SHARE_MAJORITY else [("vs", theta)]
 
 
 def _sampling_parts(params: dict) -> list:

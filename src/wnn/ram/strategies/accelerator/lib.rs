@@ -492,7 +492,14 @@ use pyapi::*;
 /// rf_project_connections / rf_neuron_fields serve the Python creators (grid,
 /// GA init, immigrants, Python mutate/crossover fallbacks). Bumped so a Python
 /// tree that sends rf_bit_family cannot run on a wheel that ignores it.
-pub const ABI_VERSION: u32 = 27;
+/// 28 (09/11/2026, IDS-56 min-share vote): additive — IDSCacheWrapper.set_write_rule
+/// and the IDSGenomeStreamerWrapper ctor take vote_share (θ ∈ (0, 0.5] on a 1/100
+/// grid; None = 0.5 = the plain vote, bit-identical to ABI 27; ValueError with
+/// "lattice"). WriteRule::Vote carries ram_core VoteShare: a TRUE-direction visit
+/// adds +(1−θ)·w, any other −θ·w as the exact integer ratio, CPU and Metal
+/// (TrainParams gains vote_own_weight / vote_other_weight, appended). Bumped so a
+/// Python tree that sends ids_vote_share cannot run on a wheel that ignores it.
+pub const ABI_VERSION: u32 = 28;
 
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()>

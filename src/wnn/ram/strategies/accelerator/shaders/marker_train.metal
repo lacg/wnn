@@ -80,6 +80,10 @@ struct TrainParams
 	uint vote_write;					 // 16/10/2026: 1 = per-flow MAJORITY-VOTE selector
 														 // (wnn_write_rule(memory_mode, vote_write)).
 														 // 0 = the mode's own writer (bit-identical).
+	uint vote_own_weight;			 // IDS-56 (ABI 28): min-share VoteShare::own —
+														 // a TRUE-direction vote adds +weight*own.
+	uint vote_other_weight;		 // VoteShare::other — any other vote adds
+														 // -weight*other. 1/1 = the plain vote.
 };
 
 // xorshift32-based per-(neuron, example) sampling decision. Matches the CPU
@@ -305,7 +309,11 @@ kernel void marker_train(
 				// host bins the sign at export (SlotMerge::Votes ->
 				// vote_bin_to_cell); FALSE-direction visits vote too (BINARY
 				// included), so no pre-claim skip.
-				int delta = nudge_true ? int(weight) : -int(weight);
+				// IDS-56 min-share: the visit's class weight is scaled by the
+				// share (own TRUE-direction, other otherwise); 1/1 = the plain
+				// vote. Same integers as VoteShare::delta on the CPU.
+				int delta = nudge_true ? int(weight * params.vote_own_weight)
+						: -int(weight * params.vote_other_weight);
 				slot_nudge_oi(slot_values, slot, delta);
 			}
 			else if (params.oi_mode == 1u)

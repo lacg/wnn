@@ -155,7 +155,8 @@ class IdsEvaluatorFactory:
 		return IDSEvaluator(
 			dataset=dataset, classification=s.classification, num_parts=num_parts,
 			empty_value=s.empty_value, memory_mode=s.memory_mode, seed=s.seed, run_seed=s.run_seed,
-			coverage_aware=s.coverage_aware, write_rule=s.write_rule, num_negatives=s.num_negatives,
+			coverage_aware=s.coverage_aware, write_rule=s.write_rule, vote_share=s.vote_share,
+			num_negatives=s.num_negatives,
 			two_cluster_fitness_f1=s.two_cluster_fitness_f1, offspring_folds=s.offspring_folds,
 			neuron_sample_rate=s.neuron_sample_rate, k_folds=k_folds, kfold_per_gen=kfold_per_gen,
 			balance_classes=s.balance_classes, single_cluster=s.single_cluster,
@@ -226,7 +227,8 @@ class IdsEvaluatorFactory:
 		return IDSEvaluator(
 			dataset=dataset, classification=classification, num_parts=num_parts,
 			empty_value=s.empty_value, memory_mode=s.memory_mode, seed=s.seed, run_seed=s.run_seed,
-			coverage_aware=s.coverage_aware, write_rule=s.write_rule, num_negatives=s.num_negatives,
+			coverage_aware=s.coverage_aware, write_rule=s.write_rule, vote_share=s.vote_share,
+			num_negatives=s.num_negatives,
 			neuron_sample_rate=s.neuron_sample_rate, k_folds=k_folds, balance_classes=s.balance_classes,
 			kfold_per_gen=kfold_per_gen, offspring_folds=s.offspring_folds,
 		)

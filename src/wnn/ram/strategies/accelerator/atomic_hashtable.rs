@@ -1565,7 +1565,7 @@ mod tests
 		{
 			let rule = if mode == BINARY { WriteRule::Set } else { WriteRule::Lattice };
 			assert!(SlotMerge::for_batch(rule, mode, false).merges_duplicates(), "mode {mode} {rule:?}");
-			assert!(SlotMerge::for_batch(WriteRule::Vote, mode, false).merges_duplicates(), "mode {mode} vote");
+			assert!(SlotMerge::for_batch(WriteRule::Vote(ram_core::vote_share::VoteShare::MAJORITY), mode, false).merges_duplicates(), "mode {mode} vote");
 		}
 		// The nudge merges only through OI counters (env-gated); the legacy clamped nudge never.
 		let oi = CounterBin::for_training(WriteRule::Nudge, QUAD_WEIGHTED).is_some();

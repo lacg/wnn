@@ -285,10 +285,12 @@ pub struct EvalSettings
 	/// construction. `false` is bit-exact today's behaviour.
 	pub coverage_aware: bool,
 	/// Per-flow MAJORITY-VOTE write rule (`ids_write_rule="vote"`): BINARY /
-	/// TERNARY / PLN train through `WriteRule::Vote` instead of Set / the
-	/// TRUE-wins lattice. Ignored by the 4-state family. `false` is bit-exact
-	/// today's behaviour.
-	pub write_vote: bool,
+	/// TERNARY / PLN train through `WriteRule::Vote(share)` instead of Set /
+	/// the TRUE-wins lattice. Ignored by the 4-state family. `None` is
+	/// bit-exact the mode's own writer; `Some(VoteShare::MAJORITY)` is the
+	/// plain vote (worker ABI 19); any other share is the IDS-56 min-share
+	/// vote (`ids_vote_share` θ, worker ABI 28).
+	pub write_vote: Option<crate::vote_share::VoteShare>,
 	/// Two-cluster binary GA fitness (`ids_two_cluster_fitness_f1="attack"`):
 	/// the K = 2 search reports the ATTACK class's F1 instead of the 2-class
 	/// macro F1 (`adaptive::search_f1_fpr`). Ignored for K != 2; `false` is
@@ -317,7 +319,7 @@ impl Default for EvalSettings
 			fitness_weights: None,
 			run_seed: 0,
 			coverage_aware: false,
-			write_vote: false,
+			write_vote: None,
 			fitness_attack_f1: false,
 		}
 	}
@@ -1613,7 +1615,7 @@ pub fn training_is_order_independent(memory_mode: u8) -> bool
 	{
 		// Vote is never returned by `CellMode::write_rule` (it is selected per
 		// flow) but is commutative too: an integer tally.
-		Some(WriteRule::Lattice) | Some(WriteRule::Set) | Some(WriteRule::Vote) => true,
+		Some(WriteRule::Lattice) | Some(WriteRule::Set) | Some(WriteRule::Vote(_)) => true,
 		Some(WriteRule::Nudge) => order_independent_training_active(memory_mode),
 		None => false,
 	}

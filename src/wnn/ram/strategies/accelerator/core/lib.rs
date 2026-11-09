@@ -19,6 +19,7 @@ pub mod aligned_words;
 pub mod packed_bits;
 pub mod sparse_memory;
 pub mod train;
+pub mod vote_share;
 // Group-identical-units map + the one "same neuron" key (IDS multiplicity
 // layer, GA crossover dedupe, sparse export alias). docs/ids_multiplicity_layer_design.md §2.
 pub mod distinct_fractions;

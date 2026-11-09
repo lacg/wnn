@@ -53,7 +53,9 @@ def test_fixture_cases_are_distinct_except_documented_aliases():
 	keys = {name: c["key"] for name, c in CASES.items()}
 	assert keys["quad_default"] == keys["quad_explicit"]
 	assert keys["neto_default_inv"] == keys["neto_explicit_inv"]
-	aliases = {"quad_explicit", "neto_explicit_inv"}
+	# IDS-56: θ = 0.5 trains the plain vote bit-identically, so it shares its key.
+	assert keys["binary_vote"] == keys["binary_vote_share_0p5"]
+	aliases = {"quad_explicit", "neto_explicit_inv", "binary_vote_share_0p5"}
 	distinct = [k for n, k in keys.items() if n not in aliases]
 	assert len(set(distinct)) == len(distinct)
 

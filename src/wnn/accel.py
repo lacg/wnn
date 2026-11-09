@@ -146,7 +146,12 @@ import os
 #   off = bit-identical, no RNG draw) + rf_cross; module functions
 #   rf_project_connections / rf_neuron_fields (ram_core receptive_fields.rs) for
 #   the Python creators. Flow params ids_receptive_fields / ids_rf_cross.
-EXPECTED_ABI = 27
+# 28 (09/11/2026, IDS-56 min-share vote): additive — IDSCacheWrapper.set_write_rule
+#   and the IDSGenomeStreamerWrapper ctor take vote_share (flow param
+#   ids_vote_share, θ ∈ (0, 0.5] on a 1/100 grid; None = the plain vote =
+#   bit-identical to ABI 27). Bumped so ids_vote_share can't run on a wheel that
+#   would silently train the plain vote.
+EXPECTED_ABI = 28
 
 BUILD_HINT = (
 	"Rebuild the accelerator: cd src/wnn/ram/strategies/accelerator && "

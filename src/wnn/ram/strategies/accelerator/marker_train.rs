@@ -98,6 +98,13 @@ pub mod metal_impl
 		/// common.metal `wnn_write_rule(memory_mode, vote_write)`). 0 keeps the
 		/// mode's own writer, bit-identical to before.
 		pub vote_write: u32,
+		/// IDS-56 (worker ABI 28): the vote's min-share weights
+		/// (`VoteShare::own` / `other`) — a TRUE-direction visit adds
+		/// +weight·own, any other −weight·other. 1/1 = the plain vote
+		/// (bit-identical). Read only when the writer is VOTE. APPENDED at the
+		/// END in lockstep with marker_train.metal's TrainParams.
+		pub vote_own_weight: u32,
+		pub vote_other_weight: u32,
 	}
 
 	pub struct MarkerTrainer
@@ -2025,7 +2032,9 @@ pub mod batched_path
 			// Set per-chunk inside the host loop below (in MarkerTrainer::train).
 			example_offset: 0,
 			examples_in_dispatch: num_train as u32,
-			vote_write: (write_rule == ram_core::cell_mode::WriteRule::Vote) as u32,
+			vote_write: write_rule.is_vote() as u32,
+			vote_own_weight: write_rule.vote_share().map_or(1, |s| s.own()),
+			vote_other_weight: write_rule.vote_share().map_or(1, |s| s.other()),
 		};
 
 		let t_pre_train = t_phase.elapsed().as_secs_f64() * 1000.0;
@@ -2965,7 +2974,7 @@ pub mod batched_path
 				fitness_weights: None,
 				run_seed: 0,
 				coverage_aware: false,
-				write_vote: false,
+				write_vote: None,
 				fitness_attack_f1: false,
 			};
 			for n in [7usize, 37, 64]
@@ -3030,7 +3039,7 @@ pub mod batched_path
 				fitness_weights: None,
 				run_seed: 0,
 				coverage_aware: false,
-				write_vote: false,
+				write_vote: None,
 				fitness_attack_f1: false,
 			};
 			for (b, rate) in [(8usize, 0.25f32), (8, 1.0), (12, 0.25), (12, 1.0), (16, 1.0)]
