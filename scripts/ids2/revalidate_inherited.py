@@ -188,7 +188,7 @@ def main() -> int:
 	from wnn.ram.experiments.worker import FlowWorker
 	require_accel()
 	abi = installed_abi()
-	worker = FlowWorker(dashboard_url=a.url, verify_ssl=False)
+	worker = FlowWorker(db_path=":memory:", dashboard_url=a.url, verify_ssl=False)
 	results, t0 = [], time.time()
 	for i, (fid, ts) in enumerate(sorted(by_flow.items()), 1):
 		results += revalidate_flow(worker, fid, ts, abi)

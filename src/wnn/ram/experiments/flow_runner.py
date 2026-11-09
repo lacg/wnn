@@ -37,7 +37,7 @@ import os   # os.getpid() in _run_controller_flow — missing since 937d794e, so
 import sys
 from pathlib import Path
 
-from wnn.ram.experiments.worker import FlowWorker
+from wnn.ram.experiments.worker import FlowWorker, live_db_path
 
 
 # Flow statuses that are NOT an error outcome for the runner process. A flow that
@@ -62,6 +62,7 @@ def run_one_flow(
     # worker.run() -- the scheduler owns the loop. poll_interval is irrelevant
     # here (no loop), so the constructor default is fine.
     worker = FlowWorker(
+        db_path=live_db_path(),
         dashboard_url=dashboard_url,
         context_size=context_size,
         verify_ssl=verify_ssl,

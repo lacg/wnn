@@ -38,6 +38,17 @@ HEARTBEAT_INTERVAL = 30
 # Consider a flow stale if no heartbeat for this many seconds
 STALE_THRESHOLD = 90
 
+# The live tracker DB (same db as the dashboard), relative to the project root
+# the worker and flow_runner are launched from. FlowWorker takes db_path
+# EXPLICITLY: only the production entry points pass this; a script that reuses
+# FlowWorker as a revalidation host passes ":memory:" so it cannot write to the
+# live DB by accident (the old silent default did exactly that from the repo root).
+LIVE_DB_RELATIVE = Path("db/wnn.db")
+
+
+def live_db_path() -> str:
+    return str(LIVE_DB_RELATIVE.absolute())
+
 # ga_crossover_bits values (ram_core crossover_bits.rs CrossoverBits::parse)
 CROSSOVER_BITS_RULES = ("inherit", "blend_neuron", "blend_cluster")
 
@@ -69,11 +80,11 @@ class FlowWorker:
 
     def __init__(
         self,
+        db_path: str,
         dashboard_url: str = "https://localhost:3000",
         poll_interval: int = 10,
         checkpoint_base_dir: Path = Path("checkpoints"),
         context_size: int = 4,
-        db_path: Optional[str] = None,
         verify_ssl: bool | str = False,
         cpu_budget: Optional[int] = None,
     ):
@@ -119,10 +130,9 @@ class FlowWorker:
         config = DashboardClientConfig(base_url=dashboard_url, verify_ssl=verify_ssl)
         self.client = DashboardClient(config, logger=self._log)
 
-        # V2 Tracker for direct database writes (same db as dashboard)
-        # Standard location: db/wnn.db relative to project root
-        if db_path is None:
-            db_path = str(Path("db/wnn.db").absolute())
+        # V2 Tracker for direct database writes. No default: see LIVE_DB_RELATIVE.
+        if not db_path:
+            raise ValueError("FlowWorker: db_path is required (live_db_path() for the worker, ':memory:' for scripts)")
         self.tracker: Optional[ExperimentTracker] = create_tracker(db_path=db_path, logger=self._log)
 
         # Setup signal handlers for graceful shutdown
@@ -1901,6 +1911,7 @@ def main():
         verify_ssl = False  # Default: skip SSL verify (self-signed cert)
 
     worker = FlowWorker(
+        db_path=live_db_path(),
         dashboard_url=args.url,
         poll_interval=args.poll_interval,
         checkpoint_base_dir=args.checkpoint_dir,
