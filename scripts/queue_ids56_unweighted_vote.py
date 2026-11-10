@@ -5,10 +5,11 @@ Arm: clone 7501 (unswr lattice encoff r20419) with ids_write_rule=vote, ids_vote
 balance_classes=false. Audit (prereg §1): balance_classes only feeds the per-visit training weight; lattice ignores
 it (CPU eval_export.rs + GPU marker_train.metal), so vs the lattice control the arm changes exactly the writer (the
 unweighted min-share tally) and nothing in folds, negatives, fitness, CE or threshold calibration.
-Control: the existing IDS-56 unswr lattice encoff flows on the same seeds (7501 / 7505 / 7509), NOT re-flown.
-Seeds r20419-21 (n=3); extend with --seeds 20422,20423 ONLY if the prereg's ambiguity rule fires.
+Control: the existing IDS-56 unswr lattice encoff flows on the same seeds (7509 / 7513 / 7517), NOT re-flown.
+Seeds r20421-23 (n=3) — the seeds theta was NOT tuned on (experiment-design review 10/11, prereg §5); extend with
+--seeds 20419,20420 (the tuning seeds, controls 7501/7505, disclosed) ONLY if the prereg's ambiguity rule fires.
 
-Usage: python scripts/queue_ids56_unweighted_vote.py [--dry-run] [--seeds 20422,20423]"""
+Usage: python scripts/queue_ids56_unweighted_vote.py [--dry-run] [--seeds 20419,20420]"""
 import json, sqlite3, sys
 from pathlib import Path
 
@@ -17,7 +18,7 @@ import queue_ids56_vote_share_ab as Q  # noqa: E402
 
 THETA = 0.02
 BASE = 7501
-SEEDS_N3 = (20419, 20420, 20421)
+SEEDS_N3 = (20421, 20422, 20423)  # clean seeds; extension = 20419,20420 (theta-tuning seeds)
 TAG = "nb" + f"{THETA:.2f}".replace("0.", "")  # nb02 = unweighted (no balance) share 0.02
 PREFIX = "IDS56U-unswr-WbCTRL-desir-BINARY-2m-max250-xo_blend_cluster-rate0.25-rklegacy"
 # Everything else is inherited from 7501 verbatim; these are the ONLY differences from the control.

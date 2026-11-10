@@ -3,7 +3,7 @@
 Written 10/11/2026 (ids-security agent), on Luiz's approval of "recommendation 2, n=3 first" from
 `docs/ids56_unswr_tiny_genomes.md` (commit 52b8246c). It is the basis for this doc.
 
-**Status: DRAFT. Nothing queued.**
+**Status: REVIEWED (experiment-design, 10/11/2026): GO-WITH-CHANGES, changes applied below (§3, script). Nothing queued.**
 - No flow was queued, paused, cancelled, resumed or reordered. The worker (ABI 28) was live throughout.
 - Probes ran at `nice -n 10` through the worker's own construction path (`IdsEvaluatorFactory` → `IDSCacheWrapper`,
   `set_write_rule`, Rust `evaluate_multiclass_at_thresholds`). There is no Python reimplementation.
@@ -155,41 +155,63 @@ single point-B genome.
 - Every offline evidence point is encoff.
 - An encon arm would double cost on no evidence. Revisit only if the encoff arm adopts.
 
-**Control:** the existing IDS-56 lattice encoff flows on the same seeds:
-- **7501** (r20419)
-- **7505** (r20420)
+**Control:** the existing IDS-56 lattice encoff flows on the same seeds (changed in review, see §5):
 - **7509** (r20421)
-- extension seeds: 7513 (r20422) and 7517 (r20423)
+- **7513** (r20422)
+- **7517** (r20423)
+- extension seeds: 7501 (r20419) and 7505 (r20420), the θ-tuning seeds, disclosed as such
 
 Each control has the same base params and seed as its arm (offspring seeding no longer reads the wall clock since
 worker ABI 14), so the control is **not** re-flown.
 
-**Seeds:** r20419–21 first (standing rule). Extend to r20422–23 only per the rule below.
+**Seeds:** r20421–23 first (standing rule n=3). These are the seeds θ was NOT chosen on. Extend with r20419–20
+only per the rule below; the n=5 readout must also print the clean-seed (r20421–23) subset on its own.
+All three controls have ids below the arm's, so under FIFO they finish before the arm's first flow starts: the seed
+change costs no queue time.
 
 **Metric:**
 - Taken from `validation_summaries.threshold_metadata` for the GA phase, `genome_type=best_f1`, `validation_point=final`.
 - Mode is `margin_val_cal`: τ calibrated on VAL, scored on the 10% TEST, which is report-only.
 - Pairing is by seed.
-- All 7 threshold modes × 5 genome types are reported in Rule-7 format. Only the line above decides adoption.
+- All stored threshold modes (this binary-margin pipeline stores 10: argmax, margin_fixed0, margin_train_cal,
+  margin_val_cal, margin_train_f1, margin_val_f1, argmax_platt, argmax_beta, argmax_classnorm, margin_classnorm)
+  × 5 genome types are reported in Rule-7 layout. Only the line above decides adoption.
+- F1 here is **macro-F1**. On unswr (benign 96%) benign-F1 sits near 99.6 and barely moves, so ΔmacroF1 ≈
+  ½·Δattack-F1. Report `attack_f1` and TPR (from `confusion`) beside every macro-F1 cell.
+- Readout guard: `validation_summaries.worker_abi` must be equal for each arm flow and its paired control. If the worker
+  ABI changes before the arm runs, the comparison is cross-build: stop and ask Luiz whether to re-fly the controls.
 - Never use `iterations.best_f1`.
 
-### Adoption rule
+### Adoption rule (revised in review, §5)
 
-**At n=3:**
-- **ADOPT** if F1 wins paired on **3/3** seeds AND the mean paired ΔFPR ≤ **+0.05 pp**.
-- **REJECT** if F1 wins on ≤ 1/3 seeds, OR mean ΔFPR > +0.15 pp.
-- **AMBIGUOUS** in every other case → extend to n=5. Examples:
-  - 2/3 F1 wins;
-  - 3/3 F1 wins with a mean ΔFPR in (+0.05, +0.15];
-  - any seed with |ΔF1| < 0.05 pp (inside the noise).
+Definitions, per seed, on GA `best_f1` final `margin_val_cal` TEST: ΔF1 = arm − control (macro-F1, pp);
+ΔFPR = arm − control (pp). A seed is a **win** if ΔF1 ≥ +0.05 pp, a **tie** if |ΔF1| < 0.05 pp, a **loss** otherwise.
 
-**At n=5 (after extension):**
-- **ADOPT** if F1 wins on **≥ 4/5** seeds AND the mean paired ΔFPR ≤ +0.05 pp.
+**At n=3 (r20421–23).** Apply in this order; the first match decides.
+1. **REJECT** if wins ≤ 1/3 (ties count as non-wins), OR mean ΔFPR > +0.15 pp.
+2. **ADOPT** if wins = 3/3 AND mean ΔF1 ≥ +0.15 pp AND mean ΔFPR ≤ +0.05 pp AND every seed ΔFPR ≤ +0.10 pp.
+3. **AMBIGUOUS** otherwise → extend to n=5 with r20419–20. Examples: 2 wins + 1 tie or loss; 3/3 wins with mean ΔF1
+   < +0.15; 3/3 wins with mean ΔFPR in (+0.05, +0.15] or one seed above +0.10.
+
+**At n=5 (after extension).**
+- **ADOPT** if wins ≥ 4/5 AND mean ΔF1 ≥ +0.15 pp AND mean ΔFPR ≤ +0.05 pp AND every seed ΔFPR ≤ +0.10 pp.
 - Otherwise **REJECT**. There is no further extension.
 
-**Stop condition, stated now:** probe5 is re-run on the 7505 and 7509 GA `best_f1` finals when they land, before the
-arm's r20420/21 flows start. If θ=0.02 shows VAL ΔF1 ≤ 0 on **both**, the arm is withdrawn (the queued r20420/21 flows
-are cancelled only on Luiz's named order). θ is **not** re-chosen on that data.
+**Why these bounds (measured, not assumed).** Lattice GA `best_f1` finals on unswr at this recipe (IDS-47, 9 flows =
+3 seeds × 3 crossovers, plus 7501) give a seed-to-seed SD of **0.016 pp FPR** (≈ 24 benign TEST rows) and
+**0.15–0.19 pp macro-F1**. The +0.05 pp mean bound is therefore ≈ 3 seed-SDs, a cost tolerance and not a noise
+threshold. The +0.15 pp mean-ΔF1 floor is ≈ 1 seed-SD of F1.
+
+**Scope.** ADOPT means "becomes the unswr write rule for the IDS-56 line". It is not a paper claim: at n=3 it is
+provisional, and a paper claim needs the clean-seed subset and a stated N.
+
+**No θ shopping.** Only θ=0.02 is flown. If it rejects, any other θ is a new pre-registration, not a rescue.
+
+**Stop condition (futility gate, revised in review).** When each of 7509/7513/7517 lands, probe5 re-trains its GA
+`best_f1` final under θ=0.02 unweighted and reads **VAL only** (do not print or read the TEST columns of this probe
+before the arm reads out). Withdraw the arm if, on ≥ 2 of the 3 genomes, VAL ΔF1 ≤ 0 OR VAL ΔFPR > +0.15 pp. The gate
+can only withdraw; θ is **not** re-chosen on that data. Queued arm flows are cancelled only on Luiz's named order. All
+three controls finish before the arm's first flow under FIFO, so the gate is always decidable in time.
 
 ### Estimated duration
 
@@ -210,7 +232,7 @@ are cancelled only on Luiz's named order). θ is **not** re-chosen on that data.
 `scripts/queue_ids56_unweighted_vote.py --dry-run` prints the full dict. These are the deltas from 7501:
 
 ```
-seed                  20419 | 20420 | 20421   (ext: 20422 | 20423)
+seed                  20421 | 20422 | 20423   (ext: 20419 | 20420)
 ids_write_rule        "lattice" -> "vote"
 ids_vote_share        null      -> 0.02
 balance_classes       true      -> false
@@ -230,3 +252,109 @@ it PATCHes the flow to queued.
    desirability fitness (FPR weight 0.35) may land somewhere else on the TPR/FPR curve.
 3. **θ was chosen on VAL of genomes from the same seeds that will be tested** (r20419–20). That is VAL, not TEST, and
    the rule was stated first, but the choice is not independent of r20419/20.
+
+## 5. Review (experiment-design, 10/11/2026)
+
+**Verdict: GO-WITH-CHANGES.** The changes are applied in §3 and in `scripts/queue_ids56_unweighted_vote.py`
+(still dry-run only). With them, the design is ready to queue on Luiz's go. Nothing was queued or touched.
+
+### Data this review rests on (DB reads, 10/11 21:16 UTC)
+
+7505's GA is still running (GA gen 64; 7501 stopped at gen 90), so no second IDS-56 lattice GA final exists yet.
+The nearest measured proxy is IDS-47: unswr lattice, BINARY, desirability, max250, `random_3way`, 3 seeds × 3
+crossovers. It differs from 7501 only in the crossover and in params later made explicit (dedupe, ranking, RF). It
+also ran on an older build, so it serves as a noise estimate, not as a control.
+
+```
+GA best_f1 final, margin_val_cal (tau on VAL, scored on TEST), macro-F1 / FPR %, N=1 per row
+flow  | crossover      | seed   | F1     | FPR    | attack-F1
+------+----------------+--------+--------+--------+----------
+7224  | inherit        | r20419 | 93.92  | 0.224  | 88.27
+7225  | blend_neuron   | r20419 | 94.22  | 0.244  | 88.87
+7226  | blend_cluster  | r20419 | 94.36  | 0.188  | 89.13
+7234  | inherit        | r20420 | 94.16  | 0.217  | 88.74
+7235  | blend_neuron   | r20420 | 94.11  | 0.213  | 88.64
+7236  | blend_cluster  | r20420 | 94.32  | 0.217  | 89.05
+7246  | inherit        | r20421 | 94.09  | 0.213  | 88.60
+7247  | blend_neuron   | r20421 | 94.01  | 0.199  | 88.46
+7248  | blend_cluster  | r20421 | 94.02  | 0.211  | 88.46
+7501  | blend_cluster  | r20419 | 94.17  | 0.194  | 88.75   (IDS-56 control, ABI 28)
+
+all 9 IDS-47      : F1 94.13±0.15  FPR 0.214±0.016  (N=9)
+blend_cluster only: F1 94.23±0.19  FPR 0.205±0.015  (N=3)
+TEST benign support 152,390 -> 0.01 pp = 15 rows; attack support 6,036
+```
+
+All 10 lattice GA finals sit on point B (FPR 0.19–0.24). None has fallen into attractor A (1.12). Older QUAD/BIN
+unswr cohorts do sit on A, so the FPR distribution across recipes is bimodal. Within lattice-B it is tight.
+
+### Q1: the FPR bound. Keep +0.05 pp on the MEAN, add a per-seed ceiling of +0.10 pp
+
+- The concern was that +0.05 pp would reject on noise. It will not: the measured seed SD of lattice FPR is 0.016 pp,
+  so +0.05 pp is about 3 seed-SDs. Under a normal model with these SDs (arm noise = control noise, **an assumption**:
+  the vote could be noisier), a true ΔFPR of +0.03 passes the mean bound about 98% of the time when the F1 effect is
+  real.
+- So the bound is a **cost tolerance**: about 76 extra benign alarms per 152k, traded for roughly 2 pp of TPR in the
+  r20419 probe. That is a Pareto move along the curve, not dominance. The doc now says so. Whether +0.05 is the right
+  price is Luiz's policy call. The statistics support it as written.
+- **Mean or per seed:** both. The mean decides, and a per-seed ceiling of +0.10 pp (about 6 seed-SDs) blocks ADOPT.
+  Reason: a bimodal metric can hide a regression in a mean. One seed falling to A adds about +0.9 pp and is caught by
+  the mean. But a control seed falling to A (−0.9 for the arm) could mask a +0.10 regression on the other two. The
+  ceiling closes that hole at no power cost.
+
+### Q2: the θ selection seeds. A real dependency → test on r20421–23 instead
+
+- On data, there is no leak: θ was picked on VAL, and TEST was untouched by the rule.
+- On genomes, there is a measured dependency. **Grid connectivity is seed-determined:** 7501 (lattice, r20419) and
+  7503 (ms01, r20419) store a byte-identical 500n grid genome (connections md5 `018e5854bc`), and 7505 (r20420)
+  does not share it. So the arm's grid stage on r20419/20 would re-evaluate the exact connectivities θ was tuned on.
+  The GA starts from those grid elites.
+- Every IDS-56 seed sees the same `random_3way` partition. Changing seeds therefore removes the genome overlap but
+  does not change the data. That is the right fix, and the only one available.
+- **Change:** primary seeds are r20421–23, with controls 7509/7513/7517. All are already queued with ids below the
+  arm's, so under FIFO they finish first: **zero added queue time**.
+- The extension, if triggered, uses r20419/20 (controls 7501/7505 exist). It is disclosed as the tuning seeds, and the
+  clean subset is printed on its own. A paper claim may cite only the clean subset or a fresh-seed replication.
+
+### Q3: the stop condition. Sound as a futility gate; tightened
+
+- A gate that can only withdraw, never tune, is conservative: it can only lower the false-adoption rate. Keep it.
+- **"ΔF1 ≤ 0 on both" was too lax:** one bad genome out of two passed. The gate also ignored FPR.
+- **Changed to:** with the new seeds, probe the GA `best_f1` finals of 7509/7513/7517. Withdraw if, on ≥ 2/3,
+  VAL ΔF1 ≤ 0 OR VAL ΔFPR > +0.15 pp.
+- Read **VAL only**. The probe prints TEST, and reading it on the test seeds' control genomes before the readout
+  would be a peek.
+- The gate checks a necessary condition, not a sufficient one. It retrains lattice-evolved genomes, and the arm's GA
+  will pick its own (author's issue 2). The arm's flown result is the only evidence that counts.
+
+### Q4: other findings
+
+1. **The rule was internally inconsistent.** "Wins ≤ 1/3 → REJECT" and "any |ΔF1| < 0.05 → AMBIGUOUS" both fired on
+   1 win + 2 ties. The fix: wins and ties are now defined, and the rules are applied in order (REJECT, then ADOPT,
+   then AMBIGUOUS).
+2. **3/3 sign wins alone is a weak bar.** Under no true effect, P(3/3) = 1/8. Sequentially, through the n=5
+   extension, the original rule adopts about **21%** of the time on a null F1 effect. That figure is simulated from
+   the measured SDs; it is a model, not a measurement. Adding **mean ΔF1 ≥ +0.15 pp** (about one seed-SD) cuts this to
+   about **8.5%**. Power at the probe's effect size (+0.5 pp, ΔFPR +0.03) stays at about 98%. Power falls from 0.84
+   to 0.73 only if the true effect is as small as +0.25 pp, which the floor is meant to screen out.
+3. **Metric.** The decision stays on macro-F1 (the project convention). On a 96%-benign binary task, ΔmacroF1 ≈
+   ½·Δattack-F1, so attack-F1 and TPR are now reported beside it.
+4. **"7 threshold modes" was wrong for this pipeline.** It stores 10 binary-margin modes, and the reporting line now
+   lists them.
+5. **Pairing is real but partial.** Same seed means the same folds and the same grid connectivity (verified above),
+   but the GA diverges from generation 1. Treat the pairs as matched starting points. Do not read the paired SD as a
+   within-genome SD.
+6. **ABI drift.** The controls are ABI 28, and the arm runs 2–3 days later. `MIN_WORKER_ABI` is a floor (`<`), not an
+   equality. A readout guard (equal `worker_abi` per pair, else ask Luiz about re-flying controls) is now in §3.
+7. **Multiplicity.** Only one θ is flown, so there is no multiplicity at the test stage. The 5-candidate VAL search is
+   disclosed. A θ=0.02 rejection does not license flying θ=0.01/0.04 as a rescue; that would need a new
+   pre-registration (now stated).
+8. **Reporting.** n=3 is labelled provisional. Cells are `mean±std (N)`. Show the Pareto view (best F1 at FPR < 0.25,
+   etc.) beside the 5 tables. The weighted ms01 flows (7507/7511/7515) go in as the third point for
+   vote-vs-weighting attribution, with the θ mismatch (0.1 vs 0.02) stated.
+
+### Ready to queue?
+
+Yes, on Luiz's go: `scripts/queue_ids56_unweighted_vote.py` (no flags) queues r20421–23. The dry run was verified
+10/11 and prints exactly those three names, with params unchanged from §3 apart from the seed. One action remains
+before the arm's first flow starts: the futility-gate probe on 7509/7513/7517 as each lands.
