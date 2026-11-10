@@ -255,6 +255,467 @@ WHAT CHANGED
   inert on UNSW-random/CICIDS (thr 0.43-0.56, ≤0.3pp) = prior correction, not VAL overfit.
   Every CIC-IoT row in the next paper comes from the Kaggle/Neto copies; every table pairs modes.
 
+## IDS-56 READOUT (10/11/2026) — min-share vote (`ms01`, θ=0.1) vs `lattice` × encoding dedupe, UNSW temporal_3way (worker ABI 28)
+
+**Question.** Does the min-share cell commit (`ids_write_rule=vote`, `ids_vote_share=0.1`: TRUE only if the own class's
+class-weighted share of a cell's visits is > 0.1) beat BINARY TRUE-wins `lattice`? Does the answer depend on
+`ids_encoding_dedupe` (IDS-52: unswt 288 → 161 train-informative input bits)?
+
+20/20 unswt flows (7481–7500): {lattice, ms01} × {encoff, encon} × r20419–r20423, BINARY 2-cluster 2m max250,
+blend_neuron, 16b Wb, rate 0.25, rf off. All 20 ran 60 GA generations (budget-matched). unswr 7501–7520: running,
+no result yet. Full readout, mechanism probe and proposals: `docs/ids56_readout.md`.
+
+**Summary — GA best_f1, margin_val_cal (held-out TEST, VAL-calibrated), mean±SD n=5.**
+```
+arm             |  F1 GA       FPR GA      Acc GA  | neurons | cells k | ΔF1 vs lattice (same enc) | flow h
+----------------+------------------------------------+---------+---------+---------------------------+----------
+lattice-encoff  | 90.75±0.17   4.95±0.74   90.78  |   498.6 |   213.5 |  —                        | 0.43±0.03
+ms01-encoff     | 90.71±0.12   4.19±0.93   90.73  |   466.6 |   198.7 | −0.04±0.13 (3 up / 2 down) | 0.75±0.08
+lattice-encon   | 91.25±0.11   4.12±0.73   91.28  |   498.0 |   355.0 |  —                        | 0.51±0.05
+ms01-encon      | 91.83±0.07   3.86±0.63   91.85  |   479.4 |   333.2 | +0.58±0.15 (5/5)          | 0.72±0.02
+```
+Reading:
+- **encon:** ms01 wins F1 on 5/5 seeds (+0.38..+0.73), FPR −0.26 on the mean (3/5 lower), with ~6% fewer cells.
+- **encoff:** no F1 effect at θ=0.1.
+- Dedupe alone: +0.50 F1 / −0.83 FPR.
+- Mechanism (probe, same genomes retrained via the Rust API):
+  - The gain is the write rule, not GA co-adaptation.
+  - At θ=0.1 the vote clears only 2.3–3.1% of TRUE cells, ~¾ of them benign-cluster cells.
+  - It trades Fuzzers recall for Reconnaissance/Shellcode/Worms recall. Under encoff that trade cancels
+    (Fuzzers −12.8 / Recon +14.8); under encon it is net positive (Fuzzers −5.3 / Recon +19.5).
+  - A post-hoc θ sweep on TEST puts encoff's peak at θ≈0.05 (+0.54), so θ=0.1 is past encoff's narrow window.
+    Not a result until a pre-registered arm runs.
+- **Low-FPR caveat:** lattice-encon keeps a 90.23/2.09 seed-mean point (grid best_f1 argmax_classnorm). ms01-encon
+  has nothing below 2.9% FPR.
+
+### IDS-56 rule-7 tables (generated: `scripts/build_sp_5tables.py --prefix 'IDS56-unswt-%'`)
+# IDS-56 — min-share vote (ms01, theta=0.1) vs lattice x encoding dedupe off/on (unswt temporal_3way, 16bWb, rate 0.25)
+
+    Flows : 20/20 completed | running: 0 | queued: 0 | paused (not counted in target): 0
+    Total wall (completed) : 12.0h  |  Avg/run: 36m
+    Latest done : 10/11/2026 06:51 UTC (10/11/2026 02:51 ET)
+
+
+## IDS56-unswt-BINARY-2m-max250-xo_blend_neuron-16bWb-rate0.25-lattice-encoff  (5/5 completed)
+
+    dataset=unsw-nb15 split=temporal_3way bits=16 feats=top20 class=binary | mem=BINARY | caps 250n/34b | w(ce/acc/f1/fpr)=0.1/0.2/0.35/0.35 | kfold=5x5 gens=250
+
+### Best individual genomes (all phases x genome types x 7 modes)
+
+    Metric              |      F1 |     FPR |     Acc | Source (seed phase genome_type mode)
+    --------------------+---------+---------+---------+--------------------------------------
+    Best F1 (any FPR)   |  90.87% |   4.95% |  90.89% | r20420 GA best_acc     margin_val_f1
+    Best F1 (FPR<10%)   |  90.87% |   4.95% |  90.89% | r20420 GA best_acc     margin_val_f1
+    Best F1 (FPR<6%)    |  90.87% |   4.95% |  90.89% | r20420 GA best_acc     margin_val_f1
+    Best F1 (FPR<5%)    |  90.87% |   4.95% |  90.89% | r20420 GA best_acc     margin_val_f1
+    Best F1 (FPR<4%)    |  90.60% |   3.78% |  90.62% | r20420 GA best_acc     margin_classnorm
+    Best F1 (FPR<2%)    |  89.56% |   1.80% |  89.56% | r20422 GA best_acc     argmax_classnorm
+    Best FPR (any F1)   |  31.01% |   0.00% |  44.94% | r20420 GS best_acc     argmax_beta
+    Best FPR (F1>80%)   |  80.95% |   0.69% |  81.08% | r20420 GA best_fpr     argmax
+    Best FPR (F1>90%)   |  90.60% |   3.78% |  90.62% | r20420 GA best_acc     margin_classnorm
+    Best Acc (any FPR)  |  90.87% |   4.95% |  90.89% | r20420 GA best_acc     margin_val_f1
+
+### best_f1  (runs: GS 5 | GA 5)
+    Grid Search : — neurons | — bits
+    GA Neurons  : — neurons | — bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    argmax               |81.26±0.27 82.17±0.22 |37.30±0.69 34.98±0.53 |82.55±0.21 83.26±0.18
+    margin_fixed0        |81.26±0.27 82.17±0.22 |37.30±0.69 34.98±0.53 |82.55±0.21 83.26±0.18
+    margin_train_cal     |81.26±0.27 82.16±0.22 |37.30±0.69 34.98±0.53 |82.55±0.21 83.26±0.18
+    margin_train_f1      |81.26±0.27 82.16±0.22 |37.30±0.69 34.98±0.53 |82.55±0.21 83.26±0.18
+    argmax_platt         |90.02±0.17 90.21±0.17 | 8.03±0.48  7.48±0.40 |90.07±0.16 90.26±0.17
+    argmax_beta          |68.97±21.24 69.27±21.39 |34.47±19.34 33.92±18.97 |73.22±15.82 73.46±15.94
+    argmax_classnorm     |88.93±0.19 89.20±0.26 | 1.96±0.10  2.07±0.22 |88.93±0.19 89.20±0.26
+    margin_classnorm     |90.50±0.14 90.62±0.19 | 5.76±0.87  4.82±0.93 |90.54±0.14 90.64±0.20
+    margin_val_f1        |90.65±0.13 90.75±0.17 | 5.19±0.85  4.95±0.74 |90.67±0.13 90.78±0.18
+    margin_val_cal       |90.65±0.13 90.75±0.17 | 5.19±0.85  4.95±0.74 |90.67±0.13 90.78±0.18
+
+### best_fpr  (runs: GS 5 | GA 5)
+    Grid Search : — neurons | — bits
+    GA Neurons  : — neurons | — bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    argmax               |81.35±0.21 72.81±16.38 |37.12±0.52  0.78±0.22 |82.62±0.17 74.54±12.86
+    margin_fixed0        |81.35±0.21 72.81±16.38 |37.12±0.52  0.78±0.22 |82.62±0.17 74.54±12.86
+    margin_train_cal     |81.35±0.21 78.71±0.40 |37.12±0.52 42.06±0.33 |82.62±0.17 80.42±0.44
+    margin_train_f1      |81.35±0.21 78.71±0.40 |37.12±0.52 42.06±0.33 |82.62±0.17 80.42±0.44
+    argmax_platt         |90.03±0.16 78.77±0.24 | 7.98±0.48 41.53±0.78 |90.09±0.15 80.42±0.22
+    argmax_beta          |68.83±21.16 50.90±21.38 |34.79±19.51 68.52±45.52 |73.12±15.77 63.21±11.78
+    argmax_classnorm     |89.04±0.14 79.83±0.87 | 2.10±0.16  9.00±18.61 |89.04±0.14 80.31±0.52
+    margin_classnorm     |90.54±0.12 80.29±0.91 | 6.58±1.10 25.45±15.30 |90.58±0.12 81.01±0.66
+    margin_val_f1        |90.70±0.12 80.25±0.89 | 5.89±1.07 19.82±18.46 |90.73±0.11 80.87±0.70
+    margin_val_cal       |90.70±0.12 80.25±0.89 | 5.89±1.07 19.82±18.46 |90.73±0.11 80.87±0.70
+
+### best_acc  (runs: GS 5 | GA 5)
+    Grid Search : — neurons | — bits
+    GA Neurons  : — neurons | — bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    argmax               |81.19±0.16 82.16±0.23 |37.47±0.45 34.99±0.54 |82.49±0.12 83.26±0.19
+    margin_fixed0        |81.19±0.16 82.16±0.23 |37.47±0.45 34.99±0.54 |82.49±0.12 83.26±0.19
+    margin_train_cal     |81.19±0.16 82.16±0.22 |37.47±0.45 34.99±0.54 |82.49±0.12 83.26±0.19
+    margin_train_f1      |81.19±0.16 82.16±0.22 |37.47±0.45 34.99±0.54 |82.49±0.12 83.26±0.19
+    argmax_platt         |89.97±0.11 90.20±0.19 | 8.06±0.44  7.50±0.43 |90.02±0.11 90.25±0.19
+    argmax_beta          |69.37±21.45 69.27±21.39 |33.69±18.84 33.92±18.97 |73.54±15.99 73.46±15.94
+    argmax_classnorm     |88.93±0.19 89.18±0.27 | 2.01±0.13  2.06±0.21 |88.93±0.19 89.18±0.27
+    margin_classnorm     |90.47±0.11 90.62±0.20 | 5.64±0.88  5.05±0.89 |90.50±0.11 90.64±0.20
+    margin_val_f1        |90.61±0.12 90.75±0.17 | 5.11±0.87  4.97±0.73 |90.64±0.11 90.78±0.18
+    margin_val_cal       |90.61±0.12 90.75±0.17 | 5.11±0.87  4.97±0.73 |90.64±0.11 90.78±0.18
+
+### best_ce  (runs: GS 5 | GA 5)
+    Grid Search : — neurons | — bits
+    GA Neurons  : — neurons | — bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    argmax               |79.30±0.14 80.17±1.61 |41.43±0.35 38.21±5.44 |80.96±0.12 81.56±1.16
+    margin_fixed0        |79.30±0.14 80.17±1.61 |41.43±0.35 38.21±5.44 |80.96±0.12 81.56±1.16
+    margin_train_cal     |79.30±0.14 79.22±0.71 |41.43±0.35 41.34±1.74 |80.96±0.12 80.87±0.56
+    margin_train_f1      |79.30±0.14 79.22±0.71 |41.43±0.35 41.34±1.74 |80.96±0.12 80.87±0.56
+    argmax_platt         |82.20±4.20 85.52±3.80 |26.87±20.33 12.14±16.84 |83.21±3.28 85.88±3.07
+    argmax_beta          |78.60±4.68 71.28±20.19 |38.70±18.03 46.75±34.23 |80.42±3.54 76.30±12.04
+    argmax_classnorm     |84.49±2.08 86.20±1.00 | 3.14±0.61  3.20±0.53 |84.51±2.07 86.20±1.00
+    margin_classnorm     |84.60±2.12 86.78±1.45 | 3.43±0.92  3.55±0.41 |84.62±2.10 86.79±1.45
+    margin_val_f1        |84.50±2.07 86.81±1.49 | 3.07±0.74  3.55±0.42 |84.52±2.06 86.81±1.49
+    margin_val_cal       |84.50±2.07 86.81±1.49 | 3.07±0.74  3.55±0.42 |84.52±2.06 86.81±1.49
+
+### best_fitness  (runs: GS 5 | GA 5)
+    Grid Search : — neurons | — bits
+    GA Neurons  : — neurons | — bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    argmax               |81.33±0.21 81.65±1.23 |37.12±0.52 28.07±15.37 |82.60±0.17 82.56±1.63
+    margin_fixed0        |81.33±0.21 81.65±1.23 |37.12±0.52 28.07±15.37 |82.60±0.17 82.56±1.63
+    margin_train_cal     |81.33±0.21 81.49±1.58 |37.12±0.52 36.44±3.39 |82.60±0.17 82.72±1.28
+    margin_train_f1      |81.33±0.21 81.49±1.58 |37.12±0.52 36.44±3.39 |82.60±0.17 82.72±1.28
+    argmax_platt         |90.02±0.17 87.90±5.33 | 7.98±0.48 14.43±15.70 |90.07±0.16 88.29±4.57
+    argmax_beta          |68.82±21.16 60.66±25.07 |34.75±19.49 45.27±35.62 |73.11±15.76 68.40±17.17
+    argmax_classnorm     |88.96±0.18 87.26±4.35 | 2.01±0.15  1.71±0.63 |88.96±0.18 87.30±4.27
+    margin_classnorm     |90.52±0.14 88.70±4.48 | 6.36±1.26  9.40±9.95 |90.55±0.14 88.81±4.28
+    margin_val_f1        |90.68±0.14 88.80±4.54 | 5.72±1.20  9.45±9.89 |90.71±0.13 88.92±4.34
+    margin_val_cal       |90.68±0.14 88.80±4.54 | 5.72±1.20  9.45±9.89 |90.71±0.13 88.92±4.34
+
+
+## IDS56-unswt-BINARY-2m-max250-xo_blend_neuron-16bWb-rate0.25-lattice-encon  (5/5 completed)
+
+    dataset=unsw-nb15 split=temporal_3way bits=16 feats=top20 class=binary | mem=BINARY | caps 250n/34b | w(ce/acc/f1/fpr)=0.1/0.2/0.35/0.35 | kfold=5x5 gens=250
+
+### Best individual genomes (all phases x genome types x 7 modes)
+
+    Metric              |      F1 |     FPR |     Acc | Source (seed phase genome_type mode)
+    --------------------+---------+---------+---------+--------------------------------------
+    Best F1 (any FPR)   |  91.41% |   4.62% |  91.43% | r20423 GS best_acc     margin_val_f1
+    Best F1 (FPR<10%)   |  91.41% |   4.62% |  91.43% | r20423 GS best_acc     margin_val_f1
+    Best F1 (FPR<6%)    |  91.41% |   4.62% |  91.43% | r20423 GS best_acc     margin_val_f1
+    Best F1 (FPR<5%)    |  91.41% |   4.62% |  91.43% | r20423 GS best_acc     margin_val_f1
+    Best F1 (FPR<4%)    |  91.37% |   3.39% |  91.39% | r20420 GS best_fpr     margin_classnorm
+    Best F1 (FPR<2%)    |  90.65% |   1.89% |  90.66% | r20423 GS best_acc     argmax_classnorm
+    Best FPR (any F1)   |  31.01% |   0.00% |  44.94% | r20421 GS best_f1      argmax_beta
+    Best FPR (F1>80%)   |  83.81% |   1.04% |  83.85% | r20422 GA best_fpr     argmax_classnorm
+    Best FPR (F1>90%)   |  90.42% |   1.66% |  90.42% | r20423 GA best_f1      argmax_classnorm
+    Best Acc (any FPR)  |  91.41% |   4.62% |  91.43% | r20423 GS best_acc     margin_val_f1
+
+### best_f1  (runs: GS 5 | GA 5)
+    Grid Search : — neurons | — bits
+    GA Neurons  : — neurons | — bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    argmax               |82.12±0.21 86.57±2.00 |35.37±0.62 24.04±5.06 |83.26±0.16 87.07±1.75
+    margin_fixed0        |82.12±0.21 86.57±2.00 |35.37±0.62 24.04±5.06 |83.26±0.16 87.07±1.75
+    margin_train_cal     |85.14±2.59 87.68±0.45 |27.66±6.53 21.14±1.24 |85.83±2.23 88.04±0.41
+    margin_train_f1      |85.14±2.59 87.68±0.45 |27.66±6.53 21.14±1.24 |85.83±2.23 88.04±0.41
+    argmax_platt         |90.67±0.09 90.68±0.25 | 6.28±0.31  6.20±0.27 |90.70±0.09 90.72±0.25
+    argmax_beta          |69.44±21.49 68.81±21.16 |33.63±18.80 33.29±18.62 |73.61±16.02 72.90±15.67
+    argmax_classnorm     |90.23±0.29 90.20±0.21 | 2.09±0.19  1.92±0.19 |90.24±0.30 90.21±0.21
+    margin_classnorm     |91.18±0.06 91.22±0.11 | 4.32±1.03  3.81±0.60 |91.20±0.06 91.24±0.10
+    margin_val_f1        |91.19±0.13 91.25±0.11 | 4.49±0.31  4.12±0.73 |91.22±0.13 91.28±0.11
+    margin_val_cal       |91.19±0.13 91.25±0.11 | 4.49±0.31  4.12±0.73 |91.22±0.13 91.28±0.11
+
+### best_fpr  (runs: GS 5 | GA 5)
+    Grid Search : — neurons | — bits
+    GA Neurons  : — neurons | — bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    argmax               |82.10±0.15 87.42±2.85 |35.32±0.53  5.27±4.10 |83.23±0.11 87.46±2.88
+    margin_fixed0        |82.10±0.15 87.42±2.85 |35.32±0.53  5.27±4.10 |83.23±0.11 87.46±2.88
+    margin_train_cal     |84.12±2.67 80.78±2.06 |30.14±6.68 36.78±5.01 |84.95±2.29 82.04±1.68
+    margin_train_f1      |84.12±2.67 80.78±2.06 |30.14±6.68 36.78±5.01 |84.95±2.29 82.04±1.68
+    argmax_platt         |90.76±0.20 85.68±5.38 | 5.93±0.53 17.25±17.20 |90.79±0.19 86.14±4.80
+    argmax_beta          |59.70±26.20 78.21±1.46 |25.44±23.23 22.32±20.10 |66.33±19.53 79.01±2.01
+    argmax_classnorm     |90.18±0.21 86.64±2.25 | 1.99±0.28  1.29±0.14 |90.18±0.21 86.65±2.24
+    margin_classnorm     |91.22±0.11 87.64±3.06 | 4.22±0.79  3.13±1.93 |91.24±0.11 87.66±3.06
+    margin_val_f1        |91.20±0.11 87.63±3.07 | 3.93±0.69  3.11±1.71 |91.22±0.10 87.64±3.07
+    margin_val_cal       |91.20±0.11 87.63±3.07 | 3.93±0.69  3.11±1.71 |91.22±0.10 87.64±3.07
+
+### best_acc  (runs: GS 5 | GA 5)
+    Grid Search : — neurons | — bits
+    GA Neurons  : — neurons | — bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    argmax               |81.94±0.40 84.70±2.31 |35.81±0.96 28.77±5.77 |83.11±0.33 85.44±2.01
+    margin_fixed0        |81.94±0.40 84.70±2.31 |35.81±0.96 28.77±5.77 |83.11±0.33 85.44±2.01
+    margin_train_cal     |85.97±2.03 87.61±0.39 |25.58±5.10 21.35±1.14 |86.54±1.74 87.98±0.35
+    margin_train_f1      |85.97±2.03 87.61±0.39 |25.58±5.10 21.35±1.14 |86.54±1.74 87.98±0.35
+    argmax_platt         |90.63±0.14 90.65±0.24 | 6.44±0.46  6.22±0.26 |90.67±0.13 90.69±0.24
+    argmax_beta          |77.24±4.05 69.30±21.41 |37.95±9.15 33.55±18.76 |78.62±4.82 73.45±15.94
+    argmax_classnorm     |90.18±0.30 90.12±0.18 | 2.20±0.23  1.93±0.13 |90.19±0.30 90.12±0.18
+    margin_classnorm     |91.12±0.14 91.19±0.11 | 4.09±0.83  4.18±0.65 |91.15±0.14 91.21±0.11
+    margin_val_f1        |91.13±0.19 91.24±0.11 | 4.10±0.72  4.37±0.64 |91.15±0.19 91.27±0.11
+    margin_val_cal       |91.13±0.19 91.24±0.11 | 4.10±0.72  4.37±0.64 |91.15±0.19 91.27±0.11
+
+### best_ce  (runs: GS 5 | GA 5)
+    Grid Search : — neurons | — bits
+    GA Neurons  : — neurons | — bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    argmax               |80.54±1.25 81.94±1.50 |38.69±2.79 34.35±4.47 |81.95±1.00 83.01±1.18
+    margin_fixed0        |80.54±1.25 81.94±1.50 |38.69±2.79 34.35±4.47 |81.95±1.00 83.01±1.18
+    margin_train_cal     |80.54±1.25 80.97±1.84 |38.69±2.79 37.18±3.70 |81.95±1.00 82.26±1.55
+    margin_train_f1      |80.54±1.25 80.97±1.84 |38.69±2.79 37.18±3.70 |81.95±1.00 82.26±1.55
+    argmax_platt         |89.41±1.69 89.40±1.03 | 6.22±1.07  6.26±1.12 |89.44±1.71 89.43±1.04
+    argmax_beta          |67.33±20.78 77.74±1.79 |37.44±22.27 44.49±3.47 |72.03±15.51 79.75±1.39
+    argmax_classnorm     |88.94±1.48 89.19±0.84 | 3.29±1.49  3.70±1.60 |88.95±1.48 89.19±0.83
+    margin_classnorm     |89.62±1.92 89.75±1.30 | 5.34±1.07  4.74±0.45 |89.64±1.93 89.76±1.31
+    margin_val_f1        |89.57±1.94 89.76±1.29 | 4.98±1.32  4.71±0.37 |89.59±1.96 89.77±1.30
+    margin_val_cal       |89.57±1.94 89.76±1.29 | 4.98±1.32  4.71±0.37 |89.59±1.96 89.77±1.30
+
+### best_fitness  (runs: GS 5 | GA 5)
+    Grid Search : — neurons | — bits
+    GA Neurons  : — neurons | — bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    argmax               |82.12±0.21 86.57±2.00 |35.37±0.62 24.04±5.06 |83.26±0.16 87.07±1.75
+    margin_fixed0        |82.12±0.21 86.57±2.00 |35.37±0.62 24.04±5.06 |83.26±0.16 87.07±1.75
+    margin_train_cal     |85.14±2.59 87.68±0.45 |27.66±6.53 21.14±1.24 |85.83±2.23 88.04±0.41
+    margin_train_f1      |85.14±2.59 87.68±0.45 |27.66±6.53 21.14±1.24 |85.83±2.23 88.04±0.41
+    argmax_platt         |90.67±0.09 90.68±0.25 | 6.28±0.31  6.20±0.27 |90.70±0.09 90.72±0.25
+    argmax_beta          |69.44±21.49 68.81±21.16 |33.63±18.80 33.29±18.62 |73.61±16.02 72.90±15.67
+    argmax_classnorm     |90.23±0.29 90.20±0.21 | 2.09±0.19  1.92±0.19 |90.24±0.30 90.21±0.21
+    margin_classnorm     |91.18±0.06 91.22±0.11 | 4.32±1.03  3.81±0.60 |91.20±0.06 91.24±0.10
+    margin_val_f1        |91.19±0.13 91.25±0.11 | 4.49±0.31  4.12±0.73 |91.22±0.13 91.28±0.11
+    margin_val_cal       |91.19±0.13 91.25±0.11 | 4.49±0.31  4.12±0.73 |91.22±0.13 91.28±0.11
+
+
+## IDS56-unswt-BINARY-2m-max250-xo_blend_neuron-16bWb-rate0.25-ms01-encoff  (5/5 completed)
+
+    dataset=unsw-nb15 split=temporal_3way bits=16 feats=top20 class=binary | mem=BINARY | caps 250n/34b | w(ce/acc/f1/fpr)=0.1/0.2/0.35/0.35 | kfold=5x5 gens=250
+
+### Best individual genomes (all phases x genome types x 7 modes)
+
+    Metric              |      F1 |     FPR |     Acc | Source (seed phase genome_type mode)
+    --------------------+---------+---------+---------+--------------------------------------
+    Best F1 (any FPR)   |  91.14% |   3.85% |  91.16% | r20423 GS best_f1      margin_val_f1
+    Best F1 (FPR<10%)   |  91.14% |   3.85% |  91.16% | r20423 GS best_f1      margin_val_f1
+    Best F1 (FPR<6%)    |  91.14% |   3.85% |  91.16% | r20423 GS best_f1      margin_val_f1
+    Best F1 (FPR<5%)    |  91.14% |   3.85% |  91.16% | r20423 GS best_f1      margin_val_f1
+    Best F1 (FPR<4%)    |  91.14% |   3.85% |  91.16% | r20423 GS best_f1      margin_val_f1
+    Best F1 (FPR<2%)    |  83.01% |   1.77% |  83.06% | r20420 GA best_fpr     margin_classnorm
+    Best FPR (any F1)   |  31.01% |   0.00% |  44.94% | r20419 GS best_acc     argmax_beta
+    Best FPR (F1>80%)   |  82.87% |   1.64% |  82.93% | r20420 GA best_fpr     argmax_classnorm
+    Best FPR (F1>90%)   |  90.96% |   2.72% |  90.97% | r20423 GS best_f1      margin_classnorm
+    Best Acc (any FPR)  |  91.14% |   3.85% |  91.16% | r20423 GS best_f1      margin_val_f1
+
+### best_f1  (runs: GS 5 | GA 5)
+    Grid Search : — neurons | — bits
+    GA Neurons  : — neurons | — bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    argmax               |82.25±0.35 85.52±0.22 |34.88±0.83 26.59±0.59 |83.34±0.29 86.11±0.19
+    margin_fixed0        |82.25±0.35 85.52±0.22 |34.88±0.83 26.59±0.59 |83.34±0.29 86.11±0.19
+    margin_train_cal     |85.31±0.78 85.70±0.29 |27.04±1.99 26.09±0.78 |85.93±0.68 86.26±0.25
+    margin_train_f1      |85.31±0.78 85.70±0.29 |27.04±1.99 26.09±0.78 |85.93±0.68 86.26±0.25
+    argmax_platt         |90.59±0.13 90.58±0.04 | 8.27±0.20  8.02±0.41 |90.65±0.13 90.64±0.04
+    argmax_beta          |59.24±25.79 77.62±1.69 |24.96±22.79 33.81±11.16 |65.78±19.06 78.67±2.57
+    argmax_classnorm     |90.66±0.23 90.69±0.10 | 5.19±0.44  5.03±0.19 |90.69±0.23 90.72±0.10
+    margin_classnorm     |90.71±0.16 90.70±0.13 | 3.95±1.28  4.40±0.67 |90.73±0.16 90.72±0.13
+    margin_val_f1        |90.78±0.22 90.71±0.12 | 4.28±1.11  4.19±0.93 |90.80±0.22 90.73±0.11
+    margin_val_cal       |90.78±0.22 90.71±0.12 | 4.28±1.11  4.19±0.93 |90.80±0.22 90.73±0.11
+
+### best_fpr  (runs: GS 5 | GA 5)
+    Grid Search : — neurons | — bits
+    GA Neurons  : — neurons | — bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    argmax               |85.03±0.60 83.30±3.83 |21.02±1.90  5.47±4.64 |85.34±0.58 83.36±3.77
+    margin_fixed0        |85.03±0.60 83.30±3.83 |21.02±1.90  5.47±4.64 |85.34±0.58 83.36±3.77
+    margin_train_cal     |79.24±0.46 79.32±0.46 |41.69±1.93 40.70±1.58 |80.94±0.26 80.90±0.32
+    margin_train_f1      |79.24±0.46 79.32±0.46 |41.69±1.93 40.70±1.58 |80.94±0.26 80.90±0.32
+    argmax_platt         |83.73±1.98 81.60±4.51 |22.98±5.09 27.45±14.74 |84.12±1.84 82.36±3.96
+    argmax_beta          |73.64±7.25 78.23±1.36 |51.41±11.93 25.87±22.75 |76.82±5.29 79.42±1.96
+    argmax_classnorm     |79.66±3.43 81.31±4.50 | 9.69±0.34  4.90±4.33 |79.68±3.44 81.38±4.47
+    margin_classnorm     |86.40±0.87 83.59±3.56 |14.68±0.39 16.67±16.99 |86.53±0.89 84.04±3.02
+    margin_val_f1        |86.81±0.74 83.63±3.71 |14.59±0.31  8.42±10.16 |86.95±0.76 83.78±3.62
+    margin_val_cal       |86.81±0.74 83.63±3.71 |14.59±0.31  8.42±10.16 |86.95±0.76 83.78±3.62
+
+### best_acc  (runs: GS 5 | GA 5)
+    Grid Search : — neurons | — bits
+    GA Neurons  : — neurons | — bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    argmax               |81.97±0.21 85.39±0.31 |35.51±0.44 26.98±0.89 |83.11±0.18 86.00±0.27
+    margin_fixed0        |81.97±0.21 85.39±0.31 |35.51±0.44 26.98±0.89 |83.11±0.18 86.00±0.27
+    margin_train_cal     |85.65±0.98 85.59±0.33 |26.18±2.52 26.41±0.97 |86.22±0.86 86.17±0.29
+    margin_train_f1      |85.65±0.98 85.59±0.33 |26.18±2.52 26.41±0.97 |86.22±0.86 86.17±0.29
+    argmax_platt         |90.57±0.06 90.59±0.04 | 8.17±0.27  8.06±0.40 |90.63±0.06 90.65±0.03
+    argmax_beta          |59.74±26.23 77.64±1.71 |25.14±22.95 33.82±11.17 |66.33±19.53 78.70±2.60
+    argmax_classnorm     |90.70±0.08 90.70±0.09 | 5.03±0.17  5.08±0.26 |90.72±0.07 90.72±0.09
+    margin_classnorm     |90.75±0.15 90.72±0.10 | 4.30±1.33  4.65±1.00 |90.77±0.15 90.74±0.10
+    margin_val_f1        |90.80±0.13 90.73±0.09 | 4.37±1.30  4.32±1.05 |90.82±0.12 90.75±0.09
+    margin_val_cal       |90.80±0.13 90.73±0.09 | 4.37±1.30  4.32±1.05 |90.82±0.12 90.75±0.09
+
+### best_ce  (runs: GS 5 | GA 5)
+    Grid Search : — neurons | — bits
+    GA Neurons  : — neurons | — bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    argmax               |80.60±1.17 83.73±1.47 |38.74±2.66 30.07±3.16 |82.02±0.93 84.50±1.32
+    margin_fixed0        |80.60±1.17 83.73±1.47 |38.74±2.66 30.07±3.16 |82.02±0.93 84.50±1.32
+    margin_train_cal     |83.55±3.80 83.31±1.93 |31.00±9.70 31.42±4.29 |84.50±3.14 84.17±1.69
+    margin_train_f1      |83.55±3.80 83.31±1.93 |31.00±9.70 31.42±4.29 |84.50±3.14 84.17±1.69
+    argmax_platt         |90.07±0.74 90.03±0.52 | 8.92±1.06  8.26±0.71 |90.14±0.73 90.09±0.52
+    argmax_beta          |80.62±4.27 69.30±21.41 |34.59±17.84 34.09±19.07 |82.04±3.48 73.52±15.98
+    argmax_classnorm     |90.06±0.81 89.83±0.66 | 7.29±2.27  6.52±1.57 |90.11±0.79 89.86±0.65
+    margin_classnorm     |90.18±0.73 89.99±0.52 | 3.40±0.37  7.41±2.18 |90.19±0.73 90.04±0.51
+    margin_val_f1        |90.26±0.67 90.04±0.52 | 3.69±0.83  7.87±1.82 |90.28±0.67 90.10±0.51
+    margin_val_cal       |90.26±0.67 90.04±0.52 | 3.69±0.83  7.87±1.82 |90.28±0.67 90.10±0.51
+
+### best_fitness  (runs: GS 5 | GA 5)
+    Grid Search : — neurons | — bits
+    GA Neurons  : — neurons | — bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    argmax               |82.25±0.35 85.52±0.22 |34.88±0.83 26.61±0.59 |83.34±0.29 86.10±0.19
+    margin_fixed0        |82.25±0.35 85.52±0.22 |34.88±0.83 26.61±0.59 |83.34±0.29 86.10±0.19
+    margin_train_cal     |85.31±0.78 85.69±0.29 |27.04±1.99 26.11±0.80 |85.93±0.68 86.25±0.25
+    margin_train_f1      |85.31±0.78 85.69±0.29 |27.04±1.99 26.11±0.80 |85.93±0.68 86.25±0.25
+    argmax_platt         |90.59±0.13 90.58±0.04 | 8.27±0.20  8.02±0.41 |90.65±0.13 90.64±0.04
+    argmax_beta          |59.24±25.79 77.59±1.66 |24.96±22.79 33.80±11.15 |65.78±19.06 78.64±2.55
+    argmax_classnorm     |90.66±0.23 90.69±0.10 | 5.19±0.44  5.03±0.19 |90.69±0.23 90.72±0.10
+    margin_classnorm     |90.71±0.16 90.70±0.13 | 3.95±1.28  4.40±0.67 |90.73±0.16 90.72±0.13
+    margin_val_f1        |90.78±0.22 90.71±0.12 | 4.28±1.11  4.22±0.94 |90.80±0.22 90.73±0.11
+    margin_val_cal       |90.78±0.22 90.71±0.12 | 4.28±1.11  4.22±0.94 |90.80±0.22 90.73±0.11
+
+
+## IDS56-unswt-BINARY-2m-max250-xo_blend_neuron-16bWb-rate0.25-ms01-encon  (5/5 completed)
+
+    dataset=unsw-nb15 split=temporal_3way bits=16 feats=top20 class=binary | mem=BINARY | caps 250n/34b | w(ce/acc/f1/fpr)=0.1/0.2/0.35/0.35 | kfold=5x5 gens=250
+
+### Best individual genomes (all phases x genome types x 7 modes)
+
+    Metric              |      F1 |     FPR |     Acc | Source (seed phase genome_type mode)
+    --------------------+---------+---------+---------+--------------------------------------
+    Best F1 (any FPR)   |  91.94% |   4.09% |  91.97% | r20422 GA best_acc     margin_val_f1
+    Best F1 (FPR<10%)   |  91.94% |   4.09% |  91.97% | r20422 GA best_acc     margin_val_f1
+    Best F1 (FPR<6%)    |  91.94% |   4.09% |  91.97% | r20422 GA best_acc     margin_val_f1
+    Best F1 (FPR<5%)    |  91.94% |   4.09% |  91.97% | r20422 GA best_acc     margin_val_f1
+    Best F1 (FPR<4%)    |  91.93% |   3.71% |  91.95% | r20419 GS best_acc     margin_classnorm
+    Best F1 (FPR<2%)    |  85.03% |   1.86% |  85.05% | r20421 GA best_fpr     margin_val_f1
+    Best FPR (any F1)   |  31.01% |   0.00% |  44.94% | r20420 GA best_ce      argmax_beta
+    Best FPR (F1>80%)   |  83.28% |   1.16% |  83.33% | r20419 GA best_fpr     argmax_classnorm
+    Best FPR (F1>90%)   |  91.59% |   2.70% |  91.60% | r20422 GA best_ce      margin_classnorm
+    Best Acc (any FPR)  |  91.94% |   5.09% |  91.98% | r20421 GS best_acc     argmax_platt
+
+### best_f1  (runs: GS 5 | GA 5)
+    Grid Search : — neurons | — bits
+    GA Neurons  : — neurons | — bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    argmax               |82.63±0.11 85.41±0.35 |34.10±0.17 27.13±0.78 |83.67±0.10 86.02±0.31
+    margin_fixed0        |82.63±0.11 85.41±0.35 |34.10±0.17 27.13±0.78 |83.67±0.10 86.02±0.31
+    margin_train_cal     |85.17±0.67 85.74±0.38 |27.82±1.78 26.23±0.97 |85.82±0.58 86.31±0.34
+    margin_train_f1      |85.17±0.67 85.74±0.38 |27.82±1.78 26.23±0.97 |85.82±0.58 86.31±0.34
+    argmax_platt         |91.88±0.05 91.83±0.09 | 5.40±0.20  5.70±0.23 |91.92±0.05 91.88±0.09
+    argmax_beta          |58.26±25.04 78.48±0.53 |19.72±21.11 41.83±0.10 |64.52±18.21 80.15±0.56
+    argmax_classnorm     |91.73±0.08 91.74±0.07 | 3.04±0.13  3.21±0.20 |91.75±0.08 91.76±0.07
+    margin_classnorm     |91.86±0.05 91.80±0.07 | 3.89±0.22  3.72±0.64 |91.89±0.05 91.82±0.07
+    margin_val_f1        |91.87±0.03 91.83±0.07 | 3.85±0.32  3.86±0.63 |91.90±0.03 91.85±0.07
+    margin_val_cal       |91.87±0.03 91.83±0.07 | 3.85±0.32  3.86±0.63 |91.90±0.03 91.85±0.07
+
+### best_fpr  (runs: GS 5 | GA 5)
+    Grid Search : — neurons | — bits
+    GA Neurons  : — neurons | — bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    argmax               |80.72±3.67 81.05±3.52 |27.23±3.95  5.28±3.61 |81.20±3.64 81.12±3.45
+    margin_fixed0        |80.72±3.67 81.05±3.52 |27.23±3.95  5.28±3.61 |81.20±3.64 81.12±3.45
+    margin_train_cal     |78.44±1.37 77.74±1.21 |42.00±3.63 43.94±2.81 |80.16±0.99 79.66±0.91
+    margin_train_f1      |78.44±1.37 77.74±1.21 |42.00±3.63 43.94±2.81 |80.16±0.99 79.66±0.91
+    argmax_platt         |80.71±3.98 79.85±0.78 |28.88±8.11 32.34±1.45 |81.36±3.64 80.64±0.76
+    argmax_beta          |65.81±15.89 73.88±6.55 |58.96±26.13 34.44±28.16 |71.78±9.22 76.08±4.42
+    argmax_classnorm     |78.25±1.95 80.70±3.08 | 9.75±0.64  9.93±11.82 |78.27±1.93 80.84±3.01
+    margin_classnorm     |82.83±3.82 82.61±1.74 |14.02±1.41 14.04±13.59 |82.90±3.89 82.85±1.48
+    margin_val_f1        |82.83±4.09 82.64±1.75 |14.37±1.62 13.73±13.24 |82.89±4.13 82.86±1.50
+    margin_val_cal       |82.83±4.09 82.64±1.75 |14.37±1.62 13.73±13.24 |82.89±4.13 82.86±1.50
+
+### best_acc  (runs: GS 5 | GA 5)
+    Grid Search : — neurons | — bits
+    GA Neurons  : — neurons | — bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    argmax               |82.63±0.11 85.39±0.33 |34.10±0.17 27.17±0.72 |83.67±0.10 86.01±0.30
+    margin_fixed0        |82.63±0.11 85.39±0.33 |34.10±0.17 27.17±0.72 |83.67±0.10 86.01±0.30
+    margin_train_cal     |85.17±0.67 85.72±0.37 |27.82±1.78 26.28±0.96 |85.82±0.58 86.29±0.33
+    margin_train_f1      |85.17±0.67 85.72±0.37 |27.82±1.78 26.28±0.96 |85.82±0.58 86.29±0.33
+    argmax_platt         |91.88±0.05 91.84±0.09 | 5.40±0.20  5.70±0.23 |91.92±0.05 91.88±0.09
+    argmax_beta          |58.26±25.04 78.48±0.53 |19.72±21.11 41.83±0.10 |64.52±18.21 80.15±0.56
+    argmax_classnorm     |91.73±0.08 91.74±0.07 | 3.04±0.13  3.22±0.22 |91.75±0.08 91.76±0.07
+    margin_classnorm     |91.86±0.05 91.80±0.07 | 3.89±0.22  3.71±0.64 |91.89±0.05 91.82±0.07
+    margin_val_f1        |91.87±0.03 91.83±0.07 | 3.85±0.32  3.89±0.60 |91.90±0.03 91.85±0.07
+    margin_val_cal       |91.87±0.03 91.83±0.07 | 3.85±0.32  3.89±0.60 |91.90±0.03 91.85±0.07
+
+### best_ce  (runs: GS 5 | GA 5)
+    Grid Search : — neurons | — bits
+    GA Neurons  : — neurons | — bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    argmax               |80.93±1.33 83.42±1.44 |38.06±3.03 31.15±4.75 |82.30±1.06 84.28±1.15
+    margin_fixed0        |80.93±1.33 83.42±1.44 |38.06±3.03 31.15±4.75 |82.30±1.06 84.28±1.15
+    margin_train_cal     |83.04±3.20 84.53±1.85 |32.79±7.73 28.74±3.87 |84.07±2.64 85.24±1.63
+    margin_train_f1      |83.04±3.20 84.53±1.85 |32.79±7.73 28.74±3.87 |84.07±2.64 85.24±1.63
+    argmax_platt         |90.96±1.25 91.20±0.59 | 8.38±3.82  7.22±1.54 |91.04±1.21 91.25±0.58
+    argmax_beta          |82.09±4.34 59.15±23.87 |32.91±12.49 40.94±37.43 |83.23±3.58 66.54±15.94
+    argmax_classnorm     |90.86±1.24 91.25±0.56 | 6.90±4.91  5.55±1.57 |90.92±1.18 91.29±0.54
+    margin_classnorm     |91.04±1.07 91.28±0.55 | 3.74±0.49  4.38±1.86 |91.06±1.07 91.31±0.54
+    margin_val_f1        |91.19±0.90 91.33±0.52 | 3.61±0.68  4.40±1.89 |91.21±0.91 91.35±0.51
+    margin_val_cal       |91.19±0.90 91.33±0.52 | 3.61±0.68  4.40±1.89 |91.21±0.91 91.35±0.51
+
+### best_fitness  (runs: GS 5 | GA 5)
+    Grid Search : — neurons | — bits
+    GA Neurons  : — neurons | — bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    argmax               |82.63±0.11 85.38±0.38 |34.10±0.17 22.00±11.16 |83.67±0.10 85.87±0.56
+    margin_fixed0        |82.63±0.11 85.38±0.38 |34.10±0.17 22.00±11.16 |83.67±0.10 85.87±0.56
+    margin_train_cal     |85.17±0.67 84.29±3.40 |27.82±1.78 29.23±7.11 |85.82±0.58 85.07±2.91
+    margin_train_f1      |85.17±0.67 84.29±3.40 |27.82±1.78 29.23±7.11 |85.82±0.58 85.07±2.91
+    argmax_platt         |91.88±0.05 89.66±4.89 | 5.40±0.20 10.62±11.05 |91.92±0.05 89.83±4.60
+    argmax_beta          |58.26±25.04 77.84±1.21 |19.72±21.11 42.94±2.54 |64.52±18.21 79.63±0.96
+    argmax_classnorm     |91.73±0.08 90.35±3.14 | 3.04±0.13  2.92±0.76 |91.75±0.08 90.37±3.14
+    margin_classnorm     |91.86±0.05 90.46±3.06 | 3.89±0.22  3.45±1.08 |91.89±0.05 90.48±3.06
+    margin_val_f1        |91.87±0.03 90.49±3.05 | 3.85±0.32  3.60±1.09 |91.90±0.03 90.51±3.05
+    margin_val_cal       |91.87±0.03 90.49±3.05 | 3.85±0.32  3.60±1.09 |91.90±0.03 90.51±3.05
+
+
 ## IDS-45 FINAL n=10 (25/10/2026, rule applied automatically; written up 26/10) — neuron budget: per-cluster vs total cap
 
 Question (Luiz 24/10): BINARY 2m max250 allows 250 neurons PER cluster (up to 500 total), while QUAD 1m
