@@ -233,8 +233,11 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	# 09/11/2026 (docs/ctrl_dres_failures.md #3/#4): phased_ga --select-tail/--select-tail-deg
 	# and --train-xy-offset/--train-init-vxy (ABI 48). Not built by the flow adapter:
 	# REFUSED by _refuse_unbuilt_keys like the other phased_ga-only keys.
-	"controller_select_tail",         # off | near_fail — stage-select tail term
+	"controller_select_tail",         # off | near_fail | p99 — stage-select tail term
 	"controller_select_tail_deg",     # near_fail bound (deg, in (0, 5); default 4)
+	# 10/11/2026 (docs/ctrl_select_tail_prereg.md): phased_ga --val-units. Phased_ga-only,
+	# REFUSED by _refuse_unbuilt_keys like the select_tail keys.
+	"controller_val_units",           # stage-select val units per candidate (default 5)
 	"controller_train_xy_offset",     # DAgger trainer xy start bound (m; None = xy_offset)
 	"controller_train_init_vxy",      # DAgger trainer initial v_xy bound (m/s; default 0)
 })

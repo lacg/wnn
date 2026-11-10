@@ -26,13 +26,33 @@ HOW IT COMBINES: an added rank term (Borda), NOT lexicographic.
   * Invariant: when every candidate has the same tail count (the common case — most
     have 0), rank(tail) is a constant and the winner is EXACTLY today's winner.
 
+p99 (10/11/2026, pre-registered in docs/ctrl_select_tail_prereg.md) replaces the
+count with a PERCENTILE: per candidate, the 99th percentile of its per-episode mean
+attitude error (the same row field near_fail and the 5 deg stable bound read) over
+ALL its val episodes POOLED (val units x episodes), a diverged episode counting as
++inf. It is combined exactly like near_fail (the rank sum above).
+  * Method: numpy.percentile(errs, 99, method="inverted_cdf") on the pooled array —
+    Hyndman & Fan type 1, the empirical quantile: the smallest observed error e with
+    F(e) >= 0.99, i.e. sorted[ceil(0.99 n) - 1]. On 2000 episodes (20 units x 100)
+    that is the 21st-largest error, on 500 the 6th-largest.
+  * Why not numpy's default "linear": it interpolates b - (b - a) * t, and with a
+    diverged (+inf) neighbour that is inf - inf = NaN, so a candidate with diverged
+    episodes would rank by NaN. An order statistic is inf-safe and always an episode
+    that was actually flown.
+  * A NON-finite error on a non-diverged row also counts as +inf (near_fail counts it
+    as a near-miss too): an unmeasurable episode must not read as a clean one.
+
 Selection only: the tail never enters the GA fitness, and is never measured on the
 report seeds (the val draws are the only ones the sink is armed for).
 """
 
 import math
 
-SELECT_TAIL_MODES = ("off", "near_fail")
+import numpy as np
+
+SELECT_TAIL_MODES = ("off", "near_fail", "p99")
+# The pre-registered percentile (docs/ctrl_select_tail_prereg.md) and its numpy method.
+P99_Q, P99_METHOD = 99.0, "inverted_cdf"
 # The scorer's stable bound (metal_controller.rs / cpu_score.rs stable_thresh): an
 # episode is a FAIL above it. A tail bound at or above it would count fails only,
 # which stable% already ranks.
@@ -58,9 +78,12 @@ def validate_select_tail(args) -> None:
 
 
 def select_tail_token(args) -> str:
-	"""Provenance select= value: 'off' or 'near_fail:<deg>'."""
+	"""Provenance select= value: 'off', 'near_fail:<deg>' or 'p99', plus ',val_units=N'
+	when --val-units is not the default 5 (so a default run's line is unchanged)."""
+	from wnn.control.val_units import val_units_suffix
 	mode = select_tail_mode(args)
-	return "off" if mode == "off" else f"{mode}:{float(getattr(args, 'select_tail_deg', 4.0)):g}"
+	tok = mode if mode in ("off", "p99") else f"{mode}:{float(getattr(args, 'select_tail_deg', 4.0)):g}"
+	return tok + val_units_suffix(args)
 
 
 def new_episode_sink(args):
@@ -69,18 +92,70 @@ def new_episode_sink(args):
 	return [] if select_tail_mode(args) != "off" else None
 
 
-def tail_count(sink: list, deg: float, label: str) -> int:
-	"""Episodes of genome 0 that diverged or whose mean error exceeds `deg`. Refuses an
-	empty sink: the per-episode rows exist only on the GPU scorer, and a silent 0 would
-	read as a perfectly clean candidate."""
+def genome0_rows(sink: list, label: str) -> list:
+	"""The per-episode rows of genome 0 in one val call's sink. Refuses an empty sink:
+	the rows exist only on the GPU scorer, and a silent nothing would read as a
+	perfectly clean candidate."""
 	rows = [r for entry in sink for r in entry["episodes"] if int(r[_ROW_GENOME]) == 0]
 	if not rows:
 		raise RuntimeError(
 			f"--select-tail: no per-episode rows for {label} — the per-episode export is "
 			"GPU-scorer only (score_controllers_metal); unset WNN_CONTROLLER_GPU_EVAL=0 or "
 			"run with --select-tail off.")
+	return rows
+
+
+def near_fail_count(rows: list, deg: float) -> int:
+	"""Episodes that diverged or whose mean error exceeds `deg` (non-finite counts)."""
 	bound = math.radians(deg)
 	return sum(1 for r in rows if r[_ROW_DIVERGED] != 0.0 or not (r[_ROW_ERR] <= bound))
+
+
+def tail_count(sink: list, deg: float, label: str) -> int:
+	"""near_fail over one val call's sink (genome 0; an empty sink is refused)."""
+	return near_fail_count(genome0_rows(sink, label), deg)
+
+
+def episode_errors_deg(rows: list) -> np.ndarray:
+	"""Per-episode mean attitude error (deg); diverged or non-finite -> +inf."""
+	errs = np.array([float(r[_ROW_ERR]) for r in rows], dtype=np.float64)
+	dead = np.array([float(r[_ROW_DIVERGED]) != 0.0 for r in rows], dtype=bool)
+	errs = np.degrees(errs)
+	errs[dead | ~np.isfinite(errs)] = np.inf
+	return errs
+
+
+def p99_deg(rows: list) -> float:
+	"""The pre-registered tail: 99th percentile (inverted_cdf) of the pooled errors."""
+	if not rows:
+		raise RuntimeError("--select-tail p99: no per-episode rows to take a percentile of")
+	return float(np.percentile(episode_errors_deg(rows), P99_Q, method=P99_METHOD))
+
+
+def tail_value(args, rows: list) -> float:
+	"""The candidate's tail term over ALL its pooled val rows (lower = better)."""
+	if select_tail_mode(args) == "p99":
+		return p99_deg(rows)
+	return near_fail_count(rows, float(getattr(args, "select_tail_deg", 4.0)))
+
+
+def tail_cell(args, value) -> str:
+	"""The stage-table cell for one candidate's tail term."""
+	if select_tail_mode(args) == "p99":
+		return "p99=%.2f°" % value
+	return "tail=%d" % value
+
+
+def tail_footer(args) -> str:
+	"""The stage-table footer naming the tail rule the headline was picked under."""
+	if select_tail_mode(args) == "p99":
+		tail = (f"tail = p{P99_Q:g} (numpy {P99_METHOD}) of per-episode err over ALL pooled val "
+		        "episodes, diverged = +inf")
+	else:
+		tail = (f"tail = val episodes diverged or err > "
+		        f"{float(getattr(args, 'select_tail_deg', 4.0)):g}°")
+	return (f"  (--select-tail {select_tail_token(args)}: {tail}; "
+	        "HEADLINE = min R = rank(fit) + rank(tail), ties -> lower fit)")
 
 
 def average_ranks(values: list) -> list:

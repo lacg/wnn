@@ -95,7 +95,7 @@ def test_validation_and_tokens():
 	ns = SimpleNamespace
 	for deg in (0.0, -1.0, 5.0, 7.0, float("nan")):
 		assert _refuses(validate_select_tail, ns(select_tail="near_fail", select_tail_deg=deg)), deg
-	assert _refuses(validate_select_tail, ns(select_tail="p99", select_tail_deg=4.0))
+	assert _refuses(validate_select_tail, ns(select_tail="p95", select_tail_deg=4.0))
 	assert not _refuses(validate_select_tail, ns(select_tail="near_fail", select_tail_deg=4.0))
 	assert select_tail_token(ns(select_tail="off", select_tail_deg=4.0)) == "off"
 	assert select_tail_token(ns(select_tail="near_fail", select_tail_deg=3.5)) == "near_fail:3.5"

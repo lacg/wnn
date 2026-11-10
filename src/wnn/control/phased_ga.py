@@ -290,8 +290,11 @@ def _resume_ga_state_if_targeted(strat, args, stage_num: int) -> None:
 	      f"{strat._resume_start_gen} with the dumped GA state", flush=True)
 
 from wnn.control.provenance import arch_token, collect_provenance, obs_pwm_convention
-from wnn.control.select_tail import (new_episode_sink, select_tail_token, tail_count,
-                                     tail_rank_winner, validate_select_tail)
+from wnn.control.select_tail import (SELECT_TAIL_MODES, genome0_rows, new_episode_sink,
+                                     select_tail_token, tail_cell, tail_footer, tail_rank_winner,
+                                     tail_value, validate_select_tail)
+from wnn.control.val_units import (DEFAULT_VAL_UNITS, checked_val_unit_seeds, val_units_count,
+                                   val_units_line, validate_val_units)
 from wnn.control.train_ics import (train_ic_header, train_ic_overrides, train_ic_token,
                                    validate_train_ics)
 from wnn.control.threshold_calibration import (
@@ -2084,13 +2087,31 @@ def _recalc_headline(args, ec: EpisodeConfig) -> None:
 	seeds = resolve_seed_set(base=base, run_index=0, train=args.train_seed,
 	                         test=args.test_seed, val=args.val_seed)
 	log_seed_set(seeds)
+	print(val_units_line(args, seeds), flush=True)   # refuses a val unit that is not disjoint
 	print(f"\n[recalc] re-selecting the headline over {len(entries)} stages "
 	      f"({', '.join(lbl for lbl, _s, _r in entries)}) from {args.recalc_headline}")
 	# stage_holdouts is empty: the per-stage report blocks live in the original
 	# run's log and are unchanged by re-selection. The selector scores the genome
 	# it picks on the report seeds itself, so the headline triple is still the
 	# selected genome's own number.
-	_select_headline_stage(args, ec, seeds, entries, {})
+	_recalc_summary(args, _select_headline_stage(args, ec, seeds, entries, {}))
+
+
+def _recalc_summary(args, headline) -> None:
+	"""ONE greppable line per recalc: the pick under this rule and its report-unit row
+	(the pre-registered comparison, docs/ctrl_select_tail_prereg.md, reads it straight)."""
+	rule = f"val_units={val_units_count(args)} select={select_tail_token(args).split(',')[0]}"
+	if headline is None or getattr(headline, "report", None) is None:
+		print(f"[recalc] PICK {args.recalc_headline} {rule} headline=NONE (nothing scored)")
+		return
+	wh = headline.report
+	fails = getattr(wh, "stable_failures", None)
+	n_eps = getattr(wh, "stable_episodes", None)
+	fail_s = f" fails={fails}/{n_eps}" if fails is not None else " fails=n/a"
+	print(f"[recalc] PICK {args.recalc_headline} {rule} headline={headline.key} "
+	      f"stage={headline.label} report({len(getattr(args, 'report_seeds', None) or [0])} units): "
+	      f"stable={wh.acc * 100:.2f}% err={wh.mean_attitude_error_deg:.3f}°"
+	      f"{_heldout_row_str(wh)}{fail_s}", flush=True)
 
 
 def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
@@ -2120,8 +2141,8 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 	    rank-WHM is valid for: they compete on the same population, so a genome cannot
 	    win by having had weaker company.
 
-	MULTI-SEED VAL (5 draws, derived `seeds.val + i`). One val draw would make
-	best-of-N selection a lottery — the more candidates screened on a single finite
+	MULTI-SEED VAL (--val-units draws, default 5, derived `seeds.val + i`). One val
+	draw would make best-of-N selection a lottery — the more candidates screened on a single finite
 	draw, the likelier the winner is one that got lucky there. Averaging the metrics
 	across 5 val seeds before ranking damps that, exactly as the report block uses 5.
 	This is NOT a leak: val is disjoint from both the search folds and the report seeds,
@@ -2140,7 +2161,9 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 	from types import SimpleNamespace
 	from wnn.control.controller_orchestrator import ControllerOrchestrator
 	from wnn.ram.fitness import FitnessCalculatorControllerHarmonic
-	VAL_SEEDS = [int(seeds.val) + i for i in range(5)]
+	# --val-units N (default 5 = the pre-flag list): unit i = seeds.val + i, checked
+	# disjoint from the report units and the train/test seeds (wnn.control.val_units).
+	VAL_SEEDS = checked_val_unit_seeds(args, seeds)
 	_TOP_K = max(1, int(getattr(args, "stage_select_top_k",
 	                            ControllerOrchestrator.STAGE_SELECT_TOP_K)))
 
@@ -2184,9 +2207,9 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 
 	scored: dict = {}
 	cand_meta: dict = {}
-	tails: dict = {}         # --select-tail: key -> near-fail count over the val draws
+	tails: dict = {}         # --select-tail: key -> tail term over ALL its pooled val episodes
 	for key, label, spec, genome in cand:
-		per_seed = []
+		per_seed, tail_rows = [], []
 		for vs in VAL_SEEDS:
 			sink = new_episode_sink(args)    # None (tail off) = the unchanged call
 			try:
@@ -2206,8 +2229,11 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 			if vm is not None:
 				per_seed.append(vm)
 				if sink is not None:
-					tails[key] = tails.get(key, 0) + tail_count(
-						sink, float(getattr(args, "select_tail_deg", 4.0)), f"{key}-VAL{vs}")
+					tail_rows.extend(genome0_rows(sink, f"{key}-VAL{vs}"))
+		if tail_rows:
+			# Pooled over every val unit: near_fail's count is the per-unit sum it always
+			# was; p99 needs the pool (a percentile of percentiles is not one).
+			tails[key] = tail_value(args, tail_rows)
 		if per_seed:
 			scored[key] = _mean_metric(per_seed)
 			cand_meta[key] = (label, spec, genome)
@@ -2244,7 +2270,7 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 		whms = dict(zip(labels, vals))
 		winner = min(whms, key=lambda l: whms[l])
 		if tails:
-			# --select-tail near_fail: rank(fit) + rank(tail), see wnn.control.select_tail.
+			# --select-tail near_fail|p99: rank(fit) + rank(tail), see wnn.control.select_tail.
 			winner, combined = tail_rank_winner(labels, whms, tails)
 
 	print("\n" + "=" * 72)
@@ -2291,7 +2317,7 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 			# headlines (arm 9: MEMORY#0 under WHM, CONNECTIONS#0 under arithmetic).
 			fit_s = ("fit=%.4f" % whms[key]) if key in whms else "fit=n/a"
 			if key in combined:
-				fit_s += " tail=%d R=%.1f" % (tails[key], combined[key])
+				fit_s += " %s R=%.1f" % (tail_cell(args, tails[key]), combined[key])
 			mark = "  <- HEADLINE" if key == winner else ""
 			print(f"    {key:<14} {val_s:<26} {aux:<44} {fit_s}{mark}")
 	# The combine word is READ OFF THE CALCULATOR, never hardcoded. It was
@@ -2308,8 +2334,7 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 	      f"disjoint val seeds {VAL_SEEDS[0]}..{VAL_SEEDS[-1]}; fit = {calc.name if scored else 'n/a'}, "
 	      f"ONE {combine} weighted-rank over ALL {len(scored)} candidates — top-{_TOP_K} of every stage together)")
 	if combined:
-		print(f"  (--select-tail {select_tail_token(args)}: tail = val episodes diverged or err > "
-		      f"{float(getattr(args, 'select_tail_deg', 4.0)):g}°; HEADLINE = min R = rank(fit) + rank(tail), ties -> lower fit)")
+		print(tail_footer(args))
 	if winner is None:
 		print("  [stage-select] no stage could be scored on val — headline falls back to MEMORY")
 		return None
@@ -2346,6 +2371,7 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 		# is a weight that silently cannot be applied — jerk is 20% of C10.
 		print(f"  [stage-select] HEADLINE held-out: stable={wh.acc * 100:.1f}% "
 		      f"err={wh.mean_attitude_error_deg:.2f}°{_heldout_row_str(wh)}")
+	headline.report = wh     # the published row of the PICKED genome (--recalc-headline reads it)
 	return headline
 
 
@@ -3663,15 +3689,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "orchestrator's population release (~120-330 MB/genome).")
 	# Tail-aware stage-select (09/11/2026, docs/ctrl_dres_failures.md idea #3). Selection
 	# only: never the GA fitness, never the report seeds (wnn.control.select_tail).
-	ap.add_argument("--select-tail", choices=("off", "near_fail"), default="off",
+	ap.add_argument("--select-tail", choices=SELECT_TAIL_MODES, default="off",
 	                help="Stage-select tail term. near_fail: count each candidate's val episodes "
 	                     "that diverged or whose per-episode mean attitude error exceeds "
 	                     "--select-tail-deg (GPU per-episode rows), and pick the headline by "
 	                     "rank(fit) + rank(tail) — a near-miss proxy for the 1-in-1000 fails the "
-	                     "mean-based fitness cannot see. off (default) = unchanged selection.")
+	                     "mean-based fitness cannot see. p99 (pre-registered, "
+	                     "docs/ctrl_select_tail_prereg.md): tail = 99th percentile (numpy "
+	                     "inverted_cdf) of the per-episode error over ALL pooled val episodes, "
+	                     "diverged = +inf, combined the same way. off (default) = unchanged selection.")
 	ap.add_argument("--select-tail-deg", type=float, default=4.0,
 	                help="near_fail bound (deg), in (0, 5): below the 5° stable bound so the "
 	                     "count sees near-misses, not only fails. Default 4.0.")
+	ap.add_argument("--val-units", type=int, default=DEFAULT_VAL_UNITS, metavar="N",
+	                help="Stage-select val units per candidate (x --report-episodes each). Unit i "
+	                     "= seeds.val + i, asserted disjoint from the report units and the "
+	                     "train/test seeds (raw + fold pool seeds). Default 5 = the pre-flag list, "
+	                     "bit-identical; N > 5 extends it (its first 5 are today's).")
 	ap.add_argument("--recalc-headline", type=str, default=None, metavar="CKPT_DIR",
 	                help="REPORT-ONLY re-selection: skip the search entirely, rebuild the "
 	                     "stage candidates from the stage checkpoints in CKPT_DIR and re-run "
@@ -4276,6 +4310,7 @@ def main():
 	# Ideas #3/#4 of docs/ctrl_dres_failures.md: refuse bad bounds before any work.
 	validate_train_ics(args, ec)
 	validate_select_tail(args)
+	validate_val_units(args)
 	# CTRL-17 G4: one greppable line with the λ the DAgger gate + checkpoint rank on.
 	print(_gate_lambda_header(args, ec), flush=True)
 	# ABI 32: one greppable line stating the plant mode; validates the G5 reference
@@ -4422,6 +4457,7 @@ def main():
 		s = resolve_seed_set(base=base, run_index=run_i,
 		                     train=args.train_seed, test=args.test_seed, val=args.val_seed)
 		log_seed_set(s)
+		print(val_units_line(args, s), flush=True)   # refuses a val unit that is not disjoint
 		record_seed_set(s, script="run_phased_ga", extra={
 			"grid_sn": args.grid_state_neurons, "grid_bits": args.grid_bits,
 			"grid_on": _on_axis, "input_window_k": args.input_window_k,
