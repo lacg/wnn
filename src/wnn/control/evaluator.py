@@ -2189,6 +2189,25 @@ class ControllerEvaluator:
 		}
 		return controller, stats
 
+	def _retry_on_rust_cpu(self, controllers: list, cpu_scorer):
+		"""Metal failed: re-score on the rayon-CPU Rust scorer (CPU/GPU parity-tested, flies
+		every plant the GPU does) and say why, instead of dropping to the Python loop."""
+		import sys
+		print(f"[ControllerEvaluator] ⚠️ Metal scorer failed ({getattr(self, '_rust_score_error', None)!r}) "
+		      "— re-scoring this batch on the Rust CPU scorer", file=sys.stderr, flush=True)
+		return self._score_population_rust(controllers, cpu_scorer)
+
+	def _refuse_python_fallback(self):
+		"""The Python per-step loop cannot fly the ABI-32 plant: raise the Rust scorer's own
+		error (the real cause) rather than the loop's generic refusal."""
+		from .training import refuse_python_abi32_plant
+		try:
+			refuse_python_abi32_plant(self.episode_config, "score_population")
+		except NotImplementedError as refusal:
+			cause = getattr(self, "_rust_score_error", None)
+			raise RuntimeError(f"Rust scorer failed and the Python loop cannot fly this plant: {cause!r}") \
+				from (cause or refusal)
+
 	def score_population(self, controllers: list) -> list[tuple[float, dict]]:
 		"""Closed-loop score each trained controller on the evaluator's fixed
 		episode set (fresh recurrent state per episode, comparable to PID).
@@ -2211,13 +2230,16 @@ class ControllerEvaluator:
 			except Exception:
 				_scorer = None
 			res = self._score_population_rust(controllers, _scorer) if _scorer is not None else None
+			if res is None and _scorer is not None and _scorer is score_controllers_metal:
+				res = self._retry_on_rust_cpu(controllers, score_controllers_cpu)
 			if res is not None:
 				return res
+			self._refuse_python_fallback()
 			# The Rust scorer failing → the slow Python per-step loop (10-50x). Warn once.
 			if not getattr(self, "_gpu_score_fallback_warned", False):
 				import sys
 				print("[ControllerEvaluator] ⚠️ Metal scorer unavailable/failed — falling back to "
-				      "the per-step CPU eval loop (10-50x slower). Investigate if unexpected.",
+				      f"the per-step CPU eval loop (10-50x slower): {getattr(self, '_rust_score_error', None)!r}",
 				      file=sys.stderr, flush=True)
 				self._gpu_score_fallback_warned = True
 		from .dagger import eval_closed_loop_reset
@@ -2360,7 +2382,10 @@ class ControllerEvaluator:
 					**ec.sim_kwargs(), **ec.motor_lag_kwargs(),
 					**ec.imu_kwargs(), **ec.att_ref_kwargs(),
 					**alloc_kwargs, **stage1_kwargs)
-		except Exception:
+		except Exception as e:
+			# Kept for score_population: a swallowed scorer error made dropconst s3's headline
+			# held-out die in the Python loop with the real cause lost (10/11/2026).
+			self._rust_score_error = e
 			return None
 		if sink is not None and scorer is _metal:
 			n_g = len(controllers)
