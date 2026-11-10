@@ -306,3 +306,23 @@ variant with input-dependent control flow — which is the entire point of it.
 That is the lesson worth keeping: **the bug could only bite the measurement that
 depended on the input actually changing**, so a table of stable numbers around it
 was not evidence that it was fine.
+
+
+## CTRL-51: WNN vs the MPCOF teacher on the same M4 (10/11/2026)
+
+`mpcof_cascade.[ch]` is the C port of the cascade MPCOF outer loop: the online
+part only, with tables from `ctrl51/export_mpcof.py` written to
+`mpcof_model.h`. `cascade_dhat.[ch]` is the observer, now shared with
+`wnn_cascade.c`. On the host the port is bit-identical to the Rust teacher
+over 100k ticks.
+
+`bench_ctrl51.c` with `run_bench_ctrl51.sh` measures every call. It uses the
+`insnmark.c` plugin, which gives per-region instructions, soft-double calls,
+libm calls and VFP instructions. That yields a worst case as well as a mean.
+It needs a toolchain WITH newlib (`ARM_TC`).
+
+The exporter now supports the CTRL-48 residual (`WNN_OBS_DRES`). Before this
+it exported dres winners as runnable with those three features left at 0, so
+re-export any such header.
+
+Results and caveats are in `docs/ctrl51_onboard_cost.md`.

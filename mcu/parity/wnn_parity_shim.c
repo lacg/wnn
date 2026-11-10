@@ -7,6 +7,7 @@
  *   cc -O2 -std=c11 -ffp-contract=off -shared -fPIC -I mcu \
  *      -DWNN_MODEL_HEADER='"<abs path to header>"' mcu/parity/wnn_parity_shim.c
  */
+#include "../cascade_dhat.c"
 #include "../wnn_cascade.c"
 #include "../wnn_ratefw.c"
 

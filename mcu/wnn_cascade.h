@@ -17,7 +17,8 @@
  *   rate_integ           the rate PID's integrator I per axis AS IT STANDS BEFORE this
  *                        tick's rate update (pid.integ, SI units: rad) — CTRL-38 rate-I
  *   applied_prev         the motor command the plant ACTUALLY received last tick
- *                        (post rate loop, post any trim) — CTRL-38 d-hat input
+ *                        (post rate loop, post any trim) — CTRL-38 d-hat input and
+ *                        the CTRL-48 residual (which also reads rate_integ)
  * Inputs a model does not use are ignored (the header's WNN_OBS_* flags say which).
  *
  * BIT PARITY. Every operation mirrors the Rust source in order and precision
@@ -42,14 +43,21 @@
 #error "wnn_cascade: the model header is not a full cascade export (re-export without --tables-only)"
 #endif
 
-/* d-hat observer precision. Default f64 = the CPU reference (cascade_dhat.rs), bit
- * exact. -DWNN_DHAT_F32 = the Metal kernel's f32 twin (cheaper on an M4F, which has
- * no double-precision FPU; NOT bit-identical to the CPU reference). */
-#ifdef WNN_DHAT_F32
-typedef float wnn_obs_real;
-#else
-typedef double wnn_obs_real;
+/* CTRL-48 a3 (--obs-cascade-dhat-residual). A header exported before 10/11/2026 has
+ * no WNN_OBS_DRES: such an exporter wrote a dres winner as runnable WITHOUT the three
+ * residual columns (left at 0) — re-export it. The observer runs for a2 or a3. */
+#ifndef WNN_OBS_DRES
+#define WNN_OBS_DRES 0
 #endif
+#define WNN_OBS_OBSERVER (WNN_OBS_DHAT || WNN_OBS_DRES)
+
+/* d-hat observer (mcu/cascade_dhat.[ch], shared with the MPCOF port). Precision:
+ * default f64 = the CPU reference (cascade_dhat.rs), bit exact. -DWNN_DHAT_F32 = the
+ * Metal kernel's f32 twin (cheaper on an M4F, which has no double-precision FPU; NOT
+ * bit-identical to the CPU reference). */
+#include "cascade_dhat.h"
+typedef cdhat_real wnn_obs_real;
+typedef cdhat_t wnn_dhat_t;
 
 typedef struct
 {
@@ -69,14 +77,6 @@ typedef struct
 	double integral[3];
 } wnn_mahony_t;
 
-typedef struct
-{
-	wnn_obs_real c[3], clamp[3];
-	wnn_obs_real k_thrust, dt, alpha, l_gain;
-	wnn_obs_real lag_pwm[4], dhat[3], last_gyro[3];
-	int primed, seeded, have_gyro;
-} wnn_dhat_t;
-
 #define WNN_MAX_INTEGRALS 5
 
 typedef struct
@@ -86,6 +86,7 @@ typedef struct
 	float integ[WNN_MAX_INTEGRALS];
 	float yaw_heading;
 	float range[4], gamma[4];
+	float resid_inv_a[3], resid_w[3]; /* CTRL-48 a3 scale (unused unless WNN_OBS_DRES) */
 	float setpoint[4];       /* held CTBR setpoint = Rust's self.pwm (bank deviations) */
 	float setpoint_prev[4];  /* Rust's self.pwm_prev (delta law only) */
 	uint32_t step_counter;

@@ -1,5 +1,5 @@
 /* On-board cascade WNN controller. Every function names the Rust it mirrors
- * (ram_controller @ ABI 41); keep the operation ORDER when editing — the parity
+ * (ram_controller @ ABI 41; the CTRL-48 residual @ ABI 45); keep the operation ORDER when editing — the parity
  * test (mcu/parity/) asserts bit equality, and a reassociated sum is a different
  * function. See wnn_cascade.h for the firmware contract. */
 #include "wnn_cascade.h"
@@ -11,7 +11,7 @@
 static const float wnn_ctbr_range[4] = WNN_CTBR_RANGE_INIT;
 static const float wnn_ctbr_gamma[4] = WNN_CTBR_GAMMA_INIT;
 static const double wnn_rate_gains[12] = WNN_RATE_GAINS_INIT;
-#if WNN_OBS_DHAT
+#if WNN_OBS_OBSERVER
 static const double wnn_dhat_plant[5] = WNN_DHAT_PLANT_INIT;
 #endif
 
@@ -24,15 +24,6 @@ static float clampf_rs(float x, float lo, float hi)
 	if (x > hi) x = hi;
 	return x;
 }
-
-#if WNN_OBS_DHAT
-static wnn_obs_real clamp_obs(wnn_obs_real x, wnn_obs_real lo, wnn_obs_real hi)
-{
-	if (x < lo) x = lo;
-	if (x > hi) x = hi;
-	return x;
-}
-#endif
 
 /* ---------------------------------------- Mahony estimator (estimator.rs) */
 
@@ -93,80 +84,53 @@ static void up_from_quat(const float q[4], float up[3])
 /* ------------------------------------- d-hat observer (cascade_dhat.rs) -- */
 
 /* CascadeDhat::new(torque_gains(..), k_thrust, dt, 0, out_limit) then
- * set_motor_lag(WNN_MOTOR_LAG_S, dt) — the host's set_observer_motor_lag. */
-static void dhat_init(wnn_dhat_t *d)
+ * set_motor_lag(WNN_MOTOR_LAG_S, dt) — the host's set_observer_motor_lag. The law
+ * itself is cascade_dhat.c, shared with the MPCOF port (mcu/mpcof_cascade.c). */
+#if WNN_OBS_OBSERVER
+/* cascade_dhat.rs torque_gains(arm, k_drag, inertia): f32 plant, f64 gains. */
+static void plant_torque_gains(double c[3])
 {
-#if WNN_OBS_DHAT
 	double arm = (float)wnn_dhat_plant[0], kd = (float)wnn_dhat_plant[1];
 	double in[3] = {(float)wnn_dhat_plant[2], (float)wnn_dhat_plant[3], (float)wnn_dhat_plant[4]};
-	double c[3] = {arm / in[0], arm / in[1], 4.0 * kd / in[2]};
+	c[0] = arm / in[0];
+	c[1] = arm / in[1];
+	c[2] = 4.0 * kd / in[2];
+}
+#endif
+
+static void dhat_init(cdhat_t *d)
+{
+#if WNN_OBS_OBSERVER
+	double c[3];
+	plant_torque_gains(c);
+	double clamp[3] = {c[0] * WNN_RATE_OUT_LIMIT_N, c[1] * WNN_RATE_OUT_LIMIT_N, c[2] * WNN_RATE_OUT_LIMIT_N};
 	float dt = WNN_DT, t = WNN_MOTOR_LAG_S;
-	d->alpha = (wnn_obs_real)(double)(4.0f * dt / fmaxf(t, 4.0f * dt));
-	for (int a = 0; a < 3; a++)
-	{
-		d->c[a] = (wnn_obs_real)c[a];
-		d->clamp[a] = (wnn_obs_real)(c[a] * WNN_RATE_OUT_LIMIT_N);
-	}
-	d->k_thrust = (wnn_obs_real)WNN_K_THRUST;
-	d->dt = (wnn_obs_real)(double)dt;
-	d->l_gain = (wnn_obs_real)WNN_DHAT_L_GAIN;
+	double alpha = (double)(4.0f * dt / fmaxf(t, 4.0f * dt));
+	cdhat_init(d, c, clamp, WNN_K_THRUST, (double)dt, alpha, WNN_DHAT_L_GAIN);
 #else
-	(void)d;
+	cdhat_reset(d);
 #endif
 }
 
-/* CascadeDhat::reset — per flight. */
-static void dhat_reset(wnn_dhat_t *d)
+/* CTRL-48 a3 scale (cascade_obs.rs CasResidual::new from ctbr.rs residual_scale):
+ * per axis inv_a = 1/(c*ki*L), w = 1 (L = i_limit, 1 when 0); ki = 0 => 1/clamp, 0. */
+static void resid_init(wnn_ctrl_t *ctl)
 {
-	for (int i = 0; i < 4; i++) d->lag_pwm[i] = 0;
-	for (int i = 0; i < 3; i++) d->dhat[i] = 0;
-	for (int i = 0; i < 3; i++) d->last_gyro[i] = 0;
-	d->primed = d->seeded = d->have_gyro = 0;
-}
-
-#if WNN_OBS_DHAT
-/* CascadeDhat::lagged_force. */
-static void dhat_lagged_force(const wnn_dhat_t *d, wnn_obs_real f[3])
-{
-	wnn_obs_real t[4];
-	for (int m = 0; m < 4; m++) t[m] = d->k_thrust * d->lag_pwm[m] * d->lag_pwm[m];
-	f[0] = t[3] - t[1];
-	f[1] = t[2] - t[0];
-	f[2] = (t[0] - t[1] + t[2] - t[3]) * (wnn_obs_real)0.25;
-}
-
-/* CascadeDhat::track_lag: 0 on the priming call, else 1 with the lagged force. */
-static int dhat_track_lag(wnn_dhat_t *d, const float applied[4], wnn_obs_real ua[3])
-{
-	if (!d->primed) { d->primed = 1; return 0; }
-	wnn_obs_real cmd[4];
-	for (int m = 0; m < 4; m++) cmd[m] = clamp_obs((wnn_obs_real)applied[m], 0, 1);
-	for (int m = 0; m < 4; m++)
+#if WNN_OBS_DRES
+	double c[3];
+	plant_torque_gains(c);
+	for (int a = 0; a < 3; a++)
 	{
-		if (!d->seeded) d->lag_pwm[m] = cmd[m];
-		else d->lag_pwm[m] += d->alpha * (cmd[m] - d->lag_pwm[m]);
+		double ki = wnn_rate_gains[a * 4 + 1], lim = wnn_rate_gains[a * 4 + 3];
+		double l = (lim > 0.0) ? lim : 1.0;
+		int has_i = (ki != 0.0);
+		ctl->resid_inv_a[a] = (float)(has_i ? 1.0 / (c[a] * ki * l) : 1.0 / (c[a] * WNN_RATE_OUT_LIMIT_N));
+		ctl->resid_w[a] = has_i ? 1.0f : 0.0f;
 	}
-	d->seeded = 1;
-	dhat_lagged_force(d, ua);
-	return 1;
+#else
+	(void)ctl;
+#endif
 }
-
-/* CascadeDhat::observe(gyro_t, applied_{t-1}). */
-static void dhat_observe(wnn_dhat_t *d, const float gyro[3], const float applied[4])
-{
-	wnn_obs_real g[3] = {(wnn_obs_real)gyro[0], (wnn_obs_real)gyro[1], (wnn_obs_real)gyro[2]};
-	wnn_obs_real ua[3];
-	int have_ua = dhat_track_lag(d, applied, ua);
-	for (int a = 0; have_ua && d->have_gyro && a < 3; a++)
-	{
-		wnn_obs_real rate_dot = (g[a] - d->last_gyro[a]) / d->dt;
-		wnn_obs_real residual = rate_dot - d->c[a] * ua[a] - d->dhat[a];
-		d->dhat[a] = clamp_obs(d->dhat[a] + d->l_gain * residual, -d->clamp[a], d->clamp[a]);
-	}
-	for (int a = 0; a < 3; a++) d->last_gyro[a] = g[a];
-	d->have_gyro = 1;
-}
-#endif /* WNN_OBS_DHAT */
 
 /* --------------------------- features (controller.rs compute_features) -- */
 
@@ -231,18 +195,34 @@ static int translation_block(wnn_ctrl_t *c, int fi, const wnn_tick_in_t *in)
 	return fi;
 }
 
-/* CTRL-38 (cascade_obs.rs): rate-I = I / i_limit, then d-hat (ticked every tick). */
-static int cascade_block(wnn_ctrl_t *c, int fi, const wnn_tick_in_t *in)
+/* cascade_obs.rs CascadeObs::live: v = [rate I / i_limit x3, d-hat x3] (f32). The
+ * observer ticks every tick whenever a2 or a3 is on. */
+static void cascade_values(wnn_ctrl_t *c, const wnn_tick_in_t *in, float v[6])
 {
-	for (int i = 0; WNN_OBS_RATE_I && i < 3; i++)
+	for (int i = 0; i < 6; i++) v[i] = 0.0f;
+	for (int i = 0; (WNN_OBS_RATE_I || WNN_OBS_DRES) && i < 3; i++)
 	{
 		double lim = wnn_rate_gains[i * 4 + 3], integ = in->rate_integ[i];
-		c->features[fi++] = (float)((lim > 0.0) ? integ / lim : integ);
+		v[i] = (float)((lim > 0.0) ? integ / lim : integ);
 	}
-#if WNN_OBS_DHAT
-	dhat_observe(&c->dhat, in->gyro, in->applied_prev);
-	for (int a = 0; a < 3; a++) c->features[fi++] = (float)c->dhat.dhat[a];
+#if WNN_OBS_OBSERVER
+	cdhat_observe(&c->dhat, in->gyro, in->applied_prev);
+	for (int a = 0; a < 3; a++) v[3 + a] = (float)c->dhat.dhat[a];
+#else
+	(void)c; (void)in;
 #endif
+}
+
+/* CTRL-38/48 (cascade_obs.rs append): rate-I, then d-hat, then the residual
+ * r = d-hat * inv_a + w * (I/L) (CasResidual::of, f32). */
+static int cascade_block(wnn_ctrl_t *c, int fi, const wnn_tick_in_t *in)
+{
+	float v[6];
+	cascade_values(c, in, v);
+	for (int i = 0; WNN_OBS_RATE_I && i < 3; i++) c->features[fi++] = v[i];
+	for (int a = 0; WNN_OBS_DHAT && a < 3; a++) c->features[fi++] = v[3 + a];
+	for (int a = 0; WNN_OBS_DRES && a < 3; a++)
+		c->features[fi++] = v[3 + a] * c->resid_inv_a[a] + c->resid_w[a] * v[a];
 	return fi;
 }
 
@@ -357,6 +337,7 @@ void wnn_init(wnn_ctrl_t *c)
 	c->est.kp = (double)WNN_EST_KP;
 	c->est.ki = (double)WNN_EST_KI;
 	dhat_init(&c->dhat);
+	resid_init(c);
 	/* Runtime copies: a const gamma would let the compiler fold powf(x, 2) -> x*x. */
 	memcpy(c->range, wnn_ctbr_range, sizeof c->range);
 	memcpy(c->gamma, wnn_ctbr_gamma, sizeof c->gamma);
@@ -367,7 +348,7 @@ void wnn_init(wnn_ctrl_t *c)
 void wnn_reset(wnn_ctrl_t *c, float init_yaw, const float q0[4])
 {
 	mahony_reset(&c->est, q0);
-	dhat_reset(&c->dhat);
+	cdhat_reset(&c->dhat);
 	memset(c->integ, 0, sizeof c->integ);
 	memset(c->setpoint, 0, sizeof c->setpoint);
 	memset(c->setpoint_prev, 0, sizeof c->setpoint_prev);

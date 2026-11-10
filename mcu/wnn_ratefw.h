@@ -38,6 +38,12 @@ typedef struct
 void wnn_ratefw_init(wnn_ratefw_t *r, const double gains[12], double out_limit_n,
                      double hover_n, double k_thrust, uint32_t main_loop_hz,
                      double attitude_hz, double lpf_hz);
+/* The same stage from EXPORTED constants (no libm: the lpf2p coefficients b0, b1,
+ * b2, a1, a2 come from Rust's Lpf2p::coeffs, NULL = filter off). The mixer constants
+ * are left 0 — for a stage only ever advanced with wnn_ratefw_update (the MPCOF
+ * shadow, mcu/mpcof_cascade.c). */
+void wnn_ratefw_init_coeffs(wnn_ratefw_t *r, const double gains[12], double out_limit_n,
+                            double dt_rate, uint32_t decimation, const double *lpf);
 /* RateStageFw::reset (per flight). The anchor transport survives, as in Rust. */
 void wnn_ratefw_reset(wnn_ratefw_t *r);
 /* CtbrInner::set_anchor: transport = clamp(anchor, 0, 1) - hover_pwm. */
@@ -46,6 +52,10 @@ void wnn_ratefw_set_anchor(wnn_ratefw_t *r, float anchor_pwm);
 void wnn_ratefw_integ(const wnn_ratefw_t *r, double out[3]);
 /* CtbrInner::fly: one physical tick on the held setpoint [coll dev, p, q, r]. */
 void wnn_ratefw_fly(wnn_ratefw_t *r, const float sp[4], const float gyro[3], float pwm[4]);
+/* RateStageFw::step minus the mixer: the rate PID update on update ticks
+ * (tick % decimation == 0) and the tick count. What the MPCOF shadow needs — its
+ * caller discards the pwm, and this does not compute it. */
+void wnn_ratefw_update(wnn_ratefw_t *r, const double sp[3], const double gyro[3]);
 /* RateStageFw::hover_pwm. */
 double wnn_ratefw_hover_pwm(const wnn_ratefw_t *r);
 

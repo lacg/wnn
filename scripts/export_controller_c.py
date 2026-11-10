@@ -256,8 +256,12 @@ def wheel_constants(spec) -> tuple:
 	if kp is None or ki is None:
 		raise SystemExit(f"cannot read est_kp/est_ki defaults from the wheel signature: {sig!r}")
 	lgain = 0.0
-	if (spec.ctbr or {}).get("obs_dhat_plant") is not None:
-		m = re.search(r"obs=dhat\(l=([0-9.eE+-]+),", repr(ra.CtbrSpec(**spec.ctbr)))
+	plant = dhat_plant(spec.ctbr)
+	if plant is not None:
+		# The dres-only spec prints no gain: ask the same CtbrSpec with the observer
+		# emitted (CTRL-48 a3 runs the a2 observer, ctbr.rs cascade_obs).
+		probe = dict(spec.ctbr, obs_dhat_plant=list(plant))
+		m = re.search(r"obs=dhat\(l=([0-9.eE+-]+),", repr(ra.CtbrSpec(**probe)))
 		if m is None:
 			raise SystemExit("cannot read the d-hat gain from the wheel's CtbrSpec provenance")
 		lgain = float(m.group(1))
@@ -343,7 +347,15 @@ def render_feature_flags(spec) -> list:
 	lines = [f"#define WNN_OBS_{c} {int(bool(getattr(spec, a, False)))}" for c, a in FEATURE_FLAGS]
 	lines.append(f"#define WNN_OBS_RATE_I {int(bool(ctbr.get('obs_rate_i', False)))}")
 	lines.append(f"#define WNN_OBS_DHAT {int(ctbr.get('obs_dhat_plant') is not None)}")
+	lines.append(f"#define WNN_OBS_DRES {int(ctbr.get('obs_dhat_residual_plant') is not None)}")
 	return lines
+
+
+def dhat_plant(ctbr):
+	"""The observer's plant [arm, k_drag, Ixx, Iyy, Izz] when a2 (d-hat) or a3 (the
+	CTRL-48 residual) runs it, else None — ctbr.rs cascade_obs: a2's or a3's."""
+	c = ctbr or {}
+	return c.get("obs_dhat_plant") or c.get("obs_dhat_residual_plant")
 
 
 def render_controller_consts(m: ExportModel) -> list:
@@ -364,7 +376,7 @@ def render_controller_consts(m: ExportModel) -> list:
 
 def render_ctbr_consts(m: ExportModel) -> list:
 	c = m.spec.ctbr
-	plant = c.get("obs_dhat_plant") or [0.0] * 5
+	plant = dhat_plant(c) or [0.0] * 5
 	return [
 		f"#define WNN_CTBR_RANGE_INIT {init_list(c['range'], f32_lit)}",
 		f"#define WNN_CTBR_GAMMA_INIT {init_list(c['gamma'], f32_lit)}",
@@ -435,6 +447,7 @@ def report(out: str, o: dict, model):
 	if model:
 		c = model.spec.ctbr
 		print(f"  blocks: rate_i={bool(c.get('obs_rate_i'))} dhat={c.get('obs_dhat_plant') is not None} "
+		      f"dres={c.get('obs_dhat_residual_plant') is not None} "
 		      f"motor_lag={model.motor_lag_s}s action_repeat={model.spec.action_repeat}")
 
 

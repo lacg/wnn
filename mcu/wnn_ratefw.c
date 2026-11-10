@@ -78,6 +78,26 @@ void wnn_ratefw_init(wnn_ratefw_t *r, const double gains[12], double out_limit_n
 	wnn_ratefw_reset(r);
 }
 
+void wnn_ratefw_init_coeffs(wnn_ratefw_t *r, const double gains[12], double out_limit_n,
+                            double dt_rate, uint32_t decimation, const double *lpf)
+{
+	memset(r, 0, sizeof *r);
+	r->dt = dt_rate;
+	r->has_filt = (lpf != 0);
+	for (int i = 0; i < 3; i++)
+	{
+		wnn_pidch_t *p = &r->ax[i];
+		p->kp = gains[i * 4]; p->ki = gains[i * 4 + 1];
+		p->kd = gains[i * 4 + 2]; p->i_limit = gains[i * 4 + 3];
+		if (!lpf) continue;
+		p->filt.b0 = lpf[0]; p->filt.b1 = lpf[1]; p->filt.b2 = lpf[2];
+		p->filt.a1 = lpf[3]; p->filt.a2 = lpf[4];
+	}
+	r->out_limit = out_limit_n;
+	r->decimation = decimation > 1u ? decimation : 1u;
+	wnn_ratefw_reset(r);
+}
+
 void wnn_ratefw_reset(wnn_ratefw_t *r)
 {
 	for (int i = 0; i < 3; i++)
@@ -119,14 +139,19 @@ static void ratefw_mix(const wnn_ratefw_t *r, double pwm[4])
 	for (int i = 0; i < 4; i++) pwm[i] = sqrt(clamp_d(t[i], 0.0, kt) / kt);
 }
 
-/* RateStageFw::step(rate_sp, gyro, coll_dev). */
-static void ratefw_step(wnn_ratefw_t *r, const double sp[3], const double gyro[3],
-                        double coll_dev, double pwm[4])
+void wnn_ratefw_update(wnn_ratefw_t *r, const double sp[3], const double gyro[3])
 {
 	if (r->tick % r->decimation == 0)
 		for (int i = 0; i < 3; i++)
 			r->held[i] = pidch_update(&r->ax[i], r->has_filt, r->dt, r->out_limit, sp[i], gyro[i]);
 	r->tick += 1u;
+}
+
+/* RateStageFw::step(rate_sp, gyro, coll_dev). */
+static void ratefw_step(wnn_ratefw_t *r, const double sp[3], const double gyro[3],
+                        double coll_dev, double pwm[4])
+{
+	wnn_ratefw_update(r, sp, gyro);
 	ratefw_mix(r, pwm);
 	if (coll_dev == 0.0) return;
 	for (int i = 0; i < 4; i++) pwm[i] = clamp_d(pwm[i] + coll_dev, 0.0, 1.0);
