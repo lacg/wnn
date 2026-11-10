@@ -41,8 +41,10 @@
 # perception settled, and BOTH quantizer routes are closed. What remains is structural
 # (sn>0 / state neurons, reassessment section 5).
 #
-# GRID IS NOT THE READ-OUT — same rule as E1. In the outer-q arm GRID moved opposite
-# to the trained stages and swung from 96.8% to 31.0% stable across cells.
+# GRID IS NOT THE READ-OUT — same rule as E1 (it rests on the c30 control seeds' GRID
+# spread). 09/11/2026: the outer-q GRID swing (96.8% -> 31.0%) is NOT encoder evidence —
+# the q-selected shapes were re-trained on the default ladder (flag dropped, fixed
+# 8542f4c1; docs/ctrl_outerq_august_audit.md).
 #
 # ARMING. The base configuration is RESOLVED from the E1 and outer-q markers after the
 # gate clears, so this chain can be armed before E1 has finished:

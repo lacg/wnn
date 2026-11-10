@@ -5,7 +5,7 @@
 > distribution the controller never visits (wrong regime, wrong plant, wrong policy).
 > See §8 below and `l4_teacher_screen_results.md` §"The thermometer was calibrated on
 > the wrong distribution". Within-arm refutations survive; absolute figures are on
-> notice pending the outer-quantile arm.
+> notice pending the outer-quantile arm, which turned out VOID (audit 09/11/2026, docs/ctrl_outerq_august_audit.md).
 
 Written while the seed-31337004 tie-break cohort flies. Purpose: pin the paper claim,
 audit the one gap the committee did not close (the observer gap), pre-register the two
@@ -221,7 +221,7 @@ Four levers flown since §8 was written. Full tables in
 
 | route | lever | verdict |
 |---|---|---|
-| perception | outer-quantile 0.02 / 0.005 | REFUTED 4/4 |
+| perception | outer-quantile 0.02 / 0.005 | ~~REFUTED 4/4~~ VOID — flag dropped by NEURONS/MEMORY/report fits (audit 09/11/2026, docs/ctrl_outerq_august_audit.md) |
 | perception | student-state refit | NULL at n=5, mean Δ +0.008, CI [-0.36,+0.38], ladder stopped |
 | action | γ=2 warped alphabet | REFUTED 3/3, CI [+0.27, +1.05] |
 | structural | sn>0 / state neurons | NEVER TESTED |
@@ -236,17 +236,18 @@ Four levers flown since §8 was written. Full tables in
    is LARGER than reported — but it was estimated from an unrepresentative pair, and
    that must be said plainly rather than quietly benefiting from it.
 
-**§6's freeze precondition is now MET.** §8 argued the recipe could not freeze until
-the encoder question settled. It has settled — as a refutation, which settles it just
-as well. Tasks #2 (motor lag) and #3 (setpoint tracking) are unblocked; #4
+**§6's freeze precondition is now MET** *(09/11/2026: met on the refit null ONLY; the
+quantile question is open — (audit 09/11/2026, docs/ctrl_outerq_august_audit.md))*. §8 argued the recipe could not freeze until
+the encoder question settled. ~~It has settled — as a refutation, which settles it just
+as well.~~ Tasks #2 (motor lag) and #3 (setpoint tracking) are unblocked; #4
 (gym-pybullet-drones) and #6 (Crazyflie) still wait for the freeze, since both port
 fitted thresholds.
 
 **Why the structural route is now the only live hypothesis.** L64 refined the action
 alphabet uniformly and won on one seed; gamma refined it near zero and lost on all
 three. If near-zero action resolution were the constraint, gamma would be the cheap
-win (same footprint, ~8x finer steps). Perception coverage failed the same way from
-two directions. Every "give the substrate finer numbers" lever has now failed, which
+win (same footprint, ~8x finer steps). Perception coverage failed from ~~two directions~~ ONE direction (refit, a null); the
+quantile direction was never flown (audit 09/11/2026, docs/ctrl_outerq_august_audit.md). Every "give the substrate finer numbers" lever has now failed, which
 is precisely the evidence that promotes "give the substrate STATE" — the L1 finding
 already showed a bias estimate cannot be *injected* as an input feature; sn>0 asks
 whether it can be *learned*.
@@ -255,9 +256,15 @@ whether it can be *learned*.
 unanimity bar is withdrawn (see l4 doc "E1b"): it grows stricter with N, so more
 evidence made a real effect harder to show. The alphabet probe's "one seed each way
 => fails" was that rule at n=2 and should be re-read as UNRESOLVED, not refuted. L3
-and outer-q are unaffected — unanimous failures need no majority rule.
+is unaffected — unanimous failures need no majority rule; outer-q has no valid result (audit 09/11/2026, docs/ctrl_outerq_august_audit.md).
 
 ## 7. Decision log
+
+- 09/11/2026 — **the 10/08 "Outer-q closed: REFUTED 4/4; outside% dead" entry is VOID**:
+  `--threshold-outer-quantile` never reached the NEURONS/MEMORY/held-out fits (fixed
+  8542f4c1, moved into ThresholdCalibration e238f36f) (audit 09/11/2026, docs/ctrl_outerq_august_audit.md). Read correctly the arm
+  compared tilt-5 vs tilt-30 calibration (tilt 5 lost 4/4, n=2, provisional). Quantile,
+  calibration tilt and student-state fit are being re-tested in CTRL-48 blocks 3-5.
 
 - 09/08/2026 — reassessment drafted; alphabet probe armed behind the 004 scoring
   chain; sn>0 programme spec'd but NOT queued (launches on merit after probe + 004
