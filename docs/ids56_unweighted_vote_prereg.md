@@ -350,7 +350,7 @@ unswr cohorts do sit on A, so the FPR distribution across recipes is bimodal. Wi
    disclosed. A θ=0.02 rejection does not license flying θ=0.01/0.04 as a rescue; that would need a new
    pre-registration (now stated).
 8. **Reporting.** n=3 is labelled provisional. Cells are `mean±std (N)`. Show the Pareto view (best F1 at FPR < 0.25,
-   etc.) beside the 5 tables. The weighted ms01 flows (7507/7511/7515) go in as the third point for
+   etc.) beside the 5 tables. The weighted ms01 encoff flows on the same seeds (7511/7515/7519; ext 7503/7507) go in as the third point for
    vote-vs-weighting attribution, with the θ mismatch (0.1 vs 0.02) stated.
 
 ### Ready to queue?
