@@ -124,7 +124,7 @@ fn gpu_rows(c: &WnnController, s1: &Stage1Cfg) -> Option<Vec<f64>>
 
 /// The recipe's student, trained on the recipe's plant (estimator before training,
 /// so train = deploy).
-fn dres_student() -> WnnController
+pub(crate) fn dres_student() -> WnnController
 {
 	let mut c = obs_student3(0, 10, 0xC5C0, false, false, true);
 	c.enable_att_estimator(2.0, 0.1).expect("estimator on");

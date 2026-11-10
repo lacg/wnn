@@ -144,7 +144,11 @@ import os
 # ABI 48 (09/11/2026, docs/ctrl_dres_failures.md idea #4): RewardGatedConfigPacked(
 # init_vxy=) — the DAgger trainer's initial horizontal velocity bound (--train-init-vxy),
 # drawn after x0/y0 (0 draws nothing). Default-off ⇒ ABI 47 bit-identical.
-EXPECTED_ABI = 48
+# ABI 49 (09/11/2026): additive export sample_student_features(controller, cfg,
+# num_episodes, seed) — the trained student's own feature values on the training
+# episodes (the --threshold-refit-from-student pool on translation runs; the Python
+# collector refused the ABI-32 plant). Every existing path bit-identical.
+EXPECTED_ABI = 49
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

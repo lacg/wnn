@@ -771,11 +771,27 @@ def fit_calibration(
 	`calibration` (ThresholdCalibration) sets episodes / regime / ladder; None keeps
 	the legacy call (num_episodes, flown, quantile), byte-identical."""
 	cal = calibration or ThresholdCalibration(episodes=int(num_episodes))
+	extra = _pooled_extra_samples(spec, cal, extra_samples)
 	samples = _calibration_samples(spec, cal, seed, geometry, alloc, episode_config)
-	thresholds = _thresholds_from_samples(samples, spec, method, cal.outer_quantile, extra_samples,
+	thresholds = _thresholds_from_samples(samples, spec, method, cal.outer_quantile, extra,
 	                                      ladder=cal.ladder)
 	return CalibrationFit(thresholds=thresholds,
-	                      constant_features=_zero_spread_features(samples, extra_samples))
+	                      constant_features=_zero_spread_features(samples, extra))
+
+
+def _pooled_extra_samples(spec, cal: "ThresholdCalibration", extra_samples):
+	"""The student samples pooled with the teacher's: the run's refit (carried in the
+	calibration, so every fit site gets it) or a caller's explicit `extra_samples` —
+	never both (two sources for one pool is a plumbing error, not a union)."""
+	if cal.student_samples is None:
+		return extra_samples
+	if extra_samples is not None:
+		raise ValueError("fit_calibration: extra_samples AND calibration.student_samples — pass one")
+	if len(cal.student_samples) != spec.num_features():
+		raise ValueError(f"fit_calibration: the refit's student samples have {len(cal.student_samples)} "
+		                 f"features, this spec has {spec.num_features()} — a different feature layout "
+		                 "than the grid winner the samples were collected from")
+	return cal.student_samples
 
 
 def _zero_spread_features(samples_per_feature, extra_samples) -> tuple[int, ...]:
@@ -1108,7 +1124,39 @@ def random_connectivity(spec: ControllerSpec, seed: int = 0) -> tuple[list[int],
 
 def collect_student_feature_samples(genome, episode_config, num_episodes: int,
                                     seed: int) -> list[list[float]]:
-	"""Roll out a TRAINED STUDENT and harvest the feature values it actually visits.
+	"""Roll out a TRAINED STUDENT and harvest the feature values it actually visits —
+	on the SAME plant the teacher ladder is fitted on (the pairing _calib_plant_sim
+	guarantees for the Python path):
+
+	  * training-cascade runs (translation + airframe, no geometry — the teacher fit
+	    is `_training_cascade_samples`): the Rust sampler (ABI 49) flies the student
+	    through the DAgger trainer's own rollout on the same reference config. This
+	    is every real-life recipe (specific-force IMU, rotor drag, Mahony, cascade,
+	    delta law), which the Python loop below cannot fly and refused;
+	  * attitude-only runs: the Python loop below (_collect_student_python), byte-
+	    identical to the 10/08 collector the E1 refit cells flew.
+
+	Overactuated (geometry) runs are refused: the Python loop has no step_n."""
+	if getattr(episode_config, "geometry", None) is not None:
+		raise NotImplementedError("collect_student_feature_samples: overactuated (geometry) runs are not "
+		                          "supported — the student rollout would fly the quad mixer.")
+	if _calib_plant_gate(episode_config) and bool(getattr(episode_config, "translation", False)):
+		return _collect_student_rust(genome, episode_config, num_episodes, seed)
+	return _collect_student_python(genome, episode_config, num_episodes, seed)
+
+
+def _collect_student_rust(genome, episode_config, num_episodes: int, seed: int) -> list[list[float]]:
+	"""The training-cascade student sampler (ram_controller.sample_student_features)."""
+	from wnn.control import _accel as ra
+	cols = ra.sample_student_features(build_controller(genome), reference_packed_config(episode_config),
+	                                  int(num_episodes), int(seed))
+	return [[float(v) for v in col] for col in cols]
+
+
+def _collect_student_python(genome, episode_config, num_episodes: int,
+                            seed: int) -> list[list[float]]:
+	"""Roll out a TRAINED STUDENT and harvest the feature values it actually visits
+	(attitude-only plant).
 
 	The point of option A (10/08/2026). `fit_thresholds_from_pid_rollouts` rolls out
 	PID — a better controller than the student — so the ladder is fitted on states
@@ -1136,7 +1184,7 @@ def collect_student_feature_samples(genome, episode_config, num_episodes: int,
 	from .training import _sample_initial_state, apply_disturbance
 
 	from .training import refuse_python_abi32_plant
-	refuse_python_abi32_plant(episode_config, "collect_student_feature_samples")
+	refuse_python_abi32_plant(episode_config, "collect_student_feature_samples (attitude-only path)")
 	ctl = build_controller(genome)
 	# Same plant gate as the teacher fit (19/09/2026): a refit on the synthetic
 	# plant under an airframe run would re-fit the ladder on the wrong aircraft.

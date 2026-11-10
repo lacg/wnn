@@ -616,10 +616,7 @@ def _geometry_from_args(args, base_seed: int):
 	return geo, ar
 
 
-_grid_for_refit = None   # last ControllerGridSearch — the refit needs its probe spec
-
-
-def stage0_grid(args, ec: EpisodeConfig, seed: int, thresholds_override=None):
+def stage0_grid(args, ec: EpisodeConfig, seed: int):
 	"""Grid over (state_neurons × bits). Returns
 	(winner_spec, seed_population, winner_metrics, wall_time, thresholds).
 
@@ -630,13 +627,35 @@ def stage0_grid(args, ec: EpisodeConfig, seed: int, thresholds_override=None):
 	instead of discarding all but the single winner. `seed_population[0]` is the
 	fitness-best genome; its spec is `winner_spec`.
 	"""
+	return _grid_result(*_grid_search(args, ec, seed))
+
+
+def _grid_search(args, ec: EpisodeConfig, seed: int):
+	"""(ControllerGridSearch, outcome) — the grid object is kept for the refit, which
+	trains the winner with the grid's own evaluator and ladder."""
 	from wnn.control.controller_grid_search import ControllerGridSearch
-	gs = ControllerGridSearch(args, ec, seed, thresholds_override=thresholds_override)
-	outcome = gs.run()
-	winner_spec = outcome.best_point.spec
-	global _grid_for_refit
-	_grid_for_refit = gs
-	return winner_spec, outcome.seed_population, outcome.best_metrics, gs.elapsed, gs.thresholds
+	gs = ControllerGridSearch(args, ec, seed)
+	return gs, gs.run()
+
+
+def _grid_result(gs, outcome):
+	"""stage0_grid's 5-tuple from a finished grid."""
+	return outcome.best_point.spec, outcome.seed_population, outcome.best_metrics, gs.elapsed, gs.thresholds
+
+
+def _stage0_with_refit(args, ec: EpisodeConfig, seeds, seed: int):
+	"""Stage 0, plus the student-state refit round when --threshold-refit-from-student
+	is set: roll the trained grid winner out, pool its states into the run's
+	calibration (args._threshold_refit_samples -> ThresholdCalibration.student_samples,
+	read by EVERY later fit site), then REGRID under the refit ladder."""
+	from wnn.control.cancel_state import raise_if_interrupted
+	args._threshold_refit_samples = None   # per run: never inherit a previous run's pool
+	gs, outcome = _grid_search(args, ec, seed)
+	raise_if_interrupted("GRID (stage 0) — its scores after the signal are cancelled evaluations")
+	if _refit_thresholds_from_student(args, ec, seeds, gs, outcome.seed_population):
+		gs, outcome = _grid_search(args, ec, seed)
+		raise_if_interrupted("GRID regrid (stage 0)")
+	return _grid_result(gs, outcome)
 
 
 # -----------------------------------------------------------------------------
@@ -1793,15 +1812,23 @@ def _maybe_holdout(args, ec, spec, res, seeds, label: str):
 
 
 
-def _refit_thresholds_from_student(args, ec, seeds, grid, winner_genome):
-	"""One student-state refit round (option A). Returns the new thresholds, or
-	None when disabled / not applicable.
+def _refit_thresholds_from_student(args, ec, seeds, grid, seed_population) -> bool:
+	"""One student-state refit round (option A). Stores the TRAINED grid winner's own
+	feature samples on args._threshold_refit_samples (-> the run's ThresholdCalibration)
+	and returns True; False when the flag is off. Any failure STOPS the run: a run that
+	asked for a refit and silently flew the teacher ladder is not that run (until
+	09/11/2026 every failure printed "keeping the teacher fit" and continued).
 
 	WHY A REFIT OBLIGATES A REGRID. The thermometer defines the ADDRESS function,
 	so new thresholds invalidate every learned cell — the paper-critical THRESHOLD
 	MISALIGNMENT finding. The caller therefore RE-RUNS the grid under the new
 	ladder rather than reusing the winner that produced the samples; that winner's
 	only job is to be a realistic state generator.
+
+	WHY THE SAMPLES, NOT THE LADDER, ARE CARRIED. Every fit site (GRID, NEURONS,
+	MEMORY, every held-out and stage-select) re-fits from calibration_from_args(args);
+	carrying the pool there gives all of them the same refit ladder, exactly as the
+	outer quantile rides in ThresholdCalibration. Before 09/11 only the regrid saw it.
 
 	WHY ONE ROUND, NOT ITERATION. Each round costs a full grid stage (the cheapest
 	stage, but not free) and the fixed point is not guaranteed to exist — the
@@ -1810,37 +1837,48 @@ def _refit_thresholds_from_student(args, ec, seeds, grid, winner_genome):
 	rounds are an open question, not a default.
 	"""
 	if not getattr(args, "threshold_refit_from_student", False):
-		return None
-	if winner_genome is None:
-		print("  [thr-refit] no grid winner to sample from — keeping the teacher fit")
-		return None
+		return False
+	if not seed_population:
+		raise SystemExit("[thr-refit] the grid produced no winner to sample from — the refit cannot run")
 	eps = int(getattr(args, "threshold_refit_episodes", 10))
-	print(f"  [thr-refit] rolling out the grid winner for {eps} episodes to collect "
+	print(f"  [thr-refit] training the grid winner, then rolling it out for {eps} episodes to collect "
 	      f"the STUDENT's own feature distribution (the teacher fit under-covers it)")
-	try:
-		# The grid winner is a RecurrentArchGenome (connectivity + cells), not a
-		# buildable ControllerGenome — materialize it against the grid's own spec and
-		# ladder, exactly as the evaluator does, so the rollout uses the SAME
-		# controller the grid scored.
-		from wnn.control.evaluator import controller_genome_from_arch
-		cg = controller_genome_from_arch(winner_genome, grid._probe_spec, grid.thresholds)
-		extra = collect_student_feature_samples(cg, ec, eps, seeds.train)
-	except Exception as e:
-		print(f"  [thr-refit] collection failed ({e}) — keeping the teacher fit")
-		return None
-	n = sum(len(x) for x in extra)
+	cols = _student_refit_samples(args, ec, seeds, grid, seed_population[0], eps)
+	n = len(cols[0]) if cols else 0
 	if n == 0:
-		print("  [thr-refit] collector returned nothing — keeping the teacher fit")
-		return None
-	thr = fit_thresholds_from_pid_rollouts(
-		grid._probe_spec, calibration=calibration_from_args(args), seed=seeds.train,
-		geometry=getattr(ec, "geometry", None),
-		alloc=getattr(ec, "alloc_residual", None),
-		episode_config=_calib_ec(args, ec),
-		extra_samples=extra)
-	print(f"  [thr-refit] refit on {n} student samples + the teacher pool; "
-	      f"REGRIDDING (the address function moved, so every cell is stale)")
-	return thr
+		raise SystemExit("[thr-refit] the student rollout returned no samples — the refit cannot run")
+	args._threshold_refit_samples = tuple(tuple(c) for c in cols)
+	print(f"  [thr-refit] {n} student samples per feature ({len(cols)} features) pooled with the teacher "
+	      f"pool at EVERY fit site; REGRIDDING (the address function moved, so every cell is stale)")
+	return True
+
+
+def _refuse_refit_without_grid(args, path: str) -> None:
+	"""The refit's student pool exists only in the run that collected it (it is not
+	in any checkpoint), so a path that skips the grid would fit the TEACHER ladder
+	and read cells written under the refit one. Refuse, never degrade."""
+	if getattr(args, "threshold_refit_from_student", False):
+		raise SystemExit(f"--threshold-refit-from-student cannot run with {path}: the student pool "
+		                 "is collected after the grid and is not saved, so the ladder these cells were "
+		                 "written under cannot be rebuilt. Re-fly the run from the grid.")
+
+
+def _student_refit_samples(args, ec, seeds, grid, winner, eps: int) -> list:
+	"""The trained grid winner's visited feature values. Grid genomes carry NO cells
+	(the grid trains inside evaluate_batch and discards them), so the winner is first
+	trained on a copy with the grid's own evaluator — the same K-fold accumulate, ladder
+	and train seed the grid scored it under — then materialized and flown. Rolling the
+	raw winner out (10/08 to 09/11) flew an EMPTY memory, not the student."""
+	from wnn.control.evaluator import controller_genome_from_arch
+	student = winner.clone()
+	student.cells = None
+	try:
+		grid._evaluator._evaluate_core([student], write_back=True)
+		cg = controller_genome_from_arch(student, grid._probe_spec, grid.thresholds)
+		return collect_student_feature_samples(cg, ec, eps, seeds.train)
+	except Exception as e:
+		raise RuntimeError(f"[thr-refit] student-state collection failed: {e} — the run asked for "
+		                   "--threshold-refit-from-student and cannot honour it") from e
 
 
 def _stage_entry_from_checkpoint(path, top_k: int | None = None):
@@ -2037,6 +2075,7 @@ def _recalc_headline(args, ec: EpisodeConfig) -> None:
 	prints. The caller must pass the SAME flags the original run used — the seeds,
 	the episodes and the scoring all derive from them, so a mismatched flag would
 	silently produce a number that is not comparable with the original."""
+	_refuse_refit_without_grid(args, "--recalc-headline (nothing is re-collected)")
 	entries = _stage_entries_from_checkpoints(args.recalc_headline,
 	                                          top_k=_stage_select_top_k(args))
 	if not entries:
@@ -2586,6 +2625,8 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 	# from their stage checkpoints. Resolved HERE, before any work, so a missing
 	# checkpoint refuses the resume in seconds instead of after the resumed stage.
 	# (13/10/2026: _tw20 s2 resumed at MEMORY and ranked 3 candidates, not 9.)
+	if resume_state is not None:
+		_refuse_refit_without_grid(args, "--resume / --seed-winner (the grid is skipped)")
 	_completed = []
 	if resume_state is not None and resume_state.get("resume_source") != "seed_winner":
 		_completed = _resume_completed_stages(args, resume_state, resume_start_stage, skip_stages)
@@ -2596,9 +2637,13 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 	# Stage 0 — grid. Skipped on resume (only its winner_spec matters and the
 	# resume's captured `spec` carries that forward).
 	if resume_state is None:
-		winner_spec, seed_pop0, m0, dt0, _thr = stage0_grid(args, ec, seed)
-		from wnn.control.cancel_state import raise_if_interrupted
-		raise_if_interrupted("GRID (stage 0) — its scores after the signal are cancelled evaluations")
+		# STUDENT-STATE THRESHOLD REFIT (option A) rides inside _stage0_with_refit: the
+		# ladder is fitted on teacher rollouts — a BETTER controller than the student —
+		# so it under-covers the excursions the student actually makes. The trained grid
+		# winner is rolled out, its states join the run's calibration (every later fit
+		# site), and the grid is RE-RUN under the new ladder (the paper-critical
+		# THRESHOLD MISALIGNMENT finding: every cell under the old ladder is stale).
+		winner_spec, seed_pop0, m0, dt0, _thr = _stage0_with_refit(args, ec, seeds, seed)
 		stage_results = [("Grid", winner_spec, m0, dt0, grid_point_count(args))]
 		# GRID held-out (REPORT ONLY, same contract as every other stage). The grid
 		# winner is what you would ship if you stopped before the GA, so it needs the
@@ -2609,22 +2654,6 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 		from types import SimpleNamespace as _SNS
 		grid_res = _SNS(best_genome=(seed_pop0[0] if seed_pop0 else None),
 		                final_population=seed_pop0)
-		# STUDENT-STATE THRESHOLD REFIT (option A). The ladder above was fitted on
-		# PID rollouts — a BETTER controller than the student — so it under-covers
-		# the excursions the student actually makes. Roll the grid winner out,
-		# refit on ITS states, and REGRID: new thresholds move the address
-		# function, so every cell trained under the old ladder is stale (the
-		# paper-critical THRESHOLD MISALIGNMENT finding). The first winner is a
-		# state generator only — discarded, not carried.
-		_thr2 = _refit_thresholds_from_student(
-			args, ec, seeds, _grid_for_refit, grid_res.best_genome)
-		if _thr2 is not None:
-			winner_spec, seed_pop0, m0, dt0, _thr = stage0_grid(
-				args, ec, seed, thresholds_override=_thr2)
-			raise_if_interrupted("GRID regrid (stage 0)")
-			stage_results = [("Grid", winner_spec, m0, dt0, grid_point_count(args))]
-			grid_res = _SNS(best_genome=(seed_pop0[0] if seed_pop0 else None),
-			                final_population=seed_pop0)
 		grid_ho = _maybe_holdout(args, ec, winner_spec, grid_res, seeds, "GRID")
 		if grid_ho is not None:
 			# Keep it LOCALLY too: `stage_holdouts` is the flow_runner's out-dict and is

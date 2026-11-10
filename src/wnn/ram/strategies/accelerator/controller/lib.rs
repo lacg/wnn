@@ -73,6 +73,8 @@ mod init_vxy_tests; // ABI 48: training-only initial horizontal velocity (draw o
 #[cfg(test)]
 mod scorer_chunk_tests; // 09/11: CPU scorer vs Metal across score chunks on the rf_c200_dres recipe (ep_vert global index)
 #[cfg(test)]
+mod ctrl49_tests; // ABI 49: the student feature sampler (--threshold-refit-from-student)
+#[cfg(test)]
 mod ctrl48_tests; // CTRL-48: the cascade unabsorbed-disturbance block — physics, replay, CPU/GPU parity
 #[cfg(test)]
 mod abi38_tests; // ABI 38: the cascade controller — identity, rivals, CPU/GPU parity, trainers
@@ -438,7 +440,15 @@ mod metal_controller;
 ///   draw_translation_episode right after x0/y0 (0 draws nothing). Python sets it on
 ///   the DAgger TRAINING config only (`--train-init-vxy`); scorers, calibration
 ///   sampler and recorder are untouched. Pin: init_vxy_tests.rs.
-pub const ABI_VERSION: u32 = 48;
+/// ABI 49 (09/11/2026, additive export, every existing path bit-identical):
+///   sample_student_features(controller, cfg, num_episodes, seed) — the TRAINED
+///   student's own feature values on the training episodes, flown through the
+///   DAgger student rollout (calib_sampler::sample_student_features_rs). Replaces the
+///   Python attitude-only collector for `--threshold-refit-from-student` on every
+///   run whose teacher ladder comes from the training-cascade sampler (translation
+///   + airframe): that collector refused the ABI-32 plant and the refit silently
+///   fell back to the teacher ladder. Pin: ctrl49_tests.rs.
+pub const ABI_VERSION: u32 = 49;
 
 /// ABI 44: how output neurogenesis lays out the output layer — "segment" = every
 /// bank / E-I half resizes at its own tail (pre-44 Python resized the flat tail).
@@ -1271,6 +1281,33 @@ fn sample_calibration_features(
 	))
 }
 
+/// ABI 49: the STUDENT's own visited feature values (per feature) on the same
+/// training episodes `sample_calibration_features` flies the teacher through —
+/// the `--threshold-refit-from-student` pool (calib_sampler::sample_student_features_rs).
+/// `controller` is the TRAINED student (its cells are read, never written); `cfg` is
+/// the reference config (expert_drives / explore_eps are overridden: the student flies).
+#[pyfunction]
+#[pyo3(signature = (controller, cfg, num_episodes, seed))]
+fn sample_student_features(
+	mut controller: PyRefMut<'_, controller::WnnController>,
+	cfg: dagger_train::RewardGatedConfigPacked,
+	num_episodes: usize,
+	seed: u64,
+) -> PyResult<Vec<Vec<f32>>>
+{
+	let flies = calib_sampler::student_flies(&cfg);
+	dagger_train::validate_train_regime(&controller, &flies).map_err(|e| {
+		pyo3::exceptions::PyValueError::new_err(format!("sample_student_features: {e}"))
+	})?;
+	if cfg.steps_per_episode == 0 || num_episodes == 0
+	{
+		return Err(pyo3::exceptions::PyValueError::new_err(
+			"sample_student_features: steps_per_episode and num_episodes must be > 0",
+		));
+	}
+	Ok(calib_sampler::sample_student_features_rs(&mut controller, &cfg, num_episodes, seed))
+}
+
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn record_input_entropy(
@@ -1410,6 +1447,7 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()>
 	m.add_function(wrap_pyfunction!(record_address_universe, m)?)?;
 	m.add_function(wrap_pyfunction!(record_input_entropy, m)?)?;
 	m.add_function(wrap_pyfunction!(sample_calibration_features, m)?)?;
+	m.add_function(wrap_pyfunction!(sample_student_features, m)?)?;
 	m.add("LAYER_STATE", memory_ops::LAYER_STATE)?;
 	m.add("LAYER_OUTPUT", memory_ops::LAYER_OUTPUT)?;
 	// Untrained-cell decode anchor (delta-control + residual neutral point),

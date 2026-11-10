@@ -25,8 +25,10 @@
 
 use crate::controller::{yaw_from_quat_rs, AttitudeSim, WnnController};
 use crate::dagger_train::{
-	apply_cfg_disturbance, sample_initial_state, AirframeRs, RewardGatedConfigPacked, TeacherBank,
+	apply_cfg_disturbance, rollout_and_label_inner, sample_initial_state, AirframeRs, RewardGatedConfigPacked,
+	TeacherBank,
 };
+use crate::imitation_probe::ImitCapture;
 use crate::episode_regime::{anchor_controller, draw_translation_episode, feed_live_obs, OuterLoops};
 use crate::optimal::Teacher;
 use rand::rngs::SmallRng;
@@ -68,6 +70,59 @@ pub fn sample_calibration_features_rs(
 		ep_ctx.run(controller, teacher, &mut sim, &mut rng, &mut samples);
 	}
 	samples
+}
+
+/// ABI 49: per-feature samples of the TRAINED STUDENT's own visited states — the
+/// `--threshold-refit-from-student` pool. The student FLIES the same training
+/// episodes `sample_calibration_features_rs` draws for the teacher (same `cfg`, same
+/// rng seeding and draw order, tilt bound `cfg.full_tilt_deg`), through the DAgger
+/// trainer's own student rollout (`rollout_and_label_inner`, expert_drives off,
+/// no exploration): translation, specific-force IMU, rotor drag, motor lag, the
+/// Mahony estimator, the CTBR delta law and the cascade blocks are the trainer's,
+/// not a second Python plant. Samples are EVERY physical step's feature vector —
+/// the teacher sampler's convention, so the two pools pool per unit of flight
+/// time (compute_features runs on action-repeat holds too). Cells are never
+/// written: a rollout reads memory, training is a separate call.
+pub fn sample_student_features_rs(
+	controller: &mut WnnController,
+	cfg: &RewardGatedConfigPacked,
+	num_episodes: usize,
+	seed: u64,
+) -> Vec<Vec<f32>>
+{
+	let cfg = student_flies(cfg);
+	let mut rng = SmallRng::seed_from_u64(seed);
+	let af = AirframeRs::from_cfg(&cfg);
+	let mut bank = TeacherBank::new(af);
+	let mut sim = af.sim();
+	controller.set_observer_motor_lag_core(sim.motor_lag());
+	let tilt = cfg.full_tilt_deg.to_radians();
+	let mut cap = ImitCapture::feature_sampler();
+	for ep in 0..num_episodes
+	{
+		if ram_core::cancel::check_cancel()
+		{
+			break;
+		}
+		let teacher = bank.get_mut(cfg.teacher_id_for(0, ep));
+		let _ = rollout_and_label_inner(controller, teacher, &mut sim, &cfg, tilt, &mut rng, [0.0; 3], Some(&mut cap));
+	}
+	per_feature(&cap.feats, controller.num_features())
+}
+
+/// The reference config with the STUDENT driving: no expert, no exploration noise.
+pub(crate) fn student_flies(cfg: &RewardGatedConfigPacked) -> RewardGatedConfigPacked
+{
+	let mut c = cfg.clone();
+	c.expert_drives = false;
+	c.explore_eps = 0.0;
+	c
+}
+
+/// Step-major feature rows -> one column per feature.
+fn per_feature(rows: &[Vec<f32>], nf: usize) -> Vec<Vec<f32>>
+{
+	(0..nf).map(|f| rows.iter().map(|r| r[f]).collect()).collect()
 }
 
 /// What one calibration episode needs besides the mutable actors.
