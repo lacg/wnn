@@ -1,5 +1,12 @@
 # Audit: the August 2026 `--threshold-outer-quantile` conclusions after the 09/11 plumbing fix
 
+
+> **ADDENDUM 10/11/2026:** the "refit NULL at n=5 — STANDS" verdict above is now **VOID**. The August refit
+> rolled out an empty-memory grid winner and its ladder reached GRID only (same defect as the quantile); see
+> l4_teacher_screen_results.md "Refit (E1 + E1b)" and branch ctrl-refit-fix dc86efd5. With it, the perception
+> channel has NO valid flown result at all: quantile, calibration tilt and student refit are all being re-tested
+> in CTRL-48 block 5 on controller ABI 49.
+
 09/11/2026. Read-only audit: no runs, no code changes. Trigger: commit `8542f4c1` (09/11) found that
 `--threshold-outer-quantile` reached only 2 of the 5 threshold-ladder fits in `phased_ga.py`.
 

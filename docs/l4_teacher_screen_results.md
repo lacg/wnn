@@ -1202,7 +1202,14 @@ HYPOTHESIS, never as a result.
 control's Σ12.2M. Reaching into the tails maps more of the flown distribution onto
 FEWER distinct codes near zero, so distinct states collide into shared addresses.
 
-### Refit (E1 + E1b) — CLOSED at n=5: a measured NULL
+### Refit (E1 + E1b) — ~~CLOSED at n=5: a measured NULL~~ VOID (10/11/2026)
+
+> **10/11/2026 — this null is VOID as a test of student-state calibration** (refit-fix agent, branch ctrl-refit-fix
+> dc86efd5): the August refit (a) rolled out an EMPTY-memory grid winner, not a trained student, and (b) its ladder
+> reached the GRID search only; NEURONS, MEMORY and every held-out were trained and scored on the teacher ladder
+> (same defect class as the outer quantile, 8542f4c1). It measured grid selection under a ladder pooled with an
+> untrained controller's states. The "better-conditioned space for the memory stage" mechanism has no support
+> (MEMORY never flew it). Fixed in controller ABI 49; re-tested as rf_c200_dres_refit100 (CTRL-48 block 5).
 
 ```
   seed        ctrl    refit    Δ headline    trained-stage rows
