@@ -160,8 +160,7 @@ class ControllerGridSearch(GenericGridSearch):
 		fit = fit_calibration(
 			probe_spec, calibration=calibration_from_args(args), seed=seed,
 			geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None),
-			episode_config=_calib_ec(args, ec),
-			outer_quantile=getattr(args, "threshold_outer_quantile", None))
+			episode_config=_calib_ec(args, ec))
 		if getattr(args, "drop_constant_features", False):
 			names = feature_names(probe_spec)
 			args._drop_auto = tuple(names[f] for f in fit.constant_features)

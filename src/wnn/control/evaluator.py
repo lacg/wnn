@@ -741,13 +741,12 @@ def fit_thresholds_from_pid_rollouts(
 	geometry=None,        # Optional[GeometryConfig] — N-rotor TRUE table (sim side)
 	alloc=None,           # Optional[AllocResidualConfig] — baseline driver gains
 	episode_config=None,  # Optional[EpisodeConfig] — the OPERATING regime (see below)
-	outer_quantile=None,  # Optional[float] — coverage margin, see below
 	extra_samples=None,   # Optional[list[list[float]]] — per-feature student states
 	calibration: "ThresholdCalibration | None" = None,   # CTRL-48; None = num_episodes, flown, quantile
 ) -> list[float]:
 	"""Per-feature thermometer thresholds — fit_calibration(...).thresholds (see there)."""
 	return fit_calibration(spec, num_episodes, seed, method, geometry, alloc, episode_config,
-	                       outer_quantile, extra_samples, calibration).thresholds
+	                       extra_samples, calibration).thresholds
 
 
 def fit_calibration(
@@ -758,7 +757,6 @@ def fit_calibration(
 	geometry=None,
 	alloc=None,
 	episode_config=None,
-	outer_quantile=None,
 	extra_samples=None,
 	calibration: "ThresholdCalibration | None" = None,
 ) -> CalibrationFit:
@@ -768,7 +766,7 @@ def fit_calibration(
 	the legacy call (num_episodes, flown, quantile), byte-identical."""
 	cal = calibration or ThresholdCalibration(episodes=int(num_episodes))
 	samples = _calibration_samples(spec, cal, seed, geometry, alloc, episode_config)
-	thresholds = _thresholds_from_samples(samples, spec, method, outer_quantile, extra_samples,
+	thresholds = _thresholds_from_samples(samples, spec, method, cal.outer_quantile, extra_samples,
 	                                      ladder=cal.ladder)
 	return CalibrationFit(thresholds=thresholds,
 	                      constant_features=_zero_spread_features(samples, extra_samples))
