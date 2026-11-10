@@ -222,6 +222,11 @@ class RewardGatedConfig:
 	curriculum: bool = True
 	easy_tilt_deg: float = 8.0
 	full_tilt_deg: float = 30.0
+	# Training-only horizontal regime (09/11/2026, idea #4 of docs/ctrl_dres_failures.md):
+	# the Rust trainer's xy start bound (None = the episode config's) and initial
+	# horizontal-velocity bound (0 = at rest; ABI 48). evaluator._trainer_plant_kwargs.
+	train_xy_offset: Optional[float] = None
+	train_init_vxy: float = 0.0
 
 	eval_episodes: int = 20              # closed-loop eval after each round
 	seed: int = 0

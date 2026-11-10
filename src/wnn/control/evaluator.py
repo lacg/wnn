@@ -1293,6 +1293,28 @@ def _plant_train_kwargs(ec) -> dict:
 	return {**af, **s1}
 
 
+def _trainer_plant_kwargs(rg) -> dict:
+	"""_plant_train_kwargs for the DAgger TRAINER config only (09/11/2026, idea #4).
+
+	--train-xy-offset / --train-init-vxy widen the trainer's horizontal starts (the
+	--rg-*-tilt-deg pattern: the trainer's rollouts AND its per-round checkpoint eval
+	fly them). reference_packed_config (calibration sampler, MEMORY recorder) and every
+	scorer keep _plant_train_kwargs(ec) — the run's own --xy-offset, at rest. Unset ⇒
+	the very same dict, so the trainer call is byte-identical; init_vxy is passed only
+	when > 0, so an unset run never names the ABI-48 kwarg."""
+	kw = _plant_train_kwargs(rg.episode_config)
+	xy = getattr(rg, "train_xy_offset", None)
+	vxy = float(getattr(rg, "train_init_vxy", 0.0) or 0.0)
+	if (xy is not None or vxy > 0.0) and float(kw.get("xy_offset", 0.0)) <= 0.0:
+		raise ValueError("train_xy_offset / train_init_vxy need the horizontal channel "
+		                 "(translation with max_initial_xy_offset_m > 0) — they would be ignored.")
+	if xy is not None:
+		kw["xy_offset"] = float(xy)
+	if vxy > 0.0:
+		kw["init_vxy"] = vxy
+	return kw
+
+
 def _target_levels_kwarg(ra, spec) -> dict:
 	"""TARGET-LEVELS (16/08/2026, arm R) forwarding — split-deploy safe.
 
@@ -1911,7 +1933,7 @@ class ControllerEvaluator:
 			# airframe + firmware cascade (19/09/2026 gap — trainer got af_mass
 			# only) and the stage-1 vertical channel (or the vertical features
 			# are zeros here and real there — the DOB divergence; Rust asserts).
-			**_plant_train_kwargs(rg.episode_config),
+			**_trainer_plant_kwargs(rg),
 			# CTRL-17 G4: the λ terms the gate + checkpoint rank on.
 			**_gate_lambda_kwargs(rg),
 			# AXIS F: the TRAINING rollout + per-round eval fly the same lagged
@@ -2054,7 +2076,7 @@ class ControllerEvaluator:
 			# airframe + firmware cascade (19/09/2026 gap — trainer got af_mass
 			# only) and the stage-1 vertical channel (or the vertical features
 			# are zeros here and real there — the DOB divergence; Rust asserts).
-			**_plant_train_kwargs(rg.episode_config),
+			**_trainer_plant_kwargs(rg),
 			# CTRL-17 G4: the λ terms the gate + checkpoint rank on.
 			**_gate_lambda_kwargs(rg),
 			# AXIS F: the TRAINING rollout + per-round eval fly the same lagged

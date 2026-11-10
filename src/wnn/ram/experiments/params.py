@@ -230,6 +230,13 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	# Trainer tilt curriculum (27/09/2026): phased_ga --rg-easy-tilt-deg / --rg-full-tilt-deg.
 	"controller_rg_easy_tilt_deg",    # DAgger round-0 initial-tilt bound (deg; default 8)
 	"controller_rg_full_tilt_deg",    # DAgger last-round + checkpoint-eval tilt (deg; default 30)
+	# 09/11/2026 (docs/ctrl_dres_failures.md #3/#4): phased_ga --select-tail/--select-tail-deg
+	# and --train-xy-offset/--train-init-vxy (ABI 48). Not built by the flow adapter:
+	# REFUSED by _refuse_unbuilt_keys like the other phased_ga-only keys.
+	"controller_select_tail",         # off | near_fail — stage-select tail term
+	"controller_select_tail_deg",     # near_fail bound (deg, in (0, 5); default 4)
+	"controller_train_xy_offset",     # DAgger trainer xy start bound (m; None = xy_offset)
+	"controller_train_init_vxy",      # DAgger trainer initial v_xy bound (m/s; default 0)
 })
 
 

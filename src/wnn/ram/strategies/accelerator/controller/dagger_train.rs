@@ -313,6 +313,13 @@ pub struct RewardGatedConfigPacked
 	// lambda_alt sweep flying while this landed — is untouched.
 	#[pyo3(get, set)]
 	pub xy_offset: f32,
+	/// ABI 48 (09/11/2026, docs/ctrl_dres_failures.md idea #4): per-axis bound (m/s)
+	/// of the episode's INITIAL horizontal velocity, U(-v, v) on vx and vy, drawn
+	/// right after x0/y0. 0.0 (default) draws NOTHING — every ABI-47 rng sequence
+	/// is untouched. Python sets it on the TRAINING config only (--train-init-vxy);
+	/// the scorers, the calibration sampler and the recorder never see it.
+	#[pyo3(get, set)]
+	pub init_vxy: f32,
 	/// Reward weight on the RADIAL horizontal position error (0 ⇒ stage-1 reward).
 	/// CTRL-17 G4 (26/09/2026): READ by the DAgger gate and the per-round
 	/// checkpoint (episode_regime::step_reward). It was plumbed but never read, so
@@ -443,6 +450,7 @@ impl RewardGatedConfigPacked
 		imu_specific_force = false, rotor_drag = 0.0, att_err_tilt_ref = false,
 		dist_motor_asym_mag = 0.0,
 		write_vote = false, vote_share = None, dagger_label_estimate = false,
+		init_vxy = 0.0,
 ))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -533,6 +541,7 @@ impl RewardGatedConfigPacked
 		write_vote: bool,
 		vote_share: Option<f64>,
 		dagger_label_estimate: bool,
+		init_vxy: f32,
 	) -> PyResult<Self>
 	{
 		let cfg = Self {
@@ -623,9 +632,11 @@ impl RewardGatedConfigPacked
 			write_vote,
 			vote_share,
 			dagger_label_estimate,
+			init_vxy,
 		};
 		cfg.validate_abi32().map_err(pyo3::exceptions::PyValueError::new_err)?;
 		cfg.write_vote_share().map_err(pyo3::exceptions::PyValueError::new_err)?;
+		cfg.validate_init_vxy().map_err(pyo3::exceptions::PyValueError::new_err)?;
 		if !(dist_motor_asym_mag.is_finite() && (0.0..1.0).contains(&dist_motor_asym_mag))
 		{
 			return Err(pyo3::exceptions::PyValueError::new_err(format!(
@@ -643,6 +654,25 @@ impl RewardGatedConfigPacked
 	{
 		crate::plant_opts::PlantOpts::new(self.imu_specific_force, self.rotor_drag)
 			.expect("RewardGatedConfigPacked: plant options validated at construction")
+	}
+
+	/// ABI 48: init_vxy must be a finite bound >= 0, and > 0 only where the horizontal
+	/// channel exists (translation && xy_offset > 0) — elsewhere it would be ignored.
+	pub(crate) fn validate_init_vxy(&self) -> Result<(), String>
+	{
+		if !(self.init_vxy.is_finite() && self.init_vxy >= 0.0)
+		{
+			return Err(format!("init_vxy = {} must be a finite bound >= 0 (m/s)", self.init_vxy));
+		}
+		if self.init_vxy > 0.0 && !(self.translation && self.xy_offset > 0.0)
+		{
+			return Err(format!(
+				"init_vxy = {} needs the horizontal channel (translation and xy_offset > 0): \
+				 without it no horizontal state is drawn and the velocity would be ignored",
+				self.init_vxy
+			));
+		}
+		Ok(())
 	}
 
 	/// CTRL-46: the vote share the DAgger walk tallies with, None for the mode's own
@@ -4715,6 +4745,7 @@ mod d0_hover_anchor_tests
 			imu_specific_force: false, rotor_drag: 0.0, att_err_tilt_ref: false,
 			dist_motor_asym_mag: 0.0,
 			write_vote: false, vote_share: None, dagger_label_estimate: false,
+			init_vxy: 0.0,
 		}
 	}
 
@@ -5244,6 +5275,7 @@ mod motor_lag_axis_f_tests
 			imu_specific_force: false, rotor_drag: 0.0, att_err_tilt_ref: false,
 			dist_motor_asym_mag: 0.0,
 			write_vote: false, vote_share: None, dagger_label_estimate: false,
+			init_vxy: 0.0,
 		}
 	}
 

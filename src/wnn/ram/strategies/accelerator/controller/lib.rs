@@ -69,6 +69,8 @@ mod ctrl40_tests; // CTRL-40: Metal split train/record for the applied-actuator 
 #[cfg(test)]
 mod ctrl46_tests; // CTRL-46 (ABI 46): vote write rule (CPU/GPU, order independence) + estimate-built labels
 #[cfg(test)]
+mod init_vxy_tests; // ABI 48: training-only initial horizontal velocity (draw order, validation)
+#[cfg(test)]
 mod scorer_chunk_tests; // 09/11: CPU scorer vs Metal across score chunks on the rf_c200_dres recipe (ep_vert global index)
 #[cfg(test)]
 mod ctrl48_tests; // CTRL-48: the cascade unabsorbed-disturbance block — physics, replay, CPU/GPU parity
@@ -430,7 +432,13 @@ mod metal_controller;
 ///   (dist_ep_offset + e). Every GPU-scored translation row over > 25 episodes MOVES
 ///   to the CPU scorer's value; attitude-only runs and <= 25-episode calls are
 ///   bit-identical. No Python surface change. Pin: scorer_chunk_tests.rs.
-pub const ABI_VERSION: u32 = 47;
+/// ABI 48 (09/11/2026, docs/ctrl_dres_failures.md idea #4, default-OFF ⇒ ABI 47
+///   bit-identical): RewardGatedConfigPacked(init_vxy=) — per-axis bound of a
+///   U(-v, v) initial horizontal velocity, drawn in episode_regime::
+///   draw_translation_episode right after x0/y0 (0 draws nothing). Python sets it on
+///   the DAgger TRAINING config only (`--train-init-vxy`); scorers, calibration
+///   sampler and recorder are untouched. Pin: init_vxy_tests.rs.
+pub const ABI_VERSION: u32 = 48;
 
 /// ABI 44: how output neurogenesis lays out the output layer — "segment" = every
 /// bank / E-I half resizes at its own tail (pre-44 Python resized the flat tail).

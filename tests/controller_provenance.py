@@ -36,7 +36,8 @@ def test_line_is_single_token_per_field() -> None:
 	      {"wheel": "ram_controller-2026.212.37", "abi": "27", "wheel_sha256": "08cdd0462eac0d15", "git": "3b5fc37d+dirty",
 	       "motor_lag": "unknown", "obs_pwm": "unknown", "train_asym": "unknown", "arch": "unknown",
 	       "recorder": "unknown", "neuro": "unknown", "rf": "unknown", "calib": "unknown", "drop": "unknown",
-	       "write": "unknown", "label": "unknown", "abp": "unknown"})
+	       "write": "unknown", "label": "unknown", "abp": "unknown",
+	       "select": "unknown", "train_ic": "unknown"})
 	q = ControllerProvenance("w", 35, "s", "g", "rotation(1 pool/gen)", "0.2s:airframe:grafe2026")
 	check("ABI 35 item I: resolved motor lag is printed before fitness_pools",
 	      " motor_lag=0.2s:airframe:grafe2026 obs_pwm=unknown " in q.line()

@@ -141,7 +141,10 @@ import os
 # translational draws (z/vz/mass/collective/x/y) by the chunk-local episode, so GPU
 # scores of translation runs with > 25 episodes replayed episodes 0..24's draws. GPU
 # rows of those runs MOVE to the CPU scorer's value. No Python surface change.
-EXPECTED_ABI = 47
+# ABI 48 (09/11/2026, docs/ctrl_dres_failures.md idea #4): RewardGatedConfigPacked(
+# init_vxy=) — the DAgger trainer's initial horizontal velocity bound (--train-init-vxy),
+# drawn after x0/y0 (0 draws nothing). Default-off ⇒ ABI 47 bit-identical.
+EXPECTED_ABI = 48
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

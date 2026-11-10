@@ -290,6 +290,10 @@ def _resume_ga_state_if_targeted(strat, args, stage_num: int) -> None:
 	      f"{strat._resume_start_gen} with the dumped GA state", flush=True)
 
 from wnn.control.provenance import arch_token, collect_provenance, obs_pwm_convention
+from wnn.control.select_tail import (new_episode_sink, select_tail_token, tail_count,
+                                     tail_rank_winner, validate_select_tail)
+from wnn.control.train_ics import (train_ic_header, train_ic_overrides, train_ic_token,
+                                   validate_train_ics)
 from wnn.control.threshold_calibration import (
 	CALIB_LADDERS, CALIB_REGIMES, calibration_from_args,
 )
@@ -896,7 +900,8 @@ def _gate_lambda_header(args, ec: EpisodeConfig) -> str:
 	return (gate_lambda_line(args, ec, math.radians(full))
 	        + f"\n[RG-TILT] DAgger trainer tilt curriculum {easy:g}°→{full:g}° "
 	          f"(checkpoint eval at {full:g}°); scorer --tilt {getattr(args, 'tilt', float('nan')):g}°"
-	        + gate_line)
+	        + gate_line
+	        + ("" if train_ic_token(args) == "off" else "\n" + train_ic_header(args, ec)))
 
 
 def _rg_config(args, ec: EpisodeConfig, seed: int) -> RewardGatedConfig:
@@ -914,6 +919,8 @@ def _rg_config(args, ec: EpisodeConfig, seed: int) -> RewardGatedConfig:
 	rg.teacher_hover_mode = getattr(args, "teacher_hover", "derived")
 	# Trainer tilt curriculum (27/09/2026): set BEFORE the gate λ, which reads it.
 	rg.easy_tilt_deg, rg.full_tilt_deg = _rg_tilts(args)
+	# Training-only horizontal starts (idea #4; validated in main by validate_train_ics).
+	rg.train_xy_offset, rg.train_init_vxy = train_ic_overrides(args)
 	# CTRL-17 G4: the λ the Rust gate + checkpoint rank on — the explicit reward λ,
 	# else derived from the rank weights at the trainer's own tilt (gate_lambdas.py).
 	rg.gate_lambda_alt, rg.gate_lambda_pos, _src = resolve_gate_lambdas(
@@ -2138,12 +2145,15 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 
 	scored: dict = {}
 	cand_meta: dict = {}
+	tails: dict = {}         # --select-tail: key -> near-fail count over the val draws
 	for key, label, spec, genome in cand:
 		per_seed = []
 		for vs in VAL_SEEDS:
+			sink = new_episode_sink(args)    # None (tail off) = the unchanged call
 			try:
 				vm = _holdout_report(args, ec, spec, genome, None,
-				                     vs, seeds.train, stage_label=f"{key}-VAL{vs}")
+				                     vs, seeds.train, stage_label=f"{key}-VAL{vs}",
+				                     episode_sink=sink)
 			except HoldoutScoringError:
 				raise
 			except Exception as e:
@@ -2156,6 +2166,9 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 					f"stage-select {key}: val seed {vs} failed: {e}") from e
 			if vm is not None:
 				per_seed.append(vm)
+				if sink is not None:
+					tails[key] = tails.get(key, 0) + tail_count(
+						sink, float(getattr(args, "select_tail_deg", 4.0)), f"{key}-VAL{vs}")
 		if per_seed:
 			scored[key] = _mean_metric(per_seed)
 			cand_meta[key] = (label, spec, genome)
@@ -2163,7 +2176,7 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 			print(f"  [stage-select] {key}: no val draw scored — excluded from selection")
 
 	# ONE ranking over the union of candidates, using the run's own weights.
-	winner, whms = None, {}
+	winner, whms, combined = None, {}, {}
 	if scored:
 		labels = list(scored)
 		# Aggregation via _select_aggregation: ARITHMETIC by default (19/08, Luiz —
@@ -2191,6 +2204,9 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 		vals = calc.fitness([scored[l] for l in labels])
 		whms = dict(zip(labels, vals))
 		winner = min(whms, key=lambda l: whms[l])
+		if tails:
+			# --select-tail near_fail: rank(fit) + rank(tail), see wnn.control.select_tail.
+			winner, combined = tail_rank_winner(labels, whms, tails)
 
 	print("\n" + "=" * 72)
 	print("  STAGE TABLE — every stage published; headline = val-selected (union rank)")
@@ -2235,6 +2251,8 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 			# hardcoding one mean would disguise exactly the change that moves
 			# headlines (arm 9: MEMORY#0 under WHM, CONNECTIONS#0 under arithmetic).
 			fit_s = ("fit=%.4f" % whms[key]) if key in whms else "fit=n/a"
+			if key in combined:
+				fit_s += " tail=%d R=%.1f" % (tails[key], combined[key])
 			mark = "  <- HEADLINE" if key == winner else ""
 			print(f"    {key:<14} {val_s:<26} {aux:<44} {fit_s}{mark}")
 	# The combine word is READ OFF THE CALCULATOR, never hardcoded. It was
@@ -2250,6 +2268,9 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 	print(f"  (published triple = REPORT seeds, always pop[0]; 'val' = mean over {len(VAL_SEEDS)} "
 	      f"disjoint val seeds {VAL_SEEDS[0]}..{VAL_SEEDS[-1]}; fit = {calc.name if scored else 'n/a'}, "
 	      f"ONE {combine} weighted-rank over ALL {len(scored)} candidates — top-{_TOP_K} of every stage together)")
+	if combined:
+		print(f"  (--select-tail {select_tail_token(args)}: tail = val episodes diverged or err > "
+		      f"{float(getattr(args, 'select_tail_deg', 4.0)):g}°; HEADLINE = min R = rank(fit) + rank(tail), ties -> lower fit)")
 	if winner is None:
 		print("  [stage-select] no stage could be scored on val — headline falls back to MEMORY")
 		return None
@@ -2309,7 +2330,8 @@ def _headline_pick(stage_entries, winner: str, cand_meta: dict):
 
 
 def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population,
-                    report_seed: int, train_seed: int, stage_label: str = "final"):
+                    report_seed: int, train_seed: int, stage_label: str = "final",
+                    episode_sink: list | None = None):
 	"""TRUE held-out — REPORT ONLY. Re-eval the whole final population on a FRESH
 	report_seed for DESCRIPTIVE statistics. The held-out is NEVER used to select a
 	genome or feed any phase — selecting on it would leak val into the population
@@ -2318,7 +2340,10 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 
 	The per-stage/per-gen metric is K-fold on the TRAIN seed (the GA's OPTIMISTIC
 	selection metric — doesn't reproduce, see project_controller_eval_variance), so
-	this fresh-seed measurement of the chosen winner is the honest paper number."""
+	this fresh-seed measurement of the chosen winner is the honest paper number.
+
+	`episode_sink` (--select-tail, stage-select VAL draws only): armed on the SCORING
+	evaluator, it collects the GPU scorer's per-episode rows; None = the unchanged call."""
 	import statistics
 	if report_seed == train_seed:
 		print(f"  [report-seed] WARNING: report_seed == train_seed ({train_seed}) — NOT a held-out.")
@@ -2348,6 +2373,7 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 	                         rg_config=_rg_config(args, ec, report_seed),
 	                         max_train_workers=args.train_workers,
 	                         num_eval_folds=getattr(args, "num_eval_folds", 5))  # K=1 is NEVER an option
+	ev.per_episode_sink = episode_sink
 	pop = list(final_population) if final_population else [best_genome]
 	# A (13/06): the held-out RESULT is pop[0] (the during-search winner); the
 	# rest are scored ONLY for a descriptive population stat that is explicitly
@@ -3504,6 +3530,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--rg-full-tilt-deg", type=float, default=30.0,
 	                help="DAgger trainer: last-round initial-tilt bound AND the per-round "
 	                     "checkpoint eval's tilt (deg). Default 30 (historical).")
+	# Training-only horizontal episode regime (09/11/2026, docs/ctrl_dres_failures.md idea
+	# #4) — the --rg-*-tilt-deg pattern for the horizontal draw: the DAgger trainer (its
+	# rollouts and per-round checkpoint eval) flies these; the GA fitness, held-out,
+	# stage-select, threshold calibration and MEMORY recorder keep --xy-offset at rest.
+	ap.add_argument("--train-xy-offset", type=float, default=None,
+	                help="DAgger trainer: initial horizontal offset bound (m) per axis. Default "
+	                     "None = --xy-offset (unchanged). Needs --translation --xy-offset > 0.")
+	ap.add_argument("--train-init-vxy", type=float, default=0.0,
+	                help="DAgger trainer: initial horizontal VELOCITY bound (m/s) per axis, "
+	                     "U(-v, v) on vx and vy (controller ABI 48). Default 0 = at rest "
+	                     "(unchanged; draws nothing). Needs --translation --xy-offset > 0.")
 	ap.add_argument("--topk-per-neuron", type=int, default=None,
 	                help="Beam-search top-K candidate addresses per neuron in the "
 	                     "per-motor EDRA solve (default 4). ONLY bites at sn>0: a "
@@ -3595,6 +3632,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "genome that IS the published result — always competes, and the ranking is "
 	                     "not compressed onto 3 rank slots. K also bounds what survives the "
 	                     "orchestrator's population release (~120-330 MB/genome).")
+	# Tail-aware stage-select (09/11/2026, docs/ctrl_dres_failures.md idea #3). Selection
+	# only: never the GA fitness, never the report seeds (wnn.control.select_tail).
+	ap.add_argument("--select-tail", choices=("off", "near_fail"), default="off",
+	                help="Stage-select tail term. near_fail: count each candidate's val episodes "
+	                     "that diverged or whose per-episode mean attitude error exceeds "
+	                     "--select-tail-deg (GPU per-episode rows), and pick the headline by "
+	                     "rank(fit) + rank(tail) — a near-miss proxy for the 1-in-1000 fails the "
+	                     "mean-based fitness cannot see. off (default) = unchanged selection.")
+	ap.add_argument("--select-tail-deg", type=float, default=4.0,
+	                help="near_fail bound (deg), in (0, 5): below the 5° stable bound so the "
+	                     "count sees near-misses, not only fails. Default 4.0.")
 	ap.add_argument("--recalc-headline", type=str, default=None, metavar="CKPT_DIR",
 	                help="REPORT-ONLY re-selection: skip the search entirely, rebuild the "
 	                     "stage candidates from the stage checkpoints in CKPT_DIR and re-run "
@@ -4196,6 +4244,9 @@ def main():
 		# REWARD λ (the two were split 18/08); name the flag that tripped it.
 		raise SystemExit("--reward-lambda-pos requires --translation and --xy-offset > 0: "
 		                 "there is no horizontal error to reward without them.")
+	# Ideas #3/#4 of docs/ctrl_dres_failures.md: refuse bad bounds before any work.
+	validate_train_ics(args, ec)
+	validate_select_tail(args)
 	# CTRL-17 G4: one greppable line with the λ the DAgger gate + checkpoint rank on.
 	print(_gate_lambda_header(args, ec), flush=True)
 	# ABI 32: one greppable line stating the plant mode; validates the G5 reference
@@ -4322,7 +4373,8 @@ def main():
 	                         arch=arch_token(getattr(args, "_ctbr", None), args.teacher,
 	                                         args.action_repeat, ec.dt),
 	                         rf=rf_token(args), calib=calibration_from_args(args).token(),
-	                         drop=drop_token(args), **ctrl46_tokens(args)).line())
+	                         drop=drop_token(args), select=select_tail_token(args),
+	                         train_ic=train_ic_token(args), **ctrl46_tokens(args)).line())
 	import shlex
 	print(f"[argv] {shlex.join(args.cli_argv)}", flush=True)
 

@@ -159,8 +159,14 @@ def test_both_ctor_sites_use_the_plant_helper() -> None:
 	check("evaluator has exactly two trainer ctor sites", len(sites), 2)
 	for i, pos in enumerate(sites):
 		body = src[pos:src.index("\n\t\t)\n", pos)]
-		check(f"site {i} splats _plant_train_kwargs", "**_plant_train_kwargs(rg.episode_config)" in body, True)
+		# 09/11/2026 (ABI 48): the trainer sites splat _trainer_plant_kwargs(rg), which is
+		# _plant_train_kwargs(rg.episode_config) plus the training-only horizontal
+		# overrides (--train-xy-offset / --train-init-vxy; identical dict when unset).
+		check(f"site {i} splats _trainer_plant_kwargs", "**_trainer_plant_kwargs(rg)" in body, True)
 		check(f"site {i} does not splat _stage1_train_kwargs directly", "**_stage1_train_kwargs(" in body, False)
+	helper = src[src.index("def _trainer_plant_kwargs("):src.index("def _target_levels_kwarg(")]
+	check("_trainer_plant_kwargs builds on _plant_train_kwargs(rg.episode_config)",
+	      "_plant_train_kwargs(rg.episode_config)" in helper, True)
 
 
 def test_cf21_with_motor_lag_packs_both() -> None:

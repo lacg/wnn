@@ -72,6 +72,11 @@ class ControllerProvenance:
 	write: str = UNKNOWN
 	label: str = UNKNOWN
 	abp: str = UNKNOWN
+	# 09/11/2026 (docs/ctrl_dres_failures.md ideas #3/#4): the stage-select tail term
+	# ("off" | "near_fail:<deg>") and the DAgger trainer's horizontal starts ("off" |
+	# "xy:<m|scorer>,vxy:<m/s>"). Printed BEFORE fitness_pools.
+	select: str = UNKNOWN
+	train_ic: str = UNKNOWN
 
 	def line(self) -> str:
 		"""The single greppable line the ladder copies into the marker."""
@@ -89,6 +94,8 @@ class ControllerProvenance:
 		        f"write={self.write} "
 		        f"label={self.label} "
 		        f"abp={self.abp} "
+		        f"select={self.select} "
+		        f"train_ic={self.train_ic} "
 		        f"fitness_pools={self.fitness_pools}")
 
 
@@ -122,7 +129,8 @@ def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: st
                        train_asym: str = UNKNOWN, arch: str = UNKNOWN,
                        rf: str = UNKNOWN, calib: str = UNKNOWN,
                        drop: str = UNKNOWN, write: str = UNKNOWN, label: str = UNKNOWN,
-                       abp: str = UNKNOWN) -> ControllerProvenance:
+                       abp: str = UNKNOWN, select: str = UNKNOWN,
+                       train_ic: str = UNKNOWN) -> ControllerProvenance:
 	"""Gather every field, never raising: each accessor degrades to UNKNOWN / 0."""
 	wheel, abi, sha = _wheel_identity()
 	return ControllerProvenance(
@@ -143,6 +151,8 @@ def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: st
 		write=write.replace(" ", "_").replace('"', ""),
 		label=label.replace(" ", "_").replace('"', ""),
 		abp=abp.replace(" ", "_").replace('"', ""),
+		select=select.replace(" ", "_").replace('"', ""),
+		train_ic=train_ic.replace(" ", "_").replace('"', ""),
 	)
 
 
