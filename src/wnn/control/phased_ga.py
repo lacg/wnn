@@ -290,6 +290,13 @@ def _resume_ga_state_if_targeted(strat, args, stage_num: int) -> None:
 	      f"{strat._resume_start_gen} with the dumped GA state", flush=True)
 
 from wnn.control.provenance import arch_token, collect_provenance, obs_pwm_convention
+from wnn.control.select_tail import (SELECT_TAIL_MODES, genome0_rows, new_episode_sink,
+                                     select_tail_token, tail_cell, tail_footer, tail_rank_winner,
+                                     tail_value, validate_select_tail)
+from wnn.control.val_units import (DEFAULT_VAL_UNITS, checked_val_unit_seeds, val_units_count,
+                                   val_units_line, validate_val_units)
+from wnn.control.train_ics import (train_ic_header, train_ic_overrides, train_ic_token,
+                                   validate_train_ics)
 from wnn.control.threshold_calibration import (
 	CALIB_LADDERS, CALIB_REGIMES, calibration_from_args,
 )
@@ -481,6 +488,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                obs_vz: bool = False,
                obs_pos_err_xy: bool = False, obs_vel_xy: bool = False,
                obs_att_estimator: bool = False,
+               obs_att_bias_pred: bool = False,
                integral_leak: float = 0.99, integral_scale: float = 1.0,
                dt: float = 0.001,
                decouple_outputs: bool = False, bits_per_feature: int = 8,
@@ -534,6 +542,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		obs_collective_cmd=obs_collective_cmd, obs_alt_err=obs_alt_err, obs_vz=obs_vz,
 		obs_pos_err_xy=obs_pos_err_xy, obs_vel_xy=obs_vel_xy,
 		obs_att_estimator=obs_att_estimator,
+		obs_att_bias_pred=obs_att_bias_pred,
 		integral_leak=integral_leak, integral_scale=integral_scale,
 		dt=dt,
 		decouple_outputs=decouple_outputs,
@@ -610,10 +619,7 @@ def _geometry_from_args(args, base_seed: int):
 	return geo, ar
 
 
-_grid_for_refit = None   # last ControllerGridSearch — the refit needs its probe spec
-
-
-def stage0_grid(args, ec: EpisodeConfig, seed: int, thresholds_override=None):
+def stage0_grid(args, ec: EpisodeConfig, seed: int):
 	"""Grid over (state_neurons × bits). Returns
 	(winner_spec, seed_population, winner_metrics, wall_time, thresholds).
 
@@ -624,13 +630,35 @@ def stage0_grid(args, ec: EpisodeConfig, seed: int, thresholds_override=None):
 	instead of discarding all but the single winner. `seed_population[0]` is the
 	fitness-best genome; its spec is `winner_spec`.
 	"""
+	return _grid_result(*_grid_search(args, ec, seed))
+
+
+def _grid_search(args, ec: EpisodeConfig, seed: int):
+	"""(ControllerGridSearch, outcome) — the grid object is kept for the refit, which
+	trains the winner with the grid's own evaluator and ladder."""
 	from wnn.control.controller_grid_search import ControllerGridSearch
-	gs = ControllerGridSearch(args, ec, seed, thresholds_override=thresholds_override)
-	outcome = gs.run()
-	winner_spec = outcome.best_point.spec
-	global _grid_for_refit
-	_grid_for_refit = gs
-	return winner_spec, outcome.seed_population, outcome.best_metrics, gs.elapsed, gs.thresholds
+	gs = ControllerGridSearch(args, ec, seed)
+	return gs, gs.run()
+
+
+def _grid_result(gs, outcome):
+	"""stage0_grid's 5-tuple from a finished grid."""
+	return outcome.best_point.spec, outcome.seed_population, outcome.best_metrics, gs.elapsed, gs.thresholds
+
+
+def _stage0_with_refit(args, ec: EpisodeConfig, seeds, seed: int):
+	"""Stage 0, plus the student-state refit round when --threshold-refit-from-student
+	is set: roll the trained grid winner out, pool its states into the run's
+	calibration (args._threshold_refit_samples -> ThresholdCalibration.student_samples,
+	read by EVERY later fit site), then REGRID under the refit ladder."""
+	from wnn.control.cancel_state import raise_if_interrupted
+	args._threshold_refit_samples = None   # per run: never inherit a previous run's pool
+	gs, outcome = _grid_search(args, ec, seed)
+	raise_if_interrupted("GRID (stage 0) — its scores after the signal are cancelled evaluations")
+	if _refit_thresholds_from_student(args, ec, seeds, gs, outcome.seed_population):
+		gs, outcome = _grid_search(args, ec, seed)
+		raise_if_interrupted("GRID regrid (stage 0)")
+	return _grid_result(gs, outcome)
 
 
 # -----------------------------------------------------------------------------
@@ -894,7 +922,8 @@ def _gate_lambda_header(args, ec: EpisodeConfig) -> str:
 	return (gate_lambda_line(args, ec, math.radians(full))
 	        + f"\n[RG-TILT] DAgger trainer tilt curriculum {easy:g}°→{full:g}° "
 	          f"(checkpoint eval at {full:g}°); scorer --tilt {getattr(args, 'tilt', float('nan')):g}°"
-	        + gate_line)
+	        + gate_line
+	        + ("" if train_ic_token(args) == "off" else "\n" + train_ic_header(args, ec)))
 
 
 def _rg_config(args, ec: EpisodeConfig, seed: int) -> RewardGatedConfig:
@@ -912,12 +941,19 @@ def _rg_config(args, ec: EpisodeConfig, seed: int) -> RewardGatedConfig:
 	rg.teacher_hover_mode = getattr(args, "teacher_hover", "derived")
 	# Trainer tilt curriculum (27/09/2026): set BEFORE the gate λ, which reads it.
 	rg.easy_tilt_deg, rg.full_tilt_deg = _rg_tilts(args)
+	# Training-only horizontal starts (idea #4; validated in main by validate_train_ics).
+	rg.train_xy_offset, rg.train_init_vxy = train_ic_overrides(args)
 	# CTRL-17 G4: the λ the Rust gate + checkpoint rank on — the explicit reward λ,
 	# else derived from the rank weights at the trainer's own tilt (gate_lambdas.py).
 	rg.gate_lambda_alt, rg.gate_lambda_pos, _src = resolve_gate_lambdas(
 		args, ec, math.radians(rg.full_tilt_deg))
 	# Pure BC (19/07/2026): teacher drives the training rollouts (see reward_gated).
 	rg.expert_drives = bool(getattr(args, "expert_drives", False))
+	# CTRL-46 (ABI 46): the DAgger write rule and the label attitude (resolved and
+	# validated at arg-parse by resolve_ctrl46_args).
+	rg.write_vote = getattr(args, "write_rule", "last") == "vote"
+	rg.vote_share = getattr(args, "_vote_share", None)
+	rg.dagger_label_estimate = getattr(args, "dagger_label_attitude", "true") == "estimate"
 	if args.rg_rounds is not None:
 		rg.num_rounds = args.rg_rounds
 	if args.rg_episodes_per_round is not None:
@@ -1437,7 +1473,8 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 
 def _save_winner(path: str, args, spec: ControllerSpec,
                  best_genome, final_population, metrics,
-                 stage_num=None, stage_name=None, async_save: bool = False) -> None:
+                 stage_num=None, stage_name=None, async_save: bool = False,
+                 headline_key: str | None = None) -> None:
 	"""Persist the WINNER + the entire FINAL POPULATION + spec + provenance to
 	PATH (schema-2 yaml.gz, cells packed; no pickle).
 
@@ -1496,6 +1533,9 @@ def _save_winner(path: str, args, spec: ControllerSpec,
 		payload["stage_num"] = stage_num
 	if stage_name is not None:
 		payload["stage_name"] = stage_name
+	if headline_key is not None:
+		# Which published row this file IS (e.g. "NEURONS#2"): best_genome = pop[0] = it.
+		payload["meta"]["headline"] = headline_key
 	pop_n = len(payload["population"])
 	if async_save:
 		p, t = _ctl_save_async(path, payload)
@@ -1775,15 +1815,23 @@ def _maybe_holdout(args, ec, spec, res, seeds, label: str):
 
 
 
-def _refit_thresholds_from_student(args, ec, seeds, grid, winner_genome):
-	"""One student-state refit round (option A). Returns the new thresholds, or
-	None when disabled / not applicable.
+def _refit_thresholds_from_student(args, ec, seeds, grid, seed_population) -> bool:
+	"""One student-state refit round (option A). Stores the TRAINED grid winner's own
+	feature samples on args._threshold_refit_samples (-> the run's ThresholdCalibration)
+	and returns True; False when the flag is off. Any failure STOPS the run: a run that
+	asked for a refit and silently flew the teacher ladder is not that run (until
+	09/11/2026 every failure printed "keeping the teacher fit" and continued).
 
 	WHY A REFIT OBLIGATES A REGRID. The thermometer defines the ADDRESS function,
 	so new thresholds invalidate every learned cell — the paper-critical THRESHOLD
 	MISALIGNMENT finding. The caller therefore RE-RUNS the grid under the new
 	ladder rather than reusing the winner that produced the samples; that winner's
 	only job is to be a realistic state generator.
+
+	WHY THE SAMPLES, NOT THE LADDER, ARE CARRIED. Every fit site (GRID, NEURONS,
+	MEMORY, every held-out and stage-select) re-fits from calibration_from_args(args);
+	carrying the pool there gives all of them the same refit ladder, exactly as the
+	outer quantile rides in ThresholdCalibration. Before 09/11 only the regrid saw it.
 
 	WHY ONE ROUND, NOT ITERATION. Each round costs a full grid stage (the cheapest
 	stage, but not free) and the fixed point is not guaranteed to exist — the
@@ -1792,37 +1840,48 @@ def _refit_thresholds_from_student(args, ec, seeds, grid, winner_genome):
 	rounds are an open question, not a default.
 	"""
 	if not getattr(args, "threshold_refit_from_student", False):
-		return None
-	if winner_genome is None:
-		print("  [thr-refit] no grid winner to sample from — keeping the teacher fit")
-		return None
+		return False
+	if not seed_population:
+		raise SystemExit("[thr-refit] the grid produced no winner to sample from — the refit cannot run")
 	eps = int(getattr(args, "threshold_refit_episodes", 10))
-	print(f"  [thr-refit] rolling out the grid winner for {eps} episodes to collect "
+	print(f"  [thr-refit] training the grid winner, then rolling it out for {eps} episodes to collect "
 	      f"the STUDENT's own feature distribution (the teacher fit under-covers it)")
-	try:
-		# The grid winner is a RecurrentArchGenome (connectivity + cells), not a
-		# buildable ControllerGenome — materialize it against the grid's own spec and
-		# ladder, exactly as the evaluator does, so the rollout uses the SAME
-		# controller the grid scored.
-		from wnn.control.evaluator import controller_genome_from_arch
-		cg = controller_genome_from_arch(winner_genome, grid._probe_spec, grid.thresholds)
-		extra = collect_student_feature_samples(cg, ec, eps, seeds.train)
-	except Exception as e:
-		print(f"  [thr-refit] collection failed ({e}) — keeping the teacher fit")
-		return None
-	n = sum(len(x) for x in extra)
+	cols = _student_refit_samples(args, ec, seeds, grid, seed_population[0], eps)
+	n = len(cols[0]) if cols else 0
 	if n == 0:
-		print("  [thr-refit] collector returned nothing — keeping the teacher fit")
-		return None
-	thr = fit_thresholds_from_pid_rollouts(
-		grid._probe_spec, calibration=calibration_from_args(args), seed=seeds.train,
-		geometry=getattr(ec, "geometry", None),
-		alloc=getattr(ec, "alloc_residual", None),
-		episode_config=_calib_ec(args, ec),
-		extra_samples=extra)
-	print(f"  [thr-refit] refit on {n} student samples + the teacher pool; "
-	      f"REGRIDDING (the address function moved, so every cell is stale)")
-	return thr
+		raise SystemExit("[thr-refit] the student rollout returned no samples — the refit cannot run")
+	args._threshold_refit_samples = tuple(tuple(c) for c in cols)
+	print(f"  [thr-refit] {n} student samples per feature ({len(cols)} features) pooled with the teacher "
+	      f"pool at EVERY fit site; REGRIDDING (the address function moved, so every cell is stale)")
+	return True
+
+
+def _refuse_refit_without_grid(args, path: str) -> None:
+	"""The refit's student pool exists only in the run that collected it (it is not
+	in any checkpoint), so a path that skips the grid would fit the TEACHER ladder
+	and read cells written under the refit one. Refuse, never degrade."""
+	if getattr(args, "threshold_refit_from_student", False):
+		raise SystemExit(f"--threshold-refit-from-student cannot run with {path}: the student pool "
+		                 "is collected after the grid and is not saved, so the ladder these cells were "
+		                 "written under cannot be rebuilt. Re-fly the run from the grid.")
+
+
+def _student_refit_samples(args, ec, seeds, grid, winner, eps: int) -> list:
+	"""The trained grid winner's visited feature values. Grid genomes carry NO cells
+	(the grid trains inside evaluate_batch and discards them), so the winner is first
+	trained on a copy with the grid's own evaluator — the same K-fold accumulate, ladder
+	and train seed the grid scored it under — then materialized and flown. Rolling the
+	raw winner out (10/08 to 09/11) flew an EMPTY memory, not the student."""
+	from wnn.control.evaluator import controller_genome_from_arch
+	student = winner.clone()
+	student.cells = None
+	try:
+		grid._evaluator._evaluate_core([student], write_back=True)
+		cg = controller_genome_from_arch(student, grid._probe_spec, grid.thresholds)
+		return collect_student_feature_samples(cg, ec, eps, seeds.train)
+	except Exception as e:
+		raise RuntimeError(f"[thr-refit] student-state collection failed: {e} — the run asked for "
+		                   "--threshold-refit-from-student and cannot honour it") from e
 
 
 def _stage_entry_from_checkpoint(path, top_k: int | None = None):
@@ -2019,6 +2078,7 @@ def _recalc_headline(args, ec: EpisodeConfig) -> None:
 	prints. The caller must pass the SAME flags the original run used — the seeds,
 	the episodes and the scoring all derive from them, so a mismatched flag would
 	silently produce a number that is not comparable with the original."""
+	_refuse_refit_without_grid(args, "--recalc-headline (nothing is re-collected)")
 	entries = _stage_entries_from_checkpoints(args.recalc_headline,
 	                                          top_k=_stage_select_top_k(args))
 	if not entries:
@@ -2027,13 +2087,31 @@ def _recalc_headline(args, ec: EpisodeConfig) -> None:
 	seeds = resolve_seed_set(base=base, run_index=0, train=args.train_seed,
 	                         test=args.test_seed, val=args.val_seed)
 	log_seed_set(seeds)
+	print(val_units_line(args, seeds), flush=True)   # refuses a val unit that is not disjoint
 	print(f"\n[recalc] re-selecting the headline over {len(entries)} stages "
 	      f"({', '.join(lbl for lbl, _s, _r in entries)}) from {args.recalc_headline}")
 	# stage_holdouts is empty: the per-stage report blocks live in the original
 	# run's log and are unchanged by re-selection. The selector scores the genome
 	# it picks on the report seeds itself, so the headline triple is still the
 	# selected genome's own number.
-	_select_headline_stage(args, ec, seeds, entries, {})
+	_recalc_summary(args, _select_headline_stage(args, ec, seeds, entries, {}))
+
+
+def _recalc_summary(args, headline) -> None:
+	"""ONE greppable line per recalc: the pick under this rule and its report-unit row
+	(the pre-registered comparison, docs/ctrl_select_tail_prereg.md, reads it straight)."""
+	rule = f"val_units={val_units_count(args)} select={select_tail_token(args).split(',')[0]}"
+	if headline is None or getattr(headline, "report", None) is None:
+		print(f"[recalc] PICK {args.recalc_headline} {rule} headline=NONE (nothing scored)")
+		return
+	wh = headline.report
+	fails = getattr(wh, "stable_failures", None)
+	n_eps = getattr(wh, "stable_episodes", None)
+	fail_s = f" fails={fails}/{n_eps}" if fails is not None else " fails=n/a"
+	print(f"[recalc] PICK {args.recalc_headline} {rule} headline={headline.key} "
+	      f"stage={headline.label} report({len(getattr(args, 'report_seeds', None) or [0])} units): "
+	      f"stable={wh.acc * 100:.2f}% err={wh.mean_attitude_error_deg:.3f}°"
+	      f"{_heldout_row_str(wh)}{fail_s}", flush=True)
 
 
 def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
@@ -2063,8 +2141,8 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 	    rank-WHM is valid for: they compete on the same population, so a genome cannot
 	    win by having had weaker company.
 
-	MULTI-SEED VAL (5 draws, derived `seeds.val + i`). One val draw would make
-	best-of-N selection a lottery — the more candidates screened on a single finite
+	MULTI-SEED VAL (--val-units draws, default 5, derived `seeds.val + i`). One val
+	draw would make best-of-N selection a lottery — the more candidates screened on a single finite
 	draw, the likelier the winner is one that got lucky there. Averaging the metrics
 	across 5 val seeds before ranking damps that, exactly as the report block uses 5.
 	This is NOT a leak: val is disjoint from both the search folds and the report seeds,
@@ -2077,12 +2155,15 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 	just multiply cost. Extending this to the full carried populations is a follow-up —
 	it needs bounded top-K retention before `_release_prior_populations` frees them.
 
-	`stage_entries` is [(label, spec, res), ...]. Returns the winning label (or None)."""
+	`stage_entries` is [(label, spec, res), ...]. Returns the headline pick
+	(`_headline_pick`: label, key, spec, genome, population) or None."""
 	import statistics
 	from types import SimpleNamespace
 	from wnn.control.controller_orchestrator import ControllerOrchestrator
 	from wnn.ram.fitness import FitnessCalculatorControllerHarmonic
-	VAL_SEEDS = [int(seeds.val) + i for i in range(5)]
+	# --val-units N (default 5 = the pre-flag list): unit i = seeds.val + i, checked
+	# disjoint from the report units and the train/test seeds (wnn.control.val_units).
+	VAL_SEEDS = checked_val_unit_seeds(args, seeds)
 	_TOP_K = max(1, int(getattr(args, "stage_select_top_k",
 	                            ControllerOrchestrator.STAGE_SELECT_TOP_K)))
 
@@ -2126,12 +2207,15 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 
 	scored: dict = {}
 	cand_meta: dict = {}
+	tails: dict = {}         # --select-tail: key -> tail term over ALL its pooled val episodes
 	for key, label, spec, genome in cand:
-		per_seed = []
+		per_seed, tail_rows = [], []
 		for vs in VAL_SEEDS:
+			sink = new_episode_sink(args)    # None (tail off) = the unchanged call
 			try:
 				vm = _holdout_report(args, ec, spec, genome, None,
-				                     vs, seeds.train, stage_label=f"{key}-VAL{vs}")
+				                     vs, seeds.train, stage_label=f"{key}-VAL{vs}",
+				                     episode_sink=sink)
 			except HoldoutScoringError:
 				raise
 			except Exception as e:
@@ -2144,6 +2228,12 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 					f"stage-select {key}: val seed {vs} failed: {e}") from e
 			if vm is not None:
 				per_seed.append(vm)
+				if sink is not None:
+					tail_rows.extend(genome0_rows(sink, f"{key}-VAL{vs}"))
+		if tail_rows:
+			# Pooled over every val unit: near_fail's count is the per-unit sum it always
+			# was; p99 needs the pool (a percentile of percentiles is not one).
+			tails[key] = tail_value(args, tail_rows)
 		if per_seed:
 			scored[key] = _mean_metric(per_seed)
 			cand_meta[key] = (label, spec, genome)
@@ -2151,7 +2241,7 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 			print(f"  [stage-select] {key}: no val draw scored — excluded from selection")
 
 	# ONE ranking over the union of candidates, using the run's own weights.
-	winner, whms = None, {}
+	winner, whms, combined = None, {}, {}
 	if scored:
 		labels = list(scored)
 		# Aggregation via _select_aggregation: ARITHMETIC by default (19/08, Luiz —
@@ -2179,6 +2269,9 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 		vals = calc.fitness([scored[l] for l in labels])
 		whms = dict(zip(labels, vals))
 		winner = min(whms, key=lambda l: whms[l])
+		if tails:
+			# --select-tail near_fail|p99: rank(fit) + rank(tail), see wnn.control.select_tail.
+			winner, combined = tail_rank_winner(labels, whms, tails)
 
 	print("\n" + "=" * 72)
 	print("  STAGE TABLE — every stage published; headline = val-selected (union rank)")
@@ -2223,6 +2316,8 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 			# hardcoding one mean would disguise exactly the change that moves
 			# headlines (arm 9: MEMORY#0 under WHM, CONNECTIONS#0 under arithmetic).
 			fit_s = ("fit=%.4f" % whms[key]) if key in whms else "fit=n/a"
+			if key in combined:
+				fit_s += " %s R=%.1f" % (tail_cell(args, tails[key]), combined[key])
 			mark = "  <- HEADLINE" if key == winner else ""
 			print(f"    {key:<14} {val_s:<26} {aux:<44} {fit_s}{mark}")
 	# The combine word is READ OFF THE CALCULATOR, never hardcoded. It was
@@ -2238,9 +2333,12 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 	print(f"  (published triple = REPORT seeds, always pop[0]; 'val' = mean over {len(VAL_SEEDS)} "
 	      f"disjoint val seeds {VAL_SEEDS[0]}..{VAL_SEEDS[-1]}; fit = {calc.name if scored else 'n/a'}, "
 	      f"ONE {combine} weighted-rank over ALL {len(scored)} candidates — top-{_TOP_K} of every stage together)")
+	if combined:
+		print(tail_footer(args))
 	if winner is None:
 		print("  [stage-select] no stage could be scored on val — headline falls back to MEMORY")
 		return None
+	headline = _headline_pick(stage_entries, winner, cand_meta)
 	print(f"  [stage-select] HEADLINE stage={win_label} genome={winner} (union rank over "
 	      f"{len(scored)} candidates = top-{_TOP_K} of every stage, on {len(VAL_SEEDS)} val "
 	      f"seeds; NEVER on the report seeds)")
@@ -2273,11 +2371,32 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 		# is a weight that silently cannot be applied — jerk is 20% of C10.
 		print(f"  [stage-select] HEADLINE held-out: stable={wh.acc * 100:.1f}% "
 		      f"err={wh.mean_attitude_error_deg:.2f}°{_heldout_row_str(wh)}")
-	return win_label
+	headline.report = wh     # the published row of the PICKED genome (--recalc-headline reads it)
+	return headline
+
+
+def _headline_pick(stage_entries, winner: str, cand_meta: dict):
+	"""The selected genome as --save-winner must write it (09/11/2026).
+
+	Returns SimpleNamespace(label, key, spec, genome, population): `population` is the
+	headline STAGE's carried population re-ordered so the headline genome is pop[0] —
+	every consumer reads either best_genome or pop[0] (ensemble_teachers.load_winner),
+	so both must name the published genome. The population is the headline stage's own
+	(its spec), never MEMORY's, so a NEURONS headline is not saved under a foreign spec."""
+	from types import SimpleNamespace
+	label, spec, genome = cand_meta[winner]
+	stage_pop = []
+	for lbl, _spec, res in stage_entries:
+		if lbl == label and res is not None:
+			stage_pop = list(getattr(res, "final_population", None) or [])
+			break
+	population = [genome] + [g for g in stage_pop if g is not genome]
+	return SimpleNamespace(label=label, key=winner, spec=spec, genome=genome, population=population)
 
 
 def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population,
-                    report_seed: int, train_seed: int, stage_label: str = "final"):
+                    report_seed: int, train_seed: int, stage_label: str = "final",
+                    episode_sink: list | None = None):
 	"""TRUE held-out — REPORT ONLY. Re-eval the whole final population on a FRESH
 	report_seed for DESCRIPTIVE statistics. The held-out is NEVER used to select a
 	genome or feed any phase — selecting on it would leak val into the population
@@ -2286,7 +2405,10 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 
 	The per-stage/per-gen metric is K-fold on the TRAIN seed (the GA's OPTIMISTIC
 	selection metric — doesn't reproduce, see project_controller_eval_variance), so
-	this fresh-seed measurement of the chosen winner is the honest paper number."""
+	this fresh-seed measurement of the chosen winner is the honest paper number.
+
+	`episode_sink` (--select-tail, stage-select VAL draws only): armed on the SCORING
+	evaluator, it collects the GPU scorer's per-episode rows; None = the unchanged call."""
 	import statistics
 	if report_seed == train_seed:
 		print(f"  [report-seed] WARNING: report_seed == train_seed ({train_seed}) — NOT a held-out.")
@@ -2316,6 +2438,7 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 	                         rg_config=_rg_config(args, ec, report_seed),
 	                         max_train_workers=args.train_workers,
 	                         num_eval_folds=getattr(args, "num_eval_folds", 5))  # K=1 is NEVER an option
+	ev.per_episode_sink = episode_sink
 	pop = list(final_population) if final_population else [best_genome]
 	# A (13/06): the held-out RESULT is pop[0] (the during-search winner); the
 	# rest are scored ONLY for a descriptive population stat that is explicitly
@@ -2528,6 +2651,8 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 	# from their stage checkpoints. Resolved HERE, before any work, so a missing
 	# checkpoint refuses the resume in seconds instead of after the resumed stage.
 	# (13/10/2026: _tw20 s2 resumed at MEMORY and ranked 3 candidates, not 9.)
+	if resume_state is not None:
+		_refuse_refit_without_grid(args, "--resume / --seed-winner (the grid is skipped)")
 	_completed = []
 	if resume_state is not None and resume_state.get("resume_source") != "seed_winner":
 		_completed = _resume_completed_stages(args, resume_state, resume_start_stage, skip_stages)
@@ -2538,9 +2663,13 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 	# Stage 0 — grid. Skipped on resume (only its winner_spec matters and the
 	# resume's captured `spec` carries that forward).
 	if resume_state is None:
-		winner_spec, seed_pop0, m0, dt0, _thr = stage0_grid(args, ec, seed)
-		from wnn.control.cancel_state import raise_if_interrupted
-		raise_if_interrupted("GRID (stage 0) — its scores after the signal are cancelled evaluations")
+		# STUDENT-STATE THRESHOLD REFIT (option A) rides inside _stage0_with_refit: the
+		# ladder is fitted on teacher rollouts — a BETTER controller than the student —
+		# so it under-covers the excursions the student actually makes. The trained grid
+		# winner is rolled out, its states join the run's calibration (every later fit
+		# site), and the grid is RE-RUN under the new ladder (the paper-critical
+		# THRESHOLD MISALIGNMENT finding: every cell under the old ladder is stale).
+		winner_spec, seed_pop0, m0, dt0, _thr = _stage0_with_refit(args, ec, seeds, seed)
 		stage_results = [("Grid", winner_spec, m0, dt0, grid_point_count(args))]
 		# GRID held-out (REPORT ONLY, same contract as every other stage). The grid
 		# winner is what you would ship if you stopped before the GA, so it needs the
@@ -2551,22 +2680,6 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 		from types import SimpleNamespace as _SNS
 		grid_res = _SNS(best_genome=(seed_pop0[0] if seed_pop0 else None),
 		                final_population=seed_pop0)
-		# STUDENT-STATE THRESHOLD REFIT (option A). The ladder above was fitted on
-		# PID rollouts — a BETTER controller than the student — so it under-covers
-		# the excursions the student actually makes. Roll the grid winner out,
-		# refit on ITS states, and REGRID: new thresholds move the address
-		# function, so every cell trained under the old ladder is stale (the
-		# paper-critical THRESHOLD MISALIGNMENT finding). The first winner is a
-		# state generator only — discarded, not carried.
-		_thr2 = _refit_thresholds_from_student(
-			args, ec, seeds, _grid_for_refit, grid_res.best_genome)
-		if _thr2 is not None:
-			winner_spec, seed_pop0, m0, dt0, _thr = stage0_grid(
-				args, ec, seed, thresholds_override=_thr2)
-			raise_if_interrupted("GRID regrid (stage 0)")
-			stage_results = [("Grid", winner_spec, m0, dt0, grid_point_count(args))]
-			grid_res = _SNS(best_genome=(seed_pop0[0] if seed_pop0 else None),
-			                final_population=seed_pop0)
 		grid_ho = _maybe_holdout(args, ec, winner_spec, grid_res, seeds, "GRID")
 		if grid_ho is not None:
 			# Keep it LOCALLY too: `stage_holdouts` is the flow_runner's out-dict and is
@@ -2663,7 +2776,7 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 		res4 = _SNS(best_genome=resume_warm_genome, final_population=resume_population)
 
 	# Publish every stage; headline the val-selected one (see _select_headline_stage).
-	# Report-only: this changes NOTHING about the search, the carry, or --save-winner.
+	# Report-only for the search and the carry; --save-winner writes the pick (09/11/2026).
 	_all_ho = dict(orch.stage_holdouts)
 	if stage_holdouts is not None:
 		_all_ho.update(stage_holdouts)
@@ -2688,8 +2801,7 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 	# stage checkpoint is already on disk, so --recalc-headline re-selects without a
 	# re-fly. The one recoverable case — the union ranking itself failing — keeps its
 	# own narrow fallback inside _select_headline_stage.
-	if _entries:
-		_select_headline_stage(args, ec, seeds, _entries, _all_ho)
+	headline = _select_headline_stage(args, ec, seeds, _entries, _all_ho) if _entries else None
 
 	# PID baseline on the val seed (the held-out reference).
 	pid_rows = _pid_baseline(ec, args.eval_episodes, seeds.val,
@@ -2706,8 +2818,41 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 	# final_population: memory-stage population, sorted by fitness. Used by
 	# --save-winner so Plan B can warm-start its GA from Plan A's evolved pool.
 	if res4 is None:
-		return stage_results, None, None, pid_rows
-	return stage_results, res4.best_genome, res4.final_population, pid_rows
+		return stage_results, None, None, pid_rows, headline
+	return stage_results, res4.best_genome, res4.final_population, pid_rows, headline
+
+
+def _winner_payload(stage_results, final_population, headline):
+	"""(spec, genome, population, metrics, stage_label) for --save-winner.
+
+	Until 09/11/2026 --save-winner wrote MEMORY's `best_genome` — the K-fold
+	lucky-fold snapshot, which differs from pop[0] in most checkpoints — under
+	MEMORY's spec, whatever the stage-select HEADLINE was. The file therefore named
+	a genome no published row describes (CTRL-48 s1: headline NEURONS#2). It now
+	writes the HEADLINE genome as best_genome AND pop[0]. A MEMORY headline keeps
+	MEMORY's full population behind it (the Plan B warm-start pool); another stage
+	saves its own carried top-K under its own spec. No headline (no stage could be
+	scored on val) = the MEMORY fallback the log announces: pop[0], not best_genome."""
+	mem_spec, mem_metrics = stage_results[-1][1], stage_results[-1][2]
+	mem_pop = list(final_population or [])
+	if headline is None:
+		return mem_spec, (mem_pop[0] if mem_pop else None), mem_pop, mem_metrics, "MEMORY"
+	src = mem_pop if headline.label == "MEMORY" and mem_pop else headline.population
+	population = [headline.genome] + [g for g in src if g is not headline.genome]
+	metrics = next((row[2] for row in stage_results
+	                if str(row[0]).upper().startswith(headline.label)), None)
+	return headline.spec, headline.genome, population, metrics, headline.key
+
+
+def _save_published_winner(args, stage_results, final_population, headline) -> None:
+	"""--save-winner: persist the genome the HEADLINE row reports (see _winner_payload)."""
+	spec, genome, population, metrics, key = _winner_payload(stage_results, final_population, headline)
+	if genome is None:
+		print("\n[save-winner] no published genome to save (empty MEMORY population, no headline)")
+		return
+	print(f"\n[save-winner] best_genome = pop[0] = the published HEADLINE genome {key}")
+	_save_winner(args.save_winner, args, spec, genome, population, metrics,
+	             headline_key=key)
 
 
 def _print_final_summary(args, stage_results, best_final, pid_rows, total_dt: float):
@@ -2928,6 +3073,30 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "accelerometer. DEFAULT ON whenever the specific-force IMU is on (the "
 	                     "accelerometer then carries no tilt); --no-obs-att-estimator with "
 	                     "specific force is REFUSED unless --force-blind-attitude.")
+	# CTRL-46 (ABI 46). Every default reproduces ABI 45 bit-identically.
+	ap.add_argument("--write-rule", choices=list(CONTROLLER_WRITE_RULES), default="last",
+	                help="CTRL-46: how the DAgger walk writes a cell (memory mode = what a cell IS). "
+	                     "last = today's last-write-wins direct set (BINARY/TERNARY/PLN; QUAD keeps its "
+	                     "nudge). vote = the IDS-56 min-share vote: every visit of a DAgger round adds "
+	                     "+(1-θ) toward TRUE / -θ toward FALSE to a per-(neuron, address) tally, committed "
+	                     "once per round (>0 TRUE, <0 FALSE, 0 untrained). Order-independent. "
+	                     "BINARY/TERNARY/PLN only (QUAD refused: its nudge already tallies).")
+	ap.add_argument("--vote-share", type=float, default=None, metavar="THETA",
+	                help="CTRL-46: the vote's min-share θ in (0, 0.5] on the 1/100 grid (a cell commits "
+	                     "TRUE iff its TRUE visits are not a clear minority, p_true > θ). Only with "
+	                     "--write-rule vote; default (unset) = 0.5, the plain majority.")
+	ap.add_argument("--dagger-label-attitude", choices=list(DAGGER_LABEL_ATTITUDES), default="true",
+	                help="CTRL-46: the attitude the DAgger LABEL is built from. true = the simulator's "
+	                     "quaternion (default, ABI 45). estimate = the student's own Mahony estimate (what "
+	                     "it observes), so the label carries no estimator-bias term the student cannot "
+	                     "see. Only the label: rival/scoring rows are untouched. Needs --obs-att-estimator; "
+	                     "refuses --expert-drives.")
+	ap.add_argument("--obs-att-bias-pred", action="store_true", default=False,
+	                help="CTRL-46: +2 input features (roll, pitch) = the ONBOARD prediction of the Mahony "
+	                     "estimator's specific-force bias: the filter's own linearised error dynamics "
+	                     "(kp, ki) driven by the change of the horizontal velocity estimate, rotated into "
+	                     "the body by the estimate's quaternion. Uses no simulator truth. Needs "
+	                     "--obs-att-estimator and --obs-vel-xy. Default OFF.")
 	ap.add_argument("--force-blind-attitude", action="store_true", default=False,
 	                help="ABI 32: allow a specific-force run whose attitude features read the "
 	                     "raw accelerometer (or that has none). Refused by default — it flies a "
@@ -3416,6 +3585,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--rg-full-tilt-deg", type=float, default=30.0,
 	                help="DAgger trainer: last-round initial-tilt bound AND the per-round "
 	                     "checkpoint eval's tilt (deg). Default 30 (historical).")
+	# Training-only horizontal episode regime (09/11/2026, docs/ctrl_dres_failures.md idea
+	# #4) — the --rg-*-tilt-deg pattern for the horizontal draw: the DAgger trainer (its
+	# rollouts and per-round checkpoint eval) flies these; the GA fitness, held-out,
+	# stage-select, threshold calibration and MEMORY recorder keep --xy-offset at rest.
+	ap.add_argument("--train-xy-offset", type=float, default=None,
+	                help="DAgger trainer: initial horizontal offset bound (m) per axis. Default "
+	                     "None = --xy-offset (unchanged). Needs --translation --xy-offset > 0.")
+	ap.add_argument("--train-init-vxy", type=float, default=0.0,
+	                help="DAgger trainer: initial horizontal VELOCITY bound (m/s) per axis, "
+	                     "U(-v, v) on vx and vy (controller ABI 48). Default 0 = at rest "
+	                     "(unchanged; draws nothing). Needs --translation --xy-offset > 0.")
 	ap.add_argument("--topk-per-neuron", type=int, default=None,
 	                help="Beam-search top-K candidate addresses per neuron in the "
 	                     "per-motor EDRA solve (default 4). ONLY bites at sn>0: a "
@@ -3507,6 +3687,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "genome that IS the published result — always competes, and the ranking is "
 	                     "not compressed onto 3 rank slots. K also bounds what survives the "
 	                     "orchestrator's population release (~120-330 MB/genome).")
+	# Tail-aware stage-select (09/11/2026, docs/ctrl_dres_failures.md idea #3). Selection
+	# only: never the GA fitness, never the report seeds (wnn.control.select_tail).
+	ap.add_argument("--select-tail", choices=SELECT_TAIL_MODES, default="off",
+	                help="Stage-select tail term. near_fail: count each candidate's val episodes "
+	                     "that diverged or whose per-episode mean attitude error exceeds "
+	                     "--select-tail-deg (GPU per-episode rows), and pick the headline by "
+	                     "rank(fit) + rank(tail) — a near-miss proxy for the 1-in-1000 fails the "
+	                     "mean-based fitness cannot see. p99 (pre-registered, "
+	                     "docs/ctrl_select_tail_prereg.md): tail = 99th percentile (numpy "
+	                     "inverted_cdf) of the per-episode error over ALL pooled val episodes, "
+	                     "diverged = +inf, combined the same way. off (default) = unchanged selection.")
+	ap.add_argument("--select-tail-deg", type=float, default=4.0,
+	                help="near_fail bound (deg), in (0, 5): below the 5° stable bound so the "
+	                     "count sees near-misses, not only fails. Default 4.0.")
+	ap.add_argument("--val-units", type=int, default=DEFAULT_VAL_UNITS, metavar="N",
+	                help="Stage-select val units per candidate (x --report-episodes each). Unit i "
+	                     "= seeds.val + i, asserted disjoint from the report units and the "
+	                     "train/test seeds (raw + fold pool seeds). Default 5 = the pre-flag list, "
+	                     "bit-identical; N > 5 extends it (its first 5 are today's).")
 	ap.add_argument("--recalc-headline", type=str, default=None, metavar="CKPT_DIR",
 	                help="REPORT-ONLY re-selection: skip the search entirely, rebuild the "
 	                     "stage candidates from the stage checkpoints in CKPT_DIR and re-run "
@@ -3837,6 +4036,66 @@ def resolve_abi32_plant(args) -> None:
 	_resolve_motor_lag_args(args)
 
 
+# CTRL-46 (ABI 46): the controller's write rules, in the IDS vocabulary
+# (ids_write_rule / ids_vote_share). "last" = the controller's own direct write
+# (ram_core WriteRule::LastWrite for BINARY/TERNARY/PLN, the nudge for QUAD).
+CONTROLLER_WRITE_RULES = ("last", "vote")
+DAGGER_LABEL_ATTITUDES = ("true", "estimate")
+
+
+def resolve_ctrl46_args(args) -> None:
+	"""CTRL-46 (ABI 46): validate --write-rule / --vote-share / --dagger-label-attitude /
+	--obs-att-bias-pred IN PLACE (args._vote_share = the snapped θ or None). Run after
+	resolve_abi32_plant (it reads the resolved obs_att_estimator). The vote gates are
+	the IDS ones (ids_param_resolution.require_vote_mode / validate_vote_share), so a
+	θ or a mode is accepted here exactly when an IDS flow would accept it."""
+	from wnn.ram.experiments.ids_param_resolution import require_vote_mode, validate_vote_share
+	rule = getattr(args, "write_rule", "last")
+	if rule not in CONTROLLER_WRITE_RULES:
+		raise SystemExit(f"--write-rule {rule!r}: expected one of {list(CONTROLLER_WRITE_RULES)}")
+	theta = getattr(args, "vote_share", None)
+	args._vote_share = None
+	try:
+		if rule == "vote":
+			require_vote_mode(getattr(args, "memory_mode", "QUAD_WEIGHTED"), "--write-rule")
+		if theta is not None:
+			if rule != "vote":
+				raise ValueError(f"--vote-share={theta!r} is only valid with --write-rule vote")
+			args._vote_share = validate_vote_share(theta, "--vote-share")
+	except ValueError as e:
+		raise SystemExit(str(e))
+	if rule == "vote" and bool(getattr(args, "protect_learned", False)):
+		raise SystemExit("--write-rule vote refuses protect_learned (a tally has no learned cell to protect).")
+	label = getattr(args, "dagger_label_attitude", "true")
+	if label not in DAGGER_LABEL_ATTITUDES:
+		raise SystemExit(f"--dagger-label-attitude {label!r}: expected one of {list(DAGGER_LABEL_ATTITUDES)}")
+	if label == "estimate":
+		if not getattr(args, "obs_att_estimator", False):
+			raise SystemExit("--dagger-label-attitude estimate builds the label from the student's Mahony "
+			                 "estimate — it needs --obs-att-estimator (the attitude the student observes).")
+		if getattr(args, "expert_drives", False):
+			raise SystemExit("--dagger-label-attitude estimate refuses --expert-drives: the teacher would "
+			                 "fly its estimate-built label, changing the trajectory, not only the label.")
+	if getattr(args, "obs_att_bias_pred", False):
+		if not getattr(args, "obs_att_estimator", False):
+			raise SystemExit("--obs-att-bias-pred predicts the Mahony estimator's bias: it needs "
+			                 "--obs-att-estimator.")
+		if not getattr(args, "obs_vel_xy", False):
+			raise SystemExit("--obs-att-bias-pred is driven by the horizontal velocity the student "
+			                 "already reads: it needs --obs-vel-xy (no new signal is allowed in).")
+
+
+def ctrl46_tokens(args) -> dict:
+	"""Provenance write= / label= / abp= values (defaults = ABI 45: last / true / off)."""
+	rule = getattr(args, "write_rule", "last")
+	theta = getattr(args, "_vote_share", None)
+	return dict(
+		write=rule if rule != "vote" else f"vote:{0.5 if theta is None else theta:g}",
+		label=getattr(args, "dagger_label_attitude", "true"),
+		abp="on" if getattr(args, "obs_att_bias_pred", False) else "off",
+	)
+
+
 def _plant_header(args, ec) -> str:
 	"""One greppable line per run stating the plant mode (ABI 32)."""
 	return (f"[PLANT] imu={'specific-force' if ec.imu_specific_force else 'inclinometer'} "
@@ -3856,6 +4115,7 @@ def episode_config_from_args(args) -> EpisodeConfig:
 	from wnn.control.training import DisturbanceConfig
 	from wnn.control.airframe import Airframe as _Airframe
 	resolve_abi32_plant(args)  # ABI 32 (idempotent): real-life defaults under translation
+	resolve_ctrl46_args(args)  # CTRL-46 (idempotent): write rule, label attitude, abp
 	dist = DisturbanceConfig.preset(args.disturbance, seed=911)
 	if getattr(args, "motor_fault", None):
 		if dist is None:
@@ -4047,6 +4307,10 @@ def main():
 		# REWARD λ (the two were split 18/08); name the flag that tripped it.
 		raise SystemExit("--reward-lambda-pos requires --translation and --xy-offset > 0: "
 		                 "there is no horizontal error to reward without them.")
+	# Ideas #3/#4 of docs/ctrl_dres_failures.md: refuse bad bounds before any work.
+	validate_train_ics(args, ec)
+	validate_select_tail(args)
+	validate_val_units(args)
 	# CTRL-17 G4: one greppable line with the λ the DAgger gate + checkpoint rank on.
 	print(_gate_lambda_header(args, ec), flush=True)
 	# ABI 32: one greppable line stating the plant mode; validates the G5 reference
@@ -4173,7 +4437,8 @@ def main():
 	                         arch=arch_token(getattr(args, "_ctbr", None), args.teacher,
 	                                         args.action_repeat, ec.dt),
 	                         rf=rf_token(args), calib=calibration_from_args(args).token(),
-	                         drop=drop_token(args)).line())
+	                         drop=drop_token(args), select=select_tail_token(args),
+	                         train_ic=train_ic_token(args), **ctrl46_tokens(args)).line())
 	import shlex
 	print(f"[argv] {shlex.join(args.cli_argv)}", flush=True)
 
@@ -4192,6 +4457,7 @@ def main():
 		s = resolve_seed_set(base=base, run_index=run_i,
 		                     train=args.train_seed, test=args.test_seed, val=args.val_seed)
 		log_seed_set(s)
+		print(val_units_line(args, s), flush=True)   # refuses a val unit that is not disjoint
 		record_seed_set(s, script="run_phased_ga", extra={
 			"grid_sn": args.grid_state_neurons, "grid_bits": args.grid_bits,
 			"grid_on": _on_axis, "input_window_k": args.input_window_k,
@@ -4201,7 +4467,7 @@ def main():
 		})
 		from wnn.control.cancel_state import RunInterrupted
 		try:
-			stage_results, best_final, final_population, pid_rows = _run_one(
+			stage_results, best_final, final_population, pid_rows, headline = _run_one(
 				args, ec, s, resume_state=resume_state)
 		except RunInterrupted as e:
 			# The ONE exit for a shutdown (15/10/2026): no summary, no winner save,
@@ -4212,21 +4478,17 @@ def main():
 			      f"--resume-from-emergency <emergency_stage*.yaml.gz> --resume-mode same",
 			      flush=True)
 			return 143
-		val_runs.append((stage_results, best_final, final_population, pid_rows))
+		val_runs.append((stage_results, best_final, final_population, pid_rows, headline))
 
 	# Single-run path: print the per-run summary directly.
-	stage_results, best_final, final_population, pid_rows = val_runs[-1]
+	stage_results, best_final, final_population, pid_rows, headline = val_runs[-1]
 	_print_final_summary(args, stage_results, best_final, pid_rows, time.time() - t_start)
 
 	# Held-out (REPORT ONLY) now fires PER-STAGE inside _run_one (N→B→C→M trajectory);
 	# the MEMORY-stage per-stage held-out IS the final number, so nothing to add here.
 
 	if args.save_winner is not None and best_final is not None:
-		# stage_results[-1] is the Memory stage tuple (name, spec, metrics, dt, iters).
-		mem_spec    = stage_results[-1][1]
-		mem_metrics = stage_results[-1][2]
-		_save_winner(args.save_winner, args, mem_spec,
-		             best_final, final_population, mem_metrics)
+		_save_published_winner(args, stage_results, final_population, headline)
 
 	# Multi-run aggregation: mean±std of the FINAL (memory-stage) metrics.
 	if args.runs > 1:

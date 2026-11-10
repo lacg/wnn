@@ -32,6 +32,7 @@ numpy = "0.23"
 rayon = "1.8"
 dashmap = "6.1"
 rand = { version = "0.8", features = ["small_rng"] }
+rustc-hash = "1.1" # CTRL-46: the per-round vote tally map (same hasher ram_core uses)
 
 # Metal GPU (Apple Silicon) — macOS only. Used by metal_controller.rs.
 [target.'cfg(target_os = "macos")'.dependencies]

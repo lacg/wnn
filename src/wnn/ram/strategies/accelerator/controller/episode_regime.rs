@@ -96,13 +96,17 @@ pub(crate) fn draw_translation_episode(
 		jitter_sym(rng, cfg.alt_offset),
 		jitter_sym(rng, cfg.init_vz),
 	);
-	// STAGE 2: displaced at rest. Gated on xy_offset > 0 so a stage-1 config draws
-	// nothing here and its rng sequence is untouched.
+	// STAGE 2: displaced, at rest unless init_vxy > 0. Gated on xy_offset > 0 so a
+	// stage-1 config draws nothing here and its rng sequence is untouched.
 	if cfg.xy_offset > 0.0
 	{
 		let x0 = jitter_sym(rng, cfg.xy_offset);
 		let y0 = jitter_sym(rng, cfg.xy_offset);
-		sim.set_horizontal_state(x0, y0, 0.0, 0.0);
+		// ABI 48: initial horizontal velocity (training-only, idea #4). Drawn AFTER
+		// x0/y0; init_vxy == 0 draws nothing, so the ABI-47 sequence is intact.
+		let vx0 = jitter_sym(rng, cfg.init_vxy);
+		let vy0 = jitter_sym(rng, cfg.init_vxy);
+		sim.set_horizontal_state(x0, y0, vx0, vy0);
 	}
 	let hover = (m * cfg.af_gravity / (4.0 * cfg.af_k_thrust)).sqrt();
 	(hover * (1.0 + jitter_sym(rng, cfg.collective_jitter))).clamp(0.0, 1.0)

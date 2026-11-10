@@ -89,6 +89,9 @@ FAMILY: dict[str, AxisFamily] = {
 	"rate_i_x": _R, "rate_i_y": _P, "rate_i_z": _Y,     # CTRL-38 a1 inner-loop I
 	"cdhat_x": _R, "cdhat_y": _P, "cdhat_z": _Y,        # CTRL-38 a2 cascade d-hat
 	"cresid_x": _R, "cresid_y": _P, "cresid_z": _Y,     # CTRL-48 a3 unabsorbed d-hat
+	# CTRL-46: the predicted Mahony bias of the student's roll / pitch reading — BODY
+	# frame (rotated by the estimate's own quaternion), so no world-frame caveat.
+	"abp_r": _R, "abp_p": _P,
 }
 
 
@@ -101,6 +104,7 @@ ZERO_REFERENCED: frozenset[str] = frozenset({
 	"pwm", "yaw_err", "yaw_err_i", "dhat_r", "dhat_p", "dhat_y", "alt_err", "vz",
 	"e_x", "e_y", "v_x", "v_y", "rate_i_x", "rate_i_y", "rate_i_z",
 	"cdhat_x", "cdhat_y", "cdhat_z", "cresid_x", "cresid_y", "cresid_z",
+	"abp_r", "abp_p",
 })
 
 
@@ -153,7 +157,14 @@ def _cascade_block(spec: "ControllerSpec") -> list[str]:
 	        + ["cresid_x", "cresid_y", "cresid_z"] * (c.get("obs_dhat_residual_plant") is not None))
 
 
-_BLOCKS = (_base_block, _attitude_block, _actuator_block, _translation_block, _cascade_block)
+def _att_bias_block(spec: "ControllerSpec") -> list[str]:
+	"""CTRL-46 Mahony-bias predictor, appended LAST (after the cascade blocks;
+	controller.rs append_att_bias_features)."""
+	return ["abp_r", "abp_p"] * bool(getattr(spec, "obs_att_bias_pred", False))
+
+
+_BLOCKS = (_base_block, _attitude_block, _actuator_block, _translation_block, _cascade_block,
+           _att_bias_block)
 
 
 def feature_layout(spec: "ControllerSpec") -> tuple[FeatureDesc, ...]:

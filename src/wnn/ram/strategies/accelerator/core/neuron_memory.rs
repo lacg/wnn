@@ -1566,12 +1566,7 @@ pub fn oi_bin_to_cell(packed: u32) -> i64
 pub fn vote_bin_to_cell(packed: u32, tie_cell: u8) -> u8
 {
 	let (net, _, _) = oi_unpack(packed);
-	match net.signum()
-	{
-		1 => TRUE_U8,
-		-1 => FALSE_U8,
-		_ => tie_cell,
-	}
+	crate::vote_share::vote_net_to_cell(net as i64, tie_cell)
 }
 
 /// Returns true iff order-independent training is enabled via env var.
@@ -1617,7 +1612,8 @@ pub fn training_is_order_independent(memory_mode: u8) -> bool
 		// flow) but is commutative too: an integer tally.
 		Some(WriteRule::Lattice) | Some(WriteRule::Set) | Some(WriteRule::Vote(_)) => true,
 		Some(WriteRule::Nudge) => order_independent_training_active(memory_mode),
-		None => false,
+		// Never returned by `CellMode::write_rule` (controller-only, order-dependent).
+		Some(WriteRule::LastWrite) | None => false,
 	}
 }
 

@@ -80,6 +80,7 @@ fn replay_obs(t: &TrajectoryRs) -> ReplayObs
 		att_up: t.att_up.clone(),
 		cascade: t.cascade_obs.clone(),
 		dhat: t.dhat_obs.clone(),
+		att_bias: t.att_bias.clone(),
 	}
 }
 
@@ -121,6 +122,7 @@ pub(crate) fn parity(c: &WnnController, trs: &[TrajectoryRs], blank: impl Fn(&mu
 		att_up: &fb.att_up,
 		dhat_rec: &fb.dhat_rec,
 		cas_rec: &fb.cas_rec,
+		abp_rec: &fb.abp_rec,
 		selective: false,
 		target_rpy: [0.0; 3],
 	};
@@ -282,7 +284,7 @@ fn ctrl40_speed_cpu_vs_gpu_split()
 		ep_base: &fb.ep_base, ep_count: &fb.ep_count, step_base: &fb.step_base, step_count: &fb.step_count,
 		gyros: &fb.gyros, accels: &fb.accels, targets: &fb.targets, pid_pwms: &fb.pids, init_q: &fb.init_q,
 		vert_obs: &fb.vert_obs, horiz_obs: &fb.horiz_obs, pwm_dev: &fb.pwm_dev, att_up: &fb.att_up,
-		dhat_rec: &fb.dhat_rec, cas_rec: &fb.cas_rec, selective: false, target_rpy: [0.0; 3],
+		dhat_rec: &fb.dhat_rec, cas_rec: &fb.cas_rec, abp_rec: &fb.abp_rec, selective: false, target_rpy: [0.0; 3],
 	};
 	let trainer = ControllerTrainer::new().expect("trainer");
 	let _ = trainer.train(&[&fresh], &batch);

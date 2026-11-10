@@ -103,6 +103,24 @@ impl VoteShare
 	}
 }
 
+/// THE vote commit of a signed tally, independent of where the tally is stored
+/// (CTRL-46): tally > 0 → TRUE, < 0 → FALSE, 0 → `tie_cell` (the mode's untrained
+/// cell — `CounterBin::for_training(WriteRule::Vote(_), mode)` carries it). Ternary
+/// cell codes (FALSE=0, TRUE=1), which BINARY shares. The IDS trainers reach it
+/// through `neuron_memory::vote_bin_to_cell` (tally = the OI packed counter's 30-bit
+/// `net`); the controller's DAgger walk (ram_controller vote_tally.rs) keeps an i64
+/// tally per (neuron, address). GPU twin (IDS): common.metal's vote bin.
+#[inline]
+pub fn vote_net_to_cell(net: i64, tie_cell: u8) -> u8
+{
+	match net.signum()
+	{
+		1 => crate::neuron_memory::TRUE_U8,
+		-1 => crate::neuron_memory::FALSE_U8,
+		_ => tie_cell,
+	}
+}
+
 fn gcd(a: u32, b: u32) -> u32
 {
 	if b == 0
@@ -119,6 +137,17 @@ fn gcd(a: u32, b: u32) -> u32
 mod tests
 {
 	use super::*;
+
+	#[test]
+	fn net_commit_is_the_sign_rule()
+	{
+		use crate::neuron_memory::{EMPTY_U8, FALSE_U8, TRUE_U8};
+		assert_eq!(vote_net_to_cell(3, EMPTY_U8), TRUE_U8);
+		assert_eq!(vote_net_to_cell(-1, EMPTY_U8), FALSE_U8);
+		assert_eq!(vote_net_to_cell(0, EMPTY_U8), EMPTY_U8);
+		assert_eq!(vote_net_to_cell(0, FALSE_U8), FALSE_U8);
+		assert_eq!(vote_net_to_cell(i64::MAX, EMPTY_U8), TRUE_U8);
+	}
 
 	#[test]
 	fn half_is_the_plain_majority_vote()

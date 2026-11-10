@@ -63,6 +63,16 @@ pub enum WriteRule
 	/// `VoteShare::MAJORITY` (θ = 0.5, 1:1) is the plain vote above,
 	/// bit-identical. The binning is the same sign rule for every θ.
 	Vote(VoteShare),
+	/// The drone CONTROLLER's DAgger direct write for BINARY / TERNARY / PLN
+	/// (ram_controller cell_mode::nudge_cell, unchanged): every visit SETS the
+	/// cell to its target (TRUE or FALSE), so the last visit wins. Deliberately
+	/// NOT the IDS writers: the DAgger loop must be able to correct an earlier
+	/// label as the teacher distribution shifts (ram_controller cell_mode.rs
+	/// module doc). Order-DEPENDENT. Named here (CTRL-46) so the controller's
+	/// write rules live in the same vocabulary as the IDS ones; it is produced
+	/// only by `resolve_controller` and has no IDS kernel arm (`code` 4 is never
+	/// sent to an IDS trainer).
+	LastWrite,
 }
 
 /// How a counter-accumulated training pass bins each packed counter into a
@@ -141,6 +151,28 @@ impl WriteRule
 		}
 	}
 
+	/// The rule the CONTROLLER's DAgger walk applies for `memory_mode` (CTRL-46,
+	/// `--write-rule {last,vote}` + `--vote-share θ`): the 4-state family keeps its
+	/// nudge (`Nudge` — its lattice already settles disagreement by tally, so a
+	/// vote request is REFUSED rather than silently ignored); BINARY / TERNARY /
+	/// PLN get `LastWrite` (vote None, today's writer) or `Vote(share)`. Unknown
+	/// modes are refused.
+	pub fn resolve_controller(memory_mode: u8, vote: Option<VoteShare>) -> Result<WriteRule, String>
+	{
+		let mode = CellMode::from_u8(memory_mode).ok_or_else(|| format!("unknown memory_mode {memory_mode}"))?;
+		match (mode.write_rule(), vote)
+		{
+			(WriteRule::Nudge, None) => Ok(WriteRule::Nudge),
+			(WriteRule::Nudge, Some(_)) => Err(format!(
+				"write rule 'vote' needs memory_mode BINARY, TERNARY or PLN; got {} (the 4-state \
+				 modes already settle same-address disagreement through their nudge lattice)",
+				mode.name()
+			)),
+			(_, None) => Ok(WriteRule::LastWrite),
+			(_, Some(share)) => Ok(WriteRule::Vote(share)),
+		}
+	}
+
 	/// True for the vote writer (any share).
 	#[inline]
 	pub fn is_vote(self) -> bool
@@ -168,6 +200,7 @@ impl WriteRule
 			WriteRule::Lattice => 1,
 			WriteRule::Nudge => 2,
 			WriteRule::Vote(_) => 3,
+			WriteRule::LastWrite => 4,
 		}
 	}
 
@@ -519,6 +552,40 @@ mod tests
 		}
 		assert!(crate::neuron_memory::EvalSettings::default().write_vote.is_none());
 		assert_eq!(crate::neuron_memory::EvalSettings::default().write_rule(), WriteRule::Nudge);
+	}
+
+	/// CTRL-46: the controller's writer per mode — QUAD family Nudge (vote
+	/// refused), the direct modes LastWrite (vote None) or Vote(share).
+	#[test]
+	fn resolve_controller_names_last_write_and_refuses_quad_vote()
+	{
+		let share = VoteShare::from_theta(0.2).unwrap();
+		for mode in CellMode::ALL
+		{
+			let code = mode.as_u8();
+			match mode.write_rule()
+			{
+				WriteRule::Nudge =>
+				{
+					assert_eq!(WriteRule::resolve_controller(code, None), Ok(WriteRule::Nudge), "{mode}");
+					assert!(WriteRule::resolve_controller(code, Some(share)).is_err(), "{mode}");
+				}
+				_ =>
+				{
+					assert_eq!(WriteRule::resolve_controller(code, None), Ok(WriteRule::LastWrite), "{mode}");
+					assert_eq!(WriteRule::resolve_controller(code, Some(share)), Ok(WriteRule::Vote(share)), "{mode}");
+				}
+			}
+		}
+		assert!(WriteRule::resolve_controller(250, None).is_err());
+		// The IDS resolver never yields the controller writer.
+		for mode in CellMode::ALL
+		{
+			for v in [None, Some(share)]
+			{
+				assert_ne!(WriteRule::resolve(mode.as_u8(), v), WriteRule::LastWrite);
+			}
+		}
 	}
 
 	/// Vote binning: sign of the net tally, tie → the mode's untrained cell;

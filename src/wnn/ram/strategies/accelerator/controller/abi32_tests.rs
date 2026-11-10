@@ -28,7 +28,7 @@ const STEPS: usize = 400;
 /// sn=0 stage-2 controller with the per-axis attitude features (roll/pitch err,
 /// yaw dropped) so the estimator has something to feed: 9 base + 2 + 3 vertical
 /// + 4 horizontal = 18 features.
-fn controller(seed: u64, estimator: bool) -> WnnController
+pub(crate) fn controller(seed: u64, estimator: bool) -> WnnController
 {
 	controller_with(seed, estimator, 6)
 }
@@ -96,7 +96,7 @@ fn ics() -> (Vec<f32>, Vec<f32>)
 	(q0, w0)
 }
 
-fn cfg(plant: PlantOpts, att_ref: AttErrRef) -> Stage1Cfg
+pub(crate) fn cfg(plant: PlantOpts, att_ref: AttErrRef) -> Stage1Cfg
 {
 	let c = Stage1Cfg {
 		target_altitude: 0.0,
@@ -115,7 +115,7 @@ fn cfg(plant: PlantOpts, att_ref: AttErrRef) -> Stage1Cfg
 	c
 }
 
-fn tilt_ref() -> AttErrRef
+pub(crate) fn tilt_ref() -> AttErrRef
 {
 	AttErrRef::tilt(G as f64, 1.0, 1.0, 0.5236).unwrap()
 }
@@ -131,7 +131,7 @@ fn cpu(c: &WnnController, s1: &Stage1Cfg, steps: usize) -> [f64; 17]
 	)
 }
 
-fn gpu(c: &WnnController, s1: &Stage1Cfg, steps: usize) -> Option<Vec<f64>>
+pub(crate) fn gpu(c: &WnnController, s1: &Stage1Cfg, steps: usize) -> Option<Vec<f64>>
 {
 	let (q0, w0) = ics();
 	let ev = ControllerRolloutEvaluator::new().ok()?;
@@ -153,7 +153,7 @@ fn assert_parity(c: &WnnController, s1: &Stage1Cfg, what: &str) -> [f64; 17]
 	assert_parity_steps(c, s1, STEPS, what)
 }
 
-fn assert_parity_steps(c: &WnnController, s1: &Stage1Cfg, steps: usize, what: &str) -> [f64; 17]
+pub(crate) fn assert_parity_steps(c: &WnnController, s1: &Stage1Cfg, steps: usize, what: &str) -> [f64; 17]
 {
 	let cr = cpu(c, s1, steps);
 	if let Some(gr) = gpu(c, s1, steps)
@@ -169,7 +169,7 @@ fn assert_parity_steps(c: &WnnController, s1: &Stage1Cfg, steps: usize, what: &s
 	cr
 }
 
-fn differs(a: &[f64; 17], b: &[f64; 17], idx: &[usize], what: &str)
+pub(crate) fn differs(a: &[f64; 17], b: &[f64; 17], idx: &[usize], what: &str)
 {
 	assert!(
 		idx.iter().any(|&i| (a[i] - b[i]).abs() > 1e-9),
@@ -293,7 +293,7 @@ fn att_estimator_replay_is_bit_identical_and_guarded()
 		a.push(ac);
 		sim.step([0.5, 0.52, 0.5, 0.48]);
 	}
-	let ro = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: up, cascade: vec![], dhat: vec![] };
+	let ro = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: up, cascade: vec![], dhat: vec![], att_bias: vec![] };
 	let mut rep = controller(29, true);
 	rep.reset(0.0);
 	rep.replay_obs_guard(Some(&ro), n, "test");
@@ -306,7 +306,7 @@ fn att_estimator_replay_is_bit_identical_and_guarded()
 			assert_eq!(f[i].to_bits(), feats[t][i].to_bits(), "replay diverged at t={t} f={i}");
 		}
 	}
-	let short = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![] };
+	let short = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![] };
 	let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
 		controller(29, true).replay_obs_guard(Some(&short), n, "test")
 	}));

@@ -15,6 +15,7 @@ mod box_qp; // exact box-QP solver for the MPC teachers (PDAS + primal active-se
 mod arch_ops; // architecture (connectivity) operators (counter_rng, Rust-first)
 mod receptive_fields; // ABI 44 (CTRL-45): axis receptive-field projection (GA connectivity operator)
 mod cell_mode;
+mod vote_tally; // CTRL-46 (ABI 46): per-round DAgger vote tally storage (rule = ram_core WriteRule::Vote)
 mod bptt_plan; // ABI 35: a bptt window's memory-independent inputs (CPU + GPU walk)
 mod solver_view; // ABI 35 B: window-lived solver view (no per-record entry clone)
 mod cell_remap; // cell ADDRESS remaps on architecture change (bit-exact port)
@@ -66,11 +67,20 @@ mod ctrl39_tests; // CTRL-39: the MEMORY recorder reads the FLOWN command (train
 #[cfg(test)]
 mod ctrl40_tests; // CTRL-40: Metal split train/record for the applied-actuator inputs (CPU parity)
 #[cfg(test)]
+mod ctrl46_tests; // CTRL-46 (ABI 46): vote write rule (CPU/GPU, order independence) + estimate-built labels
+#[cfg(test)]
+mod init_vxy_tests; // ABI 48: training-only initial horizontal velocity (draw order, validation)
+#[cfg(test)]
+mod scorer_chunk_tests; // 09/11: CPU scorer vs Metal across score chunks on the rf_c200_dres recipe (ep_vert global index)
+#[cfg(test)]
+mod ctrl49_tests; // ABI 49: the student feature sampler (--threshold-refit-from-student)
+#[cfg(test)]
 mod ctrl48_tests; // CTRL-48: the cascade unabsorbed-disturbance block — physics, replay, CPU/GPU parity
 #[cfg(test)]
 mod abi38_tests; // ABI 38: the cascade controller — identity, rivals, CPU/GPU parity, trainers
 #[cfg(test)]
 mod abi34_tests; // ABI 34: lag-aware teachers, one pwm convention under motor lag, T=0 pins
+mod att_bias_pred; // CTRL-46 (ABI 46): onboard predictor of the Mahony specific-force bias (--obs-att-bias-pred)
 mod att_estimator; // ABI 32: the WNN's Mahony attitude estimate (obs_att_estimator)
 mod att_err_ref; // CTRL-17 G5 (ABI 32): attitude error vs the position loop tilt reference
 mod plant_opts; // ABI 32: specific-force IMU + rotor drag as ONE value every sim host applies
@@ -402,7 +412,43 @@ mod metal_controller;
 ///   kept, not even as cross) — the connection-space mechanism of `--drop-features` /
 ///   `--drop-constant-features`; the frame layout and every kernel are unchanged.
 ///   Calibration (`--calib-*`) is Python orchestration over the existing sampler.
-pub const ABI_VERSION: u32 = 45;
+/// ABI 46 (09/11/2026, CTRL-46, every item default-OFF ⇒ ABI 45 bit-identical):
+///   (a) RewardGatedConfigPacked(write_vote=, vote_share=) — `--write-rule vote
+///   [--vote-share θ]`: the DAgger walk tallies every visit of a round per (neuron,
+///   address) and commits once (ram_core WriteRule::Vote / VoteShare /
+///   vote_net_to_cell — the IDS-56 rule, shared), CPU walk + GPU walk (vote buffers
+///   29/30 of controller_bptt_walk); QUAD refused (ram_core resolve_controller);
+///   (b) RewardGatedConfigPacked(dagger_label_estimate=) — `--dagger-label-attitude
+///   estimate`: the DAgger LABEL is built from the student's Mahony estimate, not the
+///   true quaternion (labels are CPU-only);
+///   (c) WnnController(obs_att_bias_pred=) + dagger_train_batch_inplace(obs_att_bias_pred=)
+///   + ReplayObs(att_bias=) — `--obs-att-bias-pred`: +2 features at the layout tail,
+///   the onboard predictor of the Mahony specific-force bias (att_bias_pred.rs), CPU +
+///   Metal score (FC_ATT_BIAS_PRED, RolloutParams.abp_on) + Metal split replay
+///   (TrainParams.abp_on, abp_rec buffers 29/26).
+/// ABI 47 (09/11/2026, score-kernel FIX, NOT default-off): the Metal score kernel read
+///   the per-episode stage-1/2 blob (buffer 30: z0, vz0, mass, collective, x0, y0) by
+///   the CHUNK-local episode while that buffer is bound whole, so with translation on
+///   and > episodes_per_chunk() (25) episodes every later chunk replayed episodes
+///   0..24's translational draws (the CPU scorer never did). Fixed to the global index
+///   (dist_ep_offset + e). Every GPU-scored translation row over > 25 episodes MOVES
+///   to the CPU scorer's value; attitude-only runs and <= 25-episode calls are
+///   bit-identical. No Python surface change. Pin: scorer_chunk_tests.rs.
+/// ABI 48 (09/11/2026, docs/ctrl_dres_failures.md idea #4, default-OFF ⇒ ABI 47
+///   bit-identical): RewardGatedConfigPacked(init_vxy=) — per-axis bound of a
+///   U(-v, v) initial horizontal velocity, drawn in episode_regime::
+///   draw_translation_episode right after x0/y0 (0 draws nothing). Python sets it on
+///   the DAgger TRAINING config only (`--train-init-vxy`); scorers, calibration
+///   sampler and recorder are untouched. Pin: init_vxy_tests.rs.
+/// ABI 49 (09/11/2026, additive export, every existing path bit-identical):
+///   sample_student_features(controller, cfg, num_episodes, seed) — the TRAINED
+///   student's own feature values on the training episodes, flown through the
+///   DAgger student rollout (calib_sampler::sample_student_features_rs). Replaces the
+///   Python attitude-only collector for `--threshold-refit-from-student` on every
+///   run whose teacher ladder comes from the training-cascade sampler (translation
+///   + airframe): that collector refused the ABI-32 plant and the refit silently
+///   fell back to the teacher ladder. Pin: ctrl49_tests.rs.
+pub const ABI_VERSION: u32 = 49;
 
 /// ABI 44: how output neurogenesis lays out the output layer — "segment" = every
 /// bank / E-I half resizes at its own tail (pre-44 Python resized the flat tail).
@@ -1235,6 +1281,33 @@ fn sample_calibration_features(
 	))
 }
 
+/// ABI 49: the STUDENT's own visited feature values (per feature) on the same
+/// training episodes `sample_calibration_features` flies the teacher through —
+/// the `--threshold-refit-from-student` pool (calib_sampler::sample_student_features_rs).
+/// `controller` is the TRAINED student (its cells are read, never written); `cfg` is
+/// the reference config (expert_drives / explore_eps are overridden: the student flies).
+#[pyfunction]
+#[pyo3(signature = (controller, cfg, num_episodes, seed))]
+fn sample_student_features(
+	mut controller: PyRefMut<'_, controller::WnnController>,
+	cfg: dagger_train::RewardGatedConfigPacked,
+	num_episodes: usize,
+	seed: u64,
+) -> PyResult<Vec<Vec<f32>>>
+{
+	let flies = calib_sampler::student_flies(&cfg);
+	dagger_train::validate_train_regime(&controller, &flies).map_err(|e| {
+		pyo3::exceptions::PyValueError::new_err(format!("sample_student_features: {e}"))
+	})?;
+	if cfg.steps_per_episode == 0 || num_episodes == 0
+	{
+		return Err(pyo3::exceptions::PyValueError::new_err(
+			"sample_student_features: steps_per_episode and num_episodes must be > 0",
+		));
+	}
+	Ok(calib_sampler::sample_student_features_rs(&mut controller, &cfg, num_episodes, seed))
+}
+
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn record_input_entropy(
@@ -1374,6 +1447,7 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()>
 	m.add_function(wrap_pyfunction!(record_address_universe, m)?)?;
 	m.add_function(wrap_pyfunction!(record_input_entropy, m)?)?;
 	m.add_function(wrap_pyfunction!(sample_calibration_features, m)?)?;
+	m.add_function(wrap_pyfunction!(sample_student_features, m)?)?;
 	m.add("LAYER_STATE", memory_ops::LAYER_STATE)?;
 	m.add("LAYER_OUTPUT", memory_ops::LAYER_OUTPUT)?;
 	// Untrained-cell decode anchor (delta-control + residual neutral point),

@@ -232,7 +232,7 @@ def test_next_from_memory_final_is_publish_only(harness):
 	complete, and --save-winner gets the FULL population."""
 	_write_stage(harness.dir, 4, "memory", 50)
 	st = _final_state(harness.dir, 4, "memory")
-	_rows, best, pop, _pid = P._run_one(_args(harness.dir, skip_stages="bits,connections"), None,
+	_rows, best, pop, _pid, _head = P._run_one(_args(harness.dir, skip_stages="bits,connections"), None,
 	                                    SimpleNamespace(train=7, val=1000, test=11), resume_state=st)
 	assert harness.ran == [], "publish-only: no GA stage may run"
 	assert set(harness.scored) == {f"{s}#{i}" for s in ("GRID", "NEURONS", "MEMORY") for i in range(3)}

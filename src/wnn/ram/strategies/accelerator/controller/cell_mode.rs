@@ -296,7 +296,10 @@ pub fn plant_cell(on: bool, mode: u8) -> u8
 
 /// One training write toward a boolean target. QUAD: one nudge step through
 /// the 4-state lattice (the historical rule). TERNARY/BINARY: last-write-wins
-/// direct set (see module docs for why this differs from the IDS worker).
+/// direct set (see module docs for why this differs from the IDS worker) —
+/// named `ram_core::cell_mode::WriteRule::LastWrite` since CTRL-46 (its opt-in
+/// alternative, `WriteRule::Vote`, never reaches this function: the walk records
+/// the visit in vote_tally.rs instead).
 #[inline]
 pub fn nudge_cell(current: u8, target_true: bool, mode: u8) -> u8
 {

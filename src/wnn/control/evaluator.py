@@ -242,6 +242,11 @@ class ControllerSpec:
 	# accelerometer. Needed under the specific-force IMU, where the accelerometer
 	# carries no tilt. Changes feature VALUES, not the layout (num_features).
 	obs_att_estimator: bool = False
+	# CTRL-46 (ABI 46, --obs-att-bias-pred): +2 features at the layout tail — the
+	# onboard predictor of THAT estimator's specific-force bias (att_bias_pred.rs),
+	# driven only by the velocity estimate the student already reads (obs_vel_xy) and
+	# the estimate's own quaternion/gains. Requires obs_att_estimator and obs_vel_xy.
+	obs_att_bias_pred: bool = False
 	integral_leak: float = 0.99   # leaky-integral decay for "_i" (≠ delta_leak)
 	integral_scale: float = 1.0   # pre-threshold scale for integral features
 	dt: float = 0.001             # physics step (s); MUST match episode/plant dt (yaw integ.)
@@ -649,6 +654,7 @@ def _feature_controller(spec: ControllerSpec) -> WnnController:
 		obs_collective_cmd=spec.obs_collective_cmd, obs_alt_err=spec.obs_alt_err, obs_vz=spec.obs_vz,
 			obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
 		obs_att_estimator=getattr(spec, 'obs_att_estimator', False), ctbr=ctbr_arg(spec),
+		obs_att_bias_pred=getattr(spec, 'obs_att_bias_pred', False),  # CTRL-46 (ABI 46)
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 		dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
@@ -765,11 +771,27 @@ def fit_calibration(
 	`calibration` (ThresholdCalibration) sets episodes / regime / ladder; None keeps
 	the legacy call (num_episodes, flown, quantile), byte-identical."""
 	cal = calibration or ThresholdCalibration(episodes=int(num_episodes))
+	extra = _pooled_extra_samples(spec, cal, extra_samples)
 	samples = _calibration_samples(spec, cal, seed, geometry, alloc, episode_config)
-	thresholds = _thresholds_from_samples(samples, spec, method, cal.outer_quantile, extra_samples,
+	thresholds = _thresholds_from_samples(samples, spec, method, cal.outer_quantile, extra,
 	                                      ladder=cal.ladder)
 	return CalibrationFit(thresholds=thresholds,
-	                      constant_features=_zero_spread_features(samples, extra_samples))
+	                      constant_features=_zero_spread_features(samples, extra))
+
+
+def _pooled_extra_samples(spec, cal: "ThresholdCalibration", extra_samples):
+	"""The student samples pooled with the teacher's: the run's refit (carried in the
+	calibration, so every fit site gets it) or a caller's explicit `extra_samples` —
+	never both (two sources for one pool is a plumbing error, not a union)."""
+	if cal.student_samples is None:
+		return extra_samples
+	if extra_samples is not None:
+		raise ValueError("fit_calibration: extra_samples AND calibration.student_samples — pass one")
+	if len(cal.student_samples) != spec.num_features():
+		raise ValueError(f"fit_calibration: the refit's student samples have {len(cal.student_samples)} "
+		                 f"features, this spec has {spec.num_features()} — a different feature layout "
+		                 "than the grid winner the samples were collected from")
+	return cal.student_samples
 
 
 def _zero_spread_features(samples_per_feature, extra_samples) -> tuple[int, ...]:
@@ -1102,7 +1124,39 @@ def random_connectivity(spec: ControllerSpec, seed: int = 0) -> tuple[list[int],
 
 def collect_student_feature_samples(genome, episode_config, num_episodes: int,
                                     seed: int) -> list[list[float]]:
-	"""Roll out a TRAINED STUDENT and harvest the feature values it actually visits.
+	"""Roll out a TRAINED STUDENT and harvest the feature values it actually visits —
+	on the SAME plant the teacher ladder is fitted on (the pairing _calib_plant_sim
+	guarantees for the Python path):
+
+	  * training-cascade runs (translation + airframe, no geometry — the teacher fit
+	    is `_training_cascade_samples`): the Rust sampler (ABI 49) flies the student
+	    through the DAgger trainer's own rollout on the same reference config. This
+	    is every real-life recipe (specific-force IMU, rotor drag, Mahony, cascade,
+	    delta law), which the Python loop below cannot fly and refused;
+	  * attitude-only runs: the Python loop below (_collect_student_python), byte-
+	    identical to the 10/08 collector the E1 refit cells flew.
+
+	Overactuated (geometry) runs are refused: the Python loop has no step_n."""
+	if getattr(episode_config, "geometry", None) is not None:
+		raise NotImplementedError("collect_student_feature_samples: overactuated (geometry) runs are not "
+		                          "supported — the student rollout would fly the quad mixer.")
+	if _calib_plant_gate(episode_config) and bool(getattr(episode_config, "translation", False)):
+		return _collect_student_rust(genome, episode_config, num_episodes, seed)
+	return _collect_student_python(genome, episode_config, num_episodes, seed)
+
+
+def _collect_student_rust(genome, episode_config, num_episodes: int, seed: int) -> list[list[float]]:
+	"""The training-cascade student sampler (ram_controller.sample_student_features)."""
+	from wnn.control import _accel as ra
+	cols = ra.sample_student_features(build_controller(genome), reference_packed_config(episode_config),
+	                                  int(num_episodes), int(seed))
+	return [[float(v) for v in col] for col in cols]
+
+
+def _collect_student_python(genome, episode_config, num_episodes: int,
+                            seed: int) -> list[list[float]]:
+	"""Roll out a TRAINED STUDENT and harvest the feature values it actually visits
+	(attitude-only plant).
 
 	The point of option A (10/08/2026). `fit_thresholds_from_pid_rollouts` rolls out
 	PID — a better controller than the student — so the ladder is fitted on states
@@ -1130,7 +1184,7 @@ def collect_student_feature_samples(genome, episode_config, num_episodes: int,
 	from .training import _sample_initial_state, apply_disturbance
 
 	from .training import refuse_python_abi32_plant
-	refuse_python_abi32_plant(episode_config, "collect_student_feature_samples")
+	refuse_python_abi32_plant(episode_config, "collect_student_feature_samples (attitude-only path)")
 	ctl = build_controller(genome)
 	# Same plant gate as the teacher fit (19/09/2026): a refit on the synthetic
 	# plant under an airframe run would re-fit the ladder on the wrong aircraft.
@@ -1287,6 +1341,28 @@ def _plant_train_kwargs(ec) -> dict:
 	return {**af, **s1}
 
 
+def _trainer_plant_kwargs(rg) -> dict:
+	"""_plant_train_kwargs for the DAgger TRAINER config only (09/11/2026, idea #4).
+
+	--train-xy-offset / --train-init-vxy widen the trainer's horizontal starts (the
+	--rg-*-tilt-deg pattern: the trainer's rollouts AND its per-round checkpoint eval
+	fly them). reference_packed_config (calibration sampler, MEMORY recorder) and every
+	scorer keep _plant_train_kwargs(ec) — the run's own --xy-offset, at rest. Unset ⇒
+	the very same dict, so the trainer call is byte-identical; init_vxy is passed only
+	when > 0, so an unset run never names the ABI-48 kwarg."""
+	kw = _plant_train_kwargs(rg.episode_config)
+	xy = getattr(rg, "train_xy_offset", None)
+	vxy = float(getattr(rg, "train_init_vxy", 0.0) or 0.0)
+	if (xy is not None or vxy > 0.0) and float(kw.get("xy_offset", 0.0)) <= 0.0:
+		raise ValueError("train_xy_offset / train_init_vxy need the horizontal channel "
+		                 "(translation with max_initial_xy_offset_m > 0) — they would be ignored.")
+	if xy is not None:
+		kw["xy_offset"] = float(xy)
+	if vxy > 0.0:
+		kw["init_vxy"] = vxy
+	return kw
+
+
 def _target_levels_kwarg(ra, spec) -> dict:
 	"""TARGET-LEVELS (16/08/2026, arm R) forwarding — split-deploy safe.
 
@@ -1357,6 +1433,7 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		obs_collective_cmd=spec.obs_collective_cmd, obs_alt_err=spec.obs_alt_err, obs_vz=spec.obs_vz,
 			obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
 		obs_att_estimator=getattr(spec, 'obs_att_estimator', False), ctbr=ctbr_arg(spec),
+		obs_att_bias_pred=getattr(spec, 'obs_att_bias_pred', False),  # CTRL-46 (ABI 46)
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
@@ -1894,13 +1971,17 @@ class ControllerEvaluator:
 			**_train_asym_kwargs(getattr(rg, "episode_config", None)),
 			expert_drives=getattr(rg, "expert_drives", False),
 			write_priority_err=getattr(rg, "write_priority_err", False),
+			# CTRL-46 (ABI 46): write rule + label attitude (defaults = ABI 45).
+			write_vote=bool(getattr(rg, "write_vote", False)),
+			vote_share=getattr(rg, "vote_share", None),
+			dagger_label_estimate=bool(getattr(rg, "dagger_label_estimate", False)),
 			write_err_floor_deg=getattr(rg, "write_err_floor_deg", 0.0),
 			teacher_hover_mode=_TEACHER_HOVER_MODES[getattr(rg, "teacher_hover_mode", "derived")],
 			# The TRAINING rollout must fly the same plant the scorer does: the
 			# airframe + firmware cascade (19/09/2026 gap — trainer got af_mass
 			# only) and the stage-1 vertical channel (or the vertical features
 			# are zeros here and real there — the DOB divergence; Rust asserts).
-			**_plant_train_kwargs(rg.episode_config),
+			**_trainer_plant_kwargs(rg),
 			# CTRL-17 G4: the λ terms the gate + checkpoint rank on.
 			**_gate_lambda_kwargs(rg),
 			# AXIS F: the TRAINING rollout + per-round eval fly the same lagged
@@ -1957,6 +2038,7 @@ class ControllerEvaluator:
 			# ABI 32: same estimator as the scorer's controllers, or the trainer
 			# would label on accel-only features while deploy flies estimated ones.
 			obs_att_estimator=getattr(first_spec, 'obs_att_estimator', False), ctbr=ctbr_arg(first_spec),
+			obs_att_bias_pred=getattr(first_spec, 'obs_att_bias_pred', False),  # CTRL-46 (ABI 46)
 			output_full_window=getattr(first_spec, 'output_full_window', False),
 			frame_stride=int(getattr(first_spec, 'frame_stride', 1)),
 			**_target_levels_kwarg(ra, first_spec),
@@ -2032,13 +2114,17 @@ class ControllerEvaluator:
 			**_train_asym_kwargs(getattr(rg, "episode_config", None)),
 			expert_drives=getattr(rg, "expert_drives", False),
 			write_priority_err=getattr(rg, "write_priority_err", False),
+			# CTRL-46 (ABI 46): write rule + label attitude (defaults = ABI 45).
+			write_vote=bool(getattr(rg, "write_vote", False)),
+			vote_share=getattr(rg, "vote_share", None),
+			dagger_label_estimate=bool(getattr(rg, "dagger_label_estimate", False)),
 			write_err_floor_deg=getattr(rg, "write_err_floor_deg", 0.0),
 			teacher_hover_mode=_TEACHER_HOVER_MODES[getattr(rg, "teacher_hover_mode", "derived")],
 			# The TRAINING rollout must fly the same plant the scorer does: the
 			# airframe + firmware cascade (19/09/2026 gap — trainer got af_mass
 			# only) and the stage-1 vertical channel (or the vertical features
 			# are zeros here and real there — the DOB divergence; Rust asserts).
-			**_plant_train_kwargs(rg.episode_config),
+			**_trainer_plant_kwargs(rg),
 			# CTRL-17 G4: the λ terms the gate + checkpoint rank on.
 			**_gate_lambda_kwargs(rg),
 			# AXIS F: the TRAINING rollout + per-round eval fly the same lagged
@@ -2062,6 +2148,7 @@ class ControllerEvaluator:
 			obs_collective_cmd=spec.obs_collective_cmd, obs_alt_err=spec.obs_alt_err, obs_vz=spec.obs_vz,
 			obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
 		obs_att_estimator=getattr(spec, 'obs_att_estimator', False), ctbr=ctbr_arg(spec),
+		obs_att_bias_pred=getattr(spec, 'obs_att_bias_pred', False),  # CTRL-46 (ABI 46)
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,

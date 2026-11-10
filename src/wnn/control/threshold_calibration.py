@@ -23,11 +23,18 @@ today's fit); any non-default value is a lineage break and needs a paired A/B.
             1/(b+1), b/(b+1). Lives HERE, not as a loose fit argument, so every fit site
             gets it with the rest of the calibration (09/11/2026: as a loose argument it
             reached 2 of 5 fit sites from 10/08 to 09/11 — commit 8542f4c1)
+  student_samples  --threshold-refit-from-student: per-feature values the trained grid
+            winner VISITED (ABI 49 sampler), pooled with the teacher samples at EVERY fit
+            site. None = the teacher-only ladder. Same reason as outer_quantile: as a loose
+            `extra_samples` argument the refit reached GRID only (10/08 to 09/11) while
+            NEURONS, MEMORY, every held-out and stage-select re-fit the teacher ladder, so
+            the trained stages never flew the refit ladder and GRID's held-out scored on a
+            ladder its search was not run under.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 CALIB_REGIMES = ("flown", "train_mix")
 CALIB_LADDERS = ("quantile", "centred")
@@ -41,6 +48,7 @@ class ThresholdCalibration:
 	easy_tilt_deg: float = 8.0
 	full_tilt_deg: float = 30.0
 	outer_quantile: float | None = None
+	student_samples: tuple | None = field(default=None, repr=False)
 
 	def __post_init__(self):
 		if int(self.episodes) < 1:
@@ -51,6 +59,12 @@ class ThresholdCalibration:
 			raise ValueError(f"calibration ladder {self.ladder!r} — one of {list(CALIB_LADDERS)}")
 		if self.outer_quantile is not None and not 0.0 < float(self.outer_quantile) < 0.5:
 			raise ValueError(f"calibration outer_quantile must be in (0, 0.5) (got {self.outer_quantile})")
+		if self.student_samples is not None and not self.student_sample_count():
+			raise ValueError("calibration student_samples is set but empty — a refit with no samples is not a refit")
+
+	def student_sample_count(self) -> int:
+		"""Student samples per feature (0 when there is no refit)."""
+		return len(self.student_samples[0]) if self.student_samples else 0
 
 	def mix_tilts_deg(self) -> list[float]:
 		"""train_mix: one extra episode per tilt, `episodes` of them, easy -> full."""
@@ -66,7 +80,9 @@ class ThresholdCalibration:
 		"""Provenance calib= value."""
 		base = f"eps:{int(self.episodes)},regime:{self.regime},ladder:{self.ladder}"
 		# Appended only when set, so every default-calibration token stays byte-identical.
-		return base if self.outer_quantile is None else f"{base},outerq:{float(self.outer_quantile):g}"
+		if self.outer_quantile is not None:
+			base = f"{base},outerq:{float(self.outer_quantile):g}"
+		return base if self.student_samples is None else f"{base},student:{self.student_sample_count()}"
 
 
 @dataclass(frozen=True)
@@ -87,6 +103,9 @@ def calibration_from_args(args) -> ThresholdCalibration:
 		easy_tilt_deg=float(getattr(args, "rg_easy_tilt_deg", 8.0)),
 		full_tilt_deg=float(getattr(args, "rg_full_tilt_deg", 30.0)),
 		outer_quantile=getattr(args, "threshold_outer_quantile", None),
+		# Set by phased_ga's refit (_refit_thresholds_from_student) once the grid winner
+		# has been rolled out; every later fit site reads it from here.
+		student_samples=getattr(args, "_threshold_refit_samples", None),
 	)
 
 

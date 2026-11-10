@@ -98,7 +98,7 @@ def test_falls_back_to_best_genome_without_a_population(seen):
 	"""Older checkpoints and resumed runs carry no population — still scoreable."""
 	entries = [("MEMORY", SimpleNamespace(tag="MEMORY"),
 	            SimpleNamespace(best_genome=_genome("MEMORY-BEST"), final_population=None))]
-	assert _run(entries, _args()) == "MEMORY"
+	assert _run(entries, _args()).label == "MEMORY"
 	assert seen.scored == ["MEMORY-BEST"] * 5   # 5 val seeds
 
 
@@ -108,7 +108,7 @@ def test_winner_maps_back_to_its_stage(seen):
 	        "MEMORY": [_genome(f"MEMORY#{i}") for i in range(3)]}
 	# Make MEMORY#2 the clear best on every ranked component.
 	seen.table["MEMORY#2"] = _metric(0.5, 0.3, stable=1.0, jerk=0.1, mono=0)
-	assert _run(_entries(pops), _args()) == "MEMORY"
+	assert _run(_entries(pops), _args()).label == "MEMORY"
 
 
 def test_steady_weight_can_flip_the_choice(seen):
@@ -118,8 +118,8 @@ def test_steady_weight_can_flip_the_choice(seen):
 	# NEURONS: better jerk/mono. MEMORY: much better steady, slightly worse jerk.
 	seen.table["NEURONS#0"] = _metric(2.0, 2.25, stable=1.0, jerk=0.1, mono=0)
 	seen.table["MEMORY#0"] = _metric(2.0, 1.53, stable=1.0, jerk=0.9, mono=1)
-	assert _run(_entries(pops), _args(fit_weight_steady=0.0)) == "NEURONS"
-	assert _run(_entries(pops), _args(fit_weight_steady=0.35)) == "MEMORY"
+	assert _run(_entries(pops), _args(fit_weight_steady=0.0)).label == "NEURONS"
+	assert _run(_entries(pops), _args(fit_weight_steady=0.35)).label == "MEMORY"
 
 
 def test_release_keeps_top_k_not_everything_and_not_nothing():
@@ -143,3 +143,50 @@ def test_release_leaves_the_current_stage_untouched():
 	orch._res_by_stage = {4: res}
 	orch._release_prior_populations(current_stage=4)
 	assert len(res.final_population) == 50, "the running stage still needs its pool"
+
+
+def _stage_rows(mem_spec):
+	"""stage_results rows (name, spec, metrics, dt, iters) — metrics tag the stage."""
+	return [("Grid", SimpleNamespace(tag="GRID"), "m-grid", 0.0, 0),
+	        ("Neurons", SimpleNamespace(tag="NEURONS"), "m-neurons", 0.0, 0),
+	        ("Memory", mem_spec, "m-memory", 0.0, 0)]
+
+
+def test_save_winner_writes_the_headline_runner_up(seen):
+	"""09/11/2026 (CTRL-48 s1): a NEURONS#2 headline must be what --save-winner
+	writes — best_genome AND pop[0] — under NEURONS' spec, not MEMORY's best_genome."""
+	pops = {"NEURONS": [_genome(f"NEURONS#{i}") for i in range(3)],
+	        "MEMORY": [_genome(f"MEMORY#{i}") for i in range(3)]}
+	seen.table["NEURONS#2"] = _metric(0.5, 0.3, stable=1.0, jerk=0.1, mono=0)
+	entries = _entries(pops)
+	head = _run(entries, _args())
+	assert head.key == "NEURONS#2" and head.label == "NEURONS"
+	mem_full = pops["MEMORY"] + [_genome(f"MEMORY#{i}") for i in range(3, 50)]
+	spec, genome, pop, metrics, key = P._winner_payload(_stage_rows(entries[1][1]), mem_full, head)
+	assert genome is pops["NEURONS"][2] and pop[0] is genome
+	assert spec.tag == "NEURONS" and metrics == "m-neurons" and key == "NEURONS#2"
+	assert [g.name for g in pop] == ["NEURONS#2", "NEURONS#0", "NEURONS#1"], \
+		"the headline stage's own population, headline first, no duplicate"
+
+
+def test_save_winner_memory_headline_keeps_the_full_pool(seen):
+	"""A MEMORY#1 headline: pop[0] = MEMORY#1, followed by MEMORY's FULL population
+	(the Plan B warm-start pool), never MEMORY's lucky-fold best_genome."""
+	pops = {"NEURONS": [_genome(f"NEURONS#{i}") for i in range(3)],
+	        "MEMORY": [_genome(f"MEMORY#{i}") for i in range(3)]}
+	seen.table["MEMORY#1"] = _metric(0.5, 0.3, stable=1.0, jerk=0.1, mono=0)
+	entries = _entries(pops)
+	head = _run(entries, _args())
+	mem_full = pops["MEMORY"] + [_genome(f"MEMORY#{i}") for i in range(3, 50)]
+	spec, genome, pop, metrics, key = P._winner_payload(_stage_rows(entries[1][1]), mem_full, head)
+	assert genome is pops["MEMORY"][1] and pop[0] is genome and len(pop) == 50
+	assert spec.tag == "MEMORY" and metrics == "m-memory" and key == "MEMORY#1"
+	assert not any(g.name.endswith("-BEST") for g in pop)
+
+
+def test_save_winner_without_headline_is_memory_pop0():
+	"""No val-scored stage: the log says the headline falls back to MEMORY, whose
+	published row is pop[0] — the file must hold pop[0], not best_genome."""
+	mem = [_genome(f"MEMORY#{i}") for i in range(4)]
+	spec, genome, pop, metrics, key = P._winner_payload(_stage_rows(SimpleNamespace(tag="MEMORY")), mem, None)
+	assert genome is mem[0] and pop == mem and key == "MEMORY" and metrics == "m-memory"

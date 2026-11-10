@@ -133,7 +133,22 @@ import os
 # ABI 45 (08/11/2026, CTRL-48): CtbrSpec(obs_dhat_residual_plant=) — the cascade
 # unabsorbed-disturbance block; arch_project_receptive_fields mask 0 = excluded feature
 # (--drop-features / --drop-constant-features). Default-off ⇒ ABI 44 bit-identical.
-EXPECTED_ABI = 45
+# ABI 46 (09/11/2026, CTRL-46): RewardGatedConfigPacked(write_vote=, vote_share=,
+# dagger_label_estimate=) — the DAgger vote write rule and estimate-built labels;
+# WnnController(obs_att_bias_pred=) + dagger_train_batch_inplace(obs_att_bias_pred=) +
+# ReplayObs(att_bias=) — the Mahony-bias predictor block. Default-off ⇒ ABI 45 bit-identical.
+# ABI 47 (09/11/2026): score-kernel FIX — the Metal scorer indexed the per-episode
+# translational draws (z/vz/mass/collective/x/y) by the chunk-local episode, so GPU
+# scores of translation runs with > 25 episodes replayed episodes 0..24's draws. GPU
+# rows of those runs MOVE to the CPU scorer's value. No Python surface change.
+# ABI 48 (09/11/2026, docs/ctrl_dres_failures.md idea #4): RewardGatedConfigPacked(
+# init_vxy=) — the DAgger trainer's initial horizontal velocity bound (--train-init-vxy),
+# drawn after x0/y0 (0 draws nothing). Default-off ⇒ ABI 47 bit-identical.
+# ABI 49 (09/11/2026): additive export sample_student_features(controller, cfg,
+# num_episodes, seed) — the trained student's own feature values on the training
+# episodes (the --threshold-refit-from-student pool on translation runs; the Python
+# collector refused the ABI-32 plant). Every existing path bit-identical.
+EXPECTED_ABI = 49
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

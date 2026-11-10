@@ -313,6 +313,13 @@ pub struct RewardGatedConfigPacked
 	// lambda_alt sweep flying while this landed — is untouched.
 	#[pyo3(get, set)]
 	pub xy_offset: f32,
+	/// ABI 48 (09/11/2026, docs/ctrl_dres_failures.md idea #4): per-axis bound (m/s)
+	/// of the episode's INITIAL horizontal velocity, U(-v, v) on vx and vy, drawn
+	/// right after x0/y0. 0.0 (default) draws NOTHING — every ABI-47 rng sequence
+	/// is untouched. Python sets it on the TRAINING config only (--train-init-vxy);
+	/// the scorers, the calibration sampler and the recorder never see it.
+	#[pyo3(get, set)]
+	pub init_vxy: f32,
 	/// Reward weight on the RADIAL horizontal position error (0 ⇒ stage-1 reward).
 	/// CTRL-17 G4 (26/09/2026): READ by the DAgger gate and the per-round
 	/// checkpoint (episode_regime::step_reward). It was plumbed but never read, so
@@ -378,6 +385,26 @@ pub struct RewardGatedConfigPacked
 	// recorder. 0.0 ⇒ bit-identical to ABI 37.
 	#[pyo3(get)]
 	pub dist_motor_asym_mag: f32,
+	// --- CTRL-46 (ABI 46), item 1: the DAgger walk's WRITE RULE for the direct-write
+	// modes (`--write-rule {last,vote}` + `--vote-share θ`, the IDS ids_write_rule /
+	// ids_vote_share vocabulary). false ⇒ `WriteRule::LastWrite` (BINARY/TERNARY/PLN) /
+	// the QUAD nudge — today's writer, bit-identical. true ⇒ `WriteRule::Vote(share)`
+	// (ram_core resolve_controller; QUAD refused at the first round): every visit of a
+	// round goes to a signed tally committed once per round (vote_tally.rs).
+	// vote_share None ⇒ θ = 0.5 (the plain majority); set only with write_vote.
+	#[pyo3(get)]
+	pub write_vote: bool,
+	#[pyo3(get)]
+	pub vote_share: Option<f64>,
+	// --- CTRL-46 (ABI 46), item 2: the attitude the DAgger LABEL is built from
+	// (`--dagger-label-attitude {true,estimate}`). false ⇒ the TRUE quaternion
+	// (sim.quaternion(), bit-identical). true ⇒ the student's own Mahony estimate
+	// (obs_att_estimator — the attitude it actually observes), so the label carries no
+	// K_θ·(θ_true − θ_est) term the student cannot see (docs/ctrl_steady_gap_teacher.md
+	// §4 H1). Only the label: the scorer's teacher rows, the calibration sampler and
+	// the recorder are untouched; expert_drives (teacher flies on its label) is refused.
+	#[pyo3(get)]
+	pub dagger_label_estimate: bool,
 }
 
 #[pymethods]
@@ -422,6 +449,8 @@ impl RewardGatedConfigPacked
 		motor_lag_s = 0.0,
 		imu_specific_force = false, rotor_drag = 0.0, att_err_tilt_ref = false,
 		dist_motor_asym_mag = 0.0,
+		write_vote = false, vote_share = None, dagger_label_estimate = false,
+		init_vxy = 0.0,
 ))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -509,6 +538,10 @@ impl RewardGatedConfigPacked
 		rotor_drag: f32,
 		att_err_tilt_ref: bool,
 		dist_motor_asym_mag: f32,
+		write_vote: bool,
+		vote_share: Option<f64>,
+		dagger_label_estimate: bool,
+		init_vxy: f32,
 	) -> PyResult<Self>
 	{
 		let cfg = Self {
@@ -596,8 +629,14 @@ impl RewardGatedConfigPacked
 			rotor_drag,
 			att_err_tilt_ref,
 			dist_motor_asym_mag,
+			write_vote,
+			vote_share,
+			dagger_label_estimate,
+			init_vxy,
 		};
 		cfg.validate_abi32().map_err(pyo3::exceptions::PyValueError::new_err)?;
+		cfg.write_vote_share().map_err(pyo3::exceptions::PyValueError::new_err)?;
+		cfg.validate_init_vxy().map_err(pyo3::exceptions::PyValueError::new_err)?;
 		if !(dist_motor_asym_mag.is_finite() && (0.0..1.0).contains(&dist_motor_asym_mag))
 		{
 			return Err(pyo3::exceptions::PyValueError::new_err(format!(
@@ -615,6 +654,39 @@ impl RewardGatedConfigPacked
 	{
 		crate::plant_opts::PlantOpts::new(self.imu_specific_force, self.rotor_drag)
 			.expect("RewardGatedConfigPacked: plant options validated at construction")
+	}
+
+	/// ABI 48: init_vxy must be a finite bound >= 0, and > 0 only where the horizontal
+	/// channel exists (translation && xy_offset > 0) — elsewhere it would be ignored.
+	pub(crate) fn validate_init_vxy(&self) -> Result<(), String>
+	{
+		if !(self.init_vxy.is_finite() && self.init_vxy >= 0.0)
+		{
+			return Err(format!("init_vxy = {} must be a finite bound >= 0 (m/s)", self.init_vxy));
+		}
+		if self.init_vxy > 0.0 && !(self.translation && self.xy_offset > 0.0)
+		{
+			return Err(format!(
+				"init_vxy = {} needs the horizontal channel (translation and xy_offset > 0): \
+				 without it no horizontal state is drawn and the velocity would be ignored",
+				self.init_vxy
+			));
+		}
+		Ok(())
+	}
+
+	/// CTRL-46: the vote share the DAgger walk tallies with, None for the mode's own
+	/// writer. `vote_share` without `write_vote`, or a θ off (0, 0.5] / the 1/100 grid,
+	/// is an error (ram_core VoteShare::from_theta — the IDS-56 validation).
+	pub(crate) fn write_vote_share(&self) -> Result<Option<ram_core::vote_share::VoteShare>, String>
+	{
+		match (self.write_vote, self.vote_share)
+		{
+			(false, None) => Ok(None),
+			(false, Some(t)) => Err(format!("vote_share={t} is only valid with write_vote (write rule 'vote')")),
+			(true, None) => Ok(Some(ram_core::vote_share::VoteShare::MAJORITY)),
+			(true, Some(t)) => ram_core::vote_share::VoteShare::from_theta(t).map(Some),
+		}
 	}
 
 	/// ABI 32 guards: the plant options and the G5 reference need the channels
@@ -718,6 +790,10 @@ pub struct TrajectoryRs
 	// each step (WnnController::dhat_estimate, read right AFTER controller_step_4).
 	// ReplayObs.dhat. Empty when obs_dhat is off.
 	pub dhat_obs: Vec<[f32; 3]>,
+	// CTRL-46 (ABI 46): the Mahony-bias prediction [abp_r, abp_p] compute_features
+	// produced at each step (WnnController::att_bias_last, read right AFTER
+	// controller_step_4). ReplayObs.att_bias. Empty when obs_att_bias_pred is off.
+	pub att_bias: Vec<[f32; 2]>,
 	pub cumulative_reward: f64,
 	pub mean_attitude_error_rad: f64,
 	pub diverged: bool,
@@ -1825,7 +1901,20 @@ pub(crate) fn rollout_and_label_inner(
 		// on top of the attitude law, the DISCLOSED CASCADE the classical rivals
 		// already are. Without it the student is asked to learn altitude from a
 		// teacher that never commands it.
-		let (expert_pwm, expert_flown) = pilot.command(&loops, teacher, sim, q, gyro, target_64, cfg.target_altitude);
+		// CTRL-46 item 2: the attitude the LABEL is built from — the true quaternion
+		// (default, bit-identical) or the student's own Mahony estimate this step's
+		// compute_features just read (validated: estimator on, not expert_drives).
+		let q_label = if cfg.dagger_label_estimate
+		{
+			controller
+				.att_est_quat()
+				.expect("dagger_label_estimate: the student's estimator produced no live estimate this step")
+		}
+		else
+		{
+			q
+		};
+		let (expert_pwm, expert_flown) = pilot.command(&loops, teacher, sim, q_label, gyro, target_64, cfg.target_altitude);
 		// D0: the LABEL — the teacher's pwm re-based on its own hover when the
 		// switch is on, the raw pwm otherwise (teacher_label_f32).
 		let expert_pwm_f32 = teacher_label_f32(expert_pwm, rebase);
@@ -1888,6 +1977,11 @@ pub(crate) fn rollout_and_label_inner(
 		if controller.dhat_params().is_some()
 		{
 			traj.dhat_obs.push(controller.dhat_estimate());
+		}
+		// CTRL-46: and the bias prediction it produced.
+		if controller.att_bias_pred_on()
+		{
+			traj.att_bias.push(controller.att_bias_last());
 		}
 		// H3: when outputs are decoupled, the output banks are CONTROLS, so the
 		// training TARGETS (teacher + student MOTOR pwms) must be un-mixed into
@@ -2068,7 +2162,11 @@ fn traj_windows(traj: &TrajectoryRs, cfg: &RewardGatedConfigPacked) -> Vec<TrajW
 			sp: opt(traj.student_pwms.len(), end).then(|| traj.student_pwms[start..end].to_vec()),
 			lb: opt(traj.label_base.len(), end).then(|| traj.label_base[start..end].to_vec()),
 			ro: ReplayObs::slice(&traj.vert_obs, &traj.horiz_obs, &traj.pwm_dev, &traj.att_up, start, end)
-				.map(|r| r.with_cascade(&traj.cascade_obs, start, end).with_dhat(&traj.dhat_obs, start, end)),
+				.map(|r| {
+					r.with_cascade(&traj.cascade_obs, start, end)
+						.with_dhat(&traj.dhat_obs, start, end)
+						.with_att_bias(&traj.att_bias, start, end)
+				}),
 			first: start == 0,
 		});
 		start = end;
@@ -2349,6 +2447,7 @@ pub(crate) struct GatedFlat
 	pub(crate) att_up: Vec<f32>,  // ABI 32: attitude-estimate "up" per step [total_steps*3]
 	pub(crate) dhat_rec: Vec<f32>, // CTRL-40: motor d̂ values per step [total_steps*3]
 	pub(crate) cas_rec: Vec<f32>,  // CTRL-40: cascade blocks per step [total_steps*6]
+	pub(crate) abp_rec: Vec<f32>,  // CTRL-46: Mahony-bias prediction per step [total_steps*2]
 }
 
 /// Flatten the gated (episode-major) trajectories into `GatedFlat`. All episodes
@@ -2375,6 +2474,7 @@ pub(crate) fn flatten_gated(gated: &[&TrajectoryRs]) -> GatedFlat
 		att_up: Vec::with_capacity(total_steps * 3),
 		dhat_rec: Vec::with_capacity(total_steps * 3),
 		cas_rec: Vec::with_capacity(total_steps * 6),
+		abp_rec: Vec::with_capacity(total_steps * 2),
 	};
 	let mut sbase = 0u32;
 	for t in gated
@@ -2397,6 +2497,7 @@ pub(crate) fn flatten_gated(gated: &[&TrajectoryRs]) -> GatedFlat
 			f.att_up.extend_from_slice(&t.att_up.get(s).copied().unwrap_or([0.0; 3]));
 			f.dhat_rec.extend_from_slice(&t.dhat_obs.get(s).copied().unwrap_or([0.0; 3]));
 			f.cas_rec.extend_from_slice(&t.cascade_obs.get(s).copied().unwrap_or([0.0; 6]));
+			f.abp_rec.extend_from_slice(&t.att_bias.get(s).copied().unwrap_or([0.0; 2]));
 		}
 		let (sn, cs) = (0.5 * t.init_yaw).sin_cos();
 		f.init_q.extend_from_slice(&[cs, 0.0, 0.0, sn]);
@@ -2447,6 +2548,11 @@ fn applied_streams_guard(controller: &WnnController, gated: &[&TrajectoryRs])
 			"try_gpu_split: a cascade block is on but a trajectory carries {} cascade records for {n} steps",
 			t.cascade_obs.len()
 		);
+		assert!(
+			!controller.att_bias_pred_on() || t.att_bias.len() == n,
+			"try_gpu_split: obs_att_bias_pred is on but a trajectory carries {} bias records for {n} steps (CTRL-46)",
+			t.att_bias.len()
+		);
 	}
 }
 
@@ -2479,6 +2585,7 @@ pub(crate) fn try_gpu_split(
 		att_up: &fb.att_up,
 		dhat_rec: &fb.dhat_rec,
 		cas_rec: &fb.cas_rec,
+		abp_rec: &fb.abp_rec,
 		selective: cfg.split_selective_output,
 		target_rpy: target,
 	};
@@ -2575,6 +2682,53 @@ pub(crate) fn validate_train_regime(
 		{
 			return Err(format!("{name} = {v} must be finite and >= 0."));
 		}
+	}
+	validate_write_rule(controller, cfg)?;
+	if cfg.dagger_label_estimate
+	{
+		if !controller.obs_att_estimator()
+		{
+			return Err("dagger_label_estimate (--dagger-label-attitude estimate) builds the label from the \
+			            student's Mahony estimate — the controller has no attitude estimator \
+			            (obs_att_estimator off), so there is no estimate to build it from"
+				.into());
+		}
+		if cfg.expert_drives
+		{
+			return Err("dagger_label_estimate refuses expert_drives: there the teacher FLIES its label, so \
+			            the estimate would change the flown trajectory, not only the label"
+				.into());
+		}
+	}
+	Ok(())
+}
+
+/// CTRL-46 item 1: the vote writer's refusals — run before the first episode.
+///   * the mode must resolve to `WriteRule::Vote` (ram_core resolve_controller: the
+///     QUAD family is refused);
+///   * the state-splitting trainer has its own planted-cell writer (not ported);
+///   * protect_learned guards a cell by its CURRENT value, which a frozen-memory
+///     round never changes — meaningless under a tally, refused;
+///   * write_priority_err only reorders the walk, and the tally is order-free.
+fn validate_write_rule(controller: &WnnController, cfg: &RewardGatedConfigPacked) -> Result<(), String>
+{
+	let Some(share) = cfg.write_vote_share()?
+	else
+	{
+		return Ok(());
+	};
+	ram_core::cell_mode::WriteRule::resolve_controller(controller.memory_mode_u8(), Some(share))?;
+	if std::env::var("WNN_STATE_SPLIT").map(|s| s == "1").unwrap_or(false) && controller.gpu_dims().2 > 0
+	{
+		return Err("write rule 'vote' is not ported to the state-splitting trainer (WNN_STATE_SPLIT=1)".into());
+	}
+	if cfg.protect_learned
+	{
+		return Err("write rule 'vote' refuses protect_learned (a tally has no 'learned' cell to protect)".into());
+	}
+	if cfg.write_priority_err
+	{
+		return Err("write rule 'vote' refuses write_priority_err (L4 orders the walk; the tally is order-free)".into());
 	}
 	Ok(())
 }
@@ -2730,6 +2884,8 @@ pub(crate) fn dagger_train_inplace_with(
 		eprintln!("[controller] ⚠️ GPU bptt walk does not port write_priority_err (L4) — walking on the CPU");
 	}
 	let use_gpu_bptt = gpu_bptt && !cfg.write_priority_err && controller.gpu_dims().2 > 0;
+	// CTRL-46: None ⇒ the mode's own writer (LastWrite / Nudge), bit-identical.
+	let vote = cfg.write_vote_share().unwrap_or_else(|e| panic!("dagger_train: {e}"));
 	for it in 0..cfg.num_rounds
 	{
 		let tilt_rad = cfg.round_tilt_rad(it);
@@ -2811,6 +2967,7 @@ pub(crate) fn dagger_train_inplace_with(
 							att_up: t.att_up.clone(),
 							cascade: t.cascade_obs.clone(),
 							dhat: t.dhat_obs.clone(),
+							att_bias: t.att_bias.clone(),
 						})
 						.collect();
 					let (_r, _cf, planted, _pr, saturation, wishes) = controller.split_train_loop(
@@ -2844,6 +3001,12 @@ pub(crate) fn dagger_train_inplace_with(
 		}
 		else
 		{
+			// CTRL-46: under the vote rule the round's walks record into a tally that is
+			// committed once below (validated in validate_train_regime).
+			if let Some(share) = vote
+			{
+				controller.vote_begin_round(share).unwrap_or_else(|e| panic!("dagger_train: {e}"));
+			}
 			// ABI 35: sn>0 rounds can walk on the GPU (opt-in; bit-identical).
 			if use_gpu_bptt
 			{
@@ -2867,6 +3030,11 @@ pub(crate) fn dagger_train_inplace_with(
 						stats.train_steps += traj.steps;
 					}
 				}
+			}
+			if vote.is_some()
+			{
+				let (sc, oc) = controller.vote_commit_round();
+				cells_written += sc + oc;
 			}
 		}
 		history_scores.extend_from_slice(&round_scores);
@@ -3002,6 +3170,9 @@ pub fn dagger_train_inplace(
 	// ABI 38 (CTRL-27): the cascade contract — the SAME three-place invariant.
 	// A missing forward would train a motor-level controller on CTBR labels.
 	ctbr = None,
+	// CTRL-46 (ABI 46): the Mahony-bias predictor block — the SAME three-place invariant
+	// (it CHANGES the layout: +2 features at the tail, after the cascade blocks).
+	obs_att_bias_pred = false,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn dagger_train_batch_inplace(
@@ -3081,6 +3252,7 @@ pub fn dagger_train_batch_inplace(
 	target_levels: usize,
 	obs_att_estimator: bool,
 	ctbr: Option<crate::ctbr::CtbrSpec>,
+	obs_att_bias_pred: bool,
 ) -> PyResult<Vec<(Py<WnnController>, TrainStats)>>
 {
 	use rayon::prelude::*;
@@ -3189,6 +3361,7 @@ pub fn dagger_train_batch_inplace(
 					2.0, // est_kp — the rivals' Mahony default (TeacherFeed / est_kp)
 					0.1, // est_ki
 					ctbr.clone(),
+					obs_att_bias_pred,
 				)?;
 				controller
 					.set_target_levels_core(target_levels)
@@ -4571,6 +4744,8 @@ mod d0_hover_anchor_tests
 			motor_lag_s: 0.0,
 			imu_specific_force: false, rotor_drag: 0.0, att_err_tilt_ref: false,
 			dist_motor_asym_mag: 0.0,
+			write_vote: false, vote_share: None, dagger_label_estimate: false,
+			init_vxy: 0.0,
 		}
 	}
 
@@ -5099,6 +5274,8 @@ mod motor_lag_axis_f_tests
 			motor_lag_s,
 			imu_specific_force: false, rotor_drag: 0.0, att_err_tilt_ref: false,
 			dist_motor_asym_mag: 0.0,
+			write_vote: false, vote_share: None, dagger_label_estimate: false,
+			init_vxy: 0.0,
 		}
 	}
 

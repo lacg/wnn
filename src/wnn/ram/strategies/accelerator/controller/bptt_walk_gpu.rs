@@ -69,6 +69,8 @@ struct BpttParams
 	si_words: u32,
 	oi_words: u32,
 	threads: u32,
+	/// CTRL-46: 1 ⇒ vote round (no writes; visits to buffers 29/30).
+	vote: u32,
 }
 
 /// The compiled walk kernel + a small pool of command queues (genomes walk
@@ -282,6 +284,37 @@ fn words(bits: usize) -> usize
 	bits.div_ceil(32).max(1)
 }
 
+/// CTRL-46: fold one vote chunk's visits into the round's tally. Both walks visit the
+/// same (record, task) set — every record × every task, exactly what the direct-write
+/// commits touch — with the memory frozen, so the solves (and hence the state
+/// targets) match record for record. Integer sums ⇒ chunk order is irrelevant.
+fn add_chunk_visits(
+	c: &mut WnnController,
+	plans: &[BpttWindowPlan],
+	b_va: &Buffer,
+	b_vd: &Buffer,
+	num_out: usize,
+	ntask: usize,
+	recs: usize,
+)
+{
+	let addr = unsafe { std::slice::from_raw_parts(b_va.contents() as *const u64, recs * ntask) };
+	let dir = unsafe { std::slice::from_raw_parts(b_vd.contents() as *const u8, recs * ntask) };
+	let walked: usize = plans.iter().map(|p| p.n_rec).sum();
+	debug_assert_eq!(walked, recs);
+	let t = c.vote_tally_mut().expect("vote round open for the whole GPU walk");
+	for slot in 0..recs * ntask
+	{
+		let n = slot % ntask;
+		match dir[slot]
+		{
+			255 => {}
+			d if n < num_out => t.visit(false, n, addr[slot], d != 0),
+			d => t.visit(true, n - num_out, addr[slot], d != 0),
+		}
+	}
+}
+
 /// Walk `plans` (in order) on the GPU and apply the result to `c`. Returns
 /// (state writes, output writes) — the same counts the CPU walk reports.
 pub(crate) fn walk_plans_gpu(
@@ -297,6 +330,28 @@ pub(crate) fn walk_plans_gpu(
 /// `walk_plans_gpu` with an explicit records-per-dispatch budget (tests exercise
 /// one-window chunks and table growth without touching the process env).
 pub(crate) fn walk_plans_gpu_with(
+	c: &mut WnnController,
+	plans: &[BpttWindowPlan],
+	topk: usize,
+	protect_learned: bool,
+	budget: usize,
+) -> Result<(usize, usize), String>
+{
+	// CTRL-46: a vote round's tally is restored on failure, so the caller's CPU
+	// fallback re-walks the same plans without double-counting finished chunks.
+	let pre = c.vote_tally_mut().map(|t| t.clone());
+	let r = walk_plans_gpu_inner(c, plans, topk, protect_learned, budget);
+	if r.is_err()
+	{
+		if let (Some(t), Some(p)) = (c.vote_tally_mut(), pre)
+		{
+			*t = p;
+		}
+	}
+	r
+}
+
+fn walk_plans_gpu_inner(
 	c: &mut WnnController,
 	plans: &[BpttWindowPlan],
 	topk: usize,
@@ -364,9 +419,15 @@ pub(crate) fn walk_plans_gpu_with(
 		si_words: words(sil) as u32,
 		oi_words: words(oil) as u32,
 		threads: w.threads as u32,
+		vote: c.vote_tally_mut().is_some() as u32,
 		..Default::default()
 	};
 	let ntask = num_out + sn;
+	// CTRL-46: per-chunk visit buffers (one slot per record × task); 1-element dummies
+	// when the round is not a vote.
+	let vote_slots = if p.vote != 0 { max_chunk * ntask } else { 1 };
+	let b_va = w.zeroed::<u64>(vote_slots);
+	let b_vd = w.zeroed::<u8>(vote_slots);
 	let t = w.threads as usize;
 	let b_si = w.zeroed::<u32>(max_win * p.si_words as usize);
 	let b_oi = w.zeroed::<u32>(max_win * p.oi_words as usize);
@@ -423,10 +484,10 @@ pub(crate) fn walk_plans_gpu_with(
 		let cmd = q.new_command_buffer();
 		let enc = cmd.new_compute_command_encoder();
 		enc.set_compute_pipeline_state(&w.pipeline);
-		let bufs: [&Buffer; 29] = [
+		let bufs: [&Buffer; 31] = [
 			&o_buf.ent, &o_buf.idx, &o_buf.meta, &o_buf.cnt, &s_buf.ent, &s_buf.idx, &s_buf.meta, &s_buf.cnt,
 			&b_oconn, &b_sconn, &b_wm, &b_sens, &b_fr, &b_tg, &b_so, &b_prev, &b_si, &b_oi, &b_tka, &b_tkr,
-			&b_tkc, &b_lna, &b_lnr, &b_lnc, &b_cib, &b_cio, &b_stats, &b_p, &b_tt,
+			&b_tkc, &b_lna, &b_lnr, &b_lnc, &b_cib, &b_cio, &b_stats, &b_p, &b_tt, &b_va, &b_vd,
 		];
 		for (k, b) in bufs.iter().enumerate()
 		{
@@ -444,6 +505,10 @@ pub(crate) fn walk_plans_gpu_with(
 		if st[2] != 0
 		{
 			return Err("controller_bptt_walk: a cell table overflowed (host capacity bug)".into());
+		}
+		if p.vote != 0
+		{
+			add_chunk_visits(c, &plans[c0..c1], &b_va, &b_vd, num_out, ntask, recs);
 		}
 	}
 	// Apply back: every entry the tables hold, diffed against the host memory.

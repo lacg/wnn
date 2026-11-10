@@ -36,6 +36,10 @@ pub(crate) struct ImitCapture
 	/// instead of a free-running integral of its own unused decodes.
 	pub sync_accumulator: bool,
 	pub want_addresses: bool,
+	/// ABI 49 (student-state threshold refit): record ONLY the feature vector, at
+	/// every physical step — no decode targets (diag_targets refuses
+	/// dagger_label_delta), no addresses. See calib_sampler::sample_student_features_rs.
+	pub features_only: bool,
 	pub feats: Vec<Vec<f32>>,
 	pub decoded: Vec<[f32; 4]>,
 	pub target: Vec<[f32; 4]>,
@@ -62,6 +66,7 @@ impl ImitCapture
 		ImitCapture {
 			sync_accumulator,
 			want_addresses,
+			features_only: false,
 			feats: Vec::new(),
 			decoded: Vec::new(),
 			target: Vec::new(),
@@ -74,6 +79,14 @@ impl ImitCapture
 			inner: Vec::new(),
 			act: crate::actuator_lag::ActuatorLag::new(0.0, 0.001),
 		}
+	}
+
+	/// A read-only feature sampler (no accumulator sync, no addresses, no targets).
+	pub(crate) fn feature_sampler() -> Self
+	{
+		let mut c = ImitCapture::new(false, false);
+		c.features_only = true;
+		c
 	}
 
 	/// Episode start (rollout_and_label_inner): the twin re-seeds like the teacher's.
@@ -104,7 +117,9 @@ impl ImitCapture
 	/// DECISION steps of an action-repeat controller (holds are never written).
 	pub(crate) fn keeps(&self, c: &WnnController) -> bool
 	{
-		c.diag_last_step_was_decision()
+		// The feature sampler keeps EVERY physical step: compute_features runs on
+		// holds too, and the teacher pool it is pooled with samples every step.
+		self.features_only || c.diag_last_step_was_decision()
 	}
 
 	pub(crate) fn record_ctbr_hidden(&mut self, hidden: [f64; 12], inner: Option<[f64; 6]>)
@@ -116,6 +131,11 @@ impl ImitCapture
 	/// `label` = the bank-space label the trajectory recorded this step.
 	pub(crate) fn record(&mut self, c: &mut WnnController, label: [f32; 4], applied: [f32; 4])
 	{
+		if self.features_only
+		{
+			self.feats.push(c.last_feature_vector_ref().to_vec());
+			return;
+		}
 		self.label.push(label);
 		let (d, bits) = c.diag_targets(label);
 		self.feats.push(c.last_feature_vector_ref().to_vec());
@@ -689,6 +709,7 @@ pub(crate) fn from_fixture(path: &str) -> (WnnController, RewardGatedConfigPacke
 		kw.get("delta_label_scale").map(|v| v.parse().unwrap()).unwrap_or(1.0),
 		kw.get("dagger_label_delta").map(|v| v == "true").unwrap_or(false),
 		b("obs_att_estimator"), 2.0, 0.1, ctbr_from_kw(&kw),
+		kw.get("obs_att_bias_pred").map(|v| v == "true").unwrap_or(false),
 	)
 	.expect("fixture controller");
 	c.set_target_levels_core(kw.get("target_levels").map(|v| v.parse().unwrap()).unwrap_or(0)).unwrap();

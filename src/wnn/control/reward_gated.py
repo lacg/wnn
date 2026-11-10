@@ -169,6 +169,17 @@ class RewardGatedConfig:
 	# False = DAGGER (student drives), the bit-identical legacy path.
 	expert_drives: bool = False
 
+	# CTRL-46 (ABI 46), item 1: the DAgger walk's write rule for the direct-write
+	# modes (BINARY / TERNARY / PLN). False = LastWrite (today's last-write-wins,
+	# bit-identical); True = the IDS-56 min-share VOTE, tallied per round
+	# (`--write-rule vote`). vote_share None = θ 0.5 (the plain majority).
+	write_vote: bool = False
+	vote_share: Optional[float] = None
+	# CTRL-46, item 2: build the DAgger LABEL from the student's Mahony estimate
+	# (the attitude it observes) instead of the true quaternion
+	# (`--dagger-label-attitude estimate`). False = true quaternion, bit-identical.
+	dagger_label_estimate: bool = False
+
 	# Best-checkpoint selection: snapshot the controller at its best-fitness inner
 	# round and restore it at the end (the chaotic final round is often worse).
 	keep_best_checkpoint: bool = True
@@ -211,6 +222,11 @@ class RewardGatedConfig:
 	curriculum: bool = True
 	easy_tilt_deg: float = 8.0
 	full_tilt_deg: float = 30.0
+	# Training-only horizontal regime (09/11/2026, idea #4 of docs/ctrl_dres_failures.md):
+	# the Rust trainer's xy start bound (None = the episode config's) and initial
+	# horizontal-velocity bound (0 = at rest; ABI 48). evaluator._trainer_plant_kwargs.
+	train_xy_offset: Optional[float] = None
+	train_init_vxy: float = 0.0
 
 	eval_episodes: int = 20              # closed-loop eval after each round
 	seed: int = 0
@@ -485,6 +501,7 @@ def reward_gated_train(
 		obs_collective_cmd=getattr(spec, 'obs_collective_cmd', False), obs_alt_err=getattr(spec, 'obs_alt_err', False), obs_vz=getattr(spec, 'obs_vz', False),
 		obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
 		obs_att_estimator=getattr(spec, 'obs_att_estimator', False), ctbr=_ctbr_arg(spec),
+		obs_att_bias_pred=getattr(spec, 'obs_att_bias_pred', False),  # CTRL-46 (ABI 46)
 		dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt, integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
 		action_repeat=spec.action_repeat,
 		memory_mode=spec.memory_mode_int(),
