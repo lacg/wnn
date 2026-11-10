@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from wnn.control.evaluator import (ControllerSpec, EpisodeConfig,
                                    fit_thresholds_from_pid_rollouts)
+from wnn.control.threshold_calibration import ThresholdCalibration, calibration_from_args
 
 
 def _spec(bits=8):
@@ -41,9 +42,10 @@ def _cfg(tilt=5.0, steps=300):
 	                     max_initial_body_rate=0.5, max_initial_yaw_rate=0.3)
 
 
-def _fit(**kw):
-	return fit_thresholds_from_pid_rollouts(_spec(), num_episodes=2, seed=3,
-	                                        episode_config=_cfg(), **kw)
+def _fit(outer_quantile=None, extra_samples=None):
+	cal = ThresholdCalibration(episodes=2, outer_quantile=outer_quantile)
+	return fit_thresholds_from_pid_rollouts(_spec(), seed=3, episode_config=_cfg(),
+	                                        extra_samples=extra_samples, calibration=cal)
 
 
 def _spans(t, bits=8):
@@ -115,3 +117,15 @@ def test_a_and_c_compose():
 	nf = len(_fit()) // _spec().bits_per_feature
 	both = _fit(outer_quantile=0.02, extra_samples=[[-5.0, 5.0] * 2000 for _ in range(nf)])
 	assert sum(_spans(both)) > sum(_spans(_fit(outer_quantile=0.02)))
+
+
+def test_outer_quantile_rides_the_calibration():
+	"""09/11/2026: the outer quantile is part of ThresholdCalibration, so every fit site
+	that takes calibration_from_args(args) gets it (as a loose argument it reached 2 of 5)."""
+	from types import SimpleNamespace
+	assert calibration_from_args(SimpleNamespace(threshold_outer_quantile=0.02)).outer_quantile == 0.02
+	assert calibration_from_args(SimpleNamespace()).outer_quantile is None
+	assert ThresholdCalibration().token() == "eps:10,regime:flown,ladder:quantile"
+	assert ThresholdCalibration(outer_quantile=0.02).token().endswith(",outerq:0.02")
+	with pytest.raises(ValueError):
+		ThresholdCalibration(outer_quantile=0.5)

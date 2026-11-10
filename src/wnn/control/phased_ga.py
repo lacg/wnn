@@ -1830,7 +1830,6 @@ def _refit_thresholds_from_student(args, ec, seeds, grid, winner_genome):
 		geometry=getattr(ec, "geometry", None),
 		alloc=getattr(ec, "alloc_residual", None),
 		episode_config=_calib_ec(args, ec),
-		outer_quantile=getattr(args, "threshold_outer_quantile", None),
 		extra_samples=extra)
 	print(f"  [thr-refit] refit on {n} student samples + the teacher pool; "
 	      f"REGRIDDING (the address function moved, so every cell is stale)")

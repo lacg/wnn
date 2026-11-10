@@ -56,7 +56,7 @@ def _capture_seed(args, use_score):
 	# episode_config= since 09/08/2026 (4514d5c9) and this double had lagged it, so
 	# every check here had been failing with a TypeError — nothing ran it.
 	def _fake_fit(spec, num_episodes=20, seed=0, method="quantile", geometry=None, alloc=None,
-	              episode_config=None, outer_quantile=None, extra_samples=None, calibration=None):
+	              episode_config=None, extra_samples=None, calibration=None):
 		seen["seed"] = seed
 		return [0.0]
 

@@ -932,7 +932,9 @@ Scanning calibration tilt 1°…90° against `outside%`:
 
 Two things follow. The legacy 30 **was not even the best accidental value** — a pure-tilt
 search would land near 59. And **every outer-quantile candidate beats every tilt-only
-one**, which says the quantile position is the stronger of the two levers.
+one**, which says the quantile position is the stronger of the two levers *(outside% proxy
+only; the flown test of this proxy is VOID — the flag never reached the trained stages,
+fixed 8542f4c1 (audit 09/11/2026, docs/ctrl_outerq_august_audit.md))*.
 
 ⚠️ **`outside%` is a PROXY.** It is validated on three flown points, two of which are
 confounded (below). The live arm exists precisely to test whether it is causal or merely
@@ -989,14 +991,14 @@ Two cautions for scoring the `q` cells:
 comparison is internally valid. They remain refuted *at the encoder they were run on*.
 
 **Does reframe the alphabet probe.** L64 refined the ACTION alphabet and moved one seed
-but not the other — the signature of a second binding constraint. Perception was that
-constraint. The two limits are multiplicative, so the probe's verdict ("increment
+but not the other — the signature of a second binding constraint. Perception was the
+*candidate* for that constraint — untested at the quantile lever (audit 09/11/2026, docs/ctrl_outerq_august_audit.md). The two limits are multiplicative, so the probe's verdict ("increment
 resolution is not a reliable lever") should be read as "not a reliable lever *while
 perception is the tighter constraint*", not as a closed question.
 
 **Does put every ABSOLUTE number on notice.** The hold floor, the teacher-quality-does-not-
 propagate claim, and the committee bar were all measured through the mis-fitted encoder. If
-the outer-quantile arm moves the floor, the absolute figures need re-flying before
+a perception lever moves the floor (the outer-quantile arm was VOID — (audit 09/11/2026, docs/ctrl_outerq_august_audit.md)), the absolute figures need re-flying before
 publication; the relative/structural claims survive either way.
 
 ### E1 — the coverage 2×2 (PRE-REGISTERED 10/08/2026, not yet armed)
@@ -1162,7 +1164,10 @@ Three details worth keeping:
   GRID alone would have called γ a win. The "GRID is not the read-out" rule, written
   into the pre-registration before any cell ran, earned its keep here.
 
-### E1 — the coverage 2x2 DEGENERATED, and why that was correct
+### E1 — the coverage 2x2 DEGENERATED (on a verdict later voided)
+
+> **09/11/2026:** it degenerated on the outer-quantile verdict below, which is VOID
+> (audit 09/11/2026, docs/ctrl_outerq_august_audit.md). The quantile x refit interaction remains UNMEASURED.
 
 Factor A had no live level: the outer-quantile arm refuted its own lever while E1 was
 being written (below), so `pick_best_arm_config.py` returned NO WINNER and the arm ran
@@ -1170,7 +1175,14 @@ as 6 refit-only cells on the c30 control encoder instead of 12. The interaction 
 2x2 exists to measure is only meaningful between two WORKING fixes; the other 6 cells
 would have re-measured a refuted encoder.
 
-### Outer-quantile — REFUTED 4/4 (arm CLOSED, 6/6 markers)
+### Outer-quantile — ~~REFUTED 4/4~~ VOID (09/11/2026)
+
+> **VOID:** `--threshold-outer-quantile` reached only the GRID ranking; NEURONS, MEMORY,
+> every held-out and stage-select fitted the DEFAULT ladder (fixed 8542f4c1, refactored
+> e238f36f) (audit 09/11/2026, docs/ctrl_outerq_august_audit.md). No number below flew the quantile. Read correctly, the table is a
+> **tilt-5 default vs tilt-30 (c30) encoder comparison at the default quantile**: tilt 5
+> lost 4/4 cells, n=2 seeds, CI straddles 0, confounded by grid selection — PROVISIONAL.
+> The "outside% is dead" and cell-count conclusions below are struck.
 
 ```
   cell              headline    vs same-seed ctrl    stable
@@ -1181,12 +1193,12 @@ would have re-measured a refuted encoder.
 ```
 
 Every treatment cell worse on steady AND losing stable; no cell within 0.28° of its
-control. **`outside%` is dead as a predictor**: it ranked the candidates 4.7% (q=.02)
+control. ~~**`outside%` is dead as a predictor**~~ (VOID: the flown ladder was never the one ranked): it ranked the candidates 4.7% (q=.02)
 < 5.6% (q=.005) < 13.3% (c30) and the flown order is the exact reverse. Its single
 out-of-sample test failed on all four points. It stays in this document as a REFUTED
 HYPOTHESIS, never as a result.
 
-Mechanism, visible in the cell counts: q=0.02 populated Σ6.9M cells against the
+~~Mechanism, visible in the cell counts~~ (STRUCK 09/11: cross-seed pairing and the wrong ladder; the same-seed comparison reverses on s003): q=0.02 populated Σ6.9M cells against the
 control's Σ12.2M. Reaching into the tails maps more of the flown distribution onto
 FEWER distinct codes near zero, so distinct states collide into shared addresses.
 
@@ -1246,11 +1258,11 @@ Refitting invalidates the GRID stage's learned cells (hence the mandatory regrid
 which reshuffles population ordering and pushes the best genome out of index 0. The
 refit and the top-3 stage selector are therefore **coupled**, not independent.
 
-### Programme status — both quantizer routes are CLOSED
+### Programme status — ~~both quantizer routes are CLOSED~~ action route closed; perception quantile lever NEVER FLOWN (09/11/2026)
 
 | route | lever | verdict |
 |---|---|---|
-| perception | outer-quantile 0.02 / 0.005 | REFUTED 4/4 |
+| perception | outer-quantile 0.02 / 0.005 | ~~REFUTED 4/4~~ **NEVER FLOWN** (August arm void, (audit 09/11/2026, docs/ctrl_outerq_august_audit.md)) |
 | perception | wrong-regime / wrong-plant calibration | real bugs, FIXED (correctness) |
 | perception | student-state refit | **NULL at n=5** (mean Δ +0.008°, CI [-0.36,+0.38]); default-OFF |
 | action | L64 uniform alphabet | refuted at its bar (1 seed each way) |
@@ -1261,7 +1273,7 @@ L64 and γ together close the action channel from both ends and are consistent: 
 made increments uniformly finer and won on one seed; γ made them finer near zero and
 coarser elsewhere and lost on all three. If near-zero resolution were the constraint,
 γ would be the cheap win — same footprint, ~8x finer steps. It is not. **Resolution is
-not the binding constraint in either channel**, which promotes the structural route
+not the binding constraint in the ACTION channel**; the perception channel's quantile lever is untested (09/11/2026), which promotes the structural route
 (reassessment §5) to the only live hypothesis.
 
 ---
