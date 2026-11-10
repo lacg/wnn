@@ -971,7 +971,8 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	genome; the prior winner is inside the carried population by construction)."""
 	thresholds = fit_thresholds_from_pid_rollouts(spec, calibration=calibration_from_args(args), seed=seed,
 		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None),
-		episode_config=_calib_ec(args, ec))
+		episode_config=_calib_ec(args, ec),
+		outer_quantile=getattr(args, "threshold_outer_quantile", None))
 	ev = ControllerEvaluator(spec, num_eval_episodes=args.eval_episodes,
 	                         seed=seed, episode_config=ec, thresholds=thresholds,
 	                         rg_config=_rg_config(args, ec, seed),
@@ -1243,7 +1244,8 @@ def _report_thresholds(args, ec, spec, report_seed: int, train_seed: int, use_sc
 	return fit_thresholds_from_pid_rollouts(
 		spec, calibration=calibration_from_args(args), seed=seed,
 		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None),
-		episode_config=_calib_ec(args, ec))
+		episode_config=_calib_ec(args, ec),
+		outer_quantile=getattr(args, "threshold_outer_quantile", None))
 
 
 def _shell_holdout_compact(args, ec_eval: EpisodeConfig, spec: ControllerSpec,
@@ -1366,7 +1368,8 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	winner + 199 random ones."""
 	thresholds = fit_thresholds_from_pid_rollouts(spec, calibration=calibration_from_args(args), seed=seed,
 		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None),
-		episode_config=_calib_ec(args, ec))
+		episode_config=_calib_ec(args, ec),
+		outer_quantile=getattr(args, "threshold_outer_quantile", None))
 	mem_eps = getattr(args, "memory_eval_episodes", None) or args.eval_episodes
 	ev = ControllerEvaluator(spec, num_eval_episodes=mem_eps,
 	                         seed=seed, episode_config=ec, thresholds=thresholds,
