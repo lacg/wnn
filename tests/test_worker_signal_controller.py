@@ -142,8 +142,8 @@ TINY_PARAMS = dict(grid_state_neurons=[0], max_state_neurons=0, grid_bits=[8],
                    grid_output_neurons=[8], max_output_neurons=8,
                    skip_stages="bits,connections", neurons_gens=1, neurons_patience=1,
                    memory_gens=4, memory_patience=4, pop=4, grid_top_k=4,
-                   eval_episodes=2, memory_eval_episodes=2, report_episodes=2, steps=50,
-                   universe_episodes=2, report_seeds=[11], base_seed=5,
+                   eval_episodes=2, memory_eval_episodes=2, test_episodes=2, steps=50,
+                   universe_episodes=2, test_seeds=[11], base_seed=5,
                    check_interval=1, train_workers=2, grid_min_suffix=1, lamarckian=True)
 
 

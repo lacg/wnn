@@ -20,7 +20,7 @@
 #   L64: --levels 64  --max-output-neurons 256   (quantum 0.003125)
 # CONTROLS (already flown, levels=16): CMT_lqi_..._s31337002 = 99.8/1.11/0.53 and
 # CMT_lqi_..._s31337003 = 100.0/1.58/0.81 (stable%/err deg/steady deg, headline
-# held-out mean over report seeds 99990101-05).
+# held-out mean over test seeds 99990101-05).
 #
 # SUCCESS (pre-registered): an arm beats the SAME-SEED levels=16 control's steady on
 # BOTH base seeds without losing stable. Beating it on one seed only = suggestive,
@@ -49,7 +49,7 @@ SEEDS="${ALP_SEEDS:-31337002 31337003}"
 TEACHER="${ALP_TEACHER:-lqi}"
 LEVELS_ARMS="${ALP_LEVELS:-32 64}"
 NEURONS_GENS="${ALP_NEURONS_GENS:-5}"
-REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
+TEST_SEEDS="99990101 99990102 99990103 99990104 99990105"
 WAIT_PID="${ALP_WAIT_PID:-}"
 WAIT_CEIL="${ALP_WAIT_CEIL:-172800}"
 
@@ -114,7 +114,7 @@ run_arm() {
 		--steps 2000 --tilt 5.0 \
 		--fit-weight-err-sq 0.4 --fit-weight-stable 0.3 \
 		--fit-weight-jerk 0.2 --fit-weight-mono 0.1 \
-		--report-episodes 100 --holdout-pop-sample 8 \
+		--test-episodes 100 --holdout-pop-sample 8 \
 		--grid-bits 24 30 \
 		--grid-state-neurons 0 --max-state-neurons 0 \
 		--max-output-neurons "$(max_out "$levels")" \
@@ -124,7 +124,7 @@ run_arm() {
 		--teacher "$TEACHER" \
 		$FEAT_PIDMIX \
 		--save-stage-checkpoints "$OUTDIR/${tag}_stages" \
-		--report-seeds $REPORT_SEEDS \
+		--test-seeds $TEST_SEEDS \
 		--base-seed "$seed"
 }
 

@@ -29,7 +29,7 @@ def check(label, got, want):
 
 
 RESULT = "  RESULT — during-search winner (held-out):  stable={:.1f}%  err=1.00°  steady=0.50°"
-MULTI = "  [report-seeds] {} MULTI-SEED held-out (5 seeds [1, 2, 3, 4, 5]): stable=99.0±0.5%  err=1.00±0.10°{}"
+MULTI = "  [test-seeds] {} MULTI-SEED held-out (5 seeds [1, 2, 3, 4, 5]): stable=99.0±0.5%  err=1.00±0.10°{}"
 
 
 def synthetic_out(headline_rescore: bool, crowned: str) -> str:
@@ -80,7 +80,7 @@ def test_marker_field_takes_precedence():
 	check("stable_fail=k/n from the marker wins over the .out", (fc.failures, fc.episodes, fc.source), (7, 500, "marker"))
 
 
-def test_wrong_report_episodes_is_refused():
+def test_wrong_test_episodes_is_refused():
 	td = with_tree(synthetic_out(True, "MEMORY#1"), {"tag": "T"})
 	try:
 		sfc.failure_count(td, "T", "GRID", 37)
@@ -102,8 +102,8 @@ def test_clopper_pearson_edges():
 def test_phased_ga_export_helper():
 	import wnn.control.phased_ga as p
 	rs = [SimpleNamespace(acc=0.99), SimpleNamespace(acc=1.0), SimpleNamespace(acc=0.93)]
-	check("counts failures over report_episodes", p._stable_failure_count(rs, SimpleNamespace(report_episodes=100, eval_episodes=10)), (8, 300))
-	check("falls back to eval_episodes", p._stable_failure_count(rs, SimpleNamespace(report_episodes=None, eval_episodes=200)), (16, 600))
+	check("counts failures over test_episodes", p._stable_failure_count(rs, SimpleNamespace(test_episodes=100, eval_episodes=10)), (8, 300))
+	check("falls back to eval_episodes", p._stable_failure_count(rs, SimpleNamespace(test_episodes=None, eval_episodes=200)), (16, 600))
 
 
 if __name__ == "__main__":

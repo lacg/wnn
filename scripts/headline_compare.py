@@ -3,7 +3,7 @@
 Sibling of paired_power.py for runs that bank no sweepladder marker (the CTRL-8
 stage-2 runs and the CTRL-5 multi-axis programme: they leave <tag>.out + a winner
 file). Reads the LAST `[stage-select] HEADLINE held-out:` line of each .out (the
-stage-select crowned genome scored on the report seeds — the house surface) and
+stage-select crowned genome scored on the test seeds — the house surface) and
 the run's search seed from its LAST `--base-seed` in the `[argv]` line.
 
 Five metrics together: stable %, err deg, steady deg, alt m, pos3d m (the .out's
@@ -197,7 +197,7 @@ def main():
 	a = parse_args()
 	arm, ctl = load_group(a.arm), load_group(a.ctl)
 	mg = margins(a.margin)
-	print('surface: REPORT headline (stage-select crowned genome on the report seeds)')
+	print('surface: REPORT headline (stage-select crowned genome on the test seeds)')
 	print('sign: NEGATIVE d = ARM better · mode: %s · margins: %s' % (
 		a.mode, '  '.join('%s %g' % (m, mg[m]) for m in METRICS)))
 	print_group('arm', arm)

@@ -775,7 +775,7 @@ class IDSEvaluator(BaseEvaluator):
 
 		Trains on full training data, returns raw score for each TRAINING example.
 		Used for fitting calibration (platt/beta/empirical) on training data
-		so the validation set remains untouched.
+		so the test set remains untouched.
 		"""
 		bits_flat, neurons_flat, connections_flat = self._flatten_genomes([genome])
 		return self._cache.score_train_examples(
@@ -1145,7 +1145,7 @@ class IDSEvaluator(BaseEvaluator):
 
 		Same return contract as the cache path. The extra train-scoring
 		stream pass is the Protocol v2 cost on streaming flows (the
-		threshold sweep runs once per genome at validation, not per
+		threshold sweep runs once per genome at test evaluation, not per
 		generation). The -1.0 oracle sentinel resolves on EVAL scores,
 		matching evaluate_at_thresholds_ids_cached.
 		"""

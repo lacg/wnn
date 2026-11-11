@@ -37,7 +37,7 @@ ARCH="--pop 50 --num-eval-folds 5 --memory-mode BINARY \
 # probe peaked at 895 MB while production hit 44 GB — that gap IS this axis.
 SMALL="--neurons-gens 1 --neurons-patience 1 --memory-gens 1 --memory-patience 1 \
 --eval-episodes 100 --memory-eval-episodes 200 --steps 2000 --tilt 5.0 \
---report-episodes 100 --report-seed 99990101 --holdout-pop-sample 8 \
+--test-episodes 100 --test-seed 99990101 --holdout-pop-sample 8 \
 --base-seed 31337002 --runs 1"
 
 echo "[memprobe] starting $(date -u +%FT%TZ)" > "$OUT"

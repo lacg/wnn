@@ -35,7 +35,7 @@ AIRFRAME="${SCA_AIRFRAME:-cf21_brushless}"
 DIST="${SCA_DIST:-L4C}"
 SEEDS="${SCA_SEEDS:-31337002 31337003}"
 NEURONS_GENS="${SCA_NEURONS_GENS:-5}"
-REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
+TEST_SEEDS="99990101 99990102 99990103 99990104 99990105"
 
 # Gate: the calib A/B must have finished (its 4 markers) and the box be idle.
 WAIT_MARKERS="${SCA_WAIT_MARKERS:-$ROOT/experiments/calibab_markers}"
@@ -96,7 +96,7 @@ run_arm() {
 		--eval-episodes 100 --memory-eval-episodes 200 \
 		--steps 2000 --tilt 5.0 \
 		$S16_WEIGHTS \
-		--report-episodes 100 --holdout-pop-sample 8 \
+		--test-episodes 100 --holdout-pop-sample 8 \
 		--grid-bits 24 30 \
 		--grid-state-neurons 0 --max-state-neurons 0 \
 		--max-output-neurons 128 \
@@ -106,7 +106,7 @@ run_arm() {
 		--teacher mpcof \
 		$FEAT_PIDMIX \
 		--translation --reward-lambda-alt 0 \
-		--report-seeds $REPORT_SEEDS \
+		--test-seeds $TEST_SEEDS \
 		--base-seed "$seed"
 }
 

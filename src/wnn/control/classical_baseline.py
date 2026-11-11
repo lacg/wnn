@@ -5,7 +5,7 @@ WHY THIS EXISTS. A baseline is only a comparator if it sees the same aircraft on
 the same episodes. Three ways to get that wrong were found on 29/07/2026, each
 worth roughly 10pp of PID stable%:
 
-  * initial conditions drawn from the RAW report seed instead of the fold-0 pool
+  * initial conditions drawn from the RAW test seed instead of the fold-0 pool
     (ControllerEvaluator swaps in `_fold_seeds[fold]` before scoring — evaluator.py:682 —
     so a held-out report always lands on fold 0, never on the raw seed);
   * the disturbance stream seed not XOR'd with the pool seed;

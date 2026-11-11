@@ -131,7 +131,7 @@ class IdsEvaluatorFactory:
 		self._log(f"  undersample_majority={s.undersample_majority}{us}")
 		if s.calib_sample > 0:
 			self._log(f"  ids_calib_sample={s.calib_sample:,}: search thresholds calibrate on a fixed stratified "
-				"train subsample (validation thresholds use every row)")
+				"train subsample (test-evaluation thresholds use every row)")
 		return self._evaluator(dataset, s, s.num_parts, s.k_folds, s.kfold_per_gen, None, s.calib_sample)
 
 	def _test(self, dataset, s: IdsEvaluatorSettings, shared_cache):
@@ -150,7 +150,7 @@ class IdsEvaluatorFactory:
 		kfold_per_gen=1, reuse_cache=None for the test evaluator; the GA-fitness fold
 		rule ids_offspring_folds rides along). `calib_sample` (ids_calib_sample) is
 		the OPTIMIZER's only: the test evaluator shares its cache but never sets it,
-		and its full-train validation calls ignore it in Rust anyway."""
+		and its full-train test-evaluation calls ignore it in Rust anyway."""
 		from wnn.ram.architecture.ids_evaluator import IDSEvaluator
 		return IDSEvaluator(
 			dataset=dataset, classification=s.classification, num_parts=num_parts,

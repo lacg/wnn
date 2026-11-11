@@ -88,7 +88,7 @@ print(d['bits'], d['neurons'], d['seed'])
 		--eval-episodes 100 --memory-eval-episodes 200 \
 		--steps 2000 --tilt 5.0 \
 		$S16_WEIGHTS \
-		--report-episodes 100 --holdout-pop-sample 8 \
+		--test-episodes 100 --holdout-pop-sample 8 \
 		--runs 1 --memory-mode BINARY \
 		--airframe "$AIRFRAME" --disturbance "$DIST" --teacher mpcof \
 		$FEAT_STAGE1 \
@@ -97,7 +97,7 @@ print(d['bits'], d['neurons'], d['seed'])
 		--grid-bits "$BITS_R" --grid-output-neurons "$NEUR_R" \
 		--max-output-neurons "$NEUR_R" \
 		--num-eval-folds 5 \
-		--report-seeds $REPORT_SEEDS \
+		--test-seeds $TEST_SEEDS \
 		--base-seed "$SEED_R" > "$out" 2>&1
 	rc=$?
 	if [ $rc -ne 0 ]

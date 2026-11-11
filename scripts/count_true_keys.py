@@ -44,7 +44,7 @@ def parse_args():
 	ap.add_argument('--retrain-args', default=None,
 	                help="the run's exact phased_ga argv file ('#' lines ignored). With --headline, an arch-only "
 	                     "(GRID) headline is trained EXACTLY as the scorer does (phased_ga._holdout_report: train "
-	                     "seed, write_back) and scored on the first report seed; compare that RESULT row with the "
+	                     "seed, write_back) and scored on the first test seed; compare that RESULT row with the "
 	                     "run's logged HEADLINE row before trusting the count")
 	ap.add_argument('--ckpt-root', default=os.path.join(ROOT, 'logs', 'controller', 'sweep_ladder', 'ckpt'))
 	ap.add_argument('--cache', default=DEFAULT_CACHE)
@@ -130,7 +130,7 @@ def count_headline(marker_path: str, ckpt_root: str, retrain_args: "str | None")
 def retrain_like_scorer(genome, spec, argv_path: str, label: str) -> None:
 	"""Stamp the cells the stage-select scorer gave an arch-only headline: the SAME
 	_holdout_report call (train on the train seed, write_back), scored on the first
-	report seed so its RESULT row can be diffed against the run's log."""
+	test seed so its RESULT row can be diffed against the run's log."""
 	import shlex
 	from wnn.control.phased_ga import build_arg_parser, episode_config_from_args, _holdout_report
 	from wnn.seeds import resolve_seed_set
@@ -139,7 +139,7 @@ def retrain_like_scorer(genome, spec, argv_path: str, label: str) -> None:
 	args = build_arg_parser().parse_args(argv)
 	ec = episode_config_from_args(args)
 	train = resolve_seed_set(base=args.base_seed, run_index=0).train
-	_holdout_report(args, ec, spec, genome, None, int(args.report_seeds[0]), train,
+	_holdout_report(args, ec, spec, genome, None, int(args.test_seeds[0]), train,
 	                stage_label=f"HEADLINE-{label} (re-count)")
 	if genome.cells is None:
 		raise SystemExit(f"{label}: scorer left no cells after training")

@@ -8,7 +8,7 @@
 #   plain delta    : launch_controller_phased.sh c10_delta_baseline_20260618  31337002
 #
 # Recipe = the magnitude-aware C10 config (grid 8/12/16 × 24/30, skip bits+conns,
-# lamarckian, magnitude-aware patience, 100/200 eps, C10 weights, report-seed 99990101).
+# lamarckian, magnitude-aware patience, 100/200 eps, C10 weights, test-seed 99990101).
 # Coexists with the XDS worker via RAYON_NUM_THREADS=3.
 set -euo pipefail
 if [ "$#" -lt 2 ]; then
@@ -33,7 +33,7 @@ python "$PROJ/scripts/detach_launch.py" "$DIR/run.out" "$PROJ" -- \
 		--pop 50 --num-eval-folds 5 --check-interval 5 --magnitude-aware-patience \
 		--eval-episodes 100 --memory-eval-episodes 200 --steps 2000 --max-state-neurons 24 --max-output-neurons 128 --tilt 5.0 \
 		--fit-weight-err-sq 0.4 --fit-weight-stable 0.3 --fit-weight-jerk 0.2 --fit-weight-mono 0.1 \
-		--report-seed 99990101 --report-episodes 100 --holdout-pop-sample 8 \
+		--test-seed 99990101 --test-episodes 100 --holdout-pop-sample 8 \
 		--base-seed "$BASE_SEED" --runs 1 \
 		--save-winner "$DIR/winner.yaml.gz" --save-stage-checkpoints "$DIR" \
 		"$@"

@@ -15,7 +15,7 @@ TILTS="10 15 20 25 30 35 40 45"   # 5° already done (Arm A); skipped here
 BASE="logs/controller/tilt_sweep_phase1"
 SUMMARY="$BASE/SUMMARY.md"
 mkdir -p "$BASE"
-[ -f "$SUMMARY" ] || printf "# Phase-1 pure-tilt crossover scan (WNN grid->neurons->memory vs PID)\n\nbase-seed 5005, report-seed 9009, pop 50, neurons 30/2, memory 60/2, body 0.5 yaw 0.3.\n\n| tilt | WNN held-out (err/stable) | PID held-out (err/stable) | WNN-PID err gap |\n|---|---|---|---|\n" > "$SUMMARY"
+[ -f "$SUMMARY" ] || printf "# Phase-1 pure-tilt crossover scan (WNN grid->neurons->memory vs PID)\n\nbase-seed 5005, test-seed 9009, pop 50, neurons 30/2, memory 60/2, body 0.5 yaw 0.3.\n\n| tilt | WNN held-out (err/stable) | PID held-out (err/stable) | WNN-PID err gap |\n|---|---|---|---|\n" > "$SUMMARY"
 
 for T in $TILTS; do
   DIR="$BASE/tilt${T}"
@@ -34,7 +34,7 @@ for T in $TILTS; do
     --memory-gens 60 --memory-patience 2 \
     --eval-episodes 100 --universe-episodes 8 --num-eval-folds 5 \
     --fit-weight-err-sq 0.40 --fit-weight-stable 0.30 --fit-weight-jerk 0.10 --fit-weight-mono 0.20 \
-    --base-seed 5005 --report-seed 9009 --lamarckian \
+    --base-seed 5005 --test-seed 9009 --lamarckian \
     --save-stage-checkpoints "$DIR" --save-winner "$DIR/winner.pkl" \
     > "$LOG" 2>&1
   rc=$?

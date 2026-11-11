@@ -42,20 +42,20 @@ tasks, so the leaderboards are kept apart — 100% stable exists only in the
 attitude-only half, and quoting it beside an altitude run compares two objectives.
 
 TWO COLUMNS, TWO RULES (05/09/2026, Luiz). `hd` ranks headline_holdout — the
-stage-select winner on the report seeds. But stage-select crowns the union-rank
+stage-select winner on the test seeds. But stage-select crowns the union-rank
 winner of the top-3 of EVERY stage on the val seeds, so it is a DRAW: the two
 byte-identical seed-31337002 runs at b32 n256 sit 7 ranks apart (0.1129 vs 0.1442)
 while their MEMORY rows match to 0.01 deg. Ranking eras against each other on `hd`
 therefore reads "rotation beat CRN", which is backwards.
 So every row also carries `hdMEM` — the SAME rule for everyone, computed from
-held_memory_multiseed (the MEMORY stage's mean over the report seeds, present in
+held_memory_multiseed (the MEMORY stage's mean over the test seeds, present in
 every marker). Compare eras on hdMEM; publish the headline. Both are printed side
 by side so the selection draw is visible rather than silently ranked.
 The `fit` column says which scorer the search ran under: CRN (every genome on all
 5 pools every generation, default since 03/09 21:05 EDT) or rot (the K-fold
 rotation, where an elite kept the score of the pool it was born on).
 
-ONLY held-out lines ARE READ — the report seeds. Never the val seeds (that is what
+ONLY held-out lines ARE READ — the test seeds. Never the val seeds (that is what
 selection ran on) and never the during-search gen lines (anti-predictive, repeatedly).
 """
 import glob, json, math, os, re, sys
@@ -157,9 +157,9 @@ def parse_marker(path, outs):
 		d = json.load(open(path))
 	except Exception:
 		return None
-	# 14/09/2026: arch-only stage rows had their FIRST report seed scored under
-	# report-seed thresholds while the cells were written under train-seed ones
-	# (phased_ga._holdout_report, 15/07→14/09). scripts/rescore_first_report_seed.py
+	# 14/09/2026: arch-only stage rows had their FIRST test seed scored under
+	# test-seed thresholds while the cells were written under train-seed ones
+	# (phased_ga._holdout_report, 15/07→14/09). scripts/rescore_first_test_seed.py
 	# repairs banked markers into *_aligned fields; the aligned headline is the
 	# published one when it exists, the original stays in the marker untouched.
 	# 15-17/09/2026: scripts/recalc_headlines.py re-ran stage-select over every
@@ -206,7 +206,7 @@ def parse_marker(path, outs):
 		mem=mem,
 		hd_mem=gate_distance(mem['stable'], mem['err'], mem['alt'] if alt_of(ma) is not None else None) if mem else None,
 		# 'fixed'  = headline re-scored aligned; 'unfixed' = an arch-only headline with
-		# no checkpoint to re-score from (its first report seed is still misaligned);
+		# no checkpoint to re-score from (its first test seed is still misaligned);
 		# ''       = MEMORY headline (score-only, never misaligned) or pre-15/07 run.
 		# CONNECTIONS is arch-only only in a non-Lamarckian run; every ladder-era
 		# CONNECTIONS headline is Lamarckian (cells present, aligned), so it is

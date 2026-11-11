@@ -1139,7 +1139,7 @@ def _run_axis_curriculum(args, ec: EpisodeConfig, spec: ControllerSpec,
 	slate). Patience resets per sub-phase, so a converged easy phase advances
 	instead of early-stopping the whole curriculum. Returns the FINAL (all-3)
 	sub-phase's (result, evaluator, total_wall) — so downstream stages + the
-	held-out report seed from the genome scored on the real 3-axis problem."""
+	held-out test seed from the genome scored on the real 3-axis problem."""
 	schedule = _axis_curriculum_schedule(args.neurons_gens)
 	carried_pop = initial_population
 	last_res, last_ev, total_dt = None, None, 0.0
@@ -1231,7 +1231,7 @@ def _phase_stable(ev, best_genome) -> float:
 	return float(m.acc)
 
 
-def _report_thresholds(args, ec, spec, report_seed: int, train_seed: int, use_score: bool):
+def _test_thresholds(args, ec, spec, test_seed: int, train_seed: int, use_score: bool):
 	"""Thresholds for a REPORT-ONLY scoring pass.
 
 	Thresholds are NOT an output knob — they are the per-feature thermometer
@@ -1241,10 +1241,10 @@ def _report_thresholds(args, ec, spec, report_seed: int, train_seed: int, use_sc
 
 	A genome carrying trained cells had those cells WRITTEN at addresses computed
 	under the TRAIN-seed thresholds (fit at :546 / :887 with seed=<train seed>).
-	Refitting on the report seed re-quantizes the inputs, so the same physical state
+	Refitting on the test seed re-quantizes the inputs, so the same physical state
 	maps to a different address and the trained memory is read where nothing was
 	written — rebuilding a hash function after inserting the keys. Measured on frozen
-	winners replayed over 5 report seeds (01/08/2026, docs/threshold_misalignment_finding.md):
+	winners replayed over 5 test seeds (01/08/2026, docs/threshold_misalignment_finding.md):
 	    1layer_9feat_BINARY_s31337003  48.0+-13.8  ->  86.8+-1.7
 	    dfa_9feat_BINARY_s31337003     67.0+- 6.2  ->  87.6+-1.9
 	Variance collapsing WHILE the mean rises is a mismatch being removed, not leakage
@@ -1252,7 +1252,7 @@ def _report_thresholds(args, ec, spec, report_seed: int, train_seed: int, use_sc
 	the more conservative variant.
 
 	Only the SCORE-ONLY path is affected. `evaluate_batch` trains fresh at eval time
-	under whatever thresholds it is handed, so refitting per report seed is correct
+	under whatever thresholds it is handed, so refitting per test seed is correct
 	there and is left alone.
 
 	UNCONDITIONAL since 03/08/2026 (Luiz). This was a --holdout-fixed-thresholds flag,
@@ -1268,14 +1268,14 @@ def _report_thresholds(args, ec, spec, report_seed: int, train_seed: int, use_sc
 	never needed this flag.
 
 	Still scoped to the score-only path: evaluate_batch trains fresh under whatever
-	thresholds it is handed, so refitting per report seed is correct there.
+	thresholds it is handed, so refitting per test seed is correct there.
 
 	use_score=False is ONLY correct when the SAME evaluator both trains and scores
 	(evaluate_batch). `_holdout_report`'s arch-only branch trains with one evaluator
 	on the train seed and scores with another — it must pass use_score=True, and did
 	not from 15/07 to 14/09/2026 (see the note at its call site).
 	"""
-	seed = train_seed if use_score else report_seed
+	seed = train_seed if use_score else test_seed
 	return fit_thresholds_from_pid_rollouts(
 		spec, calibration=calibration_from_args(args), seed=seed,
 		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None),
@@ -1286,20 +1286,20 @@ def _shell_holdout_compact(args, ec_eval: EpisodeConfig, spec: ControllerSpec,
                            best_genome, seed_list, train_seed: int):
 	"""REPORT-ONLY held-out for one adaptive shell. Re-score the during-search WINNER
 	(winner only — no pop sample, to keep the per-shell cost low) on each fresh, UNSEEN
-	report-seed at the `ec_eval` difficulty, aggregate mean±std. NEVER gates advance/
+	test-seed at the `ec_eval` difficulty, aggregate mean±std. NEVER gates advance/
 	regress: gating on it would make it not held-out (it would leak into selection).
 	Returns (mean_stable_pct, sd_pp, mean_err_deg, sd_err_deg) or None."""
 	import statistics
 	if best_genome is None or not seed_list:
 		return None
-	rep_eps = getattr(args, "report_episodes", None) or args.eval_episodes
+	rep_eps = getattr(args, "test_episodes", None) or args.eval_episodes
 	use_score = (getattr(best_genome, "cells", None) is not None
 	             or getattr(ec_eval, "geometry", None) is not None)  # residual: score-only
 	stbs, errs = [], []
 	for rs in seed_list:
 		if rs == train_seed:
 			continue  # shares the train seed → not held-out
-		thresholds = _report_thresholds(args, ec_eval, spec, rs, train_seed, use_score)
+		thresholds = _test_thresholds(args, ec_eval, spec, rs, train_seed, use_score)
 		ev = ControllerEvaluator(spec, num_eval_episodes=rep_eps, seed=rs,
 		                         episode_config=ec_eval, thresholds=thresholds,
 		                         rg_config=_rg_config(args, ec_eval, rs),
@@ -1358,8 +1358,8 @@ def _run_adaptive_difficulty_curriculum(args, ec: EpisodeConfig, spec: Controlle
 		# TEST @d: the honest mirror of the in-search mastery number (gap = overfit).
 		# TRANSFER @1.0: the same winner on the full task — a transfer-curve point.
 		if getattr(args, "holdout_per_shell", False):
-			rseeds = (getattr(args, "report_seeds", None)
-			          or ([args.report_seed] if getattr(args, "report_seed", None) is not None else None))
+			rseeds = (getattr(args, "test_seeds", None)
+			          or ([args.test_seed] if getattr(args, "test_seed", None) is not None else None))
 			bg = getattr(res, "best_genome", None)
 			if rseeds and bg is not None:
 				ht = _shell_holdout_compact(args, ec_d, spec, bg, rseeds, seed)
@@ -1708,7 +1708,7 @@ def _heldout_row_str(m) -> str:
 
 
 def _heldout_row_stats(results) -> dict:
-	"""Mean/SD per metric of the row across the report seeds; absent metrics omitted."""
+	"""Mean/SD per metric of the row across the test seeds; absent metrics omitted."""
 	import statistics
 	stats = {}
 	for attr, _label, _unit, _dp in _HELDOUT_ROW:
@@ -1721,12 +1721,12 @@ def _heldout_row_stats(results) -> dict:
 
 
 def _stable_failure_count(results, args) -> tuple[int, int]:
-	"""(failed episodes, total episodes) across the report seeds — R11.
+	"""(failed episodes, total episodes) across the test seeds — R11.
 
-	Each seed scores `report_episodes` (fallback: eval_episodes) episodes and
+	Each seed scores `test_episodes` (fallback: eval_episodes) episodes and
 	`acc` is the pass fraction k/N, so round(acc*N) recovers k exactly. Returns
 	counts, never a rate: a rate hides N, and N is what the exact CI needs."""
-	n_per_seed = int(getattr(args, "report_episodes", None) or args.eval_episodes)
+	n_per_seed = int(getattr(args, "test_episodes", None) or args.eval_episodes)
 	passed = sum(int(round(r.acc * n_per_seed)) for r in results)
 	total = n_per_seed * len(results)
 	return total - passed, total
@@ -1743,20 +1743,20 @@ def _heldout_row_agg_str(stats: dict) -> str:
 
 
 def _maybe_holdout(args, ec, spec, res, seeds, label: str):
-	"""Per-stage held-out (REPORT ONLY) — fires after each stage if --report-seed is set,
+	"""Per-stage held-out (REPORT ONLY) — fires after each stage if --test-seed is set,
 	so we see the held-out N→B→C→M trajectory, not just the final. Never feeds selection.
 
 	Returns the held-out winner metric (with .mean_attitude_error_deg / .acc / .fitness)
 	so a caller (the dashboard flow_runner) can record it on the stage's experiment;
-	returns None when no report-seed is set or the stage was skipped/failed."""
+	returns None when no test-seed is set or the stage was skipped/failed."""
 	if res is None or res.best_genome is None:
 		return None
-	# Multi-seed (--report-seeds) takes precedence over the single --report-seed:
+	# Multi-seed (--test-seeds) takes precedence over the single --test-seed:
 	# score the winner on EACH fresh seed and aggregate mean±std (robust to the
 	# documented single-seed controller-eval variance; see project_controller_eval_variance).
-	report_seeds = getattr(args, "report_seeds", None)
-	seed_list = report_seeds if report_seeds else (
-		[args.report_seed] if getattr(args, "report_seed", None) is not None else None)
+	test_seeds = getattr(args, "test_seeds", None)
+	seed_list = test_seeds if test_seeds else (
+		[args.test_seed] if getattr(args, "test_seed", None) is not None else None)
 	if not seed_list:
 		return None
 	try:
@@ -1784,10 +1784,10 @@ def _maybe_holdout(args, ec, spec, res, seeds, label: str):
 		# R11 (multi-axis spec): stable is a bounded pass RATE, so its t-CI is
 		# approximate. Export the FAILURE COUNT over all report episodes so a reader
 		# can put an exact binomial CI on it. Exact because each seed scores
-		# report_episodes episodes and acc is k/N. Appended LAST so every existing
+		# test_episodes episodes and acc is k/N. Appended LAST so every existing
 		# regex anchored on "stable=…% err=…°" keeps matching.
 		fails, n_eps = _stable_failure_count(results, args)
-		print(f"  [report-seeds] {label} MULTI-SEED held-out ({len(results)} seeds {seed_list}): "
+		print(f"  [test-seeds] {label} MULTI-SEED held-out ({len(results)} seeds {seed_list}): "
 		      f"stable={mean(stbs):.1f}±{sd(stbs):.1f}%  err={mean(errs):.2f}±{sd(errs):.2f}°"
 		      f"{_heldout_row_agg_str(stats)}  stable_fail={fails}/{n_eps}")
 		# Return the seed-mean as the stage held-out (so downstream recording uses the
@@ -1810,7 +1810,7 @@ def _maybe_holdout(args, ec, spec, res, seeds, label: str):
 		# spent on a result that was already unreportable at minute 30. Killing
 		# the run at the first failure turns that into a ~30 min loss, and the
 		# stage dump is still on disk for a resume.
-		print(f"  [report-seed] {label} held-out failed: {e}")
+		print(f"  [test-seed] {label} held-out failed: {e}")
 		raise HoldoutScoringError(f"{label} held-out scoring failed: {e}") from e
 
 
@@ -1954,9 +1954,9 @@ def _stage_select_top_k(args) -> int:
 	                          ControllerOrchestrator.STAGE_SELECT_TOP_K)))
 
 
-def _report_seeds_configured(args) -> bool:
-	"""True when the run publishes held-out rows (--report-seeds or --report-seed)."""
-	return bool(getattr(args, "report_seeds", None)) or getattr(args, "report_seed", None) is not None
+def _test_seeds_configured(args) -> bool:
+	"""True when the run publishes held-out rows (--test-seeds or --test-seed)."""
+	return bool(getattr(args, "test_seeds", None)) or getattr(args, "test_seed", None) is not None
 
 
 def _resume_completed_stages(args, resume_state: dict, resume_start_stage: int,
@@ -1966,7 +1966,7 @@ def _resume_completed_stages(args, resume_state: dict, resume_start_stage: int,
 	(13/10/2026, _tw20 s2: a stage-4 resume ranked 3 MEMORY candidates, not 9).
 
 	Returns [(stage_num, name, path-or-None)] in stage order. GRID (0) is listed
-	only when report seeds are set, because only then does a fresh run make it a
+	only when test seeds are set, because only then does a fresh run make it a
 	candidate (_run_one's `_grid_stage_entry`). --skip-stages members are left out
 	(a fresh run produced nothing for them either). Under --resume-mode next the
 	DUMPED stage was cut short by choice; its final checkpoint is used when one
@@ -1978,7 +1978,7 @@ def _resume_completed_stages(args, resume_state: dict, resume_start_stage: int,
 	from wnn.ram.strategies.phased.checkpoint import find_checkpoint_file
 	names = {0: "grid"}
 	names.update({i: key for i, (key, _n, _k, _d) in enumerate(_STAGES, start=1)})
-	want = [0] if _report_seeds_configured(args) else []
+	want = [0] if _test_seeds_configured(args) else []
 	want += [sn for sn in range(1, resume_start_stage) if names[sn] not in skip_stages]
 	if not want:
 		return []
@@ -2092,7 +2092,7 @@ def _recalc_headline(args, ec: EpisodeConfig) -> None:
 	      f"({', '.join(lbl for lbl, _s, _r in entries)}) from {args.recalc_headline}")
 	# stage_holdouts is empty: the per-stage report blocks live in the original
 	# run's log and are unchanged by re-selection. The selector scores the genome
-	# it picks on the report seeds itself, so the headline triple is still the
+	# it picks on the test seeds itself, so the headline triple is still the
 	# selected genome's own number.
 	_recalc_summary(args, _select_headline_stage(args, ec, seeds, entries, {}))
 
@@ -2109,7 +2109,7 @@ def _recalc_summary(args, headline) -> None:
 	n_eps = getattr(wh, "stable_episodes", None)
 	fail_s = f" fails={fails}/{n_eps}" if fails is not None else " fails=n/a"
 	print(f"[recalc] PICK {args.recalc_headline} {rule} headline={headline.key} "
-	      f"stage={headline.label} report({len(getattr(args, 'report_seeds', None) or [0])} units): "
+	      f"stage={headline.label} report({len(getattr(args, 'test_seeds', None) or [0])} units): "
 	      f"stable={wh.acc * 100:.2f}% err={wh.mean_attitude_error_deg:.3f}°"
 	      f"{_heldout_row_str(wh)}{fail_s}", flush=True)
 
@@ -2121,11 +2121,11 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 	Why this exists (08/08/2026). The run's reported answer used to be hardcoded to
 	the MEMORY stage (`--save-winner [-1]`). Across 8 paired runs MEMORY beat NEURONS
 	only 2/8, and L4 showed the stages landing within ~0.05° of each other — so a
-	fixed stage is arbitrary, and picking the best stage AFTER seeing the report seeds
+	fixed stage is arbitrary, and picking the best stage AFTER seeing the test seeds
 	is best-of-N inflation (E[max] > max E). Both are fixed by selecting on a draw
-	that is disjoint from BOTH the search folds and the report seeds:
+	that is disjoint from BOTH the search folds and the test seeds:
 
-	    search folds -> train   |   seeds.val -> picks the stage   |   report seeds -> published
+	    search folds -> train   |   seeds.val -> picks the stage   |   test seeds -> published
 
 	SELECTION IS A UNION RANKING, NOT PER-STAGE SCORING. Every stage's winner is scored
 	on the SAME val draws, then all candidates are ranked together in ONE call to the
@@ -2145,10 +2145,10 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 	draw would make best-of-N selection a lottery — the more candidates screened on a single finite
 	draw, the likelier the winner is one that got lucky there. Averaging the metrics
 	across 5 val seeds before ranking damps that, exactly as the report block uses 5.
-	This is NOT a leak: val is disjoint from both the search folds and the report seeds,
+	This is NOT a leak: val is disjoint from both the search folds and the test seeds,
 	so the published number stays honestly measured whichever candidate wins.
 
-	    search folds -> train | seeds.val + 0..4 -> ranks the candidates | report seeds -> published
+	    search folds -> train | seeds.val + 0..4 -> ranks the candidates | test seeds -> published
 
 	Only the winner of each stage is scored here (`final_population=None` forces
 	`pop=[best_genome]`): the population sample exists for descriptive stats and would
@@ -2162,7 +2162,7 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 	from wnn.control.controller_orchestrator import ControllerOrchestrator
 	from wnn.ram.fitness import FitnessCalculatorControllerHarmonic
 	# --val-units N (default 5 = the pre-flag list): unit i = seeds.val + i, checked
-	# disjoint from the report units and the train/test seeds (wnn.control.val_units).
+	# disjoint from the test units and the train/test seeds (wnn.control.val_units).
 	VAL_SEEDS = checked_val_unit_seeds(args, seeds)
 	_TOP_K = max(1, int(getattr(args, "stage_select_top_k",
 	                            ControllerOrchestrator.STAGE_SELECT_TOP_K)))
@@ -2341,11 +2341,11 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 	headline = _headline_pick(stage_entries, winner, cand_meta)
 	print(f"  [stage-select] HEADLINE stage={win_label} genome={winner} (union rank over "
 	      f"{len(scored)} candidates = top-{_TOP_K} of every stage, on {len(VAL_SEEDS)} val "
-	      f"seeds; NEVER on the report seeds)")
+	      f"seeds; NEVER on the test seeds)")
 	# The headline triple must describe the genome that was SELECTED. When that is
 	# pop[0] the stage's own report block already holds it; when the ranking picked a
-	# runner-up, score THAT genome on the report seeds rather than quoting pop[0]'s
-	# numbers under its name (one genome x report seeds — cheap, and the alternative
+	# runner-up, score THAT genome on the test seeds rather than quoting pop[0]'s
+	# numbers under its name (one genome x test seeds — cheap, and the alternative
 	# is a mislabelled published result).
 	wh = stage_holdouts.get(win_label.upper())
 	# `wh is None` covers --recalc-headline, where the per-stage report blocks are
@@ -2395,10 +2395,10 @@ def _headline_pick(stage_entries, winner: str, cand_meta: dict):
 
 
 def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population,
-                    report_seed: int, train_seed: int, stage_label: str = "final",
+                    test_seed: int, train_seed: int, stage_label: str = "final",
                     episode_sink: list | None = None):
 	"""TRUE held-out — REPORT ONLY. Re-eval the whole final population on a FRESH
-	report_seed for DESCRIPTIVE statistics. The held-out is NEVER used to select a
+	test_seed for DESCRIPTIVE statistics. The held-out is NEVER used to select a
 	genome or feed any phase — selecting on it would leak val into the population
 	(overfitting to the held-out draw). The reported RESULT is the during-search
 	winner (selected on train/val) measured ONCE here; pop mean±std is context only.
@@ -2410,8 +2410,8 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 	`episode_sink` (--select-tail, stage-select VAL draws only): armed on the SCORING
 	evaluator, it collects the GPU scorer's per-episode rows; None = the unchanged call."""
 	import statistics
-	if report_seed == train_seed:
-		print(f"  [report-seed] WARNING: report_seed == train_seed ({train_seed}) — NOT a held-out.")
+	if test_seed == train_seed:
+		print(f"  [test-seed] WARNING: test_seed == train_seed ({train_seed}) — NOT a held-out.")
 	# The scorer's thresholds are the TRAIN-seed fit in BOTH branches below (14/09/2026):
 	# a winner that carries cells had them written under train-seed thresholds during
 	# the search, and an arch-only winner has them written under train-seed thresholds
@@ -2419,23 +2419,23 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 	# the train-seed address function. From 15/07 to 14/09 this line passed
 	# use_score=False for the arch-only case, so `ev` was built on the REPORT-seed fit
 	# while `train_ev` wrote the cells under the train-seed fit — the misalignment
-	# `_report_thresholds` describes, on every arch-only stage's FIRST report seed only
+	# `_test_thresholds` describes, on every arch-only stage's FIRST test seed only
 	# (from the second seed on, the genome carried the written-back cells and took the
-	# score-only path). Measured on s31337003_bd GRID#0, report seed 99990101:
+	# score-only path). Measured on s31337003_bd GRID#0, test seed 99990101:
 	# 80.0%/4.24° misaligned vs 87.0%/2.02° aligned (scripts/probe_episode_failures.py);
 	# across 40 b24 n256 runs the first-seed GRID row sat 4.3 pp / 1.4° below the
 	# other four. The K=1 undertraining fix (0ab05a35) introduced it by replacing
 	# evaluate_batch — which trains and scores under ONE threshold set — with a
 	# train-then-score pair that used two.
-	thresholds = _report_thresholds(args, ec, spec, report_seed, train_seed, use_score=True)
+	thresholds = _test_thresholds(args, ec, spec, test_seed, train_seed, use_score=True)
 	# Held-out episode count decoupled from the GA's --eval-episodes (10/06/2026):
 	# the search eval runs every generation (cost ∝ episodes), but the held-out is
 	# scored ONCE per stage — so it can afford many more episodes to de-quantize
 	# the reported stable% (8 eps = 12.5pp steps; 50 eps = 2pp).
-	rep_eps = getattr(args, "report_episodes", None) or args.eval_episodes
+	rep_eps = getattr(args, "test_episodes", None) or args.eval_episodes
 	ev = ControllerEvaluator(spec, num_eval_episodes=rep_eps,
-	                         seed=report_seed, episode_config=ec, thresholds=thresholds,
-	                         rg_config=_rg_config(args, ec, report_seed),
+	                         seed=test_seed, episode_config=ec, thresholds=thresholds,
+	                         rg_config=_rg_config(args, ec, test_seed),
 	                         max_train_workers=args.train_workers,
 	                         num_eval_folds=getattr(args, "num_eval_folds", 5))  # K=1 is NEVER an option
 	ev.per_episode_sink = episode_sink
@@ -2448,7 +2448,7 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 	ho_sample = getattr(args, "holdout_pop_sample", 8)
 	if ho_sample and ho_sample > 0 and len(pop) > ho_sample:
 		import random
-		rng = random.Random(report_seed)
+		rng = random.Random(test_seed)
 		pop = [pop[0]] + rng.sample(pop[1:], ho_sample - 1)  # winner FIRST (= RESULT)
 	# MEMORY-stage / Lamarckian winners carry cells → score-only on the fresh seed (a
 	# TRUE held-out: the cells were trained on train_seed during the search). Residual
@@ -2459,11 +2459,11 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 		metrics = ev.score_genomes(pop)
 	else:
 		# Arch-only winner (e.g. a raw grid winner — no cells). Do NOT retrain on the
-		# report seed (train==test, not a held-out) and NEVER at K=1: the ctor default
+		# test seed (train==test, not a held-out) and NEVER at K=1: the ctor default
 		# num_eval_folds=1 badly undertrains → the controller diverges (measured TERNARY
 		# grid winner 90%→8% stable / 24.7°, a pure K=1 artifact — 15/07/2026). Instead
 		# train on the TRAIN seed EXACTLY as the search did (K=num_eval_folds accumulate),
-		# THEN score those cells on the fresh report seed → train-on-A → score-on-B.
+		# THEN score those cells on the fresh test seed → train-on-A → score-on-B.
 		# Same fit as `thresholds` above (train seed, same calibration ec) — ONE threshold
 		# set for the write and the read, which is the whole point.
 		train_ev = ControllerEvaluator(spec, num_eval_episodes=rep_eps, seed=train_seed,
@@ -2474,23 +2474,23 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 		for _g in pop:
 			_g.cells = None
 		train_ev._evaluate_core(pop, write_back=True)   # stamp train-seed cells (K-fold accumulate)
-		metrics = ev.score_genomes(pop)                 # held-out: score on report seed, no retrain
+		metrics = ev.score_genomes(pop)                 # held-out: score on test seed, no retrain
 	# A score taken after a SIGTERM is a cancelled evaluation (zeros / sentinels),
 	# never a measurement: do not print it, return it, or let stage-select rank it.
 	from wnn.control.cancel_state import raise_if_interrupted
-	raise_if_interrupted(f"held-out [{stage_label}] on seed {report_seed}")
+	raise_if_interrupted(f"held-out [{stage_label}] on seed {test_seed}")
 	stables = [m.acc * 100 for m in metrics]
 	errs = [m.mean_attitude_error_deg for m in metrics]
 	ds = metrics[0]            # final_population[0] = the during-search winner = THE RESULT
 	pop_max = max(stables)     # descriptive only — NOT selected (would leak)
-	pid_rows = _pid_baseline(ec, rep_eps, report_seed, getattr(args, "num_eval_folds", 5),
+	pid_rows = _pid_baseline(ec, rep_eps, test_seed, getattr(args, "num_eval_folds", 5),
 	                         ctbr_hold=_ctbr_rival_hold(args))
 	def _ms(xs):
 		return (statistics.mean(xs), statistics.pstdev(xs) if len(xs) > 1 else 0.0)
 	ms_s, ms_e = _ms(stables), _ms(errs)
 	bar = "=" * 72
 	print(f"\n{bar}\n  HELD-OUT REPORT [{stage_label}] (report-only) — population ({len(pop)} genomes) on "
-	      f"FRESH seed {report_seed}, train/select seed {train_seed}\n{bar}")
+	      f"FRESH seed {test_seed}, train/select seed {train_seed}\n{bar}")
 	# Steadiness (Luiz 08/07): steady-state error + monotonicity violations are
 	# computed by the eval + weighted in the fitness — surface them here too.
 	# Every metric of _HELDOUT_ROW that this scorer produced — see the note on that
@@ -2673,7 +2673,7 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 		stage_results = [("Grid", winner_spec, m0, dt0, grid_point_count(args))]
 		# GRID held-out (REPORT ONLY, same contract as every other stage). The grid
 		# winner is what you would ship if you stopped before the GA, so it needs the
-		# SAME report-seed measurement — without it the Grid row carried during-search
+		# SAME test-seed measurement — without it the Grid row carried during-search
 		# numbers while every later row carried held-out ones, and "does the GA earn
 		# its ~7000s over a ~1500s grid?" could not even be asked.
 		# `seed_population[0]` is documented (stage0_grid) as the fitness-best genome.
@@ -2702,12 +2702,12 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 		# arch-only (cells=None) and an arch-only checkpoint cannot be scored — it is
 		# resume-fodder, not a committee member. _holdout_report's arch-only branch
 		# stamps train-seed cells INTO these same genome objects (K-fold accumulate,
-		# exactly as the search trains) before scoring them on the report seeds, so
+		# exactly as the search trains) before scoring them on the test seeds, so
 		# saving afterwards captures a trained, directly-scoreable controller.
 		# Caveat for anyone comparing it: those cells were trained with
-		# --report-episodes, not --eval-episodes, so this is the grid winner as the
+		# --test-episodes, not --eval-episodes, so this is the grid winner as the
 		# HELD-OUT measured it, not as the search saw it mid-selection.
-		# With no report seed set the holdout is skipped and this falls back to the
+		# With no test seed set the holdout is skipped and this falls back to the
 		# arch-only dump (still useful: --resume, and the top-K pool for warm-start).
 		_save_stage_checkpoint(args, 0, "grid", winner_spec, grid_res, m0)
 	else:
@@ -3274,7 +3274,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "competence frontier and stopping (anti-oscillation guard, default 4).")
 	ap.add_argument("--holdout-per-shell", action="store_true",
 	                help="Adaptive curriculum: after each shell, REPORT (never gate) the winner's held-out "
-	                     "stable%%/err on unseen --report-seeds — at the shell difficulty d (TEST: the overfit "
+	                     "stable%%/err on unseen --test-seeds — at the shell difficulty d (TEST: the overfit "
 	                     "gap vs the in-search mastery number) and at full d=1.0 (TRANSFER: a transfer-curve "
 	                     "point). Report-only; never feeds selection (gating would un-hold-out it).")
 	ap.add_argument("--integral-leak", type=float, default=0.99,
@@ -3466,7 +3466,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--max-cells-strict", action="store_true",
 	                help="enforce --max-cells on the POST-grow count (clamp the grow) instead of "
 	                     "only suppressing grows once already at/over budget (default: off).")
-	# Held-out scoring refits the INPUT thermometer thresholds on the report seed, but
+	# Held-out scoring refits the INPUT thermometer thresholds on the test seed, but
 	# a trained genome's cells were written at addresses computed under the TRAIN seed's
 	# thresholds — connections + thresholds ARE the address function. Refitting reads the
 	# memory at addresses it was never written to. Measured on frozen winners over 5 report
@@ -3688,7 +3688,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "not compressed onto 3 rank slots. K also bounds what survives the "
 	                     "orchestrator's population release (~120-330 MB/genome).")
 	# Tail-aware stage-select (09/11/2026, docs/ctrl_dres_failures.md idea #3). Selection
-	# only: never the GA fitness, never the report seeds (wnn.control.select_tail).
+	# only: never the GA fitness, never the test seeds (wnn.control.select_tail).
 	ap.add_argument("--select-tail", choices=SELECT_TAIL_MODES, default="off",
 	                help="Stage-select tail term. near_fail: count each candidate's val episodes "
 	                     "that diverged or whose per-episode mean attitude error exceeds "
@@ -3702,8 +3702,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                help="near_fail bound (deg), in (0, 5): below the 5° stable bound so the "
 	                     "count sees near-misses, not only fails. Default 4.0.")
 	ap.add_argument("--val-units", type=int, default=DEFAULT_VAL_UNITS, metavar="N",
-	                help="Stage-select val units per candidate (x --report-episodes each). Unit i "
-	                     "= seeds.val + i, asserted disjoint from the report units and the "
+	                help="Stage-select val units per candidate (x --test-episodes each). Unit i "
+	                     "= seeds.val + i, asserted disjoint from the test units and the "
 	                     "train/test seeds (raw + fold pool seeds). Default 5 = the pre-flag list, "
 	                     "bit-identical; N > 5 extends it (its first 5 are today's).")
 	ap.add_argument("--recalc-headline", type=str, default=None, metavar="CKPT_DIR",
@@ -3785,21 +3785,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	# fitness weight schema (e.g. stability-dominant). Pickle, not JSON, because
 	# the genome graph contains MemoryPayload + RecurrentArchShape nested
 	# dataclasses; pickle is one-line, JSON would need custom encoders.
-	ap.add_argument("--report-seed", type=int, default=None,
-		help="TRUE held-out: after the run, re-eval the final winner on this fresh seed "
-		     "(must differ from the train/select seed). The honest paper number.")
-	ap.add_argument("--report-seeds", type=int, nargs="+", default=None,
-		help="MULTI-SEED held-out: re-eval the stage winner on EACH of these fresh seeds and "
-		     "report mean±std (robust to the single-seed eval variance). Overrides --report-seed "
+	ap.add_argument("--test-seed", type=int, default=None,
+		help="TEST seed (the SeedSet's test partition): after the run, re-eval the final winner "
+		     "on this fresh seed (must differ from the train/select seed). The honest paper "
+		     "number. Unset = no single-seed test eval (the SeedSet derives a test seed that "
+		     "is only kept disjoint from the val units).")
+	ap.add_argument("--test-seeds", type=int, nargs="+", default=None,
+		help="MULTI-SEED test: re-eval the stage winner on EACH of these fresh seeds and "
+		     "report mean±std (robust to the single-seed eval variance). Overrides --test-seed "
 		     "when set. The honest, seed-robust paper number.")
-	ap.add_argument("--report-episodes", type=int, default=None,
-		help="Episodes for the per-stage HELD-OUT eval only (default: --eval-episodes). "
-		     "The held-out runs once per stage, so it can afford far more episodes than "
+	ap.add_argument("--test-episodes", type=int, default=None,
+		help="Episodes for the per-stage TEST eval only (default: --eval-episodes). "
+		     "The test eval runs once per stage, so it can afford far more episodes than "
 		     "the per-generation search eval — de-quantizes the reported stable%%.")
 	ap.add_argument("--holdout-pop-sample", type=int, default=8,
 		help="Held-out eval scores the winner + this many sampled genomes (default 8). "
 		     "The RESULT is always the winner; the rest are a descriptive (leak-guarded, "
-		     "not-selected) stat, so scoring the whole population at report-episodes is ~Nx "
+		     "not-selected) stat, so scoring the whole population at test-episodes is ~Nx "
 		     "waste. 0 = score the full final population (legacy behavior).")
 	ap.add_argument("--save-winner", type=str, default=None,
 	                help="Path to pickle the final-stage winner + FULL FINAL POPULATION "
@@ -3894,7 +3896,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                help="Master seed for the 3-way SeedSet protocol; default = UTC timestamp.")
 	ap.add_argument("--runs", type=int, default=1)
 	ap.add_argument("--train-seed", type=int, default=None)
-	ap.add_argument("--test-seed", type=int, default=None)
 	ap.add_argument("--val-seed", type=int, default=None)
 	return ap
 

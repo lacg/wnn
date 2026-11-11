@@ -42,7 +42,7 @@ run_one() {
 		--disturbance L1 \
 		--fit-weight-err-sq "$ERR" --fit-weight-steady "$STEADY" --fit-weight-stable "$STABLE" \
 		--fit-weight-jerk "$JERK" --fit-weight-mono "$MONO" \
-		--report-episodes 100 --report-seeds 99990001 99990101 12345 67890 --holdout-pop-sample 8 \
+		--test-episodes 100 --test-seeds 99990001 99990101 12345 67890 --holdout-pop-sample 8 \
 		--base-seed "$seed" --runs 1 \
 		--save-winner "$dir/winner.yaml.gz" --save-stage-checkpoints "$dir" > "$dir/run.out" 2>&1
 	if [ $? -ne 0 ]; then echo "[w23] $(date '+%H:%M:%S') FAIL ${name} seed=${seed} (continuing)"

@@ -42,13 +42,13 @@ BASE_SITE = os.environ.get("REFIT_BASE_SITE", "/tmp/ctrl_dres_site")
 SEED = 31337001
 
 # logs/controller/ctrl48/C-S2-d_wposx2_a45_rf_c200_dres_full_s1.out [argv], budgets scaled
-# (pop/episodes/steps/output neurons/report seeds); every plant, feature and law flag kept.
+# (pop/episodes/steps/output neurons/test seeds); every plant, feature and law flag kept.
 RECIPE = shlex.split(
 	"--levels 16 --lamarckian --max-cells-strict --neurons-gens 1 --neurons-patience 1 "
 	"--memory-gens 1 --memory-patience 1 --pop 4 --num-eval-folds 5 --check-interval 2 "
 	"--magnitude-aware-patience --eval-episodes 4 --memory-eval-episodes 4 --steps 400 --tilt 5.0 "
 	"--fit-aggregation zscore --zrank-clamp 3.0 --gate-stable 0.70 --gate-err 8.0 --delta-gamma 1.0 "
-	"--grid-bits 24 --grid-output-neurons 64 --report-episodes 4 --holdout-pop-sample 2 --runs 1 "
+	"--grid-bits 24 --grid-output-neurons 64 --test-episodes 4 --holdout-pop-sample 2 --runs 1 "
 	"--memory-mode BINARY --airframe cf21_brushless --disturbance L4C --teacher mpcof "
 	"--obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err --obs-yaw-err-i "
 	"--obs-collective-cmd --obs-alt-err --obs-vz --translation --reward-lambda-alt 0 "
@@ -59,7 +59,7 @@ RECIPE = shlex.split(
 	"--delta-leak 0.7 --delta-max 0.6 --rg-gate off --fit-weight-err-sq 0.2557 "
 	"--fit-weight-stable 0.2045 --fit-weight-steady 0.3580 --fit-weight-pos 0.1818 "
 	"--receptive-fields axis --rf-cross 0.2 --calib-episodes 200 --obs-cascade-dhat-residual "
-	"--report-seeds 99990101 99990102 --base-seed 31337001 "
+	"--test-seeds 99990101 99990102 --base-seed 31337001 "
 	"--rg-rounds 1 --rg-episodes-per-round 2 --rg-eval-episodes 2 --train-workers 2")
 REFIT = ["--threshold-refit-from-student", "--threshold-refit-episodes", "4"]
 
@@ -101,7 +101,7 @@ def dump_off() -> dict:
 	g = gs._random_genome(gs._enumerate_points()[0])
 	phase = fit_thresholds_from_pid_rollouts(gs._probe_spec, calibration=calibration_from_args(args),
 		seed=train, geometry=None, alloc=None, episode_config=pg._calib_ec(args, ec))
-	report = pg._report_thresholds(args, ec, gs._probe_spec, 99990101, train, True)
+	report = pg._test_thresholds(args, ec, gs._probe_spec, 99990101, train, True)
 	feats = _features(g, gs)
 	gs._evaluator._evaluate_core([g], write_back=True, return_stats=True)
 	return {"grid": _floats(gs.thresholds), "phase": _floats(phase), "report": _floats(report),

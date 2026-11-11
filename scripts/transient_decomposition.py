@@ -2,7 +2,7 @@
 
 For every winner checkpoint (5 teachers x 2 train seeds), on the EXACT held-out
 episode pool the markers were scored on (HoldoutDraw fold-0 pool: sample_ics_flat
-+ disturbance_stream, report seeds 99990101-05), trace per-step attitude error for
++ disturbance_stream, test seeds 99990101-05), trace per-step attitude error for
 BOTH the student (ram_controller.trace_controller_cpu — shares rollout_one with the
 production CPU scorer) and its own classical teacher (trace_classical_baseline —
 the trace twin of score_classical_baseline, aggregates asserted equal).
@@ -25,7 +25,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-REPORT_SEEDS = [99990101, 99990102, 99990103, 99990104, 99990105]
+TEST_SEEDS = [99990101, 99990102, 99990103, 99990104, 99990105]
 TEACHER_IDS = {"pid": 0, "lqr": 1, "mpc": 2, "lqi": 3, "mpcof": 4}
 PHASES = {"RECOVERY": (0.0, 0.2), "CRUISE": (0.2, 0.8), "STEADY": (0.8, 1.0)}
 STABLE_DEG = 5.0
@@ -63,11 +63,11 @@ def episode_config():
 	)
 
 
-def pool_fields(ec, report_seed: int, episodes: int):
+def pool_fields(ec, test_seed: int, episodes: int):
 	"""(q0, w0, dist_kwargs) for the fold-0 held-out pool — the classical_baseline
 	convention that reproduced the published baselines."""
 	from wnn.control.classical_baseline import HoldoutDraw, _episode_fields
-	draw = HoldoutDraw(seed=report_seed, episodes=episodes, steps=ec.steps_per_episode)
+	draw = HoldoutDraw(seed=test_seed, episodes=episodes, steps=ec.steps_per_episode)
 	return _episode_fields(ec, draw)
 
 
@@ -110,7 +110,7 @@ def phase_stats(traces: list, steps: int) -> dict:
 def main():
 	ap = argparse.ArgumentParser()
 	ap.add_argument("--episodes", type=int, default=100,
-	                help="episodes per report seed (held-out used 100)")
+	                help="episodes per test seed (held-out used 100)")
 	ap.add_argument("--markers-dir", type=str, default="logs/controller/l4teach")
 	ap.add_argument("--only", type=str, default=None,
 	                help="comma list of teacher names to restrict to (e.g. mpcof,lqr)")
@@ -136,7 +136,7 @@ def main():
 			continue
 		student = build_student(w, train_seed)
 		s_traces, t_traces = [], []
-		for rs in REPORT_SEEDS:
+		for rs in TEST_SEEDS:
 			q0, w0, dist_kw = pool_fields(ec, rs, args.episodes)
 			s_traces += rc.trace_controller_cpu(
 				student, q0, w0, args.episodes, ec.steps_per_episode,
@@ -156,7 +156,7 @@ def main():
 		t = phase_stats(t_traces, ec.steps_per_episode)
 		rows.append((teacher, train_seed, s, t))
 		print(f"\n=== {teacher} s{train_seed}  ({len(s_traces)} episodes x "
-		      f"{len(REPORT_SEEDS)} report seeds) ===")
+		      f"{len(TEST_SEEDS)} test seeds) ===")
 		print(f"  student: err {s['err']:.2f}° / stable {s['stable']:.1f}% / steady {s['steady']:.2f}°")
 		print(f"  teacher: err {t['err']:.2f}° / stable {t['stable']:.1f}% / steady {t['steady']:.2f}°")
 		for p in PHASES:

@@ -68,7 +68,7 @@ DIST="L4C"
 SEED="${SL_SEED:-31337002}"
 WIDTHS="${SL_WIDTHS:-36 32}"       # top 2 by gate-distance; b=34 held in reserve
 NEURONS="${SL_NEURONS:-64 96 48}"  # 16 / 24 / 12 levels per motor; n=32 already banked
-REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
+TEST_SEEDS="99990101 99990102 99990103 99990104 99990105"
 
 FEAT_STAGE1="--obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err --obs-yaw-err-i \
 --obs-collective-cmd --obs-alt-err --obs-vz"
@@ -109,13 +109,13 @@ run_point() {
 		--steps 2000 --tilt 5.0 \
 		$LADDER_WEIGHTS $AGG_GATE \
 		--grid-bits "$b" --grid-output-neurons "$n" --max-output-neurons "$n" \
-		--report-episodes 100 --holdout-pop-sample 8 \
+		--test-episodes 100 --holdout-pop-sample 8 \
 		--runs 1 --memory-mode BINARY \
 		--airframe "$AIRFRAME" --disturbance "$DIST" --teacher mpcof \
 		$FEAT_STAGE1 \
 		--translation --reward-lambda-alt 0 \
 		--grid-state-neurons 0 --max-state-neurons 0 \
-		--report-seeds $REPORT_SEEDS \
+		--test-seeds $TEST_SEEDS \
 		--base-seed "$SEED"
 	log "$tag finished rc=$?"
 }

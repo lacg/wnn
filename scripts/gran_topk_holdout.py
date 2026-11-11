@@ -3,7 +3,7 @@
 
 Loads a saved grid population (schema-2 yaml.gz), trains the TOP-K genomes on the TRAIN
 seed (K=5 accumulate), SELECTS the best on a VAL seed, and REPORTS that pick's held-out on
-a separate TEST/report seed. Pick-on-VAL, report-on-TEST = train/val/test separation, so it
+a separate TEST/test seed. Pick-on-VAL, report-on-TEST = train/val/test separation, so it
 is NOT a test-set leak (unlike "pick the best generalizer on the held-out", which selects on
 the test draw — the very leak _holdout_report guards against).
 
@@ -11,7 +11,7 @@ Improves winner selection over grid-winner-#1 (which is crowned by the noisy dur
 fitness — see project_gran_ablation_winner_variance) WITHOUT leaking. Also prints the #1
 during-search winner's held-out for comparison. Reuses the saved grid (no re-run) → cheap.
 
-Usage: gran_topk_holdout.py <winner.yaml.gz> [--top-k 8] [--base-seed N] [--report-seed N] [--steps N]
+Usage: gran_topk_holdout.py <winner.yaml.gz> [--top-k 8] [--base-seed N] [--test-seed N] [--steps N]
 """
 import argparse
 import math
@@ -29,7 +29,7 @@ def _wrap():
 	p.add_argument("path")
 	p.add_argument("--top-k", type=int, default=8)
 	p.add_argument("--base-seed", type=int, default=31337002)
-	p.add_argument("--report-seed", type=int, default=99990101)
+	p.add_argument("--test-seed", type=int, default=99990101)
 	p.add_argument("--steps", type=int, default=2000)
 	return p.parse_args()
 
@@ -45,7 +45,7 @@ def _mk_ec(args):
 def _ev(spec, seed, ec, args, folds=None):
 	thr = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=seed,
 		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None))
-	kw = dict(num_eval_episodes=args.report_episodes, seed=seed, episode_config=ec, thresholds=thr,
+	kw = dict(num_eval_episodes=args.test_episodes, seed=seed, episode_config=ec, thresholds=thr,
 		rg_config=_rg_config(args, ec, seed), max_train_workers=args.train_workers)
 	if folds is not None:
 		kw["num_eval_folds"] = folds
@@ -66,17 +66,17 @@ def main():
 	topk = pop[: w.top_k]
 
 	argv = [
-		"--levels", "16", "--num-eval-folds", "5", "--eval-episodes", "100", "--report-episodes", "100",
+		"--levels", "16", "--num-eval-folds", "5", "--eval-episodes", "100", "--test-episodes", "100",
 		"--steps", str(w.steps), "--tilt", "5.0",
 		"--fit-weight-err-sq", "0.4", "--fit-weight-stable", "0.3", "--fit-weight-jerk", "0.2", "--fit-weight-mono", "0.1",
-		"--report-seed", str(w.report_seed), "--base-seed", str(w.base_seed), "--teacher", "lqr",
+		"--test-seed", str(w.test_seed), "--base-seed", str(w.base_seed), "--teacher", "lqr",
 		"--memory-mode", str(mode),
 	]
 	args = build_arg_parser().parse_args(argv)
 	ec = _mk_ec(args)
 	s = resolve_seed_set(base=w.base_seed, run_index=0,
 	                     train=args.train_seed, test=args.test_seed, val=args.val_seed)
-	train_seed, val_seed, test_seed = s.train, s.val, w.report_seed
+	train_seed, val_seed, test_seed = s.train, s.val, w.test_seed
 
 	print(f"\n{'#'*72}\n# {mode} TOP-{w.top_k} leak-free held-out (train→pick-on-VAL→report-on-TEST)\n"
 	      f"# {w.path}\n# train={train_seed} val={val_seed} test={test_seed}\n{'#'*72}")
@@ -105,7 +105,7 @@ def main():
 	held = test_ev.score_genomes([topk[best_i], topk[0]])
 	sel_s, sel_e, sel_sty = _triple(held[0])
 	w0_s, w0_e, w0_sty = _triple(held[1])
-	pid_m = _pid_baseline(ec, args.report_episodes, test_seed)
+	pid_m = _pid_baseline(ec, args.test_episodes, test_seed)
 
 	bar = "=" * 72
 	print(f"\n{bar}\n  {mode} — TOP-{w.top_k} leak-free RESULT (test seed {test_seed})\n{bar}")

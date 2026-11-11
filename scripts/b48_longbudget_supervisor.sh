@@ -38,7 +38,7 @@ OUTDIR="logs/controller/sweep_ladder"
 MARKDIR="experiments/sweepladder_markers"
 AIRFRAME="cf21_brushless"; DIST="L4C"; SEED=31337002; B=48; SWEEP_N=32
 TAG="SL_A_b${B}n${SWEEP_N}_${AIRFRAME}_${DIST}_g20_s${SEED}"
-REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
+TEST_SEEDS="99990101 99990102 99990103 99990104 99990105"
 
 log() { echo "[b48-long] $(date -u +%FT%TZ) $*" >> "$LOG"; }
 controller_pids() { pgrep -f -- "-m wnn.control.phased_ga" 2>/dev/null || true; }
@@ -113,14 +113,14 @@ run_controller_arm "$TAG" "$MARKDIR" "$OUTDIR" "$VP" log \
 	--fit-weight-err-sq 0.3125 --fit-weight-stable 0.25 --fit-weight-steady 0.4375 \
 	--fit-aggregation zscore --zrank-clamp 3.0 --gate-stable 0.70 --gate-err 8.0 \
 	--grid-bits "$B" --grid-output-neurons "$SWEEP_N" --max-output-neurons "$SWEEP_N" \
-	--report-episodes 100 --holdout-pop-sample 8 \
+	--test-episodes 100 --holdout-pop-sample 8 \
 	--runs 1 --memory-mode BINARY \
 	--airframe "$AIRFRAME" --disturbance "$DIST" --teacher mpcof \
 	--obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err --obs-yaw-err-i \
 	--obs-collective-cmd --obs-alt-err --obs-vz \
 	--translation --reward-lambda-alt 0 \
 	--grid-state-neurons 0 --max-state-neurons 0 \
-	--report-seeds $REPORT_SEEDS \
+	--test-seeds $TEST_SEEDS \
 	--base-seed "$SEED"
 log "$TAG finished rc=$? ########## LONG-BUDGET b=48 COMPLETE ##########"
 log "READ IT AS: compare headline_holdout vs the probe's b48 (5 gens) and vs b=36's 66.6%/5.94/6.53."

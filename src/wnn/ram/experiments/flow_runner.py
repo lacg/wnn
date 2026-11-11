@@ -140,7 +140,7 @@ def _build_phased_ga_args(params: dict):
     Starts from the CLI parser's DEFAULTS (the single source of truth) and
     overrides any arg whose name matches a flow-param key (use the CLI flag name
     with dashes->underscores, e.g. neurons_gens, bits_patience, tilt, base_seed,
-    report_seed, fit_weight_err_sq, lamarckian, grid_state_neurons). Unknown
+    test_seed, fit_weight_err_sq, lamarckian, grid_state_neurons). Unknown
     params (architecture_type, wnn_num_threads, ...) are ignored. runs is pinned
     to 1 (a flow is one phased run).
     """

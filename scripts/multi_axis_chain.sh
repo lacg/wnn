@@ -18,9 +18,9 @@
 #   flags) flies FIRST in every round r at seed r, so every condition seed has its same-seed,
 #   same-plant anchor before the round's verdict. (Supersedes decision 2's "CTRL-8 seeds ARE the
 #   anchor".)
-# REPORT SEEDS: the anchor argv's own 99990101..05 (interim set, so every headline compares to the
+# TEST SEEDS: the anchor argv's own 99990101..05 (interim set, so every headline compares to the
 #   banked anchor headlines directly). The FINAL table re-scores every crown on D5 99990201..05 with
-#   `phased_ga <argv> --report-seeds <D5> --recalc-headline <ckpt>` (spec §5 #12) — not this chain.
+#   `phased_ga <argv> --test-seeds <D5> --recalc-headline <ckpt>` (spec §5 #12) — not this chain.
 #
 # DECISIONS 05/11/2026 (Luiz) ENCODED:
 #   (1) n=3 interim stop per condition under rule_v2: after a condition's 3rd seed banks, the round
@@ -254,7 +254,7 @@ bank_marker() {   # <tag> <axis> <value> <suffix> <seed> <out> <dur_s> <flags>
 	prov="$(grep -a -m1 '^\[provenance\]' "$6" | sed 's/"//g')"
 	rss="$(grep -a 'maximum resident set size' "$6" | tail -1 | awk '{print $1}')"
 	mkdir -p "$MARK"
-	printf '{"tag":"%s","programme":"CTRL-5 multi-axis","spec":"draft 4","axis":"%s","condition":"%s","suffix":"%s","seed":%s,"anchor":"%s","flags":"%s","report_seed_set":"interim 99990101-05","dur_s":%s,"peak_rss_bytes":%s,"headline":"%s","provenance":"%s","out":"%s"}\n' \
+	printf '{"tag":"%s","programme":"CTRL-5 multi-axis","spec":"draft 4","axis":"%s","condition":"%s","suffix":"%s","seed":%s,"anchor":"%s","flags":"%s","test_seed_set":"interim 99990101-05","dur_s":%s,"peak_rss_bytes":%s,"headline":"%s","provenance":"%s","out":"%s"}\n' \
 		"$1" "$2" "$3" "$4" "$5" "$ANCHOR" "$8" "$7" "${rss:-null}" "$head" "$prov" "$6" > "${MARK}/$1.json.tmp" \
 		&& mv "${MARK}/$1.json.tmp" "${MARK}/$1.json"
 }
@@ -334,7 +334,7 @@ print_smokes() {
 	for rec in "${CONDITIONS[@]}"; do
 		IFS='|' read -r axis value suffix flags gate <<< "$rec"
 		echo "cd /Users/lacg/wnn && PYTHONPATH=src/wnn nice -n 5 /usr/bin/time -l $VP -u -m wnn.control.phased_ga $argv" \
-			"--pop 6 --steps 200 --neurons-gens 1 --memory-gens 1 --eval-episodes 2 --memory-eval-episodes 2 --report-episodes 2" \
+			"--pop 6 --steps 200 --neurons-gens 1 --memory-gens 1 --eval-episodes 2 --memory-eval-episodes 2 --test-episodes 2" \
 			"--base-seed 1 ${flags:+$flags }--save-stage-checkpoints /private/tmp/ma_smoke/$suffix > /private/tmp/ma_smoke_$suffix.out 2>&1"
 	done
 }

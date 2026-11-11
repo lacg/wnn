@@ -39,7 +39,7 @@ $PY -u -m wnn.control.phased_ga \
   --rg-rounds 3 --rg-episodes-per-round 8 --universe-episodes 5 \
   --fit-weight-err-sq "$ERR" --fit-weight-steady "$STEADY" --fit-weight-stable "$STABLE" \
   --fit-weight-jerk "$JERK" --fit-weight-mono "$MONO" \
-  --report-episodes 100 --report-seeds 99990001 99990101 12345 67890 --holdout-pop-sample 8 \
+  --test-episodes 100 --test-seeds 99990001 99990101 12345 67890 --holdout-pop-sample 8 \
   --base-seed "$SEED" --runs 1 \
   --save-winner "$DIR/winner.yaml.gz" --save-stage-checkpoints "$DIR" > "$DIR/run.out" 2>&1
 echo "{\"combo\":\"$COMBO\",\"seed\":$SEED,\"weights\":\"$W\",\"ts\":\"$(date '+%Y-%m-%dT%H:%M:%S')\"}" > "/tmp/wnn_yaw_combo_${COMBO}_seed${SEED}_done.json"

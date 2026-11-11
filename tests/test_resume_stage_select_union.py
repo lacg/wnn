@@ -73,7 +73,7 @@ def test_top_k_loader_short_population_and_head_only(tmp_path):
 def _args(tmp_path, **kw):
 	a = P.build_arg_parser().parse_args([])
 	a.save_stage_checkpoints = str(tmp_path)
-	a.report_seeds = [99990101, 99990102]
+	a.test_seeds = [99990101, 99990102]
 	a.stage_select_top_k = 3
 	for k, v in kw.items():
 		setattr(a, k, v)
@@ -101,8 +101,8 @@ def test_required_stages_follow_the_fresh_run(tmp_path):
 	assert [n for _s, n, _p in got] == ["grid", "neurons"]
 	got = P._resume_completed_stages(_args(tmp_path), st, 4, set())
 	assert [n for _s, n, _p in got] == ["grid", "neurons", "bits", "connections"]
-	# No report seeds -> a fresh run never makes GRID a candidate.
-	got = P._resume_completed_stages(_args(tmp_path, report_seeds=None, report_seed=None),
+	# No test seeds -> a fresh run never makes GRID a candidate.
+	got = P._resume_completed_stages(_args(tmp_path, test_seeds=None, test_seed=None),
 	                                 st, 4, {"bits", "connections"})
 	assert [n for _s, n, _p in got] == ["neurons"]
 	# Resume at NEURONS: only GRID finished before it.
@@ -321,13 +321,13 @@ def test_stage_select_holdout_error_propagates(harness):
 
 
 def test_runner_up_rescore_error_propagates(harness, monkeypatch):
-	"""A selected runner-up whose report-seed score failed used to publish pop[0]'s
+	"""A selected runner-up whose test-seed score failed used to publish pop[0]'s
 	triple under the headline. Make the last candidate win, then fail its re-score."""
 	from wnn.ram.fitness import FitnessCalculatorControllerHarmonic
 	monkeypatch.setattr(FitnessCalculatorControllerHarmonic, "fitness",
 	                    lambda self, ms: [0.0 if i == len(ms) - 1 else 1.0 for i in range(len(ms))])
-	harness.fail["holdout"] = ("HEADLINE-", P.HoldoutScoringError("report seed died"))
-	with pytest.raises(P.HoldoutScoringError, match="report seed died"):
+	harness.fail["holdout"] = ("HEADLINE-", P.HoldoutScoringError("test seed died"))
+	with pytest.raises(P.HoldoutScoringError, match="test seed died"):
 		P._run_one(_args(harness.dir, skip_stages="bits,connections"), None,
 		           SimpleNamespace(train=7, val=1000, test=11), resume_state=_resume_state())
 
@@ -339,7 +339,7 @@ def test_repair_recovers_every_stage_row_newest_attempt_wins(tmp_path):
 	sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 	import repair_resumed_stage_select as R
 	out = tmp_path / "T.out"
-	row = "  [report-seeds] {} MULTI-SEED held-out (5 seeds [1, 2]): stable={}%  err=1.0°"
+	row = "  [test-seeds] {} MULTI-SEED held-out (5 seeds [1, 2]): stable={}%  err=1.0°"
 	(tmp_path / "T.out.killed1").write_text(
 		"\n".join([row.format("GRID", 95), row.format("NEURONS", 99), row.format("MEMORY", 1)]))
 	out.write_text(row.format("MEMORY", 98))

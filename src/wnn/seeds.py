@@ -1,4 +1,4 @@
-"""Reproducible 3-way (train/test/val) + multi-seed management.
+"""Reproducible 3-way (train/val/test) + multi-seed management.
 
 A seed must be (a) arbitrary/unbiased — not cherry-picked to flatter a result — and
 (b) recorded, so a run reproduces and the values can go straight into a paper. This
@@ -10,11 +10,13 @@ train/test/val) overrides, for exact replication.
 Partitions (same role as IDS 80/10/10, but the controller generates ICs on the fly,
 so each partition is a disjoint *seed* rather than a disjoint row-set):
   - train: fit / evolve against these initial conditions
-  - test : model selection / early-stopping (unseen during fit)
-  - val  : held-out final report (touched once)
+  - val  : model selection / stage-select / early-stopping (unseen during fit)
+  - test : held-out final report (touched once)
+Literature convention, see docs/terminology_train_val_test.md. The controller's
+published numbers come from its test units (--test-seeds, or the single --test-seed).
 
 Multi-seed: `run_index` spawns an independent seed set from the same base; run the
-whole protocol for run_index 0..N-1 and report mean±std over the val results. Share
+whole protocol for run_index 0..N-1 and report mean±std over the test results. Share
 the SAME base across substrates (MLP / WNN / PID) so the comparison is controlled.
 
 Usage:
@@ -45,8 +47,8 @@ class SeedSet:
     base: int           # master seed (UTC timestamp YYYYMMDDHHMMSS, or explicit)
     run_index: int      # which multi-seed run (0-based)
     train: int          # fit / evolve
-    test: int           # model selection / early-stop
-    val: int            # held-out final report
+    test: int           # held-out final report
+    val: int            # model selection / stage-select / early-stop
     source: str         # "date" (auto) | "explicit"
 
     def as_dict(self) -> dict:

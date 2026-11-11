@@ -1,6 +1,6 @@
 {
  "meta": {
-  "report_seeds": [
+  "test_seeds": [
    99990101,
    99990102,
    99990103,
@@ -23,7 +23,7 @@
    "mode": "BINARY",
    "seed": 31337002,
    "train_seed": 3072558954,
-   "report_seeds": [
+   "test_seeds": [
     99990101,
     99990102,
     99990103,
@@ -124,7 +124,7 @@
    "mode": "BINARY",
    "seed": 31337003,
    "train_seed": 1709386456,
-   "report_seeds": [
+   "test_seeds": [
     99990101,
     99990102,
     99990103,
@@ -225,7 +225,7 @@
    "mode": "BINARY",
    "seed": 31337004,
    "train_seed": 2570061704,
-   "report_seeds": [
+   "test_seeds": [
     99990101,
     99990102,
     99990103,
@@ -326,7 +326,7 @@
    "mode": "BINARY",
    "seed": 31337005,
    "train_seed": 1696427126,
-   "report_seeds": [
+   "test_seeds": [
     99990101,
     99990102,
     99990103,
@@ -427,7 +427,7 @@
    "mode": "QUAD",
    "seed": 31337002,
    "train_seed": 3072558954,
-   "report_seeds": [
+   "test_seeds": [
     99990101,
     99990102,
     99990103,
@@ -528,7 +528,7 @@
    "mode": "QUAD",
    "seed": 31337003,
    "train_seed": 1709386456,
-   "report_seeds": [
+   "test_seeds": [
     99990101,
     99990102,
     99990103,
@@ -629,7 +629,7 @@
    "mode": "QUAD",
    "seed": 31337004,
    "train_seed": 2570061704,
-   "report_seeds": [
+   "test_seeds": [
     99990101,
     99990102,
     99990103,
@@ -730,7 +730,7 @@
    "mode": "QUAD",
    "seed": 31337005,
    "train_seed": 1696427126,
-   "report_seeds": [
+   "test_seeds": [
     99990101,
     99990102,
     99990103,
@@ -831,7 +831,7 @@
    "mode": "BINARY",
    "seed": 31337002,
    "train_seed": 3072558954,
-   "report_seeds": [
+   "test_seeds": [
     99990101,
     99990102,
     99990103,
@@ -932,7 +932,7 @@
    "mode": "BINARY",
    "seed": 31337003,
    "train_seed": 1709386456,
-   "report_seeds": [
+   "test_seeds": [
     99990101,
     99990102,
     99990103,
@@ -1033,7 +1033,7 @@
    "mode": "BINARY",
    "seed": 31337004,
    "train_seed": 2570061704,
-   "report_seeds": [
+   "test_seeds": [
     99990101,
     99990102,
     99990103,
@@ -1134,7 +1134,7 @@
    "mode": "BINARY",
    "seed": 31337005,
    "train_seed": 1696427126,
-   "report_seeds": [
+   "test_seeds": [
     99990101,
     99990102,
     99990103,
@@ -1235,7 +1235,7 @@
    "mode": "QUAD",
    "seed": 31337002,
    "train_seed": 3072558954,
-   "report_seeds": [
+   "test_seeds": [
     99990101,
     99990102,
     99990103,
@@ -1336,7 +1336,7 @@
    "mode": "QUAD",
    "seed": 31337003,
    "train_seed": 1709386456,
-   "report_seeds": [
+   "test_seeds": [
     99990101,
     99990102,
     99990103,
@@ -1437,7 +1437,7 @@
    "mode": "QUAD",
    "seed": 31337004,
    "train_seed": 2570061704,
-   "report_seeds": [
+   "test_seeds": [
     99990101,
     99990102,
     99990103,
@@ -1538,7 +1538,7 @@
    "mode": "QUAD",
    "seed": 31337005,
    "train_seed": 1696427126,
-   "report_seeds": [
+   "test_seeds": [
     99990101,
     99990102,
     99990103,
@@ -1639,7 +1639,7 @@
    "mode": "BINARY",
    "seed": 31337002,
    "train_seed": 3072558954,
-   "report_seeds": [
+   "test_seeds": [
     99990101,
     99990102,
     99990103,
@@ -1740,7 +1740,7 @@
    "mode": "BINARY",
    "seed": 31337003,
    "train_seed": 1709386456,
-   "report_seeds": [
+   "test_seeds": [
     99990101,
     99990102,
     99990103,
@@ -1841,7 +1841,7 @@
    "mode": "BINARY",
    "seed": 31337004,
    "train_seed": 2570061704,
-   "report_seeds": [
+   "test_seeds": [
     99990101,
     99990102,
     99990103,
@@ -1942,7 +1942,7 @@
    "mode": "QUAD",
    "seed": 31337002,
    "train_seed": 3072558954,
-   "report_seeds": [
+   "test_seeds": [
     99990101,
     99990102,
     99990103,
@@ -2043,7 +2043,7 @@
    "mode": "BINARY",
    "seed": 31337002,
    "train_seed": 3072558954,
-   "report_seeds": [
+   "test_seeds": [
     99990101,
     99990102,
     99990103,
@@ -2144,7 +2144,7 @@
    "mode": "BINARY",
    "seed": 31337003,
    "train_seed": 1709386456,
-   "report_seeds": [
+   "test_seeds": [
     99990101,
     99990102,
     99990103,
@@ -2245,7 +2245,7 @@
    "mode": "BINARY",
    "seed": 31337004,
    "train_seed": 2570061704,
-   "report_seeds": [
+   "test_seeds": [
     99990101,
     99990102,
     99990103,
@@ -2346,7 +2346,7 @@
    "mode": "BINARY",
    "seed": 31337005,
    "train_seed": 1696427126,
-   "report_seeds": [
+   "test_seeds": [
     99990101,
     99990102,
     99990103,
@@ -2447,7 +2447,7 @@
    "mode": "QUAD",
    "seed": 31337002,
    "train_seed": 3072558954,
-   "report_seeds": [
+   "test_seeds": [
     99990101,
     99990102,
     99990103,

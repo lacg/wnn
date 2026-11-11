@@ -25,7 +25,7 @@ $PY -u tests/run_phased_ga.py \
   --memory-gens 60 --memory-patience 3 --check-interval 5 \
   --saturation-grow-gain 0.02 \
   --train-workers 4 \
-  --base-seed 20260609 --report-seed 7777 \
+  --base-seed 20260609 --test-seed 7777 \
   --save-stage-checkpoints "$D1" --save-winner "$D1/winner.pkl" \
   > "$D1/run.out" 2>&1
 RC1=$?
@@ -42,7 +42,7 @@ $PY -u tests/run_phased_ga.py \
   --memory-gens 200 --memory-patience 8 --check-interval 5 \
   --saturation-grow-gain 1.0 \
   --train-workers 4 \
-  --base-seed 20260609 --report-seed 7777 \
+  --base-seed 20260609 --test-seed 7777 \
   --save-stage-checkpoints "$D2" --save-winner "$D2/winner.pkl" \
   > "$D2/run.out" 2>&1
 RC2=$?

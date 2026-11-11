@@ -4,7 +4,7 @@
   "tilt": 5.0,
   "steps": 2000,
   "episodes": 100,
-  "report_seed": 99990101,
+  "test_seed": 99990101,
   "sim_seed": 911,
   "bits": 8,
   "levels": 16,

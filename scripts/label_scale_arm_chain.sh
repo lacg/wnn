@@ -157,12 +157,12 @@ PY
 		--fit-weight-err-sq 0.3125 --fit-weight-stable 0.25 --fit-weight-steady 0.4375 \
 		--fit-aggregation zscore --zrank-clamp 3.0 --gate-stable 0.70 --gate-err 8.0 \
 		--delta-gamma 1.0 --grid-bits "$BITS" --grid-output-neurons "$NEURONS" --max-output-neurons "$NEURONS" \
-		--report-episodes 2 --holdout-pop-sample 2 --runs 1 --memory-mode BINARY \
+		--test-episodes 2 --holdout-pop-sample 2 --runs 1 --memory-mode BINARY \
 		--airframe "$AIRFRAME" --disturbance "$DIST" --teacher mpcof \
 		--obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err --obs-yaw-err-i \
 		--obs-collective-cmd --obs-alt-err --obs-vz \
 		--translation --reward-lambda-alt 0 --grid-state-neurons 0 --max-state-neurons 0 \
-		--report-seeds 99990101 --base-seed 31337002 \
+		--test-seeds 99990101 --base-seed 31337002 \
 		--delta-label-scale 2 --delta-max "$(dmax_for 2)" \
 		> logs/controller/label_scale/smoke.out 2>&1
 	rc=$?

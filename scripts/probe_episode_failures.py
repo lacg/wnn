@@ -1,12 +1,12 @@
 #!/usr/bin/env python
-"""Which EPISODES does a saved controller fail on one report seed — and what do they share?
+"""Which EPISODES does a saved controller fail on one test seed — and what do they share?
 
 Motivation (14/09/2026): the s31337003 `_bd` headline (GRID#0) flew 500/500 stable
-on the val seeds and 464/500 on the report seeds (20 of the 36 failures on
+on the val seeds and 464/500 on the test seeds (20 of the 36 failures on
 99990101). The held-out scorer reduced its per-episode buffer to per-genome means,
 so the question "what do the failed episodes have in common" was unanswerable.
-This probe re-scores ONE genome on ONE report seed through the SAME path the
-held-out used (`_report_thresholds` → `ControllerEvaluator.score_genomes`, the GPU
+This probe re-scores ONE genome on ONE test seed through the SAME path the
+held-out used (`_test_thresholds` → `ControllerEvaluator.score_genomes`, the GPU
 scorer), with the evaluator's per-episode sink armed, then joins the per-episode
 flags against the episode's initial conditions and prints the failures next to
 the passes on every variable.
@@ -19,7 +19,7 @@ Usage:
   PYTHONPATH=<dir with the per-episode-export ram_controller .so>:src/wnn \\
   python scripts/probe_episode_failures.py \\
       --ckpt-dir logs/controller/sweep_ladder/ckpt/<tag> --stage stage0_grid \\
-      --report-seed 99990101 --expect-stable 80.0 --expect-err 4.24 \\
+      --test-seed 99990101 --expect-stable 80.0 --expect-err 4.24 \\
       -- <the run's phased_ga flags, minus --save-winner/--save-stage-checkpoints>
 """
 from __future__ import annotations
@@ -46,7 +46,7 @@ def _probe_args(argv: list[str]) -> argparse.Namespace:
 	                help="checkpoint basename to load (stage0_grid / stage3_connections / stage4_memory)")
 	ap.add_argument("--genome-index", type=int, default=0,
 	                help="index into the stage's final_population (0 = the stage winner = its #0 candidate)")
-	ap.add_argument("--report-seed", type=int, required=True)
+	ap.add_argument("--test-seed", type=int, required=True)
 	ap.add_argument("--expect-stable", type=float, default=None,
 	                help="the run's logged stable%% on this seed — the probe REFUSES to interpret "
 	                     "episodes unless its aggregate reproduces it")
@@ -54,9 +54,9 @@ def _probe_args(argv: list[str]) -> argparse.Namespace:
 	ap.add_argument("--thresholds", choices=("train", "report"), default="train",
 	                help="which seed the thermometer thresholds are fit on. `train` = the aligned "
 	                     "score-only path (cells were written under train-seed thresholds). `report` "
-	                     "reproduces what _holdout_report does on the FIRST report seed of an arch-only "
+	                     "reproduces what _holdout_report does on the FIRST test seed of an arch-only "
 	                     "stage (14/09/2026 finding): it trains under train-seed thresholds, then scores "
-	                     "under report-seed thresholds — the documented address misalignment.")
+	                     "under test-seed thresholds — the documented address misalignment.")
 	return ap.parse_args(argv)
 
 
@@ -96,20 +96,20 @@ def _replay_ics(seed: int, n: int, ec) -> list[dict]:
 	return out
 
 
-def _score_with_sink(args, ec, spec, genome, report_seed: int, train_seed: int,
+def _score_with_sink(args, ec, spec, genome, test_seed: int, train_seed: int,
                      thresholds_on: str = "train"):
 	"""The held-out path of `_holdout_report` for ONE genome, sink armed."""
 	from wnn.control.evaluator import ControllerEvaluator
-	from wnn.control.phased_ga import _report_thresholds, _rg_config
+	from wnn.control.phased_ga import _test_thresholds, _rg_config
 	use_score = getattr(genome, "cells", None) is not None or getattr(ec, "geometry", None) is not None
 	if not use_score:
 		raise SystemExit("genome carries no trained cells — the held-out would retrain on the "
 		                 "train seed first; this probe only scores what was scored")
-	thresholds = _report_thresholds(args, ec, spec, report_seed, train_seed,
+	thresholds = _test_thresholds(args, ec, spec, test_seed, train_seed,
 	                                use_score=(thresholds_on == "train"))
-	rep_eps = getattr(args, "report_episodes", None) or args.eval_episodes
-	ev = ControllerEvaluator(spec, num_eval_episodes=rep_eps, seed=report_seed, episode_config=ec,
-	                         thresholds=thresholds, rg_config=_rg_config(args, ec, report_seed),
+	rep_eps = getattr(args, "test_episodes", None) or args.eval_episodes
+	ev = ControllerEvaluator(spec, num_eval_episodes=rep_eps, seed=test_seed, episode_config=ec,
+	                         thresholds=thresholds, rg_config=_rg_config(args, ec, test_seed),
 	                         max_train_workers=args.train_workers,
 	                         num_eval_folds=getattr(args, "num_eval_folds", 5))
 	ev.per_episode_sink = []
@@ -191,12 +191,12 @@ def main() -> None:
 	seeds = resolve_seed_set(base=base, run_index=0, train=args.train_seed,
 	                         test=args.test_seed, val=args.val_seed)
 	label, spec, genome = _load_stage_genome(pa.ckpt_dir, pa.stage, pa.genome_index)
-	print(f"[probe] {label}#{pa.genome_index} from {pa.ckpt_dir} — report seed {pa.report_seed}, "
+	print(f"[probe] {label}#{pa.genome_index} from {pa.ckpt_dir} — test seed {pa.test_seed}, "
 	      f"train seed {seeds.train}, cells={'yes' if getattr(genome, 'cells', None) is not None else 'no'}")
 	print(f"[probe] thresholds fit on the {pa.thresholds.upper()} seed")
-	m, sink, n_eps = _score_with_sink(args, ec, spec, genome, pa.report_seed, seeds.train, pa.thresholds)
+	m, sink, n_eps = _score_with_sink(args, ec, spec, genome, pa.test_seed, seeds.train, pa.thresholds)
 	st, er = m.acc * 100.0, m.mean_attitude_error_deg
-	print(f"[probe] aggregate on {pa.report_seed}: stable={st:.1f}%  err={er:.2f}°  "
+	print(f"[probe] aggregate on {pa.test_seed}: stable={st:.1f}%  err={er:.2f}°  "
 	      f"steady={m.mean_steady_error_deg:.2f}°  ({n_eps} episodes)")
 	if pa.expect_stable is not None and abs(st - pa.expect_stable) > 0.05:
 		raise SystemExit(f"REFUSING to interpret: aggregate stable {st:.1f}% != logged {pa.expect_stable:.1f}% "

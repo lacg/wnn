@@ -56,7 +56,7 @@ TAB_SEEDS="31337002 31337003 31337004 31337005 31337006"
 # replication of the b32 n256 record. The gate therefore waits on the ON markers
 # only (TAB_ARMS override), and the chain's keeper may be the handoff script.
 TAB_ARMS="${TAB_ARMS:-on}"
-REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
+TEST_SEEDS="99990101 99990102 99990103 99990104 99990105"
 
 mkdir -p "$MARKDIR" "$OUTDIR"
 
@@ -116,13 +116,13 @@ run_point() {
 		--delta-gamma 1.0 \
 		--delta-leak "$leak" \
 		--grid-bits "$BITS" --grid-output-neurons "$NEURONS" --max-output-neurons "$NEURONS" \
-		--report-episodes 100 --holdout-pop-sample 8 \
+		--test-episodes 100 --holdout-pop-sample 8 \
 		--runs 1 --memory-mode BINARY \
 		--airframe "$AIRFRAME" --disturbance "$DIST" --teacher mpcof \
 		$FEAT \
 		--translation --reward-lambda-alt 0 \
 		--grid-state-neurons 0 --max-state-neurons 0 \
-		--report-seeds $REPORT_SEEDS \
+		--test-seeds $TEST_SEEDS \
 		--base-seed "$SEED"
 	log "$tag finished rc=$?"
 }

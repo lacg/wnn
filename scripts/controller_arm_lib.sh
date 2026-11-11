@@ -203,8 +203,8 @@ run_controller_arm() {
 	local rss held_n held_m held_nm held_mm cells fpga
 	rss=$(grep -E "maximum resident set size" "$out" | awk '{print $1}' | tail -1)
 	# 04/08/2026 FIX. This used to take RESULT lines 1 and 2 and call them NEURONS and
-	# MEMORY. With --report-seeds N each stage emits N RESULT lines, so at N=5 lines 1
-	# AND 2 are both NEURONS (report seeds 1 and 2) and "held_memory" was never the
+	# MEMORY. With --test-seeds N each stage emits N RESULT lines, so at N=5 lines 1
+	# AND 2 are both NEURONS (test seeds 1 and 2) and "held_memory" was never the
 	# memory stage at all — every marker written by this helper carried a mislabelled
 	# field, and it was quoted as a MEMORY result. Anchor on the stage headers instead,
 	# which hold for N=1 and N>1 alike.
@@ -212,18 +212,18 @@ run_controller_arm() {
 	# CONNECTIONS as its GA-arch stage, so the "arch stage" anchor accepts either.
 	held_n=$(awk '/STAGE (1 \(NEURONS\)|3 \(CONNECTIONS\)) done/{f=1} f && /RESULT — during-search winner/{print; exit}' "$out")
 	held_m=$(awk '/STAGE 4 \(MEMORY\) done/{f=1} f && /RESULT — during-search winner/{print; exit}' "$out")
-	# The AUTHORITATIVE numbers when --report-seeds is used: mean±SD across report seeds
+	# The AUTHORITATIVE numbers when --test-seeds is used: mean±SD across test seeds
 	# rather than one draw. Empty for single-seed runs, which emit no MULTI-SEED line.
-	# Captured because a single RESULT line is one report seed and cannot carry variance
+	# Captured because a single RESULT line is one test seed and cannot carry variance
 	# — reporting it as "the" held-out result is how a 1.99° draw got quoted against a
 	# 1.73±0.06° aggregate.
 	held_nm=$(grep -E " (NEURONS|CONNECTIONS) MULTI-SEED held-out" "$out" | tail -1)
 	held_mm=$(grep -E " MEMORY MULTI-SEED held-out" "$out" | tail -1)
 	# 08/08/2026 — publish EVERY stage, headline the val-selected one. GRID gets the
-	# same report-seed treatment as the GA stages (before this, the Grid row carried
+	# same test-seed treatment as the GA stages (before this, the Grid row carried
 	# during-search numbers while every later row carried held-out ones, so "did the
 	# GA earn its runtime?" was unanswerable). The HEADLINE lines name the stage that
-	# a fresh val draw picked — selection never touches the published report seeds.
+	# a fresh val draw picked — selection never touches the published test seeds.
 	held_gm=$(grep -E "GRID MULTI-SEED held-out" "$out" | tail -1)
 	# 26/09/2026 — EVERY stage's multi-seed held-out, keyed by stage name. held_neurons_multiseed
 	# keeps its old meaning (the ONE GA-arch stage of a 3-stage pipeline: NEURONS for _pipeN,

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Yaw-anchor combo-sweep STATUS REPORT. Run anytime for a ranked snapshot, or loop it
-# (see --watch). Parses each combo's HELD-OUT (report-seeds MEMORY MULTI-SEED) line —
+# (see --watch). Parses each combo's HELD-OUT (test-seeds MEMORY MULTI-SEED) line —
 # NOT the in-sample FINAL. Ranks completed combos by held-out stable%. Baselines:
 # anchor-S16 70.5% (seed09), S16 blind 87.2% (seed09). Usage: yaw_combo_status.sh [--watch]
 set -u
@@ -27,7 +27,7 @@ report() {
   local done_n=0 inflight="" inflight_stage=""
   echo "================================================================"
   echo " YAW-ANCHOR COMBO SWEEP — $(date '+%Y-%m-%d %H:%M:%S')  (seed $SEED, folds=3, --obs-yaw-err)"
-  echo " held-out = [report-seeds] MEMORY MULTI-SEED (the trustworthy number)"
+  echo " held-out = [test-seeds] MEMORY MULTI-SEED (the trustworthy number)"
   echo " baselines: anchor-S16 70.5±17.4%   |   S16 blind 87.2±1.6%  ← beat this"
   echo "================================================================"
   printf " %-5s %-26s %12s %9s %9s\n" "combo" "weights e/st/sta/j/m" "held stbl%" "err°" "steady°"

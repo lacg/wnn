@@ -35,7 +35,7 @@ SR="$TD/root"; mkdir -p "$SR/scripts" "$SR/experiments" "$SR/bin" "$SR/c8"
 cp "$ROOT/scripts/multi_axis_chain.sh" "$ROOT/scripts/controller_arm_lib.sh" \
    "$ROOT/scripts/headline_compare.py" "$ROOT/scripts/paired_power.py" "$SR/scripts/"
 printf '#!/bin/sh\nexit 1\n' > "$SR/bin/pgrep"; chmod +x "$SR/bin/pgrep"
-ARGV0='--levels 16 --pop 50 --teacher mpcof --report-seeds 99990101 99990102 99990103 99990104 99990105'
+ARGV0='--levels 16 --pop 50 --teacher mpcof --test-seeds 99990101 99990102 99990103 99990104 99990105'
 headline() {   # <stable> <err> <steady>
 	printf '  [stage-select] HEADLINE held-out: stable=%s%% err=%s°  steady=%s°  jerk=0.02  mono_viol=1  alt=0.180m  pos=0.420m  dx=0.2m  dy=0.2m  effort=1.9\n' "$1" "$2" "$3"
 }

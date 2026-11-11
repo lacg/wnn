@@ -7,8 +7,8 @@ FAILURE COUNT with an exact (Clopper-Pearson) interval instead.
 
 Where the count comes from, in order of preference:
   1. the marker's MULTI-SEED line carries `stable_fail=k/n` (runs after 11/09/2026);
-  2. otherwise the run's .out: the report-seed RESULT lines immediately before each
-     `MULTI-SEED held-out` line are one per seed at N=--report-episodes each, and
+  2. otherwise the run's .out: the test-seed RESULT lines immediately before each
+     `MULTI-SEED held-out` line are one per seed at N=--test-episodes each, and
      `stable=99.0%` at N=100 is exactly 99/100. Every value must sit on the 100/N
      grid or the script REFUSES — a value off the grid means N is wrong, and
      rounding it would print a count that never happened.
@@ -16,13 +16,13 @@ So every marker ever banked — the four multi-axis anchors included — gets an
 interval without a re-fly.
 
 The statistical unit is a DESIGN CHOICE and is printed, not hidden: the interval
-pools all n episodes as Bernoulli trials, but episodes within one report seed share
+pools all n episodes as Bernoulli trials, but episodes within one test seed share
 that seed's disturbance stream, so the honest replication unit is the seed. The
 per-seed counts are printed beside the pooled interval so clustering is visible.
 
 Usage:
   PYTHONPATH=src python scripts/stable_failure_ci.py --tag <tag> [--tag ...] \\
-      [--stage MEMORY|CONNECTIONS|GRID|HEADLINE] [--report-episodes 100] [--vs A B] [--root DIR]
+      [--stage MEMORY|CONNECTIONS|GRID|HEADLINE] [--test-episodes 100] [--vs A B] [--root DIR]
   --vs A B  adds Fisher's exact test on the two runs' failure counts (same stage).
 """
 
@@ -39,7 +39,7 @@ DEFAULT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STAGE_FIELD = {"GRID": "held_grid_multiseed", "CONNECTIONS": "held_neurons_multiseed",
                "NEURONS": "held_neurons_multiseed", "MEMORY": "held_memory_multiseed"}
 _RESULT = re.compile(r"RESULT — during-search winner \(held-out\):\s+stable=([\d.]+)%")
-_MULTI = re.compile(r"\[report-seeds\] (\S+) MULTI-SEED held-out \((\d+) seeds")
+_MULTI = re.compile(r"\[(?:test|report)-seeds\] (\S+) MULTI-SEED held-out \((\d+) seeds")
 _FAIL = re.compile(r"stable_fail=(\d+)/(\d+)")
 _CROWNED = re.compile(r"\[stage-select\] HEADLINE stage=(\w+) genome=\w+#(\d+)")
 
@@ -50,7 +50,7 @@ class FailureCount:
 	stage: str
 	failures: int
 	episodes: int
-	per_seed: tuple      # failures per report seed, in .out order
+	per_seed: tuple      # failures per test seed, in .out order
 	source: str          # "marker" | ".out"
 
 	def rate(self) -> float:
@@ -69,8 +69,8 @@ def parse_args():
 	ap.add_argument("--tag", action="append", required=True, help="marker tag; repeatable")
 	ap.add_argument("--stage", default="MEMORY", choices=sorted(set(STAGE_FIELD) | {"HEADLINE"}),
 	                help="which held-out row (default MEMORY — the comparison surface, R7)")
-	ap.add_argument("--report-episodes", type=int, default=100,
-	                help="episodes per report seed when reconstructing from the .out")
+	ap.add_argument("--test-episodes", type=int, default=100,
+	                help="episodes per test seed when reconstructing from the .out")
 	ap.add_argument("--vs", nargs=2, metavar=("A", "B"), default=None,
 	                help="two tags to compare with Fisher's exact test")
 	ap.add_argument("--root", default=DEFAULT_ROOT,
@@ -142,7 +142,7 @@ def count_from_out(root: str, tag: str, stage: str, n_per_seed: int) -> FailureC
 		passed = pct * n_per_seed / 100.0
 		if abs(passed - round(passed)) > 1e-6:
 			raise SystemExit(f"{tag}/{stage}: stable={pct}% is not on the 100/{n_per_seed} grid — "
-			                 f"wrong --report-episodes; refusing to round a count")
+			                 f"wrong --test-episodes; refusing to round a count")
 		per_seed.append(n_per_seed - int(round(passed)))
 	return FailureCount(tag, stage, sum(per_seed), n_per_seed * len(per_seed), tuple(per_seed), ".out")
 
@@ -164,11 +164,11 @@ def main():
 	args = parse_args()
 	print(f"exact (Clopper-Pearson) 95% CI on the FAILURE rate; unit = pooled episodes "
 	      f"(seed clustering visible in per-seed) — stage {args.stage}")
-	rows = {t: failure_count(args.root, t, args.stage, args.report_episodes) for t in args.tag}
+	rows = {t: failure_count(args.root, t, args.stage, args.test_episodes) for t in args.tag}
 	for fc in rows.values():
 		print_row(fc)
 	if args.vs:
-		a, b = (rows.get(t) or failure_count(args.root, t, args.stage, args.report_episodes) for t in args.vs)
+		a, b = (rows.get(t) or failure_count(args.root, t, args.stage, args.test_episodes) for t in args.vs)
 		table = [[a.failures, a.episodes - a.failures], [b.failures, b.episodes - b.failures]]
 		_, p = fisher_exact(table)
 		print(f"\n  Fisher exact, {a.tag} vs {b.tag}: failures {a.failures} vs {b.failures} "

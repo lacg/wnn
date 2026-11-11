@@ -31,7 +31,7 @@
 # which --save-winner alone never kept.
 #
 # SUCCESS (pre-registered): a committee (pair or larger, scored by
-# scripts/ensemble_teachers.py on the 5 report seeds) beats the best SOLO member's
+# scripts/ensemble_teachers.py on the 5 test seeds) beats the best SOLO member's
 # steady on BOTH base seeds without losing stable. The solo table is a finding in
 # itself either way: it is the first teacher screen on the current recipe since the
 # TeacherBank fix, at n=2 seeds.
@@ -62,7 +62,7 @@ TEACHERS="${CMT_TEACHERS:-mpcof lqi lqr mpc pid}"
 # Budget-matched across ALL teachers (the L1/L3 cap) — committee members must be
 # comparable to each other and to the control cell.
 NEURONS_GENS="${CMT_NEURONS_GENS:-5}"
-REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
+TEST_SEEDS="99990101 99990102 99990103 99990104 99990105"
 # Gate on the L4 chain PID (armed 07/08 ~21:19 EDT). The L2-v2 lesson: a bare
 # controllers() poll cannot tell an inter-run gap from "chain finished".
 WAIT_PID="${CMT_WAIT_PID:-}"
@@ -123,7 +123,7 @@ run_member() {
 		--steps 2000 --tilt 5.0 \
 		--fit-weight-err-sq 0.4 --fit-weight-stable 0.3 \
 		--fit-weight-jerk 0.2 --fit-weight-mono 0.1 \
-		--report-episodes 100 --holdout-pop-sample 8 \
+		--test-episodes 100 --holdout-pop-sample 8 \
 		--grid-bits 24 30 \
 		--grid-state-neurons 0 --max-state-neurons 0 \
 		--max-output-neurons 128 \
@@ -133,7 +133,7 @@ run_member() {
 		--teacher "$teacher" \
 		$FEAT_PIDMIX \
 		--save-stage-checkpoints "$OUTDIR/${tag}_stages" \
-		--report-seeds $REPORT_SEEDS \
+		--test-seeds $TEST_SEEDS \
 		--base-seed "$seed"
 }
 
@@ -149,4 +149,4 @@ for seed in $SEEDS; do
 done
 
 log "########## COMMITTEE CHAIN DONE — markers in $MARKDIR ##########"
-log "NEXT: score with ensemble_teachers.py per base seed (5 MEMORY winners, solos + --pairs, --steps 2000 --episodes 100 --seeds ${REPORT_SEEDS// /,})"
+log "NEXT: score with ensemble_teachers.py per base seed (5 MEMORY winners, solos + --pairs, --steps 2000 --episodes 100 --seeds ${TEST_SEEDS// /,})"

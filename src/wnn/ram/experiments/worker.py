@@ -41,7 +41,7 @@ STALE_THRESHOLD = 90
 # The live tracker DB (same db as the dashboard), relative to the project root
 # the worker and flow_runner are launched from. FlowWorker takes db_path
 # EXPLICITLY: only the production entry points pass this; a script that reuses
-# FlowWorker as a revalidation host passes ":memory:" so it cannot write to the
+# FlowWorker as a re-test host passes ":memory:" so it cannot write to the
 # live DB by accident (the old silent default did exactly that from the repo root).
 LIVE_DB_RELATIVE = Path("db/wnn.db")
 
@@ -117,8 +117,8 @@ class FlowWorker:
         # Pre-cached data (loaded once at startup)
         self._tokenizer = None
         self._train_tokens: Optional[list[int]] = None
+        self._val_tokens: Optional[list[int]] = None
         self._test_tokens: Optional[list[int]] = None
-        self._validation_tokens: Optional[list[int]] = None
         self._vocab_size: Optional[int] = None
         self._cluster_order: Optional[list[int]] = None  # Tokens sorted by frequency
 
@@ -421,22 +421,24 @@ class FlowWorker:
         except Exception:
             dataset = load_dataset("wikitext", "wikitext-2-raw-v1", trust_remote_code=True)
 
-        # Tokenize all three splits: train, test, validation
+        # Tokenize all three splits: train, validation, test (literature roles,
+        # docs/terminology_train_val_test.md; swapped 11/11/2026 — before that the
+        # LM path searched on wikitext test and reported on wikitext validation)
         # - train: used for training RAM neurons during GA/TS (~2.4M tokens)
-        # - test: used for fitness scoring during GA/TS (~284K tokens)
-        # - validation: held out for full evaluation only (~248K tokens)
+        # - validation: used for fitness scoring during GA/TS (~248K tokens)
+        # - test: held out for the full test evaluation only (~284K tokens)
         self._log("  Tokenizing dataset...")
         train_text = "\n".join(dataset["train"]["text"])
+        val_text = "\n".join(dataset["validation"]["text"])
         test_text = "\n".join(dataset["test"]["text"])
-        validation_text = "\n".join(dataset["validation"]["text"])
 
         self._train_tokens = self._tokenizer.encode(train_text, add_special_tokens=False)
+        self._val_tokens = self._tokenizer.encode(val_text, add_special_tokens=False)
         self._test_tokens = self._tokenizer.encode(test_text, add_special_tokens=False)
-        self._validation_tokens = self._tokenizer.encode(validation_text, add_special_tokens=False)
 
         self._log(f"  Cached {len(self._train_tokens):,} train, "
-                  f"{len(self._test_tokens):,} test, "
-                  f"{len(self._validation_tokens):,} validation tokens")
+                  f"{len(self._val_tokens):,} validation, "
+                  f"{len(self._test_tokens):,} test tokens")
 
         # Compute cluster order (tokens sorted by frequency, most frequent first)
         self._log("  Computing token frequencies...")
@@ -927,7 +929,7 @@ class FlowWorker:
 
     def _build_test_scope(self, params: dict):
         """Cross-flow test-cache scope (PAPER-CRITICAL, 10/10/2026): the
-        key pins every param that changes a fixed genome's validation, and the
+        key pins every param that changes a fixed genome's test evaluation, and the
         worker ABI pins the trainer. OI is read from the env AFTER
         _apply_env_overrides, i.e. the value the accelerator will see. No ABI
         (Python fallback) -> None: nothing is served from or stamped into cache."""
@@ -1011,11 +1013,11 @@ class FlowWorker:
             self._apply_ids_config(flow_config, params)
         self._apply_seed_config(flow_config, flow_data, params, is_ids)
 
-        # Create full evaluator for validation (trains on ALL train data, evals on validation set)
+        # Create full evaluator for the test evaluation (trains on ALL train data, evals on the test set)
         full_evaluator = None
         if is_ids:
             full_evaluator = ids_test_evaluator
-        elif is_bitwise and self._validation_tokens:
+        elif is_bitwise and self._test_tokens:
             full_evaluator = self._create_full_evaluator(context_size, params)
 
         # Create flow (pass existing flow_id to avoid duplication)
@@ -1124,7 +1126,7 @@ class FlowWorker:
 
         evaluator = TieredEvaluator(
             train_tokens=self._train_tokens,
-            eval_tokens=self._test_tokens,
+            eval_tokens=self._val_tokens,
             vocab_size=self._vocab_size,
             context_size=context_size,
             cluster_order=self._cluster_order,
@@ -1155,7 +1157,7 @@ class FlowWorker:
         """Create a BitwiseEvaluator using pre-cached data.
 
         Uses train split for training, test split for fitness scoring (GA/TS).
-        Validation split is reserved for full_evaluator (final validation).
+        Test split is reserved for full_evaluator (final test evaluation).
         """
         self._ensure_lm_cache()
         self._log(f"Creating BitwiseEvaluator (context_size={context_size})...")
@@ -1170,7 +1172,7 @@ class FlowWorker:
 
         evaluator = BitwiseEvaluator(
             train_tokens=self._train_tokens,
-            eval_tokens=self._test_tokens,
+            eval_tokens=self._val_tokens,
             vocab_size=self._vocab_size,
             context_size=context_size,
             num_parts=train_parts,
@@ -1254,7 +1256,7 @@ class FlowWorker:
 
         evaluator = MultiStageEvaluator(
             train_tokens=self._train_tokens,
-            eval_tokens=self._test_tokens,
+            eval_tokens=self._val_tokens,
             vocab_size=self._vocab_size,
             context_size=effective_ctx,
             num_stages=num_stages,
@@ -1279,10 +1281,10 @@ class FlowWorker:
         return evaluator
 
     def _create_full_evaluator(self, context_size: int, params: dict):
-        """Create a full BitwiseEvaluator for validation summaries.
+        """Create a full BitwiseEvaluator for test summaries.
 
         Used ONLY for the 1-3 genome summary at end of each phase.
-        Trains on train set, evaluates on validation set (held-out).
+        Trains on train set, evaluates on the test set (held-out).
         GA/TS never touches this evaluator.
         """
         self._ensure_lm_cache()
@@ -1295,7 +1297,7 @@ class FlowWorker:
 
         full_eval = BitwiseEvaluator(
             train_tokens=self._train_tokens,
-            eval_tokens=self._validation_tokens,
+            eval_tokens=self._test_tokens,
             vocab_size=self._vocab_size,
             context_size=context_size,
             num_parts=full_train_parts,
@@ -1305,7 +1307,7 @@ class FlowWorker:
         )
 
         self._log(f"  Full evaluator: train={len(self._train_tokens):,} tokens ({full_train_parts} parts), "
-                   f"validation={len(self._validation_tokens):,} tokens ({full_eval_parts} parts)")
+                   f"test={len(self._test_tokens):,} tokens ({full_eval_parts} parts)")
         return full_eval
 
     def _create_ids_evaluators(self, params: dict):

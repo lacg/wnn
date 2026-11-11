@@ -46,7 +46,7 @@ AIRFRAME="${FAB_AIRFRAME:-cf21_brushless}"
 DIST="${FAB_DIST:-L4C}"
 SEEDS="${FAB_SEEDS:-31337002 31337003 31337004 31337005 31337006}"
 AGGREGATIONS="${FAB_AGGREGATIONS:-harmonic zscore}"
-REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
+TEST_SEEDS="99990101 99990102 99990103 99990104 99990105"
 
 # Stage-1 feature set + recipe: byte-identical to stage1_lambda_alt_sweep.sh
 # (the banked 128n/b30 operating point) except the WEIGHTS (C10, not S16 —
@@ -90,7 +90,7 @@ run_arm() {
 		--steps 2000 --tilt 5.0 \
 		$C10_WEIGHTS \
 		--fit-aggregation "$agg" --zrank-clamp 3.0 \
-		--report-episodes 100 --holdout-pop-sample 8 \
+		--test-episodes 100 --holdout-pop-sample 8 \
 		--grid-bits 24 30 \
 		--grid-state-neurons 0 --max-state-neurons 0 \
 		--max-output-neurons 128 \
@@ -100,7 +100,7 @@ run_arm() {
 		--teacher mpcof \
 		$FEAT_STAGE1 \
 		--translation --reward-lambda-alt 0 \
-		--report-seeds $REPORT_SEEDS \
+		--test-seeds $TEST_SEEDS \
 		--base-seed "$seed"
 }
 

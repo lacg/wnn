@@ -7,7 +7,7 @@
 #   memory mode  : BINARY                  |  QUAD (QUAD_WEIGHTED)
 #   seed         : 5 training base-seeds
 # = 40 runs. Each: grid -> GA-NEURONS -> GA-MEMORY (Lamarckian, SPLIT=0 / BPTT),
-# disturbance L2D, held-out on the FIXED report-seed so all 40 are comparable on
+# disturbance L2D, held-out on the FIXED test-seed so all 40 are comparable on
 # the same test set. Trained by DAGGER against the LQR teacher.
 #
 # SPLIT=0 keeps cells ~3k/genome (the yawab reference), so this whole campaign is
@@ -40,7 +40,7 @@ MARKDIR="${MARKDIR:-experiments/dfa1l_markers}"
 mkdir -p "$OUTDIR" "$MARKDIR"
 
 SEEDS=(${SEEDS:-31337002 31337003 31337004 31337005 31337006})
-REPORT_SEED="${REPORT_SEED:-99990101}"
+TEST_SEED="${TEST_SEED:-99990101}"
 # LIMIT=N stops after N cells complete this invocation (the confirm-before-all-40
 # gate: LIMIT=1 fires exactly the first arm). Unset/0 = the full 40-run sweep.
 LIMIT="${LIMIT:-0}"
@@ -62,7 +62,7 @@ COMMON="--levels 16 --skip-stages bits,connections --lamarckian \
 --check-interval 2 --magnitude-aware-patience --eval-episodes 100 \
 --memory-eval-episodes 200 --steps 2000 --tilt 5.0 \
 --fit-weight-err-sq 0.4 --fit-weight-stable 0.3 --fit-weight-jerk 0.2 \
---fit-weight-mono 0.1 --report-seed ${REPORT_SEED} --report-episodes 100 \
+--fit-weight-mono 0.1 --test-seed ${TEST_SEED} --test-episodes 100 \
 --holdout-pop-sample 8 --grid-bits 24 30 --max-output-neurons 128 \
 --runs 1 --teacher lqr --disturbance L2D"
 
@@ -160,7 +160,7 @@ BL="${MARKDIR}/baselines.json"
 if [ ! -f "$BL" ]; then
 	log "computing classical baselines (once) → $BL"
 	"$VP" -u scripts/compute_baselines.py --disturbance L2D --tilt 5.0 \
-		--report-seed "$REPORT_SEED" --report-episodes 100 --steps 2000 --out "$BL"
+		--test-seed "$TEST_SEED" --test-episodes 100 --steps 2000 --out "$BL"
 fi
 
 # ---- the 40-run sweep, INTERLEAVED so early culling / partial reads are useful.

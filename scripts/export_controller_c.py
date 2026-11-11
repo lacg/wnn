@@ -16,7 +16,7 @@ TWO KINDS OF EXPORT (07/11/2026).
     (no WNN_EXPORT_CASCADE), and wnn_cascade.h refuses to compile against it.
 
 THRESHOLDS ARE NOT IN THE CHECKPOINT. Every scorer refits them from the run's
-TRAIN seed (phased_ga._report_thresholds) — the ladder the cells were written
+TRAIN seed (phased_ga._test_thresholds) — the ladder the cells were written
 under. The exporter does the same from the run's own argv (checkpoint meta, or
 --run-argv), so the shipped ladder is the scored one. Runs whose ladder cannot be
 reproduced that way (--threshold-refit-from-student, --threshold-outer-quantile)
@@ -231,7 +231,7 @@ def threshold_refusals(args) -> list:
 
 def train_seed_thresholds(argv: list, spec) -> tuple:
 	"""(thresholds, motor_lag_s) exactly as the held-out scorer fits them."""
-	from wnn.control.phased_ga import build_arg_parser, episode_config_from_args, _report_thresholds
+	from wnn.control.phased_ga import build_arg_parser, episode_config_from_args, _test_thresholds
 	from wnn.seeds import resolve_seed_set
 	args = build_arg_parser().parse_args(argv)
 	why = threshold_refusals(args)
@@ -241,7 +241,7 @@ def train_seed_thresholds(argv: list, spec) -> tuple:
 	base = args.base_seed if args.base_seed is not None else args.seed
 	seeds = resolve_seed_set(base=base, run_index=0, train=args.train_seed,
 	                         test=args.test_seed, val=args.val_seed)
-	thr = _report_thresholds(args, ec, spec, seeds.train, seeds.train, True)
+	thr = _test_thresholds(args, ec, spec, seeds.train, seeds.train, True)
 	return [float(t) for t in thr], float(getattr(ec, "motor_lag_s", 0.0))
 
 

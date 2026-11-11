@@ -130,7 +130,7 @@ def main():
 	ap.add_argument("--tilt", type=float, default=5.0)
 	ap.add_argument("--steps", type=int, default=2000)
 	ap.add_argument("--episodes", type=int, default=100)
-	ap.add_argument("--report-seed", type=int, default=99990101)
+	ap.add_argument("--test-seed", type=int, default=99990101)
 	ap.add_argument("--sim-seed", type=int, default=911)
 	# The study's spec: bits_per_feature=8, levels_per_motor=16.
 	ap.add_argument("--bits", type=int, default=8)
@@ -139,7 +139,7 @@ def main():
 	a = ap.parse_args()
 
 	ec = _episode_config(a)
-	pool = fold_pool_seed(a.report_seed, 0)     # the fold-0 episodes, like everything else
+	pool = fold_pool_seed(a.test_seed, 0)     # the fold-0 episodes, like everything else
 	thr = _calibrate_input_thresholds(ec, pool, a.bits)
 
 	variants = {

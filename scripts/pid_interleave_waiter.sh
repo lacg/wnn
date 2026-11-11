@@ -49,7 +49,7 @@ python -u -m wnn.control.phased_ga \
 	--pop 50 --num-eval-folds 5 --check-interval 2 --magnitude-aware-patience \
 	--eval-episodes 100 --memory-eval-episodes 200 --steps 1000 --tilt 5.0 \
 	--fit-weight-err-sq 0.4 --fit-weight-stable 0.3 --fit-weight-jerk 0.2 --fit-weight-mono 0.1 \
-	--report-seed 99990101 --report-episodes 100 --holdout-pop-sample 8 \
+	--test-seed 99990101 --test-episodes 100 --holdout-pop-sample 8 \
 	--base-seed "$BASE_SEED" --runs 1 \
 	--teacher pid \
 	--save-winner "$DIR/winner.yaml.gz" --save-stage-checkpoints "$DIR" \

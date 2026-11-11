@@ -67,7 +67,7 @@ run_one() {
     --rg-rounds 3 --rg-episodes-per-round 8 --universe-episodes 5 \
     --fit-weight-err-sq "$ERR" --fit-weight-steady "$STEADY" --fit-weight-stable "$STABLE" \
     --fit-weight-jerk "$JERK" --fit-weight-mono "$MONO" \
-    --report-episodes 100 --report-seeds 99990001 99990101 12345 67890 --holdout-pop-sample 8 \
+    --test-episodes 100 --test-seeds 99990001 99990101 12345 67890 --holdout-pop-sample 8 \
     --base-seed "$seed" --runs 1 \
     $extra \
     --save-winner "$dir/winner.yaml.gz" --save-stage-checkpoints "$dir" > "$dir/run.out" 2>&1

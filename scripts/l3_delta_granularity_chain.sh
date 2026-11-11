@@ -81,7 +81,7 @@ DIST="${L3_DIST:-L4C}"
 SEEDS="${L3_SEEDS:-31337002 31337003}"
 # MPC-family cap, copied from the control arm. NOT a free choice.
 NEURONS_GENS="${L3_NEURONS_GENS:-5}"
-REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
+TEST_SEEDS="99990101 99990102 99990103 99990104 99990105"
 # Gate: wait for THIS chain process to exit before touching the box. A bare
 # controllers() poll cannot tell an inter-run gap from "the chain finished" — that is how
 # L2-v2 took the box in a 1 s window on 07/08. Unset = poll only.
@@ -148,7 +148,7 @@ run_arm() {
 		--steps 2000 --tilt 5.0 \
 		--fit-weight-err-sq 0.4 --fit-weight-stable 0.3 \
 		--fit-weight-jerk 0.2 --fit-weight-mono 0.1 \
-		--report-episodes 100 --holdout-pop-sample 8 \
+		--test-episodes 100 --holdout-pop-sample 8 \
 		--grid-bits 24 30 \
 		--grid-state-neurons 0 --max-state-neurons 0 \
 		--max-output-neurons 128 \
@@ -158,7 +158,7 @@ run_arm() {
 		--teacher mpcof \
 		$FEAT_PIDMIX \
 		--delta-max "$dmax" --delta-leak "$dleak" \
-		--report-seeds $REPORT_SEEDS \
+		--test-seeds $TEST_SEEDS \
 		--base-seed "$seed"
 }
 

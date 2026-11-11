@@ -14,7 +14,7 @@
 #   use state. Phase 2 answers the real question on a substrate that FLIES
 #   (arm A held 91% stable under L2). Check the FPGA state-cell count.
 #
-# Both phases: C10 weights, folds 5, held-out --report-seed, BINARY, lqr, L2,
+# Both phases: C10 weights, folds 5, held-out --test-seed, BINARY, lqr, L2,
 # --skip-stages bits,connections (CONNECTIONS is hit-or-miss / local-optima
 # prone — Luiz 20/07; both smokes showed it collapsing 80% -> 0% stable).
 #   bash scripts/run_prod_reflex_then_dfa.sh    # via detach_launch.py
@@ -51,7 +51,7 @@ PROD="--levels 16 --skip-stages bits,connections --lamarckian --saturation-grow-
 --pop 50 --num-eval-folds 5 --check-interval 2 --magnitude-aware-patience \
 --eval-episodes 100 --memory-eval-episodes 200 --steps 2000 --tilt 5.0 \
 --fit-weight-err-sq 0.4 --fit-weight-stable 0.3 --fit-weight-jerk 0.2 --fit-weight-mono 0.1 \
---report-seed 99990101 --report-episodes 100 --holdout-pop-sample 8 \
+--test-seed 99990101 --test-episodes 100 --holdout-pop-sample 8 \
 --base-seed $BASE --runs 1 --teacher lqr --disturbance L2 --memory-mode BINARY"
 
 run_arm() {

@@ -331,7 +331,7 @@ def print_phase_s_header(arms: list, arch: dict, state: dict, now: datetime) -> 
 	print("=" * 88)
 	print("  PHASE S — does the SENSOR SUFFIX lift held-out stability?")
 	print("  ob = sn + suffix, state prefix FORCED. Each arm: cells wiped, one")
-	print("  training pass, scored on 5 report seeds; rows aggregate training seeds.")
+	print("  training pass, scored on 5 test seeds; rows aggregate training seeds.")
 	print_architecture(arch)
 	print(f"  arms done {len(arms)}/{PHASE_S_EXPECTED_ARMS}   |   "
 	      f"ETA {phase_s_eta(arms, state['start'], now)}")
@@ -387,7 +387,7 @@ def print_phase_s_arms(arms: list) -> None:
 	"""Per-training-seed rows. Hidden by default (--raw): the aggregated table is
 	the one to read, and this is only for identifying WHICH seed diverged."""
 	print()
-	print("  RAW ARMS (one training seed each, mean±SD over 5 report seeds):")
+	print("  RAW ARMS (one training seed each, mean±SD over 5 test seeds):")
 	print(f"  {'ob':>3} {'sn':>3} {'suf':>4} {'lvl':>3} {'tseed':>9}  "
 	      f"{'stable%':>12} {'err°':>12} {'cells':>8} {'train':>7}")
 	print("  " + "-" * 84)
@@ -500,8 +500,8 @@ def print_baselines(path: str, title: str) -> None:
 	baselines = doc.get("baselines", {})
 	if not baselines:
 		return
-	paired = str(doc.get("meta", {}).get("report_seed", ""))
-	print(f"  {title} (paired report seed {paired}):")
+	paired = str(doc.get("meta", {}).get("test_seed", ""))
+	print(f"  {title} (paired test seed {paired}):")
 	print(f"  {'controller':12} {'stable%':>8} {'err°':>8} {'steady°':>8}")
 	print("  " + "-" * 84)
 	for name in ("PID", "LQR", "MPC", "LQI", "MPCOF"):

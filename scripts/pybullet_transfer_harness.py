@@ -16,12 +16,12 @@ THE CONTRACT. A policy is anything with `reset()` and
   * PidPolicy      — the classical rival already used as our in-sim baseline
   * LearnedPolicy  — the PPO/SAC MLP baseline (task #5), trained IN THIS SIM so
                      its numbers are commensurable rather than cited across sims
-Everything downstream (episode protocol, metrics, report seeds) is shared, so a
+Everything downstream (episode protocol, metrics, test seeds) is shared, so a
 row of the output table differs ONLY by the policy.
 
 METRICS ARE THE PROJECT'S TRIPLE, computed identically to the in-sim scorer:
 stable% / mean |attitude error| (deg) / steady-state error (deg over the settle
-window). Same report seeds, same tilt, same episode count — so an in-sim row and
+window). Same test seeds, same tilt, same episode count — so an in-sim row and
 a pybullet row for the same winner are directly comparable, and the DIFFERENCE
 between them is the transfer gap this harness exists to measure.
 
@@ -78,7 +78,7 @@ USAGE (once installed):
     python scripts/pybullet_transfer_harness.py \
         --winner logs/controller/.../XXX_winner.yaml.gz \
         --episodes 100 --steps 2000 --tilt 5.0 \
-        --report-seeds 99990101 99990102 99990103 99990104 99990105
+        --test-seeds 99990101 99990102 99990103 99990104 99990105
 """
 from __future__ import annotations
 
@@ -277,7 +277,7 @@ def main() -> int:
 	ap.add_argument("--episodes", type=int, default=100)
 	ap.add_argument("--steps", type=int, default=2000)
 	ap.add_argument("--tilt", type=float, default=5.0, help="initial tilt (deg)")
-	ap.add_argument("--report-seeds", type=int, nargs="+",
+	ap.add_argument("--test-seeds", type=int, nargs="+",
 	                default=[99990101, 99990102, 99990103, 99990104, 99990105])
 	ap.add_argument("--action-mode", default=ACTION_LINEAR_RPM,
 	                choices=[ACTION_THRUST_SQUARED, ACTION_LINEAR_RPM])

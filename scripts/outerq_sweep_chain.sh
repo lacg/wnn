@@ -56,7 +56,7 @@ AIRFRAME="cf21_brushless"
 DIST="L4C"
 TEACHER="lqi"
 NEURONS_GENS=5
-REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
+TEST_SEEDS="99990101 99990102 99990103 99990104 99990105"
 # cell = calib:levels:seed. Interleaved: cheap L16 pair of each calib first.
 # cell = q:seed. q=none is the 30deg legacy CONTROL (re-flown on current code so
 # the arm is internally uniform — the old CMT_lqi control predates the
@@ -118,7 +118,7 @@ for run_id in $RUNS; do
 		--steps 2000 --tilt 5.0 \
 		--fit-weight-err-sq 0.4 --fit-weight-stable 0.3 \
 		--fit-weight-jerk 0.2 --fit-weight-mono 0.1 \
-		--report-episodes 100 --holdout-pop-sample 8 \
+		--test-episodes 100 --holdout-pop-sample 8 \
 		--grid-bits 24 30 \
 		--grid-state-neurons 0 --max-state-neurons 0 \
 		--max-output-neurons 128 \
@@ -126,7 +126,7 @@ for run_id in $RUNS; do
 		--airframe "$AIRFRAME" --disturbance "$DIST" --teacher "$TEACHER" \
 		$FEAT_PIDMIX \
 		--save-stage-checkpoints "$OUTDIR/${tag}_stages" \
-		--report-seeds $REPORT_SEEDS \
+		--test-seeds $TEST_SEEDS \
 		--base-seed "$seed"
 	log "cell $run_id finished rc=$?"
 done

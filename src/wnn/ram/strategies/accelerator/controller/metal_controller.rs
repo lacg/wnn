@@ -687,7 +687,7 @@ impl ControllerRolloutEvaluator
 	/// Same dispatch as `score`, but ALSO hands back every episode the kernel
 	/// scored (14/09/2026 — the per-episode buffers were read back and summed
 	/// into per-genome means, then discarded; a 0/500 → 36/500 stable swing
-	/// between the val and report seed sets could not be diagnosed). Each
+	/// between the val and test seed sets could not be diagnosed). Each
 	/// per-episode row is
 	///   [genome_idx, episode_idx, stable, diverged, mean_err_rad, steady_rad,
 	///    alt_err_m, pos_err_m, effort, jerk, steps]

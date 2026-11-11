@@ -34,7 +34,7 @@ _TRIPLE = re.compile(r"stable=([\d.]+)%\s+err=([\d.]+)\S*\s+steady=([\d.]+)")
 def _headline(marker: dict) -> tuple[float, float, float] | None:
 	"""(stable%, err°, steady°) from a marker's headline block, or None.
 
-	Reads `headline_holdout` — the stage-selected genome's own report-seed triple.
+	Reads `headline_holdout` — the stage-selected genome's own test-seed triple.
 	Deliberately NOT the per-stage multiseed rows: stage selection routinely picks
 	different stages on different seeds, so a fixed-stage read compares two different
 	objects (the outer-q controls headlined NEURONS#0 and MEMORY#1 respectively).

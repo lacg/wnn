@@ -62,7 +62,7 @@ TEACHER="${LV_TEACHER:-mpcof}"
 SEEDS="${LV_SEEDS:-31337002 31337003}"
 LEVELS_LIST="${LV_LEVELS:-32 64}"
 NEURONS_GENS="${LV_NEURONS_GENS:-5}"     # matched to the mpcof arm of the L4 screen
-REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
+TEST_SEEDS="99990101 99990102 99990103 99990104 99990105"
 FEAT_PIDMIX="--obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err --obs-yaw-err-i"
 WAIT_MAX_S="${LV_WAIT_MAX_S:-43200}"     # 12h ceiling on waiting for the box
 
@@ -108,7 +108,7 @@ run_levels() {
 		--steps 2000 --tilt 5.0 \
 		--fit-weight-err-sq 0.4 --fit-weight-stable 0.3 \
 		--fit-weight-jerk 0.2 --fit-weight-mono 0.1 \
-		--report-episodes 100 --holdout-pop-sample 8 \
+		--test-episodes 100 --holdout-pop-sample 8 \
 		--grid-bits 24 30 \
 		--grid-state-neurons 0 --max-state-neurons 0 \
 		--max-output-neurons "$out_neurons" \
@@ -117,7 +117,7 @@ run_levels() {
 		--disturbance "$DIST" \
 		--teacher "$TEACHER" \
 		$FEAT_PIDMIX \
-		--report-seeds $REPORT_SEEDS \
+		--test-seeds $TEST_SEEDS \
 		--base-seed "$seed"
 }
 

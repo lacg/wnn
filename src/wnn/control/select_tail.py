@@ -43,7 +43,7 @@ ALL its val episodes POOLED (val units x episodes), a diverged episode counting 
     as a near-miss too): an unmeasurable episode must not read as a clean one.
 
 Selection only: the tail never enters the GA fitness, and is never measured on the
-report seeds (the val draws are the only ones the sink is armed for).
+test seeds (the val draws are the only ones the sink is armed for).
 """
 
 import math

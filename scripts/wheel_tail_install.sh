@@ -67,12 +67,12 @@ if PYTHONPATH=src/wnn "$VP" -u -m wnn.control.phased_ga \
 		--levels 16 --threshold-calib-tilt 30 --skip-stages bits,connections \
 		--neurons-gens 1 --neurons-patience 1 --memory-gens 1 --memory-patience 1 \
 		--pop 6 --num-eval-folds 1 --eval-episodes 2 --memory-eval-episodes 2 \
-		--steps 200 --tilt 5.0 --report-episodes 2 --holdout-pop-sample 2 \
+		--steps 200 --tilt 5.0 --test-episodes 2 --holdout-pop-sample 2 \
 		--grid-bits 24 --grid-state-neurons 4 --max-state-neurons 4 \
 		--max-output-neurons 128 --runs 1 --memory-mode BINARY \
 		--airframe cf21_brushless --disturbance L4C --teacher lqi \
 		--obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err --obs-yaw-err-i \
-		--report-seeds 99990101 --base-seed 31337002 > "$SMOKE_OUT" 2>&1; then
+		--test-seeds 99990101 --base-seed 31337002 > "$SMOKE_OUT" 2>&1; then
 	if grep -qE "\(state 0/[0-9]+" "$SMOKE_OUT"; then
 		log "SMOKE FAILED THE MECHANISM CHECK: zero state cells populated — investigate before any launch"
 		exit 2

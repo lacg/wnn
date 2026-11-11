@@ -35,7 +35,7 @@ VP="/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/bin/python"
 OUTDIR="logs/controller/p2"
 MARKDIR="experiments/p2_markers"
 SEEDS="${P2_SEEDS:-31337002 31337003 31337004}"
-REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
+TEST_SEEDS="99990101 99990102 99990103 99990104 99990105"
 P2_CONFIRMED="${P2_CONFIRMED:-0}"
 
 log() { echo "[p2] $(date -u +%FT%TZ) $*" >> "$LOG"; }
@@ -84,7 +84,7 @@ for seed in $SEEDS; do
 		--steps 2000 --tilt 5.0 \
 		--fit-weight-err-sq 0.4 --fit-weight-stable 0.3 \
 		--fit-weight-jerk 0.2 --fit-weight-mono 0.1 \
-		--report-episodes 100 --holdout-pop-sample 8 \
+		--test-episodes 100 --holdout-pop-sample 8 \
 		--grid-bits 24 30 \
 		--grid-output-neurons 64 96 128 \
 		--max-output-neurons 128 \
@@ -93,7 +93,7 @@ for seed in $SEEDS; do
 		--disturbance L2D \
 		--obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw \
 		--obs-yaw-err --obs-yaw-err-i --obs-tilt-p --obs-tilt-i \
-		--report-seeds $REPORT_SEEDS \
+		--test-seeds $TEST_SEEDS \
 		--base-seed "$seed"
 done
 

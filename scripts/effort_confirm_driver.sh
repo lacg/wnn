@@ -18,7 +18,7 @@ for SEED in 31337003 31337004 31337005; do
 		--eval-episodes 30 --memory-eval-episodes 50 --steps 1000 --tilt 5.0 \
 		--fit-weight-err-sq 0.35 --fit-weight-stable 0.25 --fit-weight-jerk 0.15 \
 		--fit-weight-mono 0.05 --fit-weight-effort 0.20 \
-		--report-seed 99990101 --report-episodes 50 --holdout-pop-sample 4 \
+		--test-seed 99990101 --test-episodes 50 --holdout-pop-sample 4 \
 		--base-seed "$SEED" --runs 1 --universe-episodes 8 \
 		--geometry octo-x --geometry-tilt-err 5.0 --geometry-pos-err 0.008 --rotor-asym 0.10 \
 		> "$dir/run.out" 2>&1

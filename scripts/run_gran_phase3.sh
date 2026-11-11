@@ -3,7 +3,7 @@
 # Runs the REAL production phased_ga (grid -> GA-Neurons -> GA-Memory, the binqsr_v3/C10
 # recipe — identical argv to gran_grid_winner_holdout._phased_argv, but through main() so
 # ALL stages run) for each mode x seed. Per run captures the 4-axis deployability matrix:
-#   quality  — held-out triple (stable/err/steady) printed by phased_ga's report-seed path
+#   quality  — held-out triple (stable/err/steady) printed by phased_ga's test-seed path
 #   runtime  — wall duration + peak RSS (/usr/bin/time -l)
 #   FPGA     — populated cells x bits/cell via scripts/gran_fpga_count.py on --save-winner
 # Modes INTERLEAVED within each seed (feedback_sweeps_always_interleave: round 1 = one
@@ -52,7 +52,7 @@ for BASE in $SEEDS; do
 			--eval-episodes 100 --memory-eval-episodes 200 --steps 2000 \
 			--max-state-neurons 24 --max-output-neurons 128 --tilt 5.0 \
 			--fit-weight-err-sq 0.4 --fit-weight-stable 0.3 --fit-weight-jerk 0.2 --fit-weight-mono 0.1 \
-			--report-seed 99990101 --report-episodes 100 --holdout-pop-sample 8 \
+			--test-seed 99990101 --test-episodes 100 --holdout-pop-sample 8 \
 			--base-seed "$BASE" --runs 1 --teacher lqr \
 			--memory-mode "$M" --save-winner "$winner" > "$out" 2>&1
 		rc=$?

@@ -44,7 +44,7 @@ MARKDIR="experiments/altweight_markers"
 AIRFRAME="cf21_brushless"
 DIST="L4C"
 SEED="${AW_SEED:-31337002}"
-REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
+TEST_SEEDS="99990101 99990102 99990103 99990104 99990105"
 
 # The operating point: the ladder's own regime, at the width where the pathology was
 # starkest (b=18 had the sweep's BEST block, 62.6%/8.60°/11.02°, and its WORST headline).
@@ -83,7 +83,7 @@ arm()
 		--steps 2000 --tilt 5.0 \
 		--fit-weight-err-sq "$e" --fit-weight-steady "$st" --fit-weight-stable "$sb" \
 		--fit-weight-jerk "$j" --fit-weight-mono "$m" --fit-weight-alt "$alt" \
-		--report-episodes 50 --holdout-pop-sample 8 \
+		--test-episodes 50 --holdout-pop-sample 8 \
 		--runs 1 --memory-mode BINARY \
 		--airframe "$AIRFRAME" --disturbance "$DIST" --teacher mpcof \
 		$FEAT_STAGE1 \
@@ -91,7 +91,7 @@ arm()
 		--grid-state-neurons 0 --max-state-neurons 0 \
 		--grid-bits "$BITS" --grid-output-neurons "$NEURONS" \
 		--max-output-neurons "$NEURONS" \
-		--report-seeds $REPORT_SEEDS \
+		--test-seeds $TEST_SEEDS \
 		--base-seed "$SEED"
 	log "$tag finished rc=$?"
 }

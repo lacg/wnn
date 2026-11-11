@@ -2744,7 +2744,7 @@ class ControllerEvaluator:
 		path; falls back to the per-genome Python core on Rust error. K=num_eval_folds
 		is the project-wide "kfold always 5" for controllers (folds are random
 		episode-pool seeds → accumulating is "more rollouts", NOT a CV leak;
-		generalization is judged by the held-out --report-seed). Subsumes the old
+		generalization is judged by the held-out --test-seed). Subsumes the old
 		`fitness_seeds` averaging knob.
 
 		Returns list[Metrics] (return_stats=False) or list[(Metrics, AdaptationStats)]

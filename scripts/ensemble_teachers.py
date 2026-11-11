@@ -37,7 +37,7 @@ def parse_args():
 	ap.add_argument("--winners", nargs="+", required=True,
 	                help="label=path pairs (2+); path = a schema-2 winner.yaml.gz")
 	ap.add_argument("--seeds", type=str, default="99990001,99990101,12345,67890",
-	                help="comma list of held-out report seeds")
+	                help="comma list of held-out test seeds")
 	ap.add_argument("--episodes", type=int, default=100, help="episodes per seed")
 	ap.add_argument("--steps", type=int, default=1000,
 	                help="episode length; 1000 = the teacher-run protocol")
@@ -52,7 +52,7 @@ def parse_args():
 	                help="comma list of committee sizes to sweep exhaustively, e.g. '3,4' "
 	                     "scores every trio and every quad. The full set is always "
 	                     "included; --pairs is shorthand for size 2. RANKING these on the "
-	                     "report seeds is exploratory (selection on the published "
+	                     "test seeds is exploratory (selection on the published "
 	                     "partition) — only a-priori sets carry pre-registered weight.")
 	# --- correctness args added 09/08/2026 after the first run produced garbage ---
 	ap.add_argument("--base-seed", type=int, required=True,
@@ -61,13 +61,13 @@ def parse_args():
 	                     "NOT the base itself (base 31337002 -> train 3072558954). Passing "
 	                     "the base where the train seed belongs is a silent 20-40x error. "
 	                     "Thresholds are re-fit on the derived TRAIN seed, never on a "
-	                     "THIS seed, never on a report seed: thresholds define the "
+	                     "THIS seed, never on a test seed: thresholds define the "
 	                     "thermometer encoding, i.e. the ADDRESS function, so re-fitting "
-	                     "report seed: thresholds define the thermometer encoding, i.e. the "
-	                     "ADDRESS function, so re-fitting them per report seed shifts every "
+	                     "test seed: thresholds define the thermometer encoding, i.e. the "
+	                     "ADDRESS function, so re-fitting them per test seed shifts every "
 	                     "address and queries the memory at addresses it never learned.")
 	# CLAUDE.md: K-fold is ALWAYS 5. It is not cosmetic here — with K>1 the
-	# evaluator scores on a FOLD POOL seed derived from the report seed, and
+	# evaluator scores on a FOLD POOL seed derived from the test seed, and
 	# disturbance_stream keys the weather off that same active seed. Defaulting to
 	# 1 draws different episodes AND different weather than the runs did, so the
 	# solo rows cannot reproduce the members' own held-out.

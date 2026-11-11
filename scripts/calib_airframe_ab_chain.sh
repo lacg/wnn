@@ -53,7 +53,7 @@ AIRFRAME="${CAB_AIRFRAME:-cf21_brushless}"
 DIST="${CAB_DIST:-L4C}"
 SEEDS="${CAB_SEEDS:-31337002 31337003}"
 NEURONS_GENS="${CAB_NEURONS_GENS:-5}"
-REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
+TEST_SEEDS="99990101 99990102 99990103 99990104 99990105"
 
 # Gate: wait for the lambda sweep (or whatever holds the box) to finish first.
 WAIT_MARKERS="${CAB_WAIT_MARKERS:-$ROOT/experiments/stage1lambda_markers}"
@@ -112,7 +112,7 @@ run_arm() {
 		--eval-episodes 100 --memory-eval-episodes 200 \
 		--steps 2000 --tilt 5.0 \
 		$S16_WEIGHTS \
-		--report-episodes 100 --holdout-pop-sample 8 \
+		--test-episodes 100 --holdout-pop-sample 8 \
 		--grid-bits 24 30 \
 		--grid-state-neurons 0 --max-state-neurons 0 \
 		--max-output-neurons 128 \
@@ -122,7 +122,7 @@ run_arm() {
 		--teacher mpcof \
 		$FEAT_PIDMIX \
 		$flag \
-		--report-seeds $REPORT_SEEDS \
+		--test-seeds $TEST_SEEDS \
 		--base-seed "$seed"
 }
 

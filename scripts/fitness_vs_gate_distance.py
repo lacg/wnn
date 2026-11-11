@@ -27,7 +27,7 @@ the one column the fitness needs and the marker summary lines drop.
         · relative: a score only means something against the population it was ranked in.
 
 WHAT THIS SCRIPT DOES. Reads every banked marker, recovers the MEMORY stage's held-out
-row per report seed from the .out (means over the 5 seeds, so it matches the marker's
+row per test seed from the .out (means over the 5 seeds, so it matches the marker's
 MULTI-SEED line), then ranks the whole archive TWICE: once by gate distance, once by
 handing those same rows to the SHIPPED wheel combine (ram_controller.gated_fitness_combine
 — never a reimplementation, per CLAUDE.md). Reports Kendall tau, the inversion count, and
@@ -67,13 +67,13 @@ def gate_distance(stable_pct, err_deg):
 
 
 def memory_rows(path):
-	"""Mean stable/err/steady/reward over the MEMORY stage's report-seed rows.
+	"""Mean stable/err/steady/reward over the MEMORY stage's test-seed rows.
 
-	Anchored on the stage HEADER, not on line order: with --report-seeds N every stage
+	Anchored on the stage HEADER, not on line order: with --test-seeds N every stage
 	emits N RESULT lines, and taking "the last few" is exactly the mislabelling bug the
 	arm library had to fix on 04/08/2026. A bare [MEMORY] header (no #k suffix) is the
 	published stage; the [MEMORY#k-VALxxx] blocks are stage-select's val draws and must
-	NOT be averaged in — selection never touches the report seeds.
+	NOT be averaged in — selection never touches the test seeds.
 	"""
 	try:
 		txt = open(path, errors='ignore').read()
@@ -161,7 +161,7 @@ def report(rows, label):
 	by_gd = {r['tag']: i for i, r in enumerate(sorted(rows, key=lambda r: r['gd']), 1)}
 	by_ft = {r['tag']: i for i, r in enumerate(sorted(rows, key=lambda r: r['fit']), 1)}
 	tau, con, dis, tie = kendall([r['gd'] for r in rows], [r['fit'] for r in rows])
-	print('  %s — %d runs, MEMORY stage held-out, %d report seeds each'
+	print('  %s — %d runs, MEMORY stage held-out, %d test seeds each'
 	      % (label, len(rows), rows[0]['seeds']))
 	print('  Kendall tau (gate-distance vs fitness) = %+.3f' % tau)
 	print('    concordant pairs %d   DISCORDANT %d   tied %d   -> %.1f%% of pairs invert'

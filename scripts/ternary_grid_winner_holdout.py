@@ -9,11 +9,11 @@ as an `expand … sn=12 … stable≈90%` line → GRID WINNER).
 HELD-OUT METHOD (matches how production holds out a MEMORY-stage winner):
   1. TRAIN the winner arch on the TRAIN seed, EXACTLY as the grid did — same evaluator
      config, num_eval_folds=5 K-fold ACCUMULATE (write_back stamps the trained cells).
-  2. SCORE those cells on a FRESH report seed (score_genomes → NO retrain).
+  2. SCORE those cells on a FRESH test seed (score_genomes → NO retrain).
 This is train-on-A → test-on-B: the true generalization number.
 
 WHY NOT phased_ga._holdout_report directly: for an ARCH-only genome (grid winners carry
-no cells) it RE-trains on the report seed with the evaluator's DEFAULT num_eval_folds=1
+no cells) it RE-trains on the test seed with the evaluator's DEFAULT num_eval_folds=1
 (K=1, undertrained) — that diverges (measured 8% stable / 24.7°, an artifact, not a real
 result). Production never hits that path because real held-out winners (MEMORY stage)
 carry cells → score-only. We replicate the score-only semantics here.
@@ -36,7 +36,7 @@ ARGV = [
 	"--eval-episodes", "100", "--memory-eval-episodes", "200", "--steps", "1000",
 	"--max-state-neurons", "24", "--max-output-neurons", "128", "--tilt", "5.0",
 	"--fit-weight-err-sq", "0.4", "--fit-weight-stable", "0.3", "--fit-weight-jerk", "0.2", "--fit-weight-mono", "0.1",
-	"--report-seed", "99990101", "--report-episodes", "100", "--holdout-pop-sample", "8",
+	"--test-seed", "99990101", "--test-episodes", "100", "--holdout-pop-sample", "8",
 	"--base-seed", "31337002", "--runs", "1", "--teacher", "lqr",
 	"--memory-mode", "TERNARY",
 ]
@@ -54,8 +54,8 @@ def _mk_ec(args):
 	)
 
 
-def _held_out(args, ec, winner_spec, winner, grid_thr, train_seed, report_seed):
-	"""Train winner on train_seed (grid-identical, K=5 accumulate) → score on report_seed."""
+def _held_out(args, ec, winner_spec, winner, grid_thr, train_seed, test_seed):
+	"""Train winner on train_seed (grid-identical, K=5 accumulate) → score on test_seed."""
 	# 1. TRAIN on train seed — evaluator built identically to the grid's shared evaluator.
 	train_ev = ControllerEvaluator(
 		winner_spec, num_eval_episodes=args.eval_episodes, seed=train_seed,
@@ -68,16 +68,16 @@ def _held_out(args, ec, winner_spec, winner, grid_thr, train_seed, report_seed):
 	      f"stable={tr_m.acc*100:.1f}% err={tr_m.mean_attitude_error_deg:.2f}° "
 	      f"cells={'yes' if getattr(winner, 'cells', None) is not None else 'NONE!'}")
 
-	# 2. SCORE trained cells on the FRESH report seed (no retrain).
+	# 2. SCORE trained cells on the FRESH test seed (no retrain).
 	rep_thr = fit_thresholds_from_pid_rollouts(
-		winner_spec, num_episodes=10, seed=report_seed,
+		winner_spec, num_episodes=10, seed=test_seed,
 		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None))
 	rep_ev = ControllerEvaluator(
-		winner_spec, num_eval_episodes=args.report_episodes, seed=report_seed,
-		episode_config=ec, thresholds=rep_thr, rg_config=_rg_config(args, ec, report_seed),
+		winner_spec, num_eval_episodes=args.test_episodes, seed=test_seed,
+		episode_config=ec, thresholds=rep_thr, rg_config=_rg_config(args, ec, test_seed),
 		max_train_workers=args.train_workers)
 	held = rep_ev.score_genomes([winner])[0]
-	pid_m = _pid_baseline(ec, args.report_episodes, report_seed)
+	pid_m = _pid_baseline(ec, args.test_episodes, test_seed)
 	return held, pid_m
 
 
@@ -104,11 +104,11 @@ def main():
 	      f"stable={m0.acc*100:.1f}% err={m0.mean_attitude_error_deg:.2f}°  (saved → {SAVE})")
 
 	# HONEST held-out.
-	held, pid_m = _held_out(args, ec, winner_spec, winner, grid_thr, s.train, args.report_seed)
+	held, pid_m = _held_out(args, ec, winner_spec, winner, grid_thr, s.train, args.test_seed)
 	bar = "=" * 72
 	sty = getattr(held, "mean_steady_error_deg", None)
 	print(f"\n{bar}\n  HONEST HELD-OUT [GRID-WINNER sn=12 b=30 TERNARY] — train seed {s.train} "
-	      f"(K={args.num_eval_folds}) → score FRESH seed {args.report_seed}\n{bar}")
+	      f"(K={args.num_eval_folds}) → score FRESH seed {args.test_seed}\n{bar}")
 	print(f"  RESULT (held-out):  stable={held.acc*100:.1f}%  err={held.mean_attitude_error_deg:.2f}°"
 	      + (f"  steady={sty:.2f}°" if sty is not None else "") + f"  reward={held.fitness:.2f}")
 	_bl = pid_m.get("label", "PID") if isinstance(pid_m, dict) else "PID"

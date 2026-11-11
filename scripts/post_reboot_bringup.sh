@@ -88,7 +88,7 @@ if [ "${SKIP_REPAIR:-0}" = "1" ]; then log "SKIP_REPAIR=1 — repair sequence NO
 elif up "recalc_headline[s].py" || up "rescore_first_report_see[d].py"; then log "a repair job is already running — not relaunching the sequence"; else
 	pid=$(detach /dev/null "$PROJ" -- bash -c "
 		cd '$PROJ'; export PYTHONPATH='$PROJ/src/wnn:'
-		nice -n 10 '$PY' -u scripts/rescore_first_report_seed.py >> logs/controller/rescore_first_seed.log 2>&1
+		nice -n 10 '$PY' -u scripts/rescore_first_test_seed.py >> logs/controller/rescore_first_seed.log 2>&1
 		nice -n 10 '$PY' -u scripts/recalc_headlines.py >> logs/controller/recalc_headlines.log 2>&1
 		nice -n 10 '$PY' -u scripts/recalc_headlines.py --headline-stages MEMORY --any-genome >> logs/controller/recalc_headlines_memory.log 2>&1
 		nice -n 10 '$PY' -u scripts/recalc_headlines.py --headline-stages CONNECTIONS --any-genome >> logs/controller/recalc_headlines_connections.log 2>&1

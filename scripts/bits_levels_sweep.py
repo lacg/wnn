@@ -36,7 +36,7 @@ NESTED SUFFIXES. Smaller k TRUNCATES the winner's own suffix (first k indices)
 rather than resampling; larger k extends it with fresh draws. So the ob arms are a
 strict subset chain and the comparison isolates HOW MANY bits from WHICH bits.
 
-Every arm: cells wiped, one training pass, scored on 5 report seeds (mean±SD), on
+Every arm: cells wiped, one training pass, scored on 5 test seeds (mean±SD), on
 the fold-0 pool like everything since 29/07. Multiple training seeds because the
 budget-probe smoke showed single-seed scatter swamping real effects.
 
@@ -132,7 +132,7 @@ def _arm(payload, sn, suffix, levels, train_seed, a, rng):
 	dt = time.time() - t0
 
 	tris = []
-	for rs in a.report_seeds:
+	for rs in a.test_seeds:
 		thr_r = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=rs)
 		evr = ControllerEvaluator(spec, num_eval_episodes=a.episodes, seed=rs,
 		                          episode_config=ec, thresholds=thr_r,
@@ -179,7 +179,7 @@ def main():
 	                help="SENSOR bits per output neuron. ob = sn + suffix (derived)")
 	ap.add_argument("--levels", type=int, nargs="+", default=[4, 8, 16])
 	ap.add_argument("--train-seeds", type=int, nargs="+", default=[31337002, 31337003])
-	ap.add_argument("--report-seeds", type=int, nargs="+",
+	ap.add_argument("--test-seeds", type=int, nargs="+",
 	                default=[99990101, 99990102, 99990103, 99990104, 99990105])
 	ap.add_argument("--episodes", type=int, default=100)
 	ap.add_argument("--steps", type=int, default=2000)
@@ -197,7 +197,7 @@ def main():
 	print(f"# frozen: sn={sn} state neurons, {len(payload['_proto'].output_sampled)} output "
 	      f"neurons; ob = sn + suffix, so suffix = ob - {sn}")
 	print(f"# {len(a.sns or [sn])}sn x {len(a.suffixes)}suf x {len(a.levels)}lvl x "
-	      f"{len(a.train_seeds)} tseed arms, each scored on {len(a.report_seeds)} report seeds")
+	      f"{len(a.train_seeds)} tseed arms, each scored on {len(a.test_seeds)} test seeds")
 	print()
 	print(f"{'ob':>3} {'sn':>4} {'suf':>4} {'lvl':>4} {'tseed':>9} {'stable%':>13} {'err°':>13} {'cells':>9} {'train':>7}")
 	rows, skipped = [], []

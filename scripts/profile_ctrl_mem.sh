@@ -26,7 +26,7 @@ python -u -m wnn.control.phased_ga \
 	--pop "$POP" --num-eval-folds 2 --check-interval 1 --magnitude-aware-patience \
 	--eval-episodes 60 --memory-eval-episodes 60 --steps 1000 --max-state-neurons 24 --max-output-neurons 128 --tilt 5.0 \
 	--fit-weight-err-sq 0.4 --fit-weight-stable 0.3 --fit-weight-jerk 0.2 --fit-weight-mono 0.1 \
-	--report-seed 99990101 --report-episodes 15 --holdout-pop-sample 3 \
+	--test-seed 99990101 --test-episodes 15 --holdout-pop-sample 3 \
 	--base-seed 31337002 --runs 1 --teacher lqr --memory-mode "$MODE" \
 	> "$DIR/run.out" 2>&1 &
 PG=$!

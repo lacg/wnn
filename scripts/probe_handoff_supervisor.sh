@@ -113,7 +113,7 @@ log "SMOKE b=64 starting -> $SMOKE_OUT"
 	--conns-gens 1 --conns-patience 3 \
 	--memory-gens 1 --memory-patience 2 \
 	--pop 8 --num-eval-folds 5 --check-interval 2 \
-	--eval-episodes 5 --memory-eval-episodes 5 --report-episodes 5 \
+	--eval-episodes 5 --memory-eval-episodes 5 --test-episodes 5 \
 	--steps 200 --tilt 5.0 \
 	--fit-weight-err-sq 0.3125 --fit-weight-stable 0.25 --fit-weight-steady 0.4375 \
 	--fit-aggregation zscore --zrank-clamp 3.0 --gate-stable 0.70 --gate-err 8.0 \
@@ -122,7 +122,7 @@ log "SMOKE b=64 starting -> $SMOKE_OUT"
 	--obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err --obs-yaw-err-i \
 	--obs-collective-cmd --obs-alt-err --obs-vz \
 	--translation --reward-lambda-alt 0 \
-	--report-seeds 99990101 --base-seed 31337002 \
+	--test-seeds 99990101 --base-seed 31337002 \
 	> "$SMOKE_OUT" 2>&1
 SMOKE_RC=$?
 if [ "$SMOKE_RC" != "0" ]; then

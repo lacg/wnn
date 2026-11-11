@@ -4,7 +4,7 @@ pipeline's OWN held-out code, never a private copy of it.
 Usage:
   python scripts/evaluate_winner_holdout.py \\
     --winner logs/controller/sweep_ladder/ckpt/<TAG>/stage1_neurons.yaml.gz \\
-    [--report-seeds 99990101 99990102 ...]
+    [--test-seeds 99990101 99990102 ...]
 
 What it does:
   1. Re-parse the run's EXACT command line — the checkpoint's meta["argv"], else
@@ -14,9 +14,9 @@ What it does:
      flags from the .out header guesses, and the guess silently drops recipe flags
      such as --obs-pwm (measured 26/10 on CTRL-19 s5).
   2. Load the checkpoint's population; the published genome is population[0].
-  3. Score it on each report seed with phased_ga._holdout_report: K=5 training
+  3. Score it on each test seed with phased_ga._holdout_report: K=5 training
      for an arch-only genome, cells read under TRAIN-seed thresholds
-     (_report_thresholds), the same code that writes every marker's held-out rows.
+     (_test_thresholds), the same code that writes every marker's held-out rows.
   4. Print the checkpoint's training-side metrics next to the held-out mean±SD.
 
 Rewritten 26/10/2026 (Luiz: "touch it just in case"). The old version kept its own
@@ -36,7 +36,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from rescore_first_report_seed import _find_out, parse_out  # noqa: E402
+from rescore_first_test_seed import _find_out, parse_out  # noqa: E402
 from wnn.control.phased_ga import (_ctl_load, _holdout_report, build_arg_parser,  # noqa: E402
                                    episode_config_from_args)
 
@@ -59,8 +59,8 @@ def _mean_sd(xs: list[float]) -> str:
 def main() -> int:
 	ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 	ap.add_argument("--winner", required=True, help="ckpt/<TAG>/stageN_<name>.yaml.gz")
-	ap.add_argument("--report-seeds", type=int, nargs="+", default=None,
-	                help="Held-out seeds (default: the run's own --report-seeds from its .out).")
+	ap.add_argument("--test-seeds", type=int, nargs="+", default=None,
+	                help="Held-out seeds (default: the run's own --test-seeds from its .out).")
 	a = ap.parse_args()
 
 	path = Path(a.winner)
@@ -70,9 +70,9 @@ def main() -> int:
 		print(f"ERROR: no .out for {tag} — cannot rebuild the run's recipe", file=sys.stderr)
 		return 1
 	facts = parse_out(out)
-	seeds = a.report_seeds or facts.get("report_seeds")
+	seeds = a.test_seeds or facts.get("test_seeds")
 	if not seeds or "train" not in facts or "steps" not in facts:
-		print(f"ERROR: {out} header incomplete (seed set / recipe line / report seeds)", file=sys.stderr)
+		print(f"ERROR: {out} header incomplete (seed set / recipe line / test seeds)", file=sys.stderr)
 		return 1
 	payload = _ctl_load(str(path))
 	argv = _recorded_argv(payload, out)
@@ -94,7 +94,7 @@ def main() -> int:
 
 	prev = payload.get("metrics") or {}
 	prev = prev if isinstance(prev, dict) else vars(prev)
-	print(f"\n{'=' * 72}\n  {tag}  [{stage}]  population[0], {len(seeds)} report seeds\n{'=' * 72}")
+	print(f"\n{'=' * 72}\n  {tag}  [{stage}]  population[0], {len(seeds)} test seeds\n{'=' * 72}")
 	if prev:
 		print(f"  training-side (checkpoint): stable={prev.get('acc', float('nan')) * 100:.1f}%  "
 		      f"err={prev.get('mean_attitude_error_deg', float('nan')):.2f}°  "

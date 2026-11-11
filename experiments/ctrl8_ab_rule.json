@@ -12,7 +12,7 @@
   ],
   "s2_source": "arm_kd078 + twin_kd078 (logs/controller/ctrl8_drag_sweep_pop50/), identical recipe",
   "n": 5,
-  "stick": "REPORT headline (stage-select on val; report seeds 99990101-05), paired per seed",
+  "stick": "REPORT headline (stage-select on val; test seeds 99990101-05), paired per seed",
   "rule": "ADOPT position inputs iff ALL: mean paired (arm - twin) pos3d < 0 m; mean paired err <= +0.10 deg; mean paired stable >= -0.5 pp",
   "interim": "n=3 (s2-s4) is printed as a DIRECTION only; no decision and no early stop before n=5 (optional stopping would bias the rule)",
   "also_report": "steady, alt, dx, dy per seed; both arms vs the ABI-33 rival bar experiments/ctrl22/rivals_abi33_tilt_kd0.78.json",

@@ -27,7 +27,7 @@ ARGS="--levels 16 --skip-stages bits,connections --lamarckian \
 --check-interval 2 --magnitude-aware-patience --eval-episodes 100 \
 --memory-eval-episodes 200 --steps 2000 --tilt 5.0 \
 --fit-weight-err-sq 0.4 --fit-weight-stable 0.3 --fit-weight-jerk 0.2 \
---fit-weight-mono 0.1 --report-seed 99990101 --report-episodes 100 \
+--fit-weight-mono 0.1 --test-seed 99990101 --test-episodes 100 \
 --holdout-pop-sample 8 --base-seed 31337002 --runs 1 --teacher lqr \
 --disturbance L2 --memory-mode BINARY --grid-state-neurons 8 12 16 \
 --grid-bits 24 30 --max-state-neurons 24 --max-output-neurons 128"

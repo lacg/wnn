@@ -195,7 +195,7 @@ def dump_sink() -> dict:
 	"""#3 on the GPU: the sink-armed _holdout_report returns the same metrics as the
 	unarmed call, and its per-episode rows reproduce the aggregate."""
 	from wnn.control import phased_ga as pg
-	gs = _grid(RECIPE + TAIL_ON + ["--report-episodes", "40"])
+	gs = _grid(RECIPE + TAIL_ON + ["--test-episodes", "40"])
 	g = gs._random_genome(gs._enumerate_points()[0])
 	args, ec = gs._args, gs._ec
 	sink: list = []

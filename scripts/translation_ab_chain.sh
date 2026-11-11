@@ -64,7 +64,7 @@ AIRFRAME="cf21_brushless"; DIST="L4C"
 BITS="${TAB_BITS:-32}"; NEURONS="${TAB_NEURONS:-64}"; GAMMA="${TAB_GAMMA:-1.0}"
 R2_SENTINEL="${LADDERMARK}/BITS_ROUND2_DONE.json"   # re-read below once round 2 lands
 SEEDS="${TAB_SEEDS:-31337002 31337003 31337004 31337005 31337006}"
-REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
+TEST_SEEDS="99990101 99990102 99990103 99990104 99990105"
 GATE_SEED="${TAB_GATE_SEED:-31337002}"   # the gamma=2 arm's seed, for the wait
 
 mkdir -p "$MARKDIR" "$OUTDIR"
@@ -124,13 +124,13 @@ run_point() {
 		$WEIGHTS $AGG_GATE \
 		--delta-gamma "$GAMMA" \
 		--grid-bits "$BITS" --grid-output-neurons "$NEURONS" --max-output-neurons "$NEURONS" \
-		--report-episodes 100 --holdout-pop-sample 8 \
+		--test-episodes 100 --holdout-pop-sample 8 \
 		--runs 1 --memory-mode BINARY \
 		--airframe "$AIRFRAME" --disturbance "$DIST" --teacher mpcof \
 		$FEAT_BASE $vert \
 		$plant \
 		--grid-state-neurons 0 --max-state-neurons 0 \
-		--report-seeds $REPORT_SEEDS \
+		--test-seeds $TEST_SEEDS \
 		--base-seed "$seed"
 	log "$tag finished rc=$?"
 }
@@ -180,13 +180,13 @@ preflight_off() {
 		--levels 16 --skip-stages neurons,bits \
 		--neurons-gens 0 --conns-gens 0 --memory-gens 0 \
 		--pop 2 --num-eval-folds 5 --eval-episodes 1 --memory-eval-episodes 1 \
-		--steps 1 --tilt 5.0 --report-episodes 1 --runs 1 --memory-mode BINARY \
+		--steps 1 --tilt 5.0 --test-episodes 1 --runs 1 --memory-mode BINARY \
 		$WEIGHTS $AGG_GATE --delta-gamma "$GAMMA" \
 		--grid-bits 8 --grid-output-neurons 8 --max-output-neurons 8 \
 		--airframe "$AIRFRAME" --disturbance "$DIST" --teacher mpcof \
 		$FEAT_BASE --no-translation \
 		--grid-state-neurons 0 --max-state-neurons 0 \
-		--report-seeds $REPORT_SEEDS --base-seed 31337002 > "$o" 2>&1 &
+		--test-seeds $TEST_SEEDS --base-seed 31337002 > "$o" 2>&1 &
 	local pid=$! i=0
 	while [ $i -lt 90 ]; do
 		grep -qa "Phased-GA controller search:" "$o" 2>/dev/null && { kill -9 "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; return 0; }

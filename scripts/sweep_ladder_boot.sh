@@ -51,7 +51,7 @@ smoke() {
 		--eval-episodes 4 --memory-eval-episodes 4 --steps 100 --tilt 5.0 \
 		--fit-weight-err-sq 0.25 --fit-weight-steady 0.35 --fit-weight-stable 0.20 \
 		--fit-weight-jerk 0.15 --fit-weight-mono 0.05 \
-		--report-episodes 4 --holdout-pop-sample 2 \
+		--test-episodes 4 --holdout-pop-sample 2 \
 		--grid-state-neurons 0 --max-state-neurons 0 \
 		--runs 1 --memory-mode BINARY \
 		--airframe cf21_brushless --disturbance L4C --teacher mpcof \
@@ -59,7 +59,7 @@ smoke() {
 		--obs-collective-cmd --obs-alt-err --obs-vz \
 		--translation --reward-lambda-alt 16 \
 		"$@" \
-		--report-seeds 99990101 --base-seed 31337002 > "$out" 2>&1
+		--test-seeds 99990101 --base-seed 31337002 > "$out" 2>&1
 	local rc=$?
 	local fb; fb=$(grep -ac "FELL BACK" "$out")
 	if [ "$rc" != "0" ] || [ "$fb" != "0" ]; then

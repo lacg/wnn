@@ -56,11 +56,11 @@ run_side() {
 		MARKDIR="$outroot/markers"; OUTDIR="$outroot/out"
 		VP="$STUB"
 		COMMON="--levels 16"
-		REPORT_SEEDS="99990101"
+		TEST_SEEDS="99990101"
 		FEAT_PIDMIX="--obs-peraxis-p"; FEAT_PIDMIX_PWM="x"; FEAT_PIDMIX_PWM_TILT="x"
 		FEAT_PIDMIX_DECOUPLE="x"; FEAT_PIDMIX_TILT="x"; FEAT_10FEAT="x"
 		log() { :; }
-		export MARKDIR OUTDIR VP COMMON REPORT_SEEDS
+		export MARKDIR OUTDIR VP COMMON TEST_SEEDS
 		# the new probe sources the helper; provide it relative to the real root
 		. "$ROOT/scripts/controller_arm_lib.sh"
 		# lift ONLY the run_arm function out of the script (never execute its main loop)

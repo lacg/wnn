@@ -29,7 +29,7 @@ for out in "$OUTDIR"/*.out; do
 	mode=${rest%%_*};            seed=${rest#*_s}
 
 	# 04/08/2026: same stage-mislabelling fix as controller_arm_lib.sh — with
-	# --report-seeds N each stage emits N RESULT lines, so lines 1 and 2 were both
+	# --test-seeds N each stage emits N RESULT lines, so lines 1 and 2 were both
 	# NEURONS. Anchor on the stage headers.
 	held_n=$(awk '/STAGE 1 \(NEURONS\) done/{f=1} f && /RESULT — during-search winner/{print; exit}' "$out")
 	held_m=$(awk '/STAGE 4 \(MEMORY\) done/{f=1} f && /RESULT — during-search winner/{print; exit}' "$out")

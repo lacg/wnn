@@ -2,7 +2,7 @@
 """Report a controller fitness-weight sweep run on the FULL phased_ga pipeline
 (scripts/run_weight_sweep_phased.sh — grid→GA-neurons→GA-memory, all 4 gated
 options). Per combo: combo #, the 4 fitness weights, latest-gen err/stable, the
-per-stage HELD-OUT (NEURONS + MEMORY, from --report-seed — the honest numbers),
+per-stage HELD-OUT (NEURONS + MEMORY, from --test-seed — the honest numbers),
 and wall duration. The MEMORY held-out is the final result per combo.
 
 Each combo is its own phased_ga run under <DIR>/<COMBO>/run.out.
@@ -138,7 +138,7 @@ def report_round2(base: Path):
 		for rk, (name, as_, ae) in enumerate(ranked, 1):
 			print(f"    {rk}. {name}:  stable={as_:.1f}%  err={ae:.2f}°")
 	print("\n  R1_M = round-1 MEMORY held-out; avg = mean of R1+R2 MEMORY held-out (only once R2 done). "
-	      "All held-out on fresh report-seed, matched 5°.")
+	      "All held-out on fresh test-seed, matched 5°.")
 
 
 WEIGHTS_BY_NAME = {name: (e, s, j, m) for (name, e, s, j, m) in COMBOS}
@@ -247,7 +247,7 @@ def report_round3(base: Path):
 			star = "  ★" if rk == 1 and n == len(ROUND3_SEEDS) else ""
 			print(f"    {rk}. {name}:  stable={ms:.1f}%  err={me:.2f}°  ({n}/3 seeds){star}")
 	fr = base / "FINAL_REPORT.txt"
-	print(f"\n  N_/M_ = NEURONS/MEMORY per-stage HELD-OUT (each seed's own report-seed, matched 5°). "
+	print(f"\n  N_/M_ = NEURONS/MEMORY per-stage HELD-OUT (each seed's own test-seed, matched 5°). "
 	      f"WINNER rule = mean BEST-stage held-out (12/06); MEAN row shows MEMORY-only. N_<M_ err = memory stage overfit.")
 	print(f"  FINAL_REPORT.txt: {'WRITTEN — round 3 complete' if fr.exists() else 'not yet (round 3 in progress)'}")
 
@@ -303,7 +303,7 @@ def main():
 		print("\n  Ranking by MEMORY held-out (final honest number):")
 		for rk, (name, (he, hs)) in enumerate(ranked, 1):
 			print(f"    {rk}. {name}:  stable={hs:.1f}%  err={he:.2f}°")
-	print("\n  N_/M_ = NEURONS/MEMORY per-stage HELD-OUT (fresh report-seed 99990001, matched 5°). "
+	print("\n  N_/M_ = NEURONS/MEMORY per-stage HELD-OUT (fresh test-seed 99990001, matched 5°). "
 	      "MEMORY = final result. lg = latest GA gen (during-search, optimistic).")
 
 

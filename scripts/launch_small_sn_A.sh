@@ -46,7 +46,7 @@ args = [venv_py, "-u", "tests/run_phased_ga.py",
         "--eval-episodes", "100", "--universe-episodes", "8", "--num-eval-folds", "5",
         "--fit-weight-err-sq", "0.40", "--fit-weight-stable", "0.30",
         "--fit-weight-jerk", "0.10", "--fit-weight-mono", "0.20",
-        "--base-seed", "5005", "--report-seed", "9009", "--lamarckian",
+        "--base-seed", "5005", "--test-seed", "9009", "--lamarckian",
         "--save-stage-checkpoints", newdir, "--save-winner", newdir + "/winner.pkl"]
 log = open(log_path, "w")
 p = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT,

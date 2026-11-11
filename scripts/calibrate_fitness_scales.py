@@ -29,8 +29,8 @@ from wnn.control.training import EpisodeConfig, DisturbanceConfig
 from wnn.control.airframe import Airframe as _Airframe
 from wnn.control.classical_baseline import HoldoutDraw, TeacherFeed, pid_metrics
 
-# The report seeds the A/B published on — same episodes the WNN was judged on.
-REPORT_SEEDS = [99990101, 99990102, 99990103, 99990104, 99990105]
+# The test seeds the A/B published on — same episodes the WNN was judged on.
+TEST_SEEDS = [99990101, 99990102, 99990103, 99990104, 99990105]
 EPISODES = 100
 # pid_metrics() calls score_classical_baseline(0, ...) — teacher_id is HARDCODED
 # to PID, so this measures PID and nothing else. score_all() loops all five
@@ -63,11 +63,11 @@ def episode_config() -> EpisodeConfig:
 
 
 def rows_for(teacher: str) -> list:
-	"""One metric dict per report seed, teacher ESTIMATOR-FED (the rival role —
+	"""One metric dict per test seed, teacher ESTIMATOR-FED (the rival role —
 	the WNN flies a raw noisy IMU, so an oracle-fed teacher is an upper bound,
 	not a comparator)."""
 	out = []
-	for seed in REPORT_SEEDS:
+	for seed in TEST_SEEDS:
 		ec = episode_config()
 		draw = HoldoutDraw(seed=seed, episodes=EPISODES,
 		                   steps=ec.steps_per_episode, eval_folds=FOLDS)
@@ -87,7 +87,7 @@ def report(teacher: str, rows: list) -> dict | None:
 	stb = [r["stable_rate"] * 100.0 for r in rows]
 	sdy = [r["mean_steady_error_deg"] for r in rows]
 	sd = lambda a: st.stdev(a) if len(a) > 1 else 0.0
-	print(f"\n=== teacher={teacher}  (estimator-fed, {len(rows)} report seeds x {EPISODES} episodes) ===")
+	print(f"\n=== teacher={teacher}  (estimator-fed, {len(rows)} test seeds x {EPISODES} episodes) ===")
 	print(f"  stable  {st.mean(stb):6.1f}% ± {sd(stb):5.2f}")
 	print(f"  err     {st.mean(err):6.2f}°  ± {sd(err):5.2f}")
 	print(f"  steady  {st.mean(sdy):6.2f}°  ± {sd(sdy):5.2f}")
@@ -102,7 +102,7 @@ def report(teacher: str, rows: list) -> dict | None:
 
 def main() -> int:
 	print(f"airframe={AIRFRAME}  disturbance={DISTURBANCE}  steps={STEPS}  tilt={TILT_DEG}°  translation=on")
-	print(f"report seeds {REPORT_SEEDS}  x {EPISODES} episodes each")
+	print(f"test seeds {TEST_SEEDS}  x {EPISODES} episodes each")
 	got = []
 	for t in TEACHERS:
 		try:

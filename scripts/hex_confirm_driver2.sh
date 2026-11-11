@@ -16,7 +16,7 @@ run() {
 		--pop 20 --num-eval-folds 5 --check-interval 2 \
 		--eval-episodes 30 --memory-eval-episodes 50 --steps 1000 --tilt 5.0 \
 		--fit-weight-err-sq 0.4 --fit-weight-stable 0.3 --fit-weight-jerk 0.2 --fit-weight-mono 0.1 \
-		--report-seed 99990101 --report-episodes 50 --holdout-pop-sample 4 \
+		--test-seed 99990101 --test-episodes 50 --holdout-pop-sample 4 \
 		--base-seed "$2" --runs 1 --universe-episodes 8 \
 		--geometry canted-hex --geometry-cant 20 \
 		--geometry-tilt-err "$3" --geometry-pos-err "$4" --rotor-asym "$5" \

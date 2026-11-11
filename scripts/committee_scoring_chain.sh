@@ -9,7 +9,7 @@
 # lesson) and fires the scoring the moment the box goes idle.
 #
 # WHAT IT SCORES. Per base seed: each teacher's HEADLINE winner -- the stage chosen by
-# the union ranking over 5 val seeds (seeds.val + 0..4, disjoint from the report seeds)
+# the union ranking over 5 val seeds (seeds.val + 0..4, disjoint from the test seeds)
 # -- SOLO and as PWM committees, with --pairs so every 2-member vote is ranked before
 # larger sets.
 #
@@ -21,11 +21,11 @@
 # -- exactly what the union ranking replaced. It differs in real members: mpc s31337002
 # headlines at NEURONS while the other eight markers headline at MEMORY.
 #
-# The earlier defence of MEMORY-only ("mpc's MEMORY winner is better on report-seed
+# The earlier defence of MEMORY-only ("mpc's MEMORY winner is better on test-seed
 # steady than its NEURONS headline, 0.78 vs 0.91") was WRONG IN KIND and is retracted:
 # it settles a member-selection question with the very partition the pass publishes.
 # Selection must ride on val seeds or an a-priori rule. The union ranking is the former;
-# both are unbiased w.r.t. the report seeds, and only the headline is the run's product.
+# both are unbiased w.r.t. the test seeds, and only the headline is the run's product.
 #
 # A MEMORY-only pass remains available afterwards as a DISCLOSED sensitivity check
 # (CMT_MEMBER_STAGE=memory). It is deliberately not run automatically -- scoring both
@@ -62,9 +62,9 @@ AIRFRAME="${CMT_AIRFRAME:-cf21_brushless}"
 DIST="${CMT_DIST:-L4C}"
 SEEDS="${CMT_SEEDS:-31337002 31337003}"
 TEACHERS="${CMT_TEACHERS:-mpcof lqi lqr mpc pid}"
-# The report seeds the members were held out on -- same 5, so solo numbers here are
+# The test seeds the members were held out on -- same 5, so solo numbers here are
 # directly comparable to the per-run MEMORY MULTI-SEED blocks in the markers.
-REPORT_SEEDS="${CMT_REPORT_SEEDS:-99990101,99990102,99990103,99990104,99990105}"
+TEST_SEEDS="${CMT_TEST_SEEDS:-99990101,99990102,99990103,99990104,99990105}"
 # --steps 2000 --episodes 100 = the member runs' own protocol. Do not shorten:
 # a committee scored at a different episode length is not comparable to its members.
 STEPS="${CMT_STEPS:-2000}"
@@ -199,13 +199,13 @@ score_seed() {
 		--winners $args \
 		--pairs --combo-sizes "$COMBO_SIZES" --agg "$AGG" \
 		--steps "$STEPS" --episodes "$EPISODES" \
-		--seeds "$REPORT_SEEDS" \
+		--seeds "$TEST_SEEDS" \
 		--base-seed "$seed" --disturbance "$DIST" --airframe "$AIRFRAME" > "$out" 2>&1
 	local rc=$? dur=$((SECONDS - t0))
 
-	printf '{"tag":"CMTSCORE_s%s","seed":%s,"members":%s,"teachers":"%s","member_stage":"%s","member_provenance":"%s","agg":"%s","steps":%s,"episodes":%s,"report_seeds":"%s","rc":%s,"dur_s":%s,"out":"%s","done":true}\n' \
+	printf '{"tag":"CMTSCORE_s%s","seed":%s,"members":%s,"teachers":"%s","member_stage":"%s","member_provenance":"%s","agg":"%s","steps":%s,"episodes":%s,"test_seeds":"%s","rc":%s,"dur_s":%s,"out":"%s","done":true}\n' \
 		"$seed" "$seed" "$n" "$TEACHERS" "$MEMBER_STAGE" "${provenance# }" "$AGG" \
-		"$STEPS" "$EPISODES" "$REPORT_SEEDS" "$rc" "$dur" "$out" > "$mark"
+		"$STEPS" "$EPISODES" "$TEST_SEEDS" "$rc" "$dur" "$out" > "$mark"
 	log "s$seed: finished rc=$rc dur=${dur}s members=$n -> $mark"
 }
 

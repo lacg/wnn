@@ -24,7 +24,7 @@ from wnn.control.pid import AttitudePID, AttitudePIDConfig, PIDGains
 from wnn.control.sim import AttitudeSim
 from wnn.control.training import EpisodeConfig, fitness_function, make_pid_action_fn
 
-REPORT_SEEDS = [99990001, 99990101, 12345, 67890]
+TEST_SEEDS = [99990001, 99990101, 12345, 67890]
 EPISODES_PER_SEED = 100
 
 ARMS = {
@@ -53,7 +53,7 @@ def episode_config() -> EpisodeConfig:
 def eval_arm(cfg: AttitudePIDConfig) -> list[dict]:
 	ec = episode_config()
 	per_seed = []
-	for seed in REPORT_SEEDS:
+	for seed in TEST_SEEDS:
 		pid = AttitudePID(cfg)  # fresh per seed; carried across episodes within a seed (baseline convention)
 		sim = AttitudeSim()
 		_, metrics = fitness_function(
@@ -78,7 +78,7 @@ def pooled(vals: list[float]) -> str:
 def main() -> None:
 	print("========== PID ki=0 ablation — A/B/C held-out protocol ==========")
 	print(f"tilt<=5.0deg (tilt+yaw), body<=0.5, yaw-rate<=0.3, steps=500, dt=1ms")
-	print(f"seeds={REPORT_SEEDS} x {EPISODES_PER_SEED} eps  |  PID carried across eps (baseline convention)")
+	print(f"seeds={TEST_SEEDS} x {EPISODES_PER_SEED} eps  |  PID carried across eps (baseline convention)")
 	print()
 	for name, cfg in ARMS.items():
 		rows = eval_arm(cfg)

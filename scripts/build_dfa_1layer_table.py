@@ -82,11 +82,11 @@ def main():
 	bl_doc = json.load(open(bl_path)) if os.path.exists(bl_path) else {}
 	baselines = bl_doc.get("baselines", {})
 	# The seed whose 100 held-out episodes EVERY row in this table was scored on.
-	paired_seed = str(bl_doc.get("meta", {}).get("report_seed", ""))
+	paired_seed = str(bl_doc.get("meta", {}).get("test_seed", ""))
 
 	print("=" * 82)
 	print("  WNN 1-layer vs DFA — held-out (MEMORY stage), mean±std over seeds")
-	print("  disturbance L2D, tilt 5°, 100 report-episodes × 2000 steps")
+	print("  disturbance L2D, tilt 5°, 100 test-episodes × 2000 steps")
 	print("=" * 82)
 	hdr = f"  {'cell':28} {'n':>2}  {'stable%':>11} {'err°':>11} {'steady°':>11} {'dur (h)':>11}"
 	print(hdr)
@@ -112,7 +112,7 @@ def main():
 	print("  " + "-" * 78)
 	# A baseline row must show its score on the SAME held-out episodes every WNN row
 	# was scored on, or the comparison stops being paired. b["stable"] is the mean
-	# ACROSS report-seeds, so printing it once the baselines are multi-seed would
+	# ACROSS test-seeds, so printing it once the baselines are multi-seed would
 	# silently compare WNN-on-100-episodes against baseline-on-N×100-DIFFERENT-episodes
 	# — a gap that then moves with how hard the extra draws happened to be, not with
 	# either controller. So the row reads per_seed[paired_seed]; the multi-seed spread
@@ -144,7 +144,7 @@ def main():
 		# training seed moves the result. Never read them as the same error bar.
 		n_bl = spread[0][1].get("n_seeds", 1)
 		print("  " + "-" * 78)
-		print(f"  TEST-SET PRECISION — same controllers across {n_bl} report seeds "
+		print(f"  TEST-SET PRECISION — same controllers across {n_bl} test seeds "
 		      f"(NOT the WNN ±SD axis):")
 		for name, b in spread:
 			print(f"  {name:28} {n_bl:>2}  "

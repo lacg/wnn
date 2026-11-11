@@ -118,39 +118,39 @@ def test_tokens_and_validation():
 def test_val_units_default_is_todays_list():
 	from wnn.control.val_units import checked_val_unit_seeds
 	todays = [int(A45.val) + i for i in range(5)]          # the pre-flag expression, verbatim
-	args = ns(val_units=5, report_seeds=REPORT, num_eval_folds=5)
+	args = ns(val_units=5, test_seeds=REPORT, num_eval_folds=5)
 	assert checked_val_unit_seeds(args, A45) == todays == list(range(163226054, 163226059))
-	assert checked_val_unit_seeds(ns(report_seeds=REPORT, num_eval_folds=5), A45) == todays
+	assert checked_val_unit_seeds(ns(test_seeds=REPORT, num_eval_folds=5), A45) == todays
 	print(f"✓ V1 --val-units 5 (and absent) == today's list {todays[0]}..{todays[-1]}")
 
 
 def test_val_units_20_distinct_and_disjoint():
 	from wnn.control.evaluator import fold_pool_seed
 	from wnn.control.val_units import checked_val_unit_seeds
-	args = ns(val_units=20, report_seeds=REPORT, num_eval_folds=5)
+	args = ns(val_units=20, test_seeds=REPORT, num_eval_folds=5)
 	u = checked_val_unit_seeds(args, A45)
 	assert len(u) == len(set(u)) == 20 and u[:5] == [int(A45.val) + i for i in range(5)]
 	assert not set(u) & (set(REPORT) | {A45.train, A45.test})
 	pools = lambda ss: {fold_pool_seed(s, k) for s in ss for k in range(5)} | set(ss)
 	assert not pools(u) & (pools(REPORT) | pools([A45.train, A45.test]))
-	print(f"✓ V2 --val-units 20: 20 distinct {u[0]}..{u[-1]}, disjoint from 35 report units + "
+	print(f"✓ V2 --val-units 20: 20 distinct {u[0]}..{u[-1]}, disjoint from 35 test units + "
 	      "train/test (raw + K=5 pool seeds), first 5 = today's")
 
 
 def test_val_units_overlap_refused():
 	from wnn.control.val_units import checked_val_unit_seeds
 	clash_report = ns(train=1, test=2, val=99990090)       # +11 reaches 99990101
-	assert _refuses(checked_val_unit_seeds, ns(val_units=20, report_seeds=REPORT,
+	assert _refuses(checked_val_unit_seeds, ns(val_units=20, test_seeds=REPORT,
 	                                           num_eval_folds=5), clash_report)
-	assert not _refuses(checked_val_unit_seeds, ns(val_units=5, report_seeds=REPORT,
+	assert not _refuses(checked_val_unit_seeds, ns(val_units=5, test_seeds=REPORT,
 	                                               num_eval_folds=5), clash_report)
 	clash_train = ns(train=500, test=2, val=490)
-	assert _refuses(checked_val_unit_seeds, ns(val_units=20, report_seeds=None, report_seed=None,
+	assert _refuses(checked_val_unit_seeds, ns(val_units=20, test_seeds=None, test_seed=None,
 	                                           num_eval_folds=5), clash_train)
 	clash_single = ns(train=1, test=2, val=700)
-	assert _refuses(checked_val_unit_seeds, ns(val_units=5, report_seeds=None, report_seed=702,
+	assert _refuses(checked_val_unit_seeds, ns(val_units=5, test_seeds=None, test_seed=702,
 	                                           num_eval_folds=5), clash_single)
-	print("✓ V3 overlap with report units / train / a single --report-seed is REFUSED")
+	print("✓ V3 overlap with test units / train / a single --test-seed is REFUSED")
 
 
 if __name__ == "__main__":

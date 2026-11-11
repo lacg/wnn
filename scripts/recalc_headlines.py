@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 """Re-run stage-select (`--recalc-headline`) under the FIXED held-out code for the banked
 runs whose published headline was an arch-only stage's #0 genome — the 15/07→14/09/2026
-first-report-seed misalignment reached those headlines AND the val scoring that chose
+first-test-seed misalignment reached those headlines AND the val scoring that chose
 them (a candidate without cells had its first val seed scored misaligned too).
 
-Per marker: rebuild the run's flags from its own .out (rescore_first_report_seed.
+Per marker: rebuild the run's flags from its own .out (rescore_first_test_seed.
 build_run_args), point `--recalc-headline` at its checkpoint dir, run
 phased_ga._recalc_headline in-process (NOT as `-m wnn.control.phased_ga`, so the
 chains' idle gate never sees it), capture the STAGE TABLE / HEADLINE block, and:
@@ -13,7 +13,7 @@ chains' idle gate never sees it), capture the STAGE TABLE / HEADLINE block, and:
         original `val` line bit-exactly (aligned then, aligned now). A mismatch means
         the rebuilt recipe is not the run's — REFUSE, write nothing.
   WRITE `headline_stage_recalc`, `headline_holdout_recalc` (the selected genome's
-        aligned 5-seed mean, the `[report-seeds] HEADLINE-<key> MULTI-SEED` line or the
+        aligned 5-seed mean, the `[test-seeds] HEADLINE-<key> MULTI-SEED` line or the
         stage's aligned row when the pick is unchanged), `stage_select_candidates_recalc`,
         and `headline_recalc` {previous, new, changed, at}. Originals untouched.
 
@@ -43,7 +43,7 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
-import rescore_first_report_seed as rs  # noqa: E402  (shared recipe rebuild + .out parsing)
+import rescore_first_test_seed as rs  # noqa: E402  (shared recipe rebuild + .out parsing)
 
 ARCH_ONLY = ("GRID", "NEURONS", "BITS")
 # --teacher-hover's DEFAULT flipped legacy -> derived at a88cb7c1 (11/09/2026 19:31Z);
@@ -180,7 +180,7 @@ def recalc_one(path: str, dry_run: bool, log) -> str:
 	tag = marker.get("tag") or os.path.basename(path)[:-5]
 	ck, out = rs._find_ckpt_dir(tag), rs._find_out(tag)
 	facts = rs.parse_out(out)
-	if not facts.get("report_seeds") or "train" not in facts:
+	if not facts.get("test_seeds") or "train" not in facts:
 		return "skip: .out header incomplete"
 	args = rs.build_run_args(tag, marker, facts)
 	args.recalc_headline = ck
@@ -257,7 +257,7 @@ def recalc_one(path: str, dry_run: bool, log) -> str:
 		             f"{sorted(retrained_diff)} differ from the run's val rows")
 	changed = {c for c in new_val if c in old_val and old_val[c] != new_val[c]}
 	winner = hs.group(2)
-	ms = re.search(rf"\[report-seeds\] HEADLINE-{re.escape(winner)} MULTI-SEED held-out.*", text)
+	ms = re.search(rf"\[(?:test|report)-seeds\] HEADLINE-{re.escape(winner)} MULTI-SEED held-out.*", text)
 	if ms:
 		holdout = ms.group(0)
 	elif hh:

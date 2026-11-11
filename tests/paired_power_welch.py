@@ -79,7 +79,7 @@ def test_welch_cli_runs_on_the_banked_markers():
 
 
 def _marker(tag, stable, err, steady, alt):
-	row = (f" [report-seeds] MEMORY MULTI-SEED held-out (5 seeds [1, 2, 3, 4, 5]): stable={stable}±1.0% "
+	row = (f" [test-seeds] MEMORY MULTI-SEED held-out (5 seeds [1, 2, 3, 4, 5]): stable={stable}±1.0% "
 	       f"err={err}±0.10° steady={steady}±0.10° jerk=0.0100±0.0001 mono_viol=6±0 alt={alt}±0.010m")
 	return {"tag": tag, "held_memory_multiseed": row}
 

@@ -33,7 +33,7 @@ run_arm() {  # $1=tag (P|I)  $2=extra phased_ga obs flag
     --rg-rounds 3 --rg-episodes-per-round 8 --universe-episodes 5 \
     --fit-weight-err-sq "$ERR" --fit-weight-steady "$STEADY" --fit-weight-stable "$STABLE" \
     --fit-weight-jerk "$JERK" --fit-weight-mono "$MONO" \
-    --report-episodes 100 --report-seeds 99990001 99990101 12345 67890 --holdout-pop-sample 8 \
+    --test-episodes 100 --test-seeds 99990001 99990101 12345 67890 --holdout-pop-sample 8 \
     --base-seed "$SEED" --runs 1 \
     --save-winner "$DIR/winner.yaml.gz" --save-stage-checkpoints "$DIR" > "$DIR/run.out" 2>&1
   echo "{\"iso_${tag}_done\":true,\"ts\":\"$(date '+%Y-%m-%dT%H:%M:%S')\"}" > /tmp/wnn_iso_${tag}_done.json

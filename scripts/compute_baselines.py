@@ -2,7 +2,7 @@
 """Score the 5 classical controllers (PID/LQR/MPC/LQI/MPCOF) on the study's
 FIXED held-out set, through the same Rust physics engine as the WNN.
 
-The baselines depend only on (disturbance, tilt, report-seed, episodes, steps) —
+The baselines depend only on (disturbance, tilt, test-seed, episodes, steps) —
 NOT on substrate / feature / memory-mode / training-seed — so they are computed
 ONCE and apply to every cell of the 2x2x2x5 matrix. Writes a JSON table the
 results assembler folds into the comparison.
@@ -13,12 +13,12 @@ reference: _pid_baseline is eval_closed_loop_reset, which redraws motor asymmetr
 per EPISODE and ignores the disturbance-stream seed, so it is not the twin of the
 WNN scorer. Agreeing with it was not evidence of matched conditions. Three separate
 mismatches were found on 29/07/2026 and are documented at their fix sites below:
-symmetric motor_asym, the un-XOR'd stream seed, and sampling from the report seed
+symmetric motor_asym, the un-XOR'd stream seed, and sampling from the test seed
 instead of the fold-0 pool. Each moved PID by roughly 10pp.
 
 Usage:
-  compute_baselines.py --disturbance L2D --tilt 5.0 --report-seed 99990101 \
-      --report-episodes 100 --steps 2000 --out /path/baselines.json
+  compute_baselines.py --disturbance L2D --tilt 5.0 --test-seed 99990101 \
+      --test-episodes 100 --steps 2000 --out /path/baselines.json
 """
 import argparse
 import json
@@ -38,7 +38,7 @@ _FEEDS = (TeacherFeed(use_estimator=True), TeacherFeed(use_estimator=False))
 
 
 def _score_seed(seed, a):
-	"""Score all 5 classical controllers on ONE held-out draw (report-seed).
+	"""Score all 5 classical controllers on ONE held-out draw (test-seed).
 	The seed drives BOTH the initial-condition draw (sample_ics_flat) and the
 	per-episode disturbance stream, so each seed is an independent held-out set.
 	Returns {name: (stable%, err°, steady°)}.
@@ -47,7 +47,7 @@ def _score_seed(seed, a):
 	comparator now lives in wnn.control.classical_baseline, so phased_ga's banner
 	and this table cannot drift apart again (they did, for 10 days)."""
 	# The disturbance must be built the way phased_ga builds it (preset seeded with
-	# --sim-seed, 911 by default), NOT with the report seed: the WNN cells fly that
+	# --sim-seed, 911 by default), NOT with the test seed: the WNN cells fly that
 	# configuration, and a baseline flown on a different one is not a comparator.
 	ec = EpisodeConfig(
 		dt=0.001, steps_per_episode=a.steps,
@@ -77,7 +77,7 @@ def _score_seed(seed, a):
 	# baseline flies a healthy aircraft against a WNN trained on a broken one.
 	if a.motor_fault:
 		apply_motor_fault(ec.disturbance, a.motor_fault)
-	draw = HoldoutDraw(seed=seed, episodes=a.report_episodes, steps=a.steps,
+	draw = HoldoutDraw(seed=seed, episodes=a.test_episodes, steps=a.steps,
 	                   stable_deg=a.stable_deg, eval_folds=a.eval_folds,
 	                   fold_index=a.fold_index)
 	out = {}
@@ -142,14 +142,14 @@ def main():
 	ap.add_argument("--no-motor-lag", action="store_true", default=False,
 	                help="ABI 35: lag-free under --translation (same as --motor-lag-s 0).")
 	ap.add_argument("--tilt", type=float, default=5.0)
-	ap.add_argument("--report-seed", type=int, default=99990101)
+	ap.add_argument("--test-seed", type=int, default=99990101)
 	# Multi-seed held-out: each seed is an independent held-out draw. The
 	# baseline ±SD is therefore TEST-SET variance (same controller, different
 	# episode set) — NOT the WNN cells' training-seed variance. Default keeps
 	# the single fixed held-out (99990101) for backward compatibility.
-	ap.add_argument("--report-seeds", type=int, nargs="+", default=None,
-	                help="held-out report-seeds; overrides --report-seed for multi-seed ±SD")
-	ap.add_argument("--report-episodes", type=int, default=100)
+	ap.add_argument("--test-seeds", type=int, nargs="+", default=None,
+	                help="held-out test-seeds; overrides --test-seed for multi-seed ±SD")
+	ap.add_argument("--test-episodes", type=int, default=100)
 	ap.add_argument("--steps", type=int, default=2000)
 	# MUST match phased_ga's hardcoded DisturbanceConfig.preset(level, seed=911).
 	# Change it only if phased_ga changes, or the baselines stop being comparators.
@@ -177,7 +177,7 @@ def main():
 		raise SystemExit("--xy-offset requires --translation: x/y cannot move without it.")
 	_resolve_plant(a)
 
-	seeds = a.report_seeds if a.report_seeds else [a.report_seed]
+	seeds = a.test_seeds if a.test_seeds else [a.test_seed]
 
 	# Score every controller on every held-out seed → per-controller triples.
 	# score_all returns FIVE fields per controller — (stable%, err°, steady°,
@@ -217,7 +217,7 @@ def main():
 
 	table = {}
 	print(f"# classical baselines: {a.disturbance}, tilt={a.tilt}°, "
-	      f"{len(seeds)} seed(s) {seeds}, {a.report_episodes} ep × {a.steps} steps")
+	      f"{len(seeds)} seed(s) {seeds}, {a.test_episodes} ep × {a.steps} steps")
 	hdr = f"{'ctrl':14} {'stable%':>13} {'err°':>13} {'steady°':>13}"
 	if a.translation:
 		hdr += f" {'alt m':>14} {'pos3d m':>14}"
@@ -241,21 +241,21 @@ def main():
 	        # ABI 32. A file without these keys predates ABI 32: inclinometer, no drag, level.
 	        "imu_specific_force": bool(a.imu_specific_force), "rotor_drag": float(a.rotor_drag),
 	        "att_err_ref": a.att_err_ref,
-	        "report_seed": seeds[0], "report_seeds": seeds,
-	        "report_episodes": a.report_episodes,
+	        "test_seed": seeds[0], "test_seeds": seeds,
+	        "test_episodes": a.test_episodes,
 	        "steps": a.steps, "stable_deg": a.stable_deg,
 	        "sim_seed": a.sim_seed,
 	        "eval_folds": a.eval_folds, "fold_index": a.fold_index,
 	        "motor_fault": a.motor_fault,
 	        # Same helper the scorer used, so the recorded pool CANNOT disagree
 	        # with the pool the episodes were actually drawn from.
-	        "pool_seeds": {str(s): HoldoutDraw(seed=s, episodes=a.report_episodes,
+	        "pool_seeds": {str(s): HoldoutDraw(seed=s, episodes=a.test_episodes,
 	                                           steps=a.steps, stable_deg=a.stable_deg,
 	                                           eval_folds=a.eval_folds,
 	                                           fold_index=a.fold_index).pool_seed()
 	                       for s in seeds},
 	        "conditions_note": "ICs sampled from the fold-index POOL seed (see pool_seeds), "
-	                           "NOT the report seed; disturbance stream = sim_seed XOR "
+	                           "NOT the test seed; disturbance stream = sim_seed XOR "
 	                           "pool_seed; motor asymmetry is the RESOLVED per-airframe "
 	                           "draw. All three match the WNN scorer "
 	                           "(evaluator.py fold_pool_seed + :1236-1237), so the "

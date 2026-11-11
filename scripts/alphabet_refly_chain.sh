@@ -36,7 +36,7 @@ AIRFRAME="cf21_brushless"
 DIST="L4C"
 TEACHER="lqi"
 NEURONS_GENS=5
-REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
+TEST_SEEDS="99990101 99990102 99990103 99990104 99990105"
 # seed:levels cells to fly, in order (L16 pair first for the early A/B read).
 RUNS="${ALP2_RUNS:-${ALP2_CELLS:-31337002:16 31337003:16 31337002:32 31337002:64}}"
 WAIT_PID="${ALP2_WAIT_PID:-}"
@@ -91,7 +91,7 @@ for run_id in $RUNS; do
 		--steps 2000 --tilt 5.0 \
 		--fit-weight-err-sq 0.4 --fit-weight-stable 0.3 \
 		--fit-weight-jerk 0.2 --fit-weight-mono 0.1 \
-		--report-episodes 100 --holdout-pop-sample 8 \
+		--test-episodes 100 --holdout-pop-sample 8 \
 		--grid-bits 24 30 \
 		--grid-state-neurons 0 --max-state-neurons 0 \
 		--max-output-neurons "$(max_out "$levels")" \
@@ -101,7 +101,7 @@ for run_id in $RUNS; do
 		--teacher "$TEACHER" \
 		$FEAT_PIDMIX \
 		--save-stage-checkpoints "$OUTDIR/${tag}_stages" \
-		--report-seeds $REPORT_SEEDS \
+		--test-seeds $TEST_SEEDS \
 		--base-seed "$seed"
 	log "cell $run_id finished rc=$?"
 done

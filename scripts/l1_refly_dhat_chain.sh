@@ -50,7 +50,7 @@ SEEDS="${L1B_SEEDS:-31337002 31337003}"
 # MPC-family cap, copied from the control arm. NOT a free choice.
 NEURONS_GENS="${L1B_NEURONS_GENS:-5}"
 LGAIN="${L1B_LGAIN:-0.05}"
-REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
+TEST_SEEDS="99990101 99990102 99990103 99990104 99990105"
 
 # nf=15 pidmix (+3 dhat when the dhat arm adds it).
 FEAT_PIDMIX="--obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err --obs-yaw-err-i"
@@ -106,7 +106,7 @@ run_cell() {
 		--eval-episodes 100 --memory-eval-episodes 200 \
 		--steps 2000 --tilt 5.0 \
 		$S16_WEIGHTS \
-		--report-episodes 100 --holdout-pop-sample 8 \
+		--test-episodes 100 --holdout-pop-sample 8 \
 		--grid-bits 24 30 \
 		--grid-state-neurons 0 --max-state-neurons 0 \
 		--max-output-neurons 128 \
@@ -116,7 +116,7 @@ run_cell() {
 		--teacher mpcof \
 		$FEAT_PIDMIX \
 		$dhat_flags \
-		--report-seeds $REPORT_SEEDS \
+		--test-seeds $TEST_SEEDS \
 		--base-seed "$seed"
 }
 

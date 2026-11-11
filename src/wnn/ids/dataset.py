@@ -86,8 +86,9 @@ class IDSDataset:
 	encoder: ThermometerEncoder
 	category_names: list[str]  # index → category name
 	feature_names: list[str]  # feature names in order
-	# Optional validation split (80/10/10). When present, test is for threshold
-	# calibration and validation is for final reported metrics.
+	# Optional validation split (80/10/10, Protocol v2). When present, validation is
+	# for threshold calibration and test is for the final reported metrics
+	# (docs/terminology_train_val_test.md).
 	X_val: "LazyEncodedArray | None" = None
 	y_val_binary: np.ndarray | None = None
 	y_val_multi: np.ndarray | None = None

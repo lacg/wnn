@@ -61,7 +61,7 @@ def load_subject(tag: str):
 	assert g.state_neurons == 0 and g.forced_prefix == 0, "sn>0 genomes are not MCU-exportable"
 	assert spec.memory_mode == "BINARY", spec.memory_mode
 	s = resolve_seed_set(base=a.base_seed, run_index=0, train=a.train_seed, test=a.test_seed, val=a.val_seed)
-	thr = [float(t) for t in P._report_thresholds(a, ec, spec, int(a.report_seeds[0]), s.train, use_score=True)]
+	thr = [float(t) for t in P._test_thresholds(a, ec, spec, int(a.test_seeds[0]), s.train, use_score=True)]
 	return a, ec, spec, g, thr, s, head
 
 
@@ -190,7 +190,7 @@ def score_wnn(a, ec, spec, thr, genomes, seeds, ctbr_override=None):
 def _score_wnn_seed(a, ec, sp, thr, genomes, rs, out):
 	from wnn.control import phased_ga as P
 	from wnn.control.evaluator import ControllerEvaluator
-	ev = ControllerEvaluator(sp, num_eval_episodes=a.report_episodes, seed=rs, episode_config=ec,
+	ev = ControllerEvaluator(sp, num_eval_episodes=a.test_episodes, seed=rs, episode_config=ec,
 	                         thresholds=thr, rg_config=P._rg_config(a, ec, rs),
 	                         max_train_workers=a.train_workers, num_eval_folds=a.num_eval_folds)
 	scored = ev.score_genomes(genomes)  # all-or-nothing: append only after the whole batch scored
@@ -203,7 +203,7 @@ def score_mpcof(a, ec, seeds, rate_override=None):
 	from wnn.control import classical_baseline as CB
 	rows = []
 	for rs in seeds:
-		draw = CB.HoldoutDraw(seed=rs, episodes=a.report_episodes, steps=ec.steps_per_episode,
+		draw = CB.HoldoutDraw(seed=rs, episodes=a.test_episodes, steps=ec.steps_per_episode,
 		                      eval_folds=a.num_eval_folds)
 		if rate_override is None:
 			r = CB.cascade_rival_metrics(ec, draw, CB.TeacherFeed(use_estimator=True), 4, int(a.action_repeat))
@@ -234,8 +234,8 @@ def summarise(per_seed, eps):
 	        "steady": float(np.nanmean(r[:, 2])), "fails": int(round(((1 - r[:, 0]) * eps).sum()))}
 
 
-def report_seeds(a, n):
-	s = [int(x) for x in a.report_seeds]
+def test_seeds(a, n):
+	s = [int(x) for x in a.test_seeds]
 	return s if n is None else s[:n]
 
 
@@ -245,12 +245,12 @@ def mode_wnn(args):
 	from wnn.control.evaluator import NUM_FEATURES  # noqa: F401 (documents the input space source)
 	input_bits = g.shape.output_input_space
 	img = Image(g, thr, input_bits)
-	seeds = report_seeds(a, args.seeds)
+	seeds = test_seeds(a, args.seeds)
 	print(f"[ctrl52] {args.tag} {head}: N={img.n} bits={img.bits} K={img.keys.size} conn u{img.conn_w} "
 	      f"input_bits={input_bits} thr={img.thr.size} total_bits={img.total_bits} seeds={len(seeds)}", flush=True)
 	res = {"only": args.only, "tag": args.tag, "genome": head, "image": {n: b for n, b in img.seg}, "total_bits": img.total_bits,
 	       "neurons": img.n, "bits": img.bits, "keys": int(img.keys.size), "input_bits": int(input_bits),
-	       "seeds": seeds, "episodes": a.report_episodes, "draws": []}
+	       "seeds": seeds, "episodes": a.test_episodes, "draws": []}
 	out = Path(args.out)
 	for k in [int(x) for x in args.ks.split(",")]:
 		t0 = time.time()
@@ -264,7 +264,7 @@ def mode_wnn(args):
 			scores = score_wnn(a, ec, spec, list(thr_d), [it[1] for it in items], seeds)
 			for (d, _, counts, ncell), ps in zip(items, scores):
 				row = {"k": k, "draw": d, "counts": counts, "visible_cells": ncell, "per_seed": ps,
-				       **summarise(ps, a.report_episodes)}
+				       **summarise(ps, a.test_episodes)}
 				res["draws"].append(row)
 				print(f"  k={k:>7} d={d} st={row['stable']:6.2f} err={row['err']:.2f} sty={row['steady']:.2f} "
 				      f"fails={row['fails']:>4} cells={ncell} flips={counts}", flush=True)
@@ -284,13 +284,13 @@ def _flip_f32(x: float, bit: int) -> float:
 
 def mode_rate(args):
 	a, ec, spec, g, thr, s, head = load_subject(args.tag)
-	seeds = report_seeds(a, args.seeds)
+	seeds = test_seeds(a, args.seeds)
 	if args.who == "wnn":
 		base = list(spec.ctbr["rate_gains"])
 	else:
 		base = list(ec.airframe_kwargs()["af_pid_rate"])
 	print(f"[ctrl52-rate] who={args.who} base gains={base}", flush=True)
-	res = {"who": args.who, "tag": args.tag, "base": base, "seeds": seeds, "episodes": a.report_episodes, "flips": []}
+	res = {"who": args.who, "tag": args.tag, "base": base, "seeds": seeds, "episodes": a.test_episodes, "flips": []}
 	targets = [(-1, -1)] + [(i, b) for i in range(12) for b in range(32)]
 	for i, b in targets:
 		gains = list(base)
@@ -303,7 +303,7 @@ def mode_rate(args):
 		else:
 			ps = score_mpcof(a, ec, seeds, rate_override=gains)
 		row = {"gain": i, "bit": b, "value": gains[i] if i >= 0 else None, "per_seed": ps,
-		       **summarise(ps, a.report_episodes)}
+		       **summarise(ps, a.test_episodes)}
 		res["flips"].append(row)
 		print(f"  gain={i:>2} bit={b:>2} val={row['value']} st={row['stable']:6.2f} err={row['err']:.2f} "
 		      f"({time.time() - t0:.1f}s)", flush=True)
@@ -312,10 +312,10 @@ def mode_rate(args):
 
 def mode_mpcof(args):
 	a, ec, spec, g, thr, s, head = load_subject(args.tag)
-	seeds = report_seeds(a, args.seeds)
+	seeds = test_seeds(a, args.seeds)
 	t0 = time.time()
 	ps = score_mpcof(a, ec, seeds)
-	row = {"per_seed": ps, **summarise(ps, a.report_episodes), "seeds": seeds, "secs": time.time() - t0}
+	row = {"per_seed": ps, **summarise(ps, a.test_episodes), "seeds": seeds, "secs": time.time() - t0}
 	json.dump(row, open(args.out, "w"))
 	print(f"[ctrl52-mpcof] {row['stable']:.2f} / {row['err']:.2f} / {row['steady']:.2f} fails={row['fails']} "
 	      f"({row['secs']:.0f}s)", flush=True)

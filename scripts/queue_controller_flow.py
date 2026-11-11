@@ -72,8 +72,8 @@ FULL_PARAMS = {
 	# Multi-objective fitness (harmonic-rank activates when any non-err weight > 0).
 	"fit_weight_err_sq": 0.40, "fit_weight_stable": 0.30,
 	"fit_weight_jerk": 0.10, "fit_weight_mono": 0.20,
-	# Seeds (base_seed -> 3-way SeedSet; report_seed -> held-out).
-	"base_seed": 5005, "report_seed": 9009,
+	# Seeds (base_seed -> 3-way SeedSet; test_seed -> held-out).
+	"base_seed": 5005, "test_seed": 9009,
 }
 
 # Tiny end-to-end recipe for the deploy smoke test (seconds, not hours).
@@ -95,7 +95,7 @@ def build_flow(args) -> dict:
 	# Explicit CLI overrides (only when provided).
 	for cli_key, pkey in (
 		("tilt", "tilt"), ("pop", "pop"), ("base_seed", "base_seed"),
-		("report_seed", "report_seed"), ("wnn_num_threads", "wnn_num_threads"),
+		("test_seed", "test_seed"), ("wnn_num_threads", "wnn_num_threads"),
 		("check_interval", "check_interval"),
 		("neurons_gens", "neurons_gens"), ("bits_gens", "bits_gens"),
 		("conns_gens", "conns_gens"), ("memory_gens", "memory_gens"),
@@ -152,7 +152,7 @@ def main():
 	ap.add_argument("--conns-gens", type=int, default=None)
 	ap.add_argument("--memory-gens", type=int, default=None)
 	ap.add_argument("--base-seed", type=int, default=None)
-	ap.add_argument("--report-seed", type=int, default=None)
+	ap.add_argument("--test-seed", type=int, default=None)
 	ap.add_argument("--execute", action="store_true", help="Actually POST (default: dry-run preview)")
 	args = ap.parse_args()
 

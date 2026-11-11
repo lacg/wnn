@@ -10,7 +10,7 @@ phased_ga's OWN parser + episode_config_from_args on the anchor's exact argv
 (the 13/08 compare-estimator rule). Score-only — no training, nothing written back.
 
 Grid: xy offset {0 (stage-1 control row), --xy} x steps {2000, 6000} x the run's
-report seeds; per teacher mean +/- SD over seeds of stable % / err deg / steady deg
+test seeds; per teacher mean +/- SD over seeds of stable % / err deg / steady deg
 / alt m / pos (3-D) m. Also the mean initial horizontal displacement (the start bar
 a position-holding controller must beat).
 
@@ -69,13 +69,13 @@ def _start_xy(ec, seed, episodes, folds):
 
 
 def _cell(base_argv, xy, steps, ctbr_hold=0):
-	"""{teacher: [row per report seed]} + start displacement per seed, for one (xy, steps)."""
+	"""{teacher: [row per test seed]} + start displacement per seed, for one (xy, steps)."""
 	from wnn.control.classical_baseline import HoldoutDraw, TeacherFeed, score_all, cascade_rival_metrics
 	args, ec = _regime(base_argv, xy, steps)
 	folds = int(args.num_eval_folds)
 	rows, starts = {}, []
-	for seed in args.report_seeds:
-		draw = HoldoutDraw(seed=int(seed), episodes=int(args.report_episodes),
+	for seed in args.test_seeds:
+		draw = HoldoutDraw(seed=int(seed), episodes=int(args.test_episodes),
 		                   steps=ec.steps_per_episode, eval_folds=folds)
 		feed = TeacherFeed(use_estimator=True)
 		for name, r in score_all(ec, draw, feed).items():
@@ -86,7 +86,7 @@ def _cell(base_argv, xy, steps, ctbr_hold=0):
 				rows.setdefault(m["label"], []).append((
 					m["stable_rate"] * 100.0, m["mean_attitude_error_deg"], m["mean_steady_error_deg"],
 					m["mean_altitude_error_m"], m["mean_position_error_m"]))
-		starts.append(_start_xy(ec, int(seed), int(args.report_episodes), folds))
+		starts.append(_start_xy(ec, int(seed), int(args.test_episodes), folds))
 	return rows, starts, args
 
 
@@ -103,10 +103,10 @@ def main():
 		for steps in a.steps:
 			t0 = time.time()
 			rows, starts, args = _cell(base, xy, steps, a.ctbr_hold)
-			cell = {"xy_offset_m": xy, "steps": steps, "seeds": [int(s) for s in args.report_seeds],
-			        "episodes": int(args.report_episodes), "start_xy_m": _ms(starts), "teachers": {}}
+			cell = {"xy_offset_m": xy, "steps": steps, "seeds": [int(s) for s in args.test_seeds],
+			        "episodes": int(args.test_episodes), "start_xy_m": _ms(starts), "teachers": {}}
 			print(f"\n== xy {xy} m · {steps} steps ({steps / 1000:.0f} s) · {len(starts)} seeds x "
-			      f"{args.report_episodes} ep · start |xy| {cell['start_xy_m'][0]:.3f} m · {time.time() - t0:.0f}s")
+			      f"{args.test_episodes} ep · start |xy| {cell['start_xy_m'][0]:.3f} m · {time.time() - t0:.0f}s")
 			print(f"  {'teacher':22s} " + "  ".join(f"{c:>15s}" for c in cols))
 			for name, rs in rows.items():
 				stats = {c: _ms([r[i] for r in rs]) for i, c in enumerate(cols)}

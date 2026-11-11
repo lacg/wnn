@@ -1,31 +1,31 @@
 #!/usr/bin/env python3
-"""Replay saved controller winners on extra held-out report seeds.
+"""Replay saved controller winners on extra held-out test seeds.
 
 WHY: the study table gives each WNN cell a ±SD over TRAINING seeds on one fixed
 held-out draw, while the classical baselines carry a ±SD over REPORT seeds with no
 training at all. Those are different axes and cannot be read as the same error bar.
-Re-scoring a frozen winner on several report seeds puts the WNN on the BASELINE's
+Re-scoring a frozen winner on several test seeds puts the WNN on the BASELINE's
 axis (test-set variance), which is the comparison that can be stated as
 "WNN a±b vs PID c±d" without an apples-to-oranges footnote.
 
 No search and no training happen here: a MEMORY-stage winner already carries the
 cells it was trained with on its own train seed, so this is rollouts only. That is
-also what keeps it honest — the report seeds are never seen by any training pass.
+also what keeps it honest — the test seeds are never seen by any training pass.
 
 TWO THRESHOLD VARIANTS, because the answer differs and the difference IS the point:
 
   train     — decode thresholds fit ONCE on the winner's own train seed under the
-              regime it was TRAINED in, then held fixed across every report seed.
+              regime it was TRAINED in, then held fixed across every test seed.
               This is what phased_ga._holdout_report does (unconditionally since
-              03/08/2026 — see _report_thresholds), so these numbers are the ones
+              03/08/2026 — see _test_thresholds), so these numbers are the ones
               comparable to the study table. Nothing about the test draw touches
               the model: cells + thresholds together ARE the deployed controller.
-  per_seed  — decode thresholds re-fit from PID rollouts on EACH report seed under
+  per_seed  — decode thresholds re-fit from PID rollouts on EACH test seed under
               the SCORING regime. The diagnostic: it re-quantizes the inputs, so
               cells are read at addresses they were not written to
               (docs/threshold_misalignment_finding.md).
 
-The gap between them measures the only place a report seed influences anything
+The gap between them measures the only place a test seed influences anything
 before scoring. It is not label leakage (thresholds come from the PID teacher, not
 from the genome's score), but it IS calibration against the test distribution, and
 a reviewer is entitled to ask. If the two variants agree, the question is settled
@@ -84,18 +84,18 @@ run's own `[argv]` line as the TRAINED regime, appends --score-args to it for th
 SCORING regime (e.g. "--disturbance L4A" for A-cross), loads the crowned genome from
 the run's --save-stage-checkpoints dir, and scores it with the same _fit_thresholds /
 _score_once pair as the legacy mode ('train' thresholds = trained regime, train seed).
-Report seeds = the SCORING regime's --report-seeds (put D5 in --score-args).
+Test seeds = the SCORING regime's --test-seeds (put D5 in --score-args).
 A crowned genome without cells (arch-only) is refused — it would need retraining.
-SAME-REGIME re-scoring on new report seeds needs no tool: phased_ga's own
-  phased_ga <the run's argv> --report-seeds <D5> --recalc-headline <its ckpt dir>
-re-selects on the (unchanged) val seeds and scores the crown on the new report seeds.
+SAME-REGIME re-scoring on new test seeds needs no tool: phased_ga's own
+  phased_ga <the run's argv> --test-seeds <D5> --recalc-headline <its ckpt dir>
+re-selects on the (unchanged) val seeds and scores the crown on the new test seeds.
   rescore_winners.py --run-out 'logs/controller/ctrl8_ab_pop50/arm_s*.out' \\
       --run-out logs/controller/ctrl8_drag_sweep_pop50/arm_kd078.out \\
       --score-args "--disturbance L4A" --out experiments/ctrl22/across_L4A.json --dry-run
 
 Usage:
   rescore_winners.py --glob 'logs/controller/dfa1l/*_winner.yaml.gz' \\
-      --report-seeds 99990101 99990102 99990103 99990104 99990105 \\
+      --test-seeds 99990101 99990102 99990103 99990104 99990105 \\
       --out experiments/dfa1l_markers/rescore.json
 """
 import argparse
@@ -166,8 +166,8 @@ class Regime:
 	ec: object
 
 	@property
-	def report_episodes(self):
-		return self.args.report_episodes or self.args.eval_episodes
+	def test_episodes(self):
+		return self.args.test_episodes or self.args.eval_episodes
 
 
 # The plant of the glob mode. Its Condition argv carries only disturbance / airframe /
@@ -191,7 +191,7 @@ def _regime(cond, a):
 	plant = shlex.split(getattr(a, "plant_args", LEGACY_PLANT_ARGS))
 	argv = cond.argv() + plant + ["--steps", str(a.steps), "--tilt", str(cond.tilt),
 	                      "--body-rate", str(a.body_rate), "--yaw-rate", str(a.yaw_rate),
-	                      "--report-episodes", str(a.episodes), "--num-eval-folds", "5"]
+	                      "--test-episodes", str(a.episodes), "--num-eval-folds", "5"]
 	args = build_arg_parser().parse_args(argv)
 	ec = episode_config_from_args(args)
 	if ec.translation and ec.airframe is None:   # phased_ga main()'s stage-1 guard
@@ -214,23 +214,23 @@ def _conditions(a):
 	return score, trained
 
 
-def _fit_thresholds(regime, spec, report_seed, train_seed, use_score):
+def _fit_thresholds(regime, spec, test_seed, train_seed, use_score):
 	"""phased_ga's report-threshold fit (calibration ec included) on this regime.
 	use_score=True → fit ONCE on the train seed (the address function the cells were
-	written under); False → re-fit on the report seed (the per_seed diagnostic)."""
-	from wnn.control.phased_ga import _report_thresholds
-	return _report_thresholds(regime.args, regime.ec, spec, report_seed, train_seed, use_score)
+	written under); False → re-fit on the test seed (the per_seed diagnostic)."""
+	from wnn.control.phased_ga import _test_thresholds
+	return _test_thresholds(regime.args, regime.ec, spec, test_seed, train_seed, use_score)
 
 
-def _score_once(spec, genome, score, report_seed, thresholds):
-	"""One frozen genome, one report seed → the scorer's metrics object. This is the
+def _score_once(spec, genome, score, test_seed, thresholds):
+	"""One frozen genome, one test seed → the scorer's metrics object. This is the
 	evaluator phased_ga._holdout_report builds, knob for knob (report episodes,
 	_rg_config, K=5, train workers) — score-only, no training, nothing written back."""
 	from wnn.control.evaluator import ControllerEvaluator
 	from wnn.control.phased_ga import _rg_config
-	ev = ControllerEvaluator(spec, num_eval_episodes=score.report_episodes,
-	                         seed=report_seed, episode_config=score.ec, thresholds=thresholds,
-	                         rg_config=_rg_config(score.args, score.ec, report_seed),
+	ev = ControllerEvaluator(spec, num_eval_episodes=score.test_episodes,
+	                         seed=test_seed, episode_config=score.ec, thresholds=thresholds,
+	                         rg_config=_rg_config(score.args, score.ec, test_seed),
 	                         max_train_workers=score.args.train_workers,
 	                         num_eval_folds=score.args.num_eval_folds)
 	return ev.score_genomes([genome])[0]
@@ -280,7 +280,7 @@ def _agg(rows):
 
 
 def _rescore_cell(path, meta, a, score, trained):
-	"""Both threshold variants for one winner, across every report seed."""
+	"""Both threshold variants for one winner, across every test seed."""
 	from wnn.seeds import resolve_seed_set
 	loaded = _load_winner(path)
 	if loaded is None:
@@ -289,15 +289,15 @@ def _rescore_cell(path, meta, a, score, trained):
 	spec, genome = loaded
 	train_seed = resolve_seed_set(base=meta["seed"], run_index=0).train
 	# variant 'train': fit ONCE, on the train seed, under the TRAINED regime.
-	fixed = _fit_thresholds(trained, spec, a.report_seeds[0], train_seed, use_score=True)
+	fixed = _fit_thresholds(trained, spec, a.test_seeds[0], train_seed, use_score=True)
 	runs = {"per_seed": [], "train": []}
-	for rs in a.report_seeds:
+	for rs in a.test_seeds:
 		refit = _fit_thresholds(score, spec, rs, train_seed, use_score=False)
 		runs["per_seed"].append(_row(_score_once(spec, genome, score, rs, refit)))
 		runs["train"].append(_row(_score_once(spec, genome, score, rs, fixed)))
 	return {"tag": meta["tag"], "substrate": meta["sub"], "feature": meta["feat"],
 	        "mode": meta["mode"], "seed": meta["seed"], "train_seed": train_seed,
-	        "report_seeds": a.report_seeds,
+	        "test_seeds": a.test_seeds,
 	        "per_seed": {"agg": _agg(runs["per_seed"]), "runs": runs["per_seed"]},
 	        "train": {"agg": _agg(runs["train"]), "runs": runs["train"]}}
 
@@ -315,9 +315,9 @@ def _print_row(r):
 
 def _print_table(results, a, score, trained):
 	print("=" * 150)
-	print(f"  WINNER RE-SCORE — frozen winners replayed on {len(a.report_seeds)} report "
+	print(f"  WINNER RE-SCORE — frozen winners replayed on {len(a.test_seeds)} report "
 	      f"seeds (TEST-SET variance: the baselines' axis)")
-	print(f"  seeds {a.report_seeds} | {a.episodes} ep x {a.steps} steps | tilt {a.tilt}°")
+	print(f"  seeds {a.test_seeds} | {a.episodes} ep x {a.steps} steps | tilt {a.tilt}°")
 	print(f"  scored under : {score.cond.label()}")
 	print(f"  trained under: {trained.cond.label()}  (fixes the 'train' address function)")
 	print("=" * 150)
@@ -334,7 +334,7 @@ def _print_table(results, a, score, trained):
 
 def _payload(results, a, score, trained):
 	"""The on-disk document. Built fresh each flush so a partial file is a valid one."""
-	return {"meta": {"report_seeds": a.report_seeds, "episodes": a.episodes,
+	return {"meta": {"test_seeds": a.test_seeds, "episodes": a.episodes,
 	                 "steps": a.steps, "tilt_deg": a.tilt,
 	                 "disturbance": a.disturbance,
 	                 "scored_under": vars(score.cond), "trained_under": vars(trained.cond),
@@ -366,7 +366,7 @@ def _describe(regime, role):
 	      + f" translation={ec.translation}")
 	print(f"           steps={ec.steps_per_episode} tilt={math.degrees(ec.max_initial_tilt_rad):.1f}° "
 	      f"body_rate={ec.max_initial_body_rate} yaw_rate={ec.max_initial_yaw_rate} "
-	      f"report_episodes={regime.report_episodes} folds={regime.args.num_eval_folds}")
+	      f"test_episodes={regime.test_episodes} folds={regime.args.num_eval_folds}")
 	if ec.translation:
 		print(f"           alt_offset={ec.max_initial_alt_offset_m} init_vz={ec.max_initial_vz} "
 		      f"collective_jitter={ec.collective_cmd_jitter} mass_jitter={ec.mass_jitter} "
@@ -378,8 +378,8 @@ def _dry_run(a, score, trained, paths):
 	_describe(score, "score:")
 	_describe(trained, "trained:")
 	print(f"  thresholds: 'train' variant fit ONCE on the train seed under the TRAINED regime; "
-	      f"'per_seed' re-fit per report seed under the SCORING regime")
-	print(f"  report seeds: {a.report_seeds}")
+	      f"'per_seed' re-fit per test seed under the SCORING regime")
+	print(f"  test seeds: {a.test_seeds}")
 	print(f"  out: {a.out}")
 	print(f"  winners matched by {a.glob!r}: {len(paths)}")
 	for p in paths:
@@ -470,7 +470,7 @@ def _run_out_jobs(a):
 
 
 def _rescore_run_out(job):
-	"""One crowned genome, both threshold variants, across the SCORING regime's report seeds."""
+	"""One crowned genome, both threshold variants, across the SCORING regime's test seeds."""
 	from wnn.seeds import resolve_seed_set
 	path, tag, trained, score, stage, key, ckpt = job
 	spec, genome = _crowned_genome(ckpt, stage, key)
@@ -480,7 +480,7 @@ def _rescore_run_out(job):
 	base = trained.args.base_seed if trained.args.base_seed is not None else trained.args.seed
 	train_seed = resolve_seed_set(base=base, run_index=0, train=trained.args.train_seed,
 	                              test=trained.args.test_seed, val=trained.args.val_seed).train
-	seeds = [int(s) for s in score.args.report_seeds]
+	seeds = [int(s) for s in score.args.test_seeds]
 	fixed = _fit_thresholds(trained, spec, seeds[0], train_seed, use_score=True)
 	runs = {"per_seed": [], "train": []}
 	for rs in seeds:
@@ -488,7 +488,7 @@ def _rescore_run_out(job):
 		runs["per_seed"].append(_row(_score_once(spec, genome, score, rs, refit)))
 		runs["train"].append(_row(_score_once(spec, genome, score, rs, fixed)))
 	return {"tag": tag, "run_out": path, "crown": key, "seed": base, "train_seed": train_seed,
-	        "score_args": score.cond.label(), "report_seeds": seeds,
+	        "score_args": score.cond.label(), "test_seeds": seeds,
 	        "substrate": None, "feature": None, "mode": None,
 	        "per_seed": {"agg": _agg(runs["per_seed"]), "runs": runs["per_seed"]},
 	        "train": {"agg": _agg(runs["train"]), "runs": runs["train"]}}
@@ -502,7 +502,7 @@ def _main_run_out(a):
 			print(f"  {tag}: crown {key} from {ckpt} · train seed base {trained.args.base_seed}")
 			_describe(trained, "trained:")
 			_describe(score, "score:")
-			print(f"           report seeds {list(score.args.report_seeds)} · xy_offset "
+			print(f"           test seeds {list(score.args.test_seeds)} · xy_offset "
 			      f"{getattr(score.ec, 'max_initial_xy_offset_m', None)} · rotor_drag "
 			      f"{getattr(score.args, 'rotor_drag', None)} · motor_lag_s {getattr(score.ec, 'motor_lag_s', None)}")
 		print(f"  out: {a.out}")
@@ -538,7 +538,7 @@ def _build_parser():
 	from wnn.control.airframe import Airframe
 	ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
 	ap.add_argument("--glob", default="logs/controller/dfa1l/*_winner.yaml.gz")
-	ap.add_argument("--report-seeds", type=int, nargs="+",
+	ap.add_argument("--test-seeds", type=int, nargs="+",
 	                default=[99990101, 99990102, 99990103, 99990104, 99990105])
 	ap.add_argument("--episodes", type=int, default=100)
 	ap.add_argument("--steps", type=int, default=2000)
@@ -572,7 +572,7 @@ def _build_parser():
 	                     "own [argv] (+ --score-args); repeatable. See the module docstring.")
 	ap.add_argument("--score-args", default="",
 	                help="--run-out: phased_ga flags appended (last-wins) for the SCORING regime, "
-	                     "e.g. '--disturbance L4A --report-seeds 99990201 ...'")
+	                     "e.g. '--disturbance L4A --test-seeds 99990201 ...'")
 	ap.add_argument("--plant-args", default=LEGACY_PLANT_ARGS,
 	                help="glob mode: the phased_ga PLANT flags of both regimes (default: the "
 	                     f"ABI <= 31 plant the glob-mode winners flew, '{LEGACY_PLANT_ARGS}'). "

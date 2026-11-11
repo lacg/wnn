@@ -7,14 +7,14 @@ THE BUG (fixed in controller_arm_lib.sh, 04/08/2026). Markers were written with
     held_m = <RESULT line 2>
 
 which is only correct when a run emits ONE held-out RESULT per stage. With
-`--report-seeds N` each stage emits N of them, so at N=5 lines 1 and 2 are both
-NEURONS (report seeds 1 and 2) and `held_memory` was never the memory stage at all.
+`--test-seeds N` each stage emits N of them, so at N=5 lines 1 and 2 are both
+NEURONS (test seeds 1 and 2) and `held_memory` was never the memory stage at all.
 Every marker written by that helper carries the wrong value, and those values were
 quoted as MEMORY results.
 
 This re-derives both fields from the run's .out by anchoring on the STAGE headers,
 and additionally captures the MULTI-SEED aggregate lines — the authoritative numbers
-when report seeds are used, because a single RESULT line is one draw and carries no
+when test seeds are used, because a single RESULT line is one draw and carries no
 variance.
 
 Markers whose .out is missing are left ALONE and reported: a marker is a claim that a
@@ -46,7 +46,7 @@ MEMORY_HDR = re.compile(r"STAGE 4 \(MEMORY\) done")
 
 def first_result_after(lines, header):
 	"""The first held-out RESULT line following a stage header — the same anchor
-	controller_arm_lib.sh now uses, and correct for one report seed or many."""
+	controller_arm_lib.sh now uses, and correct for one test seed or many."""
 	seen = False
 	for ln in lines:
 		if header.search(ln):

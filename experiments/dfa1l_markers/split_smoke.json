@@ -16,7 +16,7 @@
   "train_seeds": [
    31337002
   ],
-  "report_seeds": [
+  "test_seeds": [
    99990101
   ],
   "episodes": 10,

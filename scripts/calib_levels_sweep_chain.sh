@@ -56,7 +56,7 @@ AIRFRAME="cf21_brushless"
 DIST="L4C"
 TEACHER="lqi"
 NEURONS_GENS=5
-REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
+TEST_SEEDS="99990101 99990102 99990103 99990104 99990105"
 # cell = calib:levels:seed. Interleaved: cheap L16 pair of each calib first.
 RUNS="${CLS_RUNS:-${CLS_CELLS:-5.0:16:31337002 5.0:16:31337003 2.5:16:31337002 2.5:16:31337003 5.0:64:31337002 5.0:64:31337003 2.5:64:31337002 2.5:64:31337003}}"
 WAIT_PID="${CLS_WAIT_PID:-}"
@@ -111,7 +111,7 @@ for run_id in $RUNS; do
 		--steps 2000 --tilt 5.0 \
 		--fit-weight-err-sq 0.4 --fit-weight-stable 0.3 \
 		--fit-weight-jerk 0.2 --fit-weight-mono 0.1 \
-		--report-episodes 100 --holdout-pop-sample 8 \
+		--test-episodes 100 --holdout-pop-sample 8 \
 		--grid-bits 24 30 \
 		--grid-state-neurons 0 --max-state-neurons 0 \
 		--max-output-neurons "$(max_out "$levels")" \
@@ -119,7 +119,7 @@ for run_id in $RUNS; do
 		--airframe "$AIRFRAME" --disturbance "$DIST" --teacher "$TEACHER" \
 		$FEAT_PIDMIX \
 		--save-stage-checkpoints "$OUTDIR/${tag}_stages" \
-		--report-seeds $REPORT_SEEDS \
+		--test-seeds $TEST_SEEDS \
 		--base-seed "$seed"
 	log "cell $run_id finished rc=$?"
 done

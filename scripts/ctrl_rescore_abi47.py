@@ -1,5 +1,5 @@
 """Re-score one finished ctrl48 run's HEADLINE genome on the fixed (ABI 47) scorer, as flown
-(the run's own [argv]), over its 35 report seeds. argv: tag. Writes <tag>.json next to this file."""
+(the run's own [argv]), over its 35 test seeds. argv: tag. Writes <tag>.json next to this file."""
 import sys, shlex, json, re
 sys.path.insert(0, "/tmp/ctrl_fix_site")
 sys.path.insert(1, "/Users/lacg/wnn/.claude/worktrees/ctrl-scorer-fix/src")
@@ -27,22 +27,22 @@ KEYS = ("acc", "mean_attitude_error_deg", "mean_steady_error_deg", "mean_positio
 rows = []
 if getattr(g, "cells", None) is None:
 	# Arch-only headline (raw GRID): train on the TRAIN seed exactly as _holdout_report does
-	# (K-fold accumulate, train-seed thresholds, write-back), then score-only on every report seed.
-	rs0 = int(a.report_seeds[0])
-	thr0 = P._report_thresholds(a, ec, spec, rs0, s.train, use_score=True)
-	tev = ControllerEvaluator(spec, num_eval_episodes=a.report_episodes, seed=s.train, episode_config=ec,
+	# (K-fold accumulate, train-seed thresholds, write-back), then score-only on every test seed.
+	rs0 = int(a.test_seeds[0])
+	thr0 = P._test_thresholds(a, ec, spec, rs0, s.train, use_score=True)
+	tev = ControllerEvaluator(spec, num_eval_episodes=a.test_episodes, seed=s.train, episode_config=ec,
 	                          thresholds=thr0, rg_config=P._rg_config(a, ec, s.train), max_train_workers=a.train_workers,
 	                          num_eval_folds=a.num_eval_folds)
 	tev._evaluate_core([g], write_back=True)
 	print(f"[arch-only] {head}: trained on train seed {s.train}", flush=True)
-for rs in [int(x) for x in a.report_seeds]:
-	thr = P._report_thresholds(a, ec, spec, rs, s.train, use_score=True)
-	ev = ControllerEvaluator(spec, num_eval_episodes=a.report_episodes, seed=rs, episode_config=ec,
+for rs in [int(x) for x in a.test_seeds]:
+	thr = P._test_thresholds(a, ec, spec, rs, s.train, use_score=True)
+	ev = ControllerEvaluator(spec, num_eval_episodes=a.test_episodes, seed=rs, episode_config=ec,
 	                         thresholds=thr, rg_config=P._rg_config(a, ec, rs), max_train_workers=a.train_workers,
 	                         num_eval_folds=a.num_eval_folds)
 	m = ev.score_genomes([g])[0]
 	rows.append([getattr(m, k) for k in KEYS])
-n = len(rows); eps = a.report_episodes
+n = len(rows); eps = a.test_episodes
 mean = lambda i: sum(r[i] for r in rows) / n
 fails = round(sum((1 - r[0]) * eps for r in rows))
 res = {"tag": tag, "genome": head, "seeds": n, "episodes": eps, "stable": mean(0) * 100, "err": mean(1),

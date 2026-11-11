@@ -357,7 +357,7 @@ def _stage_summary(stage: CurriculumStage, weights: dict, res, ev, wall: float,
 	print(bar)
 
 
-def _holdout_eval(args, spec, weights, genome, final_population, report_seed: int, train_seed: int):
+def _holdout_eval(args, spec, weights, genome, final_population, test_seed: int, train_seed: int):
 	"""TRUE held-out — REPORT ONLY. Re-eval the whole final population on a FRESH seed
 	for DESCRIPTIVE stats; NEVER used to select a genome or feed anything (selecting on
 	it would leak val → overfitting to the held-out draw). The reported RESULT is the
@@ -366,19 +366,19 @@ def _holdout_eval(args, spec, weights, genome, final_population, report_seed: in
 	non-reproducing — see project_controller_eval_variance), so this is the honest number.
 	"""
 	import statistics
-	if report_seed == train_seed:
-		print(f"  [report-seed] WARNING: report_seed == train_seed ({train_seed}) — "
-		      f"NOT a held-out; pick a distinct --report-seed.")
+	if test_seed == train_seed:
+		print(f"  [test-seed] WARNING: test_seed == train_seed ({train_seed}) — "
+		      f"NOT a held-out; pick a distinct --test-seed.")
 	stage = _with_steps(DEFAULT_CURRICULUM[-1], getattr(args, "full_steps", None))
 	ec = _build_ec(stage)
-	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=report_seed)
-	rg_config = RewardGatedConfig(seed=report_seed, episode_config=ec)
+	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=test_seed)
+	rg_config = RewardGatedConfig(seed=test_seed, episode_config=ec)
 	rg_config.steps_per_episode = stage.steps
 	rg_config.num_rounds = 3
 	rg_config.episodes_per_round = 6
 	rg_config.progress = False
 	ev = ControllerEvaluator(spec, num_eval_episodes=stage.eval_episodes,
-	                         seed=report_seed, episode_config=ec, thresholds=thresholds,
+	                         seed=test_seed, episode_config=ec, thresholds=thresholds,
 	                         rg_config=rg_config, max_train_workers=args.train_workers,
 	                         num_eval_folds=args.num_eval_folds)
 	pop = [genome] + [g for g in (final_population or []) if g is not genome]
@@ -391,14 +391,14 @@ def _holdout_eval(args, spec, weights, genome, final_population, report_seed: in
 	mean_e = statistics.mean(errs); std_e = statistics.pstdev(errs) if len(errs) > 1 else 0.0
 	bar = "=" * 72
 	print(f"\n{bar}\n  HELD-OUT REPORT (report-only) — final population ({len(pop)} genomes) "
-	      f"on fresh seed {report_seed}, train seed {train_seed}\n{bar}")
+	      f"on fresh seed {test_seed}, train seed {train_seed}\n{bar}")
 	print(f"  RESULT — during-search winner (held-out):  stable={ds.acc*100:.1f}%  "
 	      f"err={ds.mean_attitude_error_deg:.2f}°  reward={ds.fitness:.2f}")
 	print(f"  population (held-out, descriptive):        stable={mean_s:.1f}±{std_s:.1f}%  "
 	      f"err={mean_e:.2f}±{std_e:.2f}°  (pop max={max(stables):.1f}% — NOT selected, would leak)")
 	pid = AttitudePID(AttitudePIDConfig())
 	from wnn.control.training import make_pid_action_fn
-	_, pid_m = eval_closed_loop_reset(make_pid_action_fn(pid), pid.reset, ec, 100, report_seed)
+	_, pid_m = eval_closed_loop_reset(make_pid_action_fn(pid), pid.reset, ec, 100, test_seed)
 	print(f"  vs PID  (held-out):                        stable={pid_m['stable_rate']*100:.1f}%  "
 	      f"err={pid_m['mean_attitude_error_deg']:.2f}°")
 	print(f"  vs MLP-GA baseline:  9.66°  (run_mlp_ga.py — note: legacy 15° setting)")
@@ -818,15 +818,15 @@ def run_full_curriculum(args, weights: dict, seed: int):
 			pass
 	_print_curriculum_report(stage_records, cumulative_wall, seed)
 	# TRUE held-out: re-eval the final controller on a fresh seed (the honest
-	# paper number). Skipped unless --report-seed is given.
-	report_seed = getattr(args, "report_seed", None)
-	if report_seed is not None and prev_best is not None:
+	# paper number). Skipped unless --test-seed is given.
+	test_seed = getattr(args, "test_seed", None)
+	if test_seed is not None and prev_best is not None:
 		try:
-			_holdout_eval(args, spec, weights, prev_best, prev_population, report_seed, seed)
+			_holdout_eval(args, spec, weights, prev_best, prev_population, test_seed, seed)
 		except Exception as e:
-			print(f"  [report-seed] held-out eval failed: {e}")
-	elif report_seed is not None:
-		print(f"  [report-seed] no final controller to evaluate (no winner).")
+			print(f"  [test-seed] held-out eval failed: {e}")
+	elif test_seed is not None:
+		print(f"  [test-seed] no final controller to evaluate (no winner).")
 	return "DONE"
 
 
@@ -877,7 +877,7 @@ def main() -> int:
 	# Seeds.
 	ap.add_argument("--base-seed", type=int, default=None)
 	ap.add_argument("--seed", type=int, default=42)
-	ap.add_argument("--report-seed", type=int, default=None,
+	ap.add_argument("--test-seed", type=int, default=None,
 		help="TRUE held-out: after a --mode full run, re-eval the final controller "
 		     "on this fresh seed (must differ from the train seed). The honest paper number.")
 	ap.add_argument("--full-gens", type=int, default=None,

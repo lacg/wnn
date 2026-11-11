@@ -23,7 +23,7 @@
 #                               cells are read where nothing was written. Rank
 #                               correlation of that axis to the aligned one: 0.19.
 #                               A screen without this flag ranks threshold luck.
-#   --report-seeds (5, not 1)   lands the held-out directly on the baselines' axis,
+#   --test-seeds (5, not 1)   lands the held-out directly on the baselines' axis,
 #                               so no separate rescore pass is needed after.
 #
 # Usage: run_l3d_feature_probe.sh [seed ...]     (default: 31337002 = round 1)
@@ -40,7 +40,7 @@ MARKDIR="${MARKDIR:-experiments/l3dfeat_markers}"
 mkdir -p "$OUTDIR" "$MARKDIR"
 
 SEEDS=(${@:-31337002})
-REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
+TEST_SEEDS="99990101 99990102 99990103 99990104 99990105"
 
 # Identical to the study's COMMON except --disturbance (per-arm) and the two
 # departures above. Keeping the rest bit-identical is what makes A1 a control:
@@ -51,7 +51,7 @@ COMMON="--levels 16 --skip-stages bits,connections --lamarckian \
 --check-interval 2 --magnitude-aware-patience --eval-episodes 100 \
 --memory-eval-episodes 200 --steps 2000 --tilt 5.0 \
 --fit-weight-err-sq 0.4 --fit-weight-stable 0.3 --fit-weight-jerk 0.2 \
---fit-weight-mono 0.1 --report-episodes 100 \
+--fit-weight-mono 0.1 --test-episodes 100 \
 --holdout-pop-sample 8 --grid-bits 24 30 --max-output-neurons 128 \
 --runs 1 --teacher lqr --grid-state-neurons 0 --max-state-neurons 0 \
 --memory-mode BINARY"
@@ -105,7 +105,7 @@ run_arm() {
 		"\"arm\":\"${arm}\",\"disturbance\":\"${dist}\",\"features\":\"${featset}\",\"substrate\":\"1layer\",\"mode\":\"BINARY\",\"seed\":${seed}" \
 		-- $COMMON \
 		--disturbance "$dist" $feat_flags \
-		--report-seeds $REPORT_SEEDS \
+		--test-seeds $TEST_SEEDS \
 		--base-seed "$seed"
 }
 

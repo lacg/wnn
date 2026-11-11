@@ -1,6 +1,6 @@
 {
  "meta": {
-  "report_seeds": [
+  "test_seeds": [
    99990101,
    99990102,
    99990103,
@@ -21,7 +21,7 @@
    "mode": "BINARY",
    "seed": 31337002,
    "train_seed": 3072558954,
-   "report_seeds": [
+   "test_seeds": [
     99990101,
     99990102,
     99990103,

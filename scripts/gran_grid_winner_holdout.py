@@ -4,7 +4,7 @@ ONE script for ALL modes (supersedes the binary/qsr one-offs; no duplicates).
 
 Runs stage-0 grid ONLY (NO GA-Neurons, NO GA-Memory): the deterministic grid regenerates
 the winner, we TRAIN it on the train seed (num_eval_folds=5 K-fold ACCUMULATE, write_back
-stamps cells) and SCORE those cells on a FRESH report seed (score_genomes → NO retrain).
+stamps cells) and SCORE those cells on a FRESH test seed (score_genomes → NO retrain).
 That is train-on-A → test-on-B: the true generalization number. We replicate the
 score-only semantics production uses for a MEMORY-stage winner (avoids the _holdout_report
 K=1 undertraining artifact for arch-only genomes).
@@ -49,7 +49,7 @@ def _phased_argv(w):
 		"--eval-episodes", "100", "--memory-eval-episodes", "200", "--steps", str(w.steps),
 		"--max-state-neurons", "24", "--max-output-neurons", "128", "--tilt", "5.0",
 		"--fit-weight-err-sq", "0.4", "--fit-weight-stable", "0.3", "--fit-weight-jerk", "0.2", "--fit-weight-mono", "0.1",
-		"--report-seed", "99990101", "--report-episodes", "100", "--holdout-pop-sample", "8",
+		"--test-seed", "99990101", "--test-episodes", "100", "--holdout-pop-sample", "8",
 		"--base-seed", str(w.base_seed), "--runs", "1", "--teacher", "lqr",
 		"--memory-mode", w.memory_mode,
 	], save
@@ -66,8 +66,8 @@ def _mk_ec(args):
 	)
 
 
-def _held_out(args, ec, winner_spec, winner, grid_thr, train_seed, report_seed):
-	"""Train winner on train_seed (grid-identical, K=5 accumulate) → score on report_seed."""
+def _held_out(args, ec, winner_spec, winner, grid_thr, train_seed, test_seed):
+	"""Train winner on train_seed (grid-identical, K=5 accumulate) → score on test_seed."""
 	train_ev = ControllerEvaluator(
 		winner_spec, num_eval_episodes=args.eval_episodes, seed=train_seed,
 		episode_config=ec, thresholds=grid_thr, rg_config=_rg_config(args, ec, train_seed),
@@ -80,14 +80,14 @@ def _held_out(args, ec, winner_spec, winner, grid_thr, train_seed, report_seed):
 	      f"cells={'yes' if getattr(winner, 'cells', None) is not None else 'NONE!'}")
 
 	rep_thr = fit_thresholds_from_pid_rollouts(
-		winner_spec, num_episodes=10, seed=report_seed,
+		winner_spec, num_episodes=10, seed=test_seed,
 		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None))
 	rep_ev = ControllerEvaluator(
-		winner_spec, num_eval_episodes=args.report_episodes, seed=report_seed,
-		episode_config=ec, thresholds=rep_thr, rg_config=_rg_config(args, ec, report_seed),
+		winner_spec, num_eval_episodes=args.test_episodes, seed=test_seed,
+		episode_config=ec, thresholds=rep_thr, rg_config=_rg_config(args, ec, test_seed),
 		max_train_workers=args.train_workers)
 	held = rep_ev.score_genomes([winner])[0]
-	pid_m = _pid_baseline(ec, args.report_episodes, report_seed)
+	pid_m = _pid_baseline(ec, args.test_episodes, test_seed)
 	return held, pid_m
 
 
@@ -123,11 +123,11 @@ def main():
 	print(f"\n[grid done {dt0:.0f}s] winner sn={sn} b={sb} during-search: "
 	      f"stable={m0.acc*100:.1f}% err={m0.mean_attitude_error_deg:.2f}°  (saved → {save})")
 
-	held, pid_m = _held_out(args, ec, winner_spec, winner, grid_thr, s.train, args.report_seed)
+	held, pid_m = _held_out(args, ec, winner_spec, winner, grid_thr, s.train, args.test_seed)
 	bar = "=" * 72
 	sty = getattr(held, "mean_steady_error_deg", None)
 	print(f"\n{bar}\n  HONEST HELD-OUT [GRID-WINNER sn={sn} b={sb} {w.memory_mode}] — "
-	      f"train seed {s.train} (K={args.num_eval_folds}) → score FRESH seed {args.report_seed}\n{bar}")
+	      f"train seed {s.train} (K={args.num_eval_folds}) → score FRESH seed {args.test_seed}\n{bar}")
 	print(f"  RESULT (held-out):  stable={held.acc*100:.1f}%  err={held.mean_attitude_error_deg:.2f}°"
 	      + (f"  steady={sty:.2f}°" if sty is not None else "") + f"  reward={held.fitness:.2f}")
 	_bl = pid_m.get("label", "PID") if isinstance(pid_m, dict) else "PID"

@@ -43,7 +43,7 @@ AIRFRAME="${S1_AIRFRAME:-cf21_brushless}"
 DIST="${S1_DIST:-L4C}"
 SEEDS="${S1_SEEDS:-31337002 31337003}"
 NEURONS_GENS="${S1_NEURONS_GENS:-5}"
-REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
+TEST_SEEDS="99990101 99990102 99990103 99990104 99990105"
 # λ=0 is the CONTROL arm (translation on, no altitude reward), not a filler.
 LAMBDAS="${S1_LAMBDAS:-0 1 4 16 64}"
 
@@ -94,7 +94,7 @@ run_lambda() {
 		--eval-episodes 100 --memory-eval-episodes 200 \
 		--steps 2000 --tilt 5.0 \
 		$S16_WEIGHTS \
-		--report-episodes 100 --holdout-pop-sample 8 \
+		--test-episodes 100 --holdout-pop-sample 8 \
 		--grid-bits 24 30 \
 		--grid-state-neurons 0 --max-state-neurons 0 \
 		--max-output-neurons 128 \
@@ -104,7 +104,7 @@ run_lambda() {
 		--teacher mpcof \
 		$FEAT_STAGE1 \
 		--translation --reward-lambda-alt "$lam" \
-		--report-seeds $REPORT_SEEDS \
+		--test-seeds $TEST_SEEDS \
 		--base-seed "$seed"
 }
 

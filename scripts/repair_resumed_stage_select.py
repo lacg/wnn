@@ -22,7 +22,7 @@ GATES (any failure REFUSES and writes nothing to the marker):
   G1  the selector's fitness identity (`fit = ...`) equals the run's;
   G2  every candidate the ORIGINAL pool ranked reproduces its `val` line bit-exactly
       (proves the flags rebuild the run's scorer);
-  G3  when the new headline is a stage's #0 genome, its re-scored report-seed
+  G3  when the new headline is a stage's #0 genome, its re-scored test-seed
       MULTI-SEED row equals that stage's published row from the run's logs.
 
 WRITES (originals never touched): headline_stage_recalc, headline_holdout_recalc,
@@ -164,7 +164,7 @@ def main() -> int:
 	if not hs:
 		return refuse("no HEADLINE line in the recalc output")
 	winner = hs.group(2)
-	ms = re.search(rf"\[report-seeds\] HEADLINE-{re.escape(winner)} MULTI-SEED held-out.*", text)
+	ms = re.search(rf"\[(?:test|report)-seeds\] HEADLINE-{re.escape(winner)} MULTI-SEED held-out.*", text)
 	hh = re.search(r"\[stage-select\] HEADLINE held-out: .*", text)
 	holdout = _squeeze(ms.group(0)) if ms else (_squeeze(hh.group(0)) if hh else None)
 	if holdout is None:

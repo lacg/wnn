@@ -6,9 +6,9 @@
 # (delta) substrate — only the scorer changed + shorter gens (quick) + throttled
 # (RAYON=2) so it shares the box with the deadline-priority XDS worker.
 # Compare the held-out ranking here vs wsweep_phased_20260610 to re-pick weights.
-# v2 (multi-seed): held-out scored at --report-episodes 100 (NOT the search's 8 eps;
+# v2 (multi-seed): held-out scored at --test-episodes 100 (NOT the search's 8 eps;
 # the 8-ep held-out was the cause of W1's noisy/inflated 87.5% → real ~58%) over 4
-# fixed report seeds (--report-seeds), reported as mean±std — robust to the documented
+# fixed test seeds (--test-seeds), reported as mean±std — robust to the documented
 # single-seed controller-eval variance.
 set -u
 cd /Users/lacg/wnn
@@ -49,8 +49,8 @@ for entry in "${COMBOS[@]}"; do
     --fit-weight-jerk "$J" --fit-weight-mono "$M" \
     --train-workers 2 \
     --base-seed 20260609 \
-    --report-episodes 100 \
-    --report-seeds 99990001 99990101 12345 67890 \
+    --test-episodes 100 \
+    --test-seeds 99990001 99990101 12345 67890 \
     --save-stage-checkpoints "$D" --save-winner "$D/winner.pkl" \
     > "$D/run.out" 2>&1
   echo "[resweep] $(date '+%Y-%m-%d %H:%M:%S') DONE $NAME (exit $?)"

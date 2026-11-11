@@ -34,7 +34,7 @@ MARKDIR="experiments/specialist1_markers"
 AIRFRAME="cf21_brushless"
 DIST="L4C"
 SEED="${SP1_SEED:-31337002}"
-REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
+TEST_SEEDS="99990101 99990102 99990103 99990104 99990105"
 
 FEAT_STAGE1="--obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err --obs-yaw-err-i \
 	--obs-collective-cmd --obs-alt-err --obs-vz"
@@ -62,12 +62,12 @@ run_arm_common() {
 		--eval-episodes 100 --memory-eval-episodes 200 \
 		--steps 2000 --tilt 5.0 \
 		$S16_WEIGHTS \
-		--report-episodes 100 --holdout-pop-sample 8 \
+		--test-episodes 100 --holdout-pop-sample 8 \
 		--runs 1 --memory-mode BINARY \
 		--airframe "$AIRFRAME" --disturbance "$DIST" --teacher mpcof \
 		$FEAT_STAGE1 \
 		--translation --reward-lambda-alt 16 \
-		--report-seeds $REPORT_SEEDS \
+		--test-seeds $TEST_SEEDS \
 		--base-seed "$SEED" \
 		"$@"
 	log "$tag finished rc=$?"

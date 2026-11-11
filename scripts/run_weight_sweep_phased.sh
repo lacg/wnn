@@ -6,7 +6,7 @@
 #   - splitting           (WNN_STATE_SPLIT=1, conflict-driven state in training)
 #   - lamarckian          (--lamarckian: carry+write-back trained cells across gens)
 #   - cell persistence    (--save-winner saves the genome WITH its cells)
-#   - per-stage held-out  (--report-seed: honest held-out at end of neurons + memory)
+#   - per-stage held-out  (--test-seed: honest held-out at end of neurons + memory)
 # Runs all 18 combos (W1-W4 + C1-C14) sequentially. Detached + checkpointed.
 set -u
 cd /Users/lacg/wnn
@@ -47,7 +47,7 @@ for entry in "${COMBOS[@]}"; do
     --fit-weight-err-sq "$E" --fit-weight-stable "$S" \
     --fit-weight-jerk "$J" --fit-weight-mono "$M" \
     --train-workers 4 \
-    --base-seed 20260609 --report-seed 99990001 \
+    --base-seed 20260609 --test-seed 99990001 \
     --save-stage-checkpoints "$D" --save-winner "$D/winner.pkl" \
     > "$D/run.out" 2>&1
   echo "[wsweep] $(date '+%Y-%m-%d %H:%M:%S') DONE $NAME (exit $?)"

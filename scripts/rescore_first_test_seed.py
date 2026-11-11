@@ -1,12 +1,12 @@
 #!/usr/bin/env python
-"""Re-score the FIRST report seed of every arch-only stage row from the run's own
+"""Re-score the FIRST test seed of every arch-only stage row from the run's own
 checkpoint — the 15/07→14/09/2026 threshold misalignment (phased_ga._holdout_report).
 
 WHAT WAS WRONG. For a stage whose winner carried no cells (GRID always; NEURONS /
 BITS / CONNECTIONS when not Lamarckian), `_holdout_report` trained the cells on the
 train seed under TRAIN-seed thresholds and scored them with an evaluator built on
 REPORT-seed thresholds — two address functions for one memory. Only the FIRST
-report seed was hit: the write-back left the genome carrying cells, so seeds 2..5
+test seed was hit: the write-back left the genome carrying cells, so seeds 2..5
 took the aligned score-only path. Fixed at the source on 14/09/2026; this script
 repairs the banked rows so the archive is on one rule.
 
@@ -29,7 +29,7 @@ WHAT THIS DOES, per marker (read-only on the run; writes ONLY to the marker json
 Nothing is trained. GPU scorer, ~2 scorings per stage row.
 
 Usage:
-  PYTHONPATH=src/wnn python scripts/rescore_first_report_seed.py [--only TAG ...]
+  PYTHONPATH=src/wnn python scripts/rescore_first_test_seed.py [--only TAG ...]
       [--stages GRID,NEURONS,...] [--dry-run] [--limit N] [--headline-first]
 """
 from __future__ import annotations
@@ -63,9 +63,9 @@ def _find_ckpt_dir(tag: str) -> str | None:
 
 
 def parse_out(path: str) -> dict:
-	"""Header facts + per-stage per-report-seed RESULT rows."""
+	"""Header facts + per-stage per-test-seed RESULT rows."""
 	L = open(path, errors="replace").read().split("\n")
-	f: dict = dict(per_seed={}, report_seeds=None)
+	f: dict = dict(per_seed={}, test_seeds=None)
 	for i, l in enumerate(L[:40]):
 		m = re.search(r"\[W2\] disturbance=(\w+)", l)
 		if m:
@@ -79,9 +79,9 @@ def parse_out(path: str) -> dict:
 	for i, l in enumerate(L):
 		m = re.search(r"HELD-OUT REPORT \[(\w+)\] \(report-only\).*FRESH seed (\d+)", l)
 		if not m:
-			m2 = re.search(r"\[report-seeds\] \w+ MULTI-SEED held-out \((\d+) seeds \[([\d, ]+)\]\)", l)
-			if m2 and f["report_seeds"] is None:
-				f["report_seeds"] = [int(x) for x in m2.group(2).split(",")]
+			m2 = re.search(r"\[(?:test|report)-seeds\] \w+ MULTI-SEED held-out \((\d+) seeds \[([\d, ]+)\]\)", l)
+			if m2 and f["test_seeds"] is None:
+				f["test_seeds"] = [int(x) for x in m2.group(2).split(",")]
 			continue
 		stage, seed = m.group(1), int(m.group(2))
 		for j in range(i, min(i + 8, len(L))):
@@ -108,7 +108,7 @@ def build_run_args(tag: str, marker: dict, facts: dict, rep_eps: int | None = No
 	        "--disturbance", facts["disturbance"],
 	        "--base-seed", str(facts["base"]), "--train-seed", str(facts["train"]),
 	        "--test-seed", str(facts["test"]), "--val-seed", str(facts["val"]),
-	        "--report-seeds", *[str(s) for s in facts["report_seeds"]],
+	        "--test-seeds", *[str(s) for s in facts["test_seeds"]],
 	        "--num-eval-folds", "5", "--holdout-pop-sample", "8", "--runs", "1"]
 	af = re.search(r"(cf21_brushless|cf2x_urdf)", tag)
 	if af:
@@ -129,8 +129,8 @@ def build_run_args(tag: str, marker: dict, facts: dict, rep_eps: int | None = No
 	if rep_eps is None:
 		blob = " ".join(str(v) for k, v in marker.items() if k.startswith("held_") or k.startswith("headline"))
 		sf = re.search(r"stable_fail=\d+/(\d+)", blob)
-		rep_eps = (int(sf.group(1)) // len(facts["report_seeds"])) if sf else 100
-	argv += ["--report-episodes", str(rep_eps), "--eval-episodes", str(facts.get("eval_episodes", 100))]
+		rep_eps = (int(sf.group(1)) // len(facts["test_seeds"])) if sf else 100
+	argv += ["--test-episodes", str(rep_eps), "--eval-episodes", str(facts.get("eval_episodes", 100))]
 	return build_arg_parser().parse_args(argv)
 
 
@@ -145,13 +145,13 @@ def load_stage_genome(entries: list, stage: str):
 	return None, None
 
 
-def score_seed(args, ec, spec, genome, report_seed: int, train_seed: int, thresholds_on: str):
+def score_seed(args, ec, spec, genome, test_seed: int, train_seed: int, thresholds_on: str):
 	from wnn.control.evaluator import ControllerEvaluator
-	from wnn.control.phased_ga import _report_thresholds, _rg_config
-	thr = _report_thresholds(args, ec, spec, report_seed, train_seed, use_score=(thresholds_on == "train"))
-	rep_eps = args.report_episodes or args.eval_episodes
-	ev = ControllerEvaluator(spec, num_eval_episodes=rep_eps, seed=report_seed, episode_config=ec,
-	                         thresholds=thr, rg_config=_rg_config(args, ec, report_seed),
+	from wnn.control.phased_ga import _test_thresholds, _rg_config
+	thr = _test_thresholds(args, ec, spec, test_seed, train_seed, use_score=(thresholds_on == "train"))
+	rep_eps = args.test_episodes or args.eval_episodes
+	ev = ControllerEvaluator(spec, num_eval_episodes=rep_eps, seed=test_seed, episode_config=ec,
+	                         thresholds=thr, rg_config=_rg_config(args, ec, test_seed),
 	                         max_train_workers=args.train_workers,
 	                         num_eval_folds=getattr(args, "num_eval_folds", 5))
 	m = ev.score_genomes([genome])[0]
@@ -180,9 +180,9 @@ def _fmt_ms(vals: list[float], nd: int) -> str:
 
 
 def multiseed_string(stage: str, rows: list[dict], seeds: list[int], n_eps: int) -> str:
-	"""The `[report-seeds] STAGE MULTI-SEED held-out (...)` line, rebuilt from per-seed
+	"""The `[test-seeds] STAGE MULTI-SEED held-out (...)` line, rebuilt from per-seed
 	rows — the same fields, same order, same precision as the run prints."""
-	parts = [f" [report-seeds] {stage} MULTI-SEED held-out ({len(seeds)} seeds [{', '.join(str(s) for s in seeds)}]):"]
+	parts = [f" [test-seeds] {stage} MULTI-SEED held-out ({len(seeds)} seeds [{', '.join(str(s) for s in seeds)}]):"]
 	parts.append(f"stable={_fmt_ms([r['stable'] for r in rows], 1)}%")
 	parts.append(f"err={_fmt_ms([r['err'] for r in rows], 2)}°")
 	parts.append(f"steady={_fmt_ms([r['steady'] for r in rows], 2)}°")
@@ -220,8 +220,8 @@ def process_marker(path: str, stages: list[str], dry_run: bool, log) -> str:
 	if not out or not ck:
 		return f"skip: {'no .out' if not out else 'no checkpoint dir'}"
 	facts = parse_out(out)
-	if not facts.get("report_seeds") or "train" not in facts or "steps" not in facts:
-		return "skip: .out header incomplete (no report seeds / seed set / recipe line)"
+	if not facts.get("test_seeds") or "train" not in facts or "steps" not in facts:
+		return "skip: .out header incomplete (no test seeds / seed set / recipe line)"
 	hs = re.search(r"stage=(\w+) genome=(\S+)", marker.get("headline_stage") or "")
 	head_stage, head_genome = (hs.group(1), hs.group(2)) if hs else ("?", "?")
 	try:
@@ -230,9 +230,9 @@ def process_marker(path: str, stages: list[str], dry_run: bool, log) -> str:
 	except SystemExit as e:
 		return f"skip: recipe rebuild refused ({e})"
 	align = marker.get("holdout_alignment") or {}
-	seeds = facts["report_seeds"]
+	seeds = facts["test_seeds"]
 	s1 = seeds[0]
-	n_eps = args.report_episodes
+	n_eps = args.test_episodes
 	changed = False
 	entries = None
 	for stage in stages:
@@ -254,7 +254,7 @@ def process_marker(path: str, stages: list[str], dry_run: bool, log) -> str:
 		logged = per[s1]
 		t0 = time.time()
 		# Classify by reproduction. The expected case goes first so the common
-		# outcome costs one scoring: arch-only stages were misaligned (report-seed
+		# outcome costs one scoring: arch-only stages were misaligned (test-seed
 		# thresholds reproduce the log); a Lamarckian CONNECTIONS row was aligned.
 		first = "train" if stage == "CONNECTIONS" else "report"
 		got = {first: score_seed(args, ec, spec, genome, s1, facts["train"], first)}
@@ -266,7 +266,7 @@ def process_marker(path: str, stages: list[str], dry_run: bool, log) -> str:
 			# recipes used 50. Retry the expected threshold set at the other counts
 			# before refusing — the reproduction gate still decides.
 			for alt_eps in (50, 200, 20):
-				if alt_eps == args.report_episodes:
+				if alt_eps == args.test_episodes:
 					continue
 				args2 = build_run_args(tag, marker, facts, rep_eps=alt_eps)
 				cand = score_seed(args2, ec, spec, genome, s1, facts["train"], first)
@@ -275,7 +275,7 @@ def process_marker(path: str, stages: list[str], dry_run: bool, log) -> str:
 					got = {first: cand}
 					other = "report" if first == "train" else "train"
 					got[other] = score_seed(args, ec, spec, genome, s1, facts["train"], other)
-					log(f"  (report-episodes resolved to {alt_eps})")
+					log(f"  (test-episodes resolved to {alt_eps})")
 					break
 		rep, tr = got.get("report"), got.get("train")
 		# Which threshold set reproduced the log decides the class; when both do

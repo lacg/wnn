@@ -4,7 +4,7 @@
 # anchor's in-sample≫held-out gap (91→70%) is OVERFITTING the 3 search folds: with
 # 5 accumulated folds the GA sees more diverse ICs and can't memorize them, so the
 # anchor's clear in-sample edge (2.94°/2.03° vs S16 3.41°/3.05°) should survive to
-# held-out. Compare held-out (report-seeds) vs folds=3 anchor (70/67.5%) AND S16
+# held-out. Compare held-out (test-seeds) vs folds=3 anchor (70/67.5%) AND S16
 # (87/88.5%) at the SAME seeds. Args: SEED. Writes YAWF5_seed{SEED}/.
 set -u
 cd /Users/lacg/wnn
@@ -25,7 +25,7 @@ $PY -u -m wnn.control.phased_ga \
   --rg-rounds 3 --rg-episodes-per-round 8 --universe-episodes 5 \
   --fit-weight-err-sq "$ERR" --fit-weight-steady "$STEADY" --fit-weight-stable "$STABLE" \
   --fit-weight-jerk "$JERK" --fit-weight-mono "$MONO" \
-  --report-episodes 100 --report-seeds 99990001 99990101 12345 67890 --holdout-pop-sample 8 \
+  --test-episodes 100 --test-seeds 99990001 99990101 12345 67890 --holdout-pop-sample 8 \
   --base-seed "$SEED" --runs 1 \
   --save-winner "$DIR/winner.yaml.gz" --save-stage-checkpoints "$DIR" > "$DIR/run.out" 2>&1
 echo "{\"yaw_f5_done\":true,\"seed\":$SEED,\"ts\":\"$(date '+%Y-%m-%dT%H:%M:%S')\"}" > /tmp/wnn_yaw_f5_seed${SEED}_done.json

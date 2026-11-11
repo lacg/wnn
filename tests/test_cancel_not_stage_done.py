@@ -38,8 +38,8 @@ TINY = ["--grid-state-neurons", "0", "--max-state-neurons", "0",
         "--grid-bits", "8", "--grid-output-neurons", "8", "--max-output-neurons", "8",
         "--skip-stages", "bits,connections", "--neurons-gens", "1", "--neurons-patience", "1",
         "--memory-gens", "4", "--memory-patience", "4", "--pop", "4", "--grid-top-k", "4",
-        "--eval-episodes", "2", "--memory-eval-episodes", "2", "--report-episodes", "2",
-        "--steps", "50", "--universe-episodes", "2", "--report-seeds", "11",
+        "--eval-episodes", "2", "--memory-eval-episodes", "2", "--test-episodes", "2",
+        "--steps", "50", "--universe-episodes", "2", "--test-seeds", "11",
         "--base-seed", "5", "--runs", "1", "--check-interval", "1",
         "--train-workers", "2", "--grid-min-suffix", "1", "--lamarckian"]
 

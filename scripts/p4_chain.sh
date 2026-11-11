@@ -65,7 +65,7 @@ VP="/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/bin/python"
 OUTDIR="logs/controller/p4"
 MARKDIR="experiments/p4_markers"
 SEEDS="${P4_SEEDS:-31337002 31337003 31337004}"
-REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
+TEST_SEEDS="99990101 99990102 99990103 99990104 99990105"
 P4_CONFIRMED="${P4_CONFIRMED:-0}"
 
 # nf=17 pidmix_tilt — identical flags to p2_chain.sh and to
@@ -123,7 +123,7 @@ run_quad_arm() {
 		--steps 2000 --tilt 5.0 \
 		--fit-weight-err-sq 0.4 --fit-weight-stable 0.3 \
 		--fit-weight-jerk 0.2 --fit-weight-mono 0.1 \
-		--report-episodes 100 --holdout-pop-sample 8 \
+		--test-episodes 100 --holdout-pop-sample 8 \
 		--grid-bits 24 30 \
 		--grid-output-neurons 64 96 128 \
 		--max-output-neurons 128 \
@@ -132,7 +132,7 @@ run_quad_arm() {
 		--memory-mode QUAD_WEIGHTED --output-decode "$decode" \
 		--disturbance L2D \
 		$FEAT_PIDMIX_TILT \
-		--report-seeds $REPORT_SEEDS \
+		--test-seeds $TEST_SEEDS \
 		--base-seed "$seed"
 }
 

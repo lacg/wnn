@@ -3,7 +3,7 @@
 # Designed 30/07/2026 (docs/motor_fault_experiment.md + the gap decomposition).
 #
 #   B  data-budget CURVE : retrain the winner arch at 1x/4x/16x DAgger budget, each
-#                          arm scored on 5 report seeds. Read the SHAPE with error
+#                          arm scored on 5 test seeds. Read the SHAPE with error
 #                          bars: a flat-within-noise curve says no affordable budget
 #                          closes the 77->96 gap, so stop buying episodes.
 #   A  nominal memory-GA : seed-winner MEMORY-only value-GA (closed-loop reward,
@@ -40,7 +40,7 @@ OUTDIR="${OUTDIR:-logs/controller/ceiling}"
 MARKDIR="${MARKDIR:-experiments/dfa1l_markers}"
 WINNER="${WINNER:-logs/controller/dfa1l/dfa_9feat_BINARY_s31337002_winner.yaml.gz}"
 BASE_SEED="${BASE_SEED:-31337002}"     # MUST match the winner's _sNNNN
-REPORT_SEED="${REPORT_SEED:-99990101}"
+TEST_SEED="${TEST_SEED:-99990101}"
 FAULT="${FAULT:-1:0.3}"                # motor 2 at 30% effectiveness (the cliff)
 mkdir -p "$OUTDIR"
 
@@ -65,8 +65,8 @@ guard() {
 COMMON="--levels 16 --pop 50 --num-eval-folds 5 --check-interval 2 \
 --magnitude-aware-patience --eval-episodes 100 --memory-eval-episodes 200 \
 --steps 2000 --tilt 5.0 --fit-weight-err-sq 0.4 --fit-weight-stable 0.3 \
---fit-weight-jerk 0.2 --fit-weight-mono 0.1 --report-seed ${REPORT_SEED} \
---report-episodes 100 --holdout-pop-sample 8 --grid-bits 24 30 \
+--fit-weight-jerk 0.2 --fit-weight-mono 0.1 --test-seed ${TEST_SEED} \
+--test-episodes 100 --holdout-pop-sample 8 --grid-bits 24 30 \
 --grid-state-neurons 8 12 16 --max-state-neurons 24 --max-output-neurons 128 \
 --runs 1 --teacher lqr --disturbance L2D --base-seed ${BASE_SEED}"
 
@@ -123,8 +123,8 @@ phase_C() {
 	log "===== PHASE C: motor-fault (${FAULT}) memory-GA + matched baselines ====="
 	# Baselines on the SAME faulted plant first (scoring-only, minutes).
 	"$VP" -u scripts/compute_baselines.py --disturbance L2D --motor-fault "$FAULT" \
-		--report-seeds 99990101 99990102 99990103 99990104 99990105 \
-		--report-episodes 100 --steps 2000 \
+		--test-seeds 99990101 99990102 99990103 99990104 99990105 \
+		--test-episodes 100 --steps 2000 \
 		--out "$MARKDIR/baselines_fault_${FAULT//:/x}.json" \
 		> "$OUTDIR/phaseC_baselines.out" 2>&1 || { log "fault baselines FAILED"; return 4; }
 	tail -7 "$OUTDIR/phaseC_baselines.out"

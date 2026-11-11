@@ -54,7 +54,7 @@ SEEDS="${L1_SEEDS:-31337002 31337003}"
 # MPC-family cap, copied from the control arm. NOT a free choice.
 NEURONS_GENS="${L1_NEURONS_GENS:-5}"
 LGAIN="${L1_LGAIN:-0.05}"
-REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
+TEST_SEEDS="99990101 99990102 99990103 99990104 99990105"
 
 # nf=15 pidmix + 3 d̂ = 18 features.
 FEAT_PIDMIX="--obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err --obs-yaw-err-i"
@@ -88,7 +88,7 @@ run_arm() {
 		--steps 2000 --tilt 5.0 \
 		--fit-weight-err-sq 0.4 --fit-weight-stable 0.3 \
 		--fit-weight-jerk 0.2 --fit-weight-mono 0.1 \
-		--report-episodes 100 --holdout-pop-sample 8 \
+		--test-episodes 100 --holdout-pop-sample 8 \
 		--grid-bits 24 30 \
 		--grid-state-neurons 0 --max-state-neurons 0 \
 		--max-output-neurons 128 \
@@ -98,7 +98,7 @@ run_arm() {
 		--teacher mpcof \
 		$FEAT_PIDMIX \
 		--obs-dhat --dhat-l-gain "$LGAIN" \
-		--report-seeds $REPORT_SEEDS \
+		--test-seeds $TEST_SEEDS \
 		--base-seed "$seed"
 }
 

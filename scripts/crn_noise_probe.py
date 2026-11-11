@@ -24,7 +24,7 @@ cannot; with --frames 3 the A-vs-fresh / B-C gap measures exactly that.
 MACHINERY, not a reimplementation: the population comes from the banked stage
 checkpoint (population, NEVER best_genome — project_checkpoint_best_vs_pop0); the
 regime is phased_ga's OWN parser + episode_config_from_args on the run's exact argv
-(--run-args-file); thresholds are phased_ga._report_thresholds fit ONCE on the train
+(--run-args-file); thresholds are phased_ga._test_thresholds fit ONCE on the train
 seed (the address function the cells were written under, = the MEMORY-stage fit);
 scoring is ControllerEvaluator.score_genomes with score_crn=True — score-only, no
 training, nothing written back — i.e. the MEMORY stage's own fitness call.
@@ -53,7 +53,7 @@ METRICS = ("stable_rate", "mean_attitude_error_deg", "mean_steady_error_deg",
 MAD_K = 1.4826
 FRAME_NAMES = "ABC"
 # Frame seeds for the fresh frames: fixed odd offsets from the train seed, so the
-# probe is reproducible and never collides with the run's test/val/report seeds.
+# probe is reproducible and never collides with the run's test/val/test seeds.
 FRESH_OFFSETS = (0, 0x2C1B3C6D, 0x5E2D58D9)
 _CRN_LINE = re.compile(r"CRN fitness: every genome scored on all (\d+) pools \[([0-9, ]+)\].*?\((\d+) episodes each")
 
@@ -147,8 +147,8 @@ def _verify_against_run(a, frame_a_pools, episodes):
 
 def _thresholds(reg, spec):
 	"""The MEMORY stage's fit: PID rollouts on the train seed, calib ec included."""
-	from wnn.control.phased_ga import _report_thresholds
-	return _report_thresholds(reg.args, reg.ec, spec, reg.train_seed, reg.train_seed, True)
+	from wnn.control.phased_ga import _test_thresholds
+	return _test_thresholds(reg.args, reg.ec, spec, reg.train_seed, reg.train_seed, True)
 
 
 def _evaluator(reg, spec, thresholds, seed, a):

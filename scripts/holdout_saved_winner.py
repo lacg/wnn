@@ -4,7 +4,7 @@
 Loads a winner saved by ternary_grid_winner_holdout.py (canonical ternary_grid_winner.yaml.gz,
 via _ctl_load — same schema as --save-winner / --seed-winner) and does EXACTLY: train that
 single genome on the TRAIN seed (K=5 accumulate, the search regime) → score its cells on the
-FRESH report seed (score_genomes, no retrain). That's it.
+FRESH test seed (score_genomes, no retrain). That's it.
 
 This is the repeatable "1 freaking genome, train + held-out test" tool. It touches one
 genome; peak memory is one TERNARY controller's cells (tiny vs a pop=30 grid). Nothing to
@@ -12,7 +12,7 @@ kill from our side — if macOS jetsam takes it, rerun. K=1 is never used.
 
 Seeds are NOT read from the file — they are DETERMINISTIC from --base-seed (resolve_seed_set),
 matching how the search derived them. Thresholds are PID-fit + arch-independent, so re-fitting
-on the train/report seed reproduces the grid's exactly.
+on the train/test seed reproduces the grid's exactly.
 
 Usage:  python scripts/holdout_saved_winner.py [path.yaml.gz]
 """
@@ -29,9 +29,9 @@ DEFAULT_PKL = "/Users/lacg/wnn/logs/controller/ternary_grid_winner.yaml.gz"
 # Same non-grid CLI knobs the winner was searched under (steps/tilt/folds/report).
 ARGV = [
 	"--levels", "16", "--num-eval-folds", "5", "--eval-episodes", "100",
-	"--report-episodes", "100", "--steps", "1000", "--tilt", "5.0",
+	"--test-episodes", "100", "--steps", "1000", "--tilt", "5.0",
 	"--fit-weight-err-sq", "0.4", "--fit-weight-stable", "0.3", "--fit-weight-jerk", "0.2", "--fit-weight-mono", "0.1",
-	"--report-seed", "99990101", "--base-seed", "31337002", "--teacher", "lqr",
+	"--test-seed", "99990101", "--base-seed", "31337002", "--teacher", "lqr",
 	"--memory-mode", "TERNARY",
 ]
 
@@ -46,7 +46,7 @@ def main():
 	# Seeds are deterministic from --base-seed (same as the search), NOT stored in the file.
 	s = resolve_seed_set(base=args.base_seed, run_index=0,
 	                     train=args.train_seed, test=args.test_seed, val=args.val_seed)
-	train_seed, report_seed = s.train, args.report_seed
+	train_seed, test_seed = s.train, args.test_seed
 	grid_thr = None                              # re-fit (PID thresholds are arch-independent)
 	dist = DisturbanceConfig.preset(args.disturbance, seed=911)
 	ec = EpisodeConfig(
@@ -56,7 +56,7 @@ def main():
 
 	print(f"\n{'#'*72}\n# 1-GENOME held-out (loaded {path})\n"
 	      f"# winner sn={getattr(spec,'state_neurons','?')} b={getattr(spec,'state_bits','?')} "
-	      f"mode={getattr(spec,'memory_mode','?')}  train={train_seed} report={report_seed}\n{'#'*72}")
+	      f"mode={getattr(spec,'memory_mode','?')}  train={train_seed} report={test_seed}\n{'#'*72}")
 	t0 = time.time()
 
 	# 1. TRAIN the single genome on the train seed, K=5 accumulate (search regime).
@@ -72,19 +72,19 @@ def main():
 	print(f"  [train@{train_seed} K={args.num_eval_folds}] stable={tr_m.acc*100:.1f}% "
 	      f"err={tr_m.mean_attitude_error_deg:.2f}° cells={'yes' if winner.cells is not None else 'NONE!'}")
 
-	# 2. SCORE those cells on the fresh report seed — no retrain.
-	rep_thr = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=report_seed,
+	# 2. SCORE those cells on the fresh test seed — no retrain.
+	rep_thr = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=test_seed,
 		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None))
-	rep_ev = ControllerEvaluator(spec, num_eval_episodes=args.report_episodes, seed=report_seed,
-		episode_config=ec, thresholds=rep_thr, rg_config=_rg_config(args, ec, report_seed),
+	rep_ev = ControllerEvaluator(spec, num_eval_episodes=args.test_episodes, seed=test_seed,
+		episode_config=ec, thresholds=rep_thr, rg_config=_rg_config(args, ec, test_seed),
 		max_train_workers=args.train_workers)
 	held = rep_ev.score_genomes([winner])[0]
-	pid_m = _pid_baseline(ec, args.report_episodes, report_seed)
+	pid_m = _pid_baseline(ec, args.test_episodes, test_seed)
 
 	bar = "=" * 72
 	sty = getattr(held, "mean_steady_error_deg", None)
 	print(f"\n{bar}\n  HELD-OUT [1 genome] — train {train_seed} (K={args.num_eval_folds}) → "
-	      f"score FRESH {report_seed}\n{bar}")
+	      f"score FRESH {test_seed}\n{bar}")
 	print(f"  RESULT: stable={held.acc*100:.1f}%  err={held.mean_attitude_error_deg:.2f}°"
 	      + (f"  steady={sty:.2f}°" if sty is not None else "") + f"  reward={held.fitness:.2f}")
 	print(f"  vs PID: stable={pid_m['stable_rate']*100:.1f}%  err={pid_m['mean_attitude_error_deg']:.2f}°")

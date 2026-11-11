@@ -55,7 +55,7 @@ SEEDS="${L4_SEEDS:-31337002 31337003}"
 # and was deleted with the rest of that screen — compare against the CLOSED-FORM ARM OF
 # THIS RERUN, never against a remembered number.)
 NEURONS_GENS="${L4_NEURONS_GENS:-60}"
-REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
+TEST_SEEDS="99990101 99990102 99990103 99990104 99990105"
 
 # nf=15 pidmix — the A2 probe winner, and the only feature set with a matched
 # head-to-head win (beat pidmix_tilt on err at all three paired seeds).
@@ -102,7 +102,7 @@ run_teacher() {
 		--steps 2000 --tilt 5.0 \
 		--fit-weight-err-sq 0.4 --fit-weight-stable 0.3 \
 		--fit-weight-jerk 0.2 --fit-weight-mono 0.1 \
-		--report-episodes 100 --holdout-pop-sample 8 \
+		--test-episodes 100 --holdout-pop-sample 8 \
 		--grid-bits 24 30 \
 		--grid-state-neurons 0 --max-state-neurons 0 \
 		--max-output-neurons 128 \
@@ -111,7 +111,7 @@ run_teacher() {
 		--disturbance "$DIST" \
 		--teacher "$teacher" \
 		$FEAT_PIDMIX \
-		--report-seeds $REPORT_SEEDS \
+		--test-seeds $TEST_SEEDS \
 		--base-seed "$seed"
 }
 

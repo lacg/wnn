@@ -24,7 +24,7 @@
 #     this run:  --conns-gens 20 --conns-patience 5
 # Everything else is byte-identical — same S16noJM weights, same desirability
 # aggregation with NO gate flags (the calculator REFUSES gate+desirability), same
-# features, folds 5, same report seeds, same base seed. Anything else changing
+# features, folds 5, same test seeds, same base seed. Anything else changing
 # would reintroduce the confound this run exists to kill.
 #
 # COST at the probe's measured 2066.7s/gen: ~11.5h if it runs the full 20 gens,
@@ -40,7 +40,7 @@ OUTDIR="logs/controller/sweep_ladder"
 MARKDIR="experiments/sweepladder_markers"
 AIRFRAME="cf21_brushless"; DIST="L4C"; SEED=31337002; B=36; SWEEP_N=32
 TAG="SL_A_b${B}n${SWEEP_N}_${AIRFRAME}_${DIST}_desir_g20_s${SEED}"
-REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
+TEST_SEEDS="99990101 99990102 99990103 99990104 99990105"
 
 log() { echo "[b36desir-long] $(date -u +%FT%TZ) $*" >> "$LOG"; }
 controller_pids() { pgrep -f -- "-m wnn.control.phased_ga" 2>/dev/null || true; }
@@ -77,14 +77,14 @@ run_controller_arm "$TAG" "$MARKDIR" "$OUTDIR" "$VP" log \
 	--fit-weight-err-sq 0.3125 --fit-weight-stable 0.25 --fit-weight-steady 0.4375 \
 	--fit-aggregation desirability \
 	--grid-bits "$B" --grid-output-neurons "$SWEEP_N" --max-output-neurons "$SWEEP_N" \
-	--report-episodes 100 --holdout-pop-sample 8 \
+	--test-episodes 100 --holdout-pop-sample 8 \
 	--runs 1 --memory-mode BINARY \
 	--airframe "$AIRFRAME" --disturbance "$DIST" --teacher mpcof \
 	--obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err --obs-yaw-err-i \
 	--obs-collective-cmd --obs-alt-err --obs-vz \
 	--translation --reward-lambda-alt 0 \
 	--grid-state-neurons 0 --max-state-neurons 0 \
-	--report-seeds $REPORT_SEEDS \
+	--test-seeds $TEST_SEEDS \
 	--base-seed "$SEED"
 log "$TAG finished rc=$? ########## LONG-BUDGET b=36 DESIR COMPLETE ##########"
 log "READ IT AS: compare headline_holdout vs the probe's b36 DESIR (37.4%/10.29/11.55) and vs b36 GATE (66.6%/5.94/6.53)."

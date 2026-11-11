@@ -23,9 +23,9 @@ def _evaluator_and_genome():
 	a._conn_policy, a._conn_policy_min = P.conn_policy_from_name(getattr(a, "conn_policy", "spread"))
 	_, spec, res = P._stage_entry_from_checkpoint(D / f"ckpt_{TAG}/stage4_memory.yaml.gz", top_k=1)[:3]
 	s = resolve_seed_set(base=a.base_seed, run_index=0, train=a.train_seed, test=a.test_seed, val=a.val_seed)
-	rs = int(a.report_seeds[0])
-	thr = P._report_thresholds(a, ec, spec, rs, s.train, use_score=True)
-	mk = lambda: ControllerEvaluator(spec, num_eval_episodes=a.report_episodes, seed=rs, episode_config=ec,
+	rs = int(a.test_seeds[0])
+	thr = P._test_thresholds(a, ec, spec, rs, s.train, use_score=True)
+	mk = lambda: ControllerEvaluator(spec, num_eval_episodes=a.test_episodes, seed=rs, episode_config=ec,
 		thresholds=thr, rg_config=P._rg_config(a, ec, rs), max_train_workers=a.train_workers,
 		num_eval_folds=a.num_eval_folds)
 	return mk, res.final_population[0]

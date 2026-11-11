@@ -106,7 +106,7 @@ if ! "$VP" -u -m wnn.control.phased_ga \
 	--obs-yaw-err --obs-yaw-err-i \
 	--obs-collective-cmd --obs-alt-err --obs-vz \
 	--translation --reward-lambda-alt 4.0 \
-	--report-episodes 4 --report-seeds 99990101 \
+	--test-episodes 4 --test-seeds 99990101 \
 	--base-seed 31337099 > "$SMOKE_LOG" 2>&1; then
 	log "ABORT: SMOKE FAILED (rc != 0) — see $SMOKE_LOG. Nothing armed."
 	exit 1

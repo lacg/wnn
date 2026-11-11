@@ -13,7 +13,7 @@
 # flag is the ladder's own, so the ONLY change vs the banked _op31 control is the weight.
 # Luiz 21/10: 0.05 only; a 0.10 dose arm only if this one needs it.
 #
-# PRE-REGISTERED READ (paired per seed vs _op31, report-seed HEADLINE + MEMORY rows):
+# PRE-REGISTERED READ (paired per seed vs _op31, test-seed HEADLINE + MEMORY rows):
 #   success = alt better AND err not worse than +0.10 deg AND stable not worse than -0.5 pp.
 #   Verdict is the mean paired delta + 95% CI (paired_power.py), never a win tally.
 #

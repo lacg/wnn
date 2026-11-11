@@ -44,7 +44,7 @@ SEEDS="${BITS_SEEDS:-31337002 31337003}"
 BITS_POINTS="${BITS_POINTS:-32 34 36}"
 BITS_LAMBDA="${BITS_LAMBDA:-0}"
 NEURONS_GENS="${BITS_NEURONS_GENS:-5}"
-REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
+TEST_SEEDS="99990101 99990102 99990103 99990104 99990105"
 
 # Gate: behind the scope-cost arm (which is itself behind the calib A/B).
 WAIT_MARKERS="${BITS_WAIT_MARKERS:-$ROOT/experiments/scopecost_markers}"
@@ -106,7 +106,7 @@ run_point() {
 		--eval-episodes 100 --memory-eval-episodes 200 \
 		--steps 2000 --tilt 5.0 \
 		$S16_WEIGHTS \
-		--report-episodes 100 --holdout-pop-sample 8 \
+		--test-episodes 100 --holdout-pop-sample 8 \
 		--grid-bits "$b" \
 		--grid-state-neurons 0 --max-state-neurons 0 \
 		--max-output-neurons 128 \
@@ -116,7 +116,7 @@ run_point() {
 		--teacher mpcof \
 		$FEAT_STAGE1 \
 		--translation --reward-lambda-alt "$BITS_LAMBDA" \
-		--report-seeds $REPORT_SEEDS \
+		--test-seeds $TEST_SEEDS \
 		--base-seed "$seed"
 }
 

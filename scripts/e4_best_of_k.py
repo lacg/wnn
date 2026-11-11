@@ -2,10 +2,10 @@
 """E4 — best-of-K + small ensemble over EXISTING saved controller winners.
 
 Deployment-honest protocol (plan: .claude/plans/controller_break_90_v2.md):
-- SELECTION already happened on the standard report seeds (the recorded ho-mem
+- SELECTION already happened on the standard test seeds (the recorded ho-mem
   numbers each run printed). We take the top-K recorded winners as candidates.
 - FINAL number = re-score each candidate on FRESH seeds never used anywhere
-  (train seeds 202606xx; report seeds 99990001/99990101/12345/67890) so the
+  (train seeds 202606xx; test seeds 99990001/99990101/12345/67890) so the
   best-of-K claim carries no selection leak.
 - ENSEMBLE arm: average the PWM outputs of the top-3 (by fresh pooled stable)
   each step — the FPGA-cheap "committee of 1-KB controllers".
@@ -28,13 +28,13 @@ from wnn.control.evaluator import (
 )
 from wnn.control.training import EpisodeConfig
 
-# Fresh seeds — never used as train/fold/report seeds anywhere in the line.
+# Fresh seeds — never used as train/fold/test seeds anywhere in the line.
 FRESH_SEEDS = [77770001, 77770101, 424242, 313131]
 EPISODES_PER_SEED = 100
 ENSEMBLE_TOP = int(__import__("os").environ.get("E4_ENSEMBLE_TOP", "3"))
 
 # (label, recorded ho-mem stable%, path) — selection ALREADY made on the
-# standard report seeds; recorded numbers shown for the fresh-vs-recorded gap.
+# standard test seeds; recorded numbers shown for the fresh-vs-recorded gap.
 CANDIDATES = [
 	("pidmix_s10_R1",      90.0, "logs/controller/FrameFixVal_20260627/pidmix_seed20260610/winner.yaml.gz"),
 	("pidmix_pwm_s09_R1",  87.2, "logs/controller/FrameFixVal_20260627/pidmix_pwm_seed20260609/winner.yaml.gz"),
@@ -51,7 +51,7 @@ CANDIDATES = [
 	# E2 LONG arm: trained + recorded at steps=2000 (88.8 on the 2000-step ho metric);
 	# scoring HERE runs the standard 500-step protocol = the cross-arm comparable number.
 	("e2_long_s09", 88.8, "logs/controller/E2Reliability_20260702/LONG_seed20260609/winner.yaml.gz"),
-	# E2 ANCH arm: yaw-anchor + immigrants + 30 gens — 91.0±4.6 report-seed ho-mem,
+	# E2 ANCH arm: yaw-anchor + immigrants + 30 gens — 91.0±4.6 test-seed ho-mem,
 	# the first single >90 on the standard protocol (02/07).
 	("e2_anch_s09", 91.0, "logs/controller/E2Reliability_20260702/ANCH_seed20260609/winner.yaml.gz"),
 	# E2 LONG seed10 (trained @2000; 88.0±4.1 on the 2000-step ho — recipe reproduces
@@ -252,7 +252,7 @@ def main() -> None:
 	print("========== E4 best-of-K over saved winners — FRESH-seed protocol ==========")
 	dist_lv = os.environ.get("E4_DIST", "OFF")
 	print(f"fresh seeds {FRESH_SEEDS} x {EPISODES_PER_SEED} eps | tilt<=5° body<=0.5 yaw-rate<=0.3 steps={ec.steps_per_episode} dist={dist_lv}")
-	print(f"candidates: {len(CANDIDATES)} (selected on the RECORDED report-seed ho-mem)\n")
+	print(f"candidates: {len(CANDIDATES)} (selected on the RECORDED test-seed ho-mem)\n")
 	skip_solo = os.environ.get("E4_SKIP_SOLO") == "1"  # ensemble-only: load winners, no member rescore
 	results = []
 	for label, recorded, path in CANDIDATES:

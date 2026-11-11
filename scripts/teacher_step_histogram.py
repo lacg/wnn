@@ -241,7 +241,7 @@ def main() -> int:
 	ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 	ap.add_argument("--teacher", default="mpcof", choices=sorted(TEACHER_ID))
 	ap.add_argument("--episodes", type=int, default=20)
-	ap.add_argument("--seed", type=int, default=99990101, help="a report seed, so the draw is the scorer's")
+	ap.add_argument("--seed", type=int, default=99990101, help="a test seed, so the draw is the scorer's")
 	ap.add_argument("--dmax", type=float, nargs="+", default=[0.1, 0.09, 0.075, 0.06, 0.05, 0.025])
 	ap.add_argument("--gamma", type=float, nargs="+", default=[1.0, 1.25, 1.5, 2.0])
 	ap.add_argument("--leak", type=float, nargs="+", default=[0.95, 0.90])

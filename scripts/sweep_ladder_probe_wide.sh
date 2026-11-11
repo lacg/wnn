@@ -39,7 +39,7 @@ DIST="L4C"
 SEEDS="${SL_SEEDS:-31337002}"   # probe is seed-1 only; no cull, no seed-2 round
 BITS="${SL_BITS:-40 48 64}"   # WIDE PROBE: sparse points above the ladder
 SWEEP_N="${SL_SWEEP_NEURONS:-32}"
-REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
+TEST_SEEDS="99990101 99990102 99990103 99990104 99990105"
 
 FEAT_STAGE1="--obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err --obs-yaw-err-i \
 --obs-collective-cmd --obs-alt-err --obs-vz"
@@ -76,13 +76,13 @@ run_one() {
 		--steps 2000 --tilt 5.0 \
 		$LADDER_WEIGHTS \
 		"$@" \
-		--report-episodes 100 --holdout-pop-sample 8 \
+		--test-episodes 100 --holdout-pop-sample 8 \
 		--runs 1 --memory-mode BINARY \
 		--airframe "$AIRFRAME" --disturbance "$DIST" --teacher mpcof \
 		$FEAT_STAGE1 \
 		--translation --reward-lambda-alt "$SL_LAMBDA_ALT" \
 		--grid-state-neurons 0 --max-state-neurons 0 \
-		--report-seeds $REPORT_SEEDS \
+		--test-seeds $TEST_SEEDS \
 		--base-seed "$seed"
 	log "$tag finished rc=$?"
 }

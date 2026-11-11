@@ -5,12 +5,12 @@ Why a launcher and not `phased_ga --runs N`:
   --runs reuses ONE save dir (clobbers each seed's winner) and reports the
   OPTIMISTIC during-search Stage-4 metric. Proper multi-seed wants:
     * one save dir PER seed (winners + stage checkpoints preserved), and
-    * the held-out RESULT line (--report-seed) as the per-seed number to average.
+    * the held-out RESULT line (--test-seed) as the per-seed number to average.
 
 Methodology (matches CLAUDE.md "trust held-out, not the gen-line"):
   * base-seed VARIES per run  → different train/select episode draws (the thing
     whose variance we want to measure).
-  * report-seed is FIXED across runs → every seed graded on the IDENTICAL
+  * test-seed is FIXED across runs → every seed graded on the IDENTICAL
     held-out test pool, so the spread is optimizer variance, not test variance.
 
 Each seed is launched fully detached (own session, PPID=1) so it survives
@@ -22,7 +22,7 @@ Usage (locked 13/06 config is the default — just give seeds + an out root):
   python scripts/controller_multiseed.py \
     --out-root logs/controller/c10_multiseed_20260613 \
     --base-seeds 31337001 31337002 31337003 \
-    --report-seed 99990101
+    --test-seed 99990101
 """
 import argparse
 import os
@@ -65,7 +65,7 @@ def build_phased_cmd(args, base_seed: int, save_dir: Path) -> list[str]:
 		"--fit-weight-err-sq", str(args.w_err), "--fit-weight-stable", str(args.w_stable),
 		"--fit-weight-jerk", str(args.w_jerk), "--fit-weight-mono", str(args.w_mono),
 		# --- held-out report (FIXED seed across all runs) ---
-		"--report-seed", str(args.report_seed), "--report-episodes", str(args.report_episodes),
+		"--test-seed", str(args.test_seed), "--test-episodes", str(args.test_episodes),
 		"--holdout-pop-sample", str(args.holdout_pop_sample),
 		# --- this seed's train/select draw + outputs ---
 		"--base-seed", str(base_seed), "--runs", "1",
@@ -88,7 +88,7 @@ def main() -> int:
 	ap.add_argument("--out-root", required=True, help="parent dir; one seed<N>/ subdir per run")
 	ap.add_argument("--base-seeds", type=int, nargs="+", required=True,
 	                help="distinct train/select seeds (≥3 for a real multi-seed mean)")
-	ap.add_argument("--report-seed", type=int, default=99990101,
+	ap.add_argument("--test-seed", type=int, default=99990101,
 	                help="FIXED held-out seed shared by all runs (identical test pool)")
 	ap.add_argument("--stagger", type=float, default=3.0, help="seconds between launches")
 	# Locked 13/06 config (overridable but defaults reproduce the approved run).
@@ -107,7 +107,7 @@ def main() -> int:
 	ap.add_argument("--memory-eval-episodes", type=int, default=100)
 	ap.add_argument("--steps", type=int, default=1000)
 	ap.add_argument("--tilt", type=float, default=5.0)
-	ap.add_argument("--report-episodes", type=int, default=100)
+	ap.add_argument("--test-episodes", type=int, default=100)
 	ap.add_argument("--holdout-pop-sample", type=int, default=8)
 	ap.add_argument("--w-err", type=float, default=0.40)
 	ap.add_argument("--w-stable", type=float, default=0.30)
@@ -132,7 +132,7 @@ def main() -> int:
 	env["PYTHONPATH"] = f"{repo / 'src'}:{env.get('PYTHONPATH', '')}".rstrip(":")
 
 	manifest = out_root / "manifest.txt"
-	lines = [f"# controller multi-seed launched (report-seed FIXED = {args.report_seed})"]
+	lines = [f"# controller multi-seed launched (test-seed FIXED = {args.test_seed})"]
 	for i, base_seed in enumerate(args.base_seeds):
 		seed_dir = out_root / f"seed{i}_base{base_seed}"
 		cmd = build_phased_cmd(args, base_seed, seed_dir)

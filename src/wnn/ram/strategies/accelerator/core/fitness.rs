@@ -193,7 +193,7 @@ pub fn rank_combine(columns: &[MetricColumn], aggregation: RankAggregation)
 /// (2 episodes in 500 — inside the CRN pool noise) into +1.35 sigma and −0.337
 /// of fitness at weight 0.25. That single term outweighed its losses on err²,
 /// steady AND alt, and crowned it over a genome that beat it on three of four
-/// columns on the report seeds. The ±clamp cannot help: it bounds the tail,
+/// columns on the test seeds. The ±clamp cannot help: it bounds the tail,
 /// not the denominator. `scale_floor` bounds the denominator from below, so a
 /// difference smaller than the metric's measured noise can no longer buy rank.
 pub fn zrank_combine(columns: &[MetricColumn], clamp: f64) -> Result<Vec<f64>, String>
@@ -660,7 +660,7 @@ mod tests
 			gap(&at_sem), bare_gap);
 
 		// Floored at the RAW single-pool noise (2.5 pp), the decision reverses
-		// and the genome that wins three of four report-seed columns is crowned.
+		// and the genome that wins three of four test-seed columns is crowned.
 		let at_raw = zrank_combine(&build(2.5), 3.0).unwrap();
 		assert!(gap(&at_raw) < 0.0,
 			"floor at the raw pool noise should reverse it: {} vs {}",

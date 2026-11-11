@@ -3,10 +3,10 @@
 committee protocol, so the WNN table has its classical column.
 
 COMPARABILITY IS THE WHOLE POINT. Same physics engine (score_classical_baseline is
-the Rust sim the WNN rows fly), same episode ICs (draw_ics on the report seed — the
+the Rust sim the WNN rows fly), same episode ICs (draw_ics on the test seed — the
 exact pools the committee rows used, so classical-vs-committee is common random
 numbers), same L4C disturbance resolved the same way (disturbance_stream keyed on the
-report seed), same airframe INCLUDING the firmware PID cascade (af_pid_* from
+test seed), same airframe INCLUDING the firmware PID cascade (af_pid_* from
 airframe_kwargs — omitting it silently scores the legacy synthetic-plant PID, the
 L2 wrong-aircraft trap).
 
@@ -42,7 +42,7 @@ FEEDS = (TeacherFeed(use_estimator=True), TeacherFeed(use_estimator=False))
 
 def parse_args():
 	ap = argparse.ArgumentParser(description="Classical-teacher closed-loop baselines")
-	ap.add_argument("--seeds", required=True, help="comma list of report seeds")
+	ap.add_argument("--seeds", required=True, help="comma list of test seeds")
 	ap.add_argument("--teachers", default="pid,lqr,mpc,lqi,mpcof")
 	ap.add_argument("--episodes", type=int, default=100)
 	ap.add_argument("--steps", type=int, default=2000)

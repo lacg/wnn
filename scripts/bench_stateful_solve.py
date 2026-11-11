@@ -46,7 +46,7 @@ BASE = [
 	"--grid-bits", "30", "--max-output-neurons", "128",
 	"--pop", "6", "--num-eval-folds", "1", "--runs", "1",
 	"--eval-episodes", "10", "--steps", "400", "--tilt", "5.0",
-	"--report-episodes", "5", "--report-seeds", "99990101",
+	"--test-episodes", "5", "--test-seeds", "99990101",
 	"--teacher", "lqr", "--memory-mode", "BINARY", "--disturbance", "L3D",
 	"--obs-peraxis-p", "--obs-peraxis-i", "--no-obs-peraxis-yaw",
 	"--obs-yaw-err", "--obs-yaw-err-i",

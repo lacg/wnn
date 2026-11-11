@@ -2,15 +2,15 @@
   "meta": {
     "disturbance": "L2D",
     "tilt_deg": 5.0,
-    "report_seed": 99990101,
-    "report_seeds": [
+    "test_seed": 99990101,
+    "test_seeds": [
       99990101,
       99990102,
       99990103,
       99990104,
       99990105
     ],
-    "report_episodes": 100,
+    "test_episodes": 100,
     "steps": 2000,
     "stable_deg": 5.0,
     "sim_seed": 911,
@@ -23,7 +23,7 @@
       "99990104": 148564280,
       "99990105": 2284152141
     },
-    "conditions_note": "ICs sampled from the fold-index POOL seed (see pool_seeds), NOT the report seed; disturbance stream = sim_seed XOR pool_seed; motor asymmetry is the RESOLVED per-airframe draw. All three match the WNN scorer (evaluator.py fold_pool_seed + :1236-1237), so the baselines fly the same aircraft on the same episodes as the WNN cells. Files written before 29/07/2026 have all three wrong and are NOT comparable to WNN rows.",
+    "conditions_note": "ICs sampled from the fold-index POOL seed (see pool_seeds), NOT the test seed; disturbance stream = sim_seed XOR pool_seed; motor asymmetry is the RESOLVED per-airframe draw. All three match the WNN scorer (evaluator.py fold_pool_seed + :1236-1237), so the baselines fly the same aircraft on the same episodes as the WNN cells. Files written before 29/07/2026 have all three wrong and are NOT comparable to WNN rows.",
     "variance_note": "baseline \u00b1SD = test-set variance across held-out seeds; WNN cell \u00b1SD = training-seed variance on the fixed held-out (99990101)."
   },
   "baselines": {

@@ -9,7 +9,7 @@
 # ARM: identical to _alt31 (scripts/ctrl19_alt_weight_chain.sh) except the weights:
 # S16noJM renormalised x0.90 + --fit-weight-alt 0.10 (sum stays 1).
 #
-# PRE-REGISTERED READ (same rule as rung 1, paired per seed vs _op31, report-seed HEADLINE):
+# PRE-REGISTERED READ (same rule as rung 1, paired per seed vs _op31, test-seed HEADLINE):
 #   success = alt better AND err not worse than +0.10 deg AND stable not worse than -0.5 pp.
 #
 # STARTS ONLY AFTER rung 1: waits for the _alt31 seed_arm_chain (pid given as $1) to exit,

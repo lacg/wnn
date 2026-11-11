@@ -30,7 +30,7 @@ AIRFRAME="cf21_brushless"
 DIST="L4C"
 TEACHER="${SN_TEACHER:-lqi}"
 NEURONS_GENS=5
-REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
+TEST_SEEDS="99990101 99990102 99990103 99990104 99990105"
 FEAT_PIDMIX="--obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err --obs-yaw-err-i"
 
 export WNN_STATE_SPLIT=1   # REQUIRED — sn>0 does NOT imply it (reward_gated.py:477)
@@ -75,7 +75,7 @@ run_controller_arm "$tag" \
 	--steps 2000 --tilt 5.0 \
 	--fit-weight-err-sq 0.4 --fit-weight-stable 0.3 \
 	--fit-weight-jerk 0.2 --fit-weight-mono 0.1 \
-	--report-episodes 100 --holdout-pop-sample 8 \
+	--test-episodes 100 --holdout-pop-sample 8 \
 	--grid-bits 24 30 \
 	--grid-state-neurons "$SN" --max-state-neurons "$SN" \
 	--max-output-neurons 128 \
@@ -83,7 +83,7 @@ run_controller_arm "$tag" \
 	--airframe "$AIRFRAME" --disturbance "$DIST" --teacher "$TEACHER" \
 	$FEAT_PIDMIX \
 	--save-stage-checkpoints "$OUTDIR/${tag}_stages" \
-	--report-seeds $REPORT_SEEDS \
+	--test-seeds $TEST_SEEDS \
 	--base-seed "$SEED" \
 	$RESUME_ARGS
 rc=$?

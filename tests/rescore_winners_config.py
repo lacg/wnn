@@ -78,13 +78,13 @@ def test_regime_resolves_through_phased_ga():
 	check("steps forwarded", reg.ec.steps_per_episode, 2000)
 	check("tilt forwarded (deg)", round(math.degrees(reg.ec.max_initial_tilt_rad), 6), 5.0)
 	check("rates forwarded", (reg.ec.max_initial_body_rate, reg.ec.max_initial_yaw_rate), (0.5, 0.3))
-	check("report episodes = --episodes", reg.report_episodes, 100)
+	check("report episodes = --episodes", reg.test_episodes, 100)
 	check("K-fold is 5", reg.args.num_eval_folds, 5)
 	# Same argv through phased_ga directly must give the SAME plant (no hand copy).
 	ref = episode_config_from_args(build_arg_parser().parse_args(
 		["--disturbance", "L4A", "--airframe", "cf21_brushless", "--translation",
 		 "--imu-inclinometer", "--no-rotor-drag", "--no-motor-lag", "--steps", "2000", "--tilt", "5.0", "--body-rate", "0.5", "--yaw-rate", "0.3",
-		 "--report-episodes", "100", "--num-eval-folds", "5"]))
+		 "--test-episodes", "100", "--num-eval-folds", "5"]))
 	same = all(getattr(ref, f) == getattr(reg.ec, f) for f in
 	           ("steps_per_episode", "max_initial_tilt_rad", "translation", "max_initial_alt_offset_m",
 	            "max_initial_vz", "collective_cmd_jitter", "mass_jitter", "target_altitude",

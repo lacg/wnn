@@ -44,7 +44,7 @@ STABLE_DEG = 5.0      # episode is "stable" when its mean error is under this
 TILT_DEG = 5.0        # the production regime: recipes fly --tilt 5.0
 
 NUM_EPISODES = 3
-IC_SEED = 99990101    # first report seed — ICs drawn by the CANONICAL sampler
+IC_SEED = 99990101    # first test seed — ICs drawn by the CANONICAL sampler
 
 # Episodes are drawn by training.sample_ics_flat (the single source of truth
 # for IC draw order) inside the operating regime the winner was trained and

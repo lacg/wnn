@@ -9,7 +9,7 @@ parity-tested against controller_rollout.metal). This re-scores winners saved
 BEFORE the fix so their steady° can be reported honestly.
 
 SCORE-ONLY: loads each winner's already-trained cells and scores them on the
-FRESH report seed — no retraining, so the numbers are directly comparable to the
+FRESH test seed — no retraining, so the numbers are directly comparable to the
 run's own held-out line (which is also score-only for a MEMORY-stage winner).
 Each winner's OWN spec (sn, bits, mode, obs flags) rides along in the file, so
 sn=0 reflex and sn=8/16 DFA winners are both handled.
@@ -37,11 +37,11 @@ def _args_for(disturbance: str, steps: int, episodes: int):
 	"""The non-grid knobs the winners were searched under (C10 weights, folds 5)."""
 	return build_arg_parser().parse_args([
 		"--levels", "16", "--num-eval-folds", "5",
-		"--eval-episodes", str(episodes), "--report-episodes", str(episodes),
+		"--eval-episodes", str(episodes), "--test-episodes", str(episodes),
 		"--steps", str(steps), "--tilt", "5.0",
 		"--fit-weight-err-sq", "0.4", "--fit-weight-stable", "0.3",
 		"--fit-weight-jerk", "0.2", "--fit-weight-mono", "0.1",
-		"--report-seed", "99990101", "--base-seed", "31337002",
+		"--test-seed", "99990101", "--base-seed", "31337002",
 		"--teacher", "lqr", "--disturbance", disturbance,
 	])
 
@@ -61,12 +61,12 @@ def rescore(path: str, disturbance: str, steps: int, episodes: int) -> dict | No
 		max_initial_body_rate=args.body_rate,
 		max_initial_yaw_rate=args.yaw_rate, disturbance=dist)
 	rep_thr = fit_thresholds_from_pid_rollouts(
-		spec, num_episodes=10, seed=args.report_seed,
+		spec, num_episodes=10, seed=args.test_seed,
 		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None))
 	ev = ControllerEvaluator(
-		spec, num_eval_episodes=args.report_episodes, seed=args.report_seed,
+		spec, num_eval_episodes=args.test_episodes, seed=args.test_seed,
 		episode_config=ec, thresholds=rep_thr,
-		rg_config=_rg_config(args, ec, args.report_seed),
+		rg_config=_rg_config(args, ec, args.test_seed),
 		max_train_workers=args.train_workers)
 	m = ev.score_genomes([winner])[0]
 	return {
@@ -105,11 +105,11 @@ def main() -> None:
 		max_initial_yaw_rad=math.radians(args.tilt),
 		max_initial_body_rate=args.body_rate,
 		max_initial_yaw_rate=args.yaw_rate, disturbance=dist)
-	pid = _pid_baseline(ec, args.report_episodes, args.report_seed)
+	pid = _pid_baseline(ec, args.test_episodes, args.test_seed)
 
 	bar = "=" * 78
 	print(f"\n{bar}\n  HELD-OUT RE-SCORE (CPU scorer, transient metrics restored) — "
-	      f"seed {args.report_seed}, {a.disturbance}, {a.steps} steps\n{bar}")
+	      f"seed {args.test_seed}, {a.disturbance}, {a.steps} steps\n{bar}")
 	print(f"  {'winner':<34} {'sn':>3} {'stable':>8} {'err':>8} {'steady':>8}")
 	for r in rows:
 		sty = f"{r['steady']:.2f}°" if r["steady"] is not None else "n/a"

@@ -3,7 +3,7 @@
 
 build_dfa_1layer_table.py reads the per-cell markers, which carry the held-out
 triple as phased_ga printed it. Every cell run before 03/08/2026 printed that
-triple through a REFIT address function — thresholds fit on the report seed while
+triple through a REFIT address function — thresholds fit on the test seed while
 the genome's cells were written under the train seed — so the memory was read where
 nothing had been written. That is the bug documented in
 docs/threshold_misalignment_finding.md.
@@ -17,7 +17,7 @@ otherwise would trade one wrong number for another.
 Two different +-SDs are in play and must not be mixed:
   * per-cell  : across the 5 REPORT seeds, one frozen winner -> test-set variance,
                 the same axis as the classical baselines.
-  * per-family: across TRAINING seeds, using each cell's report-seed MEAN -> the
+  * per-family: across TRAINING seeds, using each cell's test-seed MEAN -> the
                 same axis as the marker table's +-SD, so the two are comparable.
 Only the second is printed in the family table, to keep it side-by-side readable.
 
@@ -74,7 +74,7 @@ def main():
 
 	print("=" * 86)
 	print("  WNN 1-layer vs DFA — held-out on the ALIGNED axis (train-seed thresholds)")
-	print("  disturbance L2D, tilt 5°, 100 report-episodes × 2000 steps, 5 report seeds/cell")
+	print("  disturbance L2D, tilt 5°, 100 test-episodes × 2000 steps, 5 test seeds/cell")
 	print("=" * 86)
 	print(f"  {'cell':<28}{'n':>3}{'stable%':>14}{'err°':>12}{'steady°':>12}   vs BROKEN axis")
 	print("  " + "-" * 82)
@@ -94,7 +94,7 @@ def main():
 		      f"{a_sd[0]:>8.1f}±{a_sd[1]:<3.1f}"
 		      f"   was {b_st[0]:>5.1f}% / {b_er[0]:>5.1f}°")
 	print("  " + "-" * 82)
-	print("  CLASSICAL BASELINES (compute_baselines.py, same 5 report seeds):")
+	print("  CLASSICAL BASELINES (compute_baselines.py, same 5 test seeds):")
 	print(f"  {'PID':<28}{5:>3}{90.4:>9.1f}±{7.5:<4.1f}{4.0:>8.1f}±{0.4:<3.1f}{4.0:>8.1f}±{0.5:<3.1f}")
 	print(f"  {'LQR':<28}{5:>3}{100.0:>9.1f}±{0.0:<4.1f}{1.6:>8.1f}±{0.1:<3.1f}{1.3:>8.1f}±{0.2:<3.1f}")
 	print(f"  {'MPC':<28}{5:>3}{100.0:>9.1f}±{0.0:<4.1f}{1.7:>8.1f}±{0.1:<3.1f}{1.4:>8.1f}±{0.2:<3.1f}")

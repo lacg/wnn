@@ -4,8 +4,8 @@ the FULL 5-stage curriculum on it.
 Winner = highest mean held-out stable across rounds 1/2/3 among the round-3
 contenders (W2,C2,C11,C13,W4,C9,C14). So: C13 if it holds, else whoever leads
 (currently C9). Launches:
-  --mode full --weights <winner> --pop 200 --base-seed 3003 --report-seed 7007
-Train seed 3003 + report seed 7007 are BOTH distinct from the selection seeds
+  --mode full --weights <winner> --pop 200 --base-seed 3003 --test-seed 7007
+Train seed 3003 + test seed 7007 are BOTH distinct from the selection seeds
 (42/1001/2002) → the held-out report is leak-free. Detached, idempotent.
 """
 import os, sys, time, re, subprocess, importlib.util
@@ -15,7 +15,7 @@ ROOT = Path("/Users/lacg/wnn")
 R3_MARKER = Path("/tmp/curric_r3_launched")          # "PID logpath"
 ROUND_LOGS = ["/tmp/curric_log.txt", "/tmp/curric_r2_log.txt", "/tmp/curric_r3_log.txt"]
 R3_COMBOS = {"W2", "C2", "C11", "C13", "W4", "C9", "C14"}
-TRAIN_SEED, REPORT_SEED = 3003, 7007
+TRAIN_SEED, TEST_SEED = 3003, 7007
 POLL = 60
 LOG = ROOT / "logs/curric_fullmode_autolaunch.log"
 DONE = Path("/tmp/curric_fullmode_launched")
@@ -121,14 +121,14 @@ def main():
 	Path("/tmp/curric_full_log.txt").write_text(str(flog) + "\n")
 	cmd = [sys.executable, "-u", "tests/run_curriculum_ga.py", "--mode", "full",
 	       "--weights", wstr, "--pop", "200", "--full-gens", "60", "--full-patience", "3",
-	       "--base-seed", str(TRAIN_SEED), "--report-seed", str(REPORT_SEED),
+	       "--base-seed", str(TRAIN_SEED), "--test-seed", str(TEST_SEED),
 	       "--train-workers", "3", "--num-eval-folds", "5", "--save-dir", str(savedir)]
 	env = dict(os.environ); env["PYTHONPATH"] = f"{ROOT}/src/wnn:" + env.get("PYTHONPATH", "")
 	f = open(flog, "w")
 	p = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT,
 	                     start_new_session=True, env=env, cwd=str(ROOT))
 	DONE.write_text(f"{p.pid} {winner} {flog}\n")
-	log(f"launched FULL mode: PID {p.pid}, winner {winner}, train {TRAIN_SEED}, report {REPORT_SEED}")
+	log(f"launched FULL mode: PID {p.pid}, winner {winner}, train {TRAIN_SEED}, report {TEST_SEED}")
 	log(f"  log: {flog}")
 
 

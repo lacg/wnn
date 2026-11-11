@@ -67,7 +67,7 @@ AIRFRAME="cf21_brushless"
 DIST="L4C"
 TEACHER="lqi"
 NEURONS_GENS=5
-REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
+TEST_SEEDS="99990101 99990102 99990103 99990104 99990105"
 REFIT_EPISODES="${E2_REFIT_EPISODES:-10}"
 
 SEEDS="${E2_SEEDS:-31337002 31337003 31337004}"
@@ -140,12 +140,12 @@ if ! PYTHONPATH=src/wnn "$VP" -u -m wnn.control.phased_ga \
 		--skip-stages bits,connections \
 		--neurons-gens 1 --neurons-patience 1 --memory-gens 1 --memory-patience 1 \
 		--pop 6 --num-eval-folds 1 --eval-episodes 2 --memory-eval-episodes 2 \
-		--steps 200 --tilt 5.0 --report-episodes 2 --holdout-pop-sample 2 \
+		--steps 200 --tilt 5.0 --test-episodes 2 --holdout-pop-sample 2 \
 		--grid-bits 24 --grid-state-neurons 0 --max-state-neurons 0 \
 		--max-output-neurons 128 --runs 1 --memory-mode BINARY \
 		--airframe "$AIRFRAME" --disturbance "$DIST" --teacher "$TEACHER" \
 		$FEAT_PIDMIX \
-		--report-seeds 99990101 --base-seed 31337002 > "$OUTDIR/PREFLIGHT.out" 2>&1; then
+		--test-seeds 99990101 --base-seed 31337002 > "$OUTDIR/PREFLIGHT.out" 2>&1; then
 	log "ABORT: pre-flight FAILED — see $OUTDIR/PREFLIGHT.out. Arming nothing."
 	exit 4
 fi
@@ -174,7 +174,7 @@ for run_id in $RUNS; do
 		--steps 2000 --tilt 5.0 \
 		--fit-weight-err-sq 0.4 --fit-weight-stable 0.3 \
 		--fit-weight-jerk 0.2 --fit-weight-mono 0.1 \
-		--report-episodes 100 --holdout-pop-sample 8 \
+		--test-episodes 100 --holdout-pop-sample 8 \
 		--grid-bits 24 30 \
 		--grid-state-neurons 0 --max-state-neurons 0 \
 		--max-output-neurons 128 \
@@ -182,7 +182,7 @@ for run_id in $RUNS; do
 		--airframe "$AIRFRAME" --disturbance "$DIST" --teacher "$TEACHER" \
 		$FEAT_PIDMIX \
 		--save-stage-checkpoints "$OUTDIR/${tag}_stages" \
-		--report-seeds $REPORT_SEEDS \
+		--test-seeds $TEST_SEEDS \
 		--base-seed "$seed"
 	log "cell $run_id finished rc=$?"
 done

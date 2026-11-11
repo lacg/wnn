@@ -29,7 +29,7 @@ $PY -u -m wnn.control.phased_ga \
   --eval-episodes 100 --steps 500 --tilt 5.0 --body-rate 0.5 --yaw-rate 0.3 \
   --rg-rounds 3 --rg-episodes-per-round 8 --universe-episodes 5 \
   --fit-weight-err-sq 0.40 --fit-weight-stable 0.50 --fit-weight-jerk 0.05 --fit-weight-mono 0.05 \
-  --report-episodes 100 --report-seeds 99990001 99990101 12345 67890 --holdout-pop-sample 8 \
+  --test-episodes 100 --test-seeds 99990001 99990101 12345 67890 --holdout-pop-sample 8 \
   --base-seed 20260609 --runs 1 \
   --save-winner "$DIR/winner.yaml.gz" --save-stage-checkpoints "$DIR" \
   > "$DIR/run.out" 2>&1

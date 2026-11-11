@@ -36,12 +36,12 @@ RECIPE="--levels 16 --lamarckian --skip-stages neurons,bits --max-cells 180000 -
 --fit-weight-err-sq 0.3125 --fit-weight-stable 0.25 --fit-weight-steady 0.4375 \
 --fit-aggregation zscore --zrank-clamp 3.0 --gate-stable 0.70 --gate-err 8.0 \
 --delta-gamma 1.0 --grid-bits 32 --grid-output-neurons 256 --max-output-neurons 256 \
---report-episodes 100 --holdout-pop-sample 8 --runs 1 --memory-mode BINARY \
+--test-episodes 100 --holdout-pop-sample 8 --runs 1 --memory-mode BINARY \
 --airframe cf21_brushless --disturbance L4C --teacher mpcof \
 --obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err --obs-yaw-err-i \
 --obs-collective-cmd --obs-alt-err --obs-vz --translation --reward-lambda-alt 0 \
 --grid-state-neurons 0 --max-state-neurons 0 \
---report-seeds 99990101 99990102 99990103 99990104 99990105 --base-seed 31337002"
+--test-seeds 99990101 99990102 99990103 99990104 99990105 --base-seed 31337002"
 
 log() { echo "[racing-probe-chain] $(date -u +%FT%TZ) $*" >> "$LOG"; }
 controller_pids() { pgrep -f -- "-m wnn.control.phased_ga" 2>/dev/null || true; }

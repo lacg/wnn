@@ -25,7 +25,7 @@ training signal instead.
 
 Training fidelity: mirrors phased_ga._holdout_report's train path verbatim —
 ControllerEvaluator on the winner's TRAIN seed (resolve_seed_set of its base seed),
-K=5, one _evaluate_core(write_back=True) pass — then scores on the report seed the
+K=5, one _evaluate_core(write_back=True) pass — then scores on the test seed the
 way everything since 29/07 scores (fresh evaluator, fold-0 pool).
 
 Usage: data_budget_probe.py --winner logs/controller/dfa1l/dfa_9feat_BINARY_s31337002_winner.yaml.gz \
@@ -82,12 +82,12 @@ def _train(genome, spec, ec, train_seed, a, rounds, episodes):
 	return genome, time.time() - t0
 
 
-def _score_one(genome, spec, ec, report_seed, a):
-	"""Held-out score on ONE report seed, fold-0 pool — the 29/07 shape."""
-	thr = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=report_seed)
-	ev = ControllerEvaluator(spec, num_eval_episodes=a.episodes, seed=report_seed,
+def _score_one(genome, spec, ec, test_seed, a):
+	"""Held-out score on ONE test seed, fold-0 pool — the 29/07 shape."""
+	thr = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=test_seed)
+	ev = ControllerEvaluator(spec, num_eval_episodes=a.episodes, seed=test_seed,
 	                         episode_config=ec, thresholds=thr,
-	                         rg_config=_rg(report_seed, ec, a, BASE_ROUNDS, BASE_EPISODES),
+	                         rg_config=_rg(test_seed, ec, a, BASE_ROUNDS, BASE_EPISODES),
 	                         num_eval_folds=5)
 	m = ev.score_genomes([genome])[0]
 	return (m.acc * 100.0, m.mean_attitude_error_deg,
@@ -95,11 +95,11 @@ def _score_one(genome, spec, ec, report_seed, a):
 
 
 def _score(genome, spec, ec, a):
-	"""Mean±SD across report seeds — WITHOUT error bars a budget slope cannot be
+	"""Mean±SD across test seeds — WITHOUT error bars a budget slope cannot be
 	distinguished from scatter. The toy-budget smoke went 60 -> 70 -> 50 on a single
 	seed at 10 eval episodes: pure noise read as a trend. Same test-set axis as the
 	classical baselines, so an arm's ±SD is directly comparable to theirs."""
-	tris = [_score_one(genome, spec, ec, rs, a) for rs in a.report_seeds]
+	tris = [_score_one(genome, spec, ec, rs, a) for rs in a.test_seeds]
 	def ms(i):
 		xs = [t[i] for t in tris if t[i] is not None]
 		if not xs:
@@ -107,7 +107,7 @@ def _score(genome, spec, ec, a):
 		return [statistics.mean(xs),
 		        statistics.pstdev(xs) if len(xs) > 1 else 0.0]
 	return {"stable": ms(0), "err_deg": ms(1), "steady_deg": ms(2),
-	        "per_seed": {str(rs): list(t) for rs, t in zip(a.report_seeds, tris)}}
+	        "per_seed": {str(rs): list(t) for rs, t in zip(a.test_seeds, tris)}}
 
 
 def main():
@@ -121,7 +121,7 @@ def main():
 	                help="budget multipliers, each an arm (applied to episodes/round)")
 	ap.add_argument("--base-seed", type=int, default=None,
 	                help="winner's --base-seed; default parses _sNNNN from the filename")
-	ap.add_argument("--report-seeds", type=int, nargs="+",
+	ap.add_argument("--test-seeds", type=int, nargs="+",
 	                default=[99990101, 99990102, 99990103, 99990104, 99990105],
 	                help="score every arm on all of these; gives each point a ±SD")
 	ap.add_argument("--episodes", type=int, default=100)
