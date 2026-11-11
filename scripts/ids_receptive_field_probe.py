@@ -306,7 +306,7 @@ def main():
 	ap.add_argument("cmd", choices=["prep", "probe"])
 	ap.add_argument("cfg", choices=list(CFGS))
 	ap.add_argument("dedupe", type=int, choices=[0, 1])
-	ap.add_argument("--dir", default="/Users/lacg/.claude/jobs/f3e0e76f/tmp")
+	ap.add_argument("--dir", default="/Users/lacg/wnn/experiments/job_f3e0e76f_tmp")
 	ap.add_argument("--neurons", type=int, default=1000)
 	ap.add_argument("--crosses", default="0,0.2,0.4")
 	ap.add_argument("--seeds", default="1,2,3")
