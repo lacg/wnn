@@ -288,6 +288,40 @@ Reading:
 - **Low-FPR caveat:** lattice-encon keeps a 90.23/2.09 seed-mean point (grid best_f1 argmax_classnorm). ms01-encon
   has nothing below 2.9% FPR.
 
+### IDS-56 vs classical baselines — UNSW temporal_3way (unswt), TEST partition (added 10/11/2026)
+
+WNN = GA best_f1, `margin_val_cal`, n=5 seeds (r20419-23), mean ± SD over the per-seed values. Classical =
+`scripts/verify_ids_baselines.py --dataset unsw --split temporal_3way [--n-bits 16 | --raw] --models rf,xgb,ada,mlp`
+(single fixed-seed fits, top-20 features from the WNN loader; `val_cal` = F1-optimal threshold on the VAL partition,
+like-for-like with the WNN's margin_val_cal). F1 = macro-F1 for both. WNN size given as logical cells, not MB
+(CTRL-51 showed the exported footprint is not 1 bit/cell).
+
+```
+                                                                  F1             FPR          Acc      size
+WNN lattice encoff                                                90.76 ± 0.17   4.95 ± 0.73  90.78    214K cells
+WNN lattice encon                                                 91.25 ± 0.11   4.12 ± 0.72  91.28    355K cells
+WNN vote (ms01) encoff                                            90.71 ± 0.12   4.19 ± 0.92  90.73    199K cells
+WNN vote (ms01) encon   (best WNN)                                91.83 ± 0.07   3.86 ± 0.62  91.85    333K cells
+--- classical, val_cal, same 16-bit thermometer encoding ----------------------------------------------
+RF (100 trees)                                                    90.66          7.61         90.71    138.04 MB
+XGBoost (100 trees, depth 6)                                      92.09          3.64         92.11      0.27 MB
+AdaBoost (100 stumps)                                             89.41          5.90         89.44      0.05 MB
+MLP (128-64)                                                      92.02          3.58         92.04      1.05 MB
+--- classical, val_cal, raw numeric top-20 (paper comparator) -----------------------------------------
+RF                                                                91.95          5.91         91.99     95.31 MB
+XGBoost                                                           92.38          3.59         92.41      0.26 MB
+AdaBoost                                                          89.60          5.72         89.63      0.05 MB
+MLP                                                               91.54          2.34         91.56      0.13 MB
+--- classical, fixed 0.5 threshold, 16-bit thermo (reference only) ------------------------------------
+RF 86.12 / 25.35 · XGBoost 84.96 / 28.42 · AdaBoost 81.88 / 34.38 · MLP 84.89 / 28.64
+```
+
+Read: best WNN (vote + dedupe) is −0.26 pp F1 / +0.22 pp FPR vs XGBoost and −0.19 / +0.28 vs MLP on the same
+encoding (−0.55 / +0.27 vs raw XGBoost); it beats thermometer RF (+1.2 pp, FPR 3.86 vs 7.61) and AdaBoost (+2.4 pp),
+and ties raw RF on F1 (−0.12) at lower FPR. Lowest FPR overall: raw MLP 2.34 at F1 91.54. The vote + dedupe arm closes
+~2/3 of lattice-encon's 0.84 pp gap to XGBoost. Caveat: WNN rows use the legacy feature ranking; the feature-list
+equality with the baselines' top-20 is not verified line by line. unswr version to follow when its 20 flows finish.
+
 ### IDS-56 rule-7 tables (generated: `scripts/build_sp_5tables.py --prefix 'IDS56-unswt-%'`)
 # IDS-56 — min-share vote (ms01, theta=0.1) vs lattice x encoding dedupe off/on (unswt temporal_3way, 16bWb, rate 0.25)
 
