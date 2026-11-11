@@ -641,7 +641,7 @@ class DashboardClient:
 
 	def check_cached_test_summary(self, genome_hash: str, scope: Optional[TestCacheScope]) -> Optional[tuple[float, float, Optional[float], Optional[float], Optional[dict], Optional[Footprint]]]:
 		"""
-		Check if a genome has already been validated under the SAME scope.
+		Check if a genome has already been tested under the SAME scope.
 
 		Args:
 			genome_hash: The genome's config hash
@@ -888,7 +888,7 @@ class DashboardClient:
 
 	def get_combined_test_summaries(self, flow_id: int) -> list[dict]:
 		"""
-		Get combined test summarys for a flow.
+		Get combined test summaries for a flow.
 
 		Args:
 			flow_id: Flow ID
