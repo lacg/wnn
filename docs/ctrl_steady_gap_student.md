@@ -2,7 +2,7 @@
 
 Investigation only (training-algorithms agent). Scratch: /tmp/steady_student/ (trace.py, ana*.py, thr.py, lt_*.csv). The teacher and plant side is in docs/ctrl_steady_gap_teacher.md.
 
-**Probe.** Each saved dres winner (s1-s3) runs one DAgger round on its own trained cells: 12 student-flown episodes at 5° (report seed 99990101, 2000 steps, report-seed thresholds). `WNN_LABEL_TRACE` records, at every decision, the teacher label at the student's state and the leaked baseline. These give the emitted setpoint sp_k = base_{k+1}/0.7 and the student's own decoded label L̂ = (sp_k − base_k)/0.6. "Tail" means t ≥ 1.6 s, the steady window.
+**Probe.** Each saved dres winner (s1-s3) runs one DAgger round on its own trained cells: 12 student-flown episodes at 5° (test seed 99990101, 2000 steps, test-seed thresholds). `WNN_LABEL_TRACE` records, at every decision, the teacher label at the student's state and the leaked baseline. These give the emitted setpoint sp_k = base_{k+1}/0.7 and the student's own decoded label L̂ = (sp_k − base_k)/0.6. "Tail" means t ≥ 1.6 s, the steady window.
 - Probe err 1.49/1.78/1.81° matches the runs.
 - Caveat: `_winner.yaml.gz` may not be the headline genome (s1 NEURONS#2, s2 MEMORY#1, s3 MEMORY#2).
 

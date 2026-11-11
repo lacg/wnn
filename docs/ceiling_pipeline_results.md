@@ -12,8 +12,8 @@ one per phase.
 
 | Phase | Name | Question it answers | Method |
 |---|---|---|---|
-| **S** | split sweep | Is the controller **sensor-starved**? Every study cell ran `suffix=18`; a smoke run suggested 18→32 lifts held-out 40%→90-95%. | 65 arms: control `sn=12/suf=18` + `sn{6,7} × suf{24,30,32,34,36,38}`, 5 training seeds each, every arm scored on 5 report seeds. `ob = sn + suffix` (state prefix forced — the FSM-coherence invariant). Cells wiped, ONE imitation training pass per arm, no GA. |
-| **B** | data-budget curve | Is the gap **data starvation**? Would more DAgger episodes close it? | Retrain the winner architecture at 1× / 4× / 16× episode budget (192 / 768 / 3072), each scored on 5 report seeds. Read the SHAPE, with a noise test on each slope. |
+| **S** | split sweep | Is the controller **sensor-starved**? Every study cell ran `suffix=18`; a smoke run suggested 18→32 lifts held-out 40%→90-95%. | 65 arms: control `sn=12/suf=18` + `sn{6,7} × suf{24,30,32,34,36,38}`, 5 training seeds each, every arm scored on 5 test seeds. `ob = sn + suffix` (state prefix forced — the FSM-coherence invariant). Cells wiped, ONE imitation training pass per arm, no GA. |
+| **B** | data-budget curve | Is the gap **data starvation**? Would more DAgger episodes close it? | Retrain the winner architecture at 1× / 4× / 16× episode budget (192 / 768 / 3072), each scored on 5 test seeds. Read the SHAPE, with a noise test on each slope. |
 | **A** | nominal long memory-GA | Is the gap the **imitation ceiling**? Does closed-loop reward beat the teacher? | MEMORY-stage value-GA seeded from the winner, 800 gens, patience 20, **no teacher ceiling** — reward is the objective, not teacher agreement. Nominal plant. |
 | **C** | motor-fault memory-GA | Can the WNN **beat classical control** where classical control fails? | Same memory-GA on a faulted plant (motor 2 at 30% effectiveness) + matched classical baselines re-measured on that plant. |
 
@@ -25,7 +25,7 @@ to actually win.
 ## Phase A — the one classical-beating result
 
 ```
-HELD-OUT (fresh report seed 99990101, nominal plant, L2D, tilt 5°)
+HELD-OUT (fresh test seed 99990101, nominal plant, L2D, tilt 5°)
   during-search winner:  stable=89.0%  err=3.27°  steady=3.34°  mono_viol=3
   vs PID:                stable=85.0%  err=3.96°
   population (descriptive): stable=65.4±37.8%  err=23.42±34.89°  (pop max 91.0%)
@@ -34,8 +34,8 @@ HELD-OUT (fresh report seed 99990101, nominal plant, L2D, tilt 5°)
 > **RETRACTED (01/08/2026).** Both claims below are false, for two independent reasons.
 >
 > 1. **The PID number is wrong.** `vs PID 85.0%` came from `phased_ga._pid_baseline`,
->    which drew episodes from the RAW report seed while every WNN row is pool-seeded.
->    The comparator is `baselines.json`: **PID = 90.4±7.5%** over 5 report seeds
+>    which drew episodes from the RAW test seed while every WNN row is pool-seeded.
+>    The comparator is `baselines.json`: **PID = 90.4±7.5%** over 5 test seeds
 >    (100.0% on the canonical seed 99990101 this block was scored on). Phase A's 89.0%
 >    does **not** beat PID — it loses on the paired seed and ties within σ on the
 >    5-seed axis. Fixed in `wnn/control/classical_baseline.py`.
@@ -53,7 +53,7 @@ both stability (+4.0 pp) and error (−0.69°). Every dfa1l study cell topped ou
 77.0% and lost to PID.~~
 
 Caveats, both material:
-- **n=1.** One genome, one report seed. Not reproduced.
+- **n=1.** One genome, one test seed. Not reproduced.
 - The population is **bimodal** (65.4±37.8%): the winner is a good draw, not
   evidence that the method reliably produces 89%.
 - Early-stopped at **gen 42 of 800** (patience 19/20, ~5.5 gen/s) — the long budget
@@ -81,10 +81,10 @@ across the budget axis.
 ## Phase C — beats 3 of 5 classicals, loses to the best 2
 
 ```
-WNN memory-GA (held-out, 1 report seed):  stable= 4.0%  err=10.03°  steady=13.41°
+WNN memory-GA (held-out, 1 test seed):  stable= 4.0%  err=10.03°  steady=13.41°
   population (descriptive):               stable= 3.2± 2.8%  (pop max 8.0%)
 
-fault-plant classical baselines (5 report seeds):
+fault-plant classical baselines (5 test seeds):
   MPCOF  10.8± 7.0    LQI   7.2± 4.7    LQR   1.0± 1.3
   MPC     0.4± 0.5    PID   0.0± 0.0
 ```
@@ -93,7 +93,7 @@ The WNN (4.0%) **beats LQR, MPC and PID**, all of which collapse to ~0–1% when
 motor drops to 30%. It loses to MPCOF (10.8%) and LQI (7.2%).
 
 Two things that block a claim here:
-- **Asymmetric scoring.** The WNN is scored on ONE report seed; the baselines on
+- **Asymmetric scoring.** The WNN is scored on ONE test seed; the baselines on
   five. Not like-for-like. Fix: rescore the phase-C winner on the same 5 seeds
   (`scripts/rescore_winners.py`).
 - The recipe cited **MPCOF 20.0%** as the bar; freshly measured on 5 seeds it is
@@ -188,7 +188,7 @@ architecture** — is the obvious follow-up, and neither phase measured it.
 ## Open items
 
 - **Phase A n=1.** Reproduce across ≥5 training seeds before citing 89%.
-- **Phase C asymmetry.** Rescore the winner on the same 5 report seeds as the
+- **Phase C asymmetry.** Rescore the winner on the same 5 test seeds as the
   baselines; update `docs/motor_fault_experiment.md` (MPCOF bar is 10.8±7.0, not 20.0).
 - **Phase S on 1layer.** The whole sweep ran on `dfa`. The `1layer` substrate is
   ~20× cheaper per cell and is the FPGA-relevant one; the suffix result may not

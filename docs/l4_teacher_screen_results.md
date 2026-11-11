@@ -40,7 +40,7 @@ is why the screen is being re-flown rather than rescued.
 ## Classical reference on the FIXED plant
 
 Recomputed with `scripts/compute_baselines.py --airframe cf21_brushless --disturbance
-L4C`, same protocol as before (tilt 5°, 5 report seeds × 100 episodes × 2000 steps,
+L4C`, same protocol as before (tilt 5°, 5 test seeds × 100 episodes × 2000 steps,
 sim-seed 911, fold 0). Scoring only, no GA — minutes. Canonical file:
 `experiments/l4teach_markers/baselines_L4C_cf21bl.json`.
 
@@ -94,10 +94,10 @@ is ambiguous between teacher quality and search budget and must be reported that
 Recipe per run: grid (b∈{24,30}, sn=0) → NEURONS GA (early-stop, 5-gen cap on the MPC
 family) → MEMORY GA (120-gen cap, patience 2, magnitude-aware), pop 50, K=5
 fold-accumulate, `--max-cells 180000 --max-cells-strict`, BINARY antagonist decode,
-levels=16, tilt 5°, L4C, 5 report seeds × 100 episodes. Markers:
+levels=16, tilt 5°, L4C, 5 test seeds × 100 episodes. Markers:
 `experiments/l4teach_markers/L4T_*.json`.
 
-**MULTI-SEED held-out (5 report seeds), full triple err°/stable%/steady°, both stages:**
+**MULTI-SEED held-out (5 test seeds), full triple err°/stable%/steady°, both stages:**
 
 ```
 teacher  seed        NEURONS held-out                MEMORY held-out
@@ -243,7 +243,7 @@ pid   s31337003   0.99x   1.72x   1.93x      2.59°/ 96.4%/1.99°             1.
 floor. Taken together they locate the limit in the LEARNING / CREDIT-ASSIGNMENT path, and
 promote L3 and L4 from "deferred" to "the only remaining candidates."**
 
-All numbers below are MEMORY-stage multi-seed held-out (5 report seeds), reported as the
+All numbers below are MEMORY-stage multi-seed held-out (5 test seeds), reported as the
 full triple **err° / stable% / steady°**. Read **steady** as the primary: err is ~80%
 recovery term and recovery is already teacher-grade (0.88–1.21× per D1/D2), so a hold fix
 can move err by at most the ~20% the steady window carries.
@@ -500,14 +500,14 @@ committee section below is what finally moved it.)
 ### Stage reporting — publish ALL stages, headline the val-selected one (from 08/08/2026)
 
 Prompted by the L4 numbers above: reporting a single hardcoded stage (MEMORY, `[-1]`)
-was never defensible, and picking the best stage *after seeing the report seeds* is
+was never defensible, and picking the best stage *after seeing the test seeds* is
 best-of-N inflation. Both problems are fixed by one rule, landing from the committee
 cohort onward:
 
 - **Every stage is measured and published** — GRID, NEURONS, MEMORY, each with its full
-  report-seed triple. Nothing is hidden or selected away.
+  test-seed triple. Nothing is hidden or selected away.
 - **The headline is the stage chosen on `seeds.val`** — a draw disjoint from both the
-  search folds and the report seeds. Selection never touches the published metric, so
+  search folds and the test seeds. Selection never touches the published metric, so
   the headline number is unbiased.
 - **Rationale:** a run generates several deployable genomes; the honest question is which
   one you would actually fly, answered on unseen data, with every candidate's numbers
@@ -531,7 +531,7 @@ vote, and (best of all) by the FULL-4 vote without pid.
 
 ### Solo screen (members = each run's val-selected headline pop[0])
 
-All rows `stable% / err° / steady°`, mean±SD over report seeds 99990101–05, L4C,
+All rows `stable% / err° / steady°`, mean±SD over test seeds 99990101–05, L4C,
 cf21_brushless, steps 2000 × 100 episodes. Full per-stage tables live in the markers
 (`experiments/committee_markers/`); solos below reproduce those marker rows EXACTLY
 (the 10/10 validation that gates everything else — see "harness provenance").
@@ -578,7 +578,7 @@ Against the bar (best solo steady: 0.53 on s002, 0.74 on s003):
   — the strongest passer.** Beats the best solo by 51% / 14% and the control cells by
   59% / 33%. Disclosure: dropping pid is a rule ("exclude the member that failed its
   own solo screen"), and pid's failure was visible in the markers before any committee
-  was scored — but the markers ARE report-seed data, so FULL4's a-priori standing is
+  was scored — but the markers ARE test-seed data, so FULL4's a-priori standing is
   one notch below FULL5's. Both pass; the paper can carry both.
 - **FULL5 mean (the fully parameter-free vote): 0.35 / 0.68 at 100.0% — passes.** The
   mean vote absorbs pid at k=5; every +pid PAIR is worse than its non-pid counterpart
@@ -625,7 +625,7 @@ mean 0.25/0.64 · `mpcof+lqr+mpc` median 0.39/0.65 · `mpcof+lqi+lqr` mean 0.43/
    so median becomes an outlier-rejector. **Median = veto at small odd k, filter at large
    odd k.** Prefer MEAN at k=3.
 
-These trios are ranked on the published report seeds and therefore stay EXPLORATORY;
+These trios are ranked on the published test seeds and therefore stay EXPLORATORY;
 FULL4/FULL5 remain the a-priori rows. `mpcof+lqi+mpc` clears the bar on both seeds
 (0.42/0.57 vs 0.53/0.74), which makes "k=3 suffices" a strong hypothesis pending
 seed 31337004.
@@ -633,7 +633,7 @@ seed 31337004.
 ### Classical rivals, same engine, same episodes (CRN with the committee rows)
 
 `score_classical_baseline` (one physics engine for WNN and rivals; firmware PID cascade
-via `af_pid_*`), same 5 report-seed pools, L4C, cf21_brushless. Teachers are
+via `af_pid_*`), same 5 test-seed pools, L4C, cf21_brushless. Teachers are
 training-free, so one table serves both base seeds:
 
 ```
@@ -662,14 +662,14 @@ The first scoring pass (08/08, preserved under
 20–40× worse than their own runs' held-out. Its own built-in control caught it: a SOLO
 row must reproduce that member's marker triple. Seven defects were found and fixed
 across two commits (`3a9be6f6`, `6d77e697`, `ad3ea430`):
-thresholds refit on report seeds (the address function shifted), base seed passed
+thresholds refit on test seeds (the address function shifted), base seed passed
 where the DERIVED train seed belongs, no disturbance, no airframe (the L2
 wrong-aircraft bug in a new script), `num_eval_folds` 1 vs 5, members read from
 `best_genome` (a lucky-fold snapshot — `final_population[0]` is the published result;
 they differ in 5/8 checkpoints), and a `winner_only.yaml.gz` cache COLLIDING between
 stage1/stage4 in one `_stages` dir. After all seven: **all 10 solos reproduce their
 marker rows exactly, mean and SD.** Residual caveat: solos score on the evaluator's
-fold-pool ICs, committees on `draw_ics(report_seed)` — same distribution, not CRN
+fold-pool ICs, committees on `draw_ics(test_seed)` — same distribution, not CRN
 across that one comparison; the gaps exceed the per-seed SDs by an order of magnitude.
 
 Next steps queued from this result: NEURONS-stage member pool (all 10 runs) and GRID
@@ -850,7 +850,7 @@ against the old QUAD baselines (n=10 per dataset).
 
 Live confirmation that the top-3 machinery is doing real work: 3 of the first 4 runs
 under it headlined a RUNNER-UP (MEMORY#2, MEMORY#2, NEURONS#2), and each time the
-selected genome's OWN report-seed triple was scored for the headline.
+selected genome's OWN test-seed triple was scored for the headline.
 
 ---
 
@@ -962,7 +962,7 @@ rows predate both fixes and are not a valid baseline.
 **Bar (pre-registered): beat BOTH `q=none` control runs' headline steady without losing
 stable.**
 
-Controls, held-out over 5 report seeds, as stable%/err°/steady°:
+Controls, held-out over 5 test seeds, as stable%/err°/steady°:
 
 ```
                     s31337002                     s31337003
@@ -1102,7 +1102,7 @@ E1b: seeds 31337005 and 31337006, refit {off, on}, 4 runs, chained behind E2.
 
 ## RESULTS — E1 / E1b / E2, and the closure of the resolution programme (10/08/2026)
 
-All triples `stable% / err° / steady°`, held-out over report seeds 99990101-05,
+All triples `stable% / err° / steady°`, held-out over test seeds 99990101-05,
 compared HEADLINE-to-HEADLINE per the pre-registered rule.
 
 ### The five-seed control band — read this before any absolute claim
@@ -1128,11 +1128,11 @@ overlapped (outer-q, E1, E2), on every stage and the same headline genome index.
    reassessment banks "~0.5°"; that figure came from the two seeds that happen to be
    the best two of the five now known.
 2. **Within-seed report variance is ~10x smaller than between-seed variance.** This
-   control's report-seed SDs are ±0.05 (NEURONS) and ±0.06 (MEMORY), against a
+   control's test-seed SDs are ±0.05 (NEURONS) and ±0.06 (MEMORY), against a
    between-seed spread of 0.57°. Combined with the exact reproductions, run-to-run
    variance at fixed (seed, code, flags) is **zero** — the pipeline is deterministic.
    ⇒ Replicating a seed buys NOTHING. Every additional run must use a NEW base seed.
-   ⇒ Five report seeds per cell is over-spending; three would give nearly the same
+   ⇒ Five test seeds per cell is over-spending; three would give nearly the same
    precision and free budget for more base seeds.
 
 ### E2 — `--delta-gamma 2.0` REFUTED, 3/3 seeds (arm CLOSED, 6/6 markers)

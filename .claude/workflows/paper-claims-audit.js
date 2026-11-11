@@ -31,7 +31,7 @@ const CLAIMS_SCHEMA = {
 					metric: { type: 'string', description: 'F1 / FPR / Acc / err° / stable° / size / speedup' },
 					value: { type: 'string' },
 					cohort: { type: 'string', description: 'cohort, flow, or run the number should come from' },
-					partition: { type: 'string', description: 'as stated: train / during-search fold / held-out / report-seed / unstated' },
+					partition: { type: 'string', description: 'as stated: train / during-search fold / held-out / test-seed / unstated' },
 				},
 			},
 		},
@@ -65,7 +65,7 @@ const REFUTE_SCHEMA = {
 const RULES = `
 Project measurement canon you MUST apply:
 - Held-out only. IDS: val_cal held-out, never iterations.best_f1 (that is during-search k-fold = a LEAK).
-  Controller: only the --report-seed HELD-OUT block; gen-line stable/err are optimistic and non-reproducible.
+  Controller: only the --test-seed HELD-OUT block; gen-line stable/err are optimistic and non-reproducible.
 - Read ACTUAL values from the DB (sqlite3 -readonly ${DB}). Never compute, estimate, or infer a number.
   Use threshold_metadata (all 7 modes); best_genomes is incomplete.
 - Cohorts differing in split family (random/temporal, 2-way vs _3way), protocol version, or scorer build

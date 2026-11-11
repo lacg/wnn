@@ -26,7 +26,7 @@ the one column the fitness needs and the marker summary lines drop.
         · relative: a score only means something against the population it was ranked in.
 
 WHAT THIS SCRIPT DOES. Reads every banked marker, recovers the MEMORY stage's held-out
-row per report seed from the .out (means over the 5 seeds, so it matches the marker's
+row per test seed from the .out (means over the 5 seeds, so it matches the marker's
 MULTI-SEED line), then ranks the whole archive TWICE: once by gate distance, once by
 handing those same rows to the SHIPPED wheel combine (ram_controller.gated_fitness_combine
 — never a reimplementation, per CLAUDE.md). Reports Kendall tau, the inversion count, and
@@ -42,7 +42,7 @@ DISAGREEMENTS, not the absolute fitness numbers.
 ==============================================================================
 ALTITUDE REGIMEN
 ==============================================================================
-  altitude regimen — 102 runs, MEMORY stage held-out, 5 report seeds each
+  altitude regimen — 102 runs, MEMORY stage held-out, 5 test seeds each
   Kendall tau (gate-distance vs fitness) = +0.929
     concordant pairs 4967   DISCORDANT 184   tied 0   -> 3.6% of pairs invert
 
@@ -77,7 +77,7 @@ ALTITUDE REGIMEN
 ==============================================================================
 ATTITUDE-ONLY (a different task — never pooled with the above)
 ==============================================================================
-  attitude-only — 89 runs, MEMORY stage held-out, 5 report seeds each
+  attitude-only — 89 runs, MEMORY stage held-out, 5 test seeds each
   Kendall tau (gate-distance vs fitness) = +0.913
     concordant pairs 3732   DISCORDANT 169   tied 15   -> 4.3% of pairs invert
 

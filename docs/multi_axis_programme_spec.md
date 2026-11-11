@@ -17,9 +17,9 @@ arm-vs-twin verdict has named the anchor.
 | D14 | **Controller wheel FROZEN at ABI 33** (sha a6398538ce04588c) for the whole programme. | R9; chain preflight refuses any other wheel and refuses to bank a run whose `[provenance]` differs; Q5 closed |
 | D15 | **No drag-sweep re-fly.** §1.2 stays an n=1 reference. | Q6 closed |
 
-Report seeds in-programme: every condition flies the anchor argv's own 99990101..05 (the interim set),
+Test seeds in-programme: every condition flies the anchor argv's own 99990101..05 (the interim set),
 so its headline compares directly with the banked anchor headlines; the FINAL table re-scores every
-crown on D5 (99990201..05) with `phased_ga <argv> --report-seeds <D5> --recalc-headline <ckpt dir>`
+crown on D5 (99990201..05) with `phased_ga <argv> --test-seeds <D5> --recalc-headline <ckpt dir>`
 (same regime) — and the rivals on D5 are already scored (§5 #6).
 
 Tooling landed 05/11 (no box time used): scripts/headline_compare.py (7ddeba55; .out REPORT-headline
@@ -39,7 +39,7 @@ rewritten + tests/multi_axis_chain_dryrun.sh 27/27 (d6d9cfd8; NOT launched); per
 | 5 | Round 1 = 12 runs ~46 h; total 40 runs ~215 h | Round 1 = 9 runs ~99 h; total 48-50 runs ~520-540 h at n=5 | §4 |
 | 6 | n=4 per condition + anchor extended to 8 | n=5 per condition (house rule), anchor s2-s6 from CTRL-8 + D4 extension s7-s9 | §4 |
 | 7 | ONE primary column per axis is the verdict | Holistic verdict (CTRL-8 rule_v2 template): attitude block decides, pos3d/alt tie-break; per-axis focus metric only sizes power | §2, §6 |
-| 8 | MEMORY multi-seed row is the surface | REPORT headline only (report seeds), five metrics stable/err/steady/alt/pos3d (+dx/dy) | R7, R8 |
+| 8 | MEMORY multi-seed row is the surface | REPORT headline only (test seeds), five metrics stable/err/steady/alt/pos3d (+dx/dy) | R7, R8 |
 | 9 | Baselines via compute_baselines (stage-1, attitude-only) | Rival bar per condition via scripts/ctrl22_stage2_rivals.py on the condition's own argv | R6 |
 | 10 | Axis F plumbing open; --motor-lag 0.0375 | CLOSED at ABI 30; flag is `--motor-lag-s` = 2% SETTLING TIME T (T=0.15 nominal, 0.30 stress) | phased_ga.py:2700-2707 |
 | 11 | Trainer-airframe gap (#14/#15) open | CLOSED at ABI 30; `_hd30` re-fly superseded by the ABI-33 lineage | evaluator.py:1021-1033 |
@@ -85,11 +85,11 @@ duplicates kept verbatim — this is what the chain must reproduce, not a cleane
 --neurons-patience 3 --conns-gens 5 --conns-patience 3 --memory-gens 120 --memory-patience 2 --pop 50
 --num-eval-folds 5 --check-interval 2 --magnitude-aware-patience --eval-episodes 100 --memory-eval-episodes 200
 --steps 2000 --tilt 5.0 --fit-aggregation zscore --zrank-clamp 3.0 --gate-stable 0.70 --gate-err 8.0
---delta-gamma 1.0 --grid-bits 24 --grid-output-neurons 256 --max-output-neurons 256 --report-episodes 100
+--delta-gamma 1.0 --grid-bits 24 --grid-output-neurons 256 --max-output-neurons 256 --test-episodes 100
 --holdout-pop-sample 8 --runs 1 --memory-mode BINARY --airframe cf21_brushless --disturbance L4C --teacher mpcof
 --obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err --obs-yaw-err-i --obs-collective-cmd
 --obs-alt-err --obs-vz --translation --reward-lambda-alt 0 --grid-state-neurons 0 --max-state-neurons 0
---report-seeds 99990101 99990102 99990103 99990104 99990105
+--test-seeds 99990101 99990102 99990103 99990104 99990105
 --obs-pwm --skip-stages connections,bits --max-output-neurons 512 --max-cells 1000000000 --teacher-hover derived
 --base-seed <seed>
 --fit-weight-err-sq 0.28125 --fit-weight-stable 0.225 --fit-weight-steady 0.39375 --fit-weight-pos 0.1
@@ -102,7 +102,7 @@ floor (CTRL-20 closed); 2 s episodes; provenance abi=33 wheel_sha256=a6398538ce0
 Built by scripts/ctrl8_ab_pop50.sh (BASE = experiments/crn_noise_probe/ARGS_…_s31337002_op31.txt minus
 save/seed/weights, + W + S2 + POS). FILL IN at verdict: winner = {arm|twin}, decided on n={3|5}, date.
 
-PROVISIONAL anchor numbers — REPORT headline (stage-select crowned genome on report seeds 99990101-05),
+PROVISIONAL anchor numbers — REPORT headline (stage-select crowned genome on test seeds 99990101-05),
 ABI 33, k_d 0.78; mean ± SD over search seeds. NOT a result until the A/B closes.
 ```
 controller          n   stable %      err °        steady °     alt m          pos3d m
@@ -115,7 +115,7 @@ LQR                 5   100.0         1.94 ± 0.09  1.20 ± 0.06  0.16 ± 0.01  
 MPC                 5   100.0         2.24 ± 0.23  1.46 ± 0.19  0.16 ± 0.01    0.36 ± 0.01
 PID                 5   100.0         2.99 ± 0.38  2.50 ± 0.45  0.16 ± 0.02    0.35 ± 0.01   weakest classical
 ```
-(rival SDs are over the 5 report seeds. WNN headline per seed: arm s2 97.0/2.55/2.02/0.163/0.411,
+(rival SDs are over the 5 test seeds. WNN headline per seed: arm s2 97.0/2.55/2.02/0.163/0.411,
 s3 95.0/2.63/1.83/0.202/0.429, s4 94.4/2.83/2.13/0.178/0.425; twin s2 91.4/3.04/2.64/0.179/0.451,
 s3 87.6/3.30/3.03/0.163/0.436.)
 
@@ -157,16 +157,16 @@ R2. SIZE BEFORE FLYING with exact noncentral-t MDEs (80 % power, α .05 two-side
     INDETERMINATE, never a refutation.
 R3. pos3d is the best-resolved channel at stage 2 (SD 0.009 m); alt next (0.020 m). They tie-break, and
     are the focus for axes whose read is about position/altitude hold.
-R4. Same search seeds (31337002..) and the same report seeds everywhere. Pairing by search seed is
+R4. Same search seeds (31337002..) and the same test seeds everywhere. Pairing by search seed is
     cosmetic (pair correlation ≈ 0 in every earlier arm), so PRIMARY analysis = Welch vs the extended
     anchor; paired is the robustness line.
 R5. Train ORACLE, compare ESTIMATOR-FED: every rival row is the [est] row (ctrl22 `feed: estimator`).
     The WNN's own attitude features come from the Mahony estimator (ABI 32) — stated in every table.
 R6. Every condition gets its OWN rival bar, scored by scripts/ctrl22_stage2_rivals.py on the
     condition's own argv (per-condition ARGS file; xy 0.5 m, 2000 steps cell) BEFORE its WNN runs,
-    and recomputed on any new report-seed set (R10). Never compare across conditions' bars. Conditions
+    and recomputed on any new test-seed set (R10). Never compare across conditions' bars. Conditions
     that do not change the plant (B teacher, C state neurons) share the anchor's bar.
-R7. Surface = the REPORT HEADLINE only (stage-select crowned genome on the report seeds). No
+R7. Surface = the REPORT HEADLINE only (stage-select crowned genome on the test seeds). No
     STAGE-SELECT/VAL tables in reports (Luiz 25/10). Gen-line numbers are never results.
 R8. Five metrics on every surface: stable %, err °, steady °, alt m, pos3d m (dx/dy alongside). Rival
     rows carry their SDs. Altitude and pos3d are never omitted.
@@ -175,7 +175,7 @@ R9. PROVENANCE + WHEEL FREEZE. Every run records `[provenance]` (abi, wheel_sha2
     wheel hashes. Any controller-wheel change during the programme stops it; resume only after an
     anchor re-fly or a demonstrated bit-identity pin on the anchor argv (pop-6 smoke RESULT lines
     identical pre/post).
-R10. REPORT SEEDS: D5 DECIDED 19/09 — final table on 99990201..05; interim reads keep 99990101..05. The
+R10. TEST SEEDS: D5 DECIDED 19/09 — final table on 99990201..05; interim reads keep 99990101..05. The
     CTRL-8 anchor was read on 99990101..05, so the final table needs every winner RE-SCORED on D5 (Stage 0
     #12) and every rival bar recomputed on D5 (#6).
 R11. stable is a bounded per-episode pass rate: report failures as counts (`stable_fail=k/n`, 50a9bdba)
@@ -352,7 +352,7 @@ a running .sh, never launched beside IDS memory pressure (the controller is the 
 2   R11 failure counts                      CLOSED    50a9bdba; `stable_fail=` on MULTI-SEED lines (3 in arm_s3.out)
 3   HOLD sentinel                           CLOSED    controller_arm_lib.sh; honoured by ctrl8_ab_pop50.sh:24
 4   D0 teacher hover / label re-base        CLOSED    a88cb7c1; dagger_train.rs:1240-1259 (teacher.hover(), all teachers)
-5   D5 report-seed set                      CLOSED    decided 19/09 (§8); implementation is #6 + #12
+5   D5 test-seed set                      CLOSED    decided 19/09 (§8); implementation is #6 + #12
 6   Rival bars per condition (ABI 33)       CLOSED    05/11: experiments/ctrl22/rivals_abi33_ma_{L4A,L4B,lagT015,lagT030,cf2xfw_kd025}.json
                                                       (interim seeds 99990101-05) + *_d5.json and rivals_abi33_ma_anchor_d5.json
                                                       (D5 99990201-05); ARGS_ma_*.txt = arm argv + condition flags last-wins.
@@ -398,7 +398,7 @@ round-1 path.
 Smokes (fly AFTER the CTRL-8 verdict; pop 6 = plumbing only, numbers NOT read): the exact argv per
 condition is printed by `MA_ANCHOR=<arm|twin> bash scripts/multi_axis_chain.sh --smoke-list` (anchor argv
 verbatim from its s3 .out + `--pop 6 --steps 200 --neurons-gens 1 --memory-gens 1 --eval-episodes 2
---memory-eval-episodes 2 --report-episodes 2 --base-seed 1` + the condition flags, under /usr/bin/time -l).
+--memory-eval-episodes 2 --test-episodes 2 --base-seed 1` + the condition flags, under /usr/bin/time -l).
 Assert rc 0, `[PLANT]`, `[provenance] abi=33 wheel_sha256=a6398538ce04588c`, a GRID line and a HEADLINE;
 axis B: no label saturation; axis C: read peak RSS + cells, then set MA_AXIS_C_MAX_CELLS (D13).
 One smoke at a time, never beside a live phased_ga. No wheel install anywhere (D14).
@@ -428,7 +428,7 @@ One smoke at a time, never beside a live phased_ga. No wheel install anywhere (D
 ## 8. Decisions
 
 DECIDED 19/09/2026 (Luiz): D1 cf2x_firmware only · D2 levels dropped · D3 round-major · D4 anchor to 8
-seeds · D5 final report seeds 99990201..05, interim 99990101..05 · D6 axis F added (T units per §3-F) ·
+seeds · D5 final test seeds 99990201..05, interim 99990101..05 · D6 axis F added (T units per §3-F) ·
 D7 axis G optional after round 2 · D9 anchor = `_hd29` — SUPERSEDED 05/11 by the CTRL-8 winner (draft 4).
 DECIDED since: alt weight 0.0 (CTRL-19, 28/10); MAD floor not adopted (CTRL-20, 30/10); ABI-32 real-life
 plant (31/10, option A); k_d 0.78 default (03/11); CTRL-8 rule_v2 holistic (05/11).

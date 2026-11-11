@@ -7,7 +7,7 @@ Four changes, all additive, landing together:
 
 | # | change | unlocks |
 |---|---|---|
-| 1 | GRID gets the 5-report-seed held-out | "does the GA earn its 7000s over a 1500s grid?" |
+| 1 | GRID gets the 5-test-seed held-out | "does the GA earn its 7000s over a 1500s grid?" |
 | 2 | persist EVERY stage winner per run | NEURONS-vs-MEMORY on identical draws; committee members |
 | 3 | three-way max-over-stages, **selected on val** | ship the best stage without inflating the reported number |
 | 4 | marker carries the GRID block + the selected stage | the results doc can read all of it |
@@ -15,7 +15,7 @@ Four changes, all additive, landing together:
 ## Why
 
 `docs/l4_teacher_screen_results.md` compares stages that are not measured the same way.
-Every GA stage (NEURONS, MEMORY) gets a 5-report-seed held-out block; **Stage 0 GRID gets
+Every GA stage (NEURONS, MEMORY) gets a 5-test-seed held-out block; **Stage 0 GRID gets
 none**. Verified on `logs/controller/l3delta/L3D_dstep_..._s31337002.out`: the only
 `RESULT — during-search winner (held-out)` blocks are at lines 196-232 (NEURONS) and
 351-387 (MEMORY). Line 72 is the grid winner, during-search numbers only.
@@ -55,7 +55,7 @@ genome, which is exactly the `res.best_genome` / `res.final_population` shape
 		stage_results = [("Grid", winner_spec, m0, dt0, grid_point_count(args))]
 		# GRID held-out (REPORT ONLY, never feeds selection — same contract as every
 		# other stage). The grid winner is what you would ship if you stopped before
-		# the GA, so it needs the SAME 5-report-seed measurement the GA stages get.
+		# the GA, so it needs the SAME 5-test-seed measurement the GA stages get.
 		# Without it the Grid row carries during-search numbers while every later row
 		# carries held-out ones, and "does the GA earn its keep?" cannot be asked.
 		from types import SimpleNamespace
@@ -137,7 +137,7 @@ force the design:
   gets ONE noisy re-score on the next stage's stick and can be eliminated permanently by
   that single draw. A stage winner is a max over never-refreshed noisy estimates.
 
-**Selector: `seeds.val`, NOT the report seeds.** Selecting on the report seeds is not a
+**Selector: `seeds.val`, NOT the test seeds.** Selecting on the test seeds is not a
 training leak — nothing is fit to them — but `E[max(A,B,C)] > max(E[A],E[B],E[C])`, so the
 published number would be biased upward by the selection itself. That is the best-of-N
 inflation family, and it is the first thing a reviewer pokes at. `seeds.val` is already in
@@ -146,13 +146,13 @@ scope (`phased_ga.py:1484`, used by `_pid_baseline`). Cost: 3 extra evaluations 
 ```
 search folds  → train
 seeds.val     → picks GRID | NEURONS | MEMORY
-report seeds  → the published number, unbiased
+test seeds  → the published number, unbiased
 ```
 
 ⚠️ **Report it as an ADDITIONAL column; do NOT switch the headline mid-programme.**
 L1/L1b/L2/L3 all report the MEMORY stage. Changing the headline before L4 would break the
 one comparison chain the hold-floor programme rests on. So: emit the val-selected stage and
-its report-seed triple alongside the existing MEMORY headline, accumulate evidence across
+its test-seed triple alongside the existing MEMORY headline, accumulate evidence across
 L4, and switch the headline only at a programme boundary — pre-registered, justified by the
 winner's-curse mechanism above rather than by which scored better.
 

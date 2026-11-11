@@ -13,11 +13,11 @@ Plane CTRL-52, approved by Luiz 10/11/2026. Simulation only. Measured 10/11/2026
 ## Method
 
 **Subjects (WNN).** These are the a49 dres control headline genomes, scored exactly as flown (each run's `[argv]` rebuilds the episode config; checkpoint per `[stage-select] HEADLINE`):
-`C-S2-d_wposx2_a49_rf_c200_dres_full_s1` (MEMORY#1), `_s2` (NEURONS#2) and `_s3` (NEURONS#2). Also included is the block-3 dropconst winner `C-S2-d_wposx2_a45_rf_c200_dres_dropconst_full_s1` (NEURONS#0, an a45 genome rescored on the ABI-49 wheel). BINARY, sn=0, 24-bit output neurons, CTBR cascade (100 Hz outer over the 500 Hz firmware rate PID). Thresholds are refit on the TRAIN seed, as `_report_thresholds` does.
+`C-S2-d_wposx2_a49_rf_c200_dres_full_s1` (MEMORY#1), `_s2` (NEURONS#2) and `_s3` (NEURONS#2). Also included is the block-3 dropconst winner `C-S2-d_wposx2_a45_rf_c200_dres_dropconst_full_s1` (NEURONS#0, an a45 genome rescored on the ABI-49 wheel). BINARY, sn=0, 24-bit output neurons, CTBR cascade (100 Hz outer over the 500 Hz firmware rate PID). Thresholds are refit on the TRAIN seed, as `_test_thresholds` does.
 
 **Subject (MPCOF).** The `MPCOF>rate(h10)` cascade, est-fed, via `classical_baseline.cascade_rival_metrics`, i.e. `score_classical_baseline(teacher_id=4, ctbr_outer_hold=10)`. Same episodes, same plant.
 
-**Scoring.** 35 CF2.1 report units (seeds 99990101..99990135) x 100 episodes. A fresh evaluator per unit gives fold 0 of the report pool, the held-out report convention. Each fault draw is one corrupted controller image flown across all 35 units. The scorer is the installed Rust scorer; Python only edits the stored data. Reproduction at k=0: s1 99.97 / 1.47 / 0.90 (one fail; the run's HEADLINE prints 100.0 / 1.47 / 0.90). MPCOF 100.00 / 1.35 / 0.68 (0 fails).
+**Scoring.** 35 CF2.1 test units (seeds 99990101..99990135) x 100 episodes. A fresh evaluator per unit gives fold 0 of the report pool, the held-out report convention. Each fault draw is one corrupted controller image flown across all 35 units. The scorer is the installed Rust scorer; Python only edits the stored data. Reproduction at k=0: s1 99.97 / 1.47 / 0.90 (one fail; the run's HEADLINE prints 100.0 / 1.47 / 0.90). MPCOF 100.00 / 1.35 / 0.68 (0 fails).
 
 **Storage model (what a flip hits).** The bit universe is the MCU export (`mcu/README.md`, `scripts/export_controller_c.py`):
 `wnn_conn` (uint8 per address bit), `wnn_keys` (uint32 per TRUE cell, each neuron's sorted on-set), `wnn_off` (uint32 x N+1) and `wnn_thresholds` (float32). BINARY stores only the written-TRUE set, so:

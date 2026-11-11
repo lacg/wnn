@@ -32,7 +32,7 @@ The merge-tree dry run was clean against b03be615.
    - No guard fires.
    - MEMORY records a universe.
    - The fitness carries the position metric (`ZRank(… pos=0.1)` on the calculator lines). The gen line itself never prints `pos=` (generic_ga's formatter has no such field) — corrected 30/09 at landing.
-   - The fitter's xy threshold spans are non-zero. Not logged: verify with `_report_thresholds` on the smoke's spec (landing 30/09: pos_err_xy 0.48/0.52, vel_xy 0.22/0.23; features 6-8 = target_attitude, 0-span by design in attitude hold).
+   - The fitter's xy threshold spans are non-zero. Not logged: verify with `_test_thresholds` on the smoke's spec (landing 30/09: pos_err_xy 0.48/0.52, vel_xy 0.22/0.23; features 6-8 = target_attitude, 0-span by design in attitude hold).
    - The header shows `[RG-TILT] DAgger trainer tilt curriculum 8°→30° (checkpoint eval at 30°); scorer --tilt 5°`
      (defaults unchanged).
    - The packing log reads `packing FFD` if the population splits. A tiny pop fits in one sub-batch and prints

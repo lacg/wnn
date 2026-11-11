@@ -18,7 +18,7 @@ record), memories `project_l3_refuted_l4_committee_armed`, `project_controller_8
 
 ## 1. Where the programme stands (banked, do not re-derive)
 
-All triples `stable% / err° / steady°`, held-out report seeds 99990101–05, L4C,
+All triples `stable% / err° / steady°`, held-out test seeds 99990101–05, L4C,
 cf21_brushless, 100 eps × 2000 steps.
 
 - **Single-run hold-floor programme CLOSED.** L1 (d̂-as-input), L1b, L2, L3

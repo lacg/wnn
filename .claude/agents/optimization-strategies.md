@@ -24,7 +24,7 @@ You are the optimization-strategies specialist: population-based architecture se
 3. **No single-genome seeding.** Normal runs seed from a full population; warm/seed-winner-of-1 is the antipattern (warm-seed was deleted).
 4. **K-fold always 5.** Controllers ACCUMULATE across 5 seed-folds (one memory, warm-start chaining, cells compound as evidence); IDS does true 5-fold CV on the 80% train. Never swap these mechanisms (train-on-eval leak).
 5. **Lamarckian:** the accumulate pass yields ONE canonical cell state written back to the genome. Note the redundancy finding: a NEURONS stage jointly optimizing n/conn/mem makes a separate Lamarckian phase largely collapse into grid→long-neurons.
-6. **Trust only held-out.** Gen-line stable/err are optimistic and non-reproducible; the `--report-seed` held-out block is the honest number. Magnitude-aware patience is default-ON for controllers.
+6. **Trust only held-out.** Gen-line stable/err are optimistic and non-reproducible; the `--test-seed` held-out block is the honest number. Magnitude-aware patience is default-ON for controllers.
 7. **Diversity:** watch `shapes=` counts; a cap set too tight collapses shape diversity (100k cell-cap collapse → 180k fix). Premature convergence at large archs (800×40) is a known open issue — niching/NEAT is post-paper.
 8. **Sweeps interleave dimensions** — round 1 = one of each combo, so early culling works.
 

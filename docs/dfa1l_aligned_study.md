@@ -18,10 +18,10 @@ rescore and nothing untrustworthy about them. 0 cells remain on the broken axis.
 
 ## Held-out results
 
-Disturbance L2D, tilt 5°, 100 report-episodes × 2000 steps, 5 report seeds per cell.
-`n` = training seeds; ±SD is **across training seeds**, using each cell's report-seed
+Disturbance L2D, tilt 5°, 100 test-episodes × 2000 steps, 5 test seeds per cell.
+`n` = training seeds; ±SD is **across training seeds**, using each cell's test-seed
 mean — the same axis as the old marker table's ±SD, so the two columns are comparable.
-(The per-cell test-set ±SD across the 5 report seeds is a different quantity and is
+(The per-cell test-set ±SD across the 5 test seeds is a different quantity and is
 kept in `all.json`, not printed here.)
 
 ```
@@ -36,7 +36,7 @@ kept in `all.json`, not printed here.)
   dfa    10feat BINARY          3     99.1±0.6      2.3±0.1     1.9±0.2   was  21.0% /   8.4°
   dfa    10feat QUAD            1     56.4±0.0      5.3±0.0     5.9±0.0   was  14.0% /   8.6°
   ----------------------------------------------------------------------------------
-  CLASSICAL BASELINES (compute_baselines.py, same 5 report seeds):
+  CLASSICAL BASELINES (compute_baselines.py, same 5 test seeds):
   PID                           5     90.4±7.5      4.0±0.4     4.0±0.5
   LQR                           5    100.0±0.0      1.6±0.1     1.3±0.2
   MPC                           5    100.0±0.0      1.7±0.1     1.4±0.2
@@ -131,4 +131,4 @@ python3 scripts/build_dfa_aligned_table.py    # prints the table above
 ```
 
 Source of truth: `experiments/rescore/all.json` (git-tracked, 25 cells, each holding
-both the aligned `train` replay and the broken `per_seed` replay for every report seed).
+both the aligned `train` replay and the broken `per_seed` replay for every test seed).

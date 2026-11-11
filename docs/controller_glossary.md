@@ -71,7 +71,7 @@ an arm name just means "that family, trained @2000".
 | **ruler** | The evaluation yardstick a number was measured on (e.g. "the 2000-step ruler" = held-out episodes of 2000 steps). Numbers on different rulers are not comparable. |
 | **beat-me (line)** | The incumbent score a challenger must exceed to claim a win — e.g. LONG@2000 = 88.2/2.77° for the C2K pool. Campaign slang; "reference baseline" in paper language. |
 | **ho-neur / ho-mem** | Held-out score measured after the NEURONS GA phase (interim) / after the MEMORY phase (final). C2K showed ho-mem ≤ ho-neur in every cell — the gap is an overfit early-warning. |
-| **fresh-seed (truth serum)** | Re-scoring a winner on 4 seeds never used in training, selection, OR reporting. Mandatory before believing any number; several report-seed "winners" crater on it. |
+| **fresh-seed (truth serum)** | Re-scoring a winner on 4 seeds never used in training, selection, OR reporting. Mandatory before believing any number; several test-seed "winners" crater on it. |
 | **pooled (n=8)** | The 2 recipe seeds × 4 held-out seeds combined — the recipe-level number. Single-cell bests (like LEAN2K_s09's 93.5) are seed lottery until pooled. |
 | **seed lottery / bimodality** | When a recipe's outcome depends on the GA random seed (e.g. ANCH seeds land 60 vs 87). Wide pooled SD (±29) is the fingerprint. |
 | **cell** | One (arm × seed) training run in a sweep — e.g. C2K had 8 cells. |

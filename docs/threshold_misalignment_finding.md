@@ -35,10 +35,10 @@ a leakage-class problem. It isn't one. It is an *alignment* problem.
 |---|---|---|
 | `phased_ga.py:546` (stage 2-3 search) | `train_seed` | yes — training and eval share them |
 | `phased_ga.py:887` (memory stage) | `train_seed` | yes |
-| `phased_ga.py:785` (`_shell_holdout_compact`) | **`rs` = report seed** | **no**, for score-only genomes |
-| `phased_ga.py:1124` (`_holdout_report`) | **`report_seed`** | **no**, for score-only genomes |
+| `phased_ga.py:785` (`_shell_holdout_compact`) | **`rs` = test seed** | **no**, for score-only genomes |
+| `phased_ga.py:1124` (`_holdout_report`) | **`test_seed`** | **no**, for score-only genomes |
 
-The two held-out paths refit per report seed. For a genome that carries trained
+The two held-out paths refit per test seed. For a genome that carries trained
 cells this is wrong: it is scored through a different address function than the one
 its memory was built under.
 
@@ -51,14 +51,14 @@ m = (ev.score_genomes([g]) if use_score else ev.evaluate_batch([g]))[0]
 
 - `score_genomes` — pre-trained cells, no training. Thresholds MUST match training.
 - `evaluate_batch` — trains fresh at eval time under whatever thresholds are supplied,
-  so refitting on the report seed is legitimate there.
+  so refitting on the test seed is legitimate there.
 
 ## Measurement
 
-Frozen winners replayed on 5 report seeds (`scripts/rescore_winners.py`), both variants:
+Frozen winners replayed on 5 test seeds (`scripts/rescore_winners.py`), both variants:
 
 ```
-  cell                            per-report-seed         train-seed thresholds
+  cell                            per-test-seed         train-seed thresholds
   dfa_9feat_BINARY_s31337002      84.8± 9.4  3.4±0.4      89.6±2.4  3.2±0.1
   dfa_9feat_BINARY_s31337003      67.0± 6.2  4.4±0.4      87.6±1.9  3.4±0.1
   1layer_9feat_BINARY_s31337002   78.0± 7.8  3.7±0.4      86.2±1.2  3.4±0.1
@@ -72,10 +72,10 @@ Five of six BINARY winners land **86.2–90.0% with σ 1.2–2.6**.
 
 > **CORRECTION (01/08/2026).** This section originally read "every one above PID's
 > **85.0% / 3.96°**". That comparator was wrong — 85.0 came from `phased_ga._pid_baseline`,
-> which flew PID on episodes drawn from the RAW report seed while every WNN row is
+> which flew PID on episodes drawn from the RAW test seed while every WNN row is
 > pool-seeded (`fold_pool_seed`). `scripts/compute_baselines.py` had documented this on
 > 29/07 and been fixed; `_pid_baseline` had not. **The comparator is `baselines.json`:
-> PID = 90.4±7.5% / 3.96±0.38° / 4.00±0.46° over the same 5 report seeds**
+> PID = 90.4±7.5% / 3.96±0.38° / 4.00±0.46° over the same 5 test seeds**
 > (per-seed stable `[100.0, 98.0, 81.0, 84.0, 89.0]`).
 >
 > Against the correct number, these 9feat BINARY cells do **NOT** beat PID — they sit at

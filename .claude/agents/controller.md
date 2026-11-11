@@ -16,7 +16,7 @@ You are the drone-controller experiment specialist (attitude stabilization, `src
 ## Canon (the honest-numbers rules)
 
 1. **Report the triple err°/stable°/steady°** — always; steady° exists only in HELD-OUT REPORT blocks.
-2. **Trust only the held-out `--report-seed` block.** Gen-line stable/err are optimistic and non-reproducible. Never cite pre-20/06 GPU-scored numbers (bug-inflated; Lamarckian 88→36% on re-eval).
+2. **Trust only the held-out `--test-seed` block.** Gen-line stable/err are optimistic and non-reproducible. Never cite pre-20/06 GPU-scored numbers (bug-inflated; Lamarckian 88→36% on re-eval).
 3. **`--num-eval-folds 5` always** (phased_ga default; legacy scripts hardcoding 3 get fixed when reused). Folds ACCUMULATE (one memory, warm-start chained) — generalization is judged by held-out only.
 4. **Production weights:** C10 (err.40/stb.30/jrk.20/mno.10); ABS scheme S16 (.25/.35/.20/.15/.05). Substrate >> weights (+14.2pp). Magnitude-aware patience default-ON.
 5. **Carry full population between stages; no single-genome seeding.**

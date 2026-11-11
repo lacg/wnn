@@ -1156,7 +1156,7 @@ class FlowWorker:
     def _create_bitwise_evaluator(self, context_size: int, params: dict):
         """Create a BitwiseEvaluator using pre-cached data.
 
-        Uses train split for training, test split for fitness scoring (GA/TS).
+        Uses train split for training, validation split for fitness scoring (GA/TS).
         Test split is reserved for full_evaluator (final test evaluation).
         """
         self._ensure_lm_cache()
@@ -1190,7 +1190,7 @@ class FlowWorker:
     def _create_multistage_evaluator(self, context_size: int, params: dict):
         """Create a MultiStageEvaluator using pre-cached data.
 
-        Uses train split for training, test split for fitness scoring (GA/TS).
+        Uses train split for training, validation split for fitness scoring (GA/TS).
         """
         self._ensure_lm_cache()
         # Per-stage context sizes (e.g., [2, 4] for S0=2, S1=4)

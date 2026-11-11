@@ -311,9 +311,9 @@ marker records what was flown.
 
 **Recipe.** Exactly the CTRL-37/38 posx2 command line: `MA` from
 `experiments/ctrl22/ARGS_ma_anchor_lag020.txt` with the chain's sed (which strips
-`--obs-pwm`, the save flags and the report seeds), plus `--motor-lag-s 0.20 --output-mode
+`--obs-pwm`, the save flags and the test seeds), plus `--motor-lag-s 0.20 --output-mode
 ctbr --action-repeat 10 --ctbr-delta-law --delta-leak 0.7 --delta-max 0.6 --rg-gate off`,
-posx2 weights `.2557/.2045/.3580/.1818`, `--report-seeds 99990101..99990135` (35 units),
+posx2 weights `.2557/.2045/.3580/.1818`, `--test-seeds 99990101..99990135` (35 units),
 `--num-eval-folds 5`, pop 50. All arms run on ONE wheel (including the inc-0 fix).
 Seeds **s1..s3 = `--base-seed 31337001..31337003`**. s2/s3 share base seeds with the
 banked CTRL-37/38 rows, but the wheel differs, so CTRL-45 rows are **never** paired with

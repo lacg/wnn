@@ -107,7 +107,7 @@ Implementation contract:
 - **Python**: flags `--obs-tilt-p --obs-tilt-i --obs-peraxis-p --obs-peraxis-i --obs-integral-leak`
   → ControllerSpec.obs_features (mirror fit-weights threading through phased_ga).
 
-**Ablation matrix** (each = one ~33h retrain; A/B vs 83%/3.67° baseline on report-seed 99990101):
+**Ablation matrix** (each = one ~33h retrain; A/B vs 83%/3.67° baseline on test-seed 99990101):
 ```
 config            #feat  tests
 (none) baseline    9     the current 83%/3.67° control

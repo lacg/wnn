@@ -209,7 +209,7 @@ placed by the centred ladder at ±0.065/±0.19° (s2). It de-aliases exactly as 
   `_refit_thresholds_from_student` catches that exception and prints "keeping the teacher fit". So
   `--threshold-refit-from-student` is a **silent no-op** for rf_c200_dres.
 - **The refit would not reach the trained stages anyway.** Even if it ran, the refit ladder only reaches
-  `stage0_grid(thresholds_override=...)`. NEURONS (`_run_arch_phase`), MEMORY and `_report_thresholds` all refit
+  `stage0_grid(thresholds_override=...)`. NEURONS (`_run_arch_phase`), MEMORY and `_test_thresholds` all refit
   from the teacher pool without `extra_samples`. This is the same 2-of-5 plumbing defect class that
   `8542f4c1` fixed for the outer quantile. It would also leave GRID's held-out scored on a ladder its cells were
   not written under. Code reading only; nothing changed.
@@ -244,7 +244,7 @@ stage checkpoints.
 **Scoring.**
 - Each candidate was scored on the run's own 5 VAL seeds (`seeds.val+0..4`, 500 episodes, fixed scorer), with
   per-episode GPU rows plus a CPU replay for peak lateral speed. CPU vs GPU flags: 0 mismatches.
-- Each candidate was then scored on the 35 report seeds (3,500 episodes) **for checking only**.
+- Each candidate was then scored on the 35 test seeds (3,500 episodes) **for checking only**.
 
 **Ranking.** "fit" is the run's own union-rank calculator: ZRank, the gate, and the run's weights over the 9 val
 means, recomputed on the fixed scorer.
@@ -306,7 +306,7 @@ MEMORY#2   fit -0.321  <-flown                   0   0   0   0   0  2.46 1.41 0.
 - **GRID#0's fails are invisible on val.** It has 0 val fails, 0 episodes >3°, and p99 2.69°. Its 21 report
   fails sit on 4 units: 99990121 (8), 99990123 (8), 99990118 (4) and 99990112 (1).
 - **Fails cluster on hard units** across all candidates: 112, 113, 118, 121 and 123.
-  - Each report seed is one CF2.1 unit (motor-wear draw), and val samples only 5 units.
+  - Each test seed is one CF2.1 unit (motor-wear draw), and val samples only 5 units.
   - *Inferred:* unit-specific weakness is mostly a coverage-of-units problem, which no per-episode tail metric
     on 5 units can fix.
 - **Predictiveness of val metrics.** Spearman across 27 candidates, vs report fails / vs report err>4 count:
@@ -321,7 +321,7 @@ MEMORY#2   fit -0.321  <-flown                   0   0   0   0   0  2.46 1.41 0.
 
   All are weak. The run's own fit has no rank relation to report fails.
 
-**Leak caveat.** Report seeds were used only to check. But I chose "p99" after looking at these correlations,
+**Leak caveat.** Test seeds were used only to check. But I chose "p99" after looking at these correlations,
 so it is a POST-HOC rule (n=3 seeds, 3 vs 4 vs 24 fails). It must be pre-registered and validated on runs it did
 not come from before it can be claimed.
 

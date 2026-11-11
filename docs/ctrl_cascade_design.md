@@ -416,7 +416,7 @@ does not slow the plant). One controller run at a time.
 
 This is a new lineage with suffix `_ct38`, and no CTBR marker is pooled with a direct-pwm marker. Comparisons
 across lineages go only through elements both lineages share:
-- the same scorer (G5, L4C, translation, report seeds 99990101-05);
+- the same scorer (G5, L4C, translation, test seeds 99990101-05);
 - the same rivals (`PID[est]` / `PID[oracle]`, printed in both);
 - the R0/R1/R2 rows above as the direct-pwm reference.
 

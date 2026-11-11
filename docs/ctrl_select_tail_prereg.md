@@ -13,7 +13,7 @@ correlation +0.42 with report fails; fitness ≈ 0.
 
 ## The rule under test (fixed)
 - `--val-units 20`: stage-select flies every candidate on 20 val units (× 100 episodes), disjoint
-  from the 35 report units and from the train/test seeds. Default 5 = today, bit-identical.
+  from the 35 test units and from the train/test seeds. Default 5 = today, bit-identical.
 - `--select-tail p99`: tail term = the 99th percentile of the candidate's per-episode attitude error
   (the per-episode error the stable bound uses; a diverged episode counts as +inf) over ALL its val
   episodes. Combined exactly like `near_fail`: headline = lowest rank(fit) + rank(p99), average
@@ -24,7 +24,7 @@ correlation +0.42 with report fails; fitness ≈ 0.
 ## Test set
 Every CTRL-48 block-4 and block-5 run on controller ABI 49 (tags `C-S2-d_wposx2_a49_*`, ≈33 runs),
 re-ranked with `--recalc-headline` from their stage checkpoints. No GA run is added; no rule
-parameter is tuned on these runs. Each pick is scored on the 35 report units × 100 episodes on the
+parameter is tuned on these runs. Each pick is scored on the 35 test units × 100 episodes on the
 fixed scorer.
 
 ## Pass criterion (P adopted only if ALL hold)

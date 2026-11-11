@@ -48,7 +48,7 @@ pattern (which caused tonight's incidents) and monitor the controller in the das
 - flow_runner, on `architecture_type=="controller"`, calls `run_phased_ga`'s `_run_one`
   IN-PROCESS (the flow_runner IS the RAYON=3 subprocess) with params mapped from flow config:
   tilt, body_rate, yaw_rate, steps, pop, elitism, check_interval, {neurons,bits,conns,memory}_{gens,patience},
-  eval_episodes, universe_episodes, num_eval_folds, fit_weights, base_seed, report_seed,
+  eval_episodes, universe_episodes, num_eval_folds, fit_weights, base_seed, test_seed,
   lamarckian, save_stage_checkpoints. → REUSES the fixed orchestrator (population carry +
   held-out) entirely; zero re-implementation.
 - DB reporting: the controller flow defines 5 experiment records (grid, neurons, bits,

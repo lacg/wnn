@@ -260,7 +260,7 @@ worker wheel.
 **Recipe.**
 - The CTRL-45 command line (MA args + chain sed + `--motor-lag-s 0.20 --output-mode ctbr --action-repeat 10
   --ctbr-delta-law --delta-leak 0.7 --delta-max 0.6 --rg-gate off`).
-- posx2 weights, `--report-seeds 99990101..99990135` (35 CF2.1 units), `--num-eval-folds 5`, pop 50.
+- posx2 weights, `--test-seeds 99990101..99990135` (35 CF2.1 units), `--num-eval-folds 5`, pop 50.
 - **Plus A's adopted calibration and CTRL-45's adopted RF setting.** If either has not been decided when E flies,
   use what the reference arm uses and record it. Both arms must use the same setting.
 - `--att-err-ref tilt` (already in the recipe).

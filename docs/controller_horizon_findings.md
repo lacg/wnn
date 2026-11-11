@@ -15,7 +15,7 @@ architecture + cells evolved by phased GA (grid → neurons → memory, Lamarcki
 DAGGER-trained against an AttitudePID teacher). Episode: random initial attitude
 (tilt ≤5°, yaw ≤5°, body-rate ≤0.5), target level; **stable** = not diverged AND mean
 attitude error ≤5°; **steady°** = mean error over the last 20% of steps (the
-drift-sensitive metric). Held-out protocol: 4 report seeds × 100 episodes; **fresh-seed
+drift-sensitive metric). Held-out protocol: 4 test seeds × 100 episodes; **fresh-seed
 protocol** (mandatory truth serum): 4 further seeds never used in training, selection,
 OR reporting.
 
@@ -229,7 +229,7 @@ construction.**
 
 ## Supporting results
 
-- **Fresh-seed protocol is load-bearing**: report-seed winners routinely fail it
+- **Fresh-seed protocol is load-bearing**: test-seed winners routinely fail it
   (pidmix_pwm family 87.2→76.5±16.8; ANCH 91.0→81.2±15.6 with a 55% crater seed;
   pidmix_s10's 90.0→89.2 reproduces — that's how we know which is real).
 - **Lean extreme**: a 4-input-bit / 20-total-state-bit / 60K-cell s16 controller

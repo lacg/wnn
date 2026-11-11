@@ -127,7 +127,7 @@ jerk and mono — not zero-padded, so copying the parent's raw numbers gives a d
 | S16noJM vs C10noJM | 4-1 | 3-2 | **S16noJM** (runoff — NOT pre-registered) |
 | S16noJM vs STEADY40 | 3-2 | 3-2 | **S16noJM** (runoff — NOT pre-registered) |
 
-Headline stage chosen per run (val-selected, never on the report seeds):
+Headline stage chosen per run (val-selected, never on the test seeds):
 
 | arm | s…2 | s…3 | s…4 | s…5 | s…6 |
 |---|---|---|---|---|---|
@@ -170,6 +170,6 @@ this comparison existed, so not circular.
   Never compare its 4-seed mean against a 5-seed mean; the unequal n moved STEADY40's mean
   steady by 0.13° in an earlier reading and briefly made a clear loss look like a tie.
 - **No PID win.** A run's `.out` holds ~60 `vs PID[est] (RIVAL)` lines spanning 1.24°–3.86°,
-  one per seed block. Compare the headline's report seed against *that same seed's* PID row.
+  one per seed block. Compare the headline's test seed against *that same seed's* PID row.
   The best run of the programme (C10noJM s31337005, 97.4% / 1.80° / 1.25°) loses every column
   to PID on its matched seed (100% / 1.24° / 0.55°).

@@ -19,7 +19,7 @@ It sits on the `_op31` anchor argv: b24 n256, `--obs-pwm`, levels as banked, L4C
 
 ## 2. Measured inputs
 
-**Rival bar (CTRL-22, estimator-fed, 5 report seeds, xy 0.5 m, mean start |xy| 0.385 m):**
+**Rival bar (CTRL-22, estimator-fed, 5 test seeds, xy 0.5 m, mean start |xy| 0.385 m):**
 
 | teacher | 2 s: err° / pos3d m | 6 s: err° / pos3d m |
 |---|---|---|

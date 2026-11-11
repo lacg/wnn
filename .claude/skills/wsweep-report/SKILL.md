@@ -10,7 +10,7 @@ Per-combo status for a controller fitness-weight cull-down sweep run via
 weighting err²/stable/jerk/mono) is a full **phased_ga** run
 (grid → GA-neurons → GA-memory) with all four gated options on: splitting
 (`WNN_STATE_SPLIT=1`), lamarckian write-back (`--lamarckian`), cell persistence
-(`--save-winner`), and per-stage held-out (`--report-seed`).
+(`--save-winner`), and per-stage held-out (`--test-seed`).
 
 ## Steps
 
@@ -30,7 +30,7 @@ weighting err²/stable/jerk/mono) is a full **phased_ga** run
 - **err/stb/jrk/mno** — the combo's 4 fitness weights (sum to 1.0).
 - **stage / lastgen / lg_err / lg_stb** — current stage + the latest GA
   generation's during-search err/stable (optimistic; the GA's selection metric).
-- **N_err / N_stb** — NEURONS-stage **held-out** (fresh report-seed 99990001,
+- **N_err / N_stb** — NEURONS-stage **held-out** (fresh test-seed 99990001,
   matched 5°). Real generalization number after the architecture search.
 - **M_err / M_stb** — MEMORY-stage **held-out** = the **final honest result**
   per combo (after the cell-value GA, the high-leverage stage).

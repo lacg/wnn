@@ -22,7 +22,7 @@ checked the five fit sites at `5f3d113c` (`git show 5f3d113c:src/wnn/control/pha
   student refit _refit_thresholds_from_student   YES                     (never flown with q)
   NEURONS _run_arch_phase (pg:642)               NO                      tilt5, default q
   MEMORY  _run_memory_phase (pg:1027)            NO                      tilt5, default q
-  _report_thresholds (pg:903): every held-out
+  _test_thresholds (pg:903): every held-out
     + stage-select val scoring                   NO                      tilt5, default q
   arch-only held-out train fit (pg:1539)         NO                      tilt5, default q
 ```
@@ -32,7 +32,7 @@ So the August behaviour matches today's bug exactly. Four further points settle 
 - **`--threshold-calib-tilt` WAS honoured everywhere**, through `calib_episode_config` at every site. Only the
   quantile was dropped.
 - **No code path carried the grid ladder forward.** `--holdout-fixed-thresholds` (`8ab1d466`, 01/08)
-  became unconditional on 03/08 as `_report_thresholds`. It fixes the fit SEED to the train seed. It never
+  became unconditional on 03/08 as `_test_thresholds`. It fixes the fit SEED to the train seed. It never
   carried the grid's ladder, and it rebuilds the default-q ladder.
 - **Grid genomes carry no cells.** `controller_grid_search.py:226` sets `genome.cells = None`, and
   `evaluate_batch` does not write back. NEURONS therefore re-trained the grid pool from empty under its own
@@ -66,8 +66,8 @@ markers carry `"outer_q":""`.
 
 ## 2. Per-run table
 
-Triples are stable% / err° / steady°, held out over report seeds 99990101-05 (N=5 report seeds, ±
-over report seeds). HEADLINE = stage-select pick (val seeds), present since `d3f64e03`.
+Triples are stable% / err° / steady°, held out over test seeds 99990101-05 (N=5 test seeds, ±
+over test seeds). HEADLINE = stage-select pick (val seeds), present since `d3f64e03`.
 
 ```
 run (…_cf21_brushless_L4C)    seed  headline   affected         headline          GRID ho                NEURONS ho              MEMORY ho

@@ -47,7 +47,7 @@ test "does integrator capacity break 90%" without the pidmix feature-wiring conf
 
 Shared: `--grid-bits 24` (bits are wasted — keep it cheap), `--num-eval-folds 5`,
 `--neurons-gens 15 --memory-gens 15`, `--pop 24`, `--eval-episodes 100 --steps 500`,
-`--report-seeds 99990001 99990101 12345 67890`, `--tilt 5.0`, fit-weights = C10
+`--test-seeds 99990001 99990101 12345 67890`, `--tilt 5.0`, fit-weights = C10
 (err²0.25 steady0.35 stable0.20 jerk0.15 mono0.05), seeds {20260609, 20260610}, seed-outer.
 3 arms × 2 seeds = **6 cells**, ~1–2 h each at 24b/folds5 → ~8–12 h.
 Report/pool exactly like the bit-sweep (mean±SD over 8 held-outs per arm).

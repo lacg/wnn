@@ -16,7 +16,7 @@ same episodes. Diagnosis only: no code changed, nothing queued.
   (0.45 m/s gives about 5.3 deg) that the vehicle must actually fly.
 - **L4C has no gusts, no sensor dropout and no observation delay.** Its stochastic terms are:
   - +/-20% per-episode, per-axis torque-scale jitter;
-  - +/-20% per-unit motor wear, one draw per report seed;
+  - +/-20% per-unit motor wear, one draw per test seed;
   - ADIS16448 gyro/accel noise and gyro bias walk.
   So "gust/dropout/delay" triggers cannot occur in this recipe.
 
@@ -47,7 +47,7 @@ Notes on the table:
 - Stall = the 0.25-1.0 s window.
 - Siblings = the other dres seeds on the same episode.
 
-| genome | unit (report seed, index) / ep | err (bound 5.0) | trigger | peak err, when | stall err | siblings err | MPCOF cascade err (rank/100), peak |
+| genome | unit (test seed, index) / ep | err (bound 5.0) | trigger | peak err, when | stall err | siblings err | MPCOF cascade err (rank/100), peak |
 |---|---|---|---|---|---|---|---|
 | dres s2 MEMORY#1 | 99990112 (#11) / 86 | 5.11 | under-correction of the start kick on pitch (early q 1.1 vs 2.1 rad/s in s3) | 13.9 @0.12 s | 5.9 | 2.59 / 2.49 | 3.78 (1st, its hardest), 13.7 @0.125 s |
 | dres s2 MEMORY#1 | 99990123 (#22) / 32 | 5.32 | under-correction on roll (early p 0.70 vs 2.20) | 11.1 @0.27 s | 7.2 | 2.73 / 2.45 | 2.55 (11th), 6.7 @0.10 s |
@@ -104,7 +104,7 @@ The time course is the same in all four:
 
 ### Thermometer cut-points vs what these episodes reach
 
-Thermometer cut-point spans, fit at the train seed (`_report_thresholds`, 200 calibration
+Thermometer cut-point spans, fit at the train seed (`_test_thresholds`, 200 calibration
 episodes flown by the training cascade), compared with what these episodes reach. Measured, and
 identical across the 3 genomes to within a few percent:
 

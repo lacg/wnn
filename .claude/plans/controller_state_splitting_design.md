@@ -111,7 +111,7 @@ The integral is a thermometer counter. **Increment** is regular/easy ("if level 
 
 ## 10. Implementation plan
 
-All **controller-only** (ram.rs / ids_cache.rs untouched). Gated behind `WNN_STATE_SPLIT=1`, **default OFF** (like option A). Implement uncommitted → `maturin develop --release` → test → commit only if it works, else revert source + rebuild. Validation harness exists: `build_controller(controller_genome_from_arch(...))` + `run_episode`; held-out via `--report-seed`; multi-seed via the Step-0 harness.
+All **controller-only** (ram.rs / ids_cache.rs untouched). Gated behind `WNN_STATE_SPLIT=1`, **default OFF** (like option A). Implement uncommitted → `maturin develop --release` → test → commit only if it works, else revert source + rebuild. Validation harness exists: `build_controller(controller_genome_from_arch(...))` + `run_episode`; held-out via `--test-seed`; multi-seed via the Step-0 harness.
 
 Phased by **risk** (de-risk the most fundamental unknowns first):
 
@@ -142,7 +142,7 @@ Emit the two pressures from the trainer; wire `phased_ga` (Python) to consume th
 - Pass criterion: GA discovers a smaller/right `sn` than option A's imposed grid; connectivity converges toward the requested discriminators.
 
 ### Phase 6 — Full eval + multi-seed + baselines
-Run on the 5° spec, multi-seed (`--report-seed` held-out + Step-0 harness), compare vs: memoryless baseline, option A (sn-sweet-spot), and PID (3.40°/98% reference). Report held-out, NOT during-search gen-line (`project_controller_eval_variance`).
+Run on the 5° spec, multi-seed (`--test-seed` held-out + Step-0 harness), compare vs: memoryless baseline, option A (sn-sweet-spot), and PID (3.40°/98% reference). Report held-out, NOT during-search gen-line (`project_controller_eval_variance`).
 - Pass criterion: closes a meaningful fraction of the 83%→98% stability gap *on held-out*, without option A's sn≥9 collapse.
 
 ### Sequencing notes

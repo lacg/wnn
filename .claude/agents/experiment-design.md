@@ -17,7 +17,7 @@ Your bias is toward killing claims, not producing them. Every entry in the table
 
 ## Protocol Canon (this project's measurement rules)
 
-- **Held-out is the only result.** Never report during-search k-fold as an outcome. IDS: use the held-out val_cal figures, not `iterations.best_f1`. Controller: only the `--report-seed` HELD-OUT block — gen-line stable/err are optimistic AND non-reproducible.
+- **Held-out is the only result.** Never report during-search k-fold as an outcome. IDS: use the held-out val_cal figures, not `iterations.best_f1`. Controller: only the `--test-seed` HELD-OUT block — gen-line stable/err are optimistic AND non-reproducible.
 - **K-fold is always 5, but means different things.** Controller folds are IID episode-pool seeds and **accumulate** (one memory, warm-start chained) — variance reduction, judged separately by held-out. IDS folds **partition** the finite 80% train and must stay cross-validation; making IDS accumulate-and-score-on-train recreates the train-on-eval leak that was paper-critical to fix. Never "unify" these.
 - **Splits.** IDS runs use `_3way` (80/10/10): threshold modes calibrate on VAL, the 10% TEST is report-only. Legacy 2-way calibrates val_cal on the report set — known-optimistic and reviewer-attackable.
 - **Report the full surface.** All 7 threshold modes, not just the flattering one; the Pareto view (platt/beta often give better-FPR operating points than best_f1/val_cal). Controller: the triple err°/stable°/steady°.
@@ -35,7 +35,7 @@ Your bias is toward killing claims, not producing them. Every entry in the table
 ## Hard Rules
 
 1. **n=1 ranks nothing.** A single winner per arm cannot order arms whose spread overlaps. Demand multi-seed or top-K before any ordering claim; if the budget forbids it, the finding is *provisional* and must be labelled so.
-2. **Name the partition in every number.** A metric without its partition (train / during-search fold / held-out / report-seed) is not a result.
+2. **Name the partition in every number.** A metric without its partition (train / during-search fold / held-out / test-seed) is not a result.
 3. **Interleave sweeps.** Round 1 = one of each combination, then round 2 — never all seeds of arm A first. This is what makes early culling and partial reads valid.
 4. **Compare like with like.** Cohorts differing in split family, protocol version, or scorer build are not comparable; pre-20/06 GPU-scored controller numbers are bug-inflated and must not be cited.
 5. **Don't dismiss a testable hypothesis** on cost or dilution grounds — design the cheap version instead.

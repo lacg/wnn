@@ -44,20 +44,20 @@ tasks, so the leaderboards are kept apart — 100% stable exists only in the
 attitude-only half, and quoting it beside an altitude run compares two objectives.
 
 TWO COLUMNS, TWO RULES (05/09/2026, Luiz). `hd` ranks headline_holdout — the
-stage-select winner on the report seeds. But stage-select crowns the union-rank
+stage-select winner on the test seeds. But stage-select crowns the union-rank
 winner of the top-3 of EVERY stage on the val seeds, so it is a DRAW: the two
 byte-identical seed-31337002 runs at b32 n256 sit 7 ranks apart (0.1129 vs 0.1442)
 while their MEMORY rows match to 0.01 deg. Ranking eras against each other on `hd`
 therefore reads "rotation beat CRN", which is backwards.
 So every row also carries `hdMEM` — the SAME rule for everyone, computed from
-held_memory_multiseed (the MEMORY stage's mean over the report seeds, present in
+held_memory_multiseed (the MEMORY stage's mean over the test seeds, present in
 every marker). Compare eras on hdMEM; publish the headline. Both are printed side
 by side so the selection draw is visible rather than silently ranked.
 The `fit` column says which scorer the search ran under: CRN (every genome on all
 5 pools every generation, default since 03/09 21:05 EDT) or rot (the K-fold
 rotation, where an elite kept the score of the pool it was born on).
 
-ONLY held-out lines ARE READ — the report seeds. Never the val seeds (that is what
+ONLY held-out lines ARE READ — the test seeds. Never the val seeds (that is what
 selection ran on) and never the during-search gen lines (anti-predictive, repeatedly).
 ```
 

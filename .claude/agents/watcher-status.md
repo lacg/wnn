@@ -40,7 +40,7 @@ and never estimate a cell the script left blank.
   seeds as the triple. It is the cost side of the cost/benefit — quote it whenever
   discussing whether a cell is worth more seeds.
 - The WNN rows' ±SD is TRAINING-seed variance on a fixed held-out; the baselines' ±SD
-  is TEST-SET variance across report-seeds. Different sources — never read them as
+  is TEST-SET variance across test-seeds. Different sources — never read them as
   comparable error bars.
 - Baselines show `—` for duration by design: classical controllers have no search to time.
 - A cell may be missing because its marker is absent, not because it did not run. Cross-

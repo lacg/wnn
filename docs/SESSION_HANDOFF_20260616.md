@@ -59,7 +59,7 @@ All clean (no 180°) ⇒ the original seed0/seed2 180° duds were **purely the S
 - ~~`--neurons-patience 3 --check-interval 3` (was 5/5); `--memory-patience 6`~~ — superseded above.
 - Run controllers **ONE AT A TIME, never parallel** ([[feedback_controller_one_at_a_time_xds_priority]]).
 - Lamarckian, skip bits+connections, grid sn{8,12,16}×b{24,30}, pop50, folds5, steps1000, tilt5.0,
-  C10 weights err.40/stb.30/jrk.20/mno.10, report-seed 99990101, report-episodes 100.
+  C10 weights err.40/stb.30/jrk.20/mno.10, test-seed 99990101, test-episodes 100.
 - **FIRST cohort to run = the clean seed1@100n/200m re-run** (now with magnitude-aware patience) to
   resolve the confounded MILESTONE B A/B (50/100 81%/3.84° vs 100n/200m, which was cut short).
 

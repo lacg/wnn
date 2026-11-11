@@ -20,6 +20,20 @@ Always use context7 when I need code generation, setup or configuration steps, o
 - ALL CPU paths must use `neuron_memory::cell_to_weight()` (pub since 10/06/2026) — never hardcode `FALSE => 0.0, TRUE => 1.0, _ => empty_value` (this exact pattern shipped the inverted-QUAD multistage bug)
 - Metal shaders get cell semantics from `shaders/common.metal` (`WNN_QUAD_WEIGHTS`, `wnn_compute_address*`, `wnn_cell_weight`) — prepended at compile time; NEVER add per-shader copies. Parity tests: `cargo test cpu_fallback_matches_gpu`
 
+### Train / validation / test: the literature's meaning, everywhere
+**One vocabulary in code, DB, logs, ticks, chat and the paper** (decided 11/11/2026, sources in
+`docs/terminology_train_val_test.md`):
+- **train** — fit (memory writes, GA search folds)
+- **validation (`val`)** — model selection and tuning, touched repeatedly: threshold calibration
+  (`val_cal`), controller stage-select (`--val-units`), futility gates, early stopping
+- **test** — the final report number, touched once: the IDS `_3way` test partition, the controller
+  test units (`--test-seeds` / `--test-seed`), the `test_summaries` table
+
+A val number is a tuning number: never report it, and never put it next to someone else's test
+number without saying which is which. Never name a tuning partition "test" or a report partition
+"validation" in new code (the pre-11/2026 names `validation_summaries`, `--report-seeds` and the
+`[report-seeds]` log tag survive only in old logs).
+
 ### K-fold: Always 5 (but accumulate for controllers, CV for IDS)
 **K-fold is ALWAYS 5 — never 1, never 3. Never run a search on a single data/episode partition.**
 
@@ -38,7 +52,7 @@ The *mechanism* differs by substrate because the folds mean different things:
   COMPOUNDING via warm-start chaining (fold k+1 starts from fold k's exported cells). RAM writes
   accumulate as evidence (QUAD nudging settles same-address disagreement by vote tally), so 5 folds
   = "teach the same memory 5 times" → one richer canonical state. No weight-averaging problem, no
-  leak (generalization is judged separately by the held-out `--report-seed`). For Lamarckian this
+  leak (generalization is judged separately by the held-out `--test-seed`). For Lamarckian this
   also gives the single canonical state to write back. See `_train_genome_accumulate`.
 - **IDS (`ids_k_folds=5`): CROSS-VALIDATION, do NOT accumulate-and-score-on-train.**
   Folds ARE partitions of the finite 80% train set. Train on 4 folds, score the held-out 5th,
@@ -46,7 +60,7 @@ The *mechanism* differs by substrate because the folds mean different things:
   5" would make fitness a TRAINING score = the train-on-eval LEAK that was paper-critical to fix
   (28/05 dual-bug fix; never report during-search k-fold as the result). NEVER do this to IDS.
 
-**Why the asymmetry is correct, not a confound:** the controller's held-out `--report-seed` is the
+**Why the asymmetry is correct, not a confound:** the controller's held-out `--test-seed` is the
 real generalization check; the during-search folds only reduce episode-luck variance, so compounding
 them is just "more rollouts." IDS has no infinite stream — its only generalization signal during
 search IS the held-out-per-fold, so that separation must be preserved.
@@ -80,7 +94,7 @@ Every key read from `flows.config_json.params` must be in
 ### IDS Datasets: 80/20 Split with K-fold on Training
 **All new IDS experiment runs use an 80/20 split with K-fold cross-validation on the 80% train.**
 - **Train (80%)**: K-fold cross-validation during GA search (`ids_k_folds=5, ids_kfold_per_gen=5` by default — every generation averages all 5 folds for the patience-tracker fitness)
-- **Held-out (20%)**: never seen during search; consumed only at validation checkpoints (init / after-grid / after-GA) and the final report
+- **Held-out (20%)**: never seen during search; consumed only at test checkpoints (init / after-grid / after-GA, stored in `test_summaries`) and the final report
 
 This matches the standard IDS-literature convention (Moustafa, Sharafaldin et al.): K-fold on training data drives the optimizer; the held-out 20% is only touched for reporting.
 

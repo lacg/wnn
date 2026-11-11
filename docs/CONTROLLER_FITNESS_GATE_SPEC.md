@@ -49,7 +49,7 @@ The quantum is fixed by the alphabet; only the *rate* is under a genome's contro
 So minimising jerk means minimising how often the controller acts, and the global
 argmin is a controller that never actuates.
 
-Measured reference (PID, estimator-fed, cf21_brushless/L4C, 5 report seeds x 100
+Measured reference (PID, estimator-fed, cf21_brushless/L4C, 5 test seeds x 100
 episodes, `scripts/calibrate_fitness_scales.py`):
 
 ```

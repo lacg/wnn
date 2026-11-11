@@ -72,7 +72,7 @@ nominal-model classical controller on the canonical fault-tolerant-control scena
   knowing the fault) is the right "adaptation prize" reference — needs flight-dynamics
   care (at 0.3 the faulted motor cannot even hold its hover share, so naive mixer
   compensation saturates); design it with the flight-dynamics agent before trusting it.
-- **Report:** held-out triple on FRESH report seeds, the same fold-0/conditions
+- **Report:** held-out triple on FRESH test seeds, the same fold-0/conditions
   machinery as everything since 29/07 (`fold_pool_seed` / `disturbance_stream` —
   the conditions-parity test guards it).
 

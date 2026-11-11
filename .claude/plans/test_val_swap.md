@@ -1,6 +1,6 @@
 # Plan: one train / validation / test convention everywhere (the literature's)
 
-Status: DRAFT for Luiz (rewritten 11/11/2026 after the literature check). Nothing implemented.
+Status: IMPLEMENTED on branch `test-val-terminology` (11/11/2026). Luiz chose the renames: `--report-seeds` → `--test-seeds` and `validation_summaries` → `test_summaries`. Cut-over steps: see the end of this file.
 Supersedes the first draft, which swapped the code to "test = tuning, val = report".
 
 ## Decision (Luiz 11/11)
@@ -21,7 +21,7 @@ Most of the code already follows the literature, so the work is far smaller than
 - **IDS: no change.** `val_cal` / `margin_val_cal` calibrate on the val partition; the test partition is
   report-only. No worker ABI bump, no wheel swap, no DB migration of `threshold_metadata`.
 - **Controller behaviour: no change.** Stage-select ranks on `seeds.val` / `--val-units`; published numbers come
-  from `--report-seeds`.
+  from `--test-seeds`.
 - **The one inverted place: `src/wnn/seeds.py`.** The docstring and `SeedSet` comments say test = "model selection /
   early-stopping" and val = "held-out final report". The controller uses `seeds.val` for selection, so the comments
   contradict the usage as well as the literature.
@@ -37,11 +37,11 @@ Most of the code already follows the literature, so the work is far smaller than
 
 ### 2. Controller: make "report" and "test" the same word — [D-A]
 Today the controller has three names: `seeds.test` (used only in the disjointness check), `seeds.val`
-(stage-select) and `--report-seeds` (published). Under the convention the report units ARE the test set.
-- (a) **Recommended: keep the flag names, fix the words.** `--report-seeds` stays (scripts and block 6 pass it).
+(stage-select) and `--test-seeds` (published). Under the convention the test units ARE the test set.
+- (a) **Recommended: keep the flag names, fix the words.** `--test-seeds` stays (scripts and block 6 pass it).
   Printers, docstrings and docs say "test (report) units". `seeds.test` is documented as "reserved test seed, kept
-  disjoint; the published test units are `--report-seeds`". No flag churn, no risk to running chains.
-- (b) Rename `--report-seeds` → `--test-seeds` with the old name as a warning alias. One word everywhere, but it
+  disjoint; the published test units are `--test-seeds`". No flag churn, no risk to running chains.
+- (b) Rename `--test-seeds` → `--test-seeds` with the old name as a warning alias. One word everywhere, but it
   touches every chain script and the tick prompt.
 
 ### 3. DB — [D-B] (was D2/D3)
@@ -72,7 +72,22 @@ Today the controller has three names: `seeds.test` (used only in the disjointnes
 - Step 2(b) or 3(b), if chosen: about half a day, lands after block 6.
 
 ## Decisions for Luiz
-- **D-A:** keep `--report-seeds` and fix the words (recommended), or rename it to `--test-seeds`.
+- **D-A:** keep `--test-seeds` and fix the words (recommended), or rename it to `--test-seeds`.
 - **D-B:** keep the `test_summaries` table name (recommended), or rename it.
 The old D2 (migrate JSON keys) and D3 (swap seed columns) are no longer needed; D4 (flag aliases) only applies if
 D-A(b) is chosen.
+
+## Cut-over (live system)
+
+Run after `BLOCK6 DONE` (the running chain passes `--report-seeds` and greps `[report-seeds]`), at an IDS flow
+boundary:
+1. Stop the worker (`scripts/worker_swap.py`, no relaunch), then stop the dashboard.
+2. Back up `wnn.db` (sqlite `.backup`).
+3. Merge `test-val-terminology` into the working branch.
+4. Build the dashboard (`cargo build --release` in `dashboard/`) and the frontend (`npm run build`).
+5. Start the dashboard: it renames the two tables before the schema runs. Check `test_summaries` row count equals
+   the backup's `validation_summaries` count.
+6. Relaunch the worker; POST /resume or /restart the interrupted flow; verify the first finished flow writes
+   `test_summaries` rows.
+7. Rename the flags in the unversioned chain scripts under `logs/controller/`, update memory files, re-check the
+   hold scripts (PIDs 61873, 32321) still see their flows.

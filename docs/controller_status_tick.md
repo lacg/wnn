@@ -109,7 +109,7 @@ Measured on arm 1 of the alt-weight sweep:
 | | stable | err | steady |
 |---|---|---|---|
 | during-search (CONNECTIONS, gen 5/5) | 50.0% | 18.43° | 23.06° |
-| held-out (5 report seeds) | 36.4 ±7.2% | 20.93 ±6.83° | 24.14 ±8.30° |
+| held-out (5 test seeds) | 36.4 ±7.2% | 20.93 ±6.83° | 24.14 ±8.30° |
 
 The search view claimed 50% stability; the honest number was 36.4%. **Never put a
 gen-line number in a results table** — markers, arm tables and `docs/` take held-out

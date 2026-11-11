@@ -7,7 +7,7 @@ the same day; quotes below.
 |---|---|---|---|
 | **train** | fit the model | freely | memory writes, GA search folds (K-fold on the 80% for IDS) |
 | **validation** (`val`) | model selection and tuning | repeatedly | threshold calibration (`val_cal`), controller stage-select (`--val-units`), futility gates, early stopping |
-| **test** | final, unbiased report | once, at the end | every published number: the IDS `_3way` test partition, the controller report seeds |
+| **test** | final, unbiased report | once, at the end | every published number: the IDS `_3way` test partition, the controller test seeds |
 
 A number is **report-grade only if it comes from the test partition.** A validation number is a tuning number:
 it is optimistic by construction and must never be compared against someone else's test number.
@@ -48,14 +48,30 @@ The reversed usage (test = development, validation = final) is real, which is wh
 
 For ML and security venues (S&P, USENIX Security, IROS) the table at the top is the convention.
 
-## State of the code against this convention (11/11/2026)
+## State of the code (renamed 11/11/2026, branch `test-val-terminology`)
 
-- **IDS: already consistent.** Protocol v2 calibrates on the `_3way` val partition (`val_cal`, `margin_val_cal`)
-  and reports on the test partition.
-- **Controller: consistent in behaviour.** Stage-select ranks on the val units (`--val-units`, `seeds.val`); the
-  published numbers come from `--report-seeds`, which are the test set under this convention.
-- **Inconsistent: `src/wnn/seeds.py`.** Its docstring and `SeedSet` say test = "model selection / early-stopping"
-  and val = "held-out final report", the reverse of both the literature and how the controller uses `seeds.val`.
-  Fix planned in `.claude/plans/test_val_swap.md`.
-- `test_summaries` (DB table) stores checkpoint reports, including test-partition metrics. The name predates
-  Protocol v2; renaming it is optional and listed in the plan.
+- **IDS.** Protocol v2 calibrates on the `_3way` val partition (`val_cal`, `margin_val_cal`) and reports on the
+  test partition. Unchanged — it already followed the convention.
+- **Checkpoint results table.** `validation_summaries` is now **`test_summaries`** (column `validation_point` →
+  `test_point`), and `combined_validations` is now `combined_test_summaries`. The dashboard renames both on
+  startup (`rename_legacy_test_tables`). API routes: `/api/flows/:id/test-summaries`,
+  `/api/flows/:id/combined-test-summaries`, `/api/test-summaries/check`. Worker, frontend and iOS names follow
+  (`TestSummary`, `create_test_summary`, `test_cache_key.py`, `TestProgressionChart`).
+- **Controller.** Stage-select ranks on the val units (`--val-units`, `seeds.val`). The published numbers come
+  from the test units: `--test-seeds` (was `--report-seeds`), `--test-seed` (was `--report-seed`, merged with the
+  seed registry's test seed) and `--test-episodes` (was `--report-episodes`). Log tags are `[test-seeds]` /
+  `[test-seed]`.
+- **Seed registry (`src/wnn/seeds.py`).** Documented roles corrected: val = selection, test = report. No seed
+  value moved.
+- **Legacy LM path (`worker.py`).** It used to search on wikitext test and report on wikitext validation. It now
+  searches on validation and reports on test. This is the one behaviour change; the LM stack has been retired
+  since 10/06/2026, and old LM numbers are not comparable with a re-run.
+
+### What still carries the old words, on purpose
+
+- Log files written before the cut-over print `[report-seeds]`. The four parsers that read them
+  (`recalc_headlines.py`, `repair_resumed_stage_select.py`, `rescore_first_test_seed.py`, `stable_failure_ci.py`)
+  accept both tags.
+- Historic sections of `docs/ids_results.md` and dated notes describe what was run at the time; identifiers in
+  them were renamed, prose was not rewritten.
+- HuggingFace split names (`validation`, `test`) are the dataset's own and already match the convention.

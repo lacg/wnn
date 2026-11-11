@@ -11,7 +11,7 @@ unit, in the random grid genomes, and on 10 never-seen units. Formal pre-registe
 - The ABI 44 vs 45 confound is ruled out: the base s1 re-score under 45 reproduces exactly, and s2 is a same-wheel pair.
 
 **No leak.**
-- Stage-select ran on val seeds 163226054..58, disjoint from the report seeds 99990101..135.
+- Stage-select ran on val seeds 163226054..58, disjoint from the test seeds 99990101..135.
 - Thresholds are fit on the train seed.
 - RF is a connection-map projection only; no scorer, kernel or decode reads it.
 
