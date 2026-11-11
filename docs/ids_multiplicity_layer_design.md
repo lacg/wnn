@@ -349,9 +349,9 @@ Full-stack path, hop by hop:
 4. `IDSEvaluator.evaluate_at_thresholds` / `evaluate_multiclass_at_thresholds` /
    streaming variants (ids_evaluator.py) return it.
 5. `experiment.py:1470` gets it and passes it to
-   `dashboard_client.create_validation_summary` (dashboard_client.py:676) as a typed
+   `dashboard_client.create_test_summary` (dashboard_client.py:676) as a typed
    `Footprint` param, plus the log line.
-6. Dashboard API `create_validation_summary` (dashboard/src/api/mod.rs:81 →
+6. Dashboard API `create_test_summary` (dashboard/src/api/mod.rs:81 →
    experiments.rs) upserts the genome's footprint.
 7. `genomes` columns: reuse `materialized_cells` as **logical_cells** (it is NULL
    everywhere today; the comment is updated). ADD `physical_neurons`,
@@ -417,7 +417,7 @@ Fix (live training path, real run parameters, shared multiplicity layer):
    `IDSEvaluator.export_trained_layer(genome)` wraps it.
 3. **Fidelity gate.** The exporter recomputes held-out metrics from the returned
    scores at the stored threshold modes and requires equality with the DB
-   `validation_summaries` row for that genome/point. On mismatch it refuses to
+   `test_summaries` row for that genome/point. On mismatch it refuses to
    write files.
 4. **Outputs.**
    - `metadata.json` gains `logical_neurons`, `physical_neurons`, `index_of`,
@@ -687,11 +687,11 @@ Readings:
   `evaluate_at_thresholds` (5th tuple element) / `evaluate_multiclass_at_thresholds`
   (3rd) / `IDSGenomeStreamer.footprint()` → `wnn.ram.footprint.Footprint` →
   `IDSEvaluator` → `experiment.py` (log line + summary) → dashboard.
-  **Deviation (§5 step 7):** stored on `validation_summaries`
+  **Deviation (§5 step 7):** stored on `test_summaries`
   (`logical_neurons, physical_neurons, logical_cells, physical_cells`), not on
   `genomes` — a `genomes` row exists only for leaderboard submissions, written
   after the summary and only at `final`, so the upsert would miss most rows.
-  The validation-cache hit carries the footprint back.
+  The test-cache hit carries the footprint back.
 - **Stage 4 (super-genome).** `ram_core::super_genome::SuperGenome`: batch
   neurons walked cluster-major, collapsed, trained as ONE genome through
   `batched_train_core`; budget overflow bisects; a single genome takes the plain
@@ -758,7 +758,7 @@ than the plain wheel at rate 0.25.
   the pre-batch word, so two cells of one 31-cell word in one batch kept only
   the last (tests/test_memory_explore_batch.py).
 - **`RAMClusterLayer.reset_memory` left the SPARSE / LSH stores trained.**
-- **Dashboard validation cache drifted metrics by an ULP**: serde_json's
+- **Dashboard test cache drifted metrics by an ULP**: serde_json's
   default float parse is not correctly rounded, and a cache hit re-stores the
   served metadata as the final row (196/18500 recorded as ...596 instead of
   ...595). `float_roundtrip` enabled; dashboard test

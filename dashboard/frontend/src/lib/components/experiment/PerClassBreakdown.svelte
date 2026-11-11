@@ -1,8 +1,8 @@
 <script lang="ts">
-	import type { ValidationProgressionPoint } from './types'
+	import type { TestProgressionPoint } from './types'
 
-	export let points: ValidationProgressionPoint[] = []
-	// Which validation point + threshold mode to display. Bound from the page so
+	export let points: TestProgressionPoint[] = []
+	// Which test point + threshold mode to display. Bound from the page so
   // the choice survives in-page navigation (state lives in the page).
 	export let pointChoice: number = 0
 	export let thresholdChoice: 'train_cal' | 'fixed_05' | 'val_cal' | 'platt' | 'beta' | 'empirical' | 'empirical_cumulative' = 'train_cal'
@@ -142,7 +142,7 @@
 {/if}
 
 <style>
-  /* Per-class drill-down section (rendered BELOW the main validation table,
+  /* Per-class drill-down section (rendered BELOW the main test table,
      not interleaved between header and phase rows). */
   .per-class-section {
     margin-top: 1rem;

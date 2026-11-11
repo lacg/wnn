@@ -47,7 +47,7 @@ the module tree.
 | 2.3 | **ANY→ANY transitions accepted** on flows (PATCH overwrites started_at/NULLs completed_at on →running) and experiments (status is free-text String; typos round-trip as `Pending`) | db/mod.rs:759-876; api/mod.rs:166-173 |
 | 2.4 | **Zero transactions in db/mod.rs** (verified): create_flow (flow+seed+N experiments — crash = partial-experiment flow), deletes, restart, the wipe — all multi-statement, all unprotected | db/mod.rs throughout |
 | 2.5 | **Stale-flow handling inverted**: dashboard's guarded `requeue_stale_flow` (status→queued, data preserved) is dead code; live behavior is worker-side 90s stale→**failed**. This IS the "restart cancels running flows" pain. A restarted worker (empty `self._running`) can fail flows another process owns | db/mod.rs:1269-1302 (dead) vs worker.py:271-317 |
-| 2.6 | **Restart-resume deletes FK-referenced genomes** (`best_genomes.genome_id` → FK violation → 500 mid-mutation, flow stuck) AND throws away the cross-flow `validation_summaries` cache (hours of 46M re-validation) | db/mod.rs:979-1025,1364-1375 |
+| 2.6 | **Restart-resume deletes FK-referenced genomes** (`best_genomes.genome_id` → FK violation → 500 mid-mutation, flow stuck) AND throws away the cross-flow `test_summaries` cache (hours of 46M re-validation) | db/mod.rs:979-1025,1364-1375 |
 | 2.7 | **Worker exception handler can wedge flows**: unguarded `get_flow` inside `_handle_flow_exception` — dashboard down (the usual cause) → raises → no requeue/fail marking → flow stuck `running` until stale→failed (loses auto-resume) | worker.py:933-942 |
 | 2.8 | **Retry stack hazard**: outer 3×30s × transport `Retry(total=5, backoff)` incl. READ timeouts and POST → hung dashboard blocks synchronous training-loop calls ~10 min; non-idempotent POSTs (checkpoints, flows) can duplicate rows on connection-reset-after-commit | dashboard_client.py:175-240 |
 
@@ -94,7 +94,7 @@ the module tree.
 - **Silent dropdown failures** in SeedCheckpointSelector (3 paths set no error).
 - Smaller: `checkpoint_type='phase_end'` not in enum (stored raw, mislabeled on
   read); client can't clear seed_checkpoint_id; `find_checkpoint_by_path` scans
-  only latest 100; `check_cached_validation` outage → silent cache-miss →
+  only latest 100; `check_cached_test_summary` outage → silent cache-miss →
   hours of re-validation on 46M.
 
 ## Tier 4 — Smells / cleanup / structure
@@ -111,9 +111,9 @@ the module tree.
   fixes 1.10 once). Consolidate `.status-badge`/btn/filter CSS into app.css.
 - **God-file split maps produced** (line-ranged seams, same discipline as D3):
   - `db/mod.rs` (3177) → db/{migrations, schema, flows, flow_lifecycle,
-    experiments, iterations, checkpoints, validations, combined_validations,
+    experiments, iterations, checkpoints, validations, combined_test_summaries,
     gating, best_genomes, parse}
-  - `api/mod.rs` (2098) → api/{experiments, live_progress, combined_validations,
+  - `api/mod.rs` (2098) → api/{experiments, live_progress, combined_test_summaries,
     gating, snapshot, flows, flow_lifecycle, checkpoints, watch, best_genomes, ws}
   - `experiments/[id]/+page.svelte` (3387) → 11 components;
     `flows/[id]/+page.svelte` (2994) → 9 components + `useFlowPolling` module;
@@ -121,7 +121,7 @@ the module tree.
     (also the fix vehicle for 1.9). Full tables in the agent seam maps —
     preserved in section 6 below… (see git history of this commit for the
     raw agent reports if more line detail is needed).
-- **types.ts gaps**: `GenomeValidationType` missing `best_f1|best_fpr` (IDS
+- **types.ts gaps**: `GenomeTestType` missing `best_f1|best_fpr` (IDS
   reality), `ThresholdResult` missing `acc` — both force `any` erasure in the
   pages; three architecture-type fields (see Tier 3).
 - **A11Y**: exactly ONE violation repo-wide — `experiments/[id]/+page.svelte:3265`
@@ -163,7 +163,7 @@ changes are validated against live traffic, not alongside the ABI swap.
 - [x] P3 state machine — branch `dashboard-p3-p6` (ff1f9c60): transition
   validator (ANY→ANY → 409, TOCTOU-safe), conditional cancel + completed_at,
   gen-0 wipe window closed (iteration-rows guard + tx), FK-safe resume that
-  PRESERVES the validation cache, create_flow fully transactional, typed
+  PRESERVES the test cache, create_flow fully transactional, typed
   experiment status (422 on typos), stale flows RE-QUEUED not failed
   (dashboard 180s task + worker fallback). Verified live on a fresh instance.
   DEFERRED: worker _handle_flow_exception guard → post-arch-review-merge

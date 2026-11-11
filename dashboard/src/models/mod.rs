@@ -431,7 +431,7 @@ pub struct GenomeEvaluation
 // Health Check Models
 // =============================================================================
 
-/// Periodic full validation
+/// Periodic full evaluation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthCheck
 {
@@ -450,22 +450,22 @@ pub struct HealthCheck
 }
 
 // =============================================================================
-// Validation Summary Models
+// Test Summary Models
 // =============================================================================
 
-/// Validation point in the experiment flow
+/// Test point in the experiment flow
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub enum ValidationPoint
+pub enum TestPoint
 {
 	Init,
 	Final,
 }
 
-/// Type of genome being validated
+/// Type of genome being tested
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub enum GenomeValidationType
+pub enum GenomeTestType
 {
 	BestCe,
 	BestAcc,
@@ -476,34 +476,34 @@ pub enum GenomeValidationType
 	BestOverallAcc,
 }
 
-/// Full-dataset validation result for a single genome at a checkpoint
-/// Deduplication: genome_hash is used to skip re-validation of already-validated genomes
+/// Full-dataset test result for a single genome at a checkpoint
+/// Deduplication: genome_hash is used to skip re-testing already-tested genomes
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ValidationSummary
+pub struct TestSummary
 {
 	pub id: i64,
 	pub flow_id: Option<i64>,
 	pub experiment_id: i64,
-	pub validation_point: ValidationPoint,
-	pub genome_type: GenomeValidationType,
+	pub test_point: TestPoint,
+	pub genome_type: GenomeTestType,
 	pub genome_hash: String,
 	pub ce: f64,
 	pub accuracy: f64,
 	pub f1_macro: Option<f64>,
 	pub fpr: Option<f64>,
 	pub threshold_metadata: Option<serde_json::Value>,
-	/// Logical + physical size of the validated genome (IDS-37); None for rows
-	/// written before worker ABI 17 or by non-IDS validations.
+	/// Logical + physical size of the tested genome (IDS-37); None for rows
+	/// written before worker ABI 17 or by non-IDS test evaluations.
 	#[serde(default)]
-	pub footprint: Option<ValidationFootprint>,
+	pub footprint: Option<TestFootprint>,
 	pub created_at: DateTime<Utc>,
 }
 
-/// What a validated genome costs, LOGICAL (what the genome says, copies
+/// What a tested genome costs, LOGICAL (what the genome says, copies
 /// included) and PHYSICAL (distinct neurons actually trained and held) —
 /// always both (docs/ids_multiplicity_layer_design.md §5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ValidationFootprint
+pub struct TestFootprint
 {
 	pub logical_neurons: i64,
 	pub physical_neurons: i64,
@@ -511,7 +511,7 @@ pub struct ValidationFootprint
 	pub physical_cells: i64,
 }
 
-impl ValidationFootprint
+impl TestFootprint
 {
 	/// All four columns or nothing: a partial footprint is never reported.
 	pub fn from_parts(
@@ -531,17 +531,17 @@ impl ValidationFootprint
 }
 
 // =============================================================================
-// Combined Validation Models (multi-stage end-to-end metrics)
+// Combined Test Models (multi-stage end-to-end metrics)
 // =============================================================================
 
-/// Combined (end-to-end) validation result for a multi-stage flow.
+/// Combined (end-to-end) test result for a multi-stage flow.
 /// Pairs S0's best_X genome with S1's best_X genome and runs both stages together.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CombinedValidation
+pub struct CombinedTestSummary
 {
 	pub id: i64,
 	pub flow_id: i64,
-	pub genome_type: GenomeValidationType,
+	pub genome_type: GenomeTestType,
 	pub combined_ce: f64,
 	pub combined_accuracy: f64,
 	/// Per-stage CE breakdown as JSON array, e.g. [1.23, 3.45]

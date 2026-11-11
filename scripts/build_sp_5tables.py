@@ -8,7 +8,7 @@ and scripts/build_xds_5tables.py matches ONLY the `XDS-<cohort>-<w>b-W<x>-C35-
 hand-assembled. This script is the tooling for them.
 
 Cohort cell = flow-name family (everything before the trailing `-r<seed>`).
-Every number comes from validation_summaries.threshold_metadata at the
+Every number comes from test_summaries.threshold_metadata at the
 'final' checkpoint = HELD-OUT report partition. Never from iterations.best_f1
 (that is the during-search k-fold metric = train-on-eval leak).
 
@@ -96,10 +96,10 @@ def load(cur, like, exclude):
 
 	cur.execute(
 		f"""SELECT f.id AS fid, f.name, vs.genome_type, e.phase_type, vs.threshold_metadata
-		FROM validation_summaries vs
+		FROM test_summaries vs
 		JOIN flows f ON f.id = vs.flow_id
 		JOIN experiments e ON e.id = vs.experiment_id
-		WHERE f.name LIKE ? {ex} AND f.status='completed' AND vs.validation_point='final'""",
+		WHERE f.name LIKE ? {ex} AND f.status='completed' AND vs.test_point='final'""",
 		params)
 
 	data = defaultdict(lambda: defaultdict(lambda: defaultdict(

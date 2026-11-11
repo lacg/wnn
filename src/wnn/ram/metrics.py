@@ -1,7 +1,7 @@
 """Core metric types for WNN evaluation and fitness ranking.
 
 Provides a single source of truth for metric representation across the entire
-system: evaluators, fitness calculators, GA/TS populations, validation summaries,
+system: evaluators, fitness calculators, GA/TS populations, test summaries,
 checkpoints, and the dashboard.
 
 Usage:

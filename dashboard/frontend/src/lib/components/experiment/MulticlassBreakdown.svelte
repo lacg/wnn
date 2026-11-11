@@ -1,7 +1,7 @@
 <script lang="ts">
-	import type { ValidationProgressionPoint } from './types'
+	import type { TestProgressionPoint } from './types'
 
-	export let points: ValidationProgressionPoint[] = []
+	export let points: TestProgressionPoint[] = []
 
 	// Local drill-down state (phase × decode mode × genome for the confusion matrix).
 	let pointChoice: number = 0

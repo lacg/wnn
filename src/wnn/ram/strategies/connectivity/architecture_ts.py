@@ -409,7 +409,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 			raise StopIteration("Shutdown requested")
 
 	# =========================================================================
-	# Simplified optimize: setup + super() + validation
+	# Simplified optimize: setup + super() + test evaluation
 	# =========================================================================
 
 	def optimize(
@@ -426,7 +426,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 
 		Sets up Rust state, delegates to unified loop in base class (which uses
 		our _generate_neighbors override for Rust-accelerated search), then
-		runs validation summary on full data.
+		runs test summary on full data.
 
 		IMPORTANT: initial_fitness is REQUIRED.
 		"""
@@ -503,9 +503,9 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 		finally:
 			self._stop_live_observer(observer)
 
-		# Validation summary (Rust path only: full-data evaluation)
+		# Test summary (Rust path only: full-data evaluation)
 		if self._cached_evaluator is not None:
-			result = self._run_validation_summary(result)
+			result = self._run_test_summary(result)
 
 		return result
 

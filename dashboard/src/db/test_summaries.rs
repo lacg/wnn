@@ -1,25 +1,25 @@
-//! Validation summary, cached validation, and combined validation queries (split from db/mod.rs `queries`).
+//! Test summary, cached test, and combined test queries (split from db/mod.rs `queries`).
 
 use super::queries::*;
 use super::*;
 
 // =============================================================================
-// Validation Summary queries
+// Test Summary queries
 // =============================================================================
 
-/// Get validation summaries for an experiment
-pub async fn get_validation_summaries(
+/// Get test summaries for an experiment
+pub async fn get_test_summaries(
 	pool: &DbPool,
 	experiment_id: i64,
-) -> Result<Vec<ValidationSummary>>
+) -> Result<Vec<TestSummary>>
 {
 	let rows = sqlx::query(
-		r#"SELECT id, flow_id, experiment_id, validation_point, genome_type,
+		r#"SELECT id, flow_id, experiment_id, test_point, genome_type,
                   genome_hash, ce, accuracy, f1_macro, fpr, threshold_metadata,
                   logical_neurons, physical_neurons, logical_cells, physical_cells, created_at
-           FROM validation_summaries
+           FROM test_summaries
            WHERE experiment_id = ?
-           ORDER BY validation_point, genome_type"#,
+           ORDER BY test_point, genome_type"#,
 	)
 	.bind(experiment_id)
 	.fetch_all(pool)
@@ -28,25 +28,25 @@ pub async fn get_validation_summaries(
 	let mut summaries = Vec::with_capacity(rows.len());
 	for row in rows
 	{
-		summaries.push(row_to_validation_summary(&row)?);
+		summaries.push(row_to_test_summary(&row)?);
 	}
 	Ok(summaries)
 }
 
-/// Get validation summaries for a flow (all experiments)
-pub async fn get_flow_validation_summaries(
+/// Get test summaries for a flow (all experiments)
+pub async fn get_flow_test_summaries(
 	pool: &DbPool,
 	flow_id: i64,
-) -> Result<Vec<ValidationSummary>>
+) -> Result<Vec<TestSummary>>
 {
 	let rows = sqlx::query(
-        r#"SELECT vs.id, vs.flow_id, vs.experiment_id, vs.validation_point, vs.genome_type,
+        r#"SELECT vs.id, vs.flow_id, vs.experiment_id, vs.test_point, vs.genome_type,
                   vs.genome_hash, vs.ce, vs.accuracy, vs.f1_macro, vs.fpr, vs.threshold_metadata,
                   vs.logical_neurons, vs.physical_neurons, vs.logical_cells, vs.physical_cells, vs.created_at
-           FROM validation_summaries vs
+           FROM test_summaries vs
            JOIN experiments e ON vs.experiment_id = e.id
            WHERE e.flow_id = ?
-           ORDER BY e.sequence_order, vs.validation_point, vs.genome_type"#,
+           ORDER BY e.sequence_order, vs.test_point, vs.genome_type"#,
     )
     .bind(flow_id)
     .fetch_all(pool)
@@ -55,15 +55,15 @@ pub async fn get_flow_validation_summaries(
 	let mut summaries = Vec::with_capacity(rows.len());
 	for row in rows
 	{
-		summaries.push(row_to_validation_summary(&row)?);
+		summaries.push(row_to_test_summary(&row)?);
 	}
 	Ok(summaries)
 }
 
-/// Validation-cache scope stamped on every new validation_summaries row and
+/// Test-cache scope stamped on every new test_summaries row and
 /// required for every cache hit (PAPER-CRITICAL fix, 10/10/2026).
 ///
-/// `key` is built in ONE place — the worker's `validation_cache_key.py` — and
+/// `key` is built in ONE place — the worker's `test_cache_key.py` — and
 /// stored verbatim, so the dashboard never re-derives it from config_json (the
 /// old SQL mirror drifted: it omitted memory_mode, feature selection,
 /// classification and the trainer ABI, so a QUAD flow inherited a QSR flow's
@@ -88,20 +88,20 @@ impl<'a> CacheScope<'a>
 	}
 }
 
-type CachedValidation =
-	(f64, f64, Option<f64>, Option<f64>, Option<serde_json::Value>, Option<ValidationFootprint>);
+type CachedTestSummary =
+	(f64, f64, Option<f64>, Option<f64>, Option<serde_json::Value>, Option<TestFootprint>);
 
-/// Check if a genome has already been validated UNDER THE SAME SCOPE.
+/// Check if a genome has already been tested UNDER THE SAME SCOPE.
 /// Returns the cached CE, accuracy, f1_macro, fpr, threshold_metadata and footprint if found.
 ///
 /// A hit requires genome_hash, cache_key AND worker_abi to match a row stamped
 /// with them. No scope -> no hit; rows with a NULL key or ABI (every row written
 /// before the fix, and every row from a pre-fix worker) are never served.
-pub async fn get_cached_validation(
+pub async fn get_cached_test_summary(
 	pool: &DbPool,
 	genome_hash: &str,
 	scope: Option<CacheScope<'_>>,
-) -> Result<Option<CachedValidation>>
+) -> Result<Option<CachedTestSummary>>
 {
 	let Some(scope) = scope
 	else
@@ -111,7 +111,7 @@ pub async fn get_cached_validation(
 	let row = sqlx::query(
 		r#"SELECT ce, accuracy, f1_macro, fpr, threshold_metadata,
                   logical_neurons, physical_neurons, logical_cells, physical_cells
-           FROM validation_summaries
+           FROM test_summaries
            WHERE genome_hash = ? AND cache_key = ? AND worker_abi = ?
            ORDER BY threshold_metadata IS NOT NULL DESC, id DESC
            LIMIT 1"#,
@@ -121,19 +121,19 @@ pub async fn get_cached_validation(
 	.bind(scope.worker_abi)
 	.fetch_optional(pool)
 	.await?;
-	Ok(row.map(|r| cached_validation_from_row(&r)))
+	Ok(row.map(|r| cached_test_summary_from_row(&r)))
 }
 
-fn cached_validation_from_row(r: &sqlx::sqlite::SqliteRow) -> CachedValidation
+fn cached_test_summary_from_row(r: &sqlx::sqlite::SqliteRow) -> CachedTestSummary
 {
 	let tm_str: Option<String> = r.get("threshold_metadata");
 	let tm = tm_str.and_then(|s| serde_json::from_str(&s).ok());
 	(r.get("ce"), r.get("accuracy"), r.get("f1_macro"), r.get("fpr"), tm, footprint_from_row(r))
 }
 
-fn footprint_from_row(r: &sqlx::sqlite::SqliteRow) -> Option<ValidationFootprint>
+fn footprint_from_row(r: &sqlx::sqlite::SqliteRow) -> Option<TestFootprint>
 {
-	ValidationFootprint::from_parts(
+	TestFootprint::from_parts(
 		r.get("logical_neurons"),
 		r.get("physical_neurons"),
 		r.get("logical_cells"),
@@ -141,12 +141,12 @@ fn footprint_from_row(r: &sqlx::sqlite::SqliteRow) -> Option<ValidationFootprint
 	)
 }
 
-/// Create a validation summary (upsert by experiment_id + validation_point + genome_type)
-pub async fn upsert_validation_summary(
+/// Create a test summary (upsert by experiment_id + test_point + genome_type)
+pub async fn upsert_test_summary(
 	pool: &DbPool,
 	flow_id: Option<i64>,
 	experiment_id: i64,
-	validation_point: &str,
+	test_point: &str,
 	genome_type: &str,
 	genome_hash: &str,
 	ce: f64,
@@ -155,17 +155,17 @@ pub async fn upsert_validation_summary(
 	fpr: Option<f64>,
 	threshold_metadata: Option<&str>,
 	scope: Option<CacheScope<'_>>,
-	footprint: Option<ValidationFootprint>,
+	footprint: Option<TestFootprint>,
 ) -> Result<i64>
 {
 	let now = Utc::now().to_rfc3339();
 
 	let result = sqlx::query(
-        r#"INSERT INTO validation_summaries
-           (flow_id, experiment_id, validation_point, genome_type, genome_hash, ce, accuracy, f1_macro, fpr, threshold_metadata, cache_key, worker_abi,
+        r#"INSERT INTO test_summaries
+           (flow_id, experiment_id, test_point, genome_type, genome_hash, ce, accuracy, f1_macro, fpr, threshold_metadata, cache_key, worker_abi,
             logical_neurons, physical_neurons, logical_cells, physical_cells, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(experiment_id, validation_point, genome_type) DO UPDATE SET
+           ON CONFLICT(experiment_id, test_point, genome_type) DO UPDATE SET
              flow_id = excluded.flow_id,
              genome_hash = excluded.genome_hash,
              ce = excluded.ce,
@@ -183,7 +183,7 @@ pub async fn upsert_validation_summary(
     )
     .bind(flow_id)
     .bind(experiment_id)
-    .bind(validation_point)
+    .bind(test_point)
     .bind(genome_type)
     .bind(genome_hash)
     .bind(ce)
@@ -204,19 +204,19 @@ pub async fn upsert_validation_summary(
 	Ok(result.last_insert_rowid())
 }
 
-fn row_to_validation_summary(row: &sqlx::sqlite::SqliteRow) -> Result<ValidationSummary>
+fn row_to_test_summary(row: &sqlx::sqlite::SqliteRow) -> Result<TestSummary>
 {
-	let validation_point_str: String = row.get("validation_point");
+	let test_point_str: String = row.get("test_point");
 	let genome_type_str: String = row.get("genome_type");
 	let threshold_metadata_str: Option<String> = row.get("threshold_metadata");
 	let threshold_metadata = threshold_metadata_str.and_then(|s| serde_json::from_str(&s).ok());
 
-	Ok(ValidationSummary {
+	Ok(TestSummary {
 		id: row.get("id"),
 		flow_id: row.get("flow_id"),
 		experiment_id: row.get("experiment_id"),
-		validation_point: parse_validation_point(&validation_point_str),
-		genome_type: parse_genome_validation_type(&genome_type_str),
+		test_point: parse_test_point(&test_point_str),
+		genome_type: parse_genome_test_type(&genome_type_str),
 		genome_hash: row.get("genome_hash"),
 		ce: row.get("ce"),
 		accuracy: row.get("accuracy"),
@@ -228,44 +228,44 @@ fn row_to_validation_summary(row: &sqlx::sqlite::SqliteRow) -> Result<Validation
 	})
 }
 
-fn parse_validation_point(s: &str) -> ValidationPoint
+fn parse_test_point(s: &str) -> TestPoint
 {
 	match s
 	{
-		"init" => ValidationPoint::Init,
-		"final" => ValidationPoint::Final,
-		_ => ValidationPoint::Final,
+		"init" => TestPoint::Init,
+		"final" => TestPoint::Final,
+		_ => TestPoint::Final,
 	}
 }
 
-fn parse_genome_validation_type(s: &str) -> GenomeValidationType
+fn parse_genome_test_type(s: &str) -> GenomeTestType
 {
 	match s
 	{
-		"best_ce" => GenomeValidationType::BestCe,
-		"best_acc" => GenomeValidationType::BestAcc,
-		"best_f1" => GenomeValidationType::BestF1,
-		"best_fpr" => GenomeValidationType::BestFpr,
-		"best_fitness" => GenomeValidationType::BestFitness,
-		"best_overall_ce" => GenomeValidationType::BestOverallCe,
-		"best_overall_acc" => GenomeValidationType::BestOverallAcc,
-		_ => GenomeValidationType::BestCe,
+		"best_ce" => GenomeTestType::BestCe,
+		"best_acc" => GenomeTestType::BestAcc,
+		"best_f1" => GenomeTestType::BestF1,
+		"best_fpr" => GenomeTestType::BestFpr,
+		"best_fitness" => GenomeTestType::BestFitness,
+		"best_overall_ce" => GenomeTestType::BestOverallCe,
+		"best_overall_acc" => GenomeTestType::BestOverallAcc,
+		_ => GenomeTestType::BestCe,
 	}
 }
 
 // =============================================================================
-// Combined Validation queries (multi-stage end-to-end metrics)
+// Combined Test queries (multi-stage end-to-end metrics)
 // =============================================================================
 
-pub async fn get_combined_validations(
+pub async fn get_combined_test_summaries(
 	pool: &DbPool,
 	flow_id: i64,
-) -> Result<Vec<CombinedValidation>>
+) -> Result<Vec<CombinedTestSummary>>
 {
 	let rows = sqlx::query(
 		r#"SELECT id, flow_id, genome_type, combined_ce, combined_accuracy,
                   per_stage_ce_json, per_stage_acc_json, unigram_lambda, created_at
-           FROM combined_validations
+           FROM combined_test_summaries
            WHERE flow_id = ?
            ORDER BY genome_type"#,
 	)
@@ -276,12 +276,12 @@ pub async fn get_combined_validations(
 	let mut results = Vec::with_capacity(rows.len());
 	for row in rows
 	{
-		results.push(row_to_combined_validation(&row)?);
+		results.push(row_to_combined_test_summary(&row)?);
 	}
 	Ok(results)
 }
 
-pub async fn upsert_combined_validation(
+pub async fn upsert_combined_test_summary(
 	pool: &DbPool,
 	flow_id: i64,
 	genome_type: &str,
@@ -297,7 +297,7 @@ pub async fn upsert_combined_validation(
 	let per_stage_acc_json = per_stage_acc.map(|v| serde_json::to_string(v).unwrap_or_default());
 
 	let result = sqlx::query(
-        r#"INSERT INTO combined_validations
+        r#"INSERT INTO combined_test_summaries
            (flow_id, genome_type, combined_ce, combined_accuracy, per_stage_ce_json, per_stage_acc_json, unigram_lambda, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(flow_id, genome_type) DO UPDATE SET
@@ -322,7 +322,7 @@ pub async fn upsert_combined_validation(
 	Ok(result.last_insert_rowid())
 }
 
-fn row_to_combined_validation(row: &sqlx::sqlite::SqliteRow) -> Result<CombinedValidation>
+fn row_to_combined_test_summary(row: &sqlx::sqlite::SqliteRow) -> Result<CombinedTestSummary>
 {
 	let genome_type_str: String = row.get("genome_type");
 	let per_stage_ce_json: Option<String> = row.get("per_stage_ce_json");
@@ -334,10 +334,10 @@ fn row_to_combined_validation(row: &sqlx::sqlite::SqliteRow) -> Result<CombinedV
 
 	let unigram_lambda: Option<f64> = row.try_get("unigram_lambda").unwrap_or(None);
 
-	Ok(CombinedValidation {
+	Ok(CombinedTestSummary {
 		id: row.get("id"),
 		flow_id: row.get("flow_id"),
-		genome_type: parse_genome_validation_type(&genome_type_str),
+		genome_type: parse_genome_test_type(&genome_type_str),
 		combined_ce: row.get("combined_ce"),
 		combined_accuracy: row.get("combined_accuracy"),
 		per_stage_ce,
@@ -350,13 +350,13 @@ fn row_to_combined_validation(row: &sqlx::sqlite::SqliteRow) -> Result<CombinedV
 #[cfg(test)]
 mod cache_scope_tests
 {
-	//! PAPER-CRITICAL regression cover (10/10/2026): the cross-flow validation
+	//! PAPER-CRITICAL regression cover (10/10/2026): the cross-flow test
 	//! cache must never serve a row across memory modes, trainer ABIs, or from
 	//! a legacy (unstamped) row. Keys come from the SAME fixture the Python
-	//! builder is tested against (tests/test_validation_cache_key.py).
+	//! builder is tested against (tests/test_test_cache_key.py).
 	use super::*;
 
-	const FIXTURE: &str = include_str!("../../../tests/fixtures/validation_cache_keys.json");
+	const FIXTURE: &str = include_str!("../../../tests/fixtures/test_cache_keys.json");
 
 	fn fixture_key(name: &str) -> String
 	{
@@ -386,11 +386,11 @@ mod cache_scope_tests
 			.last_insert_rowid()
 	}
 
-	/// One final validation row for genome "g1" in a fresh experiment.
+	/// One final test row for genome "g1" in a fresh experiment.
 	async fn write_row(pool: &DbPool, scope: Option<CacheScope<'_>>, f1: f64)
 	{
 		let exp = new_experiment(pool).await;
-		upsert_validation_summary(pool, None, exp, "final", "best_f1", "g1", 0.1, 0.9, Some(f1), Some(0.05), None, scope, None)
+		upsert_test_summary(pool, None, exp, "final", "best_f1", "g1", 0.1, 0.9, Some(f1), Some(0.05), None, scope, None)
 			.await
 			.unwrap();
 	}
@@ -413,10 +413,10 @@ mod cache_scope_tests
 		let values = [196.0f64 / 18500.0, 0.8150955590204203, 0.1 + 0.2, 1.0 / 3.0, 0.977505087852478];
 		let tm = serde_json::json!({ "empirical": { "fpr": values[0], "f1": values[1], "a": values[2], "b": values[3], "t": values[4] } }).to_string();
 		let exp = new_experiment(&pool).await;
-		upsert_validation_summary(&pool, None, exp, "final", "best_f1", "g1", 0.1, 0.9, Some(0.5), Some(0.05), Some(&tm), scope(&quad, 17), None)
+		upsert_test_summary(&pool, None, exp, "final", "best_f1", "g1", 0.1, 0.9, Some(0.5), Some(0.05), Some(&tm), scope(&quad, 17), None)
 			.await
 			.unwrap();
-		let hit = get_cached_validation(&pool, "g1", scope(&quad, 17)).await.unwrap().expect("hit");
+		let hit = get_cached_test_summary(&pool, "g1", scope(&quad, 17)).await.unwrap().expect("hit");
 		let served = hit.4.expect("metadata");
 		for (key, want) in ["fpr", "f1", "a", "b", "t"].iter().zip(values)
 		{
@@ -430,8 +430,8 @@ mod cache_scope_tests
 		let pool = test_pool("qsr").await;
 		let (quad, qsr) = (fixture_key("quad_default"), fixture_key("qsr"));
 		write_row(&pool, scope(&qsr, 14), 0.94274).await;
-		assert!(get_cached_validation(&pool, "g1", scope(&quad, 14)).await.unwrap().is_none());
-		let hit = get_cached_validation(&pool, "g1", scope(&qsr, 14)).await.unwrap();
+		assert!(get_cached_test_summary(&pool, "g1", scope(&quad, 14)).await.unwrap().is_none());
+		let hit = get_cached_test_summary(&pool, "g1", scope(&qsr, 14)).await.unwrap();
 		assert_eq!(hit.expect("same scope must hit").2, Some(0.94274));
 	}
 
@@ -442,7 +442,7 @@ mod cache_scope_tests
 		let quad = fixture_key("quad_default");
 		write_row(&pool, scope(&quad, 14), 0.80).await;
 		write_row(&pool, scope(&quad, 14), 0.85).await;
-		let hit = get_cached_validation(&pool, "g1", scope(&quad, 14)).await.unwrap();
+		let hit = get_cached_test_summary(&pool, "g1", scope(&quad, 14)).await.unwrap();
 		assert_eq!(hit.expect("hit").2, Some(0.85));
 	}
 
@@ -452,7 +452,7 @@ mod cache_scope_tests
 		let pool = test_pool("alias").await;
 		let (absent, explicit) = (fixture_key("quad_default"), fixture_key("quad_explicit"));
 		write_row(&pool, scope(&absent, 14), 0.9).await;
-		assert!(get_cached_validation(&pool, "g1", scope(&explicit, 14)).await.unwrap().is_some());
+		assert!(get_cached_test_summary(&pool, "g1", scope(&explicit, 14)).await.unwrap().is_some());
 	}
 
 	#[tokio::test]
@@ -461,7 +461,7 @@ mod cache_scope_tests
 		let pool = test_pool("abi").await;
 		let quad = fixture_key("quad_default");
 		write_row(&pool, scope(&quad, 12), 0.9).await;
-		assert!(get_cached_validation(&pool, "g1", scope(&quad, 14)).await.unwrap().is_none());
+		assert!(get_cached_test_summary(&pool, "g1", scope(&quad, 14)).await.unwrap().is_none());
 	}
 
 	#[tokio::test]
@@ -470,8 +470,8 @@ mod cache_scope_tests
 		let pool = test_pool("legacy").await;
 		write_row(&pool, None, 0.9).await;
 		let quad = fixture_key("quad_default");
-		assert!(get_cached_validation(&pool, "g1", scope(&quad, 14)).await.unwrap().is_none());
-		assert!(get_cached_validation(&pool, "g1", None).await.unwrap().is_none());
+		assert!(get_cached_test_summary(&pool, "g1", scope(&quad, 14)).await.unwrap().is_none());
+		assert!(get_cached_test_summary(&pool, "g1", None).await.unwrap().is_none());
 	}
 
 	#[tokio::test]
@@ -482,7 +482,7 @@ mod cache_scope_tests
 		for name in ["raw", "inv", "oi_off", "feature_top20", "multiclass"]
 		{
 			let key = fixture_key(name);
-			let hit = get_cached_validation(&pool, "g1", scope(&key, 14)).await.unwrap();
+			let hit = get_cached_test_summary(&pool, "g1", scope(&key, 14)).await.unwrap();
 			assert!(hit.is_none(), "{name} must not hit a quad_default row");
 		}
 	}
@@ -497,8 +497,8 @@ mod cache_scope_tests
 			(fixture_key("binary_vote"), fixture_key("binary_vote_share_0p5"), fixture_key("binary_vote_share_0p1"));
 		assert_eq!(plain, half);
 		write_row(&pool, scope(&plain, 28), 0.9).await;
-		assert!(get_cached_validation(&pool, "g1", scope(&tenth, 28)).await.unwrap().is_none(), "θ=0.1 hit a plain-vote row");
-		assert!(get_cached_validation(&pool, "g1", scope(&half, 28)).await.unwrap().is_some(), "θ=0.5 missed the plain-vote row");
+		assert!(get_cached_test_summary(&pool, "g1", scope(&tenth, 28)).await.unwrap().is_none(), "θ=0.1 hit a plain-vote row");
+		assert!(get_cached_test_summary(&pool, "g1", scope(&half, 28)).await.unwrap().is_some(), "θ=0.5 missed the plain-vote row");
 	}
 
 	/// IDS-37 stage 3: the footprint round-trips through the row, the summary
@@ -509,14 +509,14 @@ mod cache_scope_tests
 		let pool = test_pool("footprint").await;
 		let exp = new_experiment(&pool).await;
 		let quad = fixture_key("quad_default");
-		let fp = ValidationFootprint { logical_neurons: 500, physical_neurons: 137, logical_cells: 4_410_000, physical_cells: 1_210_000 };
-		let write = |footprint| upsert_validation_summary(&pool, None, exp, "final", "best_f1", "g1", 0.1, 0.9, Some(0.8), Some(0.05), None, scope(&quad, 17), footprint);
+		let fp = TestFootprint { logical_neurons: 500, physical_neurons: 137, logical_cells: 4_410_000, physical_cells: 1_210_000 };
+		let write = |footprint| upsert_test_summary(&pool, None, exp, "final", "best_f1", "g1", 0.1, 0.9, Some(0.8), Some(0.05), None, scope(&quad, 17), footprint);
 		write(Some(fp)).await.unwrap();
-		assert_eq!(get_validation_summaries(&pool, exp).await.unwrap()[0].footprint, Some(fp));
-		assert_eq!(get_cached_validation(&pool, "g1", scope(&quad, 17)).await.unwrap().expect("hit").5, Some(fp));
+		assert_eq!(get_test_summaries(&pool, exp).await.unwrap()[0].footprint, Some(fp));
+		assert_eq!(get_cached_test_summary(&pool, "g1", scope(&quad, 17)).await.unwrap().expect("hit").5, Some(fp));
 		write(None).await.unwrap();
-		assert_eq!(get_validation_summaries(&pool, exp).await.unwrap()[0].footprint, None);
-		assert_eq!(ValidationFootprint::from_parts(Some(1), Some(1), None, Some(1)), None);
+		assert_eq!(get_test_summaries(&pool, exp).await.unwrap()[0].footprint, None);
+		assert_eq!(TestFootprint::from_parts(Some(1), Some(1), None, Some(1)), None);
 	}
 
 	#[test]

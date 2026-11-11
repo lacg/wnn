@@ -175,7 +175,7 @@ CREATE TABLE IF NOT EXISTS genome_evaluations (
 );
 
 -- ============================================================================
--- HEALTH_CHECKS: Periodic full validation
+-- HEALTH_CHECKS: Periodic full evaluation
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS health_checks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -200,15 +200,15 @@ CREATE TABLE IF NOT EXISTS health_checks (
 );
 
 -- ============================================================================
--- VALIDATION_SUMMARIES: Full-dataset validation results per genome
--- Each record = one genome validated at a checkpoint (init/final of an experiment)
--- Deduplication: if genome_hash already exists, skip expensive validation and reuse cached values
+-- TEST_SUMMARIES: Full-dataset test results per genome
+-- Each record = one genome tested at a checkpoint (init/final of an experiment)
+-- Deduplication: if genome_hash already exists, skip expensive test and reuse cached values
 -- ============================================================================
-CREATE TABLE IF NOT EXISTS validation_summaries (
+CREATE TABLE IF NOT EXISTS test_summaries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     flow_id INTEGER REFERENCES flows(id),
     experiment_id INTEGER NOT NULL REFERENCES experiments(id),
-    validation_point TEXT NOT NULL,   -- 'init' or 'final'
+    test_point TEXT NOT NULL,   -- 'init' or 'final'
     genome_type TEXT NOT NULL,        -- 'best_ce', 'best_acc', 'best_fitness'
     genome_hash TEXT NOT NULL,        -- Config hash for deduplication
     ce REAL NOT NULL,
@@ -218,7 +218,7 @@ CREATE TABLE IF NOT EXISTS validation_summaries (
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
 
     -- One record per genome type per checkpoint
-    UNIQUE(experiment_id, validation_point, genome_type)
+    UNIQUE(experiment_id, test_point, genome_type)
 );
 
 -- ============================================================================
@@ -276,10 +276,10 @@ CREATE INDEX IF NOT EXISTS idx_gating_runs_experiment ON gating_runs(experiment_
 CREATE INDEX IF NOT EXISTS idx_gating_runs_status ON gating_runs(status);
 
 -- ============================================================================
--- COMBINED_VALIDATIONS: End-to-end metrics for multi-stage flows
+-- COMBINED_TEST_SUMMARIES: End-to-end metrics for multi-stage flows
 -- Pairs each genome type (best_ce, best_acc, best_fitness) across stages
 -- ============================================================================
-CREATE TABLE IF NOT EXISTS combined_validations (
+CREATE TABLE IF NOT EXISTS combined_test_summaries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     flow_id INTEGER NOT NULL REFERENCES flows(id),
     genome_type TEXT NOT NULL,        -- 'best_ce', 'best_acc', 'best_fitness'
@@ -290,7 +290,7 @@ CREATE TABLE IF NOT EXISTS combined_validations (
     UNIQUE(flow_id, genome_type)
 );
 
-CREATE INDEX IF NOT EXISTS idx_combined_validations_flow ON combined_validations(flow_id);
+CREATE INDEX IF NOT EXISTS idx_combined_test_summaries_flow ON combined_test_summaries(flow_id);
 
 -- ============================================================================
 -- BEST_GENOMES: Leaderboard of best genomes across experiments
@@ -335,9 +335,9 @@ CREATE INDEX IF NOT EXISTS idx_iterations_experiment ON iterations(experiment_id
 CREATE INDEX IF NOT EXISTS idx_genome_evals_iteration ON genome_evaluations(iteration_id);
 CREATE INDEX IF NOT EXISTS idx_genomes_experiment ON genomes(experiment_id);
 CREATE INDEX IF NOT EXISTS idx_checkpoints_experiment ON checkpoints(experiment_id);
-CREATE INDEX IF NOT EXISTS idx_validation_summaries_experiment ON validation_summaries(experiment_id);
-CREATE INDEX IF NOT EXISTS idx_validation_summaries_genome ON validation_summaries(genome_hash);
-CREATE INDEX IF NOT EXISTS idx_validation_summaries_flow ON validation_summaries(flow_id);
+CREATE INDEX IF NOT EXISTS idx_test_summaries_experiment ON test_summaries(experiment_id);
+CREATE INDEX IF NOT EXISTS idx_test_summaries_genome ON test_summaries(genome_hash);
+CREATE INDEX IF NOT EXISTS idx_test_summaries_flow ON test_summaries(flow_id);
 
 -- For finding latest records per entity
 CREATE INDEX IF NOT EXISTS idx_iterations_exp_num ON iterations(experiment_id, iteration_num DESC);

@@ -200,11 +200,11 @@ class ArchitectureStrategyMixin:
 			return StopReason.CONVERGENCE
 		return None
 
-	def _run_validation_summary(self, result: OptimizerResult) -> OptimizerResult:
-		"""Run full-data validation on top genomes and update result.
+	def _run_test_summary(self, result: OptimizerResult) -> OptimizerResult:
+		"""Run full-data test evaluation on top genomes and update result.
 
 		Shared between GA and TS architecture strategies.
-		Evaluates top 20% of final population on full validation data,
+		Evaluates top 20% of final population on full test evaluation data,
 		logs summary, records phase results, and returns updated result
 		with best-CE genome.
 		"""
@@ -221,7 +221,7 @@ class ArchitectureStrategyMixin:
 		top_k = max(1, int(len(result.final_population) * 0.2))
 		top_genomes = result.final_population[:top_k]
 
-		# Evaluate on full validation data
+		# Evaluate on full test evaluation data
 		full_results = evaluator.evaluate_batch_full(top_genomes)
 
 		# Use fitness calculator to extract bests
@@ -245,12 +245,12 @@ class ArchitectureStrategyMixin:
 		# NOTE: the old `record_phase_result` tracker calls that lived here were
 		# dead code — the Phase layer was removed from the data model in d2bc27a8
 		# (02/02/2026), which deleted that tracker method; the calls threw
-		# AttributeError (caught + debug-logged) on every validation summary
-		# since. The same validation bests are persisted via the dashboard's
-		# validation_summaries + per-experiment iterations, so they were dropped
+		# AttributeError (caught + debug-logged) on every test summary
+		# since. The same test evaluation bests are persisted via the dashboard's
+		# test_summaries + per-experiment iterations, so they were dropped
 		# (10/07/2026), not rerouted.
 
-		# Update result with validation bests
+		# Update result with test evaluation bests
 		improvement_pct = (result.initial_fitness - bests.best_ce.metrics.ce) / result.initial_fitness * 100 if result.initial_fitness != 0 else 0.0
 		return OptimizerResult(
 			initial_genome=result.initial_genome,

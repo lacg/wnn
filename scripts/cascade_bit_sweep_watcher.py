@@ -73,11 +73,11 @@ def flow_max_val_cal_f1(fid: int) -> float:
 	"""Return max val_cal F1 across all 5 best-genome types (GA Neurons phase)."""
 	rows = db_query(
 		"""SELECT vs.threshold_metadata
-		   FROM validation_summaries vs
+		   FROM test_summaries vs
 		   JOIN experiments e ON e.id = vs.experiment_id
 		   WHERE vs.flow_id = ?
 		     AND e.phase_type = 'ga_neurons'
-		     AND vs.validation_point = 'final'""",
+		     AND vs.test_point = 'final'""",
 		(fid,),
 	)
 	best = 0.0

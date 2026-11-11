@@ -2,6 +2,58 @@
 
 use super::*;
 
+/// Terminology migration (11/11/2026, docs/terminology_train_val_test.md): the
+/// per-genome held-out summaries are TEST-partition numbers, so the tables are
+/// named for what they hold. Renames validation_summaries -> test_summaries
+/// (column validation_point -> test_point) and combined_validations ->
+/// combined_test_summaries. Idempotent: a no-op once renamed or on a fresh DB.
+pub(crate) async fn rename_legacy_test_tables(pool: &DbPool) -> Result<()>
+{
+	for (old, new) in [
+		("validation_summaries", "test_summaries"),
+		("combined_validations", "combined_test_summaries"),
+	]
+	{
+		if !table_exists(pool, old).await? || table_exists(pool, new).await?
+		{
+			continue;
+		}
+		sqlx::query(&format!("ALTER TABLE {old} RENAME TO {new}"))
+			.execute(pool)
+			.await?;
+	}
+	if table_exists(pool, "test_summaries").await?
+	{
+		// Errors only when the column is already renamed
+		let _ = sqlx::query("ALTER TABLE test_summaries RENAME COLUMN validation_point TO test_point")
+			.execute(pool)
+			.await;
+	}
+	// The schema recreates these under the new names
+	for index in [
+		"idx_validation_summaries_experiment",
+		"idx_validation_summaries_genome",
+		"idx_validation_summaries_flow",
+		"idx_combined_validations_flow",
+	]
+	{
+		sqlx::query(&format!("DROP INDEX IF EXISTS {index}"))
+			.execute(pool)
+			.await?;
+	}
+	Ok(())
+}
+
+async fn table_exists(pool: &DbPool, name: &str) -> Result<bool>
+{
+	let row: Option<(String,)> =
+		sqlx::query_as("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+			.bind(name)
+			.fetch_optional(pool)
+			.await?;
+	Ok(row.is_some())
+}
+
 /// Run migrations for schema changes (legacy databases only)
 pub(crate) async fn run_migrations(pool: &DbPool) -> Result<()>
 {
@@ -93,9 +145,9 @@ pub(crate) async fn run_migrations(pool: &DbPool) -> Result<()>
 		.execute(pool)
 		.await;
 
-	// Migration: Create combined_validations table for multi-stage end-to-end metrics
+	// Migration: Create combined_test_summaries table for multi-stage end-to-end metrics
 	let _ = sqlx::query(
-		r#"CREATE TABLE IF NOT EXISTS combined_validations (
+		r#"CREATE TABLE IF NOT EXISTS combined_test_summaries (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             flow_id INTEGER NOT NULL REFERENCES flows(id),
             genome_type TEXT NOT NULL,
@@ -109,8 +161,8 @@ pub(crate) async fn run_migrations(pool: &DbPool) -> Result<()>
 	.execute(pool)
 	.await;
 
-	// Migration: Add per_stage_acc_json to combined_validations
-	let _ = sqlx::query("ALTER TABLE combined_validations ADD COLUMN per_stage_acc_json TEXT")
+	// Migration: Add per_stage_acc_json to combined_test_summaries
+	let _ = sqlx::query("ALTER TABLE combined_test_summaries ADD COLUMN per_stage_acc_json TEXT")
 		.execute(pool)
 		.await;
 
@@ -119,8 +171,8 @@ pub(crate) async fn run_migrations(pool: &DbPool) -> Result<()>
 		.execute(pool)
 		.await;
 
-	// Migration: Add unigram_lambda to combined_validations
-	let _ = sqlx::query("ALTER TABLE combined_validations ADD COLUMN unigram_lambda REAL")
+	// Migration: Add unigram_lambda to combined_test_summaries
+	let _ = sqlx::query("ALTER TABLE combined_test_summaries ADD COLUMN unigram_lambda REAL")
 		.execute(pool)
 		.await;
 
@@ -148,36 +200,36 @@ pub(crate) async fn run_migrations(pool: &DbPool) -> Result<()>
 		.execute(pool)
 		.await;
 
-	// Migration: Add IDS metrics to validation_summaries (F1-macro and FPR)
-	let _ = sqlx::query("ALTER TABLE validation_summaries ADD COLUMN f1_macro REAL")
+	// Migration: Add IDS metrics to test_summaries (F1-macro and FPR)
+	let _ = sqlx::query("ALTER TABLE test_summaries ADD COLUMN f1_macro REAL")
 		.execute(pool)
 		.await;
-	let _ = sqlx::query("ALTER TABLE validation_summaries ADD COLUMN fpr REAL")
-		.execute(pool)
-		.await;
-
-	// Migration: Add three-threshold metadata to validation_summaries (JSON)
-	let _ = sqlx::query("ALTER TABLE validation_summaries ADD COLUMN threshold_metadata TEXT")
+	let _ = sqlx::query("ALTER TABLE test_summaries ADD COLUMN fpr REAL")
 		.execute(pool)
 		.await;
 
-	// Migration (10/10/2026, PAPER-CRITICAL): validation-cache scope stamps.
-	// cache_key = the worker's full validation scope key (validation_cache_key.py),
+	// Migration: Add three-threshold metadata to test_summaries (JSON)
+	let _ = sqlx::query("ALTER TABLE test_summaries ADD COLUMN threshold_metadata TEXT")
+		.execute(pool)
+		.await;
+
+	// Migration (10/10/2026, PAPER-CRITICAL): test-cache scope stamps.
+	// cache_key = the worker's full test scope key (test_cache_key.py),
 	// worker_abi = the accelerator ABI (trainer version) that produced the row.
 	// Legacy rows keep NULL in both and are therefore NEVER served from cache.
-	let _ = sqlx::query("ALTER TABLE validation_summaries ADD COLUMN cache_key TEXT")
+	let _ = sqlx::query("ALTER TABLE test_summaries ADD COLUMN cache_key TEXT")
 		.execute(pool)
 		.await;
-	let _ = sqlx::query("ALTER TABLE validation_summaries ADD COLUMN worker_abi INTEGER")
+	let _ = sqlx::query("ALTER TABLE test_summaries ADD COLUMN worker_abi INTEGER")
 		.execute(pool)
 		.await;
 
-	// Migration (12/10/2026, IDS-37 stage 3): the validated genome's footprint,
+	// Migration (12/10/2026, IDS-37 stage 3): the tested genome's footprint,
 	// LOGICAL and PHYSICAL — always both. Physical < logical when the
 	// multiplicity layer trained duplicate neurons once. NULL on older rows.
 	for column in ["logical_neurons", "physical_neurons", "logical_cells", "physical_cells"]
 	{
-		let _ = sqlx::query(&format!("ALTER TABLE validation_summaries ADD COLUMN {column} INTEGER"))
+		let _ = sqlx::query(&format!("ALTER TABLE test_summaries ADD COLUMN {column} INTEGER"))
 			.execute(pool)
 			.await;
 	}

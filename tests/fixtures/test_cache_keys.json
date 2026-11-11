@@ -1,5 +1,5 @@
 {
- "_comment": "Shared fixture: tests/test_validation_cache_key.py asserts the Python builder produces each key; dashboard/src/db/validations.rs tests replay the keys through the cache query. Regenerate ONLY with a deliberate VALIDATION_CACHE_VERSION bump.",
+ "_comment": "Shared fixture: tests/test_test_cache_key.py asserts the Python builder produces each key; dashboard/src/db/test_summaries.rs tests replay the keys through the cache query. Regenerate ONLY with a deliberate TEST_CACHE_VERSION bump.",
  "cases": [
   {
    "name": "quad_default",

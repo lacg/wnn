@@ -78,7 +78,7 @@ pub fn routes(state: Arc<AppState>) -> Router
 		)
 		.route(
 			"/api/experiments/:id/summaries",
-			get(get_validation_summaries).post(create_validation_summary),
+			get(get_test_summaries).post(create_test_summary),
 		)
 		// Gating runs
 		.route(
@@ -118,14 +118,14 @@ pub fn routes(state: Arc<AppState>) -> Router
 		.route("/api/flows/:id/resume", post(resume_flow))
 		.route("/api/flows/:id/pid", patch(update_flow_pid))
 		.route("/api/flows/:id/heartbeat", post(update_flow_heartbeat))
-		.route("/api/flows/:id/validations", get(get_flow_validations))
+		.route("/api/flows/:id/test-summaries", get(get_flow_test_summaries))
 		.route(
-			"/api/flows/:id/combined-validations",
-			get(get_combined_validations).post(create_combined_validation),
+			"/api/flows/:id/combined-test-summaries",
+			get(get_combined_test_summaries).post(create_combined_test_summary),
 		)
 		.route("/api/flows/:id/run-gating", post(run_flow_gating))
-		// Validations
-		.route("/api/validations/check", get(check_cached_validation))
+		// Tests
+		.route("/api/test-summaries/check", get(check_cached_test_summary))
 		// Checkpoints
 		.route(
 			"/api/checkpoints",

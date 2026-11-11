@@ -3,7 +3,7 @@ Resolve IDS flow params to the values the worker ACTUALLY trains/scores with.
 
 Single source for the resolutions that were inlined (and duplicated) in
 worker._create_ids_evaluators / _create_hierarchical_ids_evaluators. The
-validation-cache key (validation_cache_key.py) uses the SAME resolvers, so the
+test-cache key (test_cache_key.py) uses the SAME resolvers, so the
 key always describes the configuration that really ran — absent, explicit and
 unrecognised memory_mode strings that all train as QUAD_WEIGHTED share a key;
 anything that trains differently never does.

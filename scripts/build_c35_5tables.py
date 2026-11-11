@@ -85,10 +85,10 @@ def main():
 	# Pull all phase × genome × threshold data
 	cur.execute(
 		"""SELECT f.name, vs.genome_type, e.phase_type, vs.threshold_metadata
-		FROM validation_summaries vs
+		FROM test_summaries vs
 		JOIN flows f ON f.id=vs.flow_id
 		JOIN experiments e ON e.id=vs.experiment_id
-		WHERE f.name LIKE ? AND f.status='completed' AND vs.validation_point='final'""",
+		WHERE f.name LIKE ? AND f.status='completed' AND vs.test_point='final'""",
 		(PATTERN,),
 	)
 

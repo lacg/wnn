@@ -47,7 +47,7 @@ Today the controller has three names: `seeds.test` (used only in the disjointnes
 ### 3. DB — [D-B] (was D2/D3)
 - `threshold_metadata` keys: already correct, nothing to migrate.
 - `seed_runs.test_seed` / `val_seed` columns: values and names stay; only the meaning in the docs is corrected.
-- `validation_summaries` table holds checkpoint reports, including test-partition metrics. Options:
+- `test_summaries` table holds checkpoint reports, including test-partition metrics. Options:
   (a) **recommended: keep the name**, document it as "checkpoint summaries" (a rename touches the Rust dashboard,
   the worker and about 60 scripts for no behaviour gain); (b) rename to `checkpoint_summaries` with a view under
   the old name.
@@ -73,6 +73,6 @@ Today the controller has three names: `seeds.test` (used only in the disjointnes
 
 ## Decisions for Luiz
 - **D-A:** keep `--report-seeds` and fix the words (recommended), or rename it to `--test-seeds`.
-- **D-B:** keep the `validation_summaries` table name (recommended), or rename it.
+- **D-B:** keep the `test_summaries` table name (recommended), or rename it.
 The old D2 (migrate JSON keys) and D3 (swap seed columns) are no longer needed; D4 (flag aliases) only applies if
 D-A(b) is chosen.

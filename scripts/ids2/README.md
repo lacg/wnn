@@ -1,7 +1,7 @@
 # IDS-2 final readout (26/09/2026) — reproduce the numbers
 
 Read-only against the dashboard DB (`file:/Volumes/.../wnn/db/wnn.db?mode=ro`). Held-out TEST val_cal only,
-from `validation_summaries` final rows — never `iterations.best_f1`.
+from `test_summaries` final rows — never `iterations.best_f1`.
 
 - `ids2_final_readout.py` — protocol readout (ids-security agent). Subcommands `arms`, `seeds`, `pareto`,
   `rule7`, `extra` — e.g. `python ids2_final_readout.py arms cicids quad`. Feeds docs/ids_results.md § "IDS-2 FINAL (26/09/2026)".

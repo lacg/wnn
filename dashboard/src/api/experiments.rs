@@ -1,4 +1,4 @@
-//! Experiment, validation-summary, combined-validation, and iteration handlers (split from api/mod.rs).
+//! Experiment, test-summary, combined-test-summary, and iteration handlers (split from api/mod.rs).
 
 use super::*;
 
@@ -215,12 +215,12 @@ pub(crate) async fn get_experiment_iterations(
 	}
 }
 
-pub(crate) async fn get_validation_summaries(
+pub(crate) async fn get_test_summaries(
 	State(state): State<Arc<AppState>>,
 	Path(experiment_id): Path<i64>,
 ) -> impl IntoResponse
 {
-	match crate::db::queries::get_validation_summaries(&state.db, experiment_id).await
+	match crate::db::queries::get_test_summaries(&state.db, experiment_id).await
 	{
 		Ok(summaries) => (StatusCode::OK, Json(summaries)).into_response(),
 		Err(e) => (
@@ -232,10 +232,10 @@ pub(crate) async fn get_validation_summaries(
 }
 
 #[derive(Debug, Deserialize)]
-pub struct CreateValidationSummaryRequest
+pub struct CreateTestSummaryRequest
 {
 	pub flow_id: Option<i64>,
-	pub validation_point: String, // 'init' or 'final'
+	pub test_point: String, // 'init' or 'final'
 	pub genome_type: String,      // 'best_ce', 'best_acc', 'best_fitness'
 	pub genome_hash: String,
 	pub ce: f64,
@@ -243,7 +243,7 @@ pub struct CreateValidationSummaryRequest
 	pub f1_macro: Option<f64>,
 	pub fpr: Option<f64>,
 	pub threshold_metadata: Option<String>,
-	/// Validation-cache scope stamp (worker validation_cache_key.py); absent from
+	/// Test-cache scope stamp (worker test_cache_key.py); absent from
 	/// pre-fix workers -> NULL -> the row is never served from cache.
 	pub cache_key: Option<String>,
 	pub worker_abi: Option<i64>,
@@ -254,11 +254,11 @@ pub struct CreateValidationSummaryRequest
 	pub physical_cells: Option<i64>,
 }
 
-impl CreateValidationSummaryRequest
+impl CreateTestSummaryRequest
 {
-	fn footprint(&self) -> Option<crate::models::ValidationFootprint>
+	fn footprint(&self) -> Option<crate::models::TestFootprint>
 	{
-		crate::models::ValidationFootprint::from_parts(
+		crate::models::TestFootprint::from_parts(
 			self.logical_neurons,
 			self.physical_neurons,
 			self.logical_cells,
@@ -267,17 +267,17 @@ impl CreateValidationSummaryRequest
 	}
 }
 
-pub(crate) async fn create_validation_summary(
+pub(crate) async fn create_test_summary(
 	State(state): State<Arc<AppState>>,
 	Path(experiment_id): Path<i64>,
-	Json(req): Json<CreateValidationSummaryRequest>,
+	Json(req): Json<CreateTestSummaryRequest>,
 ) -> impl IntoResponse
 {
-	match crate::db::queries::upsert_validation_summary(
+	match crate::db::queries::upsert_test_summary(
 		&state.db,
 		req.flow_id,
 		experiment_id,
-		&req.validation_point,
+		&req.test_point,
 		&req.genome_type,
 		&req.genome_hash,
 		req.ce,
@@ -300,7 +300,7 @@ pub(crate) async fn create_validation_summary(
 }
 
 #[derive(Debug, Deserialize)]
-pub struct CheckCachedValidationQuery
+pub struct CheckCachedTestSummaryQuery
 {
 	pub genome_hash: String,
 	/// Both required for a hit. A pre-fix worker sends only the legacy
@@ -309,12 +309,12 @@ pub struct CheckCachedValidationQuery
 	pub worker_abi: Option<i64>,
 }
 
-pub(crate) async fn check_cached_validation(
+pub(crate) async fn check_cached_test_summary(
 	State(state): State<Arc<AppState>>,
-	Query(query): Query<CheckCachedValidationQuery>,
+	Query(query): Query<CheckCachedTestSummaryQuery>,
 ) -> impl IntoResponse
 {
-	match crate::db::queries::get_cached_validation(
+	match crate::db::queries::get_cached_test_summary(
 		&state.db,
 		&query.genome_hash,
 		crate::db::queries::CacheScope::from_parts(query.cache_key.as_deref(), query.worker_abi),
@@ -349,12 +349,12 @@ pub(crate) async fn check_cached_validation(
 	}
 }
 
-pub(crate) async fn get_flow_validations(
+pub(crate) async fn get_flow_test_summaries(
 	State(state): State<Arc<AppState>>,
 	Path(flow_id): Path<i64>,
 ) -> impl IntoResponse
 {
-	match crate::db::queries::get_flow_validation_summaries(&state.db, flow_id).await
+	match crate::db::queries::get_flow_test_summaries(&state.db, flow_id).await
 	{
 		Ok(summaries) => (StatusCode::OK, Json(summaries)).into_response(),
 		Err(e) => (
@@ -366,17 +366,17 @@ pub(crate) async fn get_flow_validations(
 }
 
 // =============================================================================
-// Combined Validation handlers (multi-stage end-to-end metrics)
+// Combined Test handlers (multi-stage end-to-end metrics)
 // =============================================================================
 
-pub(crate) async fn get_combined_validations(
+pub(crate) async fn get_combined_test_summaries(
 	State(state): State<Arc<AppState>>,
 	Path(flow_id): Path<i64>,
 ) -> impl IntoResponse
 {
-	match crate::db::queries::get_combined_validations(&state.db, flow_id).await
+	match crate::db::queries::get_combined_test_summaries(&state.db, flow_id).await
 	{
-		Ok(validations) => (StatusCode::OK, Json(validations)).into_response(),
+		Ok(tests) => (StatusCode::OK, Json(tests)).into_response(),
 		Err(e) => (
 			StatusCode::INTERNAL_SERVER_ERROR,
 			Json(serde_json::json!({"error": e.to_string()})),
@@ -386,7 +386,7 @@ pub(crate) async fn get_combined_validations(
 }
 
 #[derive(Debug, Deserialize)]
-pub struct CreateCombinedValidationRequest
+pub struct CreateCombinedTestSummaryRequest
 {
 	pub genome_type: String, // 'best_ce', 'best_acc', 'best_fitness'
 	pub combined_ce: f64,
@@ -396,15 +396,15 @@ pub struct CreateCombinedValidationRequest
 	pub unigram_lambda: Option<f64>,
 }
 
-pub(crate) async fn create_combined_validation(
+pub(crate) async fn create_combined_test_summary(
 	State(state): State<Arc<AppState>>,
 	Path(flow_id): Path<i64>,
-	Json(req): Json<CreateCombinedValidationRequest>,
+	Json(req): Json<CreateCombinedTestSummaryRequest>,
 ) -> impl IntoResponse
 {
 	let per_stage_ce_slice = req.per_stage_ce.as_deref();
 	let per_stage_acc_slice = req.per_stage_acc.as_deref();
-	match crate::db::queries::upsert_combined_validation(
+	match crate::db::queries::upsert_combined_test_summary(
 		&state.db,
 		flow_id,
 		&req.genome_type,

@@ -103,7 +103,7 @@ minimal and principled — two decode rules × two calibration sources:
 
 - **Headline:** macro-F1, benign-FPR (= 1 − benign recall), accuracy.
 - Per-class precision/recall/F1 + full confusion matrix stored in
-  `validation_summaries.threshold_metadata` (extend the per-mode JSON with
+  `test_summaries.threshold_metadata` (extend the per-mode JSON with
   `per_class` — the binary schema already has a per_class rate block).
 - Weighted-F1 secondary (comparability with literature that reports it).
 - **GA fitness:** the existing weighted harmonic-rank (Eq. fitness) with
@@ -118,7 +118,7 @@ minimal and principled — two decode rules × two calibration sources:
 |---|---|---|
 | Rust `ids_cache`/eval | K-class scoring exists (B5); ADD: K-class CE, confusion matrix, macro-F1/per-class metrics, benign-margin decode + τ sweep | 1-2 d |
 | Rust pyapi | expose multiclass eval results struct | 0.5 d |
-| Python worker | label-map loaders (attack_cat / 14-label / Neto-7), K-cluster genome config, protocol v2 val/test roles, validation-summary writer per-class JSON | 1-2 d |
+| Python worker | label-map loaders (attack_cat / 14-label / Neto-7), K-cluster genome config, protocol v2 val/test roles, test-summary writer per-class JSON | 1-2 d |
 | params registry | `ids_num_classes`, `ids_label_mapping`, `eval_protocol`, `decode_mode` keys | 0.5 h |
 | Dashboard | macro-F1/benign-FPR/Acc columns for multiclass flows (flow-type-aware, like the F1/FPR/ACC vs CE/ACC switch) | 0.5-1 d |
 | Baselines | RF/XGB multiclass on identical splits + protocol (extend existing baseline scripts); pull Neto 8-class Table 7 numbers (verified source) | 0.5 d |

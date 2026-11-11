@@ -48,11 +48,11 @@ SELECT
   ROUND(AVG(vs.fpr) * 100, 2) as avg_fpr,
   ROUND(AVG(vs.accuracy) * 100, 2) as avg_acc,
   ROUND(AVG((julianday(f.completed_at) - julianday(f.started_at)) * 24 * 60), 0) as avg_min
-FROM validation_summaries vs
+FROM test_summaries vs
 JOIN experiments e ON vs.experiment_id = e.id
 JOIN flows f ON e.flow_id = f.id
 WHERE f.name LIKE 'SWEEP-ciciot%' AND f.status = 'completed'
-  AND vs.validation_point = 'final'
+  AND vs.test_point = 'final'
   AND vs.genome_type = 'best_fitness'
   AND e.phase_type = 'ga_neurons'
 GROUP BY therm_bits
@@ -62,11 +62,11 @@ ORDER BY avg_fpr ASC
 # Pick winner: best avg FPR with F1 > 80%
 win_bits=$(sqlite3 "$DB" "
 SELECT json_extract(f.config_json, '\$.params.ids_n_bits') as therm_bits
-FROM validation_summaries vs
+FROM test_summaries vs
 JOIN experiments e ON vs.experiment_id = e.id
 JOIN flows f ON e.flow_id = f.id
 WHERE f.name LIKE 'SWEEP-ciciot%' AND f.status = 'completed'
-  AND vs.validation_point = 'final'
+  AND vs.test_point = 'final'
   AND vs.genome_type = 'best_fitness'
   AND e.phase_type = 'ga_neurons'
 GROUP BY therm_bits

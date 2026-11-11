@@ -5,7 +5,7 @@ Flows 7451–7460 (worker ABI 27, families_v1, dedupe off), BINARY lattice 2m ma
 at GA start (seed projection with `_rng=None`, fixed 9517d9d3) and were rerun from the beginning.
 
 Metric: final `best_f1` genome, `margin_val_cal` (val-calibrated, report on the held-out test
-partition), from `validation_summaries`. Cells = logical cells of that genome.
+partition), from `test_summaries`. Cells = logical cells of that genome.
 
 ## GA Neurons (published phase), per seed
 

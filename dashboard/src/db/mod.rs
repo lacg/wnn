@@ -21,7 +21,7 @@ mod iterations;
 mod migrations;
 mod parse;
 mod schema;
-mod validations;
+mod test_summaries;
 
 pub type DbPool = Pool<Sqlite>;
 
@@ -45,6 +45,10 @@ pub async fn init_db(database_url: &str) -> Result<DbPool>
 		.connect_with(options)
 		.await?;
 
+	// Rename legacy tables BEFORE the schema runs, or CREATE TABLE IF NOT EXISTS
+	// would create an empty table next to the populated legacy one
+	migrations::rename_legacy_test_tables(&pool).await?;
+
 	// Create tables
 	sqlx::query(schema::SCHEMA).execute(&pool).await?;
 
@@ -66,5 +70,5 @@ pub mod queries
 	pub use super::gating::*;
 	pub use super::iterations::*;
 	pub(crate) use super::parse::*;
-	pub use super::validations::*;
+	pub use super::test_summaries::*;
 }

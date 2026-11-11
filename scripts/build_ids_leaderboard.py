@@ -7,7 +7,7 @@ completed runs in that config cell) so best-of-N inflation is visible.
 Also prints the honest cohort-central number for the same cell: GA x val_cal
 mean±std over runs. best-of-N minus mean is the winner's-curse gap.
 
-All numbers: validation_summaries.threshold_metadata, validation_point='final'
+All numbers: test_summaries.threshold_metadata, test_point='final'
 = HELD-OUT report partition. Never iterations.best_f1.
 
 Usage:
@@ -80,10 +80,10 @@ def main():
 
 		cur.execute(
 			"""SELECT f.name, vs.genome_type, e.phase_type, vs.threshold_metadata
-			FROM validation_summaries vs
+			FROM test_summaries vs
 			JOIN flows f ON f.id=vs.flow_id
 			JOIN experiments e ON e.id=vs.experiment_id
-			WHERE f.name LIKE ? AND f.status='completed' AND vs.validation_point='final'""",
+			WHERE f.name LIKE ? AND f.status='completed' AND vs.test_point='final'""",
 			(like,))
 		for r in cur.fetchall():
 			fam, seed = fam_of(r["name"])
@@ -178,7 +178,7 @@ def main():
 			cp = pts[fam]
 			n = len(fam_seeds[fam])
 			if not cp:
-				out.append(f"    {fam:<42} | {n:>2} | (no final validation_summaries rows)")
+				out.append(f"    {fam:<42} | {n:>2} | (no final test_summaries rows)")
 				continue
 			bf1 = max(cp, key=lambda x: x[0])
 			bfpr = min(cp, key=lambda x: (x[1], -x[0]))

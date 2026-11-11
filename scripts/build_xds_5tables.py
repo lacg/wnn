@@ -115,14 +115,14 @@ def main():
 		else "—"
 	)
 
-	# Pull ALL validation_summaries rows for the cohort, classify by (width, weight)
+	# Pull ALL test_summaries rows for the cohort, classify by (width, weight)
 	cur.execute(
 		"""SELECT f.name, vs.genome_type, e.phase_type, vs.threshold_metadata
-		FROM validation_summaries vs
+		FROM test_summaries vs
 		JOIN flows f ON f.id=vs.flow_id
 		JOIN experiments e ON e.id=vs.experiment_id
 		WHERE f.name LIKE ? AND f.name NOT LIKE '%PREEMP-OLD%' AND f.status='completed'
-		  AND vs.validation_point='final'""",
+		  AND vs.test_point='final'""",
 		(f"{prefix}%",),
 	)
 

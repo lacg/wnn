@@ -9,13 +9,13 @@ then calls compute_combined_metrics() for each genome type pair.
 Also computes "best overall" CE and ACC by finding the genome with the absolute
 best CE (or ACC) across ALL experiments in each stage, not just the last one.
 
-Results are stored in the dashboard via POST /api/flows/{id}/combined-validations.
+Results are stored in the dashboard via POST /api/flows/{id}/combined-test-summaries.
 
 Usage:
     cd wnn/
     source wnn/bin/activate
     export PYTHONPATH="$(pwd)/src/wnn:$PYTHONPATH"
-    python scripts/compute_combined_validations.py --flow-id 49
+    python scripts/compute_combined_test_summaries.py --flow-id 49
 """
 
 import argparse
@@ -92,7 +92,7 @@ def find_best_overall_experiments(validations, exp_by_stage, num_stages):
 			exp_id_to_stage[exp['id']] = stage
 
 	# Filter to final validation summaries only
-	final_vals = [v for v in validations if v.get('validation_point') == 'final']
+	final_vals = [v for v in validations if v.get('test_point') == 'final']
 
 	result = {}
 	for stage in range(num_stages):
@@ -247,7 +247,7 @@ def main():
 	# --- Best Overall: find best CE/ACC across ALL experiments per stage ---
 	print()
 	print("Finding best overall genomes across all experiments...")
-	validations = client.get_flow_validation_summaries(args.flow_id)
+	validations = client.get_flow_test_summaries(args.flow_id)
 	best_overall = find_best_overall_experiments(validations, exp_by_stage, num_stages)
 
 	# Load checkpoints for best-overall experiments (if different from last)
@@ -391,7 +391,7 @@ def main():
 				print(f"  {genome_type}: CE={ce:.4f}, ACC={acc:.2%}, S0={per_stage_ce[0]:.4f}, S1={per_stage_ce[1]:.4f}")
 
 				if not args.dry_run:
-					client.create_combined_validation(
+					client.create_combined_test_summary(
 						flow_id=args.flow_id,
 						genome_type=genome_type,
 						combined_ce=ce,
@@ -439,7 +439,7 @@ def main():
 					print(f"  λ={lam:.3f}: CE={ce:.4f}, ACC={acc:.2%}, S0={per_stage_ce[0]:.4f}, S1={per_stage_ce[1]:.4f}")
 
 					if not args.dry_run:
-						client.create_combined_validation(
+						client.create_combined_test_summary(
 							flow_id=args.flow_id,
 							genome_type=genome_type_label,
 							combined_ce=ce,

@@ -1,7 +1,7 @@
 # IDSXD desirability fitness-weight sweep — readout 16/09/2026
 
 Generated 16/09/2026 20:52 UTC from `file:/Volumes/20260401-WDBlack-SN850X-2TB/wnn/db/wnn.db?mode=ro` (read-only; no flow created, cancelled, requeued or modified).
-Every number is HELD-OUT: `validation_summaries.threshold_metadata` at `validation_point='final'`, val_cal mode unless stated.
+Every number is HELD-OUT: `test_summaries.threshold_metadata` at `test_point='final'`, val_cal mode unless stated.
 Protocol v2 (`random_3way`): thresholds calibrated on the 10% VAL partition, the 10% TEST partition is report-only. No `iterations.best_f1` anywhere.
 Arm weights are (w_ce / w_acc / w_f1 / w_fpr), `fitness_aggregation=desirability`, CE anchor normalized 0.2128. `unswt` (temporal) is queued with 0 completed and is skipped.
 

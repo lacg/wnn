@@ -1,11 +1,11 @@
 <script lang="ts">
-	import type { Experiment, ValidationSummary } from '$lib/types'
+	import type { Experiment, TestSummary } from '$lib/types'
 
-	export let validationSummaries: ValidationSummary[] = []
+	export let testSummaries: TestSummary[] = []
 	export let displayExperiments: Experiment[] = []
 
-	// Validation chart tooltip state
-	let validationTooltip: {
+	// Test chart tooltip state
+	let testTooltip: {
 		x: number
 		y: number
 		label: string
@@ -14,11 +14,11 @@
 		accuracy: number
 	} | null = null
 
-	// Build chart data points from validation summaries
-  // Group by experiment and validation_point, creating x-axis labels like "Init", "Exp1", "Exp2", etc.
-	$: validationChartData = (() =>
+	// Build chart data points from test summaries
+  // Group by experiment and test_point, creating x-axis labels like "Init", "Exp1", "Exp2", etc.
+	$: testChartData = (() =>
 	{
-		if (validationSummaries.length === 0) return []
+		if (testSummaries.length === 0) return []
 
 		// Create a map of experiment_id -> sequence_order for labeling
 		const expOrderMap = new Map<number, number>()
@@ -27,24 +27,24 @@
 			expOrderMap.set(exp.id, idx)
 		})
 
-		// Group validations by (experiment_id, validation_point)
+		// Group tests by (experiment_id, test_point)
 		const points: {
 			label: string
 			sortKey: number
-			validations: { genomeType: string, ce: number, accuracy: number }[]
+			tests: { genomeType: string, ce: number, accuracy: number }[]
 		}[] = []
 
 		// Group by experiment and point
-		const grouped = new Map<string, ValidationSummary[]>()
-		for (const v of validationSummaries)
+		const grouped = new Map<string, TestSummary[]>()
+		for (const v of testSummaries)
 		{
-			const key = `${v.experiment_id}-${v.validation_point}`
+			const key = `${v.experiment_id}-${v.test_point}`
 			if (!grouped.has(key)) grouped.set(key, [])
 			grouped.get(key)!.push(v)
 		}
 
 		// Convert to chart points
-		for (const [key, validations] of grouped)
+		for (const [key, tests] of grouped)
 		{
 			const [expIdStr, point] = key.split('-')
 			const expId = parseInt(expIdStr)
@@ -67,7 +67,7 @@
 			points.push({
 				label,
 				sortKey,
-				validations: validations.map(v => ({
+				tests: tests.map(v => ({
 					genomeType: v.genome_type,
 					ce: v.ce,
 					accuracy: v.accuracy
@@ -87,7 +87,7 @@
 	$: valChartHeight = valChartSvgHeight - valChartPadding.top - valChartPadding.bottom
 
 	// Compute CE range for y-axis
-	$: allCeValues = validationChartData.flatMap(p => p.validations.map(v => v.ce))
+	$: allCeValues = testChartData.flatMap(p => p.tests.map(v => v.ce))
 	$: valCeMin = allCeValues.length > 0 ? Math.min(...allCeValues) : 0
 	$: valCeMax = allCeValues.length > 0 ? Math.max(...allCeValues) : 1
 	$: valCeRange = valCeMax - valCeMin || 0.001
@@ -123,12 +123,12 @@
 	function getPolylinePoints(genomeType: string): string
 	{
 		const points: { x: number, y: number }[] = []
-		validationChartData.forEach((p, i) =>
+		testChartData.forEach((p, i) =>
 		{
-			const v = p.validations.find(val => val.genomeType === genomeType)
+			const v = p.tests.find(val => val.genomeType === genomeType)
 			if (v)
 			{
-				const x = valChartPadding.left + (i / Math.max(validationChartData.length - 1, 1)) * valChartWidth
+				const x = valChartPadding.left + (i / Math.max(testChartData.length - 1, 1)) * valChartWidth
 				const y = valChartPadding.top + valChartHeight - ((v.ce - valCeMinPadded) / valCeRangePadded) * valChartHeight
 				points.push({ x, y })
 			}
@@ -140,20 +140,20 @@
 	function hasMultiplePoints(genomeType: string): boolean
 	{
 		let count = 0
-		for (const p of validationChartData)
+		for (const p of testChartData)
 		{
-			if (p.validations.some(v => v.genomeType === genomeType)) count++
+			if (p.tests.some(v => v.genomeType === genomeType)) count++
 			if (count > 1) return true
 		}
 		return false
 	}
 </script>
 
-{#if validationChartData.length > 0}
+{#if testChartData.length > 0}
 	<section class="section">
 		<div class="card">
 			<div class="card-header">
-				<span class="card-title">Validation Progression</span>
+				<span class="card-title">Test Progression</span>
 				<div class="val-chart-legend">
 					<span class="legend-item"><span class="legend-marker best-ce"></span> Best CE</span>
 					<span class="legend-item"><span class="legend-marker best-acc"></span> Best Acc</span>
@@ -179,8 +179,8 @@
 					<line x1={valChartPadding.left} y1={valChartPadding.top + valChartHeight} x2={valChartPadding.left + valChartWidth} y2={valChartPadding.top + valChartHeight} stroke="var(--text-tertiary)" />
 
 					<!-- X-axis labels -->
-					{#each validationChartData as point, i}
-						{@const x = valChartPadding.left + (i / Math.max(validationChartData.length - 1, 1)) * valChartWidth}
+					{#each testChartData as point, i}
+						{@const x = valChartPadding.left + (i / Math.max(testChartData.length - 1, 1)) * valChartWidth}
 						<line x1={x} y1={valChartPadding.top + valChartHeight} x2={x} y2={valChartPadding.top + valChartHeight + 5} stroke="var(--text-tertiary)" />
 						<text x={x} y={valChartPadding.top + valChartHeight + 20} text-anchor="middle" class="axis-label x-label">{point.label}</text>
 					{/each}
@@ -199,12 +199,12 @@
 					{/each}
 
 					<!-- Data points (offset horizontally when multiple markers at same point) -->
-					{#each validationChartData as point, i}
-						{@const baseX = valChartPadding.left + (i / Math.max(validationChartData.length - 1, 1)) * valChartWidth}
-						{@const numValidations = point.validations.length}
-						{@const offsetStep = numValidations > 1 ? 12 : 0}
-						{#each point.validations as v, vi}
-							{@const xOffset = numValidations > 1 ? (vi - (numValidations - 1) / 2) * offsetStep : 0}
+					{#each testChartData as point, i}
+						{@const baseX = valChartPadding.left + (i / Math.max(testChartData.length - 1, 1)) * valChartWidth}
+						{@const numTests = point.tests.length}
+						{@const offsetStep = numTests > 1 ? 12 : 0}
+						{#each point.tests as v, vi}
+							{@const xOffset = numTests > 1 ? (vi - (numTests - 1) / 2) * offsetStep : 0}
 							{@const x = baseX + xOffset}
 							{@const y = valChartPadding.top + valChartHeight - ((v.ce - valCeMinPadded) / valCeRangePadded) * valChartHeight}
 							<!-- Marker based on genome type -->
@@ -216,8 +216,8 @@
 									class="data-point"
 									role="button"
 									tabindex="-1"
-									on:mouseenter={() => validationTooltip = { x, y, label: point.label, genomeType: v.genomeType, ce: v.ce, accuracy: v.accuracy }}
-									on:mouseleave={() => validationTooltip = null}
+									on:mouseenter={() => testTooltip = { x, y, label: point.label, genomeType: v.genomeType, ce: v.ce, accuracy: v.accuracy }}
+									on:mouseleave={() => testTooltip = null}
 								/>
 							{:else if v.genomeType === 'best_acc'}
 								<rect
@@ -227,8 +227,8 @@
 									class="data-point"
 									role="button"
 									tabindex="-1"
-									on:mouseenter={() => validationTooltip = { x, y, label: point.label, genomeType: v.genomeType, ce: v.ce, accuracy: v.accuracy }}
-									on:mouseleave={() => validationTooltip = null}
+									on:mouseenter={() => testTooltip = { x, y, label: point.label, genomeType: v.genomeType, ce: v.ce, accuracy: v.accuracy }}
+									on:mouseleave={() => testTooltip = null}
 								/>
 							{:else}
 								<polygon
@@ -238,20 +238,20 @@
 									class="data-point"
 									role="button"
 									tabindex="-1"
-									on:mouseenter={() => validationTooltip = { x, y, label: point.label, genomeType: v.genomeType, ce: v.ce, accuracy: v.accuracy }}
-									on:mouseleave={() => validationTooltip = null}
+									on:mouseenter={() => testTooltip = { x, y, label: point.label, genomeType: v.genomeType, ce: v.ce, accuracy: v.accuracy }}
+									on:mouseleave={() => testTooltip = null}
 								/>
 							{/if}
 						{/each}
 					{/each}
 
 					<!-- Tooltip -->
-					{#if validationTooltip}
-						<g class="tooltip-group" transform="translate({validationTooltip.x}, {validationTooltip.y - 70})">
+					{#if testTooltip}
+						<g class="tooltip-group" transform="translate({testTooltip.x}, {testTooltip.y - 70})">
 							<rect x="-100" y="-10" width="200" height="70" rx="4" fill="var(--bg-secondary)" stroke="var(--border)" />
-							<text x="0" y="10" text-anchor="middle" class="tooltip-label">{validationTooltip.label}</text>
-							<text x="0" y="30" text-anchor="middle" class="tooltip-type" fill={getGenomeTypeColor(validationTooltip.genomeType)}>{getGenomeTypeLabel(validationTooltip.genomeType)}</text>
-							<text x="0" y="50" text-anchor="middle" class="tooltip-value">CE: {validationTooltip.ce.toFixed(4)} | Acc: {(validationTooltip.accuracy * 100).toFixed(2)}%</text>
+							<text x="0" y="10" text-anchor="middle" class="tooltip-label">{testTooltip.label}</text>
+							<text x="0" y="30" text-anchor="middle" class="tooltip-type" fill={getGenomeTypeColor(testTooltip.genomeType)}>{getGenomeTypeLabel(testTooltip.genomeType)}</text>
+							<text x="0" y="50" text-anchor="middle" class="tooltip-value">CE: {testTooltip.ce.toFixed(4)} | Acc: {(testTooltip.accuracy * 100).toFixed(2)}%</text>
 						</g>
 					{/if}
 				</svg>
@@ -265,7 +265,7 @@
     margin-bottom: 2rem;
   }
 
-  /* Validation Progression Chart */
+  /* Test Progression Chart */
   .card {
     background: var(--glass-bg);
     backdrop-filter: blur(var(--glass-blur));

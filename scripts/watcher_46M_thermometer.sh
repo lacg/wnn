@@ -87,12 +87,12 @@ cur.execute("""
     SELECT vs.flow_id, f.name, vs.threshold_metadata,
            json_extract(f.config_json, '$.params.ids_n_bits') as thermo_bits,
            g.total_neurons, g.tiers_json
-    FROM validation_summaries vs
+    FROM test_summaries vs
     JOIN experiments e ON vs.experiment_id = e.id
     JOIN flows f ON e.flow_id = f.id
     LEFT JOIN genomes g ON g.config_hash = vs.genome_hash AND g.experiment_id = vs.experiment_id
     WHERE f.name LIKE '%THERMO46M%'
-      AND vs.validation_point = 'final'
+      AND vs.test_point = 'final'
       AND vs.genome_type = 'best_fitness'
     ORDER BY thermo_bits, g.total_neurons
 """)
@@ -103,12 +103,12 @@ cur.execute("""
     SELECT vs.flow_id, f.name, vs.threshold_metadata,
            json_extract(f.config_json, '$.params.ids_n_bits') as thermo_bits,
            g.total_neurons, g.tiers_json
-    FROM validation_summaries vs
+    FROM test_summaries vs
     JOIN experiments e ON vs.experiment_id = e.id
     JOIN flows f ON e.flow_id = f.id
     LEFT JOIN genomes g ON g.config_hash = vs.genome_hash AND g.experiment_id = vs.experiment_id
     WHERE f.id IN (1185, 1188)
-      AND vs.validation_point = 'final'
+      AND vs.test_point = 'final'
       AND vs.genome_type = 'best_fitness'
 """)
 baseline_rows = cur.fetchall()

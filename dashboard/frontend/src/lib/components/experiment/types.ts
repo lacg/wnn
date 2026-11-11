@@ -3,16 +3,16 @@
  * child components (P3 decomposition).
  */
 
-import type { ValidationFootprint } from '$lib/types'
+import type { TestFootprint } from '$lib/types'
 
-/** One point of the cumulative validation progression (init/final per phase). */
-export interface ValidationProgressionPoint
+/** One point of the cumulative test progression (init/final per phase). */
+export interface TestProgressionPoint
 {
 	label: string
 	expId: number
 	sequenceOrder: number
-	validationPoint: 'init' | 'final'
-	summaries: { genomeType: string, ce: number, accuracy: number, f1_macro: number | null, fpr: number | null, threshold_metadata: any | null, footprint: ValidationFootprint | null }[]
+	testPoint: 'init' | 'final'
+	summaries: { genomeType: string, ce: number, accuracy: number, f1_macro: number | null, fpr: number | null, threshold_metadata: any | null, footprint: TestFootprint | null }[]
 }
 
 /** One ranked grid-search config result. */

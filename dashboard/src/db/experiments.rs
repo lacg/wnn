@@ -405,8 +405,8 @@ pub async fn update_experiment(
 				if prior_iter <= 0 && has_iteration_rows == 0
 				{
 					// Fresh start: clear stale metrics + any partial rows.
-					// validation_summaries are KEPT — they double as the
-					// cross-flow validation cache and are upserted on re-run.
+					// test_summaries are KEPT — they double as the
+					// cross-flow test cache and are upserted on re-run.
 					set_clauses.push("current_iteration = 0");
 					set_clauses.push("best_ce = NULL");
 					set_clauses.push("best_accuracy = NULL");

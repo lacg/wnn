@@ -13,8 +13,8 @@ Which top-N feature ranking a flow encodes with (IDS-53, flow param
 Why package data next to the loaders (not docs/ or the git-ignored data/): the
 worker imports the package from the tree, so the file ships with the code that
 reads it; and the directory IS the version — a re-derivation goes to a new
-directory, bumps TRAIN_ONLY_VERSION, and so re-keys the validation cache
-(validation_cache_key `fr=`) instead of silently changing a list in place.
+directory, bumps TRAIN_ONLY_VERSION, and so re-keys the test cache
+(test_cache_key `fr=`) instead of silently changing a list in place.
 """
 
 import json

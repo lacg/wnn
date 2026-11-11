@@ -5,10 +5,10 @@ MODES = ["train_cal","fixed_05","platt","beta","empirical","empirical_cumulative
 SQL = """
 SELECT f.id fid, f.name, f.started_at, f.completed_at, f.config_json cj,
        e.phase_type ph, vs.genome_type gt, vs.genome_hash gh, vs.experiment_id eid, vs.threshold_metadata tm
-FROM validation_summaries vs
+FROM test_summaries vs
 JOIN flows f ON f.id = vs.flow_id
 JOIN experiments e ON e.id = vs.experiment_id
-WHERE f.status = 'completed' AND vs.validation_point = 'final'
+WHERE f.status = 'completed' AND vs.test_point = 'final'
   AND json_extract(f.config_json,'$.params.ids_dataset') IN
       ('cicids2017','ciciot2023','ciciot2023_canonical','ciciot2023_full','ciciot2023_neto_full','ciciot2023_neto_subsample')
 """

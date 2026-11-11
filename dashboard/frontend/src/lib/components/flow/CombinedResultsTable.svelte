@@ -1,7 +1,7 @@
 <script lang="ts">
-	import type { CombinedValidation } from '$lib/types'
+	import type { CombinedTestSummary } from '$lib/types'
 
-	export let combinedValidations: CombinedValidation[] = []
+	export let combinedTestSummaries: CombinedTestSummary[] = []
 </script>
 
 <section class="section">
@@ -12,13 +12,13 @@
 				<thead>
 					<tr>
 						<th>Genome Type</th>
-						{#if combinedValidations.some(cv => cv.unigram_lambda != null)}
+						{#if combinedTestSummaries.some(cv => cv.unigram_lambda != null)}
 							<th>Lambda</th>
 						{/if}
 						<th>Combined CE</th>
 						<th>Combined ACC</th>
-						{#if combinedValidations[0]?.per_stage_ce}
-							{#each combinedValidations[0].per_stage_ce as _, i}
+						{#if combinedTestSummaries[0]?.per_stage_ce}
+							{#each combinedTestSummaries[0].per_stage_ce as _, i}
 								<th>S{i} CE</th>
 								<th>S{i} ACC</th>
 							{/each}
@@ -26,14 +26,14 @@
 					</tr>
 				</thead>
 				<tbody>
-					{#each combinedValidations as cv}
+					{#each combinedTestSummaries as cv}
 						<tr>
 							<td>
 								<span class="genome-type-badge" class:best-ce={cv.genome_type === 'best_ce' || cv.genome_type === 'best_overall_ce'} class:best-acc={cv.genome_type === 'best_acc' || cv.genome_type === 'best_overall_acc'} class:best-fitness={cv.genome_type === 'best_fitness'} class:best-overall={cv.genome_type === 'best_overall_ce' || cv.genome_type === 'best_overall_acc'} class:lambda-sweep={cv.genome_type.startsWith('unigram_l')}>
 									{cv.genome_type === 'best_ce' ? 'Best CE' : cv.genome_type === 'best_acc' ? 'Best ACC' : cv.genome_type === 'best_fitness' ? 'Best Fitness' : cv.genome_type === 'best_overall_ce' ? 'Best Overall CE' : cv.genome_type === 'best_overall_acc' ? 'Best Overall ACC' : cv.genome_type.startsWith('unigram_l') ? `λ=${cv.genome_type.replace('unigram_l', '')}` : cv.genome_type}
 								</span>
 							</td>
-							{#if combinedValidations.some(cv => cv.unigram_lambda != null)}
+							{#if combinedTestSummaries.some(cv => cv.unigram_lambda != null)}
 								<td class="mono">{cv.unigram_lambda != null ? cv.unigram_lambda.toFixed(3) : '—'}</td>
 							{/if}
 							<td class="mono">{cv.combined_ce.toFixed(4)}</td>

@@ -2,7 +2,7 @@
 # Watcher for the 46M cross-validation flow (EVAL46M-46M-200n4b-s42-CV-pipeline).
 #
 # Polls the database every 30s. When flow 1165 reaches status='completed':
-#   1. Reads its validation_summaries (final metrics across all 7 thresholds)
+#   1. Reads its test_summaries (final metrics across all 7 thresholds)
 #   2. Compares against the headline 200n×4b on 46M result:
 #        F1=82.33%, FPR=6.67%, Acc=97.27% (fitness-aligned threshold)
 #   3. Writes a verdict report to logs/46M_cv_verdict.md
@@ -88,9 +88,9 @@ HEADLINE = {
 
 cur.execute("""
     SELECT vs.genome_type, vs.f1_macro, vs.fpr, vs.accuracy, vs.threshold_metadata
-    FROM validation_summaries vs
+    FROM test_summaries vs
     JOIN experiments e ON vs.experiment_id = e.id
-    WHERE e.flow_id = ? AND vs.validation_point = 'final'
+    WHERE e.flow_id = ? AND vs.test_point = 'final'
     ORDER BY vs.genome_type
 """, (TARGET,))
 rows = cur.fetchall()
@@ -129,9 +129,9 @@ print()
 
 cur.execute("""
     SELECT vs.threshold_metadata
-    FROM validation_summaries vs
+    FROM test_summaries vs
     JOIN experiments e ON vs.experiment_id = e.id
-    WHERE e.flow_id = ? AND vs.validation_point = 'final' AND vs.genome_type = 'best_fitness'
+    WHERE e.flow_id = ? AND vs.test_point = 'final' AND vs.genome_type = 'best_fitness'
 """, (TARGET,))
 row = cur.fetchone()
 if row and row[0]:

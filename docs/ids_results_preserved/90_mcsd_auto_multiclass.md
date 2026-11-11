@@ -140,7 +140,7 @@ flow   cascade FPR   matching S0 best_* row              S0 best_* FPRs on file
 
 This is **`best_genome != pop[0]` again**. The cascade uses the *frozen* S0 genome carried
 across the stage boundary, which for 3/5 seeds is none of the five persisted `best_*` genomes.
-**`validation_summaries` contains no row describing the gate that actually produced the
+**`test_summaries` contains no row describing the gate that actually produced the
 published cascade for seeds 20402 / 20404 / 20405.** Reconstructing "the S0 gate row" from
 `best_f1` or `best_fpr` would publish a gate that was never deployed.
 **FIX BEFORE ANY TABLE SHIPS: persist the frozen S0 genome as its own `genome_type`.**

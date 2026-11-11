@@ -227,7 +227,7 @@ VAL, hypothesis).
    *Test:* none needed. Read the remaining 4 seeds as they land.
 2. **Unweighted vote tally on unswr** (`ids_write_rule=vote, ids_vote_share=0.1, balance_classes=false`). In a BINARY
    flow, lattice is bit-identical with or without `balance_classes` (measured), so the param acts on the vote tally.
-   It also changes the validation cache key, which is expected. Before queueing, check its other consumers for
+   It also changes the test cache key, which is expected. Before queueing, check its other consumers for
    side effects: grep `class_weights` in the worker crate. If that is clean, this needs no code change and no wheel
    swap, only a flow param.
    *Cheap tests, in order:*

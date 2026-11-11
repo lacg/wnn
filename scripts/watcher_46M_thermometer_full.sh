@@ -91,10 +91,10 @@ cur.execute("""
            json_extract(f.config_json, '$.params.ids_n_bits') as thermo_bits
     FROM flows f
     JOIN experiments e ON e.flow_id = f.id
-    JOIN validation_summaries vs ON vs.experiment_id = e.id
+    JOIN test_summaries vs ON vs.experiment_id = e.id
     LEFT JOIN genomes g ON g.config_hash = vs.genome_hash AND g.experiment_id = vs.experiment_id
     WHERE (f.name LIKE '%THERMO46M%' OR f.id IN (1184, 1185, 1188))
-      AND vs.validation_point = 'final'
+      AND vs.test_point = 'final'
       AND vs.genome_type = 'best_fitness'
 """)
 

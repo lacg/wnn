@@ -22,7 +22,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 from wnn.ram.experiments.IdsEvaluatorSettings import IdsEvaluatorSettings
 from wnn.ram.experiments.ids_param_resolution import resolve_vote_share
 from wnn.ram.experiments.params import KNOWN_PARAMS
-from wnn.ram.experiments.validation_cache_key import build_validation_cache_key
+from wnn.ram.experiments.test_cache_key import build_test_cache_key
 
 
 def _abi() -> int:
@@ -72,18 +72,18 @@ def test_vote_share_requires_the_vote_writer():
 
 def test_cache_key_unchanged_when_unset_or_half_and_split_when_set():
 	base = {"ids_dataset": "unsw-nb15", "memory_mode": "BINARY"}
-	lattice = build_validation_cache_key(base, True)
-	plain = build_validation_cache_key(dict(base, ids_write_rule="vote"), True)
-	half = build_validation_cache_key(dict(base, ids_write_rule="vote", ids_vote_share=0.5), True)
-	none = build_validation_cache_key(dict(base, ids_write_rule="vote", ids_vote_share=None), True)
-	tenth = build_validation_cache_key(dict(base, ids_write_rule="vote", ids_vote_share=0.1), True)
-	fifth = build_validation_cache_key(dict(base, ids_write_rule="vote", ids_vote_share=0.2), True)
+	lattice = build_test_cache_key(base, True)
+	plain = build_test_cache_key(dict(base, ids_write_rule="vote"), True)
+	half = build_test_cache_key(dict(base, ids_write_rule="vote", ids_vote_share=0.5), True)
+	none = build_test_cache_key(dict(base, ids_write_rule="vote", ids_vote_share=None), True)
+	tenth = build_test_cache_key(dict(base, ids_write_rule="vote", ids_vote_share=0.1), True)
+	fifth = build_test_cache_key(dict(base, ids_write_rule="vote", ids_vote_share=0.2), True)
 	assert "vs=" not in lattice and "vs=" not in plain
 	assert half == plain == none  # θ = 0.5 trains the plain vote bit-identically
 	assert "vs=0.1" in tenth and tenth != plain and tenth != lattice
 	assert fifth != tenth
 	with pytest.raises(ValueError):
-		build_validation_cache_key(dict(base, ids_vote_share=0.1), True)
+		build_test_cache_key(dict(base, ids_vote_share=0.1), True)
 
 
 def test_settings_carry_the_resolved_share():

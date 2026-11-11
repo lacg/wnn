@@ -174,7 +174,7 @@ class GAConfig(OptimizationConfig):
 	immigrant_fraction: float = 0.0
 	# Random-search baseline (RAID'26 Review C): every offspring slot is a fresh
 	# random genome — zero selection pressure, everything else (evaluation
-	# protocol, μ+λ best-of-pool tracking, patience, validation checkpoints)
+	# protocol, μ+λ best-of-pool tracking, patience, test evaluation checkpoints)
 	# identical to the GA, so best-fitness-vs-evaluations curves are directly
 	# comparable at matched compute budget.
 	random_search: bool = False

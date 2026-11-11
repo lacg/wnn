@@ -1,6 +1,6 @@
 """READ-ONLY IDS-2 FINAL readout (26/09/2026): IDSXD + IDSXD2, cicids / ciciot (+ unswr quad provisional).
 
-Pre-declared reporting column: GA-neurons phase, val_cal, held-out TEST (validation_point='final'),
+Pre-declared reporting column: GA-neurons phase, val_cal, held-out TEST (test_point='final'),
 each of the 5 genome types. Seeds parsed from the flow name; `-w64fix` / `-abi13` clones EXCLUDED
 (targeted repair sets, reported separately).
 """
@@ -17,11 +17,11 @@ IMMIG_FIX = "2026-09-17T01:57"
 SQL = """
 SELECT f.id fid, f.name, f.started_at, e.phase_type, vs.genome_type gt, vs.genome_hash gh,
        vs.experiment_id eid, vs.threshold_metadata tm
-FROM validation_summaries vs
+FROM test_summaries vs
 JOIN flows f ON f.id = vs.flow_id
 JOIN experiments e ON e.id = vs.experiment_id
 WHERE (f.name LIKE 'IDSXD-%' OR f.name LIKE 'IDSXD2-%') AND f.name NOT LIKE 'IDSXD-unswt-%'
-  AND f.status = 'completed' AND vs.validation_point = 'final'
+  AND f.status = 'completed' AND vs.test_point = 'final'
 """
 con = sqlite3.connect(DB, uri=True); con.row_factory = sqlite3.Row
 

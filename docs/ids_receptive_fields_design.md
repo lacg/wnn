@@ -56,7 +56,7 @@ merge. **v2 (Luiz 08/11):** UNSW `handshake` declares `merge_into: timing` (tcpr
 are the setup round-trip timings; 10 bits with dedupe on, 32 off on unswt legacy → merges only
 with dedupe on at max_bits 34) and `protocol` declares `merge_into: context` (12 bits on unswt
 legacy even with dedupe OFF → merges there too). Because a dedupe-off map changes, the map
-version moved to `families_v2` (the validation cache re-keys); the IDS-55 unswt A/B
+version moved to `families_v2` (the test cache re-keys); the IDS-55 unswt A/B
 (flows 7451–7460) ran on `families_v1`, where protocol stayed cross-budget-only.
 
 ## The projection
@@ -100,5 +100,5 @@ feature table, so it sits in context, not timing. CICIDS per-second rates join t
 
 The factory logs `[RF] ids_receptive_fields=family map=families_v2/<file> ids_rf_cross=...`
 with each family's encoded-bit count; the experiment logs the version per phase; the
-validation-cache key carries `rf=families_v2:<cross>` when on (conservative: RF steers
+test-cache key carries `rf=families_v2:<cross>` when on (conservative: RF steers
 the search, which genome_hash already pins).

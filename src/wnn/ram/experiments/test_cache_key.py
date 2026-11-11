@@ -1,13 +1,13 @@
 """
-Cross-flow validation-cache key (PAPER-CRITICAL fix, 10/10/2026).
+Cross-flow test-cache key (PAPER-CRITICAL fix, 10/10/2026).
 
 The cache matches a genome by genome_hash (bits + neurons + connections), and
 same-seed grid searches regenerate identical genomes in every flow — so the key
 MUST pin every flow param that changes how a FIXED genome is trained or scored
-on the final validation. The old key ({ds}_{nb}b_{sp}{_raw}{_inv}{_oi}) omitted
+on the final test evaluation. The old key ({ds}_{nb}b_{sp}{_raw}{_inv}{_oi}) omitted
 memory_mode, feature selection, classification, the QSR/PLN coin seed, … — a
 QUAD flow inherited a QSR flow's TEST row, an ABI-13 QSR flow a void pre-ABI-13
-row. The trainer version is pinned separately (ValidationCacheScope.worker_abi).
+row. The trainer version is pinned separately (TestCacheScope.worker_abi).
 
 INCLUDED (changes the trained memory or the reported score of a fixed genome):
   dataset/encoding  ids_dataset, ids_n_bits, ids_split, ids_feature_selection,
@@ -33,15 +33,15 @@ INCLUDED (changes the trained memory or the reported score of a fixed genome):
                     evaluator (fitness_weight_*, default 0); the experiment's own
                     fitness weights are appended by the Experiment (empirical_cumulative)
 EXCLUDED (steer the search only): fitness aggregation/calculator/anchors,
-  ids_two_cluster_fitness_f1 (the search F1; validation decodes are unaffected),
+  ids_two_cluster_fitness_f1 (the search F1; test evaluation decodes are unaffected),
   ids_offspring_folds (which folds a search genome's fitness averages),
   ids_calib_sample (the search threshold's calibration rows), GA/TS
   budgets, patience, grids, ids_k_folds / ids_num_parts / ids_kfold_per_gen
-  (the validation evaluator is num_parts=1, no K-fold), storage/prefetch and
+  (the test evaluator is num_parts=1, no K-fold), storage/prefetch and
   performance knobs (memmap, HSR, threads, no_metal, batch size), ids_arch_type
   and tier sizing (they shape the genome, which genome_hash already pins).
 
-Bump VALIDATION_CACHE_VERSION whenever Python-side validation/calibration
+Bump TEST_CACHE_VERSION whenever Python-side test evaluation/calibration
 semantics change without an accelerator ABI bump — it invalidates every row.
 """
 
@@ -60,18 +60,18 @@ from wnn.ram.experiments.ids_param_resolution import (
 	VOTE_SHARE_MAJORITY,
 )
 
-VALIDATION_CACHE_VERSION = 2
+TEST_CACHE_VERSION = 2
 # Bump when the deduped encoder's semantics change (thermometer_dedupe.py /
 # duplicate_columns.py) — it re-keys only ids_encoding_dedupe="on" flows.
 ENCODER_VERSION_DEDUPE = "dedupe1"
 
 
-def build_validation_cache_key(params: dict, oi_enabled: bool) -> str:
+def build_test_cache_key(params: dict, oi_enabled: bool) -> str:
 	"""Flow-level cache key from flows.config_json.params + the effective OI flag."""
 	parts = _dataset_parts(params) + _model_parts(params) + _scoring_parts(params)
 	parts.append(("oi", bool(oi_enabled)))
 	body = "|".join(f"{name}={canon_value(value)}" for name, value in parts)
-	return f"v{VALIDATION_CACHE_VERSION}|{body}"
+	return f"v{TEST_CACHE_VERSION}|{body}"
 
 
 def canon_value(value) -> str:

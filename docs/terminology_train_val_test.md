@@ -57,5 +57,5 @@ For ML and security venues (S&P, USENIX Security, IROS) the table at the top is 
 - **Inconsistent: `src/wnn/seeds.py`.** Its docstring and `SeedSet` say test = "model selection / early-stopping"
   and val = "held-out final report", the reverse of both the literature and how the controller uses `seeds.val`.
   Fix planned in `.claude/plans/test_val_swap.md`.
-- `validation_summaries` (DB table) stores checkpoint reports, including test-partition metrics. The name predates
+- `test_summaries` (DB table) stores checkpoint reports, including test-partition metrics. The name predates
   Protocol v2; renaming it is optional and listed in the plan.

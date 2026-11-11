@@ -1,11 +1,11 @@
-"""Cross-flow validation-cache key (PAPER-CRITICAL fix, 10/10/2026).
+"""Cross-flow test-cache key (PAPER-CRITICAL fix, 10/10/2026).
 
 The old key ({ds}_{nb}b_{sp}{_raw}{_inv}{_oi}) omitted memory_mode, feature
 selection, classification and the trainer ABI, so same-seed grid searches let a
 QUAD flow inherit a QSR flow's final TEST row (B34-CTRL r = cached copy of void
 flow 5929). These tests pin the new key's contents; the shared fixture
-tests/fixtures/validation_cache_keys.json is ALSO replayed by the dashboard's
-Rust tests (dashboard/src/db/validations.rs), so both sides agree byte-for-byte.
+tests/fixtures/test_cache_keys.json is ALSO replayed by the dashboard's
+Rust tests (dashboard/src/db/test_summaries.rs), so both sides agree byte-for-byte.
 """
 import json
 import sys
@@ -18,16 +18,16 @@ from wnn.ram.experiments.dashboard_client import DashboardClient
 from wnn.ram.experiments.experiment import Experiment, ExperimentConfig, ExperimentType
 from wnn.ram.experiments.ids_param_resolution import oi_env_enabled, resolve_memory_mode
 from wnn.ram.experiments.params import KNOWN_PARAMS
-from wnn.ram.experiments.validation_cache_key import build_validation_cache_key
-from wnn.ram.experiments.validation_cache_scope import ValidationCacheScope
+from wnn.ram.experiments.test_cache_key import build_test_cache_key
+from wnn.ram.experiments.test_cache_scope import TestCacheScope
 
-FIXTURE = json.loads((ROOT / "tests" / "fixtures" / "validation_cache_keys.json").read_text())
+FIXTURE = json.loads((ROOT / "tests" / "fixtures" / "test_cache_keys.json").read_text())
 CASES = {c["name"]: c for c in FIXTURE["cases"]}
 BASE = dict(CASES["quad_default"]["params"])
 
 
 def _key(delta: dict, oi: bool = True) -> str:
-	return build_validation_cache_key(dict(BASE, **delta), oi)
+	return build_test_cache_key(dict(BASE, **delta), oi)
 
 
 class _RecordingParams(dict):
@@ -46,7 +46,7 @@ class _RecordingParams(dict):
 
 def test_builder_reproduces_every_fixture_key():
 	for case in FIXTURE["cases"]:
-		assert build_validation_cache_key(case["params"], case["oi_enabled"]) == case["key"], case["name"]
+		assert build_test_cache_key(case["params"], case["oi_enabled"]) == case["key"], case["name"]
 
 
 def test_fixture_cases_are_distinct_except_documented_aliases():
@@ -136,7 +136,7 @@ def test_hierarchical_val_fraction_and_seed_matter():
 
 def test_every_param_the_builder_reads_is_registered():
 	params = _RecordingParams(BASE)
-	build_validation_cache_key(params, True)
+	build_test_cache_key(params, True)
 	assert params.read - KNOWN_PARAMS == set()
 
 
@@ -157,13 +157,13 @@ def _config(w_ce: float, w_f1: float) -> ExperimentConfig:
 
 
 def test_experiment_fitness_weights_split_the_scope():
-	scope = ValidationCacheScope(_key({}), 14)
-	a = Experiment._experiment_validation_scope(scope, _config(1.0, 0.0))
-	b = Experiment._experiment_validation_scope(scope, _config(2.0, 0.0))
-	c = Experiment._experiment_validation_scope(scope, _config(1, 0))
+	scope = TestCacheScope(_key({}), 14)
+	a = Experiment._experiment_test_scope(scope, _config(1.0, 0.0))
+	b = Experiment._experiment_test_scope(scope, _config(2.0, 0.0))
+	c = Experiment._experiment_test_scope(scope, _config(1, 0))
 	assert a.key != b.key and a.key == c.key and a.worker_abi == 14
 	assert a.key.startswith(scope.key + "|ew=")
-	assert Experiment._experiment_validation_scope(None, _config(1.0, 0.0)) is None
+	assert Experiment._experiment_test_scope(None, _config(1.0, 0.0)) is None
 
 
 # ---- client wiring ------------------------------------------------------------
@@ -171,11 +171,11 @@ def test_experiment_fitness_weights_split_the_scope():
 def test_no_scope_means_no_lookup():
 	client = DashboardClient.__new__(DashboardClient)
 	client._request = lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not query"))
-	assert client.check_cached_validation("abc", None) is None
+	assert client.check_cached_test_summary("abc", None) is None
 
 
 def test_check_params_carry_key_abi_and_legacy_guard():
-	scope = ValidationCacheScope(_key({}), 14)
+	scope = TestCacheScope(_key({}), 14)
 	p = DashboardClient._cache_check_params("abc", scope)
 	assert p == {"genome_hash": "abc", "cache_key": scope.key, "worker_abi": 14, "dataset_key": scope.key}
 
@@ -193,13 +193,13 @@ def test_worker_scope_uses_installed_abi_and_effective_oi(monkeypatch):
 	import wnn.accel
 	monkeypatch.setattr(wnn.accel, "installed_abi", lambda: 14)
 	monkeypatch.setenv("WNN_ORDER_INDEPENDENT_TRAIN", "1")
-	scope = _worker()._build_validation_scope(dict(BASE))
-	assert scope == ValidationCacheScope(CASES["quad_default"]["key"], 14)
+	scope = _worker()._build_test_scope(dict(BASE))
+	assert scope == TestCacheScope(CASES["quad_default"]["key"], 14)
 	monkeypatch.delenv("WNN_ORDER_INDEPENDENT_TRAIN")
-	assert _worker()._build_validation_scope(dict(BASE)).key == CASES["oi_off"]["key"]
+	assert _worker()._build_test_scope(dict(BASE)).key == CASES["oi_off"]["key"]
 
 
 def test_worker_without_accelerator_disables_the_cache(monkeypatch):
 	import wnn.accel
 	monkeypatch.setattr(wnn.accel, "installed_abi", lambda: None)
-	assert _worker()._build_validation_scope(dict(BASE)) is None
+	assert _worker()._build_test_scope(dict(BASE)) is None

@@ -5,7 +5,7 @@ For the UNSW-random 500n34b OI Wb cohort, for each thermometer width, show the
 best_f1 / best_fpr / best_acc selected genomes: their architecture (neurons +
 bit-range) and held-out F1/FPR/Acc, averaged mean±std across seeds.
 
-SOURCE (audited): validation_summaries.validation_point='final' = the HELD-OUT 20%
+SOURCE (audited): test_summaries.test_point='final' = the HELD-OUT 20%
 re-evaluation, joined to the GA-phase experiment (phase_type='ga_neurons') and to
 genomes.tiers_json via genome_hash. This is NOT the iterations table (K-fold
 during-search fitness). Run with --show-sql to print the exact query.
@@ -36,7 +36,7 @@ def ms(vals, dec=0):
 
 def main():
 	if "--show-sql" in sys.argv:
-		print("Source = validation_summaries (validation_point='final', held-out 20%)")
+		print("Source = test_summaries (test_point='final', held-out 20%)")
 		print("Join   = experiments(phase_type='ga_neurons') + genomes ON genome_hash")
 		print("NOT    = iterations (that table holds during-search K-fold fitness)\n")
 
@@ -53,10 +53,10 @@ def main():
 		thermo = p.get("ids_n_bits")
 		rows = db.execute(
 			"SELECT vs.genome_type, g.total_neurons, g.tiers_json, vs.f1_macro, vs.fpr, vs.accuracy "
-			"FROM validation_summaries vs "
+			"FROM test_summaries vs "
 			"JOIN experiments e ON e.id = vs.experiment_id "
 			"JOIN genomes g ON g.genome_hash = vs.genome_hash "
-			"WHERE vs.flow_id=? AND vs.validation_point='final' AND e.phase_type='ga_neurons' "
+			"WHERE vs.flow_id=? AND vs.test_point='final' AND e.phase_type='ga_neurons' "
 			"AND vs.genome_type IN ('best_f1','best_fpr','best_acc')", (fid,)).fetchall()
 		for gt, neurons, tiers, f1, fpr, acc in rows:
 			br = bit_range(tiers)

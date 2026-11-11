@@ -45,7 +45,7 @@ def main():
 	pts = []  # (f1, fpr, acc, seed, gt, mode)
 	rows = c.execute(
 		"""SELECT f.name, vs.genome_type, vs.threshold_metadata
-		FROM validation_summaries vs JOIN experiments e ON vs.experiment_id=e.id
+		FROM test_summaries vs JOIN experiments e ON vs.experiment_id=e.id
 		JOIN flows f ON e.flow_id=f.id
 		WHERE f.name LIKE ? AND f.status='completed'""", (PREFIX + "%",)).fetchall()
 	for r in rows:

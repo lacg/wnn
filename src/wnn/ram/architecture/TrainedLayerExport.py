@@ -1,4 +1,4 @@
-"""TrainedLayerExport: a genome trained exactly as final validation trains it, as PHYSICAL units.
+"""TrainedLayerExport: a genome trained exactly as final test evaluation trains it, as PHYSICAL units.
 
 Python form of the Rust `TrainedLayer` (IDSCacheWrapper.export_trained, IDS-37
 stage 7). The FPGA exporter's only input: units come out of the very export the

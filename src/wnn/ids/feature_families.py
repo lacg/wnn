@@ -6,7 +6,7 @@ A family is a declared group of features with one mechanism (UNSW ttl_state,
 handshake, volume, ...). The maps are versioned package data next to the
 ranking lists — `feature_families/<FAMILY_MAP_VERSION>/<dataset>.json` — for
 the same reason as feature_rankings/: the worker reads the tree, and a change
-goes to a new directory + version so the validation cache re-keys instead of
+goes to a new directory + version so the test cache re-keys instead of
 a map silently changing in place.
 
 Connections index ENCODED bits, so the map that reaches Rust is per bit:

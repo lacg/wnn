@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 from urllib.parse import urljoin
 
-from wnn.ram.experiments.validation_cache_scope import ValidationCacheScope
+from wnn.ram.experiments.test_cache_scope import TestCacheScope
 from wnn.ram.footprint import Footprint
 
 try:
@@ -177,7 +177,7 @@ class DashboardClient:
 
 		# Connection pooling: increase pool size and add transport-level retries
 		# to prevent OSError 55 (No buffer space available) during long-running
-		# batches with concurrent heartbeat + validation API traffic.
+		# batches with concurrent heartbeat + test evaluation API traffic.
 		from urllib3.util.retry import Retry
 		from requests.adapters import HTTPAdapter
 		# P4 (12/06/2026): transport retries are restricted to idempotent
@@ -636,10 +636,10 @@ class DashboardClient:
 		self._logger(f"Linked experiment {experiment_id} to flow {flow_id}")
 
 	# =========================================================================
-	# Validation Summary methods
+	# Test Summary methods
 	# =========================================================================
 
-	def check_cached_validation(self, genome_hash: str, scope: Optional[ValidationCacheScope]) -> Optional[tuple[float, float, Optional[float], Optional[float], Optional[dict], Optional[Footprint]]]:
+	def check_cached_test_summary(self, genome_hash: str, scope: Optional[TestCacheScope]) -> Optional[tuple[float, float, Optional[float], Optional[float], Optional[dict], Optional[Footprint]]]:
 		"""
 		Check if a genome has already been validated under the SAME scope.
 
@@ -654,7 +654,7 @@ class DashboardClient:
 		if scope is None:
 			return None
 		try:
-			result = self._request("GET", "/api/validations/check", params=self._cache_check_params(genome_hash, scope))
+			result = self._request("GET", "/api/test-summaries/check", params=self._cache_check_params(genome_hash, scope))
 			if result.get("found"):
 				return (
 					result["ce"], result["accuracy"], result.get("f1_macro"), result.get("fpr"),
@@ -665,8 +665,8 @@ class DashboardClient:
 			return None
 
 	@staticmethod
-	def _cache_check_params(genome_hash: str, scope: ValidationCacheScope) -> dict:
-		"""Query params for /api/validations/check. `dataset_key` repeats the key
+	def _cache_check_params(genome_hash: str, scope: TestCacheScope) -> dict:
+		"""Query params for /api/test-summaries/check. `dataset_key` repeats the key
 		under the PRE-FIX parameter name on purpose: a not-yet-upgraded dashboard
 		compares it against its SQL-built legacy key, which a v2 key can never
 		equal — so a new worker against an old dashboard gets NO hits, never the
@@ -678,10 +678,10 @@ class DashboardClient:
 			"dataset_key": scope.key,
 		}
 
-	def create_validation_summary(
+	def create_test_summary(
 		self,
 		experiment_id: int,
-		validation_point: str,  # 'init' or 'final'
+		test_point: str,  # 'init' or 'final'
 		genome_type: str,       # 'best_ce', 'best_acc', 'best_fitness'
 		genome_hash: str,
 		ce: float,
@@ -690,15 +690,15 @@ class DashboardClient:
 		f1_macro: Optional[float] = None,
 		fpr: Optional[float] = None,
 		threshold_metadata: Optional[str] = None,
-		scope: Optional[ValidationCacheScope] = None,
+		scope: Optional[TestCacheScope] = None,
 		footprint: Optional[Footprint] = None,
 	) -> dict:
 		"""
-		Create a validation summary record for a genome at a checkpoint.
+		Create a test summary record for a genome at a checkpoint.
 
 		Args:
 			experiment_id: Experiment ID
-			validation_point: 'init' (start of experiment) or 'final' (end of experiment)
+			test_point: 'init' (start of experiment) or 'final' (end of experiment)
 			genome_type: 'best_ce', 'best_acc', or 'best_fitness'
 			genome_hash: The genome's config hash (for deduplication)
 			ce: Cross-entropy value
@@ -717,7 +717,7 @@ class DashboardClient:
 		"""
 		data = {
 			"flow_id": flow_id,
-			"validation_point": validation_point,
+			"test_point": test_point,
 			"genome_type": genome_type,
 			"genome_hash": genome_hash,
 			"ce": ce,
@@ -731,7 +731,7 @@ class DashboardClient:
 		if footprint is not None:
 			data.update(footprint.to_payload())
 		result = self._request("POST", f"/api/experiments/{experiment_id}/summaries", json_data=data)
-		self._logger(f"Created {validation_point}/{genome_type} validation for experiment {experiment_id}")
+		self._logger(f"Created {test_point}/{genome_type} test evaluation for experiment {experiment_id}")
 		return result
 
 	# =========================================================================
@@ -841,10 +841,10 @@ class DashboardClient:
 		return None
 
 	# =========================================================================
-	# Combined Validation methods (multi-stage end-to-end metrics)
+	# Combined test summary methods (multi-stage end-to-end metrics)
 	# =========================================================================
 
-	def create_combined_validation(
+	def create_combined_test_summary(
 		self,
 		flow_id: int,
 		genome_type: str,       # 'best_ce', 'best_acc', 'best_fitness'
@@ -855,7 +855,7 @@ class DashboardClient:
 		unigram_lambda: Optional[float] = None,
 	) -> dict:
 		"""
-		Create or update a combined validation record for a multi-stage flow.
+		Create or update a combined test summary record for a multi-stage flow.
 
 		Args:
 			flow_id: Flow ID
@@ -877,26 +877,26 @@ class DashboardClient:
 			"per_stage_acc": per_stage_acc,
 			"unigram_lambda": unigram_lambda,
 		}
-		result = self._request("POST", f"/api/flows/{flow_id}/combined-validations", json_data=data)
-		self._logger(f"Created combined validation for flow {flow_id}: {genome_type}")
+		result = self._request("POST", f"/api/flows/{flow_id}/combined-test-summaries", json_data=data)
+		self._logger(f"Created combined test summary for flow {flow_id}: {genome_type}")
 		return result
 
-	def get_flow_validation_summaries(self, flow_id: int) -> list[dict]:
-		"""Get all validation summaries for a flow (across all experiments)."""
-		result = self._request("GET", f"/api/flows/{flow_id}/validations")
+	def get_flow_test_summaries(self, flow_id: int) -> list[dict]:
+		"""Get all test summaries for a flow (across all experiments)."""
+		result = self._request("GET", f"/api/flows/{flow_id}/test-summaries")
 		return result if result else []
 
-	def get_combined_validations(self, flow_id: int) -> list[dict]:
+	def get_combined_test_summaries(self, flow_id: int) -> list[dict]:
 		"""
-		Get combined validations for a flow.
+		Get combined test summarys for a flow.
 
 		Args:
 			flow_id: Flow ID
 
 		Returns:
-			List of combined validation records
+			List of combined test summary records
 		"""
-		result = self._request("GET", f"/api/flows/{flow_id}/combined-validations")
+		result = self._request("GET", f"/api/flows/{flow_id}/combined-test-summaries")
 		return result if result else []
 
 	# =========================================================================

@@ -33,8 +33,8 @@ while true; do
                     json_extract(f.config_json, '$.params.fitness_weight_acc') as acc_w
                 FROM flows f
                 JOIN experiments e ON e.flow_id = f.id AND e.name = 'GA Neurons'
-                JOIN validation_summaries vs ON vs.experiment_id = e.id
-                    AND vs.validation_point = 'final' AND vs.genome_type = 'best_fitness'
+                JOIN test_summaries vs ON vs.experiment_id = e.id
+                    AND vs.test_point = 'final' AND vs.genome_type = 'best_fitness'
                 WHERE f.name LIKE 'FIT-ciciot%' AND f.status = 'completed'
             )
             GROUP BY label
@@ -55,8 +55,8 @@ while true; do
                     json_extract(vs.threshold_metadata, '$.val_cal.fpr') as fpr
                 FROM flows f
                 JOIN experiments e ON e.flow_id = f.id AND e.name = 'GA Neurons'
-                JOIN validation_summaries vs ON vs.experiment_id = e.id
-                    AND vs.validation_point = 'final' AND vs.genome_type = 'best_acc'
+                JOIN test_summaries vs ON vs.experiment_id = e.id
+                    AND vs.test_point = 'final' AND vs.genome_type = 'best_acc'
                 WHERE f.name LIKE 'FIT-ciciot%' AND f.status = 'completed'
             )
             GROUP BY label

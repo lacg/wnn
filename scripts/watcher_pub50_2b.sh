@@ -124,11 +124,11 @@ def parse_bits(tiers):
 def pull_phase(phase_name):
     cur.execute("""
         SELECT vs.threshold_metadata, g.total_neurons, g.tiers_json, f.name
-        FROM validation_summaries vs
+        FROM test_summaries vs
         JOIN experiments e ON vs.experiment_id = e.id
         JOIN flows f ON e.flow_id = f.id
         LEFT JOIN genomes g ON g.config_hash = vs.genome_hash AND g.experiment_id = vs.experiment_id
-        WHERE f.name LIKE ? AND vs.validation_point = 'final'
+        WHERE f.name LIKE ? AND vs.test_point = 'final'
           AND vs.genome_type = 'best_fitness' AND e.name = ?
     """, (f"%{BATCH_TAG}%", phase_name))
     out = []
@@ -151,13 +151,13 @@ ga_rows = pull_phase("GA Neurons")
 # 8b PUB50 baseline (all completed runs) for comparison
 cur.execute("""
     SELECT vs.threshold_metadata, g.total_neurons
-    FROM validation_summaries vs
+    FROM test_summaries vs
     JOIN experiments e ON vs.experiment_id = e.id
     JOIN flows f ON e.flow_id = f.id
     LEFT JOIN genomes g ON g.config_hash = vs.genome_hash AND g.experiment_id = vs.experiment_id
     WHERE f.name LIKE '%PUB50%ciciot%' AND f.name NOT LIKE '%-2b-%'
       AND f.status = 'completed'
-      AND vs.validation_point = 'final'
+      AND vs.test_point = 'final'
       AND vs.genome_type = 'best_fitness'
       AND e.name = 'GA Neurons'
 """)
@@ -234,7 +234,7 @@ if baseline_8b and ga_rows:
     print()
 
     # Balanced fitness score = 0.35*F1 + 0.35*(1-FPR) + 0.2*Acc
-    # CE omitted because validation_summaries doesn't always have it.
+    # CE omitted because test_summaries doesn't always have it.
     # This approximates what the harmonic-rank fitness is actually optimizing.
     def balanced_score(f1, fpr, acc):
         # f1/fpr/acc are percent values — score is also in pp

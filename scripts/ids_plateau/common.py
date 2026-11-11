@@ -50,8 +50,8 @@ def load_cells(con, flows):
 	D, GH = {}, {}
 	ids = ",".join(map(str, flows))
 	q = f"""SELECT vs.id, vs.flow_id, e.id, e.phase_type, vs.genome_type, vs.genome_hash, vs.threshold_metadata, vs.cache_key
-		FROM validation_summaries vs JOIN experiments e ON e.id=vs.experiment_id
-		WHERE vs.validation_point='final' AND vs.flow_id IN ({ids})"""
+		FROM test_summaries vs JOIN experiments e ON e.id=vs.experiment_id
+		WHERE vs.test_point='final' AND vs.flow_id IN ({ids})"""
 	nin = 0
 	for vid, fid, eid, ph, gt, gh, tm, ck in con.execute(q):
 		if vid in inh and ck is None:

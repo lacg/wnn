@@ -1,13 +1,13 @@
 <script lang="ts">
 	import { onDestroy } from 'svelte'
 	import { page } from '$app/stores'
-	import type { Flow, Experiment, Checkpoint, ValidationSummary, CombinedValidation } from '$lib/types'
+	import type { Flow, Experiment, Checkpoint, TestSummary, CombinedTestSummary } from '$lib/types'
 	import { makeLatestGuard } from '$lib/api'
 	import { isIdsFlow, isMulticlassFlow } from '$lib/ids'
 	import { currentFlow, flows } from '$lib/stores'
 	import FlowHeader from '$lib/components/flow/FlowHeader.svelte'
 	import FlowInfoCards from '$lib/components/flow/FlowInfoCards.svelte'
-	import ValidationProgressionChart from '$lib/components/flow/ValidationProgressionChart.svelte'
+	import TestProgressionChart from '$lib/components/flow/TestProgressionChart.svelte'
 	import FlowConfigEditor from '$lib/components/flow/FlowConfigEditor.svelte'
 	import FlowParamsPanel from '$lib/components/flow/FlowParamsPanel.svelte'
 	import AddExperimentForm from '$lib/components/flow/AddExperimentForm.svelte'
@@ -54,7 +54,7 @@
   // splice another flow's data under this flow's UI after navigation.
 	const requestGuard = makeLatestGuard()
 
-	// Refresh flow, experiments and validations without full page reload
+	// Refresh flow, experiments and tests without full page reload
 	async function refreshExperiments()
 	{
 		// Never race a full load (e.g. mid-navigation)
@@ -64,18 +64,18 @@
 		const isStale = () => !requestGuard.isCurrent(token) || flowId !== idAtStart
 		try
 		{
-			const [flowRes, expsRes, validationsRes] = await Promise.all([
+			const [flowRes, expsRes, testsRes] = await Promise.all([
 				fetch(`/api/flows/${idAtStart}`),
 				fetch(`/api/flows/${idAtStart}/experiments`),
-				fetch(`/api/flows/${idAtStart}/validations`)
+				fetch(`/api/flows/${idAtStart}/test-summaries`)
 			])
 			const flowData = flowRes.ok ? await flowRes.json() : null
 			const expsData = expsRes.ok ? await expsRes.json() : null
-			const validationsData = validationsRes.ok ? await validationsRes.json() : null
+			const testsData = testsRes.ok ? await testsRes.json() : null
 			if (isStale()) return
 			if (flowData) flow = flowData
 			if (expsRes.ok) experiments = Array.isArray(expsData) ? expsData : []
-			if (validationsRes.ok) validationSummaries = Array.isArray(validationsData) ? validationsData : []
+			if (testsRes.ok) testSummaries = Array.isArray(testsData) ? testsData : []
 		}
 		catch (e)
 		{
@@ -117,8 +117,8 @@
 	})
 	let experiments: Experiment[] = []
 	let checkpoints: Checkpoint[] = []
-	let validationSummaries: ValidationSummary[] = []
-	let combinedValidations: CombinedValidation[] = []
+	let testSummaries: TestSummary[] = []
+	let combinedTestSummaries: CombinedTestSummary[] = []
 	let loading = true
 	let error: string | null = null        // page-level (initial load) only
 	let actionError: string | null = null  // per-action banner — must NOT replace the page
@@ -194,8 +194,8 @@
 		flow = null
 		experiments = []
 		checkpoints = []
-		validationSummaries = []
-		combinedValidations = []
+		testSummaries = []
+		combinedTestSummaries = []
 		actionError = null
 		editMode = false
 		editingName = false
@@ -211,12 +211,12 @@
 		error = null  // a previous transient failure must not brick the page forever
 		try
 		{
-			const [flowRes, expsRes, checkpointsRes, validationsRes, combinedRes] = await Promise.all([
+			const [flowRes, expsRes, checkpointsRes, testsRes, combinedRes] = await Promise.all([
 				fetch(`/api/flows/${idAtStart}`),
 				fetch(`/api/flows/${idAtStart}/experiments`),
 				fetch(`/api/checkpoints`),
-				fetch(`/api/flows/${idAtStart}/validations`),
-				fetch(`/api/flows/${idAtStart}/combined-validations`)
+				fetch(`/api/flows/${idAtStart}/test-summaries`),
+				fetch(`/api/flows/${idAtStart}/combined-test-summaries`)
 			])
 
 			if (!flowRes.ok) throw new Error('Flow not found')
@@ -225,7 +225,7 @@
 			// Ensure experiments is always an array (defensive against API returning {})
 			const expsData = await expsRes.json()
 			const checkpointsData = checkpointsRes.ok ? await checkpointsRes.json() : []
-			const validationsData = validationsRes.ok ? await validationsRes.json() : []
+			const testsData = testsRes.ok ? await testsRes.json() : []
 			const combinedData = combinedRes.ok ? await combinedRes.json() : []
 
 			// A newer load/refresh superseded this one — drop the stale response
@@ -234,9 +234,9 @@
 			flow = flowData
 			experiments = Array.isArray(expsData) ? expsData : []
 			checkpoints = Array.isArray(checkpointsData) ? checkpointsData : []
-			validationSummaries = Array.isArray(validationsData) ? validationsData : []
-			// Combined validations (multi-stage end-to-end metrics)
-			combinedValidations = Array.isArray(combinedData) ? combinedData : []
+			testSummaries = Array.isArray(testsData) ? testsData : []
+			// Combined tests (multi-stage end-to-end metrics)
+			combinedTestSummaries = Array.isArray(combinedData) ? combinedData : []
 
 			// Populate edit form from config
 			if (flow?.config?.params)
@@ -1013,8 +1013,8 @@
 
 		<FlowInfoCards {flow} {isIDS} {isController} />
 
-		<!-- Validation Progression Chart -->
-		<ValidationProgressionChart {validationSummaries} {displayExperiments} />
+		<!-- Test Progression Chart -->
+		<TestProgressionChart {testSummaries} {displayExperiments} />
 
 		{#if editMode}
 			<FlowConfigEditor
@@ -1076,8 +1076,8 @@
 		{/if}
 
 		<!-- Combined Results (for completed or running multi-stage flows) -->
-		{#if combinedValidations.length > 0}
-			<CombinedResultsTable {combinedValidations} />
+		{#if combinedTestSummaries.length > 0}
+			<CombinedResultsTable {combinedTestSummaries} />
 			<!-- Final Results fallback (single-stage completed flows) -->
 		{:else if flow.status === 'completed'}
 			<FinalResultsCard {checkpoints} {experiments} {isIDS} />

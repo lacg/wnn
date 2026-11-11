@@ -60,7 +60,7 @@ import os
 #   dedupe_neurons (default False) and phase_type 5 (JOINT). Defaults are
 #   bit-identical to ABI 14 (ram_core golden digests). The Python GA always passes
 #   the new kwarg, so the template Python and this wheel land together at idle.
-#   NOTE: the validation cache pins worker_abi, so this bump re-validates.
+#   NOTE: the test cache pins worker_abi, so this bump re-validates.
 # 16 (11/10/2026): additive — search_offspring takes dedupe_fill (default True =
 #   ABI-15 behaviour; False = deduped children keep only distinct neurons). The GA
 #   always passes it, so wheel + Python land together at idle. The validation
@@ -70,16 +70,16 @@ import os
 #   genome's footprint (logical_neurons, physical_neurons, logical_cells,
 #   physical_cells); IDSGenomeStreamerWrapper gains footprint(). IDSEvaluator and
 #   experiment.py unpack it, so wheel + Python land together at idle. The
-#   validation cache pins worker_abi, so this bump re-validates.
+#   test cache pins worker_abi, so this bump re-validates.
 # 18 (13/10/2026, memory fixes): no Python-visible change — bumped so the deploy
 #   is identifiable. Bit-identical results, smaller working set (packed rows in
 #   the GPU word layout, no-copy Metal input, folds as row indices, chunk table
-#   <= 4 GiB). The validation cache pins worker_abi, so this bump re-validates.
+#   <= 4 GiB). The test cache pins worker_abi, so this bump re-validates.
 # 19 (16/10/2026): additive — IDSCacheWrapper.set_write_rule("lattice"|"vote"), the
 #   per-flow MAJORITY-VOTE writer for BINARY/TERNARY/PLN (ids_write_rule); default
 #   "lattice" is bit-identical to ABI 18. Also: K=2 decode modes margin_train_f1 /
 #   margin_val_f1 (attack-F1 tau) for binary two-cluster validation. IDSEvaluator +
-#   experiment.py land with this wheel at worker idle. The validation cache pins
+#   experiment.py land with this wheel at worker idle. The test cache pins
 #   worker_abi, so this bump re-validates.
 # 20 (16/10/2026): IDSGenomeStreamerWrapper takes memory_mode / run_seed /
 #   coverage_aware / write_rule / fitness_weights and gains calibrate_threshold();
@@ -101,12 +101,12 @@ import os
 #   / search_neighbors `train_folds` (+ search_neighbors `neuron_sample_rate`):
 #   ids_offspring_folds="all" (default) scores offspring, immigrants and TS
 #   neighbours as the CV mean; "phase" passes None = the legacy single fold.
-#   The validation cache pins worker_abi, so this bump re-validates.
+#   The test cache pins worker_abi, so this bump re-validates.
 # 21 (19/10/2026): additive — search_offspring takes crossover_bits ("inherit"
 #   default, bit-identical | "blend_neuron" | "blend_cluster": the child's width is
 #   drawn U[min,max] of the parents', per neuron or once per cluster). Flow param
 #   ga_crossover_bits. The GA always passes it, so wheel + Python land together
-#   at idle. The validation cache pins worker_abi, so this bump re-validates.
+#   at idle. The test cache pins worker_abi, so this bump re-validates.
 #   Same ABI: search_offspring / search_neighbors take max_neurons_total (None =
 #   no total cap, bit-identical) + neuron_budget_counts / neuron_budget_fit_genome
 #   (flow param max_neurons_total; wnn/ram/strategies/connectivity/neuron_budget.py).
@@ -116,7 +116,7 @@ import os
 #   once z-thread duplicate-key slots filled the region, so the same genome trained
 #   to a different memory on every call at b = 8 (and some b = 12, every writer).
 #   Exports are bit-identical wherever the hashed table never overflowed (b >= 16
-#   golden digests), so only low-bit results move. The validation cache pins
+#   golden digests), so only low-bit results move. The test cache pins
 #   worker_abi, so this bump re-validates.
 # 23 (01/11/2026): no surface change — duplicate-aware SCORING. A collapsed
 #   multiplicity export (rate 1.0, order-independent writer) is scored once per
@@ -135,7 +135,7 @@ import os
 #   IDENTITY (cluster, bits, connections, duplicate ordinal; Rust
 #   neuron_sample_key.rs, CPU and Metal alike), not its flat position — a neurons
 #   mutation / pool-shuffle crossover no longer re-draws other neurons' subsets.
-#   Rate 1.0 bit-identical to 24. The validation cache pins worker_abi, so this
+#   Rate 1.0 bit-identical to 24. The test cache pins worker_abi, so this
 #   bump re-validates. Lands with the IDS-51..54 Python at a worker-idle swap.
 # 26 (08/11/2026, same swap as 25): additive — search_offspring / search_neighbors
 #   take max_bit_delta (flow param, 0 = auto = bit-identical; IDSEvaluator passes

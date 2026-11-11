@@ -49,12 +49,12 @@ SELECT
   ROUND(AVG(vs.f1_macro) * 100, 2) as avg_f1,
   ROUND(AVG(vs.fpr) * 100, 2) as avg_fpr,
   ROUND(AVG(vs.accuracy) * 100, 2) as avg_acc
-FROM validation_summaries vs
+FROM test_summaries vs
 JOIN experiments e ON vs.experiment_id = e.id
 JOIN flows f ON e.flow_id = f.id
 WHERE (f.name LIKE 'BITS-ciciot%' OR f.name LIKE 'USAMP-ciciot-8b-f1dom%' OR f.name LIKE 'USAMP-ciciot-8b-baseline%')
   AND f.status = 'completed'
-  AND vs.validation_point = 'final'
+  AND vs.test_point = 'final'
   AND vs.genome_type = 'best_fitness'
   AND e.phase_type = 'ga_neurons'
 GROUP BY strategy, max_bits
@@ -68,12 +68,12 @@ SELECT
   json_extract(f.config_json, '\$.params.max_bits') as max_bits,
   ROUND(AVG(vs.f1_macro) * 100, 2) as avg_f1,
   ROUND(AVG(vs.fpr) * 100, 2) as avg_fpr
-FROM validation_summaries vs
+FROM test_summaries vs
 JOIN experiments e ON vs.experiment_id = e.id
 JOIN flows f ON e.flow_id = f.id
 WHERE (f.name LIKE 'BITS-ciciot%' OR f.name LIKE 'USAMP-ciciot-8b-f1dom%' OR f.name LIKE 'USAMP-ciciot-8b-baseline%')
   AND f.status = 'completed'
-  AND vs.validation_point = 'final'
+  AND vs.test_point = 'final'
   AND vs.genome_type = 'best_fitness'
   AND e.phase_type = 'ga_neurons'
 GROUP BY usamp, max_bits

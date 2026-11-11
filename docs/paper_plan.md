@@ -96,7 +96,7 @@ Tone: positive, factual, no superfluous adjectives. Let the work speak for itsel
 - [ ] Queue 100 CIC-IoT-2023 random (stretch, after CICIDS)
 
 ### Phase 1: Analysis Scripts (March 22-24)
-- [ ] 1.1: Trimmed-mean extraction script from validation_summaries
+- [ ] 1.1: Trimmed-mean extraction script from test_summaries
 - [ ] 1.2: Connectivity heatmap (which input bits selected, maps to feature names)
 - [ ] 1.3: Model size computation (neurons x bits x 2 bits/cell, bytes)
 - [ ] 1.4: RF/XGBoost baselines on both splits (UNSW-NB15)

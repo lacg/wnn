@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from wnn.ram.experiments.dashboard_client import DashboardClient
-from wnn.ram.experiments.validation_cache_scope import ValidationCacheScope
+from wnn.ram.experiments.test_cache_scope import TestCacheScope
 from wnn.ram.footprint import Footprint
 
 FP = Footprint(logical_neurons=500, physical_neurons=137, logical_cells=4_410_000, physical_cells=1_210_000)
@@ -46,7 +46,7 @@ def _client(responses: list):
 
 def test_summary_posts_the_four_columns_flat():
 	client = _client([{"id": 1}])
-	client.create_validation_summary(7, "final", "best_f1", "h", 0.1, 0.9, footprint=FP)
+	client.create_test_summary(7, "final", "best_f1", "h", 0.1, 0.9, footprint=FP)
 	_, path, data = client.sent[0]
 	assert path == "/api/experiments/7/summaries"
 	assert {k: data[k] for k in FP.to_payload()} == FP.to_payload()
@@ -54,14 +54,14 @@ def test_summary_posts_the_four_columns_flat():
 
 def test_summary_without_footprint_sends_no_columns():
 	client = _client([{"id": 1}])
-	client.create_validation_summary(7, "final", "best_f1", "h", 0.1, 0.9)
+	client.create_test_summary(7, "final", "best_f1", "h", 0.1, 0.9)
 	assert not set(FP.to_payload()) & set(client.sent[0][2])
 
 
-def test_cached_validation_carries_the_footprint():
+def test_cached_test_summary_carries_the_footprint():
 	hit = {"found": True, "ce": 0.1, "accuracy": 0.9, "f1_macro": 0.8, "fpr": 0.05,
 	       "threshold_metadata": None, "footprint": FP.to_payload()}
 	client = _client([hit, dict(hit, footprint=None)])
-	scope = ValidationCacheScope("k", 17)
-	assert client.check_cached_validation("h", scope)[5] == FP
-	assert client.check_cached_validation("h", scope)[5] is None
+	scope = TestCacheScope("k", 17)
+	assert client.check_cached_test_summary("h", scope)[5] == FP
+	assert client.check_cached_test_summary("h", scope)[5] is None

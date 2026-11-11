@@ -1,7 +1,7 @@
 """READ-ONLY best SINGLE genome per arm, searched EVERYWHERE: 5 genome types x 7 threshold modes x Grid/GA.
 
 Scope: IDSXD/IDSXD2/IDSXD3 on cicids + ciciot (quad 96b, random_3way). CIC-IoT runs started before the
-OR-fold fix (30/08/2026 02:27 UTC) are dropped, as in load.py. Held-out TEST, validation_summaries final rows.
+OR-fold fix (30/08/2026 02:27 UTC) are dropped, as in load.py. Held-out TEST, test_summaries final rows.
 A best row is best-of-N (seeds x 2 phases x 5 genome types x 7 modes) — report as 'best found', next to the mean.
 
 Usage: python3 scripts/ids2/best_anywhere.py <cicids|ciciot> [f1_floor ...]
@@ -16,8 +16,8 @@ MODES = ["train_cal", "fixed_05", "platt", "beta", "empirical", "empirical_cumul
 NAME_RE = re.compile(r"^(IDSXD[23]?)-(cicids|ciciot)-quad-96b-(.+?)-r(\d+)(-w64fix)?$")
 OR_FOLD_FIX = "2026-08-30T02:27"
 SQL = """SELECT f.id, f.name, f.started_at, e.phase_type, vs.genome_type, vs.threshold_metadata
-	FROM validation_summaries vs JOIN flows f ON f.id = vs.flow_id JOIN experiments e ON e.id = vs.experiment_id
-	WHERE f.name LIKE 'IDSXD%' AND f.status = 'completed' AND vs.validation_point = 'final'"""
+	FROM test_summaries vs JOIN flows f ON f.id = vs.flow_id JOIN experiments e ON e.id = vs.experiment_id
+	WHERE f.name LIKE 'IDSXD%' AND f.status = 'completed' AND vs.test_point = 'final'"""
 
 
 def load(ds: str) -> list[dict]:

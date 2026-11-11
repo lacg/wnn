@@ -10,7 +10,7 @@ BINARY 2-cluster, 500 neurons, every param that matters set explicitly.
      base exists (5990-5994 MCSD are QUAD + an old recipe); a future draft would clone 7125 with
      ids_classification="multi" and choose neurons/class deliberately.
 
-Report: validation_summaries best_f1 margin_val_cal, paired by seed; adopt theta=0.1 only where it wins F1 without an
+Report: test_summaries best_f1 margin_val_cal, paired by seed; adopt theta=0.1 only where it wins F1 without an
 FPR loss (expect per-dataset). ciciot is NOT in this batch (doc lists it; task scoped it out).
 
 Usage: python scripts/queue_ids56_vote_share_ab.py [--dry-run]"""

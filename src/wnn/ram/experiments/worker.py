@@ -923,24 +923,24 @@ class FlowWorker:
         flow_config.stage_max_neurons_list = params.get("stage_max_neurons")
         flow_config.max_bit_delta = params.get("max_bit_delta", 0)
 
-        flow_config.validation_scope = self._build_validation_scope(params)
+        flow_config.test_scope = self._build_test_scope(params)
 
-    def _build_validation_scope(self, params: dict):
-        """Cross-flow validation-cache scope (PAPER-CRITICAL, 10/10/2026): the
+    def _build_test_scope(self, params: dict):
+        """Cross-flow test-cache scope (PAPER-CRITICAL, 10/10/2026): the
         key pins every param that changes a fixed genome's validation, and the
         worker ABI pins the trainer. OI is read from the env AFTER
         _apply_env_overrides, i.e. the value the accelerator will see. No ABI
         (Python fallback) -> None: nothing is served from or stamped into cache."""
         from wnn.accel import installed_abi
         from wnn.ram.experiments.ids_param_resolution import oi_env_enabled
-        from wnn.ram.experiments.validation_cache_key import build_validation_cache_key
-        from wnn.ram.experiments.validation_cache_scope import ValidationCacheScope
+        from wnn.ram.experiments.test_cache_key import build_test_cache_key
+        from wnn.ram.experiments.test_cache_scope import TestCacheScope
         abi = installed_abi()
         if abi is None:
-            self._log("[VALCACHE] accelerator ABI unavailable — validation cache disabled for this flow")
+            self._log("[VALCACHE] accelerator ABI unavailable — test cache disabled for this flow")
             return None
         oi = oi_env_enabled(os.environ.get("WNN_ORDER_INDEPENDENT_TRAIN"))
-        scope = ValidationCacheScope(build_validation_cache_key(params, oi), int(abi))
+        scope = TestCacheScope(build_test_cache_key(params, oi), int(abi))
         self._log(f"[VALCACHE] abi={scope.worker_abi} key={scope.key}")
         return scope
 

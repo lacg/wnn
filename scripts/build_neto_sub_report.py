@@ -121,7 +121,7 @@ def load():
             vs.ce           AS ce,
             vs.threshold_metadata AS tm,
             g.tiers_json    AS tiers_json
-        FROM validation_summaries vs
+        FROM test_summaries vs
         JOIN flows       f ON f.id = vs.flow_id
         JOIN experiments e ON e.id = vs.experiment_id
         LEFT JOIN genomes g
@@ -129,7 +129,7 @@ def load():
               AND g.genome_hash   = vs.genome_hash
         WHERE f.name LIKE ?
           AND f.status = 'completed'
-          AND vs.validation_point = 'final'
+          AND vs.test_point = 'final'
         """,
         (NAME_PATTERN,),
     )

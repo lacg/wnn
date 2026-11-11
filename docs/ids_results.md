@@ -38,13 +38,13 @@ generators; section 5 is the existing XDS tool verbatim.
 ## Metric contract (do not violate)
 
 - Every number below is a **HELD-OUT** value read from
-  `validation_summaries.threshold_metadata` at `validation_point='final'`.
+  `test_summaries.threshold_metadata` at `test_point='final'`.
   **No `iterations.best_f1` anywhere** — that is the during-search 5-fold CV metric and
   reporting it is the train-on-eval leak fixed 28/05.
 - All 7 threshold modes are reported in order: `train_cal, fixed_05, platt, beta, empirical,
   empirical_cumulative, val_cal`. Empirical modes use `min_bin_size=200`.
 - `best_genomes` is used ONLY for the neurons/bits header lines (it dedups by genome_hash and
-  is incomplete); all metrics come from `validation_summaries`.
+  is incomplete); all metrics come from `test_summaries`.
 
 ## ⚠️ Protocol split — these two groups are NOT apples-to-apples
 
@@ -69,7 +69,7 @@ F1 AND FPR AND ACC. Baseline Acc is an em dash where it was never measured, neve
 
 SCOPE OF THE MEAN (this is the whole claim): GA-NEURONS phase only, genome_type
 best_fitness, val_cal, held-out final. It must NOT be pooled across phases — a flow emits
-one validation_summary per phase, so an unfiltered query returns 2 rows per seed and mixes
+one test_summary per phase, so an unfiltered query returns 2 rows per seed and mixes
 the GRID result into the GA mean. Doing that on 31/08 dragged CIC-IoT to 91.92±1.03 /
 11.94±3.60 and looked like "the old SDs were understated". They were not; the pooling was
 wrong. Grid is ~2.9pp F1 and ~8.7pp FPR worse than GA on this dataset, so pooling shifts
@@ -132,7 +132,7 @@ WHAT CHANGED
   (0.27 MB XGB vs ~1 KB WNN) is the surviving differentiator. Every paper table must pair
   the WNN's mode with the SAME mode on the comparator — never val_cal vs fixed_05.
 * **SWEEP-WINNER vs BEST-TREE-COLUMN table (13/09/2026, experiment-design readout; script
-  `scripts/idsxd_best_column.py`, held-out `validation_summaries` final rows, mean±SD over seeds).**
+  `scripts/idsxd_best_column.py`, held-out `test_summaries` final rows, mean±SD over seeds).**
   WNN column = the IDSXD column (arm × mode × phase × genome_type × thr_mode) with the best mean
   held-out F1 per dataset, reported in `val_cal`; comparator = best tree column in the same mode
   (`scripts/verify_ids_baselines.py`, RF/XGB/AdaBoost, raw and thermo, `logs/baselines_*/`).
@@ -3943,7 +3943,7 @@ XDS, legacy CIC-IoT 8b explorations, zINVALID. Retrain-and-score stored genomes;
 
 Pre-registered rule: `experiments/ids_aggregation_ab_rule.json` (registered 26/09, before any IDSAGG flow existed;
 B05-AC addendum 04/10 added before any IDSAGG metric was read). Read-only DB readout. Every number is HELD-OUT TEST
-val_cal from `validation_summaries.threshold_metadata` (`validation_point='final'`), GA-neurons phase unless marked
+val_cal from `test_summaries.threshold_metadata` (`test_point='final'`), GA-neurons phase unless marked
 Grid. Never `iterations.best_f1`.
 
 ```
@@ -4726,7 +4726,7 @@ the cost/benefit does not justify it. No cohort audit (IDSZ/IDSX/MCS) is warrant
 
 Criterion applied exactly as pre-registered in `experiments/ids_aggregation_b05ac_ext_criterion.json` (thresholds
 unchanged; Luiz's 06/10 ruling supersedes the stopping amendment, so this is read as plain desirability vs zscore).
-Metric: held-out TEST val_cal, GA phase, `validation_summaries` final. DESCRIPTIVE; the t/CI are for information only.
+Metric: held-out TEST val_cal, GA phase, `test_summaries` final. DESCRIPTIVE; the t/CI are for information only.
 Disclosure: 6425 (desir r20416) and 6426 (zs r20417) were read early. Blind at this read: r20417 desir, r20418 zs+desir.
 
 - **S (keep B05-AC + desirability): SUPPORTED.** S1 mean dF1 +0.215 >= -0.10, 1/5 seeds < 0. S2 mean dFPR -2.122 <= +0.50, 0/5 seeds > 0.
@@ -4767,7 +4767,7 @@ caveat attached to B15-AC applies to B05-AC too. The "no detectable effect under
 ## IDS-2 FINAL (26/09/2026) — IDSXD / IDSXD2 weight-sweep winners (cicids, ciciot; unswr quad PROVISIONAL)
 
 Supersedes the 13/09 interim bullet in §0A for cicids and ciciot. Read-only DB readout; every
-number is HELD-OUT TEST (`validation_summaries.threshold_metadata`, `validation_point='final'`,
+number is HELD-OUT TEST (`test_summaries.threshold_metadata`, `test_point='final'`,
 random_3way, Protocol v2: thresholds fit on the 10% VAL, reported on the 10% TEST). No
 `iterations.best_f1` anywhere. Statistical support (is the lead real) is the experiment-design
 agent's call, made separately from this readout.
@@ -5116,7 +5116,7 @@ val_cal              |  90.29±0.24 |  93.05±0.20 |  15.35±1.29 |   7.78±0.53
 - Supplementary script (read-only): `python ids2_final.py {arms <ds> <dec> [seeds]|seeds <ds> <dec> <arm> <gt>|pareto <ds> <dec> <seeds|all> [fmin]|rule7 <ds> <dec> <arm>|extra}`.
   It was run from the agent scratchpad and needs promoting to `scripts/ids2_final_readout.py` (not committed by this readout).
 - Core query (every number above is aggregated from exactly this):
-  `SELECT f.id, f.name, f.started_at, e.phase_type, vs.genome_type, vs.genome_hash, vs.threshold_metadata FROM validation_summaries vs JOIN flows f ON f.id=vs.flow_id JOIN experiments e ON e.id=vs.experiment_id WHERE (f.name LIKE 'IDSXD-%' OR f.name LIKE 'IDSXD2-%') AND f.name NOT LIKE 'IDSXD-unswt-%' AND f.status='completed' AND vs.validation_point='final'`
+  `SELECT f.id, f.name, f.started_at, e.phase_type, vs.genome_type, vs.genome_hash, vs.threshold_metadata FROM test_summaries vs JOIN flows f ON f.id=vs.flow_id JOIN experiments e ON e.id=vs.experiment_id WHERE (f.name LIKE 'IDSXD-%' OR f.name LIKE 'IDSXD2-%') AND f.name NOT LIKE 'IDSXD-unswt-%' AND f.status='completed' AND vs.test_point='final'`
   Parse the seed from the name suffix `-r(\d+)$` (this excludes `-w64fix` / `-abi13`). The phase is GA when `phase_type='ga_neurons'`.
   Metrics are `json(threshold_metadata)[mode].{f1,fpr,acc}` x 100, mean±sample SD over seeds.
 - `scripts/idsxd_best_column.py` (the interim tool) still runs and agrees on every cell. Its column ranking is a max
@@ -5126,7 +5126,7 @@ val_cal              |  90.29±0.24 |  93.05±0.20 |  15.35±1.29 |   7.78±0.53
 ## IDS-8 FINAL (02/10/2026) — UNSW temporal_3way quad-16b sweep
 
 Read-only DB readout of `IDSXD-unswt-quad-16b-*` (flows 6237-6263). Every number is HELD-OUT TEST
-(`validation_summaries.threshold_metadata`, `validation_point='final'`, temporal_3way, Protocol v2:
+(`test_summaries.threshold_metadata`, `test_point='final'`, temporal_3way, Protocol v2:
 thresholds fit on the 10% VAL, reported on the 10% TEST). No `iterations.best_f1` anywhere.
 Producer: `scripts/ids8/ids8_final_readout.py {audit|arms|paired|stats|seeds|pareto|rule7|refs}`.
 
@@ -5584,8 +5584,8 @@ val_cal              |  88.62±0.08 |  89.15±0.14 |   9.89±1.21 |   9.14±0.45
 
 ### Reproduce
 `python scripts/ids8/ids8_final_readout.py audit | armtable <gt> | stats <gt> | seeds <arm> <gt> | pareto [fmin] | rule7 <arm> | refs`
-(read-only `?mode=ro`). Core query: `validation_summaries` JOIN `flows`/`experiments` WHERE `f.id BETWEEN 6237 AND 6263`
-AND `validation_point='final'`; GA = `phase_type='ga_neurons'`. Metrics = `json(threshold_metadata)[mode].{f1,fpr,acc}` x 100,
+(read-only `?mode=ro`). Core query: `test_summaries` JOIN `flows`/`experiments` WHERE `f.id BETWEEN 6237 AND 6263`
+AND `test_point='final'`; GA = `phase_type='ga_neurons'`. Metrics = `json(threshold_metadata)[mode].{f1,fpr,acc}` x 100,
 mean±sample SD over seeds 20403-20405. Genome shape is from `genomes.tiers_json` for the validated hash.
 
 ## 0B. Best individual genome (CEILING, not the claim)
@@ -8452,7 +8452,7 @@ SP100 unswt: 22/100
                                                |    | F1|FPR<2  |  83.71 |   1.65 |  83.75 | r25052 GA best_ce empirical
                                                |    | COHORT    |  86.54 |  13.58 |    --- | GA best_f1 val_cal mean±std over n=10: F1 ±1.87, FPR ±7.08
     -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    SP-unswt-mcsmoke-16bWb                     |  1 | (no final validation_summaries rows)
+    SP-unswt-mcsmoke-16bWb                     |  1 | (no final test_summaries rows)
     SP100-unswt-quad-16bWb                     | 22 | F1        |  89.70 |   8.82 |  89.76 | r66833 GA best_ce val_cal
                                                |    | FPR       |  74.83 |   0.06 |  75.36 | r63749 GA best_fpr empirical_cumulative
                                                |    | Acc       |  89.68 |  10.16 |  89.76 | r66833 GA best_ce beta
@@ -16865,7 +16865,7 @@ Notes:
 - The 0.04% FPR point is fixed_05 (raw 0.5 threshold, calibration-free):
   ~88 false alarms / 219,639 benign flows.
 - n=1 seed vs paper best-of-cohort: needs sibling 96b-Wc seeds before any paper
-  table swap. Data source: validation_summaries flow_id=4299, validation_point='final'
+  table swap. Data source: test_summaries flow_id=4299, test_point='final'
   (latest batch), threshold_metadata JSON.
 
 
@@ -16878,8 +16878,8 @@ have reached n=2 seeds; two are at n=1. It is recorded here because it CORRECTS 
 banked claims that ARE in the paper track, and because a reader of the sections above
 would otherwise carry the retracted versions forward.
 
-Metric contract unchanged from the top of this file: held-out `validation_summaries.
-threshold_metadata` at `validation_point='final'`. No `iterations.best_f1` anywhere.
+Metric contract unchanged from the top of this file: held-out `test_summaries.
+threshold_metadata` at `test_point='final'`. No `iterations.best_f1` anywhere.
 
 ## 8.0 Cohort state  (refreshed 25/08/2026 00:39 UTC)
 
@@ -17160,7 +17160,7 @@ flow   cascade FPR   matching S0 best_* row              S0 best_* FPRs on file
 
 This is **`best_genome != pop[0]` again**. The cascade uses the *frozen* S0 genome carried
 across the stage boundary, which for 3/5 seeds is none of the five persisted `best_*` genomes.
-**`validation_summaries` contains no row describing the gate that actually produced the
+**`test_summaries` contains no row describing the gate that actually produced the
 published cascade for seeds 20402 / 20404 / 20405.** Reconstructing "the S0 gate row" from
 `best_f1` or `best_fpr` would publish a gate that was never deployed.
 **FIX BEFORE ANY TABLE SHIPS: persist the frozen S0 genome as its own `genome_type`.**
@@ -17398,7 +17398,7 @@ still tiering alone. What is withdrawn is only the claim that classnorm is a
 good decode and worth routing to.
 
 **1. Wrong flow — and a VOID one.** All seven values match, to four decimals,
-`flow 5995` · `S1: GA Neurons` · `validation_point='final'` ·
+`flow 5995` · `S1: GA Neurons` · `test_point='final'` ·
 `genome_type='best_fitness'`. Not flow 6000. **Flow 5995 is the VOID `-tiered`
 generation of 10D**, whose S0 grid was degenerate — the same section that
 forbids merging it supplied this block's numbers. Within 5995's own row the
@@ -17411,7 +17411,7 @@ admissible evidence about anything.
 
 **2. It does not replicate on the valid flows.** Read PAIRED over flows
 6000-6009 — every row one `(flow, genome_type)` pair at
-`validation_point='final'`, so each mode is scored on the SAME genome as argmax:
+`test_point='final'`, so each mode is scored on the SAME genome as argmax:
 
 ```
 mode                mean F1%    vs argmax   rows won   flows won   p (flow-level, n=10)

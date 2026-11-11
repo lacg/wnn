@@ -1,7 +1,7 @@
 """ids_calib_sample (worker ABI 24, 02/11/2026): the single-cluster binary SEARCH
 fitness calibrates each genome x fold threshold on a fixed stratified subsample of
 the fold's train rows (drawn in Rust, adaptive/calib_sample.rs). Pinned here:
-  - registry / resolution / validation-cache key (pure Python);
+  - registry / resolution / test-cache key (pure Python);
   - through the real wheel (ABI >= 24): absent == 0 == oversized is bit-identical
     on the k-fold search path, a set sample is deterministic, the validation path
     (evaluate_genomes_full_hybrid) never changes, and multi-cluster caches refuse.
@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT / "src" / "wnn"))
 from wnn.ram.experiments.IdsEvaluatorSettings import IdsEvaluatorSettings
 from wnn.ram.experiments.ids_param_resolution import resolve_calib_sample
 from wnn.ram.experiments.params import KNOWN_PARAMS
-from wnn.ram.experiments.validation_cache_key import build_validation_cache_key
+from wnn.ram.experiments.test_cache_key import build_test_cache_key
 
 
 def _abi() -> int:
@@ -66,9 +66,9 @@ def test_non_single_cluster_flows_refuse_a_sample(params):
 	assert resolve_calib_sample({**params, "ids_calib_sample": 0}) == 0
 
 
-def test_validation_cache_key_ignores_it():
+def test_test_cache_key_ignores_it():
 	base = {**SINGLE, "ids_dataset": "cicids2017"}
-	assert build_validation_cache_key(base, True) == build_validation_cache_key({**base, "ids_calib_sample": 200_000}, True)
+	assert build_test_cache_key(base, True) == build_test_cache_key({**base, "ids_calib_sample": 200_000}, True)
 
 
 # ---- through the wheel ---------------------------------------------------------

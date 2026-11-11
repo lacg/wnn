@@ -129,9 +129,9 @@ async fn delete_flow_data(pool: &DbPool, flow_id: i64) -> Result<()>
 
 /// Clear display data for an experiment (iterations, genome_evaluations, genomes)
 /// but KEEP checkpoints so resume can seed from them, and KEEP
-/// validation_summaries: they double as the cross-flow validation cache
-/// (get_cached_validation) — deleting them on a restart-resume threw away
-/// hours of full-dataset validations; they're upserted, so re-runs
+/// test_summaries: they double as the cross-flow test cache
+/// (get_cached_test_summary) — deleting them on a restart-resume threw away
+/// hours of full-dataset test evaluations; they're upserted, so re-runs
 /// overwrite stale rows naturally.
 ///
 /// Runs in a single transaction; best_genomes rows referencing this
@@ -190,7 +190,7 @@ async fn clear_experiment_display_data(pool: &DbPool, exp_id: i64) -> Result<()>
 	Ok(())
 }
 
-/// Delete all data for an experiment (iterations, genome_evaluations, genomes, checkpoints, validation_summaries, gating_runs)
+/// Delete all data for an experiment (iterations, genome_evaluations, genomes, checkpoints, test_summaries, gating_runs)
 pub(crate) async fn delete_experiment_data(pool: &DbPool, exp_id: i64) -> Result<()>
 {
 	// Delete gating runs for this experiment
@@ -199,8 +199,8 @@ pub(crate) async fn delete_experiment_data(pool: &DbPool, exp_id: i64) -> Result
 		.execute(pool)
 		.await?;
 
-	// Delete validation summaries for this experiment
-	sqlx::query("DELETE FROM validation_summaries WHERE experiment_id = ?")
+	// Delete test summaries for this experiment
+	sqlx::query("DELETE FROM test_summaries WHERE experiment_id = ?")
 		.bind(exp_id)
 		.execute(pool)
 		.await?;

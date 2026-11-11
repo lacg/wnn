@@ -3,7 +3,7 @@
 #
 # Polls the database every 60s until all 22 sweep flows reach terminal
 # state (completed/failed/cancelled). When done:
-#   1. Pulls every final validation_summary for the sweep flows
+#   1. Pulls every final test_summary for the sweep flows
 #   2. Generates a Pareto frontier report (logs/46M_sweep_verdict.md)
 #      with tables grouped by tier (MICRO / SMALL / PEAK) showing each
 #      config's best-f1 metrics across all 7 threshold modes
@@ -96,11 +96,11 @@ THRESHOLD_MODES = ['train_cal', 'fixed_05', 'platt', 'beta', 'empirical', 'empir
 cur.execute("""
     SELECT vs.flow_id, f.name, vs.genome_type, vs.threshold_metadata,
            g.total_neurons, g.tiers_json, f.status, f.started_at, f.completed_at
-    FROM validation_summaries vs
+    FROM test_summaries vs
     JOIN experiments e ON vs.experiment_id = e.id
     JOIN flows f ON e.flow_id = f.id
     LEFT JOIN genomes g ON g.config_hash = vs.genome_hash AND g.experiment_id = vs.experiment_id
-    WHERE f.name LIKE ? AND vs.validation_point = 'final'
+    WHERE f.name LIKE ? AND vs.test_point = 'final'
     ORDER BY f.id
 """, (f"%{SWEEP_TAG}%",))
 rows = cur.fetchall()

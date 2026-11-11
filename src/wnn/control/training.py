@@ -1126,7 +1126,7 @@ def fitness_function(
 	Returns:
 		(mean_reward, metrics_dict): metrics_dict has aggregate stats matching
 		the controller-specific JSON schema we'll write into
-		`validation_summaries.threshold_metadata`.
+		`test_summaries.threshold_metadata`.
 	"""
 	rng = np.random.default_rng(seed)
 	results: list[EpisodeResult] = []

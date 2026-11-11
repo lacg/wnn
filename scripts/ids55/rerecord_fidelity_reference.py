@@ -40,7 +40,7 @@ class CapturingClient:
 	def __init__(self):
 		self.rows = []
 
-	def create_validation_summary(self, **row) -> dict:
+	def create_test_summary(self, **row) -> dict:
 		self.rows.append(row)
 		return {"id": None}
 
@@ -52,8 +52,8 @@ def recorded_row() -> dict:
 	"""The DB row the fixture replaces (experiment, genome hash, ABI, metadata)."""
 	con = sqlite3.connect(DB, uri=True)
 	row = con.execute("""SELECT vs.experiment_id, vs.genome_hash, vs.worker_abi, vs.threshold_metadata
-		FROM validation_summaries vs JOIN experiments e ON e.id = vs.experiment_id AND e.phase_type = ?
-		WHERE vs.flow_id = ? AND vs.validation_point = 'final' AND vs.genome_type = ?
+		FROM test_summaries vs JOIN experiments e ON e.id = vs.experiment_id AND e.phase_type = ?
+		WHERE vs.flow_id = ? AND vs.test_point = 'final' AND vs.genome_type = ?
 		ORDER BY vs.id DESC LIMIT 1""", (PHASE, FLOW, GENOME_TYPE)).fetchone()
 	return dict(experiment_id=row[0], genome_hash=row[1], worker_abi=row[2], threshold_metadata=json.loads(row[3]))
 

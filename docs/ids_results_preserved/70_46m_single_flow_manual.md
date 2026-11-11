@@ -45,5 +45,5 @@ Notes:
 - The 0.04% FPR point is fixed_05 (raw 0.5 threshold, calibration-free):
   ~88 false alarms / 219,639 benign flows.
 - n=1 seed vs paper best-of-cohort: needs sibling 96b-Wc seeds before any paper
-  table swap. Data source: validation_summaries flow_id=4299, validation_point='final'
+  table swap. Data source: test_summaries flow_id=4299, test_point='final'
   (latest batch), threshold_metadata JSON.

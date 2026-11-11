@@ -2,7 +2,7 @@
 
 The probe runs `widths × {Wa, Wb} × 3 shared seeds = 30 flows` whose only job
 is to choose the (width, weight) that Cohort 2 (97 fresh seeds) will use.
-This script aggregates the validation_summaries from completed XDS-unsw-temporal
+This script aggregates the test_summaries from completed XDS-unsw-temporal
 flows and ranks the (width, weight) groups under a user-defined criterion.
 
 The aggregation is mechanical. The ranking *rule* is a research call — that
@@ -50,10 +50,10 @@ def load_probe_rows():
 		          vs.genome_type, vs.threshold_metadata
 		   FROM flows f
 		   JOIN experiments e ON e.flow_id = f.id
-		   JOIN validation_summaries vs ON vs.experiment_id = e.id
+		   JOIN test_summaries vs ON vs.experiment_id = e.id
 		   WHERE f.name LIKE ?
 		     AND f.status = 'completed'
-		     AND vs.validation_point = 'final'
+		     AND vs.test_point = 'final'
 		     AND e.phase_type = 'ga_neurons'""",
 		(PREFIX + "%",),
 	)

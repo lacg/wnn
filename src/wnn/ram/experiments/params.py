@@ -131,14 +131,14 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	# non-constant and distinct on the TRAIN partition (per-feature width shrinks
 	# to what the feature's values support), drops features left with no
 	# informative bit, and drops exact-duplicate feature columns (train only).
-	# Pinned in the validation-cache key. Refused with ids_streaming.
+	# Pinned in the test-cache key. Refused with ids_streaming.
 	"ids_encoding_dedupe",
 	# ids_feature_ranking (08/11/2026, IDS-53): "legacy" (default — the
 	# TOP20_RF_FEATURES constants, byte-identical) | "train_only" (the top-N
 	# re-derived on the flow's OWN train split; wnn/ids/feature_ranking.py,
 	# versioned files under wnn/ids/feature_rankings/). The legacy lists were
 	# ranked on partitions holding 76% (cicids) / 84% (ciciot) of today's
-	# random_3way test/val. Pinned in the validation-cache key ("fr=").
+	# random_3way test/val. Pinned in the test-cache key ("fr=").
 	"ids_feature_ranking",
 	# ids_receptive_fields (08/11/2026, worker ABI 27): "off" (default — no
 	# projection, no RNG draw, bit-identical) | "family": every neuron holds at
@@ -147,7 +147,7 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	# = the family holding the majority of its connections, a fresh neuron draws
 	# one by its connections' families). Enforced in Rust after every GA/TS/genesis
 	# operator and in Python on every grid / init / immigrant genome. IDS port of
-	# the controller's CTRL-45. Pinned in the validation-cache key ("rf=").
+	# the controller's CTRL-45. Pinned in the test-cache key ("rf=").
 	# ids_rf_cross (float in [0, 0.5), default 0.2): the out-of-family share;
 	# refused when set with receptive fields off.
 	"ids_receptive_fields", "ids_rf_cross",

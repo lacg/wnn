@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Re-validate validation_summaries rows the pre-fix cross-flow cache inherited (10/10/2026).
+"""Re-validate test_summaries rows the pre-fix cross-flow cache inherited (10/10/2026).
 
 Every listed row is a FINAL validation whose numbers were copied from another flow
 (different memory mode / trainer ABI, or different fitness weights). This retrains
@@ -9,7 +9,7 @@ the dashboard API, so it ends up with cache_key + worker_abi stamped.
 Parity with the worker by construction: the flow's evaluators, experiment configs
 and cache scope are built by FlowWorker._build_flow (the flow_runner path), and the
 scoring is Experiment.revalidate_genome -> _validate_one_genome, the same method
-_run_validation calls. Nothing is re-implemented here.
+_run_test_eval calls. Nothing is re-implemented here.
 
 Usage:
   python scripts/ids2/revalidate_inherited.py --rows experiments/ids2_inherited_cells.json --dry-run
@@ -37,7 +37,7 @@ def load_targets(rows_path: str, only_flow: int | None) -> dict[int, list[dict]]
 	ids = set(spec["drop_all_modes"]["row_ids"]) | set(spec["drop_empirical_cumulative_only"]["row_ids"])
 	c = ro()
 	q = f"""select v.id, v.flow_id, v.experiment_id, v.genome_type, v.genome_hash, v.threshold_metadata, v.cache_key
-		from validation_summaries v where v.validation_point='final' and v.id in ({','.join('?' * len(ids))})"""
+		from test_summaries v where v.test_point='final' and v.id in ({','.join('?' * len(ids))})"""
 	by_flow: dict[int, list[dict]] = defaultdict(list)
 	for vid, fid, eid, gt, gh, tm, key in c.execute(q, sorted(ids)):
 		if key is not None:
@@ -103,12 +103,12 @@ def make_experiment(worker, flow, exp_ids: list[int], eid: int, fid: int):
 	return Experiment(config=cfg, evaluator=flow.evaluator, logger=worker._log, checkpoint_dir=None,
 		dashboard_client=worker.client, experiment_id=eid, tracker=None, flow_id=fid,
 		shutdown_check=None, full_evaluator=flow.full_evaluator,
-		validation_scope=flow.config.validation_scope)
+		test_scope=flow.config.test_scope)
 
 
 def stored_row(vid: int) -> tuple:
 	return ro().execute("""select threshold_metadata, cache_key, worker_abi
-		from validation_summaries where id=?""", (vid,)).fetchone()
+		from test_summaries where id=?""", (vid,)).fetchone()
 
 
 def verify_row(t: dict, expect_abi: int) -> dict:

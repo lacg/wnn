@@ -12,7 +12,7 @@
 		"Upper/lower-case spellings are both listed: the HF random split uses Sload/Dload/Djit/res_bdy_len, the temporal split sload/dload/djit/response_body_len.",
 		"proto/service/state are categorical (log2(#categories) bits), so protocol is a small family on the legacy list (~12 encoded bits): at wide neurons it is reachable only via the cross budget.",
 		"ttl_state merge_into context (Luiz, IDS-55 follow-up): with ids_encoding_dedupe on, ttl_state keeps ~15 encoded bits (sttl/dttl/ct_state_ttl have few distinct values), too few to host a neuron, so it joins context (UNSW's connection-window counters; ct_state_ttl is itself a window feature). Dedupe off: 196 bits on unswr, no merge, map unchanged.",
-		"v2 (Luiz 08/11, after the IDS-55 unswt A/B ran on v1): handshake merge_into timing (tcprtt/synack/ackdat ARE the setup round-trip timings; ~10 bits with dedupe on) and protocol merge_into context (~12 bits even with dedupe off on the legacy list). protocol merges on dedupe-OFF maps too, so this is a new version (validation cache re-keys); v1 stays as the A/B's provenance."
+		"v2 (Luiz 08/11, after the IDS-55 unswt A/B ran on v1): handshake merge_into timing (tcprtt/synack/ackdat ARE the setup round-trip timings; ~10 bits with dedupe on) and protocol merge_into context (~12 bits even with dedupe off on the legacy list). protocol merges on dedupe-OFF maps too, so this is a new version (test cache re-keys); v1 stays as the A/B's provenance."
 	],
 	"families": {
 		"ttl_state": {

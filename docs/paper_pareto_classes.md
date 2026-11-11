@@ -124,7 +124,7 @@ F1 (+1.6 pp to +4.0 pp) and FPR (−16 pp to −21 pp), at model sizes between
   2026-05-28); pre-fix cohorts are deprecated.
 - Threshold mode reported throughout is `val_cal` (validation-set-calibrated
   threshold on the best_ce genome). The full 7-mode threshold table per seed
-  is available in the `validation_summaries.threshold_metadata` JSON column.
+  is available in the `test_summaries.threshold_metadata` JSON column.
 
 ## Cross-references
 

@@ -10,7 +10,7 @@ so the numbers are comparable whichever partition a WNN table cites.
 Metrics per model x partition: macro-F1, weighted-F1, accuracy, benign-FPR
 (fraction of true-benign rows predicted as any attack), per-class
 precision/recall/F1/support, and the KxK confusion matrix — the same fields
-the worker writes into validation_summaries.threshold_metadata modes.
+the worker writes into test_summaries.threshold_metadata modes.
 
 Usage:
   python3 scripts/verify_unsw_multiclass_baselines.py [--n-bits 16]

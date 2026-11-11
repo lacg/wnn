@@ -175,7 +175,7 @@ def pull_cohort(cur, pattern, exclude=None):
                g.total_neurons, g.tiers_json
         FROM flows f
         JOIN experiments e ON e.flow_id = f.id
-        LEFT JOIN validation_summaries vs ON vs.experiment_id = e.id AND vs.validation_point = 'final'
+        LEFT JOIN test_summaries vs ON vs.experiment_id = e.id AND vs.test_point = 'final'
         LEFT JOIN genomes g ON g.genome_hash = vs.genome_hash AND g.experiment_id = e.id
         WHERE {where}
     """, params)
@@ -407,7 +407,7 @@ def main():
 		"**OLD cohort** = pre-fix FIXED flows (paper baseline). Pre-April-28 (or pre-OI-v2) semantics.",
 		"**NEW cohort** = OI-v2 (post-fixes). Same architecture, same dataset. Differences:",
 		"  - OI training (WNN_ORDER_INDEPENDENT_TRAIN=1) — order-independent QUAD vote accumulation",
-		"  - Validation cache key includes `_oi<0|1>` suffix — no cross-cohort contamination",
+		"  - Test cache key includes `_oi<0|1>` suffix — no cross-cohort contamination",
 		"  - `empirical_cumulative` threshold uses flow's actual fitness weights (was hard-coded F1)",
 		"",
 		"---",

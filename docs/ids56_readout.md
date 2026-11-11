@@ -1,7 +1,7 @@
 # IDS-56 readout — min-share vote (`ms01`, θ=0.1) vs `lattice` × encoding dedupe (`encoff`/`encon`)
 
 Written 10/11/2026 (ids-security agent, read-only on the queue). Source of truth for the numbers:
-`validation_summaries` (DB `/Volumes/20260401-WDBlack-SN850X-2TB/wnn/db/wnn.db`), `validation_point='final'`,
+`test_summaries` (DB `/Volumes/20260401-WDBlack-SN850X-2TB/wnn/db/wnn.db`), `test_point='final'`,
 `threshold_metadata.margin_val_cal` (threshold fit on the 10% VAL partition, scored on the 10% TEST partition —
 Protocol v2). No `iterations.best_f1` anywhere. Rule-7 tables: `docs/ids_results.md` § "IDS-56".
 
@@ -215,7 +215,7 @@ expected to pay with dedupe on, and encon is the encoding we would adopt. Seeds 
   `{ids_write_rule: lattice, ids_vote_share: null}` vs `{ids_write_rule: vote, ids_vote_share: 0.1}`.
 - Budget: `ga_generations=250`, `patience=5`, `population_size=50` (inherited, identical in both arms). Experiments array
   = the standard 2-phase IDS pair (Grid Search + GA Neurons).
-- Report: `validation_summaries` best_f1 `margin_val_cal`, paired by seed, plus the low-FPR Pareto zone and the
+- Report: `test_summaries` best_f1 `margin_val_cal`, paired by seed, plus the low-FPR Pareto zone and the
   per-category probe (§2e).
 - Cost estimate. Measured lattice base × the measured unswt encon vote ratio of 1.41. Dedupe may shorten it, since
   ~half of the cicids/ciciot bits are redundant (IDS-52).

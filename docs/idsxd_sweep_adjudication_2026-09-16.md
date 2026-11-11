@@ -1,7 +1,7 @@
 # IDSXD desirability fitness-weight sweep — statistical adjudication
 
 Date: 16/09/2026 (DB read ~21:00 UTC). Author: experiment-design agent. READ-ONLY; no flow was touched.
-Source of truth: `validation_summaries` rows of the **GA Neurons (final) phase**, `threshold_metadata.val_cal`
+Source of truth: `test_summaries` rows of the **GA Neurons (final) phase**, `threshold_metadata.val_cal`
 (Protocol v2 on `random_3way`: threshold F1-optimal on the 10% VAL, metrics reported on the 10% TEST partition).
 `iterations.best_f1` (during-search K-fold) was NOT used anywhere. Every number below is an actual DB read;
 nothing is estimated. Script: `/private/tmp/claude-501/-Users-lacg-wnn/1ca3ecd9-4d49-4bed-87a0-ddb2c56c50a7/scratchpad/idsxd_adj.py`.

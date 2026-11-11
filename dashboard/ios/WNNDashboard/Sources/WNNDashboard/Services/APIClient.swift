@@ -100,12 +100,12 @@ public final class APIClient {
         return try await request(path: "api/checkpoints/\(checkpointId)/export-hf", method: "POST", body: ExportRequest(output_dir: outputDir))
     }
 
-    // Validation Summaries
-    public func getExperimentValidations(experimentId: Int64) async throws -> [ValidationSummary] {
+    // Test Summaries
+    public func getExperimentTests(experimentId: Int64) async throws -> [TestSummary] {
         try await request(path: "api/experiments/\(experimentId)/summaries")
     }
-    public func getFlowValidations(flowId: Int64) async throws -> [ValidationSummary] {
-        try await request(path: "api/flows/\(flowId)/validations")
+    public func getFlowTests(flowId: Int64) async throws -> [TestSummary] {
+        try await request(path: "api/flows/\(flowId)/test-summaries")
     }
 }
 

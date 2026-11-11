@@ -2,7 +2,7 @@
 
 import Foundation
 
-/// Validation result at end of a phase
+/// Test result at end of a phase
 public struct PhaseResult: Codable, Identifiable {
     public let id: Int64
     public let phase_id: Int64

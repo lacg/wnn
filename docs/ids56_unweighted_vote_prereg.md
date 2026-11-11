@@ -27,7 +27,7 @@ replaced by the unweighted min-share tally.
 | 2 | `src/wnn/ram/experiments/IdsEvaluatorFactory.py:129,140` | log lines only | no |
 | 3 | `src/wnn/ram/experiments/IdsEvaluatorFactory.py:162,232` | forwards to `IDSEvaluator` (flat + hierarchical) | plumbing |
 | 4 | `src/wnn/ram/architecture/ids_evaluator.py:320-327,1080` | streaming-mode weights (`_compute_class_weights`) | no: unswr is in-memory, not streaming |
-| 5 | `src/wnn/ram/experiments/validation_cache_key.py:164` | `("bal", …)` in the validation cache key | bookkeeping only (expected: no cache reuse with lattice flows) |
+| 5 | `src/wnn/ram/experiments/test_cache_key.py:164` | `("bal", …)` in the test cache key | bookkeeping only (expected: no cache reuse with lattice flows) |
 | 6 | `src/wnn/ram/strategies/accelerator/pyapi/ids_cache_api.rs:78-123,148-222` | PyO3 ctor arg | plumbing |
 | 7 | `ids_cache.rs:468-479` | `class_weights = compute_class_weights_with_multiplier(train_labels)` if set, else `None` | **source** |
 | 8 | `adaptive/eval_export.rs:349-378` | `max_count / count × multiplier` (unswr: benign 1, attack 25) | source |
@@ -170,7 +170,7 @@ All three controls have ids below the arm's, so under FIFO they finish before th
 change costs no queue time.
 
 **Metric:**
-- Taken from `validation_summaries.threshold_metadata` for the GA phase, `genome_type=best_f1`, `validation_point=final`.
+- Taken from `test_summaries.threshold_metadata` for the GA phase, `genome_type=best_f1`, `test_point=final`.
 - Mode is `margin_val_cal`: τ calibrated on VAL, scored on the 10% TEST, which is report-only.
 - Pairing is by seed.
 - All stored threshold modes (this binary-margin pipeline stores 10: argmax, margin_fixed0, margin_train_cal,
@@ -178,7 +178,7 @@ change costs no queue time.
   × 5 genome types are reported in Rule-7 layout. Only the line above decides adoption.
 - F1 here is **macro-F1**. On unswr (benign 96%) benign-F1 sits near 99.6 and barely moves, so ΔmacroF1 ≈
   ½·Δattack-F1. Report `attack_f1` and TPR (from `confusion`) beside every macro-F1 cell.
-- Readout guard: `validation_summaries.worker_abi` must be equal for each arm flow and its paired control. If the worker
+- Readout guard: `test_summaries.worker_abi` must be equal for each arm flow and its paired control. If the worker
   ABI changes before the arm runs, the comparison is cross-build: stop and ask Luiz whether to re-fly the controls.
 - Never use `iterations.best_f1`.
 

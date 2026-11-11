@@ -85,7 +85,7 @@ still tiering alone. What is withdrawn is only the claim that classnorm is a
 good decode and worth routing to.
 
 **1. Wrong flow — and a VOID one.** All seven values match, to four decimals,
-`flow 5995` · `S1: GA Neurons` · `validation_point='final'` ·
+`flow 5995` · `S1: GA Neurons` · `test_point='final'` ·
 `genome_type='best_fitness'`. Not flow 6000. **Flow 5995 is the VOID `-tiered`
 generation of 10D**, whose S0 grid was degenerate — the same section that
 forbids merging it supplied this block's numbers. Within 5995's own row the
@@ -98,7 +98,7 @@ admissible evidence about anything.
 
 **2. It does not replicate on the valid flows.** Read PAIRED over flows
 6000-6009 — every row one `(flow, genome_type)` pair at
-`validation_point='final'`, so each mode is scored on the SAME genome as argmax:
+`test_point='final'`, so each mode is scored on the SAME genome as argmax:
 
 ```
 mode                mean F1%    vs argmax   rows won   flows won   p (flow-level, n=10)

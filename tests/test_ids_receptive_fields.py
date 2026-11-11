@@ -193,11 +193,11 @@ def test_params_default_off_refuse_typos_and_inert_cross():
 
 
 def test_validation_key_unchanged_when_off_and_versioned_when_on():
-	from wnn.ram.experiments.validation_cache_key import build_validation_cache_key
+	from wnn.ram.experiments.test_cache_key import build_test_cache_key
 	base = {"ids_dataset": "unsw-nb15", "ids_split": "random_3way", "memory_mode": "BINARY"}
-	assert build_validation_cache_key(base, True) == build_validation_cache_key({**base, "ids_receptive_fields": "off"}, True)
-	on = build_validation_cache_key({**base, "ids_receptive_fields": "family"}, True)
-	assert on != build_validation_cache_key(base, True) and f"{FAMILY_MAP_VERSION}:0.2" in on
+	assert build_test_cache_key(base, True) == build_test_cache_key({**base, "ids_receptive_fields": "off"}, True)
+	on = build_test_cache_key({**base, "ids_receptive_fields": "family"}, True)
+	assert on != build_test_cache_key(base, True) and f"{FAMILY_MAP_VERSION}:0.2" in on
 
 
 class _Dataset:

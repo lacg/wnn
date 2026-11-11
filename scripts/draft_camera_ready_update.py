@@ -2,7 +2,7 @@
 to r98 (paper baseline) and to RF/XGBoost baselines.
 
 Pulls:
-  - validation_summaries from DB for r98 (1156), r125 (1687), r124 (1686)
+  - test_summaries from DB for r98 (1156), r125 (1687), r124 (1686)
   - Per-class output files from /Users/lacg/wnn/analysis/per_class_flow*.md
   - Latest baseline log from /Users/lacg/wnn/logs/canonical_baselines_perclass_*.log
 

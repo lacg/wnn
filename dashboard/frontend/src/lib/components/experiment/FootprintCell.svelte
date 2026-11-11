@@ -1,10 +1,10 @@
 <script lang="ts">
-	import type { ValidationFootprint } from '$lib/types'
+	import type { TestFootprint } from '$lib/types'
 
 	// One genome's footprint, LOGICAL and PHYSICAL — always both (IDS-37).
 	// Physical < logical when the multiplicity layer trained duplicate
 	// neurons once; equal for the plain layer.
-	export let footprint: ValidationFootprint | null | undefined = null
+	export let footprint: TestFootprint | null | undefined = null
 	export let colspan: number = 3
 
 	function cells(n: number): string

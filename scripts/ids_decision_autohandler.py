@@ -58,10 +58,10 @@ def status_of(fid):
 
 
 def best_f1(fid):
-	r = q("SELECT MAX(vs.f1_macro) FROM validation_summaries vs "
+	r = q("SELECT MAX(vs.f1_macro) FROM test_summaries vs "
 	      "JOIN experiments e ON e.id=vs.experiment_id "
 	      "WHERE vs.flow_id=? AND e.phase_type='ga_neurons' "
-	      "AND vs.genome_type='best_f1' AND vs.validation_point='final'", (fid,))
+	      "AND vs.genome_type='best_f1' AND vs.test_point='final'", (fid,))
 	return r[0][0] if r and r[0][0] is not None else None
 
 

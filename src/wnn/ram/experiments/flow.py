@@ -19,7 +19,7 @@ from typing import Any, Callable, Literal, Optional
 from wnn.ram.fitness import FitnessCalculatorType
 from wnn.ram.experiments.experiment import Experiment, ClusterType, ExperimentConfig, ExperimentResult, ExperimentType, StageMode
 from wnn.ram.experiments.dashboard_client import DashboardClient, FlowConfig as APIFlowConfig
-from wnn.ram.experiments.validation_cache_scope import ValidationCacheScope
+from wnn.ram.experiments.test_cache_scope import TestCacheScope
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 
 
@@ -238,7 +238,7 @@ class FlowConfig:
 	balance_classes: bool = False  # Class-balanced training (upweight minority class)
 	ids_single_cluster: bool = False  # Single-cluster discriminator (1 cluster, threshold 0.5)
 	ids_feature_selection: str = "all"  # Feature selection mode for leaderboard filtering
-	validation_scope: Optional[ValidationCacheScope] = None  # cross-flow validation-cache scope (key + worker ABI)
+	test_scope: Optional[TestCacheScope] = None  # cross-flow test-cache scope (key + worker ABI)
 
 	@classmethod
 	def bitwise_7_phase(
@@ -1043,7 +1043,7 @@ class _RunState:
 	is_multi_stage: bool = False
 	# Frozen genomes per completed stage (multi-stage LM or IDS hierarchical)
 	frozen_genomes: list[Optional[ClusterGenome]] = field(default_factory=list)
-	# Populations + metrics per stage for combined validation (best_ce, best_acc, best_fitness)
+	# Populations + metrics per stage for combined test summary (best_ce, best_acc, best_fitness)
 	frozen_populations: dict[int, tuple[list[ClusterGenome], list[tuple[float, float]]]] = field(default_factory=dict)
 
 
@@ -1079,7 +1079,7 @@ class Flow:
 		flow_id: Optional[int] = None,
 		tracker: Optional[Any] = None,  # ExperimentTracker for V2 tracking
 		shutdown_check: Optional[Callable[[], bool]] = None,  # Callable returning True if shutdown requested
-		full_evaluator: Optional[Any] = None,  # Separate evaluator for validation (validation set)
+		full_evaluator: Optional[Any] = None,  # Separate evaluator for test evaluation (held-out set)
 		s1_evaluator: Optional[Any] = None,  # Hierarchical IDS: S1 optimizer evaluator
 		s1_full_evaluator: Optional[Any] = None,  # Hierarchical IDS: S1 test evaluator
 		s1_route_evaluator: Optional[Any] = None,  # Hierarchical IDS: S1 over the FULL test partition
@@ -1096,7 +1096,7 @@ class Flow:
 			flow_id: Existing flow ID (skip creating new flow if provided)
 			tracker: Optional V2 tracker for direct database writes
 			shutdown_check: Optional callable that returns True if shutdown requested
-			full_evaluator: Separate evaluator for validation (trains full, evals validation set)
+			full_evaluator: Separate evaluator for test evaluation (trains full, evals held-out set)
 			s1_evaluator: S1 evaluator for hierarchical IDS (attack-only, 9 classes)
 			s1_full_evaluator: S1 test evaluator for hierarchical IDS
 			s1_route_evaluator: S1 trained the same way but holding the WHOLE test
@@ -1112,7 +1112,7 @@ class Flow:
 		self.tracker = tracker
 		self.shutdown_check = shutdown_check
 
-		# Hierarchical IDS: store all evaluators for combined validation
+		# Hierarchical IDS: store all evaluators for combined test summary
 		self._s1_evaluator = s1_evaluator
 		self._s1_full_evaluator = s1_full_evaluator
 		self._s1_route_evaluator = s1_route_evaluator
@@ -1685,7 +1685,7 @@ class Flow:
 			flow_id=self._flow_id,
 			shutdown_check=self.shutdown_check,
 			full_evaluator=self.full_evaluator,
-			validation_scope=self.config.validation_scope,
+			test_scope=self.config.test_scope,
 		)
 
 		result = experiment.run(
@@ -1859,7 +1859,7 @@ class Flow:
 		# Store in dashboard
 		if self.dashboard_client and self._flow_id:
 			try:
-				self.dashboard_client.create_combined_validation(
+				self.dashboard_client.create_combined_test_summary(
 					flow_id=self._flow_id,
 					genome_type=genome_type,
 					combined_ce=ce,
@@ -1868,7 +1868,7 @@ class Flow:
 					per_stage_acc=stage_accs,
 				)
 			except Exception as e:
-				self.log(f"  Warning: Failed to store combined validation: {e}")
+				self.log(f"  Warning: Failed to store combined test summary: {e}")
 
 		return ce, acc, stage_ces, stage_accs
 
@@ -1889,7 +1889,7 @@ class Flow:
 		state.frozen_genomes[cfg.num_stages - 1] = state.genome
 		stage_genomes_list = list(state.frozen_genomes)
 
-		# Save last stage population for combined validation
+		# Save last stage population for combined test summary
 		if state.population is not None and state.evals is not None:
 			state.frozen_populations[cfg.num_stages - 1] = (list(state.population), list(state.evals))
 
@@ -1929,7 +1929,7 @@ class Flow:
 		self,
 		state: _RunState,
 	) -> tuple[list[Optional[ClusterGenome]], Optional[float]]:
-		"""IDS hierarchical: combined S0→S1 validation on test set.
+		"""IDS hierarchical: combined S0→S1 test evaluation on test set.
 
 		Returns (stage_genomes_list, combined_accuracy or None).
 		"""
@@ -1974,7 +1974,7 @@ class Flow:
 		self.log("")
 
 	def _finalize(self, state: _RunState, start_time: float) -> FlowResult:
-		"""Combined-stage validation + final logging + FlowResult assembly."""
+		"""Combined-stage test evaluation + final logging + FlowResult assembly."""
 		cfg = self.config
 		elapsed = time.time() - start_time
 
@@ -1994,7 +1994,7 @@ class Flow:
 				self._compute_multistage_combined(state)
 			)
 
-		# IDS hierarchical: combined S0→S1 validation on test set
+		# IDS hierarchical: combined S0→S1 test evaluation on test set
 		is_ids_hierarchical = cfg.architecture_type == "ids" and self._s0_full_evaluator is not None
 		if is_ids_hierarchical:
 			# The S1 genome is `state.genome` and is only written into
@@ -2035,8 +2035,8 @@ class Flow:
 	def _store_ids_metrics(self, genome: ClusterGenome, experiment_id: int, exp_result=None):
 		"""Store IDS metrics on the test set via tracker.
 
-		Uses Rust-computed F1/FPR/accuracy from the experiment's validation pass
-		(same training run as validation progression) for top-level metrics.
+		Uses Rust-computed F1/FPR/accuracy from the experiment's test evaluation pass
+		(same training run as test progression) for top-level metrics.
 		Only calls predict_classes() for the per-class breakdown (confusion matrix,
 		per-class F1/recall) which the Rust path doesn't provide.
 		"""
@@ -2056,12 +2056,12 @@ class Flow:
 		if class_names:
 			metrics['class_names'] = class_names
 
-		# Override top-level metrics with Rust validation values (same training run
-		# as validation progression) so both dashboard views show identical numbers.
-		if exp_result and exp_result.validation_f1 is not None:
-			metrics['f1_macro'] = exp_result.validation_f1
-			metrics['fpr'] = exp_result.validation_fpr
-			metrics['accuracy'] = exp_result.validation_acc
+		# Override top-level metrics with Rust test evaluation values (same training run
+		# as test progression) so both dashboard views show identical numbers.
+		if exp_result and exp_result.test_f1 is not None:
+			metrics['f1_macro'] = exp_result.test_f1
+			metrics['fpr'] = exp_result.test_fpr
+			metrics['accuracy'] = exp_result.test_acc
 
 		self.log(f"  Test: acc={metrics.get('accuracy', 0):.4f}, "
 				  f"F1={metrics.get('f1_macro', 0):.4f}, "
@@ -2177,11 +2177,11 @@ class Flow:
 			"s1_f1_macro": s1_metrics["f1_macro"],
 		}
 
-		self._store_hierarchical_validation(combined_result, s0_metrics, s1_metrics,
+		self._store_hierarchical_test_summary(combined_result, s0_metrics, s1_metrics,
 		                                    s0_genome=s0_genome)
 		return combined_result
 
-	def _store_hierarchical_validation(self, combined_result, s0_metrics, s1_metrics,
+	def _store_hierarchical_test_summary(self, combined_result, s0_metrics, s1_metrics,
 	                                   s0_genome=None) -> None:
 		"""Persist the cascade result: the combined row, and the per-class detail.
 
@@ -2194,7 +2194,7 @@ class Flow:
 		if not (self.dashboard_client and self._flow_id):
 			return
 		try:
-			self.dashboard_client.create_combined_validation(
+			self.dashboard_client.create_combined_test_summary(
 				flow_id=self._flow_id,
 				genome_type="hierarchical_combined",
 				combined_ce=0.0,  # No CE: the cascade emits hard classes, not a distribution
@@ -2203,7 +2203,7 @@ class Flow:
 				per_stage_acc=[s0_metrics["accuracy"], s1_metrics["accuracy"]],
 			)
 		except Exception as e:
-			self.log(f"  Warning: Failed to store combined validation: {e}")
+			self.log(f"  Warning: Failed to store combined test summary: {e}")
 
 		experiment_id = self._experiment_ids.get(len(self.config.experiments) - 1)
 		if not experiment_id:
@@ -2232,9 +2232,9 @@ class Flow:
 			# per-stage rows: those are S0 binary and S1 nine-class numbers, on
 			# different label spaces, and averaging them with this one would be
 			# the very mistake this whole path exists to stop.
-			self.dashboard_client.create_validation_summary(
+			self.dashboard_client.create_test_summary(
 				experiment_id=experiment_id,
-				validation_point="final",
+				test_point="final",
 				genome_type="hierarchical_cascade",
 				genome_hash="cascade",
 				ce=0.0,
@@ -2266,9 +2266,9 @@ class Flow:
 					"bits_min": min(s0_genome.bits_per_neuron),
 					"bits_max": max(s0_genome.bits_per_neuron),
 				}
-			self.dashboard_client.create_validation_summary(
+			self.dashboard_client.create_test_summary(
 				experiment_id=experiment_id,
-				validation_point="final",
+				test_point="final",
 				genome_type="frozen_s0_gate",
 				genome_hash="frozen_s0",
 				ce=0.0,
@@ -2292,7 +2292,7 @@ class Flow:
 		"""Run a lambda sweep experiment (eval-only, no training).
 
 		Loads genomes from specified checkpoints, sweeps unigram_lambda values,
-		and stores each result as a combined validation in the dashboard.
+		and stores each result as a combined test summary in the dashboard.
 		"""
 		import time as _time
 		cfg = self.config
@@ -2390,11 +2390,11 @@ class Flow:
 				"s0_ce": s0_ce, "s1_ce": s1_ce,
 			})
 
-			# Store each result as a combined validation
+			# Store each result as a combined test summary
 			if self.dashboard_client and self._flow_id:
 				try:
 					genome_label = f"uni{uni_lam:.3f}_bi{bi_lam:.3f}" if bi_lam > 0 else f"unigram_l{uni_lam:.3f}"
-					self.dashboard_client.create_combined_validation(
+					self.dashboard_client.create_combined_test_summary(
 						flow_id=self._flow_id,
 						genome_type=genome_label,
 						combined_ce=ce,
@@ -2403,7 +2403,7 @@ class Flow:
 						unigram_lambda=uni_lam,
 					)
 				except Exception as e:
-					self.log(f"    Warning: Failed to store validation: {e}")
+					self.log(f"    Warning: Failed to store test evaluation: {e}")
 
 		self.log("")
 		if bigram_lambda_values:
@@ -2490,7 +2490,7 @@ class Flow:
 		frozen_populations: dict[int, tuple[list[ClusterGenome], list[tuple[float, float]]]],
 		num_stages: int,
 	) -> dict[str, list[ClusterGenome]]:
-		"""Build genome pairs for combined validation across stages.
+		"""Build genome pairs for combined test summary across stages.
 
 		For each genome type (best_ce, best_acc, best_fitness), pick the corresponding
 		genome from each stage's population and pair them together.

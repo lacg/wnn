@@ -447,7 +447,7 @@ use pyapi::*;
 /// writer). Exports are bit-identical wherever the hashed table never overflowed
 /// (marker_repeatability_tests golden: b >= 16, every writer, both rates), so a
 /// low-bit result from an ABI-21 wheel is not comparable — the stale wheel must
-/// fail loudly, and the validation cache (pins worker_abi) re-validates.
+/// fail loudly, and the test cache (pins worker_abi) re-validates.
 /// 23 (01/11/2026): no surface change — duplicate-aware SCORING. A collapsed
 /// multiplicity export (rate 1.0, order-independent writer) is scored once per
 /// DISTINCT unit, weighted by its copies, mean over the logical neurons

@@ -452,7 +452,7 @@
 	{:else if rankedGenomes.length === 0}
 		<div class="empty">
 			<p>No genomes in the leaderboard yet.</p>
-			<p class="hint">Run experiments with validation to populate the leaderboard.</p>
+			<p class="hint">Run experiments with a test evaluation to populate the leaderboard.</p>
 		</div>
 	{:else}
 		<div class="leaderboard-table">

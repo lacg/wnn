@@ -12,7 +12,7 @@ Write-safety, by construction:
   * the worker object is built WITHOUT FlowWorker.__init__ (no SqliteTracker on the live DB,
     no signal handlers); its dashboard client is a ReadOnlyClient that only forwards
     get_*/list_* calls and raises on anything else;
-  * the Experiment gets a CaptureClient as dashboard_client: create_validation_summary is
+  * the Experiment gets a CaptureClient as dashboard_client: create_test_summary is
     captured in memory (that is how threshold_metadata comes back), every other call raises.
     revalidate_genome runs with use_cache=False, submit_leaderboard=False.
 
@@ -54,7 +54,7 @@ class CaptureClient:
 	def __init__(self):
 		self.rows = []
 
-	def create_validation_summary(self, experiment_id, validation_point, genome_type, genome_hash, ce, accuracy,
+	def create_test_summary(self, experiment_id, test_point, genome_type, genome_hash, ce, accuracy,
 			flow_id, f1_macro, fpr, threshold_metadata, scope):
 		self.rows.append(dict(genome_hash=genome_hash, ce=ce, acc=accuracy, f1=f1_macro, fpr=fpr,
 			tm=json.loads(threshold_metadata) if threshold_metadata else None))
@@ -137,7 +137,7 @@ def rescore(worker, fid: int, eid: int, ckpt: dict, rows: list[dict], limit: int
 	cap = CaptureClient()
 	exp = Experiment(config=cfg, evaluator=flow.evaluator, logger=lambda m: None, checkpoint_dir=None,
 		dashboard_client=cap, experiment_id=eid, tracker=None, flow_id=fid, shutdown_check=None,
-		full_evaluator=flow.full_evaluator, validation_scope=flow.config.validation_scope)
+		full_evaluator=flow.full_evaluator, test_scope=flow.config.test_scope)
 	pop = ckpt["phase_result"]["final_population"]
 	for r in rows[:limit] if limit else rows:
 		d = pop[r["idx"]]

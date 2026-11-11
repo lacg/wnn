@@ -92,15 +92,15 @@ def test_streaming_fit_refuses_dedupe():
 def test_param_resolution_and_cache_key():
 	from wnn.ram.experiments.ids_param_resolution import resolve_encoding_dedupe
 	from wnn.ram.experiments.params import KNOWN_PARAMS
-	from wnn.ram.experiments.validation_cache_key import build_validation_cache_key
+	from wnn.ram.experiments.test_cache_key import build_test_cache_key
 	assert "ids_encoding_dedupe" in KNOWN_PARAMS
 	assert resolve_encoding_dedupe({}) is False
 	assert resolve_encoding_dedupe({"ids_encoding_dedupe": "on"}) is True
 	with pytest.raises(ValueError):
 		resolve_encoding_dedupe({"ids_encoding_dedupe": True})
 	base = {"ids_dataset": "unsw-nb15"}
-	assert build_validation_cache_key(base, True) == build_validation_cache_key(dict(base, ids_encoding_dedupe="off"), True)
-	assert "|enc=dedupe1|" in build_validation_cache_key(dict(base, ids_encoding_dedupe="on"), True)
+	assert build_test_cache_key(base, True) == build_test_cache_key(dict(base, ids_encoding_dedupe="off"), True)
+	assert "|enc=dedupe1|" in build_test_cache_key(dict(base, ids_encoding_dedupe="on"), True)
 
 
 def test_dedupe_drops_cross_feature_copies_of_near_identical_columns():

@@ -1,10 +1,10 @@
 <script lang="ts">
-	import type { ValidationProgressionPoint } from './types'
+	import type { TestProgressionPoint } from './types'
 	import PerClassBreakdown from './PerClassBreakdown.svelte'
 	import MulticlassBreakdown from './MulticlassBreakdown.svelte'
 	import FootprintCell from './FootprintCell.svelte'
 
-	export let points: ValidationProgressionPoint[] = []
+	export let points: TestProgressionPoint[] = []
 	export let isIDS: boolean = false
 	// Multiclass IDS flows carry decode-mode metadata (argmax/margin_*) instead
   // of binary threshold modes; f1/fpr cells then read macro-F1/benign-FPR
@@ -53,10 +53,10 @@
 	$: fprLabel = useMacroLabels ? 'bFPR' : 'FPR'
 </script>
 
-<div class="validation-section">
-	<div class="validation-header">
-		<span class="validation-title">📈 Validation Progression</span>
-		<div class="validation-legend">
+<div class="test-section">
+	<div class="test-header">
+		<span class="test-title">📈 Test Progression</span>
+		<div class="test-legend">
 			{#if isIDS}
 				<span class="legend-item"><span class="legend-marker best-ce"></span> Best {isMulticlass ? 'Macro-F1' : 'F1-macro'}</span>
 				<span class="legend-item"><span class="legend-marker best-acc"></span> Best {isMulticlass ? 'Benign-FPR' : 'FPR'}</span>
@@ -68,8 +68,8 @@
 			{/if}
 		</div>
 	</div>
-	<div class="validation-table-container">
-		<table class="validation-table">
+	<div class="test-table-container">
+		<table class="test-table">
 			<thead>
 				{#if isIDS}
 					<tr>
@@ -116,11 +116,11 @@
 				{#if idx > 0}
 					<tbody class="phase-spacer"><tr><td colspan="16"></td></tr></tbody>
 				{/if}
-				<tbody class="phase-group" class:phase-group-current={isCurrentExp && point.validationPoint === 'final'}>
-					<tr class:current-phase={isCurrentExp && point.validationPoint === 'final'}>
-						<td class="phase-name" class:init-phase={point.validationPoint === 'init'}>
+				<tbody class="phase-group" class:phase-group-current={isCurrentExp && point.testPoint === 'final'}>
+					<tr class:current-phase={isCurrentExp && point.testPoint === 'final'}>
+						<td class="phase-name" class:init-phase={point.testPoint === 'init'}>
 							{point.label}
-							{#if isCurrentExp && point.validationPoint === 'final'}
+							{#if isCurrentExp && point.testPoint === 'final'}
 								<span class="current-marker">◀</span>
 							{/if}
 							{#if isIDS && hasThresholds}
@@ -197,7 +197,7 @@
 	</div>
 
 	<!-- Per-attack-class drill-down: separate section so it doesn't split
-       the main validation table's header from its phase rows. -->
+       the main test table's header from its phase rows. -->
 	{#if isIDS && isMulticlass}
 		<MulticlassBreakdown {points} />
 	{:else if isIDS}
@@ -206,8 +206,8 @@
 </div>
 
 <style>
-  /* Validation Section */
-  .validation-section {
+  /* Test Section */
+  .test-section {
     background: var(--glass-bg);
     backdrop-filter: blur(var(--glass-blur));
     -webkit-backdrop-filter: blur(var(--glass-blur));
@@ -217,7 +217,7 @@
     margin-bottom: 1.5rem;
   }
 
-  .validation-header {
+  .test-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -226,12 +226,12 @@
     border-bottom: 1px solid var(--glass-border);
   }
 
-  .validation-title {
+  .test-title {
     font-weight: 600;
     color: var(--text-primary);
   }
 
-  .validation-legend {
+  .test-legend {
     display: flex;
     gap: 1rem;
     font-size: 1rem;
@@ -287,19 +287,19 @@
     border-bottom: none;
   }
 
-  /* Validation Progression Table */
-  .validation-table-container {
+  /* Test Progression Table */
+  .test-table-container {
     overflow-x: auto;
   }
 
-  .validation-table {
+  .test-table {
     width: 100%;
     border-collapse: separate;
     border-spacing: 0;
     font-size: 1rem;
   }
 
-  .validation-table th {
+  .test-table th {
     background: rgba(51, 65, 85, 0.4);
     padding: 0.4rem 0.5rem;
     text-align: center;
@@ -311,17 +311,17 @@
     white-space: nowrap;
   }
 
-  .validation-table td {
+  .test-table td {
     padding: 0.4rem 0.5rem;
     text-align: center;
     border-bottom: 1px solid var(--glass-border);
   }
 
-  .validation-table tr:last-child td {
+  .test-table tr:last-child td {
     border-bottom: none;
   }
 
-  .validation-table .phase-name {
+  .test-table .phase-name {
     text-align: left;
     font-weight: 500;
     color: var(--text-primary);
@@ -330,16 +330,16 @@
     line-height: 1.2;
   }
 
-  .validation-table .phase-name.init-phase {
+  .test-table .phase-name.init-phase {
     color: var(--accent-blue);
     font-style: italic;
   }
 
-  .validation-table tr.current-phase {
+  .test-table tr.current-phase {
     background: rgba(59, 130, 246, 0.1);
   }
 
-  .validation-table tr.current-phase td {
+  .test-table tr.current-phase td {
     font-weight: 600;
   }
 
@@ -349,42 +349,42 @@
     font-size: 1rem;
   }
 
-  .validation-table th[colspan] {
+  .test-table th[colspan] {
     border-bottom: 1px solid var(--glass-border);
   }
 
-  .validation-table .best-ce-col {
+  .test-table .best-ce-col {
     background: rgba(59, 130, 246, 0.08);
   }
 
-  .validation-table .best-acc-col {
+  .test-table .best-acc-col {
     background: rgba(34, 197, 94, 0.08);
   }
 
-  .validation-table .best-fit-col {
+  .test-table .best-fit-col {
     background: rgba(155, 89, 182, 0.08);
   }
 
   /* Glass panels for each genome column group */
   /* Best F1 group: cols 2-4 */
-  .validation-table td:nth-child(2) {
+  .test-table td:nth-child(2) {
     border-left: 1px solid rgba(59, 130, 246, 0.3) !important;
   }
-  .validation-table td:nth-child(4) {
+  .test-table td:nth-child(4) {
     border-right: 1px solid rgba(59, 130, 246, 0.3) !important;
   }
   /* Best FPR group: cols 5-7 */
-  .validation-table td:nth-child(5) {
+  .test-table td:nth-child(5) {
     border-left: 1px solid rgba(34, 197, 94, 0.3) !important;
   }
-  .validation-table td:nth-child(7) {
+  .test-table td:nth-child(7) {
     border-right: 1px solid rgba(34, 197, 94, 0.3) !important;
   }
   /* Best Fitness group: cols 8-10 */
-  .validation-table td:nth-child(8) {
+  .test-table td:nth-child(8) {
     border-left: 1px solid rgba(155, 89, 182, 0.3) !important;
   }
-  .validation-table td:nth-child(10) {
+  .test-table td:nth-child(10) {
     border-right: 1px solid rgba(155, 89, 182, 0.3) !important;
   }
 
@@ -430,19 +430,19 @@
   .phase-group tr:last-child td:nth-child(10) { border-bottom-right-radius: 6px; }
 
   /* Header column group styling */
-  .validation-table thead tr:first-child th:nth-child(2) {
+  .test-table thead tr:first-child th:nth-child(2) {
     border-left: 1px solid rgba(59, 130, 246, 0.3);
     border-top: 1px solid rgba(59, 130, 246, 0.3);
     border-top-left-radius: 6px;
     background: rgba(59, 130, 246, 0.1);
   }
-  .validation-table thead tr:first-child th:nth-child(3) {
+  .test-table thead tr:first-child th:nth-child(3) {
     border-left: 1px solid rgba(34, 197, 94, 0.3);
     border-top: 1px solid rgba(34, 197, 94, 0.3);
     border-top-left-radius: 6px;
     background: rgba(34, 197, 94, 0.1);
   }
-  .validation-table thead tr:first-child th:nth-child(4) {
+  .test-table thead tr:first-child th:nth-child(4) {
     border-left: 1px solid rgba(155, 89, 182, 0.3);
     border-top: 1px solid rgba(155, 89, 182, 0.3);
     border-top-left-radius: 6px;
@@ -473,13 +473,13 @@
   }
 
   /* Actual result row (main data — fixed 0.5) — white, bold */
-  .validation-table tbody tr:not(.threshold-sub-row) td.mono {
+  .test-table tbody tr:not(.threshold-sub-row) td.mono {
     color: #e2e8f0;
     font-weight: 600;
   }
 
   /* Phase name (Grid Search / GA Neurons) — white */
-  .validation-table tbody tr:not(.threshold-sub-row) td.phase-name {
+  .test-table tbody tr:not(.threshold-sub-row) td.phase-name {
     color: #e2e8f0;
     font-weight: 600;
   }

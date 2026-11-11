@@ -68,12 +68,12 @@ def load_exclusions(path):
 
 
 def flow_cells(c, fid, excl=(set(), set())):
-	"""All held-out TEST cells: validation_point='final', both phases x genome types x 7 modes,
+	"""All held-out TEST cells: test_point='final', both phases x genome types x 7 modes,
 	minus cache-inherited cells (--exclude)."""
 	drop_all, drop_ec = excl
 	out = []
-	q = """select v.id, e.phase_type, v.genome_type, v.threshold_metadata from validation_summaries v
-		join experiments e on e.id=v.experiment_id where v.flow_id=? and v.validation_point='final'"""
+	q = """select v.id, e.phase_type, v.genome_type, v.threshold_metadata from test_summaries v
+		join experiments e on e.id=v.experiment_id where v.flow_id=? and v.test_point='final'"""
 	for vid, ph, gt, tm in c.execute(q, (fid,)):
 		if ph not in PHASE_ABBR or gt not in GTYPES or not tm or vid in drop_all:
 			continue
@@ -324,8 +324,8 @@ def main():
 		acc = {g: defaultdict(list) for g in ("best_f1", "best_fitness")}
 		for r in v["runs"]:
 			for g in acc:
-				tm = c.execute("""select v.threshold_metadata from validation_summaries v join experiments e on e.id=v.experiment_id
-					where v.flow_id=? and v.validation_point='final' and e.phase_type='ga_neurons' and v.genome_type=?""", (r["fid"], g)).fetchone()
+				tm = c.execute("""select v.threshold_metadata from test_summaries v join experiments e on e.id=v.experiment_id
+					where v.flow_id=? and v.test_point='final' and e.phase_type='ga_neurons' and v.genome_type=?""", (r["fid"], g)).fetchone()
 				if tm and tm[0]:
 					x = json.loads(tm[0]).get("val_cal") or {}
 					for k2 in ("f1", "fpr", "acc"):

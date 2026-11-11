@@ -52,13 +52,13 @@ def test_train_only_refuses_what_it_cannot_serve():
 
 def test_param_resolution_and_cache_key():
 	from wnn.ram.experiments.ids_param_resolution import resolve_feature_ranking
-	from wnn.ram.experiments.validation_cache_key import build_validation_cache_key
+	from wnn.ram.experiments.test_cache_key import build_test_cache_key
 	assert resolve_feature_ranking({}) == "legacy"
 	with pytest.raises(ValueError):
 		resolve_feature_ranking({"ids_feature_ranking": "train"})
 	base = {"ids_dataset": "cicids2017", "ids_feature_selection": "top20"}
-	assert build_validation_cache_key(base, True) == build_validation_cache_key(dict(base, ids_feature_ranking="legacy"), True)
-	assert f"|fr={TRAIN_ONLY_VERSION}|" in build_validation_cache_key(dict(base, ids_feature_ranking="train_only"), True)
+	assert build_test_cache_key(base, True) == build_test_cache_key(dict(base, ids_feature_ranking="legacy"), True)
+	assert f"|fr={TRAIN_ONLY_VERSION}|" in build_test_cache_key(dict(base, ids_feature_ranking="train_only"), True)
 
 
 def test_settings_carry_the_ranking_to_the_loader():

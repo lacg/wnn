@@ -21,7 +21,7 @@ from wnn.ram.strategies.factory import OptimizerStrategyFactory, OptimizerStrate
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 from wnn.ram.genome import mode_or_midpoint
 from wnn.ram.experiments.phased_search import PhaseResult
-from wnn.ram.experiments.validation_cache_scope import ValidationCacheScope
+from wnn.ram.experiments.test_cache_scope import TestCacheScope
 
 
 
@@ -43,7 +43,7 @@ def _phase_defaults(
 
 
 def _uses_decode_modes(evaluator) -> bool:
-	"""K-cluster IDS validation: one memory PER CLASS, decoded by argmax /
+	"""K-cluster IDS test evaluation: one memory PER CLASS, decoded by argmax /
 	benign-margin from a single training pass (evaluate_multiclass_at_thresholds).
 	Multiclass AND binary two-cluster (ids_classification='binary',
 	ids_single_cluster=false — two memories, attack vs normal). Before
@@ -369,9 +369,9 @@ class ExperimentResult:
 	checkpoint_path: Optional[str] = None
 	was_shutdown: bool = False  # True if stopped due to external shutdown request
 	population_metrics: Optional[list[tuple[float, float]]] = None  # Cached (ce, acc) per genome in final_population
-	validation_f1: Optional[float] = None     # F1-macro from final validation (Rust)
-	validation_fpr: Optional[float] = None    # FPR from final validation (Rust)
-	validation_acc: Optional[float] = None    # Accuracy from final validation (Rust)
+	test_f1: Optional[float] = None     # F1-macro from final test evaluation (Rust)
+	test_fpr: Optional[float] = None    # FPR from final test evaluation (Rust)
+	test_acc: Optional[float] = None    # Accuracy from final test evaluation (Rust)
 
 	def to_phase_result(self) -> PhaseResult:
 		"""Convert to PhaseResult for compatibility."""
@@ -431,8 +431,8 @@ class Experiment:
 		tracker: Optional[Any] = None,  # ExperimentTracker for V2 tracking
 		flow_id: Optional[int] = None,
 		shutdown_check: Optional[Callable[[], bool]] = None,  # Callable returning True if shutdown requested
-		full_evaluator: Optional[Any] = None,  # Separate evaluator for validation (uses validation set)
-		validation_scope: Optional[ValidationCacheScope] = None,  # cross-flow validation-cache scope (key + worker ABI)
+		full_evaluator: Optional[Any] = None,  # Separate evaluator for test evaluation (uses held-out set)
+		test_scope: Optional[TestCacheScope] = None,  # cross-flow test-cache scope (key + worker ABI)
 	):
 		"""
 		Initialize experiment.
@@ -447,8 +447,8 @@ class Experiment:
 			tracker: Optional V2 tracker for direct database writes
 			flow_id: Optional flow ID for V2 tracking
 			shutdown_check: Optional callable that returns True if shutdown requested
-			full_evaluator: Separate evaluator for validation (trains on full train, evals on validation set)
-			validation_scope: Flow-level cache scope; None disables the validation cache
+			full_evaluator: Separate evaluator for test evaluation (trains on full train, evals on held-out set)
+			test_scope: Flow-level cache scope; None disables the test cache
 		"""
 		self.config = config
 		self.evaluator = evaluator
@@ -460,7 +460,7 @@ class Experiment:
 		self.tracker = tracker
 		self.flow_id = flow_id
 		self.shutdown_check = shutdown_check
-		self.validation_scope = self._experiment_validation_scope(validation_scope, config)
+		self.test_scope = self._experiment_test_scope(test_scope, config)
 
 		# Derived properties
 		self.vocab_size = evaluator.vocab_size
@@ -634,7 +634,7 @@ class Experiment:
 			initial_population: Population to seed from
 			initial_threshold: Starting accuracy threshold
 			tracker_experiment_id: V2 experiment ID for tracker (if using V2 tracking)
-			initial_evals: Cached eval results from previous phase (avoids re-evaluation for INIT validation)
+			initial_evals: Cached eval results from previous phase (avoids re-evaluation for INIT test evaluation)
 			train_subset_idx: Which train subset to use (cycled per phase to avoid subset bias)
 
 		Returns:
@@ -953,7 +953,7 @@ class Experiment:
 		if self.dashboard_client and hasattr(strategy, 'set_dashboard_client'):
 			strategy.set_dashboard_client(self.dashboard_client)
 
-		# Create fitness calculator for validation genome selection
+		# Create fitness calculator for test evaluation genome selection
 		fitness_calculator = FitnessCalculatorFactory.create(
 			cfg.fitness_calculator_type,
 			weights=FitnessWeights(
@@ -967,21 +967,21 @@ class Experiment:
 			acc_anchor=cfg.fitness_acc_anchor,
 		)
 
-		# Run INIT validation on seed population
+		# Run INIT test evaluation on seed population
 		# Use cached evals from previous phase if available (avoids redundant re-evaluation)
 		seed_pop = initial_population or ([initial_genome] if initial_genome else None)
 		if seed_pop and not is_controller:
 			if initial_evals and len(initial_evals) == len(seed_pop):
-				self.log(f"  Using cached metrics for INIT validation ({len(seed_pop)} genomes)")
+				self.log(f"  Using cached metrics for INIT test evaluation ({len(seed_pop)} genomes)")
 				init_evals = initial_evals
 			else:
-				self.log(f"  Evaluating initial population for validation selection ({len(seed_pop)} genomes)...")
+				self.log(f"  Evaluating initial population for test evaluation selection ({len(seed_pop)} genomes)...")
 				init_evals = self.evaluator.evaluate_batch(seed_pop)
 				initial_evals = [(r.ce, r.acc) for r in init_evals]  # Reuse in strategy (plain tuples)
-			self._run_validation(
+			self._run_test_eval(
 				population=seed_pop,
 				evals=init_evals,
-				validation_point='init',
+				test_point='init',
 				experiment_id=tracker_experiment_id or self.experiment_id,
 				flow_id=self.flow_id,
 				fitness_calculator=fitness_calculator,
@@ -1029,8 +1029,8 @@ class Experiment:
 			from wnn.ram.strategies.connectivity.generic_strategies import StopReason
 			was_shutdown = result.stop_reason == StopReason.SHUTDOWN if result.stop_reason else False
 
-			# Run FINAL validation (skip if shutdown was requested; controller flows
-			# have no IDS f1/fpr validation — fitness is closed-loop reward).
+			# Run FINAL test evaluation (skip if shutdown was requested; controller flows
+			# have no IDS f1/fpr test evaluation — fitness is closed-loop reward).
 			val_results = {}
 			if not was_shutdown and result.final_population and not is_controller:
 				# Use cached metrics from the optimizer if available (avoids redundant re-eval)
@@ -1038,10 +1038,10 @@ class Experiment:
 					final_evals = result.population_metrics
 				else:
 					final_evals = self.evaluator.evaluate_batch(result.final_population)
-				val_results = self._run_validation(
+				val_results = self._run_test_eval(
 					population=result.final_population,
 					evals=final_evals,
-					validation_point='final',
+					test_point='final',
 					experiment_id=tracker_experiment_id or self.experiment_id,
 					flow_id=self.flow_id,
 					fitness_calculator=fitness_calculator,
@@ -1109,7 +1109,7 @@ class Experiment:
 		if result.initial_fitness and result.initial_fitness > 0:
 			improvement = (result.initial_fitness - result.final_fitness) / result.initial_fitness * 100
 
-		# Extract validation metrics for best genome (used by flow for IDS Results)
+		# Extract test evaluation metrics for best genome (used by flow for IDS Results)
 		best_val = val_results.get('best_ce') or val_results.get('best_fitness') or {} if val_results else {}
 
 		# Create result
@@ -1127,9 +1127,9 @@ class Experiment:
 			elapsed_seconds=elapsed,
 			was_shutdown=was_shutdown,
 			population_metrics=result.population_metrics,
-			validation_f1=best_val.get('f1'),
-			validation_fpr=best_val.get('fpr'),
-			validation_acc=best_val.get('acc'),
+			test_f1=best_val.get('f1'),
+			test_fpr=best_val.get('fpr'),
+			test_acc=best_val.get('acc'),
 		)
 
 		# Save checkpoint
@@ -1166,7 +1166,7 @@ class Experiment:
 				for m in result.population_metrics
 			]
 
-		# Save best_ce and best_acc genomes for combined validation (future-proofing)
+		# Save best_ce and best_acc genomes for combined test summary (future-proofing)
 		if result.final_population and result.population_metrics:
 			try:
 				metrics = result.population_metrics
@@ -1220,13 +1220,13 @@ class Experiment:
 		return str(filepath)
 
 	@staticmethod
-	def _experiment_validation_scope(
-		scope: Optional[ValidationCacheScope],
+	def _experiment_test_scope(
+		scope: Optional[TestCacheScope],
 		config: Optional[ExperimentConfig],
-	) -> Optional[ValidationCacheScope]:
+	) -> Optional[TestCacheScope]:
 		"""Append this experiment's fitness weights: the empirical_cumulative
 		threshold mode is fitted with them, so two experiments that differ only
-		in weights must not share a cached validation row."""
+		in weights must not share a cached test evaluation row."""
 		if scope is None or config is None:
 			return None
 		return scope.with_threshold_weights(
@@ -1254,19 +1254,19 @@ class Experiment:
 		config_str = "|".join(parts)
 		return hashlib.sha256(config_str.encode()).hexdigest()[:16]
 
-	def _select_validation_genomes(
+	def _select_test_genomes(
 		self,
 		genomes: list[ClusterGenome],
 		evals: list[tuple[float, float]],
 		fitness_calculator: Optional[Any] = None,
 	) -> list[tuple[ClusterGenome, str, float, float]]:
 		"""
-		Select genomes for validation: best CE, best Acc, best Fitness.
+		Select genomes for test evaluation: best CE, best Acc, best Fitness.
 
 		Uses FitnessCalculator.bests() for correct, consistent selection
 		across all three metrics. Always returns all three types, even if
 		they refer to the same genome — deduplication happens via genome_hash
-		caching in _run_validation.
+		caching in _run_test_eval.
 
 		Args:
 			genomes: Population of genomes
@@ -1327,7 +1327,7 @@ class Experiment:
 		]
 
 	def revalidate_genome(self, genome: ClusterGenome, genome_type: GenomeType, flow_id: Optional[int]) -> dict:
-		"""Re-score ONE stored genome as a fresh FINAL validation: cache bypassed,
+		"""Re-score ONE stored genome as a fresh FINAL test evaluation: cache bypassed,
 		row upserted under this experiment's scope, no leaderboard submit. Used to
 		replace rows the pre-fix cross-flow cache inherited (10/10/2026)."""
 		results: dict = {}
@@ -1339,7 +1339,7 @@ class Experiment:
 		self,
 		genome: ClusterGenome,
 		genome_type: GenomeType,
-		validation_point: str,
+		test_point: str,
 		flow_id: Optional[int],
 		results: dict,
 		use_cache: bool = True,
@@ -1350,11 +1350,11 @@ class Experiment:
 		genome_hash = self._compute_genome_hash(genome)
 
 		# Check if already validated under the SAME scope (every param that changes
-		# this genome's validation + the worker ABI; validation_cache_key.py)
+		# this genome's test evaluation + the worker ABI; test_cache_key.py)
 		cached = None
 		if self.dashboard_client and use_cache:
 			try:
-				cached = self.dashboard_client.check_cached_validation(genome_hash, self.validation_scope)
+				cached = self.dashboard_client.check_cached_test_summary(genome_hash, self.test_scope)
 			except Exception:
 				pass
 
@@ -1405,9 +1405,9 @@ class Experiment:
 			else:
 				self.log(f"  {genome_type.value}: CE={ce:.4f}, Acc={acc:.4%} (cached)")
 		else:
-			# Run full validation (use full_evaluator if available — validates against held-out set)
+			# Run full test evaluation (use full_evaluator if available — validates against held-out set)
 			val_evaluator = self.full_evaluator or self.evaluator
-			self.log(f"  {genome_type.value}: Running full validation...")
+			self.log(f"  {genome_type.value}: Running full test evaluation...")
 			_is_sc = hasattr(val_evaluator, '_single_cluster') and val_evaluator._single_cluster
 			_is_mc = _uses_decode_modes(val_evaluator)
 			if _is_sc or _is_mc:
@@ -1432,7 +1432,7 @@ class Experiment:
 				else:
 					self.log(f"  {genome_type.value}: CE={ce:.4f}, Acc={acc:.4%} (validated)")
 
-		# Three-threshold validation for single-cluster IDS
+		# Three-threshold test evaluation for single-cluster IDS
 		threshold_metadata = None
 		val_evaluator = self.full_evaluator or self.evaluator
 		is_single_cluster = (
@@ -1445,7 +1445,7 @@ class Experiment:
 		# Use cached threshold_metadata if available (avoids re-running expensive 4-threshold eval)
 		if cached_threshold_metadata is not None and (is_single_cluster or is_multiclass):
 			threshold_metadata = cached_threshold_metadata
-			self.log(f"    Thresholds: (cached from prior validation)")
+			self.log(f"    Thresholds: (cached from prior test evaluation)")
 
 		elif is_multiclass and cached is None:
 			# Multiclass (K clusters): argmax + benign-margin decode modes
@@ -1720,12 +1720,12 @@ class Experiment:
 			self.log(f"    Footprint:   {footprint.render(genome.bits_per_neuron)}")
 
 		# Always store summary via dashboard API (even if cached)
-		# This ensures each (experiment_id, validation_point, genome_type) has a record
+		# This ensures each (experiment_id, test_point, genome_type) has a record
 		if self.dashboard_client and self.experiment_id:
 			try:
-				self.dashboard_client.create_validation_summary(
+				self.dashboard_client.create_test_summary(
 					experiment_id=self.experiment_id,
-					validation_point=validation_point,
+					test_point=test_point,
 					genome_type=genome_type.value,
 					genome_hash=genome_hash,
 					ce=ce,
@@ -1734,14 +1734,14 @@ class Experiment:
 					f1_macro=f1,
 					fpr=fpr_val,
 					threshold_metadata=json.dumps(threshold_metadata) if threshold_metadata else None,
-					scope=self.validation_scope,
+					scope=self.test_scope,
 					footprint=footprint,
 				)
 			except Exception as e:
 				self.log(f"  Warning: Failed to save {genome_type.value} summary: {e}")
 
-		# Submit to best genomes leaderboard (final validation only)
-		if self.dashboard_client and validation_point == 'final' and submit_leaderboard:
+		# Submit to best genomes leaderboard (final test evaluation only)
+		if self.dashboard_client and test_point == 'final' and submit_leaderboard:
 			try:
 				task_type = "ids" if f1 is not None else "lm"
 				exp_name = self.config.name if self.config else ""
@@ -1779,7 +1779,7 @@ class Experiment:
 				# Submit one leaderboard entry per threshold mode
 				submissions = []
 				# If threshold_metadata is available, submit from it (has all modes including train_cal)
-				# Otherwise fall back to the main validation values as train_cal
+				# Otherwise fall back to the main test evaluation values as train_cal
 				if threshold_metadata:
 					for mode_key, mode_data in threshold_metadata.items():
 						if isinstance(mode_data, dict) and 'f1' in mode_data:
@@ -1816,39 +1816,39 @@ class Experiment:
 			except Exception as e:
 				self.log(f"  Warning: leaderboard submit failed: {e}")
 
-	def _run_validation(
+	def _run_test_eval(
 		self,
 		population: list[ClusterGenome],
 		evals: list[tuple[float, float]],
-		validation_point: str,  # 'init' or 'final'
+		test_point: str,  # 'init' or 'final'
 		experiment_id: int,
 		flow_id: Optional[int] = None,
 		fitness_calculator: Optional[Any] = None,
 	) -> dict:
 		"""
-		Run full validation on selected genomes from population.
+		Run full test evaluation on selected genomes from population.
 
 		For each selected genome (best_ce, best_acc, best_fitness):
 		1. Check if genome_hash already exists in summaries (via dashboard API)
-		2. If found: skip validation, use cached values
-		3. If not found: run full validation (train full + eval full)
+		2. If found: skip test evaluation, use cached values
+		3. If not found: run full test evaluation (train full + eval full)
 		4. Store result via dashboard API
 
 		This deduplication means:
-		- Init of experiment N reuses final validation from experiment N-1
-		- Only genuinely new genomes trigger expensive full validation
+		- Init of experiment N reuses final test evaluation from experiment N-1
+		- Only genuinely new genomes trigger expensive full test evaluation
 
 		Args:
 			population: List of genomes to select from
 			evals: Training evaluation results (ce, acc) for each genome
-			validation_point: 'init' or 'final'
+			test_point: 'init' or 'final'
 			experiment_id: Experiment ID for storing summaries
 			flow_id: Optional flow ID for organizing summaries
 			fitness_calculator: Optional fitness calculator for ranking
 		"""
 		self.log("")
 		self.log("=" * 60)
-		self.log(f"  {validation_point.upper()} VALIDATION (Full Dataset)")
+		self.log(f"  {test_point.upper()} VALIDATION (Full Dataset)")
 		self.log("=" * 60)
 
 		results = {}
@@ -1859,22 +1859,22 @@ class Experiment:
 
 		try:
 			# Select 1-3 best genomes
-			selected = self._select_validation_genomes(population, evals, fitness_calculator)
+			selected = self._select_test_genomes(population, evals, fitness_calculator)
 
 			if not selected:
-				self.log("  No genomes selected for validation")
+				self.log("  No genomes selected for test evaluation")
 				return results
 
 			self.log(f"  Selected {len(selected)} genome(s): {[gt.value for _, gt, _ in selected]}")
 
 			# Process each selected genome
 			for genome, genome_type, train_metrics in selected:
-				self._validate_one_genome(genome, genome_type, validation_point, flow_id, results)
+				self._validate_one_genome(genome, genome_type, test_point, flow_id, results)
 
 			self.log("=" * 60)
 			self.log("")
 
 		except Exception as e:
-			self.log(f"  Warning: {validation_point} validation failed: {e}")
+			self.log(f"  Warning: {test_point} test evaluation failed: {e}")
 
 		return results

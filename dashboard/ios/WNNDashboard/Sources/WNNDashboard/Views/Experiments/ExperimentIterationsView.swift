@@ -14,7 +14,7 @@ public struct ExperimentIterationsView: View {
     @State private var gatingRuns: [GatingRun] = []
     @State private var checkpoints: [Checkpoint] = []
     @State private var flowExperiments: [Experiment] = []
-    @State private var flowValidations: [ValidationSummary] = []
+    @State private var flowTests: [TestSummary] = []
     @State private var isLoading = true
     @State private var isCreatingGatingRun = false
 
@@ -74,8 +74,8 @@ public struct ExperimentIterationsView: View {
             VStack(spacing: 16) {
                 experimentHeader
                 metricsSection
-                if !validationProgression.isEmpty {
-                    validationProgressionSection
+                if !testProgression.isEmpty {
+                    testProgressionSection
                 }
                 if experiment.status == .completed {
                     gatingSection
@@ -97,12 +97,12 @@ public struct ExperimentIterationsView: View {
 
     private var iPadLayout: some View {
         HStack(alignment: .top, spacing: 20) {
-            // Left: Header, Metrics, Validation, Gating
+            // Left: Header, Metrics, Test, Gating
             VStack(spacing: 16) {
                 experimentHeader
                 metricsSection
-                if !validationProgression.isEmpty {
-                    validationProgressionSection
+                if !testProgression.isEmpty {
+                    testProgressionSection
                 }
                 if experiment.status == .completed {
                     gatingSection
@@ -326,49 +326,49 @@ public struct ExperimentIterationsView: View {
             .cluster_stats
     }
 
-    // MARK: - Validation Progression
+    // MARK: - Test Progression
 
-    private struct ValidationProgressionPoint: Identifiable {
+    private struct TestProgressionPoint: Identifiable {
         let id = UUID()
         let label: String
         let expId: Int64
         let sequenceOrder: Int32
-        let validationPoint: ValidationPoint
-        let summaries: [ValidationSummary]
+        let testPoint: TestPoint
+        let summaries: [TestSummary]
 
-        var bestCE: ValidationSummary? { summaries.first { $0.genome_type == .best_ce } }
-        var bestAcc: ValidationSummary? { summaries.first { $0.genome_type == .best_acc } }
-        var bestFitness: ValidationSummary? { summaries.first { $0.genome_type == .best_fitness } }
+        var bestCE: TestSummary? { summaries.first { $0.genome_type == .best_ce } }
+        var bestAcc: TestSummary? { summaries.first { $0.genome_type == .best_acc } }
+        var bestFitness: TestSummary? { summaries.first { $0.genome_type == .best_fitness } }
     }
 
-    private var validationProgression: [ValidationProgressionPoint] {
-        guard !flowValidations.isEmpty, !flowExperiments.isEmpty else { return [] }
+    private var testProgression: [TestProgressionPoint] {
+        guard !flowTests.isEmpty, !flowExperiments.isEmpty else { return [] }
 
         let currentSeqOrder = experiment.sequence_order ?? 0
         let expMap = Dictionary(uniqueKeysWithValues: flowExperiments.map { ($0.id, $0) })
 
         // Filter to only include experiments up to current
-        let relevantValidations = flowValidations.filter { v in
+        let relevantTests = flowTests.filter { v in
             guard let exp = expMap[v.experiment_id] else { return false }
             return (exp.sequence_order ?? 0) <= currentSeqOrder
         }
 
-        // Group by (experiment_id, validation_point)
-        var grouped: [String: [ValidationSummary]] = [:]
-        for v in relevantValidations {
-            let key = "\(v.experiment_id)-\(v.validation_point.rawValue)"
+        // Group by (experiment_id, test_point)
+        var grouped: [String: [TestSummary]] = [:]
+        for v in relevantTests {
+            let key = "\(v.experiment_id)-\(v.test_point.rawValue)"
             grouped[key, default: []].append(v)
         }
 
         // Convert to progression points
-        var points: [ValidationProgressionPoint] = []
-        for (key, validations) in grouped {
+        var points: [TestProgressionPoint] = []
+        for (key, tests) in grouped {
             let parts = key.split(separator: "-")
             guard parts.count == 2,
                   let expId = Int64(parts[0]),
                   let exp = expMap[expId] else { continue }
 
-            let point = parts[1] == "init" ? ValidationPoint.`init` : ValidationPoint.final
+            let point = parts[1] == "init" ? TestPoint.`init` : TestPoint.final
             let seqOrder = exp.sequence_order ?? 0
 
             // Label: "Init" for first init, otherwise phase name
@@ -381,29 +381,29 @@ public struct ExperimentIterationsView: View {
                 label = exp.name.replacingOccurrences(of: #"^Phase \d+[ab]: "#, with: "", options: .regularExpression)
             }
 
-            points.append(ValidationProgressionPoint(
+            points.append(TestProgressionPoint(
                 label: label,
                 expId: expId,
                 sequenceOrder: seqOrder,
-                validationPoint: point,
-                summaries: validations
+                testPoint: point,
+                summaries: tests
             ))
         }
 
         // Sort by sequence order, then init before final
         return points.sorted { a, b in
             if a.sequenceOrder != b.sequenceOrder { return a.sequenceOrder < b.sequenceOrder }
-            return a.validationPoint == .`init`
+            return a.testPoint == .`init`
         }
     }
 
-    private var validationProgressionSection: some View {
+    private var testProgressionSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("📈 Validation Progression")
+                Text("📈 Test Progression")
                     .font(.headline)
                 Spacer()
-                Text("\(validationProgression.count) checkpoints")
+                Text("\(testProgression.count) checkpoints")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -460,8 +460,8 @@ public struct ExperimentIterationsView: View {
                     Divider()
 
                     // Data rows
-                    ForEach(Array(validationProgression.enumerated()), id: \.element.id) { idx, point in
-                        let isCurrentPhase = point.expId == experiment.id && point.validationPoint == .final
+                    ForEach(Array(testProgression.enumerated()), id: \.element.id) { idx, point in
+                        let isCurrentPhase = point.expId == experiment.id && point.testPoint == .final
 
                         HStack(spacing: 0) {
                             HStack(spacing: 2) {
@@ -474,8 +474,8 @@ public struct ExperimentIterationsView: View {
                                 }
                             }
                             .frame(width: 70, alignment: .leading)
-                            .font(point.validationPoint == .`init` ? .caption.italic() : .caption)
-                            .foregroundStyle(point.validationPoint == .`init` ? .blue : .primary)
+                            .font(point.testPoint == .`init` ? .caption.italic() : .caption)
+                            .foregroundStyle(point.testPoint == .`init` ? .blue : .primary)
 
                             Spacer().frame(width: 8)
 
@@ -521,7 +521,7 @@ public struct ExperimentIterationsView: View {
                         .padding(.vertical, 6)
                         .background(isCurrentPhase ? Color.blue.opacity(0.1) : Color.clear)
 
-                        if idx < validationProgression.count - 1 {
+                        if idx < testProgression.count - 1 {
                             Divider()
                         }
                     }
@@ -562,13 +562,13 @@ public struct ExperimentIterationsView: View {
             gatingRuns = try await gatingTask.sorted { $0.id > $1.id }
             checkpoints = try await checkpointsTask
 
-            // Load flow validations if experiment belongs to a flow
+            // Load flow tests if experiment belongs to a flow
             if let flowId = experiment.flow_id {
                 async let flowExpsTask = dashboardViewModel.apiClient.getFlowExperiments(flowId)
-                async let flowValsTask = dashboardViewModel.apiClient.getFlowValidations(flowId: flowId)
+                async let flowValsTask = dashboardViewModel.apiClient.getFlowTests(flowId: flowId)
 
                 flowExperiments = try await flowExpsTask
-                flowValidations = try await flowValsTask
+                flowTests = try await flowValsTask
             }
         } catch {
             print("Failed to load experiment data: \(error)")

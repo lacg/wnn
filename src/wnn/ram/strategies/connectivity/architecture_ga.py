@@ -435,7 +435,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		)
 
 	# =========================================================================
-	# Simplified optimize: setup + super() + validation
+	# Simplified optimize: setup + super() + test evaluation
 	# =========================================================================
 
 	def optimize(
@@ -451,7 +451,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 
 		Sets up Rust state, delegates to unified loop in base class (which uses
 		our _generate_offspring override for Rust-accelerated offspring), then
-		runs validation summary on full data.
+		runs test summary on full data.
 		"""
 		import time
 
@@ -612,9 +612,9 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		finally:
 			self._stop_live_observer(observer)
 
-		# Validation summary (Rust path only: full-data evaluation)
+		# Test summary (Rust path only: full-data evaluation)
 		if self._cached_evaluator is not None:
-			result = self._run_validation_summary(result)
+			result = self._run_test_summary(result)
 
 		# Flip the per-gen checkpoint to complete=True. Resume logic uses this
 		# flag to decide whether to re-enter the GA loop (False) or skip the

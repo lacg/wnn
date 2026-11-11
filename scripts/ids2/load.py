@@ -6,9 +6,9 @@ GT=["best_f1","best_fpr","best_acc","best_ce","best_fitness"]
 RE=re.compile(r"^IDSXD2?-(cicids|ciciot)-quad-96b-([A-Za-z0-9]+-?[A-Z]*)-r(\d+)(-w64fix)?$")
 FIX="2026-08-30T02:27"
 SQL="""SELECT f.id,f.name,f.started_at,e.id eid,e.phase_type,vs.genome_type,vs.genome_hash,vs.threshold_metadata
-FROM validation_summaries vs JOIN flows f ON f.id=vs.flow_id JOIN experiments e ON e.id=vs.experiment_id
+FROM test_summaries vs JOIN flows f ON f.id=vs.flow_id JOIN experiments e ON e.id=vs.experiment_id
 WHERE (f.name LIKE 'IDSXD-cicids-%' OR f.name LIKE 'IDSXD-ciciot-%' OR f.name LIKE 'IDSXD2-ciciot-%')
-AND f.status='completed' AND vs.validation_point='final'"""
+AND f.status='completed' AND vs.test_point='final'"""
 GENS="""SELECT f.name, e.phase_type, COUNT(i.id), MAX(i.iteration_num) FROM flows f JOIN experiments e ON e.flow_id=f.id
 LEFT JOIN iterations i ON i.experiment_id=e.id WHERE (f.name LIKE 'IDSXD-cicids-%' OR f.name LIKE 'IDSXD-ciciot-%' OR f.name LIKE 'IDSXD2-ciciot-%')
 AND f.status='completed' AND e.phase_type='ga_neurons' GROUP BY e.id"""

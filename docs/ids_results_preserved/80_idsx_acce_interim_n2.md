@@ -7,8 +7,8 @@ have reached n=2 seeds; two are at n=1. It is recorded here because it CORRECTS 
 banked claims that ARE in the paper track, and because a reader of the sections above
 would otherwise carry the retracted versions forward.
 
-Metric contract unchanged from the top of this file: held-out `validation_summaries.
-threshold_metadata` at `validation_point='final'`. No `iterations.best_f1` anywhere.
+Metric contract unchanged from the top of this file: held-out `test_summaries.
+threshold_metadata` at `test_point='final'`. No `iterations.best_f1` anywhere.
 
 ## 8.0 Cohort state  (refreshed 25/08/2026 00:39 UTC)
 

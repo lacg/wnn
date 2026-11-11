@@ -70,9 +70,9 @@ def main():
 	con.row_factory = sqlite3.Row
 	cur = con.cursor()
 
-	# Pull validation_summaries (full 7-threshold JSON) joined with flows for
+	# Pull test_summaries (full 7-threshold JSON) joined with flows for
 	# wall time. Neuron counts come from a separate best_genomes → genomes join
-	# because validation_summaries only has genome_hash, not genome_id.
+	# because test_summaries only has genome_hash, not genome_id.
 	cur.execute("""
 		SELECT f.name AS fname, f.id AS flow_id,
 		       (julianday(f.completed_at) - julianday(f.started_at)) * 1440 AS wall_min,
@@ -80,11 +80,11 @@ def main():
 		       vs.genome_type AS gt,
 		       vs.threshold_metadata AS tm,
 		       vs.genome_hash AS gh
-		FROM validation_summaries vs
+		FROM test_summaries vs
 		JOIN experiments e ON e.id = vs.experiment_id
 		JOIN flows f ON f.id = vs.flow_id
 		WHERE f.name LIKE ? AND f.name NOT LIKE '%PREEMP-OLD%' AND f.status = 'completed'
-		  AND vs.validation_point = 'final'
+		  AND vs.test_point = 'final'
 		""", (f"{prefix}%",))
 	rows = cur.fetchall()
 

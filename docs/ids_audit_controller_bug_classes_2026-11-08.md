@@ -58,7 +58,7 @@ Thresholds are fitted on train only (ids/dataset.py:186-188), so Protocol v2 hol
 
 **Possible ranking-level leak (not quantified).** The top-20 feature lists were ranked on other partitions (UNSW "standard", CICIDS "temporal", CIC-IoT neto-full train) that may overlap today's random_3way test/val. → experiment-design.
 
-**Fix.** Unique quantiles plus fewer bits for low-cardinality features; drop exact-duplicate columns and constant bits (or sample over distinct bit classes). This changes results, so it needs an encoder version in the validation-cache key.
+**Fix.** Unique quantiles plus fewer bits for low-cardinality features; drop exact-duplicate columns and constant bits (or sample over distinct bit classes). This changes results, so it needs an encoder version in the test-cache key.
 
 ## 4. Registered-but-ignored params
 

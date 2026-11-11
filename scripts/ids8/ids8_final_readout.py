@@ -1,7 +1,7 @@
 """READ-ONLY IDS-8 FINAL readout (02/10/2026): IDSXD-unswt-quad-16b-* (flows 6237-6263).
 
 UNSW-NB15 temporal_3way, Protocol v2 (thresholds fit on VAL, reported on TEST). Every number is
-HELD-OUT, from validation_summaries.threshold_metadata at validation_point='final'.
+HELD-OUT, from test_summaries.threshold_metadata at test_point='final'.
 NEVER iterations.best_f1.
 
 Subcommands:
@@ -46,8 +46,8 @@ def vals_of(tm_json):
 def load(where, name_re):
 	sql = f"""SELECT f.id fid, f.name, f.started_at, e.phase_type, vs.genome_type gt, vs.genome_hash gh,
 		vs.experiment_id eid, vs.threshold_metadata tm
-		FROM validation_summaries vs JOIN flows f ON f.id = vs.flow_id JOIN experiments e ON e.id = vs.experiment_id
-		WHERE {where} AND f.status = 'completed' AND vs.validation_point = 'final'"""
+		FROM test_summaries vs JOIN flows f ON f.id = vs.flow_id JOIN experiments e ON e.id = vs.experiment_id
+		WHERE {where} AND f.status = 'completed' AND vs.test_point = 'final'"""
 	d = defaultdict(dict)
 	for r in con.execute(sql):
 		m = name_re.match(r["name"])

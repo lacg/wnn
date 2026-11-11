@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onDestroy } from 'svelte'
 	import { page } from '$app/stores'
-	import type { Experiment, Iteration, GenomeEvaluation, GenomeTier, Flow, ValidationSummary, Checkpoint } from '$lib/types'
+	import type { Experiment, Iteration, GenomeEvaluation, GenomeTier, Flow, TestSummary, Checkpoint } from '$lib/types'
 	import { makeLatestGuard } from '$lib/api'
 	import { isIdsExperiment, isMulticlassFlow, hasMulticlassMetadata } from '$lib/ids'
 	import { gatingRunUpdates } from '$lib/stores'
@@ -9,7 +9,7 @@
 	import ExperimentHeader from '$lib/components/experiment/ExperimentHeader.svelte'
 	import FlowProgressBar from '$lib/components/experiment/FlowProgressBar.svelte'
 	import ExperimentInfoCards from '$lib/components/experiment/ExperimentInfoCards.svelte'
-	import ValidationProgressionTable from '$lib/components/experiment/ValidationProgressionTable.svelte'
+	import TestProgressionTable from '$lib/components/experiment/TestProgressionTable.svelte'
 	import GatingResultsPanel from '$lib/components/experiment/GatingResultsPanel.svelte'
 	import TierStatsPanel from '$lib/components/experiment/TierStatsPanel.svelte'
 	import ProgressChart from '$lib/components/experiment/ProgressChart.svelte'
@@ -17,25 +17,25 @@
 	import LiveProgressBar from '$lib/components/experiment/LiveProgressBar.svelte'
 	import IterationsTable from '$lib/components/experiment/IterationsTable.svelte'
 	import IterationDetailModal from '$lib/components/experiment/IterationDetailModal.svelte'
-	import type { ValidationProgressionPoint, GridSearchRow, ExpandedGenome, LiveProgress } from '$lib/components/experiment/types'
+	import type { TestProgressionPoint, GridSearchRow, ExpandedGenome, LiveProgress } from '$lib/components/experiment/types'
 	import type { GatingRun } from '$lib/types'
 
 	let experiment: Experiment | null = null
 	let iterations: Iteration[] = []
 	let flowExperiments: Experiment[] = []
 	let flow: Flow | null = null
-	let validationSummaries: ValidationSummary[] = []
-	let flowValidationSummaries: ValidationSummary[] = [] // All validation summaries for the flow
+	let testSummaries: TestSummary[] = []
+	let flowTestSummaries: TestSummary[] = [] // All test summaries for the flow
 	let checkpoints: Checkpoint[] = []
 	let loading = true
 	let error: string | null = null
 	let pollInterval: ReturnType<typeof setInterval> | null = null
 	let flowPollInterval: ReturnType<typeof setInterval> | null = null
 
-	// Per-class breakdown: which validation point + threshold mode to display.
+	// Per-class breakdown: which test point + threshold mode to display.
   // Defaults to the first available point (chronologically earliest, e.g. INIT).
   // Kept at page level so the choice survives in-page navigation; bound into
-  // ValidationProgressionTable → PerClassBreakdown.
+  // TestProgressionTable → PerClassBreakdown.
 	let perClassPointChoice: number = 0
 	let perClassThresholdChoice: 'train_cal' | 'fixed_05' | 'val_cal' | 'platt' | 'beta' | 'empirical' | 'empirical_cumulative' = 'train_cal'
 
@@ -105,7 +105,7 @@
   	// flowless experiment.
 		flow = null
 		flowExperiments = []
-		flowValidationSummaries = []
+		flowTestSummaries = []
 
 		try
 		{
@@ -136,25 +136,25 @@
 
 			experiment = newExperiment
 			iterations = newIterations
-			validationSummaries = newSummaries
+			testSummaries = newSummaries
 			checkpoints = newCheckpoints
 			gatingRuns = newGatingRuns
 
 			// Fetch flow and its experiments if this experiment belongs to a flow
 			if (experiment?.flow_id)
 			{
-				const [flowRes, flowExpsRes, flowValidationsRes] = await Promise.all([
+				const [flowRes, flowExpsRes, flowTestsRes] = await Promise.all([
 					fetch(`/api/flows/${experiment.flow_id}`),
 					fetch(`/api/flows/${experiment.flow_id}/experiments`),
-					fetch(`/api/flows/${experiment.flow_id}/validations`)
+					fetch(`/api/flows/${experiment.flow_id}/test-summaries`)
 				])
 				const newFlow = flowRes.ok ? await flowRes.json() : null
 				const exps = flowExpsRes.ok ? await flowExpsRes.json() : []
-				const validations = flowValidationsRes.ok ? await flowValidationsRes.json() : []
+				const tests = flowTestsRes.ok ? await flowTestsRes.json() : []
 				if (!requestGuard.isCurrent(token)) return
 				if (newFlow) flow = newFlow
 				flowExperiments = Array.isArray(exps) ? exps : []
-				flowValidationSummaries = Array.isArray(validations) ? validations : []
+				flowTestSummaries = Array.isArray(tests) ? tests : []
 			}
 		}
 		catch (e)
@@ -205,7 +205,7 @@
 				experiment.gating_results = newExp.gating_results
 				experiment = experiment // Trigger Svelte reactivity for duration display
 
-				// Status transition detected — do a full reload to get validation summaries,
+				// Status transition detected — do a full reload to get test summaries,
   			// flow experiments, checkpoints, etc.
 				if (prevStatus !== newExp.status)
 				{
@@ -490,8 +490,8 @@
 	// Flow param is the primary multiclass signal; metadata-shape fallback
   // covers rows loaded before (or without) the flow config.
 	$: isMulticlass = isMulticlassFlow(flow)
-		|| hasMulticlassMetadata(validationSummaries)
-		|| hasMulticlassMetadata(flowValidationSummaries)
+		|| hasMulticlassMetadata(testSummaries)
+		|| hasMulticlassMetadata(flowTestSummaries)
 	$: isController = experiment?.architecture_type === 'controller'
 	$: bestAttitudeDeg = (() =>
 	{
@@ -754,16 +754,16 @@
 		}
 	})()
 
-	$: cumulativeValidationProgression = (() =>
+	$: cumulativeTestProgression = (() =>
 	{
-		if (!experiment || flowValidationSummaries.length === 0 || flowExperiments.length === 0)
+		if (!experiment || flowTestSummaries.length === 0 || flowExperiments.length === 0)
 		{
-			// Fall back to current experiment's validations if no flow context
-			if (!experiment || validationSummaries.length === 0) return []
+			// Fall back to current experiment's tests if no flow context
+			if (!experiment || testSummaries.length === 0) return []
 
-			const points: ValidationProgressionPoint[] = []
-			const initSummaries = validationSummaries.filter(s => s.validation_point === 'init')
-			const finalSummaries = validationSummaries.filter(s => s.validation_point === 'final')
+			const points: TestProgressionPoint[] = []
+			const initSummaries = testSummaries.filter(s => s.test_point === 'init')
+			const finalSummaries = testSummaries.filter(s => s.test_point === 'final')
 
 			if (initSummaries.length > 0)
 			{
@@ -771,7 +771,7 @@
 					label: 'Init',
 					expId: experiment.id,
 					sequenceOrder: experiment.sequence_order ?? 0,
-					validationPoint: 'init',
+					testPoint: 'init',
 					summaries: initSummaries.map(s => ({ genomeType: s.genome_type, ce: s.ce, accuracy: s.accuracy, f1_macro: s.f1_macro, fpr: s.fpr, threshold_metadata: s.threshold_metadata, footprint: s.footprint }))
 				})
 			}
@@ -781,39 +781,39 @@
 					label: experiment.name.replace(/^Phase \d+[ab]: /, ''),
 					expId: experiment.id,
 					sequenceOrder: experiment.sequence_order ?? 0,
-					validationPoint: 'final',
+					testPoint: 'final',
 					summaries: finalSummaries.map(s => ({ genomeType: s.genome_type, ce: s.ce, accuracy: s.accuracy, f1_macro: s.f1_macro, fpr: s.fpr, threshold_metadata: s.threshold_metadata, footprint: s.footprint }))
 				})
 			}
 			return points
 		}
 
-		// Build cumulative progression from flow validations
+		// Build cumulative progression from flow tests
 		const currentSeqOrder = experiment.sequence_order ?? 0
 
 		// Create a map of experiment_id -> experiment info
 		const expMap = new Map(flowExperiments.map(e => [e.id, e]))
 
-		// Filter validations to only include experiments up to and including current
-		const relevantValidations = flowValidationSummaries.filter(v =>
+		// Filter tests to only include experiments up to and including current
+		const relevantTests = flowTestSummaries.filter(v =>
 		{
 			const exp = expMap.get(v.experiment_id)
 			if (!exp) return false
 			return (exp.sequence_order ?? 0) <= currentSeqOrder
 		})
 
-		// Group by (experiment_id, validation_point)
-		const grouped = new Map<string, ValidationSummary[]>()
-		for (const v of relevantValidations)
+		// Group by (experiment_id, test_point)
+		const grouped = new Map<string, TestSummary[]>()
+		for (const v of relevantTests)
 		{
-			const key = `${v.experiment_id}-${v.validation_point}`
+			const key = `${v.experiment_id}-${v.test_point}`
 			if (!grouped.has(key)) grouped.set(key, [])
 			grouped.get(key)!.push(v)
 		}
 
 		// Convert to progression points
-		const points: ValidationProgressionPoint[] = []
-		for (const [key, validations] of grouped)
+		const points: TestProgressionPoint[] = []
+		for (const [key, tests] of grouped)
 		{
 			const [expIdStr, point] = key.split('-')
 			const expId = parseInt(expIdStr)
@@ -842,8 +842,8 @@
 				label,
 				expId,
 				sequenceOrder: seqOrder,
-				validationPoint: point as 'init' | 'final',
-				summaries: validations.map(v => ({ genomeType: v.genome_type, ce: v.ce, accuracy: v.accuracy, f1_macro: v.f1_macro, fpr: v.fpr, threshold_metadata: v.threshold_metadata, footprint: v.footprint }))
+				testPoint: point as 'init' | 'final',
+				summaries: tests.map(v => ({ genomeType: v.genome_type, ce: v.ce, accuracy: v.accuracy, f1_macro: v.f1_macro, fpr: v.fpr, threshold_metadata: v.threshold_metadata, footprint: v.footprint }))
 			})
 		}
 
@@ -851,7 +851,7 @@
 		return points.sort((a, b) =>
 		{
 			if (a.sequenceOrder !== b.sequenceOrder) return a.sequenceOrder - b.sequenceOrder
-			return a.validationPoint === 'init' ? -1 : 1
+			return a.testPoint === 'init' ? -1 : 1
 		})
 	})()
 </script>
@@ -904,10 +904,10 @@
 			<div class="status-message">{experiment.status_message}</div>
 		{/if}
 
-		<!-- Cumulative Validation Progression -->
-		{#if cumulativeValidationProgression.length > 0}
-			<ValidationProgressionTable
-				points={cumulativeValidationProgression}
+		<!-- Cumulative Test Progression -->
+		{#if cumulativeTestProgression.length > 0}
+			<TestProgressionTable
+				points={cumulativeTestProgression}
 				{isIDS}
 				{isMulticlass}
 				macroLabels={flow ? isMulticlassFlow(flow) : null}
@@ -984,7 +984,7 @@
 
 <style>
   .container {
-    max-width: 1848px;  /* +10% to fit per-class table on the validation panel */
+    max-width: 1848px;  /* +10% to fit per-class table on the test panel */
     margin: 0 auto;
     padding: 1rem;
   }

@@ -9,9 +9,9 @@ Addresses RAID'26 Review C major issue 2 (statistical protocol):
   comparisons (different runs), Wilcoxon signed-rank for PAIRED comparisons
   (same flows under two threshold modes), Holm correction across families.
 
-Reads held-out metrics from validation_summaries.threshold_metadata (the
+Reads held-out metrics from test_summaries.threshold_metadata (the
 full 7-mode table; best_genomes is incomplete — see memory
-reference_validation_summaries_table).
+reference_test_summaries_table).
 
 Multiclass cohorts (ids_classification='multi') pass through the same code:
 their metadata keys are decode modes (argmax, margin_*) whose f1/fpr fields
@@ -54,7 +54,7 @@ def fetch(db_path: str, like: str, phase_prefix: str) -> dict:
 	con.row_factory = sqlite3.Row
 	rows = con.execute(
 		"""SELECT f.name AS flow, vs.genome_type, e.phase_type, vs.threshold_metadata
-		FROM validation_summaries vs
+		FROM test_summaries vs
 		JOIN experiments e ON vs.experiment_id = e.id
 		JOIN flows f ON e.flow_id = f.id
 		WHERE f.name LIKE ? AND f.status = 'completed' AND e.phase_type LIKE ?

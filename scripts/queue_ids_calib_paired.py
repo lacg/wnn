@@ -17,7 +17,7 @@ back to back under the same box conditions.
 
 PRE-REGISTERED READ (fixed before any IDS-48 result exists):
   n = 10 seed pairs. Per pair d = calibsub - calibfull on the HELD-OUT test
-  partition (validation_summaries, genome_type best of the GA phase as in the
+  partition (test_summaries, genome_type best of the GA phase as in the
   standard cohort table), for threshold modes val_cal and margin_val_cal where
   present:  dF1 (pp) and dFPR (pp). Report mean d with a 95% t-interval
   (t_{0.975, 9} = 2.262) over the 10 pairs.

@@ -41,9 +41,9 @@ CONFIGS = [
 
 def stats_pattern(cur, pat, mode="train_cal"):
 	cur.execute(
-		"""SELECT vs.threshold_metadata FROM validation_summaries vs
+		"""SELECT vs.threshold_metadata FROM test_summaries vs
 		JOIN flows f ON f.id=vs.flow_id JOIN experiments e ON e.id=vs.experiment_id
-		WHERE f.name LIKE ? AND f.status='completed' AND vs.validation_point='final'
+		WHERE f.name LIKE ? AND f.status='completed' AND vs.test_point='final'
 		AND e.phase_type='ga_neurons' AND vs.genome_type='best_fitness'""",
 		(pat,),
 	)
@@ -59,9 +59,9 @@ def stats_pattern(cur, pat, mode="train_cal"):
 
 def deployable_counts(cur, pat):
 	cur.execute(
-		"""SELECT vs.threshold_metadata FROM validation_summaries vs
+		"""SELECT vs.threshold_metadata FROM test_summaries vs
 		JOIN flows f ON f.id=vs.flow_id JOIN experiments e ON e.id=vs.experiment_id
-		WHERE f.name LIKE ? AND f.status='completed' AND vs.validation_point='final'""",
+		WHERE f.name LIKE ? AND f.status='completed' AND vs.test_point='final'""",
 		(pat,),
 	)
 	sub5 = sub6_F90 = sub6_F905 = 0

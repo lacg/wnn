@@ -1,7 +1,7 @@
 """READ-ONLY readout: best reporting column per dataset in the IDSXD sweep.
 
 Column = (arm, mode, phase, genome_type, thr_mode); aggregated mean±SD over completed seeds
-on HELD-OUT threshold_metadata (validation_point='final').
+on HELD-OUT threshold_metadata (test_point='final').
 """
 import json
 import re
@@ -17,13 +17,13 @@ FIX_UTC = "2026-08-30T02:27"
 
 SQL = """
 SELECT f.name, f.started_at, f.completed_at, e.phase_type, vs.genome_type, vs.threshold_metadata
-FROM validation_summaries vs
+FROM test_summaries vs
 JOIN flows f ON f.id = vs.flow_id
 JOIN experiments e ON e.id = vs.experiment_id
 WHERE (f.name LIKE 'IDSXD-%' OR f.name LIKE 'IDSXD2-%')
   AND f.name NOT LIKE 'IDSXD-unswt-%'
   AND f.status = 'completed'
-  AND vs.validation_point = 'final'
+  AND vs.test_point = 'final'
 """
 
 con = sqlite3.connect(DB, uri=True)
@@ -152,13 +152,13 @@ for ds in ["unswr", "cicids", "ciciot"]:
 print("\n\n######## BEST INDIVIDUAL GENOME per dataset (best-of-N CEILING) ########")
 SQL_IND = """
 SELECT f.id AS flow_id, f.name, f.started_at, e.phase_type, vs.genome_type, vs.genome_hash, vs.threshold_metadata
-FROM validation_summaries vs
+FROM test_summaries vs
 JOIN flows f ON f.id = vs.flow_id
 JOIN experiments e ON e.id = vs.experiment_id
 WHERE (f.name LIKE 'IDSXD-%' OR f.name LIKE 'IDSXD2-%')
   AND f.name NOT LIKE 'IDSXD-unswt-%'
   AND f.status = 'completed'
-  AND vs.validation_point = 'final'
+  AND vs.test_point = 'final'
 """
 # RF RAW comparator: logs/baselines_<ds>/rf_xgb_ada_random_3way_raw.log, rs=42, TEST partition, single run
 RF_RAW = {

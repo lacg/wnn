@@ -4,8 +4,8 @@ con = sqlite3.connect("file:/Volumes/20260401-WDBlack-SN850X-2TB/wnn/db/wnn.db?m
 SQL = """
 SELECT f.id fid, f.name, f.started_at, f.completed_at, f.config_json cj, e.phase_type ph,
        vs.genome_type gt, vs.genome_hash gh, vs.experiment_id eid, vs.threshold_metadata tm
-FROM validation_summaries vs JOIN flows f ON f.id=vs.flow_id JOIN experiments e ON e.id=vs.experiment_id
-WHERE f.status='completed' AND vs.validation_point='final'
+FROM test_summaries vs JOIN flows f ON f.id=vs.flow_id JOIN experiments e ON e.id=vs.experiment_id
+WHERE f.status='completed' AND vs.test_point='final'
   AND json_extract(f.config_json,'$.params.ids_dataset') IN ('cicids2017','ciciot2023_neto_subsample')
   AND json_extract(f.config_json,'$.params.ids_split') LIKE '%_3way'
   AND replace(f.started_at,'Z','+00:00') >= '2026-08-22' AND f.name LIKE 'IDSX%' AND json_extract(f.config_json,'$.params.max_bits')<=64

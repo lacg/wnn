@@ -3,7 +3,7 @@
 Applies experiments/ids_aggregation_ab_rule.json (primary F1 / secondary FPR, Holm over
 CICIDS + CIC-IoT, restricted to the IDSAGG- prefix) and prints the descriptive per-arm table,
 the IDSAGGX- B05-AC extension (descriptive only), Pareto mining and the Rule-7 breakdown.
-Read-only on the DB. Metric: held-out TEST val_cal, validation_summaries final rows.
+Read-only on the DB. Metric: held-out TEST val_cal, test_summaries final rows.
 
 Usage: python scripts/ids2/ids20_idsagg_readout.py <cmd>   (default: primary)
   diff | primary | arms [IDSAGG|IDSAGGX] [genome_type] | seeds [prefix] | b05vb15
@@ -37,8 +37,8 @@ for k, d in pairs.items():
 D = {}
 GH = {}
 for fid, eid, ph, gt, gh, tm in con.execute("""SELECT vs.flow_id,e.id,e.phase_type,vs.genome_type,vs.genome_hash,vs.threshold_metadata
-	FROM validation_summaries vs JOIN experiments e ON e.id=vs.experiment_id JOIN flows f ON f.id=vs.flow_id
-	WHERE f.name LIKE 'IDSAGG%' AND f.status='completed' AND vs.validation_point='final'"""):
+	FROM test_summaries vs JOIN experiments e ON e.id=vs.experiment_id JOIN flows f ON f.id=vs.flow_id
+	WHERE f.name LIKE 'IDSAGG%' AND f.status='completed' AND vs.test_point='final'"""):
 	p = "GS" if ph == "grid_search" else "GA"
 	t = json.loads(tm)
 	GH[(fid, p, gt)] = (eid, gh)

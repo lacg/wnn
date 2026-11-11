@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT / "src" / "wnn"))
 
 from wnn.ram.experiments.ids_param_resolution import resolve_write_rule
 from wnn.ram.experiments.params import KNOWN_PARAMS
-from wnn.ram.experiments.validation_cache_key import build_validation_cache_key
+from wnn.ram.experiments.test_cache_key import build_test_cache_key
 
 
 def _abi() -> int:
@@ -68,9 +68,9 @@ def test_resolve_write_rule_defaults_and_validation():
 
 def test_cache_key_unchanged_for_lattice_and_split_for_vote():
 	base = {"memory_mode": "TERNARY", "ids_dataset": "unsw-nb15"}
-	absent = build_validation_cache_key(base, True)
-	assert build_validation_cache_key(dict(base, ids_write_rule="lattice"), True) == absent
-	vote = build_validation_cache_key(dict(base, ids_write_rule="vote"), True)
+	absent = build_test_cache_key(base, True)
+	assert build_test_cache_key(dict(base, ids_write_rule="lattice"), True) == absent
+	vote = build_test_cache_key(dict(base, ids_write_rule="vote"), True)
 	assert vote != absent and "wr=vote" in vote
 	assert "wr=" not in absent
 
@@ -164,7 +164,7 @@ def test_experiment_validates_binary_two_cluster_through_decode_modes():
 	captured = {}
 
 	class _Client:
-		def create_validation_summary(self, **kw):
+		def create_test_summary(self, **kw):
 			captured.update(kw)
 
 	ds = _dataset()

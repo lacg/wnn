@@ -307,11 +307,11 @@ export interface HealthCheck
 }
 
 // =============================================================================
-// Validation Summary types
+// Test Summary types
 // =============================================================================
 
-export type ValidationPoint = 'init' | 'final'
-export type GenomeValidationType =
+export type TestPoint = 'init' | 'final'
+export type GenomeTestType =
 	| 'best_ce'
 	| 'best_acc'
 	| 'best_f1'
@@ -395,13 +395,13 @@ export interface ThresholdMetadata
 	margin_classnorm?: MulticlassModeResult
 }
 
-export interface ValidationSummary
+export interface TestSummary
 {
 	id: number
 	flow_id: number | null
 	experiment_id: number
-	validation_point: ValidationPoint
-	genome_type: GenomeValidationType
+	test_point: TestPoint
+	genome_type: GenomeTestType
 	genome_hash: string
 	ce: number
 	accuracy: number
@@ -410,13 +410,13 @@ export interface ValidationSummary
 	threshold_metadata: ThresholdMetadata | null
 	// Logical + physical size of the validated genome (IDS-37); null on rows
 	// written before worker ABI 17.
-	footprint: ValidationFootprint | null
+	footprint: TestFootprint | null
 	created_at: string
 }
 
 /** What a validated genome costs — logical (copies included) AND physical
  *  (distinct neurons trained and held), always both. */
-export interface ValidationFootprint
+export interface TestFootprint
 {
 	logical_neurons: number
 	physical_neurons: number
@@ -425,14 +425,14 @@ export interface ValidationFootprint
 }
 
 // =============================================================================
-// Combined Validation types (multi-stage end-to-end metrics)
+// Combined Test types (multi-stage end-to-end metrics)
 // =============================================================================
 
-export interface CombinedValidation
+export interface CombinedTestSummary
 {
 	id: number
 	flow_id: number
-	genome_type: GenomeValidationType
+	genome_type: GenomeTestType
 	combined_ce: number
 	combined_accuracy: number
 	per_stage_ce: number[] | null

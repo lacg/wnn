@@ -57,11 +57,11 @@ SELECT
   ROUND(AVG(vs.f1_macro) * 100, 2) as avg_f1,
   ROUND(AVG(vs.fpr) * 100, 2) as avg_fpr,
   ROUND(AVG(vs.accuracy) * 100, 2) as avg_acc
-FROM validation_summaries vs
+FROM test_summaries vs
 JOIN experiments e ON vs.experiment_id = e.id
 JOIN flows f ON e.flow_id = f.id
 WHERE f.name LIKE 'FITTHRESH%' AND f.status = 'completed'
-  AND vs.validation_point = 'final'
+  AND vs.test_point = 'final'
   AND vs.genome_type = 'best_f1'
   AND e.phase_type = 'ga_neurons'
 GROUP BY config
@@ -77,11 +77,11 @@ SELECT
   json_extract(f.config_json, '\$.params.fitness_weight_acc') as w_acc,
   ROUND(AVG(vs.f1_macro) * 100, 2) as avg_f1,
   ROUND(AVG(vs.fpr) * 100, 2) as avg_fpr
-FROM validation_summaries vs
+FROM test_summaries vs
 JOIN experiments e ON vs.experiment_id = e.id
 JOIN flows f ON e.flow_id = f.id
 WHERE f.name LIKE 'FITTHRESH%' AND f.status = 'completed'
-  AND vs.validation_point = 'final'
+  AND vs.test_point = 'final'
   AND vs.genome_type = 'best_f1'
   AND e.phase_type = 'ga_neurons'
 GROUP BY w_ce, w_f1, w_fpr, w_acc

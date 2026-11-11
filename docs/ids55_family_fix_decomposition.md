@@ -74,5 +74,5 @@ Classes: Normal / Generic (broad) / DoS+Exploits / rest (narrow: Fuzzers, Recon,
    - 2×2 on unswt: {`ids_write_rule` lattice vs vote with θ=0.1} × {`ids_encoding_dedupe` off/on}.
    - Plus the same 2×2 on unswr (the harness predicts MS loses there) and ciciot.
    - Plus one unswt multiclass pair (BIN vs MS 0.1, dedupe on).
-   - Report from `validation_summaries` best_f1 `margin_val_cal`, at equal logical cells.
+   - Report from `test_summaries` best_f1 `margin_val_cal`, at equal logical cells.
    - Adopt only where θ=0.1 wins F1 without an FPR loss. Expect it to be per-dataset.

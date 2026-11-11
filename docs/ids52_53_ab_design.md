@@ -269,7 +269,7 @@ STAGE 3   chosen ciciot config, seeds 20419..20421, encoding = NOT E*; name pref
 - COUNT(experiments)=2 per flow.
 - Params diff vs base = exactly the listed keys.
 - `ids_feature_ranking="train_only"` on every cicids/ciciot flow.
-- Worker ABI ≥ the new wheel on the first completed flow's validation_summaries.worker_abi.
+- Worker ABI ≥ the new wheel on the first completed flow's test_summaries.worker_abi.
 
 ---
 

@@ -127,13 +127,13 @@ def main():
 	con.row_factory = sqlite3.Row
 	cur = con.cursor()
 
-	# Pull validation_summaries: per-flow, per-genome_type, per-phase, per-threshold-mode → (f1, fpr, acc)
+	# Pull test_summaries: per-flow, per-genome_type, per-phase, per-threshold-mode → (f1, fpr, acc)
 	cur.execute(
 		f"""SELECT vs.flow_id, vs.genome_type, e.phase_type, vs.threshold_metadata
-		FROM validation_summaries vs
+		FROM test_summaries vs
 		JOIN experiments e ON e.id = vs.experiment_id
 		WHERE vs.flow_id IN ({placeholders})
-		  AND vs.validation_point = 'final'""",
+		  AND vs.test_point = 'final'""",
 		flow_ids,
 	)
 

@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 from wnn.ram.experiments.ids_param_resolution import resolve_two_cluster_fitness_f1
 from wnn.ram.experiments.params import KNOWN_PARAMS
-from wnn.ram.experiments.validation_cache_key import build_validation_cache_key
+from wnn.ram.experiments.test_cache_key import build_test_cache_key
 
 
 def _abi() -> int:
@@ -58,10 +58,10 @@ def test_resolution_defaults_and_validation():
 				{"ids_classification": cls, "ids_single_cluster": sc, "ids_two_cluster_fitness_f1": "attack"})
 
 
-def test_selector_does_not_touch_the_validation_cache_key():
+def test_selector_does_not_touch_the_test_cache_key():
 	"""Search-only: a fixed genome's validation is identical under both values."""
-	base = build_validation_cache_key(dict(TWO_CLUSTER), oi_enabled=True)
-	assert build_validation_cache_key({**TWO_CLUSTER, "ids_two_cluster_fitness_f1": "attack"}, oi_enabled=True) == base
+	base = build_test_cache_key(dict(TWO_CLUSTER), oi_enabled=True)
+	assert build_test_cache_key({**TWO_CLUSTER, "ids_two_cluster_fitness_f1": "attack"}, oi_enabled=True) == base
 
 
 # ---- accelerator-backed ------------------------------------------------------

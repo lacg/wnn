@@ -38,13 +38,13 @@ generators; section 5 is the existing XDS tool verbatim.
 ## Metric contract (do not violate)
 
 - Every number below is a **HELD-OUT** value read from
-  `validation_summaries.threshold_metadata` at `validation_point='final'`.
+  `test_summaries.threshold_metadata` at `test_point='final'`.
   **No `iterations.best_f1` anywhere** — that is the during-search 5-fold CV metric and
   reporting it is the train-on-eval leak fixed 28/05.
 - All 7 threshold modes are reported in order: `train_cal, fixed_05, platt, beta, empirical,
   empirical_cumulative, val_cal`. Empirical modes use `min_bin_size=200`.
 - `best_genomes` is used ONLY for the neurons/bits header lines (it dedups by genome_hash and
-  is incomplete); all metrics come from `validation_summaries`.
+  is incomplete); all metrics come from `test_summaries`.
 
 ## ⚠️ Protocol split — these two groups are NOT apples-to-apples
 

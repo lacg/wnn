@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Backfill best_genomes leaderboard from existing validation_summaries.
+Backfill best_genomes leaderboard from existing test_summaries.
 
-Reads validation_summaries with validation_point='final', finds the
+Reads test_summaries with test_point='final', finds the
 corresponding checkpoint files, extracts genome data, and submits
 to the best_genomes leaderboard via the dashboard API.
 
@@ -71,7 +71,7 @@ def main():
 
 		# Get validation summaries for this experiment
 		summaries = client._request("GET", f"/api/experiments/{exp_id}/summaries") or []
-		final_summaries = [s for s in summaries if s.get("validation_point") == "final"]
+		final_summaries = [s for s in summaries if s.get("test_point") == "final"]
 
 		if not final_summaries:
 			continue

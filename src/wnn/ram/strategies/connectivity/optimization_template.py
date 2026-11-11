@@ -59,7 +59,7 @@ class OptimizationTemplate(ABC, Generic[T]):
 	3. Fitness calculator + early stopping setup
 	4. Strategy-specific optimization loop (abstract)
 	5. Result building
-	6. Post-optimize hook (validation summary, cleanup)
+	6. Post-optimize hook (test summary, cleanup)
 
 	Subclasses MUST implement:
 	- _run_optimization_loop(): The strategy-specific optimization logic
@@ -67,7 +67,7 @@ class OptimizationTemplate(ABC, Generic[T]):
 
 	Subclasses MAY override:
 	- _pre_optimize(): Setup before the loop (Rust state, evaluator wrapping)
-	- _post_optimize(): Cleanup/validation after the loop
+	- _post_optimize(): Cleanup/test evaluation after the loop
 	- genome_to_config(): Convert genome to GenomeConfig for tracker
 	- _on_iteration_start(): Hook at each iteration start
 	"""
@@ -251,7 +251,7 @@ class OptimizationTemplate(ABC, Generic[T]):
 		return {}
 
 	def _post_optimize(self, result: OptimizerResult[T]) -> OptimizerResult[T]:
-		"""Post-processing after optimization (validation summary, cleanup)."""
+		"""Post-processing after optimization (test summary, cleanup)."""
 		return result
 
 	def _on_iteration_start(self, iteration: int, **kwargs) -> None:
@@ -525,7 +525,7 @@ class OptimizationTemplate(ABC, Generic[T]):
 		3. Setup fitness calculator + early stopping
 		4. Delegate to strategy-specific loop
 		5. Build result
-		6. Post-optimize hook (validation summary)
+		6. Post-optimize hook (test summary)
 
 		All strategies accept the same unified signature. Unused params
 		are ignored by each strategy's _run_optimization_loop().
@@ -623,7 +623,7 @@ class OptimizationTemplate(ABC, Generic[T]):
 			final_threshold=final_threshold,
 		)
 
-		# 6. Post-optimize hook (validation summary)
+		# 6. Post-optimize hook (test summary)
 		return self._post_optimize(result)
 
 	def _get_target_size(self) -> int:
