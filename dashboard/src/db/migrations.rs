@@ -281,3 +281,64 @@ pub(crate) async fn run_migrations(pool: &DbPool) -> Result<()>
 
 	Ok(())
 }
+
+#[cfg(test)]
+mod rename_tests
+{
+	//! The terminology rename must carry every legacy row across and be a
+	//! no-op on a database that is already renamed.
+	use super::*;
+
+	/// The current schema under its pre-rename names, plus one row per table.
+	fn legacy_sql() -> String
+	{
+		let schema = crate::db::schema::SCHEMA
+			.replace("combined_test_summaries", "combined_validations")
+			.replace("test_summaries", "validation_summaries")
+			.replace("test_point", "validation_point");
+		format!(
+			"{schema}
+			INSERT INTO flows (name) VALUES ('f');
+			INSERT INTO experiments (flow_id, name) VALUES (1, 'e');
+			INSERT INTO validation_summaries (flow_id, experiment_id, validation_point, genome_type, genome_hash, ce, accuracy)
+				VALUES (1, 1, 'final', 'best_f1', 'g1', 0.25, 0.75);
+			INSERT INTO combined_validations (flow_id, genome_type, combined_ce, combined_accuracy) VALUES (1, 'best_ce', 0.5, 0.5);"
+		)
+	}
+
+	async fn count(pool: &DbPool, table: &str) -> i64
+	{
+		let row: (i64,) = sqlx::query_as(&format!("SELECT COUNT(*) FROM {table}")).fetch_one(pool).await.unwrap();
+		row.0
+	}
+
+	#[tokio::test]
+	async fn legacy_tables_are_renamed_with_their_rows()
+	{
+		let path = std::env::temp_dir().join(format!("wnn_rename_{}.db", std::process::id()));
+		let _ = std::fs::remove_file(&path);
+		let url = format!("sqlite://{}?mode=rwc", path.display());
+		{
+			let legacy = sqlx::sqlite::SqlitePoolOptions::new().connect(&url).await.unwrap();
+			sqlx::query(&legacy_sql()).execute(&legacy).await.unwrap();
+			legacy.close().await;
+		}
+		// Twice: the second init must find nothing left to rename
+		for _ in 0..2
+		{
+			let pool = crate::db::init_db(&url).await.expect("init_db");
+			assert!(!table_exists(&pool, "validation_summaries").await.unwrap());
+			assert!(!table_exists(&pool, "combined_validations").await.unwrap());
+			assert_eq!(count(&pool, "test_summaries").await, 1);
+			assert_eq!(count(&pool, "combined_test_summaries").await, 1);
+			let row: (String, f64) =
+				sqlx::query_as("SELECT test_point, ce FROM test_summaries WHERE genome_hash = 'g1'")
+					.fetch_one(&pool)
+					.await
+					.unwrap();
+			assert_eq!(row, ("final".to_string(), 0.25));
+			pool.close().await;
+		}
+		let _ = std::fs::remove_file(&path);
+	}
+}
