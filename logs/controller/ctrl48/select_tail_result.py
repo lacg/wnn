@@ -40,12 +40,25 @@ def cell(p):
 	return "—" if p is None else f"{p['genome']} | {p['err']:.3f} | {p['steady']:.3f} | {p['fails']}"
 
 
+def refuse_partial(tags, n):
+	"""Hardening (Luiz 12/11/2026): the pre-registered readout is written ONLY when every run in the list has
+	both its B and P pick. A missing pick (failed run, wheel/ABI import error) exits 3, so the driver's
+	`&& git commit` never publishes a partial readout."""
+	if n == len(tags):
+		return
+	missing = len(tags) - n
+	print(f"select_tail_result: REFUSED — {missing}/{len(tags)} runs lack a B or P pick; no readout written",
+	      file=sys.stderr)
+	sys.exit(3)
+
+
 def main(listfile):
 	tags = [t.strip() for t in open(listfile) if t.strip() and not t.startswith("#")]
 	rows = {t: {r: pick(t, r) for r in RULES} | {"orig": original(t)} for t in tags}
 	json.dump(rows, open(f"{O}/picks.json", "w"), indent=1)
 	pairs = [(t, v["B"], v["P"]) for t, v in rows.items() if v["B"] and v["P"]]
 	n = len(pairs)
+	refuse_partial(tags, n)
 	L_ = ["# Tail-aware selection — pre-registered readout (CTRL-48)", "",
 	      f"Generated {dt.datetime.now(dt.timezone.utc):%d/%m/%Y %H:%M} UTC by `{L}/select_tail_result.py` from "
 	      f"`{O}/`. Pre-registration: `docs/ctrl_select_tail_prereg.md` (unchanged). Rule P = `--val-units 20 "
