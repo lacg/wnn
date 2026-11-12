@@ -32,3 +32,15 @@ fixed scorer.
 2. Mean report err and mean report steady: P not worse than B by more than 0.05° each.
 3. P picks a different genome than B on at least 3 runs (otherwise: no evidence either way, NOT adopted).
 Report per-run picks and a paired table regardless of outcome.
+
+## Amendment 1 (12/11/2026, Luiz option (a); written BEFORE any P re-pick was run)
+State when written: only the reproduction check exists (B on `rf_c200_dres_full_s1`, re-picked MEMORY#1 = the
+original headline, bit-identical val rows and test row). No P, S20 or S5p re-pick has been run, so no result can have
+shaped this change.
+
+- **Test set:** 30 runs, not 33. The 3 `rf_c200_dres_refit100_full_s{1,2,3}` runs are dropped: phased_ga refuses
+  `--recalc-headline` with `--threshold-refit-from-student` (`_refuse_refit_without_grid`: the student-refit pool is
+  collected after the grid and is not saved in any checkpoint; refusal log in `experiments/ctrl_select_tail/`).
+  Run list: `experiments/ctrl_select_tail/runs_blocks45_a49_amended.txt`.
+- Nothing else changes: rules P and B, the secondaries, the scoring (35 test units x 100 episodes, fixed scorer) and
+  all three pass criteria stand as written above, evaluated over the 30 runs.
