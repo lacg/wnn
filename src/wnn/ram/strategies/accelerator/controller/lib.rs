@@ -448,7 +448,15 @@ mod metal_controller;
 ///   run whose teacher ladder comes from the training-cascade sampler (translation
 ///   + airframe): that collector refused the ABI-32 plant and the refit silently
 ///   fell back to the teacher ladder. Pin: ctrl49_tests.rs.
-pub const ABI_VERSION: u32 = 49;
+/// ABI 50 (12/11/2026, write-rule consolidation; NO Python surface change): the
+///   controller's cell semantics (fire bit, nudge step / toward-value, plants,
+///   nudge distance, coin prob, unwritten cell) are the shared ram_core cell_write.rs
+///   primitives (+ common.metal wnn_* twins); controller/cell_mode.rs keeps only
+///   decode. Default flags bit-identical (cargo parity sweeps + phased_ga goldens).
+///   ONE behaviour change, GPU-split-train only (WNN_CONTROLLER_GPU_TRAIN=1) with
+///   PLN: controller_train sent PLN through the QUAD nudge; it now LastWrites like
+///   the CPU (parity_controller_train now sweeps TERNARY/BINARY/PLN).
+pub const ABI_VERSION: u32 = 50;
 
 /// ABI 44: how output neurogenesis lays out the output layer — "segment" = every
 /// bank / E-I half resizes at its own tail (pre-44 Python resized the flat tail).

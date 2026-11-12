@@ -499,7 +499,14 @@ use pyapi::*;
 /// adds +(1−θ)·w, any other −θ·w as the exact integer ratio, CPU and Metal
 /// (TrainParams gains vote_own_weight / vote_other_weight, appended). Bumped so a
 /// Python tree that sends ids_vote_share cannot run on a wheel that ignores it.
-pub const ABI_VERSION: u32 = 28;
+/// 29 (12/11/2026, write-rule consolidation; NO Python surface change): ram_core
+/// owns every per-cell write primitive (cell_write.rs: quad_step, fire bit,
+/// plants, nudge distance, coin prob; common.metal wnn_* twins) for BOTH the IDS
+/// worker and the controller; CellMode::default_cell takes UnwrittenLean (IDS =
+/// False = WEAK_FALSE, unchanged). Every IDS path bit-identical (cargo tests +
+/// the IDS digest, all modes x rules x OI on/off). Bumped because ram_core changed
+/// under both wheels: the pair must be deployed together.
+pub const ABI_VERSION: u32 = 29;
 
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()>
