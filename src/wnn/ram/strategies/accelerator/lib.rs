@@ -322,6 +322,9 @@ mod pln_writer_tests;
 // Per-flow MAJORITY-VOTE writer (ids_write_rule="vote", 16/10/2026).
 #[cfg(all(test, target_os = "macos"))]
 mod vote_writer_tests;
+// Per-neuron output export reproduces the reported scores bit-exactly (IDS-57 arm E, 12/11/2026).
+#[cfg(all(test, target_os = "macos"))]
+mod neuron_outputs_tests;
 // IDSGenomeStreamer == in-memory IDSCache for every memory_mode × write rule (16/10/2026).
 #[cfg(all(test, target_os = "macos"))]
 mod streamer_parity_tests;
@@ -506,6 +509,10 @@ use pyapi::*;
 /// False = WEAK_FALSE, unchanged). Every IDS path bit-identical (cargo tests +
 /// the IDS digest, all modes x rules x OI on/off). Bumped because ram_core changed
 /// under both wheels: the pair must be deployed together.
+/// Same ABI (not deployed in between): additive READ-ONLY
+/// IDSCacheWrapper.export_neuron_outputs (IDS-57 arm E, adaptive/neuron_outputs.rs)
+/// — per-row per-neuron effective cells + the production scores of every cluster
+/// for the train / val / test partition. No existing path changes.
 pub const ABI_VERSION: u32 = 29;
 
 #[pymodule]
