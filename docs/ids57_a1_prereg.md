@@ -293,3 +293,12 @@ IDS flow from its seed; the XGBoost seed spread. The simulation in §4 is a mode
 
 **Ready to queue?** Yes on Luiz's go, once (i) the queue script asserts the one-key diff and `max_bits: 64`,
 (ii) W1 is captured if the ABI 29 deploy will precede the arm, and (iii) Luiz has answered §11 items 1 and 2.
+
+## Luiz's decisions on the open items (12/11/2026, before any A1 flow started)
+- The +0.40 pp mean-gain floor stays.
+- Cost stop: at the 20 h mark the session ALERTS Luiz only. Pausing the not-yet-started A1 flows needs his order; the
+  running flow is never paused.
+- After an n=3 ADOPT, r20419-20 are NOT flown. They fly only if the rule returns AMBIGUOUS.
+- Follow-up arm, only if A1 adopts and leaves a gap: 100 bits (replaces the 80-bit arm B), with its own
+  pre-registration and a VAL gate at 100 and 128 first. Arm F (per-category attack clusters) was killed at its VAL
+  gate (docs/ids57_arm_f_gate.md).
