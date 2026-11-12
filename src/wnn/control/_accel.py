@@ -152,6 +152,8 @@ import os
 # ram_core cell_write.rs (+ common.metal wnn_*). No Python surface change; default
 # flags bit-identical. GPU split-train (WNN_CONTROLLER_GPU_TRAIN=1) + PLN now matches
 # the CPU's LastWrite (was the QUAD nudge). Ships with worker ABI 29 (shared ram_core).
+# Same ABI 50: WnnController(yaw_integral_leak=) + dagger_train_batch_inplace(
+# yaw_integral_leak=) — ARM 3 --yaw-integral-leak (None = integral_leak, bit-identical).
 EXPECTED_ABI = 50
 
 BUILD_HINT = (

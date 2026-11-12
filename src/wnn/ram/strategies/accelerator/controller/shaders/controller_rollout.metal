@@ -290,6 +290,9 @@ struct Params
 	// by the horizontal velocity obs and this thread's Mahony quaternion with the
 	// estimator's own gains (est_kp / est_ki). 0 ⇒ the ABI-45 rollout.
 	uint abp_on;
+	// ARM 3 (12/11/2026), appended in lockstep with RolloutParams: the leak of the
+	// yaw integrals (yaw_err_i, yaw_i_pa). == integral_leak unless --yaw-integral-leak.
+	float yaw_integral_leak;
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -802,6 +805,9 @@ struct FwdParams
 	// initializers that predate it zero-fill (att_est_on = 0 ⇒ legacy).
 	uint att_est_on;
 	float att_up_x, att_up_y, att_up_z;
+	// ARM 3 (12/11/2026): the yaw-integral leak — APPENDED LAST and assigned after the
+	// positional initializer (F.yaw_integral_leak = P.yaw_integral_leak) at every site.
+	float yaw_integral_leak;
 };
 
 // Cell semantics (fire bit, nudge step, nudge distance, the TERNARY empty value
@@ -883,7 +889,8 @@ inline void derive_features(
 			float errs[3] = {roll_err, pitch_err, yaw_err};
 			for (uint k = 0u; k < npa; k++)
 			{
-				integ[ii] = P.integral_leak * integ[ii] + errs[k];
+				float leak = (k == 2u) ? P.yaw_integral_leak : P.integral_leak; // ARM 3: yaw_i_pa
+				integ[ii] = leak * integ[ii] + errs[k];
 				sensors[fi++] = integ[ii] * P.integral_scale;
 				ii++;
 			}
@@ -901,7 +908,7 @@ inline void derive_features(
 		}
 		if (P.obs_yaw_err_i != 0u)
 		{
-			integ[ii] = P.integral_leak * integ[ii] + yaw_err;
+			integ[ii] = P.yaw_integral_leak * integ[ii] + yaw_err; // ARM 3
 			sensors[fi++] = integ[ii] * P.integral_scale;
 			ii++;
 		}
@@ -1515,6 +1522,7 @@ kernel void controller_rollout(
 								 P.out_full_window, P.frame_stride,
 								 P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
 								 P.memory_mode, P.output_decode};
+	F.yaw_integral_leak = P.yaw_integral_leak; // ARM 3
 	// CTRL-38: the cascade d̂ observer's per-episode state (cascade_dhat.rs reset).
 	CasObs cas_o;
 	for (uint m = 0u; m < 4u; m++)
@@ -2410,6 +2418,8 @@ struct TrainParams
 	// CTRL-46 (ABI 46), appended in lockstep: the replay writes the RECORDED Mahony-bias
 	// prediction (abp_rec) into the sensors' last two slots (the CPU replay_obs twin).
 	uint abp_on;
+	// ARM 3 (12/11/2026), appended in lockstep: the yaw-integral leak (Params twin).
+	float yaw_integral_leak;
 };
 
 // Mirror of WnnController::output_decode_target (controller.rs): map a per-motor
@@ -2552,6 +2562,7 @@ kernel void controller_train(
 								 P.out_full_window, P.frame_stride,
 								 P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
 								 P.memory_mode, P.output_decode};
+	F.yaw_integral_leak = P.yaw_integral_leak; // ARM 3
 
 	uint E = ep_count[g];
 	for (uint ej = 0u; ej < E; ej++)
@@ -2768,6 +2779,7 @@ kernel void controller_record(
 								 P.out_full_window, P.frame_stride,
 								 P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
 								 P.memory_mode, P.output_decode};
+	F.yaw_integral_leak = P.yaw_integral_leak; // ARM 3
 
 	uchar prev_state[MAX_STATE_NEURONS];
 	uchar new_state[MAX_STATE_NEURONS];

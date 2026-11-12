@@ -48,6 +48,10 @@ class ThresholdCalibration:
 	easy_tilt_deg: float = 8.0
 	full_tilt_deg: float = 30.0
 	outer_quantile: float | None = None
+	# ARM 2 (Luiz 12/11/2026): the yaw-error inputs (feature_layout.YAW_ERROR_FEATURES)
+	# take the yaw-centred ladder — 0 a bin edge, symmetric, finest near 0 — whatever
+	# `ladder` is; every other feature is untouched. False = byte-identical.
+	yaw_centred: bool = False
 	student_samples: tuple | None = field(default=None, repr=False)
 
 	def __post_init__(self):
@@ -82,6 +86,8 @@ class ThresholdCalibration:
 		# Appended only when set, so every default-calibration token stays byte-identical.
 		if self.outer_quantile is not None:
 			base = f"{base},outerq:{float(self.outer_quantile):g}"
+		if self.yaw_centred:
+			base = f"{base},yaw:centred"
 		return base if self.student_samples is None else f"{base},student:{self.student_sample_count()}"
 
 
@@ -103,6 +109,7 @@ def calibration_from_args(args) -> ThresholdCalibration:
 		easy_tilt_deg=float(getattr(args, "rg_easy_tilt_deg", 8.0)),
 		full_tilt_deg=float(getattr(args, "rg_full_tilt_deg", 30.0)),
 		outer_quantile=getattr(args, "threshold_outer_quantile", None),
+		yaw_centred=bool(getattr(args, "yaw_centred_ladder", False)),
 		# Set by phased_ga's refit (_refit_thresholds_from_student) once the grid winner
 		# has been rolled out; every later fit site reads it from here.
 		student_samples=getattr(args, "_threshold_refit_samples", None),

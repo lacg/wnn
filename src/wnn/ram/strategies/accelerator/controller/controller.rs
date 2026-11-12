@@ -1790,6 +1790,26 @@ impl WnnController
 
 	/// num_features (9 + enabled H2 extras) + obs-feature config the GPU scorer
 	/// needs to mirror compute_features. Uniform across a population.
+	/// ARM 3 (12/11/2026): set the yaw-integral leak. None keeps integral_leak (the
+	/// bit-identical default). Refuses a leak outside (0, 1].
+	pub(crate) fn set_yaw_integral_leak(&mut self, leak: Option<f32>) -> Result<(), String>
+	{
+		let Some(v) = leak else { return Ok(()) };
+		if !(v > 0.0 && v <= 1.0)
+		{
+			return Err(format!("yaw_integral_leak must be in (0, 1]; got {v}"));
+		}
+		self.yaw_integral_leak = v;
+		Ok(())
+	}
+
+	/// ARM 3: the yaw-integral leak for the GPU hosts (a separate accessor so the
+	/// positionally-destructured obs_params tuple does not move).
+	pub(crate) fn yaw_integral_leak_value(&self) -> f32
+	{
+		self.yaw_integral_leak
+	}
+
 	pub(crate) fn obs_params(
 		&self,
 	) -> (
@@ -2715,6 +2735,7 @@ impl WnnController
 			obs_yaw_err,
 			obs_yaw_err_i,
 			integral_leak,
+			yaw_integral_leak: integral_leak,
 			integral_scale,
 			dt,
 			decouple_outputs,
@@ -3521,6 +3542,12 @@ pub struct WnnController
 	obs_pwm: bool,      // current throttle accumulator (num_motors features)
 	integral_leak: f32, // leaky-integral decay for the "_i" features (DISTINCT
 	// from delta_leak, which is the OUTPUT accumulator's leak)
+	// ARM 3 (Luiz 12/11/2026, docs/ctrl_steady_gap_block6.md §3-4): the leak of the
+	// YAW integrals only (yaw_err_i, and yaw_i_pa when obs_peraxis_yaw). Defaults to
+	// integral_leak (bit-identical); --yaw-integral-leak sets it so the yaw channel
+	// can carry a true integrator (0.9995 ≈ 2 s memory at 1 kHz) against a per-unit
+	// yaw-torque trim while roll_i / pitch_i / tilt_i keep integral_leak.
+	yaw_integral_leak: f32,
 	integral_scale: f32, // pre-threshold scale applied to integral features
 	// --- Yaw-anchor (Phase A, 26/06/2026): a CLEAN scalar yaw-error channel ---
 	// obs_yaw_err exposes (target_yaw − anchored yaw_heading) as ONE proportional
@@ -3770,6 +3797,7 @@ impl WnnController
 		est_ki = 0.1,
 		ctbr = None,
 		obs_att_bias_pred = false,
+		yaw_integral_leak = None,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -3820,6 +3848,7 @@ impl WnnController
 		est_ki: f32,
 		ctbr: Option<crate::ctbr::CtbrSpec>,
 		obs_att_bias_pred: bool,
+		yaw_integral_leak: Option<f32>,
 	) -> PyResult<Self>
 	{
 		// CTRL-46: the bias-predictor rows are the VERY tail (after the cascade blocks).
@@ -3907,7 +3936,16 @@ impl WnnController
 			c.enable_att_bias_pred(abp_thresholds)
 				.map_err(pyo3::exceptions::PyValueError::new_err)?;
 		}
+		c.set_yaw_integral_leak(yaw_integral_leak).map_err(pyo3::exceptions::PyValueError::new_err)?;
 		Ok(c)
+	}
+
+	/// ARM 3: the leak of the yaw integral features (== integral_leak unless
+	/// --yaw-integral-leak set it).
+	#[getter]
+	pub fn yaw_integral_leak(&self) -> f32
+	{
+		self.yaw_integral_leak
 	}
 
 	/// CTRL-46: whether the Mahony-bias predictor block (`--obs-att-bias-pred`) is on.
@@ -6029,9 +6067,10 @@ impl WnnController
 			{
 				&[roll_err, pitch_err]
 			};
-			for &e in errs
+			let leaks = [self.integral_leak, self.integral_leak, self.yaw_integral_leak];
+			for (&e, &leak) in errs.iter().zip(leaks.iter())
 			{
-				self.integral_acc[iacc] = self.integral_leak * self.integral_acc[iacc] + e;
+				self.integral_acc[iacc] = leak * self.integral_acc[iacc] + e;
 				feats.push(self.integral_acc[iacc] * self.integral_scale);
 				iacc += 1;
 			}
@@ -6072,7 +6111,7 @@ impl WnnController
 		}
 		if self.obs_yaw_err_i
 		{
-			self.integral_acc[iacc] = self.integral_leak * self.integral_acc[iacc] + yaw_err;
+			self.integral_acc[iacc] = self.yaw_integral_leak * self.integral_acc[iacc] + yaw_err;
 			feats.push(self.integral_acc[iacc] * self.integral_scale);
 		}
 		// L1 d̂ observer (canonical order LAST, after the yaw channel). Mirrors

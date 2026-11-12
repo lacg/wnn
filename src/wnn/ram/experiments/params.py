@@ -227,6 +227,8 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	"controller_vote_share",          # vote min-share θ in (0, 0.5], 1/100 grid
 	"controller_dagger_label_attitude",  # true | estimate — the DAgger label's attitude
 	"controller_obs_att_bias_pred",   # +2 features: onboard Mahony-bias prediction
+	"controller_yaw_centred_ladder",  # ARM 2: yaw-error inputs on a 0-edged centred ladder
+	"controller_yaw_integral_leak",   # ARM 3: separate leak for the yaw integral inputs
 	# Trainer tilt curriculum (27/09/2026): phased_ga --rg-easy-tilt-deg / --rg-full-tilt-deg.
 	"controller_rg_easy_tilt_deg",    # DAgger round-0 initial-tilt bound (deg; default 8)
 	"controller_rg_full_tilt_deg",    # DAgger last-round + checkpoint-eval tilt (deg; default 30)

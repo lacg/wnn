@@ -375,6 +375,9 @@ struct RolloutParams
 	// + 1 (CTRL-46, ABI 46), appended in lockstep with the shader twin: the Mahony-bias
 	// predictor block (att_bias_pred.rs), 2 features at the very tail. 0 ⇒ ABI 45.
 	abp_on: u32,
+	// + 1 (ARM 3, 12/11/2026), appended in lockstep with the shader twin: the yaw-
+	// integral leak (== integral_leak unless --yaw-integral-leak).
+	yaw_integral_leak: f32,
 }
 
 /// CTRL-38: the cascade feature blocks as the score kernel needs them, read off the
@@ -1204,6 +1207,7 @@ impl ControllerRolloutEvaluator
 				cas_resid_inv_a: ctbr.and_then(|c| c.cas.resid).map_or([0.0; 3], |r| r.inv_a),
 				cas_resid_w: ctbr.and_then(|c| c.cas.resid).map_or([0.0; 3], |r| r.w),
 				abp_on: abp_on as u32,
+				yaw_integral_leak: controllers[0].yaw_integral_leak_value(),
 			};
 
 			let b_q0 = self.buf(q0_chunk);
@@ -2073,6 +2077,8 @@ struct TrainParams
 	// CTRL-46 (ABI 46), appended at END of BOTH structs in lockstep: the replay writes
 	// the recorded bias prediction (abp_rec) into the sensors' last two slots.
 	abp_on: u32,
+	// ARM 3 (12/11/2026), appended at END of BOTH structs in lockstep: the yaw-integral leak.
+	yaw_integral_leak: f32,
 }
 
 /// Per-genome recorded trajectory batch, flat across genomes (matches the kernel's
@@ -2632,6 +2638,7 @@ impl ControllerTrainer
 			cas_resid_inv_a: CascadeGpu::from_controller(controllers[0]).resid.map_or([0.0; 3], |r| r.inv_a),
 			cas_resid_w: CascadeGpu::from_controller(controllers[0]).resid.map_or([0.0; 3], |r| r.w),
 			abp_on: controllers[0].att_bias_pred_on() as u32,
+			yaw_integral_leak: controllers[0].yaw_integral_leak_value(),
 		};
 
 		let b_sc = self.buf(&state_conns);
@@ -2853,6 +2860,7 @@ impl ControllerTrainer
 			cas_resid_inv_a: CascadeGpu::from_controller(controllers[0]).resid.map_or([0.0; 3], |r| r.inv_a),
 			cas_resid_w: CascadeGpu::from_controller(controllers[0]).resid.map_or([0.0; 3], |r| r.w),
 			abp_on: controllers[0].att_bias_pred_on() as u32,
+			yaw_integral_leak: controllers[0].yaw_integral_leak_value(),
 		};
 
 		let rec_out = vec![0u32; total_records * out_words];
@@ -4537,7 +4545,7 @@ fn build_parity_fixture_variant(
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		fixture_ctbr(variant),
-		false,
+		false, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 	for _ in 0..(n_state * 4)
@@ -6414,7 +6422,7 @@ fn controller_plant_latch_parity_once(high_on: bool) -> Result<(usize, usize, us
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		None, // ctbr OFF (ABI 38: the motor-level controller)
-		false,
+		false, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -6608,7 +6616,7 @@ fn controller_plant_counter_parity_once() -> Result<(usize, usize, usize), Strin
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		None, // ctbr OFF (ABI 38: the motor-level controller)
-		false,
+		false, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -6790,7 +6798,7 @@ fn controller_plant_bidir_parity_once() -> Result<(usize, usize, usize), String>
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		None, // ctbr OFF (ABI 38: the motor-level controller)
-		false,
+		false, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7469,7 +7477,7 @@ fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool)
 		false, false, false,
 		false, false,
 		false, 1, 1.0, false, false, 2.0, 0.1, None,
-		false,
+		false, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7624,7 +7632,7 @@ fn controller_record_att_est_parity_once() -> Result<(usize, usize, usize, bool)
 		false, false,
 		false, 1, 1.0, false,
 		true, 2.0, 0.1, None, // obs_att_estimator ON; ctbr OFF
-		false,
+		false, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7768,7 +7776,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 		true, true, true, // stage-1 vertical channel ON
 		false, false,     // stage-2 horizontal OFF
 		false, 1, 1.0, false, false, 2.0, 0.1, None,
-		false,
+		false, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -8134,7 +8142,8 @@ mod tests
 		// + cas_kt(1) + cas_l_gain(1). Same lockstep rule.
 		// + 7 (CTRL-48, ABI 45): cas_resid(1) + cas_resid_inv_a(3) + cas_resid_w(3).
 		// + 1 (CTRL-46, ABI 46): abp_on.
-		assert_eq!(mem::size_of::<RolloutParams>(), 172 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
+		// + 1 (ARM 3, 12/11/2026): yaw_integral_leak.
+		assert_eq!(mem::size_of::<RolloutParams>(), 173 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============

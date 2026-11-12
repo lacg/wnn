@@ -107,6 +107,11 @@ ZERO_REFERENCED: frozenset[str] = frozenset({
 	"abp_r", "abp_p",
 })
 
+# ARM 2 (Luiz 12/11/2026, --yaw-centred-ladder): the yaw-ERROR inputs — the
+# yaw-anchor pair and the per-axis yaw error/integral. Only these take the
+# yaw-centred ladder (0 a bin edge); every other feature keeps its ladder.
+YAW_ERROR_FEATURES: frozenset[str] = frozenset({"yaw_err", "yaw_err_i", "yaw_err_pa", "yaw_i_pa"})
+
 
 def _block_name(name: str) -> str:
 	"""Per-motor names ("pwm_3") belong to their block ("pwm")."""
@@ -177,4 +182,5 @@ def feature_names(spec: "ControllerSpec") -> list[str]:
 
 
 __all__ = ["AxisFamily", "ALL_AXES", "BANK_FAMILIES", "FeatureDesc", "FAMILY", "ZERO_REFERENCED",
+           "YAW_ERROR_FEATURES",
            "feature_layout", "feature_names"]

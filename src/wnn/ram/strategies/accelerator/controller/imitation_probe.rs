@@ -710,7 +710,7 @@ pub(crate) fn from_fixture(path: &str) -> (WnnController, RewardGatedConfigPacke
 		kw.get("delta_label_scale").map(|v| v.parse().unwrap()).unwrap_or(1.0),
 		kw.get("dagger_label_delta").map(|v| v == "true").unwrap_or(false),
 		b("obs_att_estimator"), 2.0, 0.1, ctbr_from_kw(&kw),
-		kw.get("obs_att_bias_pred").map(|v| v == "true").unwrap_or(false),
+		kw.get("obs_att_bias_pred").map(|v| v == "true").unwrap_or(false), kw.get("yaw_integral_leak").map(|v| v.parse().unwrap()),
 	)
 	.expect("fixture controller");
 	c.set_target_levels_core(kw.get("target_levels").map(|v| v.parse().unwrap()).unwrap_or(0)).unwrap();
