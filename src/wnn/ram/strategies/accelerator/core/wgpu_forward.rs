@@ -11,6 +11,7 @@
 //! dimension, so (examples × clusters) is walked in chunks of 65 535 × 64
 //! invocations with `base_idx` rewritten in the uniform between submits.
 
+use crate::cell_mode::UnwrittenLean;
 use crate::forward::{Forward, ForwardError, ForwardRequest};
 use crate::neuron_memory::pack_packed_to_u64;
 use wgpu::util::DeviceExt;
@@ -242,7 +243,7 @@ impl Forward for WgpuForward
 			neurons_per_cluster: l.neurons_per_cluster as u32,
 			num_clusters: l.num_clusters as u32,
 			memory_mode: r.cell_mode.as_u8() as u32,
-			default_cell: r.cell_mode.miss_cell(r.coverage_aware) as u32,
+			default_cell: r.cell_mode.miss_cell(UnwrittenLean::False, r.coverage_aware) as u32,
 			run_seed_lo: r.run_seed as u32,
 			run_seed_hi: (r.run_seed >> 32) as u32,
 			empty_value: r.empty_value,

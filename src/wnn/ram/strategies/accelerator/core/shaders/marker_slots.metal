@@ -113,19 +113,31 @@ inline uint find_or_claim_slot(
 // waits on another's progress (no SIMD-divergence deadlock).
 inline void slot_nudge(device atomic_uint *slot_values, uint slot, bool target_true)
 {
-	int delta = target_true ? 1 : -1;
 	while (true)
 	{
 		uint current = atomic_load_explicit(&slot_values[slot], memory_order_relaxed);
-		int new_cell = clamp(int(current) + delta, 0, 3);
-		if (uint(new_cell) == current)
+		uint new_cell = wnn_quad_step(current, target_true); // common.metal — THE lattice step
+		if (new_cell == current)
 			return; // saturated, no change
 		uint exp = current;
 		if (atomic_compare_exchange_weak_explicit(
-						&slot_values[slot], &exp, uint(new_cell),
+						&slot_values[slot], &exp, new_cell,
 						memory_order_relaxed, memory_order_relaxed))
 			return;
 	}
+}
+
+// One SEQUENTIAL write (wnn_nudge_step) on a slot: the 4-state family nudges
+// (slot_nudge); every other mode is LastWrite — the cell becomes the target. A
+// single writer per (genome, neuron) region makes the store order the CPU order.
+// Was the controller's per-shader slot_set_direct + literal mode checks, one of
+// which sent PLN through the QUAD nudge (12/11/2026).
+inline void slot_nudge_cell(device atomic_uint *slot_values, uint slot, bool target_true, uint mode)
+{
+	if (wnn_is_quad_family(mode))
+		slot_nudge(slot_values, slot, target_true);
+	else
+		atomic_store_explicit(&slot_values[slot], wnn_nudge_step(0u, target_true, mode), memory_order_relaxed);
 }
 
 // TERNARY lattice write (12/07/2026 GPU-train generalization): mirrors the

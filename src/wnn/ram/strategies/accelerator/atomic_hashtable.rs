@@ -223,11 +223,10 @@ impl Inner
 			Some(s) => s,
 			None => return false,
 		};
-		let delta: i64 = if target_true { 1 } else { -1 };
 		loop
 		{
 			let current = self.values[slot].load(Ordering::Acquire);
-			let new_cell = (current as i64 + delta).clamp(0, 3) as u8;
+			let new_cell = ram_core::cell_write::quad_step(current, target_true);
 			if new_cell == current
 			{
 				return false;
@@ -993,11 +992,10 @@ impl MarkerInner
 			None => return false,
 		};
 		let values = self.values();
-		let delta: i32 = if target_true { 1 } else { -1 };
 		loop
 		{
 			let current = values[slot].load(Ordering::Acquire) as i32;
-			let new_cell = (current + delta).clamp(0, 3) as u32;
+			let new_cell = ram_core::cell_write::quad_step(current as u8, target_true) as u32;
 			if new_cell == current as u32
 			{
 				return false;

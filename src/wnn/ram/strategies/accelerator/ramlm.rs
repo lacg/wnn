@@ -19,7 +19,7 @@ use rayon::slice::ParallelSliceMut;
 use std::sync::atomic::{fence, AtomicI32, AtomicI64, Ordering};
 
 use ram_core::neuron_memory::{
-	BITS_PER_CELL, CELLS_PER_WORD, CELL_MASK, EMPTY, FALSE, QUAD_FALSE, QUAD_TRUE, QUAD_WEAK_TRUE,
+	BITS_PER_CELL, CELLS_PER_WORD, CELL_MASK, EMPTY, FALSE, QUAD_WEAK_TRUE,
 	QUAD_WEIGHTS, TRUE,
 };
 
@@ -378,14 +378,7 @@ fn nudge_cell(
 		let old_word = memory_words[word_offset].load(Ordering::Acquire);
 		let old_cell = (old_word >> shift) & CELL_MASK;
 
-		let new_cell = if target_true
-		{
-			(old_cell + 1).min(QUAD_TRUE)
-		}
-		else
-		{
-			(old_cell - 1).max(QUAD_FALSE)
-		};
+		let new_cell = ram_core::cell_write::quad_step(old_cell as u8, target_true) as i64;
 
 		if new_cell == old_cell
 		{
@@ -628,14 +621,7 @@ pub fn bitwise_train_neuron_parallel(
 						let cell_idx = addr % CELLS_PER_WORD;
 						let old_cell = read_cell_direct(neuron_mem, word_idx, cell_idx);
 
-						let new_cell = if target_true
-						{
-							(old_cell + 1).min(QUAD_TRUE)
-						}
-						else
-						{
-							(old_cell - 1).max(QUAD_FALSE)
-						};
+						let new_cell = ram_core::cell_write::quad_step(old_cell as u8, target_true) as i64;
 
 						if new_cell != old_cell
 						{

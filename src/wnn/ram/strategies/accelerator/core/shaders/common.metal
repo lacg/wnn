@@ -68,6 +68,78 @@ inline uint wnn_write_rule(uint memory_mode, uint vote)
 // (must match neuron_memory.rs QUAD_WEIGHTS)
 constant float WNN_QUAD_WEIGHTS[4] = {0.0f, 0.25f, 0.75f, 1.0f};
 
+// Expected read of an untrained 3-state u-cell under the PLN fair coin — PLN's
+// deterministic weight, its coin probability, and the controller's fixed TERNARY
+// empty value (twin of neuron_memory.rs PLN_U_EXPECTED).
+constant float WNN_PLN_U_EXPECTED = 0.5f;
+
+// --- Per-cell WRITE semantics (twin of core/cell_write.rs; 12/11/2026) ---
+// ONE implementation for the IDS worker and the drone controller: the 4-state
+// lattice step, mode-native TRUE cell, recurrent fire bit, sequential writer and
+// solver distance. Exhaustively pinned against the CPU by cargo test
+// cell_write_gpu_parity. Never re-add per-shader copies (the controller's
+// bw_* / ctrl_* twins drifted: controller_train sent PLN through the QUAD nudge).
+
+inline bool wnn_is_quad_family(uint mode)
+{
+	return mode == WNN_MODE_QUAD_BINARY || mode == WNN_MODE_QUAD_WEIGHTED || mode == WNN_MODE_QSR;
+}
+
+// One lattice step FALSE(0) → WEAK_FALSE(1) → WEAK_TRUE(2) → TRUE(3), saturating.
+inline uint wnn_quad_step(uint cell, bool target_true)
+{
+	uint c = cell & 3u;
+	return target_true ? min(c + 1u, 3u) : (c == 0u ? 0u : c - 1u);
+}
+
+// One lattice step toward a specific 4-state value; holds once there.
+inline uint wnn_quad_step_toward(uint cell, uint target)
+{
+	uint c = cell & 3u, t = target & 3u;
+	return c == t ? c : wnn_quad_step(c, t > c);
+}
+
+// Mode-native fully-TRUE cell: 4-state TRUE(3), else ternary TRUE(1).
+inline uint wnn_true_cell(uint mode)
+{
+	return wnn_is_quad_family(mode) ? 3u : WNN_CELL_TRUE;
+}
+
+// 1-bit "fired" read: 4-state MSB; every other mode fires on TRUE(1) only (the
+// MSB rule would invert ternary — EMPTY=2 has MSB 1).
+inline bool wnn_fire_bit(uint cell, uint mode)
+{
+	return wnn_is_quad_family(mode) ? ((cell >> 1) & 1u) != 0u : cell == WNN_CELL_TRUE;
+}
+
+// Sequential write toward a boolean target: 4-state nudge, else LastWrite.
+inline uint wnn_nudge_step(uint cell, bool target_true, uint mode)
+{
+	if (wnn_is_quad_family(mode))
+		return wnn_quad_step(cell, target_true);
+	return target_true ? WNN_CELL_TRUE : WNN_CELL_FALSE;
+}
+
+// Sequential write toward a specific mode-native value.
+inline uint wnn_nudge_toward_value(uint cell, uint target, uint mode)
+{
+	return wnn_is_quad_family(mode) ? wnn_quad_step_toward(cell, target) : target;
+}
+
+// Solver cost: 4-state lattice steps; else 0 target / 1 untrained / 2 opposite.
+inline uint wnn_nudge_distance(uint cell, bool target_true, uint mode)
+{
+	if (wnn_is_quad_family(mode))
+	{
+		uint c = cell & 3u;
+		return target_true ? (3u - c) : c;
+	}
+	uint want = target_true ? WNN_CELL_TRUE : WNN_CELL_FALSE;
+	if (cell == want)
+		return 0u;
+	return cell == WNN_CELL_EMPTY ? 1u : 2u;
+}
+
 // --- Address naming (twin of neuron_memory.rs; keep the two in lockstep) ---
 //
 // <= WNN_WIDE_ADDRESS_THRESHOLD bits: the raw MSB-first integer (connection i
@@ -209,7 +281,7 @@ inline float wnn_cell_weight(uint cell, uint memory_mode, float empty_value)
 		{
 			return 1.0f;
 		}
-		return 0.5f;
+		return WNN_PLN_U_EXPECTED;
 	}
 	if (memory_mode == WNN_MODE_BINARY)
 	{
@@ -261,7 +333,7 @@ inline float wnn_pln_coin(uint cell, ulong rng)
 		return 1.0f;
 	}
 	float u = float(uint(rng >> 40)) / float(1u << 24);
-	return u < 0.5f ? 1.0f : 0.0f;
+	return u < WNN_PLN_U_EXPECTED ? 1.0f : 0.0f;
 }
 
 // Cell → weight WITH stochastic support (mirrors cell_to_weight_rng).

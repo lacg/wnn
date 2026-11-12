@@ -13,12 +13,14 @@
 
 pub mod cancel;
 pub mod cell_mode;
+pub mod cell_write;
 pub mod forward;
 pub mod neuron_memory;
 pub mod aligned_words;
 pub mod packed_bits;
 pub mod sparse_memory;
 pub mod train;
+pub mod unwritten_lean;
 pub mod vote_share;
 // Group-identical-units map + the one "same neuron" key (IDS multiplicity
 // layer, GA crossover dedupe, sparse export alias). docs/ids_multiplicity_layer_design.md §2.
@@ -76,7 +78,7 @@ pub mod metal_sparse
 	// can no longer drift (it once returned WEAK_FALSE for BINARY and PLN).
 	pub fn default_cell_for_mode(memory_mode: u8) -> u32
 	{
-		crate::cell_mode::CellMode::from_u8(memory_mode).map_or(1, |m| m.default_cell() as u32)
+		crate::cell_mode::CellMode::from_u8(memory_mode).map_or(1, |m| m.default_cell(crate::cell_mode::UnwrittenLean::False) as u32)
 	}
 	#[inline]
 	pub fn default_cell_for_coverage(memory_mode: u8, coverage_aware: bool) -> u32

@@ -510,17 +510,12 @@ impl GroupDenseMemory
 		let word_offset = neuron_idx * self.words_per_neuron + word_idx;
 		let shift = cell_idx * BITS_PER_CELL;
 		let mask = CELL_MASK << shift;
-		let delta = 2 * (target_true as i64) - 1; // +1 or -1
-
 		loop
 		{
 			let old_word = self.words[word_offset].load(Ordering::Relaxed);
 			let old_cell = (old_word >> shift) & CELL_MASK;
 
-			let new_cell = (old_cell + delta).clamp(
-				ram_core::neuron_memory::QUAD_FALSE,
-				ram_core::neuron_memory::QUAD_TRUE,
-			);
+			let new_cell = ram_core::cell_write::quad_step(old_cell as u8, target_true) as i64;
 			if new_cell == old_cell
 			{
 				return false; // already at boundary
@@ -766,11 +761,7 @@ impl GroupSparseMemory
 			dashmap::mapref::entry::Entry::Occupied(mut e) =>
 			{
 				let old_cell = *e.get() as i64;
-				let delta = 2 * (target_true as i64) - 1;
-				let new_cell = (old_cell + delta).clamp(
-					ram_core::neuron_memory::QUAD_FALSE,
-					ram_core::neuron_memory::QUAD_TRUE,
-				) as u8;
+				let new_cell = ram_core::cell_write::quad_step(old_cell as u8, target_true);
 				if new_cell == old_cell as u8
 				{
 					return false;
@@ -789,12 +780,7 @@ impl GroupSparseMemory
 			dashmap::mapref::entry::Entry::Vacant(e) =>
 			{
 				// Default is QUAD_WEAK_FALSE (1). Nudge toward true → insert 2, toward false → insert 0
-				let default = self.default_empty as i64;
-				let delta = 2 * (target_true as i64) - 1;
-				let new_cell = (default + delta).clamp(
-					ram_core::neuron_memory::QUAD_FALSE,
-					ram_core::neuron_memory::QUAD_TRUE,
-				) as u8;
+				let new_cell = ram_core::cell_write::quad_step(self.default_empty, target_true);
 				if new_cell == self.default_empty
 				{
 					return false; // no change from default

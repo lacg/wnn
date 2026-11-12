@@ -24,7 +24,7 @@
 //! `oi_bin_to_cell`, `OI_INITIAL` are the single source in `neuron_memory.rs`.
 //! Folding `ClusterStorage::Sparse` onto this container is the noted follow-up.
 
-use crate::cell_mode::CellMode;
+use crate::cell_mode::{CellMode, UnwrittenLean};
 use crate::forward::ClusterLayout;
 use crate::neuron_memory::{
 	compute_address_packed, oi_apply_nudge, oi_bin_to_cell, pack_packed_to_u64, EMPTY_U8, FALSE_U8, OI_INITIAL,
@@ -212,7 +212,7 @@ impl SparseTrainer
 	}
 
 	/// Bin every accumulator into cells and write them. `memory` must have been
-	/// built with `new_with_default(num_neurons, bits, mode.default_cell())` so a
+	/// built with `new_with_default(num_neurons, bits, mode.default_cell(UnwrittenLean::False))` so a
 	/// cell that bins to the default is REMOVED rather than stored (the
 	/// `write_cell` contract) and the export stays minimal. Writes override
 	/// whatever the memory held — a trainer is the whole truth for its batch
@@ -319,7 +319,7 @@ impl SparseTrainer
 /// Convenience: a fresh memory sized and defaulted for `mode` and `layout`.
 pub fn new_memory(mode: CellMode, layout: ClusterLayout) -> SparseLayerMemory
 {
-	SparseLayerMemory::new_with_default(layout.num_neurons(), layout.bits_per_neuron, mode.default_cell())
+	SparseLayerMemory::new_with_default(layout.num_neurons(), layout.bits_per_neuron, mode.default_cell(UnwrittenLean::False))
 }
 
 #[cfg(test)]
@@ -546,7 +546,7 @@ mod tests
 		for mode in CellMode::ALL
 		{
 			let m = new_memory(mode, layout());
-			assert_eq!(m.read_cell_or_default(0, 12345), mode.default_cell(), "{mode}");
+			assert_eq!(m.read_cell_or_default(0, 12345), mode.default_cell(UnwrittenLean::False), "{mode}");
 			assert_eq!(m.read_cell(0, 12345), EMPTY_U8, "{mode}: read_cell must stay EMPTY on a miss");
 		}
 		assert_eq!(SparseLayerMemory::new(1, 4).read_cell_or_default(0, 0), EMPTY_U8, "NO_CANONICAL_DEFAULT keeps EMPTY");
