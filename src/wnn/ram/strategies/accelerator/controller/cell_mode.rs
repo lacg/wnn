@@ -22,25 +22,29 @@
 //!   same connection arrays) → seed-matched ablations stay clean, and at
 //!   1 bit/cell vs QUAD's 2 the storage halves.
 //!
-//! TRAINING SEMANTICS DIFFER FROM THE IDS WORKER ON PURPOSE: the worker's
-//! TERNARY is a TRUE-wins lattice and BINARY is one-shot set-TRUE (order-
-//! independent batch training over a fixed dataset). The controller's DAGGER
-//! loop must be able to CORRECT earlier labels as the teacher distribution
-//! shifts, so TERNARY/BINARY controller training is LAST-WRITE-WINS direct
-//! set (the mode-analog of QUAD's bidirectional nudge). Single-writer on both
-//! CPU and GPU (thread-per-genome), so order is deterministic.
+//! CELL SEMANTICS LIVE IN ram_core (12/11/2026, Luiz: "they should reuse the
+//! types of neurons, this should not be different codes"). Memory mode = what a
+//! cell IS (`ram_core::cell_mode::CellMode`); write rule = how it is written
+//! (`WriteRule`). The controller SELECTS its rule — the DAgger loop must correct
+//! earlier labels as the teacher distribution shifts, so BINARY/TERNARY/PLN take
+//! `WriteRule::LastWrite` (`CellMode::sequential_write_rule`; opt-in
+//! `WriteRule::Vote` via --write-rule vote) and the 4-state family its nudge —
+//! but the fire bit, nudge step, plants, nudge distance, coin probability and
+//! the unwritten cell (`default_cell(UnwrittenLean::True)`) are the shared
+//! ram_core cell_write.rs primitives (GPU: common.metal `wnn_*`).
 //!
-//! Everything here is the single source of truth; the Metal twins live in
-//! controller_rollout.metal (same mode constants via ram_core).
+//! What stays HERE is controller-specific DECODE: the output topology
+//! (cumulative / antagonist), neutral values, thermometer targets, and the
+//! fixed TERNARY empty value.
 
-use ram_core::neuron_memory::{
-	BINARY, EMPTY_U8, FALSE_U8, PLN, QSR, QUAD_BINARY, QUAD_WEIGHTED, QUAD_WEIGHTS, TERNARY, TRUE_U8,
-};
+use ram_core::cell_mode::CellMode;
+use ram_core::neuron_memory::{BINARY, EMPTY_U8, PLN, QUAD_WEIGHTS, TERNARY};
 
 /// TERNARY untrained-cell decode weight — the PLN expected-value convention
 /// (Luiz rule 12/07/2026: the controller ALWAYS runs TERNARY at 0.5; with
 /// 0.0 the neutral would sit at the decode floor and hover is unlearnable).
-pub const TERNARY_EMPTY_VALUE: f32 = 0.5;
+/// The same number as PLN's u-state expectation, so it is that constant.
+pub const TERNARY_EMPTY_VALUE: f32 = ram_core::neuron_memory::PLN_U_EXPECTED;
 
 // ---------------------------------------------------------------------------
 // OUTPUT DECODE TOPOLOGY — orthogonal to the cell format (03/08/2026)
@@ -112,25 +116,13 @@ pub fn validate_output_decode(decode: u8, mode: u8) -> Result<(), String>
 	}
 }
 
-#[inline]
-pub fn is_quad(mode: u8) -> bool
-{
-	// QSR is QUAD in every respect except the read → shares all lattice/training
-	// logic gated by is_quad (fire-bit, nudge, plant, reservoir, default).
-	mode == QUAD_WEIGHTED || mode == QUAD_BINARY || mode == QSR
-}
-
 /// Validate a controller memory mode at construction — refuse unknown values
 /// loudly instead of silently decoding garbage.
 pub fn validate_mode(mode: u8) -> Result<(), String>
 {
-	match mode
-	{
-		TERNARY | QUAD_BINARY | QUAD_WEIGHTED | QSR | BINARY | PLN => Ok(()),
-		_ => Err(format!(
-			"unknown memory_mode {mode} (TERNARY=0, QUAD_BINARY=1, QUAD_WEIGHTED=2, BINARY=3, QSR=4, PLN=5)"
-		)),
-	}
+	CellMode::from_u8(mode).map(|_| ()).ok_or_else(|| {
+		format!("unknown memory_mode {mode} (TERNARY=0, QUAD_BINARY=1, QUAD_WEIGHTED=2, BINARY=3, QSR=4, PLN=5)")
+	})
 }
 
 /// The untrained-cell decode value — the delta-control neutral AND the
@@ -175,197 +167,6 @@ pub fn neutral_decode(mode: u8) -> f32
 pub fn cell_weight(cell: u8, mode: u8) -> f32
 {
 	ram_core::neuron_memory::cell_to_weight(cell as i64, mode, TERNARY_EMPTY_VALUE)
-}
-
-/// True-firing probability of a cell for the STOCHASTIC modes (QSR/PLN) — the p
-/// in "fire 1.0 with probability p, else 0.0". QSR: the graded QUAD weight
-/// (WEAK_FALSE=.25, WEAK_TRUE=.75). PLN: FALSE→0, TRUE→1 deterministic, the u
-/// state (EMPTY)→0.5 fair coin. Same probabilities as the IDS qsr_coin/pln_coin;
-/// the controller draws the coin with its OWN per-timestep counter PRNG
-/// (dist_uniform) so the coin is a pure function of (seed, step, motor, level)
-/// and stays bit-mirrored CPU↔GPU. For deterministic modes this equals
-/// cell_weight (so is_stochastic gating is the only branch a caller needs).
-#[inline]
-pub fn cell_coin_prob(cell: u8, mode: u8) -> f32
-{
-	match mode
-	{
-		QSR => QUAD_WEIGHTS[(cell & 0x3) as usize],
-		PLN => match cell
-		{
-			FALSE_U8 => 0.0,
-			TRUE_U8 => 1.0,
-			_ => 0.5,
-		},
-		_ => cell_weight(cell, mode),
-	}
-}
-
-/// Whether a mode's READ is stochastic (a per-timestep seeded coin) vs a
-/// deterministic decode. Only QSR (stochastic QUAD) and PLN (stochastic TERNARY).
-#[inline]
-pub fn is_stochastic(mode: u8) -> bool
-{
-	mode == QSR || mode == PLN
-}
-
-/// The CONTROLLER's canonical default cell — the value a `SparseLayerMemory`
-/// should DELETE-on-write rather than store (sparse hygiene). It is the cell
-/// value whose read is indistinguishable from an unwritten address for THIS
-/// substrate: QUAD/TERNARY → EMPTY(2) (read_cell's own default, so deletion is
-/// transparent to decode, the nudge lattice, and the fire-bit); BINARY → FALSE(0)
-/// (the last-write-wins negative — decodes to 0, same as an unwritten cell via
-/// the antagonist sum). NOTE: this differs from `ram_core::default_cell_for_mode`
-/// (IDS QUAD default = WEAK_FALSE(1)); the controller's QUAD default is EMPTY(2).
-#[inline]
-pub fn canonical_default_cell(mode: u8) -> u8
-{
-	match mode
-	{
-		BINARY => FALSE_U8, // 0 — delete the negative writes
-		_ => EMPTY_U8,      // 2 — QUAD (WEAK_TRUE/0.75) & TERNARY (0.5)
-	}
-}
-
-/// The 1-bit recurrent-state feedback ("fired or not") for a state cell.
-/// QUAD: the QSR MSB ((v>>1)&1 — the side). TERNARY/BINARY: cell == TRUE(1);
-/// unwritten (reads EMPTY=2) → not fired. The QUAD MSB rule would INVERT
-/// ternary semantics (TRUE=1 has MSB 0; EMPTY=2 has MSB 1).
-#[inline]
-pub fn cell_fire_bit(cell: u8, mode: u8) -> bool
-{
-	if is_quad(mode)
-	{
-		(cell >> 1) & 1 != 0
-	}
-	else
-	{
-		cell == TRUE_U8
-	}
-}
-
-/// The mode-native "fully TRUE" / "fully FALSE" cell values (training targets).
-#[inline]
-pub fn true_cell(mode: u8) -> u8
-{
-	if is_quad(mode)
-	{
-		3
-	}
-	else
-	{
-		TRUE_U8
-	}
-}
-#[inline]
-pub fn false_cell(mode: u8) -> u8
-{
-	let _ = mode;
-	FALSE_U8
-}
-
-/// Split-trainer planted-cell encoding (Type-1 latches, Type-2/3 counters).
-/// QUAD keeps the historical lattice: strong TRUE(3) on / soft WEAK_FALSE(1)
-/// off, so one later nudge can flip a planted off but can't erase a latch.
-/// TERNARY/BINARY have no soft states and train last-write-wins (any write
-/// fully overrides), so plants set TRUE/FALSE directly — the strong/weak
-/// asymmetry has no analog to preserve.
-#[inline]
-pub fn plant_cell(on: bool, mode: u8) -> u8
-{
-	if is_quad(mode)
-	{
-		if on
-		{
-			3
-		}
-		else
-		{
-			1
-		}
-	}
-	else if on
-	{
-		TRUE_U8
-	}
-	else
-	{
-		FALSE_U8
-	}
-}
-
-/// One training write toward a boolean target. QUAD: one nudge step through
-/// the 4-state lattice (the historical rule). TERNARY/BINARY: last-write-wins
-/// direct set (see module docs for why this differs from the IDS worker) —
-/// named `ram_core::cell_mode::WriteRule::LastWrite` since CTRL-46 (its opt-in
-/// alternative, `WriteRule::Vote`, never reaches this function: the walk records
-/// the visit in vote_tally.rs instead).
-#[inline]
-pub fn nudge_cell(current: u8, target_true: bool, mode: u8) -> u8
-{
-	if is_quad(mode)
-	{
-		crate::controller_training::nudge_toward_pub(current, target_true)
-	}
-	else if target_true
-	{
-		TRUE_U8
-	}
-	else
-	{
-		FALSE_U8
-	}
-}
-
-/// One training write toward a SPECIFIC mode-native cell value.
-#[inline]
-pub fn nudge_cell_value(current: u8, target: u8, mode: u8) -> u8
-{
-	if is_quad(mode)
-	{
-		crate::controller_training::nudge_toward_value(current, target)
-	}
-	else
-	{
-		target
-	}
-}
-
-/// Solver cost: how "far" a cell is from satisfying a boolean target
-/// (the QSR graded nudge-distance, generalized). QUAD: 0..3 lattice steps.
-/// TERNARY/BINARY: 0 = already the target, 1 = untrained (EMPTY read),
-/// 2 = explicit opposite (a flip erases learned evidence — costlier).
-#[inline]
-pub fn nudge_distance(cell: u8, target_true: bool, mode: u8) -> u8
-{
-	if is_quad(mode)
-	{
-		let c = (cell & 0x3) as i8;
-		if target_true
-		{
-			(3 - c) as u8
-		}
-		else
-		{
-			c as u8
-		}
-	}
-	else
-	{
-		let want = if target_true { TRUE_U8 } else { FALSE_U8 };
-		if cell == want
-		{
-			0
-		}
-		else if cell == EMPTY_U8
-		{
-			1
-		}
-		else
-		{
-			2
-		}
-	}
 }
 
 /// Antagonist thermometer target for output neuron level `level_idx`
@@ -557,6 +358,7 @@ mod tests
 	}
 
 	use super::*;
+	use ram_core::neuron_memory::{FALSE_U8, QSR, QUAD_BINARY, QUAD_WEIGHTED, TRUE_U8};
 
 	#[test]
 	fn neutral_per_mode()
@@ -570,19 +372,20 @@ mod tests
 	#[test]
 	fn fire_bit_semantics()
 	{
+		let fire = |c: u8, m: u8| CellMode::of(m).fire_bit(c);
 		// QUAD MSB rule unchanged.
 		for (c, want) in [(0u8, false), (1, false), (2, true), (3, true)]
 		{
-			assert_eq!(cell_fire_bit(c, QUAD_WEIGHTED), want);
+			assert_eq!(fire(c, QUAD_WEIGHTED), want);
 		}
 		// TERNARY: TRUE fires; EMPTY (untrained) and FALSE do not — the QUAD
 		// MSB rule would invert this.
-		assert!(cell_fire_bit(TRUE_U8, TERNARY));
-		assert!(!cell_fire_bit(FALSE_U8, TERNARY));
-		assert!(!cell_fire_bit(EMPTY_U8, TERNARY));
+		assert!(fire(TRUE_U8, TERNARY));
+		assert!(!fire(FALSE_U8, TERNARY));
+		assert!(!fire(EMPTY_U8, TERNARY));
 		// BINARY: unwritten reads EMPTY → not fired.
-		assert!(cell_fire_bit(TRUE_U8, BINARY));
-		assert!(!cell_fire_bit(EMPTY_U8, BINARY));
+		assert!(fire(TRUE_U8, BINARY));
+		assert!(!fire(EMPTY_U8, BINARY));
 	}
 
 	#[test]
@@ -642,15 +445,16 @@ mod tests
 	#[test]
 	fn ternary_binary_nudge_is_direct_set()
 	{
-		for mode in [TERNARY, BINARY]
+		let nudge = |c: u8, t: bool, m: u8| CellMode::of(m).nudge_step(c, t);
+		for mode in [TERNARY, BINARY, PLN]
 		{
-			assert_eq!(nudge_cell(EMPTY_U8, true, mode), TRUE_U8);
-			assert_eq!(nudge_cell(EMPTY_U8, false, mode), FALSE_U8);
-			assert_eq!(nudge_cell(TRUE_U8, false, mode), FALSE_U8); // correctable
-			assert_eq!(nudge_cell(FALSE_U8, true, mode), TRUE_U8);
+			assert_eq!(nudge(EMPTY_U8, true, mode), TRUE_U8);
+			assert_eq!(nudge(EMPTY_U8, false, mode), FALSE_U8);
+			assert_eq!(nudge(TRUE_U8, false, mode), FALSE_U8); // correctable
+			assert_eq!(nudge(FALSE_U8, true, mode), TRUE_U8);
 		}
 		// QUAD unchanged: one step at a time.
-		assert_eq!(nudge_cell(1, true, QUAD_WEIGHTED), 2);
+		assert_eq!(nudge(1, true, QUAD_WEIGHTED), 2);
 	}
 
 	// ---- output-decode topology (03/08/2026) -------------------------------
@@ -721,7 +525,7 @@ mod tests
 		// TERNARY constants index QUAD_WEIGHTS[1]=0.25 and [0]=0.0, so hardcoding
 		// them measures a 0.25-wide substrate. This is the exact trap CLAUDE.md
 		// records as the inverted-QUAD multistage bug.
-		let (on, off) = (true_cell(QUAD_WEIGHTED), false_cell(QUAD_WEIGHTED));
+		let (on, off) = (CellMode::of(QUAD_WEIGHTED).true_cell(), CellMode::of(QUAD_WEIGHTED).false_cell());
 		let mut full_up = vec![off; levels];
 		for c in full_up[..levels / 2].iter_mut()
 		{
@@ -754,11 +558,11 @@ mod tests
 				.map(|i| {
 					if antagonist_target(d, i, levels)
 					{
-						true_cell(QUAD_WEIGHTED)
+						CellMode::of(QUAD_WEIGHTED).true_cell()
 					}
 					else
 					{
-						false_cell(QUAD_WEIGHTED)
+						CellMode::of(QUAD_WEIGHTED).false_cell()
 					}
 				})
 				.collect();

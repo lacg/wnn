@@ -51,9 +51,9 @@ pub fn mutate_values(
 		}
 		*v = if quad
 		{
+			// One 4-state lattice step in a random direction — the shared ram_core step.
 			let up = counter_rng::uniform(seed, generation, genome, layer, idx, 1) < 0.5;
-			let d: i16 = if up { 1 } else { -1 };
-			(*v as i16 + d).clamp(0, 3) as u8
+			ram_core::cell_write::quad_step(*v, up)
 		}
 		else
 		{

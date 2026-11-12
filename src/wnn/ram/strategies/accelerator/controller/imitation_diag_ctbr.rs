@@ -15,6 +15,7 @@
 //! The layout (names, axis families) is the ONE Python table, passed as a file
 //! (WNN_IMIT_DIAG_LAYOUT, written from feature_layout.py) — never re-declared here.
 
+use ram_core::cell_mode::{CellMode, UnwrittenLean};
 use std::collections::HashMap;
 
 use rand::rngs::SmallRng;
@@ -586,7 +587,7 @@ fn oracle_r2(c: &WnnController, s: &Stratum, count: (&[Vec<bool>], &[Vec<bool>])
 		}
 	}
 	let mode = c.memory_mode_u8();
-	let (tc, fc, ec) = (crate::cell_mode::true_cell(mode), crate::cell_mode::false_cell(mode), crate::cell_mode::canonical_default_cell(mode));
+	let (tc, fc, ec) = (CellMode::of(mode).true_cell(), CellMode::of(mode).false_cell(), CellMode::of(mode).default_cell(UnwrittenLean::True));
 	let lv = c.levels_per_motor();
 	let pred: Vec<[f64; 4]> = read
 		.iter()

@@ -17,6 +17,7 @@
 //! no DAgger relabel) and (B) the production DAgger student; plus each one's
 //! closed-loop eval and its imitation on its OWN states.
 
+use ram_core::cell_mode::CellMode;
 use std::collections::HashMap;
 
 use rand::rngs::SmallRng;
@@ -334,7 +335,7 @@ pub(crate) fn oracle(cap: &ImitCapture, c: &WnnController) -> (f64, f64, f64, f6
 		}
 	}
 	let mode = c.memory_mode_u8();
-	let (tc, fc) = (crate::cell_mode::true_cell(mode), crate::cell_mode::false_cell(mode));
+	let (tc, fc) = (CellMode::of(mode).true_cell(), CellMode::of(mode).false_cell());
 	let l = c.levels_per_motor();
 	let nm = c.num_motors().min(4);
 	let mut s = 0.0;

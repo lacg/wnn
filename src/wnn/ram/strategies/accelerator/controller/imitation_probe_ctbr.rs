@@ -18,6 +18,7 @@
 //! stage, transformed: exact, through the student's decode grid (a perfect
 //! memoriser), and plus Gaussian noise the size of the measured RAM error.
 
+use ram_core::cell_mode::CellMode;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
@@ -50,7 +51,7 @@ pub(crate) fn memoriser(c: &WnnController, l: [f32; 4]) -> [f64; 4]
 {
 	let (_d, bits) = c.diag_targets(l);
 	let mode = c.memory_mode_u8();
-	let (tc, fc) = (crate::cell_mode::true_cell(mode), crate::cell_mode::false_cell(mode));
+	let (tc, fc) = (CellMode::of(mode).true_cell(), CellMode::of(mode).false_cell());
 	let lv = c.levels_per_motor();
 	std::array::from_fn(|m| {
 		let cells: Vec<u8> = bits[m * lv..(m + 1) * lv].iter().map(|&b| if b { tc } else { fc }).collect();
@@ -153,7 +154,7 @@ fn oracle_phys(c: &WnnController, cap: &ImitCapture) -> (Vec<[f64; 4]>, f64)
 	}
 	let (cells, conf) = maps.iter().flat_map(|m| m.values()).fold((0usize, 0usize), |(c0, c1), &(t, f)| (c0 + 1, c1 + (t > 0 && f > 0) as usize));
 	let mode = c.memory_mode_u8();
-	let (tc, fc) = (crate::cell_mode::true_cell(mode), crate::cell_mode::false_cell(mode));
+	let (tc, fc) = (CellMode::of(mode).true_cell(), CellMode::of(mode).false_cell());
 	let lv = c.levels_per_motor();
 	let pred = cap
 		.addrs

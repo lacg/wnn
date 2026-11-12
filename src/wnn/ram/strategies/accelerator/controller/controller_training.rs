@@ -38,6 +38,7 @@
 //! whether to invest in full BPTT-through-time will be data-driven from
 //! the simplified-trainer results.
 
+use ram_core::cell_mode::CellMode;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -486,7 +487,7 @@ fn next_combination(combo: &mut [usize], n: usize) -> bool
 pub(crate) fn candidate_rank(val: u8, target_true: bool, mode: u8, addr: usize, proj: usize)
 	-> u32
 {
-	let d = crate::cell_mode::nudge_distance(val, target_true, mode) as u32;
+	let d = CellMode::of(mode).nudge_distance(val, target_true) as u32;
 	let h = (addr ^ proj).count_ones();
 	QSR_DISTANCE_COST as u32 * d + HAMMING_COST as u32 * h
 }
@@ -692,7 +693,7 @@ pub(crate) fn solve_qsr_reachable_view(
 			let base_cost = |val: u8| -> Option<f64> {
 				Some(
 					QSR_DISTANCE_COST
-						* crate::cell_mode::nudge_distance(val, target_true, memory_mode) as f64,
+						* CellMode::of(memory_mode).nudge_distance(val, target_true) as f64,
 				)
 			};
 			let proj = projected_address(conn, input_bits, n_bits_per_neuron);
@@ -831,7 +832,7 @@ pub fn solve_partial_connectivity_qsr_reachable<G: Fn(usize) -> Vec<(u64, u8)> +
 			let base = |val: u8| -> Option<f64> {
 				Some(
 					QSR_DISTANCE_COST
-						* crate::cell_mode::nudge_distance(val, target_true, memory_mode) as f64,
+						* CellMode::of(memory_mode).nudge_distance(val, target_true) as f64,
 				)
 			};
 			reachable_topk_for_neuron(
@@ -887,21 +888,6 @@ pub fn solve_partial_connectivity_qsr_reachable<G: Fn(usize) -> Vec<(u64, u8)> +
 const QSR_DISTANCE_COST: f64 = 7.0; // per nudge-step; ~half the TRINARY CONFLICT so a
 																		// 3-step move (~21) ≈ a hard TRINARY conflict (20).
 
-/// QSR cell weight side: true if the cell is on the TRUE side (WEAK_TRUE/TRUE).
-#[inline]
-fn qsr_nudge_distance(cell: u8, target_true: bool) -> u8
-{
-	let c = (cell & 0x3) as i8;
-	if target_true
-	{
-		(3 - c) as u8
-	}
-	else
-	{
-		c as u8
-	}
-}
-
 /// QSR analog of solve_partial_connectivity_trinary. Same beam search, graded
 /// nudge-distance cost. `read_cell` returns QSR values 0..3. Default/untrained
 /// cell value is WEAK_FALSE(1).
@@ -941,7 +927,7 @@ pub fn solve_partial_connectivity_qsr<F: Fn(usize, usize) -> u8>(
 		for addr in 0..memory_size
 		{
 			let cell = read_cell(n, addr);
-			let dist = qsr_nudge_distance(cell, target_true) as f64;
+			let dist = CellMode::QuadWeighted.nudge_distance(cell, target_true) as f64;
 			let mut hamming = 0u32;
 			for k in 0..n_bits_per_neuron
 			{
@@ -968,71 +954,10 @@ pub fn solve_partial_connectivity_qsr<F: Fn(usize, usize) -> u8>(
 	)
 }
 
-/// QSR cell values matching neuron_memory.rs and controller.rs.
-const FALSE_VAL: u8 = 0;
-const WEAK_FALSE: u8 = 1; // EMPTY default
-const WEAK_TRUE: u8 = 2;
-const TRUE_VAL: u8 = 3;
-
-/// Encode a single target bit into the QSR nudge to apply:
-///   target=TRUE  → nudge UP (FALSE→WEAK_FALSE→WEAK_TRUE→TRUE)
-///   target=FALSE → nudge DOWN (TRUE→WEAK_TRUE→WEAK_FALSE→FALSE)
-/// Returns the new cell value for a current cell value.
-#[inline]
-pub fn nudge_toward_pub(current: u8, target_true: bool) -> u8
-{
-	nudge_toward(current, target_true)
-}
-
-/// Nudge a QSR cell ONE step toward a SPECIFIC target value (0..3), not the
-/// boolean extreme. Used by per-motor EDRA to move the state cell toward the
-/// solver-derived desired QSR state value.
-#[inline]
-pub fn nudge_toward_value(current: u8, target: u8) -> u8
-{
-	let c = (current & 0x3) as i8;
-	let t = (target & 0x3) as i8;
-	if c < t
-	{
-		(c + 1) as u8
-	}
-	else if c > t
-	{
-		(c - 1) as u8
-	}
-	else
-	{
-		c as u8
-	}
-}
-
-#[inline]
-fn nudge_toward(current: u8, target_true: bool) -> u8
-{
-	let cur = current & 0x3;
-	if target_true
-	{
-		// Nudge toward TRUE
-		match cur
-		{
-			FALSE_VAL => WEAK_FALSE,
-			WEAK_FALSE => WEAK_TRUE,
-			WEAK_TRUE => TRUE_VAL,
-			_ => TRUE_VAL, // already TRUE or unknown — stay TRUE
-		}
-	}
-	else
-	{
-		// Nudge toward FALSE
-		match cur
-		{
-			TRUE_VAL => WEAK_TRUE,
-			WEAK_TRUE => WEAK_FALSE,
-			WEAK_FALSE => FALSE_VAL,
-			_ => FALSE_VAL,
-		}
-	}
-}
+/// The 4-state untrained cell (occupancy baseline of the QSR solver). The QUAD
+/// lattice step itself is ram_core `cell_write::quad_step` (12/11/2026: the
+/// nudge_toward / nudge_toward_value copies that lived here were removed).
+const WEAK_FALSE: u8 = ram_core::neuron_memory::QUAD_WEAK_FALSE as u8;
 
 // ============================================================================
 // Python bindings
@@ -1241,25 +1166,19 @@ pub fn solve_partial_qsr_reachable_py(
 #[cfg(test)]
 mod tests
 {
-	use super::*;
-
 	#[test]
 	fn nudge_up_chain()
 	{
+		use ram_core::cell_write::quad_step;
 		// FALSE → WEAK_FALSE → WEAK_TRUE → TRUE → TRUE
-		assert_eq!(nudge_toward(FALSE_VAL, true), WEAK_FALSE);
-		assert_eq!(nudge_toward(WEAK_FALSE, true), WEAK_TRUE);
-		assert_eq!(nudge_toward(WEAK_TRUE, true), TRUE_VAL);
-		assert_eq!(nudge_toward(TRUE_VAL, true), TRUE_VAL);
+		assert_eq!([0u8, 1, 2, 3].map(|c| quad_step(c, true)), [1, 2, 3, 3]);
 	}
 
 	#[test]
 	fn nudge_down_chain()
 	{
+		use ram_core::cell_write::quad_step;
 		// TRUE → WEAK_TRUE → WEAK_FALSE → FALSE → FALSE
-		assert_eq!(nudge_toward(TRUE_VAL, false), WEAK_TRUE);
-		assert_eq!(nudge_toward(WEAK_TRUE, false), WEAK_FALSE);
-		assert_eq!(nudge_toward(WEAK_FALSE, false), FALSE_VAL);
-		assert_eq!(nudge_toward(FALSE_VAL, false), FALSE_VAL);
+		assert_eq!([3u8, 2, 1, 0].map(|c| quad_step(c, false)), [2, 1, 0, 0]);
 	}
 }

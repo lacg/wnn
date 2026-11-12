@@ -60,6 +60,7 @@
 
 #![allow(dead_code)] // Some helpers are used only by the parity test.
 
+use ram_core::cell_mode::CellMode;
 use pyo3::prelude::*;
 
 // ----------------------------------------------------------------------------
@@ -1782,7 +1783,7 @@ pub(crate) fn rollout_and_label_inner(
 	// reproducible per-episode stochasticity). GATED on is_stochastic so
 	// deterministic modes draw NOTHING from `rng` and stay bit-identical to the
 	// pre-Part-5 sequence (the disturbance-off parity anchor, dagger:405).
-	if crate::cell_mode::is_stochastic(controller.memory_mode_u8())
+	if CellMode::of(controller.memory_mode_u8()).is_stochastic()
 	{
 		controller.set_decode_seed(rng.gen());
 	}
