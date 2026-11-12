@@ -320,7 +320,52 @@ Read: best WNN (vote + dedupe) is −0.26 pp F1 / +0.22 pp FPR vs XGBoost and �
 encoding (−0.55 / +0.27 vs raw XGBoost); it beats thermometer RF (+1.2 pp, FPR 3.86 vs 7.61) and AdaBoost (+2.4 pp),
 and ties raw RF on F1 (−0.12) at lower FPR. Lowest FPR overall: raw MLP 2.34 at F1 91.54. The vote + dedupe arm closes
 ~2/3 of lattice-encon's 0.84 pp gap to XGBoost. Caveat: WNN rows use the legacy feature ranking; the feature-list
-equality with the baselines' top-20 is not verified line by line. unswr version to follow when its 20 flows finish.
+equality with the baselines' top-20 is not verified line by line. unswr version below.
+
+### IDS-56 on UNSW random_3way (unswr) + classical baselines, TEST partition (added 12/11/2026)
+
+20/20 unswr flows (7501–7520): {lattice, ms01} × {encoff, encon} × r20419–r20423, BINARY 2-cluster 2m max250,
+blend_cluster, WbCTRL desirability, rate 0.25, legacy ranking. WNN = GA best_f1, `margin_val_cal` (threshold
+calibrated on VAL, scored on the TEST partition), n=5, mean ± SD. Classical = same script and protocol as the unswt
+table (`--dataset unsw --split random_3way`, thermo64 and raw top-20). Test partition: 152,390 normal / 6,036 attack.
+
+```
+                                     F1             FPR          Acc     neurons  size        GA gens  flow h
+WNN lattice encoff   (best WNN)      94.12 ± 0.16   0.35 ± 0.32  99.16   495      663K cells    86     5.08
+WNN lattice encon                    93.73 ± 0.20   0.56 ± 0.47  99.06   208      441K cells   102     2.59
+WNN vote (ms01) encoff               93.79 ± 0.18   0.92 ± 0.14  99.00    98       97K cells    60     1.14
+WNN vote (ms01) encon                93.55 ± 0.20   0.97 ± 0.17  98.96    31       63K cells    72     0.49
+--- classical, val_cal, 64-bit thermometer -------------------------------------------------------------
+RF                                   95.39          0.39         99.32            135.78 MB
+XGBoost                              95.53          0.42         99.33              0.25 MB
+AdaBoost                             93.60          0.26         99.11              0.05 MB
+MLP                                  95.48          0.41         99.33              3.46 MB
+--- classical, val_cal, raw numeric top-20 ------------------------------------------------------------
+RF                                   95.82          0.34         99.38             88.53 MB
+XGBoost                              95.60          0.43         99.34              0.26 MB
+AdaBoost                             93.74          0.55         99.07              0.05 MB
+MLP                                  95.20          0.45         99.28              0.13 MB
+```
+
+Paired by seed, ms01 − lattice (TEST):
+- encoff: ΔF1 −0.38 / −0.31 / −0.18 / −0.13 / −0.68 (mean −0.34 ± 0.22, 0/5 up); ΔFPR mean +0.57 (5/5 worse).
+- encon: ΔF1 −0.38 / −0.29 / +0.17 / −0.28 / −0.14 (mean −0.18 ± 0.22, 1/5 up — the seed where lattice-encon
+  collapsed to 20 neurons); ΔFPR mean +0.41 (3/5 worse).
+
+Read:
+- **The weighted min-share vote does not carry over from unswt to unswr.** It wins F1 5/5 on unswt-encon (+0.58)
+  but loses on unswr under both encodings, and raises FPR by ~0.4–0.6 pp. Mechanism (docs/ids56_unswr_tiny_genomes.md):
+  the class-weighted tally on unswr's 25:1 benign:attack ratio clears benign cells, and the GA settles on tiny genomes
+  (31–98 neurons) at an F1 ≈ 93.5 / FPR ≈ 1.0 attractor. The pre-registered unweighted arm (IDS56U, 7543–7545) tests
+  the fix; its futility gate passed 3/3 seeds on VAL.
+- **Dedupe (encon) does not help on unswr either:** lattice −0.39 F1 / +0.21 FPR vs encoff, with high FPR variance
+  (one seed collapsed to 20 neurons / 35K cells at 93.50 / 1.09).
+- **Against classical (TEST):** best WNN (lattice encoff, 94.12 / 0.35) is −1.27 pp F1 vs thermo RF, −1.41 vs thermo
+  XGBoost, −1.36 vs thermo MLP, −1.70 vs raw RF; its FPR (0.35) is at the classical level (0.34–0.45) and only
+  thermo AdaBoost is lower (0.26, at F1 93.60). It beats AdaBoost on F1 (+0.38–0.52). The ms01 arms trade
+  ~0.3–0.6 pp F1 and ~0.6 pp FPR for 7–10× fewer cells.
+- Caveat as for unswt: WNN rows use the legacy feature ranking; equality with the baselines' top-20 list is not
+  verified line by line.
 
 ### IDS-56 rule-7 tables (generated: `scripts/build_sp_5tables.py --prefix 'IDS56-unswt-%'`)
 # IDS-56 — min-share vote (ms01, theta=0.1) vs lattice x encoding dedupe off/on (unswt temporal_3way, 16bWb, rate 0.25)
