@@ -1,0 +1,35 @@
+# CTRL-48 blocks 4+5 on controller ABI 49 (prereg test set, docs/ctrl_select_tail_prereg.md). 33 runs.
+# The 3 refit100 runs cannot be recalculated: phased_ga _refuse_refit_without_grid (the student-refit ladder is not in any checkpoint).
+C-S2-d_wposx2_a49_rf_c200_dres_full_s1
+C-S2-d_wposx2_a49_rf_c200_dres_quad_full_s1
+C-S2-d_wposx2_a49_rf_c200_dres_ms01_full_s1
+C-S2-d_wposx2_a49_rf_c200_dres_lv32_full_s1
+C-S2-d_wposx2_a49_rf_c200_dres_mlab_full_s1
+C-S2-d_wposx2_a49_rf_c200_dres_biasin_full_s1
+C-S2-d_wposx2_a49_rf_c200_dres_full_s2
+C-S2-d_wposx2_a49_rf_c200_dres_quad_full_s2
+C-S2-d_wposx2_a49_rf_c200_dres_ms01_full_s2
+C-S2-d_wposx2_a49_rf_c200_dres_lv32_full_s2
+C-S2-d_wposx2_a49_rf_c200_dres_mlab_full_s2
+C-S2-d_wposx2_a49_rf_c200_dres_biasin_full_s2
+C-S2-d_wposx2_a49_rf_c200_dres_full_s3
+C-S2-d_wposx2_a49_rf_c200_dres_quad_full_s3
+C-S2-d_wposx2_a49_rf_c200_dres_ms01_full_s3
+C-S2-d_wposx2_a49_rf_c200_dres_lv32_full_s3
+C-S2-d_wposx2_a49_rf_c200_dres_mlab_full_s3
+C-S2-d_wposx2_a49_rf_c200_dres_biasin_full_s3
+C-S2-d_wposx2_a49_rf_c200_dres_oq02_full_s1
+C-S2-d_wposx2_a49_rf_c200_dres_cent_oq02_full_s1
+C-S2-d_wposx2_a49_rf_c200_dres_ct30_full_s1
+C-S2-d_wposx2_a49_rf_c200_dres_tvxy045_full_s1
+C-S2-d_wposx2_a49_rf_c200_dres_refit100_full_s1
+C-S2-d_wposx2_a49_rf_c200_dres_oq02_full_s2
+C-S2-d_wposx2_a49_rf_c200_dres_cent_oq02_full_s2
+C-S2-d_wposx2_a49_rf_c200_dres_ct30_full_s2
+C-S2-d_wposx2_a49_rf_c200_dres_tvxy045_full_s2
+C-S2-d_wposx2_a49_rf_c200_dres_refit100_full_s2
+C-S2-d_wposx2_a49_rf_c200_dres_oq02_full_s3
+C-S2-d_wposx2_a49_rf_c200_dres_cent_oq02_full_s3
+C-S2-d_wposx2_a49_rf_c200_dres_ct30_full_s3
+C-S2-d_wposx2_a49_rf_c200_dres_tvxy045_full_s3
+C-S2-d_wposx2_a49_rf_c200_dres_refit100_full_s3
