@@ -1,0 +1,2650 @@
+{
+ "cases": {
+  "cap34": {
+   "call_arguments": {
+    "accuracy_threshold": "0x1.f75104d551d69p-14",
+    "assortative_mating_ratio": "0x1.b333333333333p-1",
+    "bits_mutation_rate": "0x0.0p+0",
+    "cluster_crossover_ratio": "0x1.0000000000000p-1",
+    "crossover_bits": "blend_cluster",
+    "crossover_rate": "0x1.6666666666666p-1",
+    "dedupe_fill": true,
+    "dedupe_neurons": false,
+    "eval_subset_idx": 0,
+    "fitness_scores": [
+     "0x1.1f3566fe72f49p+0",
+     "0x1.1a9869fcd78c5p+0",
+     "0x1.1998c5e9deb7fp+0",
+     "0x1.36b5bafc09c5cp+0",
+     "0x1.19b5114dcf064p+0",
+     "0x1.19ea3dc16c649p+0",
+     "0x1.1b5e3cc8a8a98p+0",
+     "0x1.1ad315d9160ccp+0",
+     "0x1.2ce25c864d5b0p+0",
+     "0x1.18b345c8acddbp+0"
+    ],
+    "generation": 3,
+    "max_attempts": 60,
+    "max_bits": 34,
+    "max_neurons": 250,
+    "max_neurons_total": null,
+    "min_bits": 4,
+    "min_neurons": 5,
+    "mutable_clusters": null,
+    "neurons_mutation_rate": "0x1.999999999999ap-4",
+    "phase_type": 0,
+    "pool_shuffle_ratio": "0x1.999999999999ap-1",
+    "population_ce": [
+     "0x1.57bbbf74455e7p-2",
+     "0x1.536ad9622aa26p-2",
+     "0x1.51eea94436012p-2",
+     "0x1.74f57cda030e0p-2",
+     "0x1.528b6be67bfa3p-2",
+     "0x1.52294cc44d636p-2",
+     "0x1.5248baeaf28f2p-2",
+     "0x1.51fac3ae7e666p-2",
+     "0x1.6799a74c5909ap-2",
+     "0x1.52434ca27f36dp-2"
+    ],
+    "return_best_n": true,
+    "seed": 917526203802381735,
+    "target_count": 12,
+    "total_generations": 250,
+    "tournament_size": 3,
+    "train_subset_idx": 0
+   },
+   "evaluated": 12,
+   "offspring_seed": 917526203802381735,
+   "parents": [
+    {
+     "bits_max": 24,
+     "bits_min": 24,
+     "bits_sha256": "ad14699359dbc66f2a6a5d3243411ee86ec318abf7983ec292e44ea4261c5a55",
+     "bits_sum": 10248,
+     "connections_sha256": "6ffe7482dfd784e70fd8fa6fdd37d5ccfbeda41a104ac18e0f7f9ec9992b2c03",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fab0c8d787caep-1",
+      "ce": "0x1.57bbbf74455e7p-2",
+      "f1": "0x1.df4244c31ac5bp-1",
+      "fpr": "0x1.40dfa36b41965p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      223,
+      204
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "4cafcadecad4e19dd86e9f7a6b4e3fcdbbb550b03785f7167e1bfec501f02be5",
+     "bits_sum": 9078,
+     "connections_sha256": "e627ac1f01ae2cc6df83650afff2aacf4c92da71bb9e0d4b605eb26a542789c5",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fae5520f521cep-1",
+      "ce": "0x1.536ad9622aa26p-2",
+      "f1": "0x1.e037046f95b0dp-1",
+      "fpr": "0x1.2b65d67935f11p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      153,
+      114
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "e15c88ee6f4842e44f4896c38dc17a0315daf313af6d17a054d863344e7ec3a8",
+     "bits_sum": 10370,
+     "connections_sha256": "dc8688bfafb9c0cbec7df5056a38accc2772f525d4d17b66c54c2c0d11d619b1",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fae3f9e38baedp-1",
+      "ce": "0x1.51eea94436012p-2",
+      "f1": "0x1.e047b6503e9c3p-1",
+      "fpr": "0x1.303582b400bcfp-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      106,
+      199
+     ]
+    },
+    {
+     "bits_max": 14,
+     "bits_min": 14,
+     "bits_sha256": "b26e659c4affbdfdacc9a2e81dbfb8c6424004871bebb1e9ec25896b8a87935d",
+     "bits_sum": 3136,
+     "connections_sha256": "0bd13faa6f8622bb3bd19180de62f4af19254d8e6ee89fddb0656810b8e78009",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fa6303b98b896p-1",
+      "ce": "0x1.74f57cda030e0p-2",
+      "f1": "0x1.de2bf56833cb2p-1",
+      "fpr": "0x1.6e22ffe5d834ep-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      145,
+      79
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "db5c117d8dd164b7d4fe5d54099ddf660f9ef7121687a32d154285e8758906f8",
+     "bits_sum": 10744,
+     "connections_sha256": "d31f4a0f62c09412f12f1cc07e2e71da249262fcfbb478fd0ea555fcec9ed797",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fae72e99a4782p-1",
+      "ce": "0x1.528b6be67bfa3p-2",
+      "f1": "0x1.dfc6885d5cf13p-1",
+      "fpr": "0x1.14c428fd2f689p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      69,
+      247
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "289992913d5b155638a2ffd24255cdd079be438a5538da7cd945f866131c4348",
+     "bits_sum": 7514,
+     "connections_sha256": "0a2de783eef14f094d78775eb59baf9fd6ca86aa22dd2420cc69f4cc515bba3a",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fadf6cfcb3500p-1",
+      "ce": "0x1.52294cc44d636p-2",
+      "f1": "0x1.e04019c1c9eebp-1",
+      "fpr": "0x1.34903621b0225p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      88,
+      133
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "e2b15b06384cead9e3767725e46ec3e86e858a91943fcc59cc0d94ac836eb343",
+     "bits_sum": 8262,
+     "connections_sha256": "2ad8139247ccb1141846e9f704ec96ac3aaa97e11fa8a944bbf3e0ca5d9e2f03",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.faaeb7550752bp-1",
+      "ce": "0x1.5248baeaf28f2p-2",
+      "f1": "0x1.df59f52255de6p-1",
+      "fpr": "0x1.47c8052f97aa7p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      154,
+      89
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "77a1a3db7f0378663c98549c9693cd4480a81bb16ea5e97ffa0903c664c03d90",
+     "bits_sum": 9350,
+     "connections_sha256": "93443e0018c31214b0af7cd5ad1024a4ff5b73ac8111b385ba19ae44b02bd669",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fabc290f67ccap-1",
+      "ce": "0x1.51fac3ae7e666p-2",
+      "f1": "0x1.dfb74e18f3112p-1",
+      "fpr": "0x1.4805f2e319c12p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      187,
+      88
+     ]
+    },
+    {
+     "bits_max": 14,
+     "bits_min": 14,
+     "bits_sha256": "be96992cdbee1e9d983530dce814fa08292a3a30df012a66ddbb67f40be58a59",
+     "bits_sum": 4284,
+     "connections_sha256": "0f119cd37ed04fc63285a705678f8a735d38f6b9de7437de7629a1bc780d311f",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fa670c3e50743p-1",
+      "ce": "0x1.6799a74c5909ap-2",
+      "f1": "0x1.de330c319d005p-1",
+      "fpr": "0x1.6a88f71906047p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      169,
+      137
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "de69012a969fa6bae4c41f9d8c78240d44ed3b653b8abcc201f5c9b6a3470618",
+     "bits_sum": 12954,
+     "connections_sha256": "96dae33478d99934466018a10fc5c19e317281d11185f532e1893ab810ced6e1",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fb0a08a49d566p-1",
+      "ce": "0x1.52434ca27f36dp-2",
+      "f1": "0x1.e0dcf4e4efcbap-1",
+      "fpr": "0x1.1aebdfd4d456dp-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      220,
+      161
+     ]
+    }
+   ],
+   "phase_type": 0,
+   "returned": [
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "db5c117d8dd164b7d4fe5d54099ddf660f9ef7121687a32d154285e8758906f8",
+     "bits_sum": 10744,
+     "connections_sha256": "d31f4a0f62c09412f12f1cc07e2e71da249262fcfbb478fd0ea555fcec9ed797",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fae72e99a4782p-1",
+      "ce": "0x1.528b6be67bfa3p-2",
+      "f1": "0x1.dfc6885d5cf13p-1",
+      "fpr": "0x1.14c428fd2f689p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      69,
+      247
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "29ca0b260edb854e88cdfbf191e9721c427da5afc6159f33182604f92cd49540",
+     "bits_sum": 9758,
+     "connections_sha256": "15903aec5fd8b0549cb1b0773ed50a220ed14d7e77a720dad6e4a92d2d03756d",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fad45c2d39540p-1",
+      "ce": "0x1.52c007884af4ep-2",
+      "f1": "0x1.dfeac8da59c52p-1",
+      "fpr": "0x1.32f35c0fce2fcp-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      154,
+      133
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "de69012a969fa6bae4c41f9d8c78240d44ed3b653b8abcc201f5c9b6a3470618",
+     "bits_sum": 12954,
+     "connections_sha256": "96dae33478d99934466018a10fc5c19e317281d11185f532e1893ab810ced6e1",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fb0a08a49d566p-1",
+      "ce": "0x1.52434ca27f36dp-2",
+      "f1": "0x1.e0dcf4e4efcbap-1",
+      "fpr": "0x1.1aebdfd4d456dp-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      220,
+      161
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "db5c117d8dd164b7d4fe5d54099ddf660f9ef7121687a32d154285e8758906f8",
+     "bits_sum": 10744,
+     "connections_sha256": "d31f4a0f62c09412f12f1cc07e2e71da249262fcfbb478fd0ea555fcec9ed797",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fae72e99a4782p-1",
+      "ce": "0x1.528b6be67bfa3p-2",
+      "f1": "0x1.dfc6885d5cf13p-1",
+      "fpr": "0x1.14c428fd2f689p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      69,
+      247
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "e15c88ee6f4842e44f4896c38dc17a0315daf313af6d17a054d863344e7ec3a8",
+     "bits_sum": 10370,
+     "connections_sha256": "dc8688bfafb9c0cbec7df5056a38accc2772f525d4d17b66c54c2c0d11d619b1",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fae3f9e38baedp-1",
+      "ce": "0x1.51eea94436012p-2",
+      "f1": "0x1.e047b6503e9c3p-1",
+      "fpr": "0x1.303582b400bcfp-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      106,
+      199
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "db5c117d8dd164b7d4fe5d54099ddf660f9ef7121687a32d154285e8758906f8",
+     "bits_sum": 10744,
+     "connections_sha256": "191a12b263cde4bdbcabce901c3ec36846ece49d925c54e1b9837f126a1a2805",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fafe24088647ep-1",
+      "ce": "0x1.51f9287b4d79ep-2",
+      "f1": "0x1.e07eafa62eb65p-1",
+      "fpr": "0x1.18e7cfa7e53cep-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      69,
+      247
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "e15c88ee6f4842e44f4896c38dc17a0315daf313af6d17a054d863344e7ec3a8",
+     "bits_sum": 10370,
+     "connections_sha256": "62bc82a31f6097805f6498267aa8ec084753c694648881f92e9862ab2ff4c969",
+     "duplicate_neurons": 77,
+     "metrics": {
+      "acc": "0x1.fad1915d2aa0ep-1",
+      "ce": "0x1.51cf520f19e84p-2",
+      "f1": "0x1.dff8e5511ec2bp-1",
+      "fpr": "0x1.3914313fd1dc4p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      106,
+      199
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "56af69bb99e42bbe1fb209f865e7ee368ade72ff539df4c04a6710d20b8af782",
+     "bits_sum": 10778,
+     "connections_sha256": "106cb0592d5f942cef53a35d8ce23eebf7518006577805ffceca620dae0a09cf",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fae7987fe550dp-1",
+      "ce": "0x1.52929f1a3e15ep-2",
+      "f1": "0x1.dfcaf71284c45p-1",
+      "fpr": "0x1.1508f7fbd9a7bp-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      70,
+      247
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "db5c117d8dd164b7d4fe5d54099ddf660f9ef7121687a32d154285e8758906f8",
+     "bits_sum": 10744,
+     "connections_sha256": "d31f4a0f62c09412f12f1cc07e2e71da249262fcfbb478fd0ea555fcec9ed797",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fae72e99a4782p-1",
+      "ce": "0x1.528b6be67bfa3p-2",
+      "f1": "0x1.dfc6885d5cf13p-1",
+      "fpr": "0x1.14c428fd2f689p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      69,
+      247
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "de69012a969fa6bae4c41f9d8c78240d44ed3b653b8abcc201f5c9b6a3470618",
+     "bits_sum": 12954,
+     "connections_sha256": "a8072c63833a4b9656fc9cc2315efc2ba590bc9367fc0cafbbd9fb9d355a556d",
+     "duplicate_neurons": 94,
+     "metrics": {
+      "acc": "0x1.faf1512578038p-1",
+      "ce": "0x1.51d5ead978eddp-2",
+      "f1": "0x1.e053866b18796p-1",
+      "fpr": "0x1.215f47a7d8066p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      220,
+      161
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "07720d7153f162c37547333b9faa4d1bac6dd325368b8644fca673ca7d325e26",
+     "bits_sum": 10710,
+     "connections_sha256": "eb5265688f97c8552a16fe94c15a8260bc4386abdf9e92d4987320edc89411e3",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fab3e32447cf3p-1",
+      "ce": "0x1.528d05525ff90p-2",
+      "f1": "0x1.d86ea27a16670p-1",
+      "fpr": "0x1.e550b3e0118fap-10"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      69,
+      246
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "e65917a008b8b88d071a9969dd4d18bcc2604bba101091e794ea0aef4a1e0f22",
+     "bits_sum": 10676,
+     "connections_sha256": "be1da208b6467b072bf9ef9ce6afdeb688c23f1f6fe6200e383522ee01cd993d",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fae81cdfc0a43p-1",
+      "ce": "0x1.528ea3418606ep-2",
+      "f1": "0x1.dfcd3fdcb4cf3p-1",
+      "fpr": "0x1.14cb0a7c20809p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      69,
+      245
+     ]
+    }
+   ],
+   "selected": [
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "de69012a969fa6bae4c41f9d8c78240d44ed3b653b8abcc201f5c9b6a3470618",
+     "bits_sum": 12954,
+     "connections_sha256": "96dae33478d99934466018a10fc5c19e317281d11185f532e1893ab810ced6e1",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fb0a08a49d566p-1",
+      "ce": "0x1.52434ca27f36dp-2",
+      "f1": "0x1.e0dcf4e4efcbap-1",
+      "fpr": "0x1.1aebdfd4d456dp-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      220,
+      161
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "db5c117d8dd164b7d4fe5d54099ddf660f9ef7121687a32d154285e8758906f8",
+     "bits_sum": 10744,
+     "connections_sha256": "191a12b263cde4bdbcabce901c3ec36846ece49d925c54e1b9837f126a1a2805",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fafe24088647ep-1",
+      "ce": "0x1.51f9287b4d79ep-2",
+      "f1": "0x1.e07eafa62eb65p-1",
+      "fpr": "0x1.18e7cfa7e53cep-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      69,
+      247
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "de69012a969fa6bae4c41f9d8c78240d44ed3b653b8abcc201f5c9b6a3470618",
+     "bits_sum": 12954,
+     "connections_sha256": "a8072c63833a4b9656fc9cc2315efc2ba590bc9367fc0cafbbd9fb9d355a556d",
+     "duplicate_neurons": 94,
+     "metrics": {
+      "acc": "0x1.faf1512578038p-1",
+      "ce": "0x1.51d5ead978eddp-2",
+      "f1": "0x1.e053866b18796p-1",
+      "fpr": "0x1.215f47a7d8066p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      220,
+      161
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "e15c88ee6f4842e44f4896c38dc17a0315daf313af6d17a054d863344e7ec3a8",
+     "bits_sum": 10370,
+     "connections_sha256": "dc8688bfafb9c0cbec7df5056a38accc2772f525d4d17b66c54c2c0d11d619b1",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fae3f9e38baedp-1",
+      "ce": "0x1.51eea94436012p-2",
+      "f1": "0x1.e047b6503e9c3p-1",
+      "fpr": "0x1.303582b400bcfp-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      106,
+      199
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "e65917a008b8b88d071a9969dd4d18bcc2604bba101091e794ea0aef4a1e0f22",
+     "bits_sum": 10676,
+     "connections_sha256": "be1da208b6467b072bf9ef9ce6afdeb688c23f1f6fe6200e383522ee01cd993d",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fae81cdfc0a43p-1",
+      "ce": "0x1.528ea3418606ep-2",
+      "f1": "0x1.dfcd3fdcb4cf3p-1",
+      "fpr": "0x1.14cb0a7c20809p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      69,
+      245
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "db5c117d8dd164b7d4fe5d54099ddf660f9ef7121687a32d154285e8758906f8",
+     "bits_sum": 10744,
+     "connections_sha256": "d31f4a0f62c09412f12f1cc07e2e71da249262fcfbb478fd0ea555fcec9ed797",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fae72e99a4782p-1",
+      "ce": "0x1.528b6be67bfa3p-2",
+      "f1": "0x1.dfc6885d5cf13p-1",
+      "fpr": "0x1.14c428fd2f689p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      69,
+      247
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "db5c117d8dd164b7d4fe5d54099ddf660f9ef7121687a32d154285e8758906f8",
+     "bits_sum": 10744,
+     "connections_sha256": "d31f4a0f62c09412f12f1cc07e2e71da249262fcfbb478fd0ea555fcec9ed797",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fae72e99a4782p-1",
+      "ce": "0x1.528b6be67bfa3p-2",
+      "f1": "0x1.dfc6885d5cf13p-1",
+      "fpr": "0x1.14c428fd2f689p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      69,
+      247
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "db5c117d8dd164b7d4fe5d54099ddf660f9ef7121687a32d154285e8758906f8",
+     "bits_sum": 10744,
+     "connections_sha256": "d31f4a0f62c09412f12f1cc07e2e71da249262fcfbb478fd0ea555fcec9ed797",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fae72e99a4782p-1",
+      "ce": "0x1.528b6be67bfa3p-2",
+      "f1": "0x1.dfc6885d5cf13p-1",
+      "fpr": "0x1.14c428fd2f689p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      69,
+      247
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "56af69bb99e42bbe1fb209f865e7ee368ade72ff539df4c04a6710d20b8af782",
+     "bits_sum": 10778,
+     "connections_sha256": "106cb0592d5f942cef53a35d8ce23eebf7518006577805ffceca620dae0a09cf",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fae7987fe550dp-1",
+      "ce": "0x1.52929f1a3e15ep-2",
+      "f1": "0x1.dfcaf71284c45p-1",
+      "fpr": "0x1.1508f7fbd9a7bp-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      70,
+      247
+     ]
+    }
+   ],
+   "viable": 12
+  },
+  "cap34_dup": {
+   "call_arguments": {
+    "accuracy_threshold": "0x1.f75104d551d69p-14",
+    "assortative_mating_ratio": "0x1.b333333333333p-1",
+    "bits_mutation_rate": "0x0.0p+0",
+    "cluster_crossover_ratio": "0x1.0000000000000p-1",
+    "crossover_bits": "blend_cluster",
+    "crossover_rate": "0x1.6666666666666p-1",
+    "dedupe_fill": true,
+    "dedupe_neurons": false,
+    "eval_subset_idx": 0,
+    "fitness_scores": [
+     "0x1.364f7a09b5b82p+0",
+     "0x1.1a938b4426510p+0",
+     "0x1.30e44c5900accp+0",
+     "0x1.1a3faf98e16a2p+0",
+     "0x1.19bb5bd078dd1p+0",
+     "0x1.1a05f03fb52edp+0",
+     "0x1.1e5a809f3111bp+0",
+     "0x1.2866969badf4cp+0",
+     "0x1.186f40807f9dcp+0",
+     "0x1.4ffe71457c185p+0"
+    ],
+    "generation": 3,
+    "max_attempts": 60,
+    "max_bits": 34,
+    "max_neurons": 250,
+    "max_neurons_total": null,
+    "min_bits": 4,
+    "min_neurons": 5,
+    "mutable_clusters": null,
+    "neurons_mutation_rate": "0x1.999999999999ap-4",
+    "phase_type": 0,
+    "pool_shuffle_ratio": "0x1.999999999999ap-1",
+    "population_ce": [
+     "0x1.74e8242fea57fp-2",
+     "0x1.5198351057e32p-2",
+     "0x1.6d00d12fdad56p-2",
+     "0x1.52f0727e7220bp-2",
+     "0x1.52be4551b8544p-2",
+     "0x1.51dfdab74ae9ep-2",
+     "0x1.56a8a4430c00ap-2",
+     "0x1.58acc9f2bd438p-2",
+     "0x1.51d628be7fc06p-2",
+     "0x1.709bc907c78f7p-2"
+    ],
+    "return_best_n": true,
+    "seed": 917526203802381735,
+    "target_count": 12,
+    "total_generations": 250,
+    "tournament_size": 3,
+    "train_subset_idx": 0
+   },
+   "evaluated": 12,
+   "offspring_seed": 917526203802381735,
+   "parents": [
+    {
+     "bits_max": 14,
+     "bits_min": 14,
+     "bits_sha256": "040e32b8951f70c752725e05d4145989c31964ecc9909a4980c7bfde7e6a3974",
+     "bits_sum": 5208,
+     "connections_sha256": "ff6165042b3d1b5d768e6f05e8bf06783cad206fb56e8fe8bd641d646d1e2318",
+     "duplicate_neurons": 73,
+     "metrics": {
+      "acc": "0x1.fa6f1d4b24370p-1",
+      "ce": "0x1.74e8242fea57fp-2",
+      "f1": "0x1.de5158eb02423p-1",
+      "fpr": "0x1.662e43fe90690p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      228,
+      144
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "2425bd1a13f7f41d886cb1f08b02493e66f59a4545c3dd0ee1a97dc708241a8b",
+     "bits_sum": 6188,
+     "connections_sha256": "f2e8d75ef250b58048d74a1275aec6935fb01b97cffc77cbf88f8e944d4d22ef",
+     "duplicate_neurons": 35,
+     "metrics": {
+      "acc": "0x1.faba8175cdd38p-1",
+      "ce": "0x1.5198351057e32p-2",
+      "f1": "0x1.dfa6c70e7478ep-1",
+      "fpr": "0x1.47151e5634009p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      113,
+      69
+     ]
+    },
+    {
+     "bits_max": 14,
+     "bits_min": 14,
+     "bits_sha256": "6f914e73cfd608bde08345f4030d8628fdcca32ffff7a41a24c17451520f4984",
+     "bits_sum": 2324,
+     "connections_sha256": "ca28fab8623a6401ce3974eda6b0b67f7dc155810c9605820c33ab91d31d18a7",
+     "duplicate_neurons": 32,
+     "metrics": {
+      "acc": "0x1.fa63bd0be9da3p-1",
+      "ce": "0x1.6d00d12fdad56p-2",
+      "f1": "0x1.de208add06fa6p-1",
+      "fpr": "0x1.6b3bddfba8fdbp-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      98,
+      68
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "073dbd513ffdbd1412b9f54e8cc7ad317e75b5b710661ce024901ebb69a27f4b",
+     "bits_sum": 11628,
+     "connections_sha256": "1cc6deceaa93d81e0071343b5fa1c3d250fb90bc0378c9a2151aea0edf060a75",
+     "duplicate_neurons": 67,
+     "metrics": {
+      "acc": "0x1.fae625dc638d2p-1",
+      "ce": "0x1.52f0727e7220bp-2",
+      "f1": "0x1.e0491a5569f0ep-1",
+      "fpr": "0x1.2da0f2e5cecf5p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      199,
+      143
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "0a60005d90f55eae2fa60ed72c89e969894155a4cb4811c86a7d250bcb6daf08",
+     "bits_sum": 10064,
+     "connections_sha256": "85b25565eede4501dbb5c739468d1ad8041392987efe2815f2e324bd223c16bb",
+     "duplicate_neurons": 59,
+     "metrics": {
+      "acc": "0x1.faf5c39211a10p-1",
+      "ce": "0x1.52be4551b8544p-2",
+      "f1": "0x1.e0b7034caca7ep-1",
+      "fpr": "0x1.2e0f0ab395fe3p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      90,
+      206
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "120d1b5e1a893b25da4b9865690eab21fa0dc25d5e1f93c4750a9f2913d80482",
+     "bits_sum": 9282,
+     "connections_sha256": "3626d912aa010228d6950a2cee36fc2662450f9e820cd3f0f3db2fc2f10af8fb",
+     "duplicate_neurons": 54,
+     "metrics": {
+      "acc": "0x1.fad1e0c9c34ebp-1",
+      "ce": "0x1.51dfdab74ae9ep-2",
+      "f1": "0x1.dfda6f91053cbp-1",
+      "fpr": "0x1.331ca4b288092p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      106,
+      167
+     ]
+    },
+    {
+     "bits_max": 24,
+     "bits_min": 24,
+     "bits_sha256": "ad14699359dbc66f2a6a5d3243411ee86ec318abf7983ec292e44ea4261c5a55",
+     "bits_sum": 10248,
+     "connections_sha256": "a4dc7fa5838cd2dc830ef48c5d92b0f09369b70d4d096c78e71d1412934e433c",
+     "duplicate_neurons": 84,
+     "metrics": {
+      "acc": "0x1.fab35eb23717bp-1",
+      "ce": "0x1.56a8a4430c00ap-2",
+      "f1": "0x1.df4bab6a9c73ep-1",
+      "fpr": "0x1.3f6c131537b5ap-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      248,
+      179
+     ]
+    },
+    {
+     "bits_max": 24,
+     "bits_min": 24,
+     "bits_sha256": "6873392f08063c3ef9edc96245149f5fd471919c118809bdede9715aa8da60be",
+     "bits_sum": 9456,
+     "connections_sha256": "bd1d1d8f8d45375ebbb526760c5b64659e734bad4422e1439bd37aa528f284bb",
+     "duplicate_neurons": 78,
+     "metrics": {
+      "acc": "0x1.f97e76443ab03p-1",
+      "ce": "0x1.58acc9f2bd438p-2",
+      "f1": "0x1.cd11cca317733p-1",
+      "fpr": "0x1.6036b6efd03f4p-10"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      152,
+      242
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "ebf08da4786750be9526a2568d891327b0cb7f0b9c91d278d9ea7d0f12231d94",
+     "bits_sum": 14348,
+     "connections_sha256": "512ab13fc32e95ee74944c3715ecc11d24317e601a6078b7b053a53e96e826cc",
+     "duplicate_neurons": 83,
+     "metrics": {
+      "acc": "0x1.fb0adc70b85b3p-1",
+      "ce": "0x1.51d628be7fc06p-2",
+      "f1": "0x1.e105a0a6ea8f5p-1",
+      "fpr": "0x1.216d0a75a4337p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      193,
+      229
+     ]
+    },
+    {
+     "bits_max": 14,
+     "bits_min": 14,
+     "bits_sha256": "5449087bed052fbdf294d62dce170f4f32663cbd4071333b6f950be84385f40c",
+     "bits_sum": 4606,
+     "connections_sha256": "d1dbd9fdb730e1fd006f4427070b5b6dd559f9cbb24f700b8609e914bf670c53",
+     "duplicate_neurons": 65,
+     "metrics": {
+      "acc": "0x1.f73990f21176ap-1",
+      "ce": "0x1.709bc907c78f7p-2",
+      "f1": "0x1.b47de886bf923p-1",
+      "fpr": "0x1.cf98fa2ccb58ap-12"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      111,
+      218
+     ]
+    }
+   ],
+   "phase_type": 0,
+   "returned": [
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "0a60005d90f55eae2fa60ed72c89e969894155a4cb4811c86a7d250bcb6daf08",
+     "bits_sum": 10064,
+     "connections_sha256": "85b25565eede4501dbb5c739468d1ad8041392987efe2815f2e324bd223c16bb",
+     "duplicate_neurons": 59,
+     "metrics": {
+      "acc": "0x1.faf5c39211a10p-1",
+      "ce": "0x1.52be4551b8544p-2",
+      "f1": "0x1.e0b7034caca7ep-1",
+      "fpr": "0x1.2e0f0ab395fe3p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      90,
+      206
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "3c61963d499074d7d6111d44afe4cefcca177617e9f189b60cb3cef458739089",
+     "bits_sum": 9996,
+     "connections_sha256": "6108ee8a865488977d02ce4bf2edb4713a4392652f0dec10b0f5139d4663be21",
+     "duplicate_neurons": 33,
+     "metrics": {
+      "acc": "0x1.faf23f6baf90ep-1",
+      "ce": "0x1.51fe1f0c48359p-2",
+      "f1": "0x1.e09341f8e8b65p-1",
+      "fpr": "0x1.2be8930fa458dp-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      88,
+      206
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "2425bd1a13f7f41d886cb1f08b02493e66f59a4545c3dd0ee1a97dc708241a8b",
+     "bits_sum": 6188,
+     "connections_sha256": "5fc1ff1916a3067d02a063ac155508d349a6c1eb297ecbdc04ab65a3cca9a235",
+     "duplicate_neurons": 61,
+     "metrics": {
+      "acc": "0x1.faab4da6d4f56p-1",
+      "ce": "0x1.51b20069f2e1ep-2",
+      "f1": "0x1.df5d2f7b9d4b2p-1",
+      "fpr": "0x1.4c9e932dc1a62p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      113,
+      69
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "0a60005d90f55eae2fa60ed72c89e969894155a4cb4811c86a7d250bcb6daf08",
+     "bits_sum": 10064,
+     "connections_sha256": "85b25565eede4501dbb5c739468d1ad8041392987efe2815f2e324bd223c16bb",
+     "duplicate_neurons": 59,
+     "metrics": {
+      "acc": "0x1.faf5c39211a10p-1",
+      "ce": "0x1.52be4551b8544p-2",
+      "f1": "0x1.e0b7034caca7ep-1",
+      "fpr": "0x1.2e0f0ab395fe3p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      90,
+      206
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "0d3aab7d755ec0d95cf581cc46cc5356be87fbe0a565198aebee109951150076",
+     "bits_sum": 10846,
+     "connections_sha256": "a2807af3cab2c410b7a2a7815f60c69303cc325aad894480d59bef8f8aa0102f",
+     "duplicate_neurons": 63,
+     "metrics": {
+      "acc": "0x1.faf4d54a1d282p-1",
+      "ce": "0x1.525387510ae1ap-2",
+      "f1": "0x1.e0a5b89ebe372p-1",
+      "fpr": "0x1.2c0afa7075590p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      113,
+      206
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "3c61963d499074d7d6111d44afe4cefcca177617e9f189b60cb3cef458739089",
+     "bits_sum": 9996,
+     "connections_sha256": "fc5a3157e2d52b3f03bd833270b6ec18c1a0d1044995a4208ec7ae3ff2fbda44",
+     "duplicate_neurons": 57,
+     "metrics": {
+      "acc": "0x1.faf612ff1eabap-1",
+      "ce": "0x1.52c0dcdd3de86p-2",
+      "f1": "0x1.e0bb5508c4b46p-1",
+      "fpr": "0x1.2e76412769528p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      90,
+      204
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "bd713169f1b80bcddd4335173f533ac54aac66af37dc486c8804edd6b1a93dc3",
+     "bits_sum": 14552,
+     "connections_sha256": "03ba8860900d28ea2f8f41da603d64be6ec5db6f6ad34d2accfa0008e8f6f63e",
+     "duplicate_neurons": 84,
+     "metrics": {
+      "acc": "0x1.fb0d086899ceap-1",
+      "ce": "0x1.51e8f872d750ep-2",
+      "f1": "0x1.e1002d41cb2a5p-1",
+      "fpr": "0x1.1d951439be043p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      199,
+      229
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "2425bd1a13f7f41d886cb1f08b02493e66f59a4545c3dd0ee1a97dc708241a8b",
+     "bits_sum": 6188,
+     "connections_sha256": "f2e8d75ef250b58048d74a1275aec6935fb01b97cffc77cbf88f8e944d4d22ef",
+     "duplicate_neurons": 35,
+     "metrics": {
+      "acc": "0x1.faba8175cdd38p-1",
+      "ce": "0x1.5198351057e32p-2",
+      "f1": "0x1.dfa6c70e7478ep-1",
+      "fpr": "0x1.47151e5634009p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      113,
+      69
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "66fd6de624ca7f48fba500d27b6f4a45693aae05884d5f3be4d8871a69d4ea08",
+     "bits_sum": 6256,
+     "connections_sha256": "361de169ba26ee508652c85c54fb42467b4f7f123f065499b7df1c172b9a681a",
+     "duplicate_neurons": 35,
+     "metrics": {
+      "acc": "0x1.fabb5542565d5p-1",
+      "ce": "0x1.5196b54097d4ep-2",
+      "f1": "0x1.dfa9efd8e4723p-1",
+      "fpr": "0x1.46a024db3f2d0p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      113,
+      71
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "2425bd1a13f7f41d886cb1f08b02493e66f59a4545c3dd0ee1a97dc708241a8b",
+     "bits_sum": 6188,
+     "connections_sha256": "f2e8d75ef250b58048d74a1275aec6935fb01b97cffc77cbf88f8e944d4d22ef",
+     "duplicate_neurons": 35,
+     "metrics": {
+      "acc": "0x1.faba8175cdd38p-1",
+      "ce": "0x1.5198351057e32p-2",
+      "f1": "0x1.dfa6c70e7478ep-1",
+      "fpr": "0x1.47151e5634009p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      113,
+      69
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "193ae871d13561946f216b01d07ff45a2f2ec257726c7efe57698de324510c96",
+     "bits_sum": 11424,
+     "connections_sha256": "cd37a3ee28f5a3bf5b7a2f46c936a6f075abbbd1dc12d9209f17b267e70569d7",
+     "duplicate_neurons": 28,
+     "metrics": {
+      "acc": "0x1.fae198f8f7545p-1",
+      "ce": "0x1.521740448738ep-2",
+      "f1": "0x1.e02f34ed25f40p-1",
+      "fpr": "0x1.2ebb101cd4425p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      193,
+      143
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "afd121f9be1477c12ce1bdbe180f60cad02bde8973bf4e3a1224305e3c359b8b",
+     "bits_sum": 9316,
+     "connections_sha256": "344c90027577e4857107a6120d248dcb9ff523527afee529f591c970736a69b8",
+     "duplicate_neurons": 54,
+     "metrics": {
+      "acc": "0x1.fad176e396feep-1",
+      "ce": "0x1.51e30eb6c51ecp-2",
+      "f1": "0x1.dfd7bbbb4c068p-1",
+      "fpr": "0x1.3323862becbe5p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      107,
+      167
+     ]
+    }
+   ],
+   "selected": [
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "bd713169f1b80bcddd4335173f533ac54aac66af37dc486c8804edd6b1a93dc3",
+     "bits_sum": 14552,
+     "connections_sha256": "03ba8860900d28ea2f8f41da603d64be6ec5db6f6ad34d2accfa0008e8f6f63e",
+     "duplicate_neurons": 84,
+     "metrics": {
+      "acc": "0x1.fb0d086899ceap-1",
+      "ce": "0x1.51e8f872d750ep-2",
+      "f1": "0x1.e1002d41cb2a5p-1",
+      "fpr": "0x1.1d951439be043p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      199,
+      229
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "3c61963d499074d7d6111d44afe4cefcca177617e9f189b60cb3cef458739089",
+     "bits_sum": 9996,
+     "connections_sha256": "6108ee8a865488977d02ce4bf2edb4713a4392652f0dec10b0f5139d4663be21",
+     "duplicate_neurons": 33,
+     "metrics": {
+      "acc": "0x1.faf23f6baf90ep-1",
+      "ce": "0x1.51fe1f0c48359p-2",
+      "f1": "0x1.e09341f8e8b65p-1",
+      "fpr": "0x1.2be8930fa458dp-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      88,
+      206
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "0d3aab7d755ec0d95cf581cc46cc5356be87fbe0a565198aebee109951150076",
+     "bits_sum": 10846,
+     "connections_sha256": "a2807af3cab2c410b7a2a7815f60c69303cc325aad894480d59bef8f8aa0102f",
+     "duplicate_neurons": 63,
+     "metrics": {
+      "acc": "0x1.faf4d54a1d282p-1",
+      "ce": "0x1.525387510ae1ap-2",
+      "f1": "0x1.e0a5b89ebe372p-1",
+      "fpr": "0x1.2c0afa7075590p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      113,
+      206
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "0a60005d90f55eae2fa60ed72c89e969894155a4cb4811c86a7d250bcb6daf08",
+     "bits_sum": 10064,
+     "connections_sha256": "85b25565eede4501dbb5c739468d1ad8041392987efe2815f2e324bd223c16bb",
+     "duplicate_neurons": 59,
+     "metrics": {
+      "acc": "0x1.faf5c39211a10p-1",
+      "ce": "0x1.52be4551b8544p-2",
+      "f1": "0x1.e0b7034caca7ep-1",
+      "fpr": "0x1.2e0f0ab395fe3p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      90,
+      206
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "0a60005d90f55eae2fa60ed72c89e969894155a4cb4811c86a7d250bcb6daf08",
+     "bits_sum": 10064,
+     "connections_sha256": "85b25565eede4501dbb5c739468d1ad8041392987efe2815f2e324bd223c16bb",
+     "duplicate_neurons": 59,
+     "metrics": {
+      "acc": "0x1.faf5c39211a10p-1",
+      "ce": "0x1.52be4551b8544p-2",
+      "f1": "0x1.e0b7034caca7ep-1",
+      "fpr": "0x1.2e0f0ab395fe3p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      90,
+      206
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "3c61963d499074d7d6111d44afe4cefcca177617e9f189b60cb3cef458739089",
+     "bits_sum": 9996,
+     "connections_sha256": "fc5a3157e2d52b3f03bd833270b6ec18c1a0d1044995a4208ec7ae3ff2fbda44",
+     "duplicate_neurons": 57,
+     "metrics": {
+      "acc": "0x1.faf612ff1eabap-1",
+      "ce": "0x1.52c0dcdd3de86p-2",
+      "f1": "0x1.e0bb5508c4b46p-1",
+      "fpr": "0x1.2e76412769528p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      90,
+      204
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "193ae871d13561946f216b01d07ff45a2f2ec257726c7efe57698de324510c96",
+     "bits_sum": 11424,
+     "connections_sha256": "cd37a3ee28f5a3bf5b7a2f46c936a6f075abbbd1dc12d9209f17b267e70569d7",
+     "duplicate_neurons": 28,
+     "metrics": {
+      "acc": "0x1.fae198f8f7545p-1",
+      "ce": "0x1.521740448738ep-2",
+      "f1": "0x1.e02f34ed25f40p-1",
+      "fpr": "0x1.2ebb101cd4425p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      193,
+      143
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "afd121f9be1477c12ce1bdbe180f60cad02bde8973bf4e3a1224305e3c359b8b",
+     "bits_sum": 9316,
+     "connections_sha256": "344c90027577e4857107a6120d248dcb9ff523527afee529f591c970736a69b8",
+     "duplicate_neurons": 54,
+     "metrics": {
+      "acc": "0x1.fad176e396feep-1",
+      "ce": "0x1.51e30eb6c51ecp-2",
+      "f1": "0x1.dfd7bbbb4c068p-1",
+      "fpr": "0x1.3323862becbe5p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      107,
+      167
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "66fd6de624ca7f48fba500d27b6f4a45693aae05884d5f3be4d8871a69d4ea08",
+     "bits_sum": 6256,
+     "connections_sha256": "361de169ba26ee508652c85c54fb42467b4f7f123f065499b7df1c172b9a681a",
+     "duplicate_neurons": 35,
+     "metrics": {
+      "acc": "0x1.fabb5542565d5p-1",
+      "ce": "0x1.5196b54097d4ep-2",
+      "f1": "0x1.dfa9efd8e4723p-1",
+      "fpr": "0x1.46a024db3f2d0p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      113,
+      71
+     ]
+    }
+   ],
+   "viable": 12
+  },
+  "cap64": {
+   "call_arguments": {
+    "accuracy_threshold": "0x1.f75104d551d69p-14",
+    "assortative_mating_ratio": "0x1.b333333333333p-1",
+    "bits_mutation_rate": "0x0.0p+0",
+    "cluster_crossover_ratio": "0x1.0000000000000p-1",
+    "crossover_bits": "blend_cluster",
+    "crossover_rate": "0x1.6666666666666p-1",
+    "dedupe_fill": true,
+    "dedupe_neurons": false,
+    "eval_subset_idx": 0,
+    "fitness_scores": [
+     "0x1.1550ae7c56ca4p+0",
+     "0x1.1930f429e360bp+0",
+     "0x1.1572bef052fd4p+0",
+     "0x1.0ec8efdc67f6fp+0",
+     "0x1.1a0708c331931p+0",
+     "0x1.1a7a2ec0b6a7fp+0",
+     "0x1.13b13cbf18322p+0",
+     "0x1.131cfc8da6ec3p+0",
+     "0x1.1338f81a59619p+0",
+     "0x1.1dd51d5bc6ca8p+0"
+    ],
+    "generation": 3,
+    "max_attempts": 60,
+    "max_bits": 64,
+    "max_neurons": 250,
+    "max_neurons_total": null,
+    "min_bits": 4,
+    "min_neurons": 5,
+    "mutable_clusters": null,
+    "neurons_mutation_rate": "0x1.999999999999ap-4",
+    "phase_type": 0,
+    "pool_shuffle_ratio": "0x1.999999999999ap-1",
+    "population_ce": [
+     "0x1.513bcb8019f15p-2",
+     "0x1.5291b3d6e026ep-2",
+     "0x1.511f67069d0b8p-2",
+     "0x1.50f8cb1ef5b56p-2",
+     "0x1.5285f9aee848bp-2",
+     "0x1.5258f796c3724p-2",
+     "0x1.50f63e32078a2p-2",
+     "0x1.512771e61e63ep-2",
+     "0x1.5103a7eb9f0ccp-2",
+     "0x1.55db2a2bb4422p-2"
+    ],
+    "return_best_n": true,
+    "seed": 917526203802381735,
+    "target_count": 12,
+    "total_generations": 250,
+    "tournament_size": 3,
+    "train_subset_idx": 0
+   },
+   "evaluated": 12,
+   "offspring_seed": 917526203802381735,
+   "parents": [
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "1844013f1e2a12911daffb1cc0fef2f740882ea2f93f67fb653e7219b4a81d09",
+     "bits_sum": 10624,
+     "connections_sha256": "d09279006cf1f8d9948ec1e5b5ec26c28c7a9a6faed7ec58a5d376f0388b3d9c",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fb641c411eac0p-1",
+      "ce": "0x1.513bcb8019f15p-2",
+      "f1": "0x1.e27a5edf6ba10p-1",
+      "fpr": "0x1.e300f45b9792dp-8"
+     },
+     "neurons_above_34_bits": 166,
+     "neurons_per_cluster": [
+      103,
+      63
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "e3e82848c1ff2a230ffee6dd25fc260210d2c0864b5d2fb63da02e6d53fd8ed8",
+     "bits_sum": 12376,
+     "connections_sha256": "804f436a782b61c0de6e6671b2d3730102810a0160376260583dfbb5bb9d5736",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fb00358875a30p-1",
+      "ce": "0x1.5291b3d6e026ep-2",
+      "f1": "0x1.e0a80b8921d98p-1",
+      "fpr": "0x1.1dcc1ff2650efp-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      201,
+      163
+     ]
+    },
+    {
+     "bits_max": 48,
+     "bits_min": 48,
+     "bits_sha256": "f91c7fdad1bc4157696d73de0f63133eaccf7f113534e8c6afcaef68d4e834e7",
+     "bits_sum": 20400,
+     "connections_sha256": "8ab7c673ffb7b334176f91e4867040f3b75d31342072175f9013a8c0a989bce4",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fb602e341bef2p-1",
+      "ce": "0x1.511f67069d0b8p-2",
+      "f1": "0x1.e298a2e24d31dp-1",
+      "fpr": "0x1.f95010e38abc3p-8"
+     },
+     "neurons_above_34_bits": 425,
+     "neurons_per_cluster": [
+      247,
+      178
+     ]
+    },
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "1534c13d2513a060c600d3a95e51575efd44260620c6c1a8b6113bf3f64b3288",
+     "bits_sum": 20864,
+     "connections_sha256": "738bc162c5eb030f77a6d619c810294829731148acf63b4cc72082c17f6e0e7f",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fc259ab93ef40p-1",
+      "ce": "0x1.50f8cb1ef5b56p-2",
+      "f1": "0x1.e552726973d6dp-1",
+      "fpr": "0x1.b1b57841ee690p-9"
+     },
+     "neurons_above_34_bits": 326,
+     "neurons_per_cluster": [
+      83,
+      243
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "64499ec2fefe6c782d0b9e68c227ca52f93811a602dcb1586fde97d7ed4727d7",
+     "bits_sum": 7038,
+     "connections_sha256": "0e0dfc76e4b26a39ffc3302cd033fe22d0b978091c06dba20279a5b214c5b14f",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fae3aa75b823dp-1",
+      "ce": "0x1.5285f9aee848bp-2",
+      "f1": "0x1.e0426b8635e55p-1",
+      "fpr": "0x1.2f9e22049dffap-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      79,
+      128
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "e87a33fa079358d4cb92812afc0c44bec20fb297491d0f10812744c7db59cf58",
+     "bits_sum": 7378,
+     "connections_sha256": "e3a5a43af6be7208b1c4442042343309bd36623daa32bc09fe7060e8ceed47ad",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fad0a31380153p-1",
+      "ce": "0x1.5258f796c3724p-2",
+      "f1": "0x1.e000c1d704842p-1",
+      "fpr": "0x1.3ba8c1d79b24ep-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      91,
+      126
+     ]
+    },
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "1a8361a21a9715f2e42790a7c1c1c57eafb4bf4d0072e2d809bbfd03a020f145",
+     "bits_sum": 17856,
+     "connections_sha256": "ffdd3bad526e018ae6cb41ea68d7ccabca14403c4de65d52edd58809991f5671",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fb97185e6b8d6p-1",
+      "ce": "0x1.50f63e32078a2p-2",
+      "f1": "0x1.e39604b044493p-1",
+      "fpr": "0x1.c4af59a006c70p-8"
+     },
+     "neurons_above_34_bits": 279,
+     "neurons_per_cluster": [
+      165,
+      114
+     ]
+    },
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "742737be4666c6aa1809016dec3f489431a54b5cfc39f819d1083e1c49478c78",
+     "bits_sum": 21952,
+     "connections_sha256": "14257dc26dc5504d1aa1e459ea748f189bbd16984caa28063c62b6576c0438ea",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fbadf35009210p-1",
+      "ce": "0x1.512771e61e63ep-2",
+      "f1": "0x1.e3f3d52f86b9dp-1",
+      "fpr": "0x1.a952a3c16e9cep-8"
+     },
+     "neurons_above_34_bits": 343,
+     "neurons_per_cluster": [
+      121,
+      222
+     ]
+    },
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "ec6429646c2e582b7dd0fb773c453e96c8c39adff1b130855ce0b019e5d50bbe",
+     "bits_sum": 18176,
+     "connections_sha256": "1291b81e24764da65ec4f2746a10860acaa538aa9ab7c869de24e59d1913edf9",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fba5fcbdd3f43p-1",
+      "ce": "0x1.5103a7eb9f0ccp-2",
+      "f1": "0x1.e3c0371d7d445p-1",
+      "fpr": "0x1.ab791c2205616p-8"
+     },
+     "neurons_above_34_bits": 284,
+     "neurons_per_cluster": [
+      157,
+      127
+     ]
+    },
+    {
+     "bits_max": 24,
+     "bits_min": 24,
+     "bits_sha256": "1aea221b634755290eed1e9cf4837d9078c33324841451fdc0ed872d28620ed8",
+     "bits_sum": 9816,
+     "connections_sha256": "62f87daf3612fcab3b096a18449ac4858d5673da4d8744574debda424248fada",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fab3ae1f0d5fdp-1",
+      "ce": "0x1.55db2a2bb4422p-2",
+      "f1": "0x1.df7720e074d38p-1",
+      "fpr": "0x1.46e4f3ec680acp-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      171,
+      238
+     ]
+    }
+   ],
+   "phase_type": 0,
+   "returned": [
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "1a8361a21a9715f2e42790a7c1c1c57eafb4bf4d0072e2d809bbfd03a020f145",
+     "bits_sum": 17856,
+     "connections_sha256": "ffdd3bad526e018ae6cb41ea68d7ccabca14403c4de65d52edd58809991f5671",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fb97185e6b8d6p-1",
+      "ce": "0x1.50f63e32078a2p-2",
+      "f1": "0x1.e39604b044493p-1",
+      "fpr": "0x1.c4af59a006c70p-8"
+     },
+     "neurons_above_34_bits": 279,
+     "neurons_per_cluster": [
+      165,
+      114
+     ]
+    },
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "1534c13d2513a060c600d3a95e51575efd44260620c6c1a8b6113bf3f64b3288",
+     "bits_sum": 20864,
+     "connections_sha256": "0d8428bab30e69e21c206d9b39ce9579a241a686b168555377a2b4c19e88aadc",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fc2f1e6cf9c8ep-1",
+      "ce": "0x1.510a938d421d0p-2",
+      "f1": "0x1.e598c72a41c25p-1",
+      "fpr": "0x1.b04fa9a26bf32p-9"
+     },
+     "neurons_above_34_bits": 326,
+     "neurons_per_cluster": [
+      83,
+      243
+     ]
+    },
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "742737be4666c6aa1809016dec3f489431a54b5cfc39f819d1083e1c49478c78",
+     "bits_sum": 21952,
+     "connections_sha256": "14257dc26dc5504d1aa1e459ea748f189bbd16984caa28063c62b6576c0438ea",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fbadf35009210p-1",
+      "ce": "0x1.512771e61e63ep-2",
+      "f1": "0x1.e3f3d52f86b9dp-1",
+      "fpr": "0x1.a952a3c16e9cep-8"
+     },
+     "neurons_above_34_bits": 343,
+     "neurons_per_cluster": [
+      121,
+      222
+     ]
+    },
+    {
+     "bits_max": 48,
+     "bits_min": 48,
+     "bits_sha256": "f91c7fdad1bc4157696d73de0f63133eaccf7f113534e8c6afcaef68d4e834e7",
+     "bits_sum": 20400,
+     "connections_sha256": "dbf40440dbe20f64bf9606788ee043ba6c3945e5be5b3c65eb302e8a816c8bb6",
+     "duplicate_neurons": 105,
+     "metrics": {
+      "acc": "0x1.fb590b6fb1022p-1",
+      "ce": "0x1.5101e38bccd03p-2",
+      "f1": "0x1.e26dd88f264e8p-1",
+      "fpr": "0x1.fc3732a509c9ap-8"
+     },
+     "neurons_above_34_bits": 425,
+     "neurons_per_cluster": [
+      247,
+      178
+     ]
+    },
+    {
+     "bits_max": 61,
+     "bits_min": 54,
+     "bits_sha256": "0ba87ffd7f2cc8d3129e9edc6cac330ddfb6047e1743aeb86da7fc3632741801",
+     "bits_sum": 14425,
+     "connections_sha256": "6a97b0b12fcd56d9c3ea7af338988e8adf9689d503dbd8e4b56127134e53a854",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fb7709283616dp-1",
+      "ce": "0x1.50da4c16afc3ap-2",
+      "f1": "0x1.e20fa4d033352p-1",
+      "fpr": "0x1.8819e71448c0cp-8"
+     },
+     "neurons_above_34_bits": 246,
+     "neurons_per_cluster": [
+      83,
+      163
+     ]
+    },
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "37372cd94ed33bc3e51e52d509d0acb0d0f72a636a0595af785b614a4afa634c",
+     "bits_sum": 18048,
+     "connections_sha256": "f70adeb7b1602b4bda16bc9746fd3b9aca2cdba26a9b7396669d630de6699923",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fc4574fcc85b3p-1",
+      "ce": "0x1.511f216e78422p-2",
+      "f1": "0x1.e642742433ad0p-1",
+      "fpr": "0x1.b0a23a7c9ada6p-9"
+     },
+     "neurons_above_34_bits": 282,
+     "neurons_per_cluster": [
+      159,
+      123
+     ]
+    },
+    {
+     "bits_max": 45,
+     "bits_min": 39,
+     "bits_sha256": "bc94c4d42fc9690ca7157752ba86bf52f99130132d3c5fc30c9ef92ecbc01501",
+     "bits_sum": 13212,
+     "connections_sha256": "5ee056f6fa891bc145e759d52362ce170a3fe3c33cc8eb9f66f40b3432b0e438",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fb75b1029cd56p-1",
+      "ce": "0x1.50d59c519e689p-2",
+      "f1": "0x1.dff6d1a4e313ap-1",
+      "fpr": "0x1.aab8717435f0bp-9"
+     },
+     "neurons_above_34_bits": 326,
+     "neurons_per_cluster": [
+      83,
+      243
+     ]
+    },
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "742737be4666c6aa1809016dec3f489431a54b5cfc39f819d1083e1c49478c78",
+     "bits_sum": 21952,
+     "connections_sha256": "14257dc26dc5504d1aa1e459ea748f189bbd16984caa28063c62b6576c0438ea",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fbadf35009210p-1",
+      "ce": "0x1.512771e61e63ep-2",
+      "f1": "0x1.e3f3d52f86b9dp-1",
+      "fpr": "0x1.a952a3c16e9cep-8"
+     },
+     "neurons_above_34_bits": 343,
+     "neurons_per_cluster": [
+      121,
+      222
+     ]
+    },
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "1534c13d2513a060c600d3a95e51575efd44260620c6c1a8b6113bf3f64b3288",
+     "bits_sum": 20864,
+     "connections_sha256": "738bc162c5eb030f77a6d619c810294829731148acf63b4cc72082c17f6e0e7f",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fc259ab93ef40p-1",
+      "ce": "0x1.50f8cb1ef5b56p-2",
+      "f1": "0x1.e552726973d6dp-1",
+      "fpr": "0x1.b1b57841ee690p-9"
+     },
+     "neurons_above_34_bits": 326,
+     "neurons_per_cluster": [
+      83,
+      243
+     ]
+    },
+    {
+     "bits_max": 44,
+     "bits_min": 38,
+     "bits_sha256": "b7a4d317034f55f22460205f3972e9426ff88668d0b36d07711c4874a285eec6",
+     "bits_sum": 16644,
+     "connections_sha256": "854bf8c6318b2c6c1a678cf42cf2614581878c96b2835a084f2f979dc90d5a5c",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fb02e5dd5cd95p-1",
+      "ce": "0x1.518e9aa599d32p-2",
+      "f1": "0x1.e10b31caf2500p-1",
+      "fpr": "0x1.2ccba4c1cbb06p-7"
+     },
+     "neurons_above_34_bits": 411,
+     "neurons_per_cluster": [
+      171,
+      240
+     ]
+    },
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "15cb8a1404d1762080a1e7aecb9c21a20f0e37e40656fdaabf747a8dcf65f682",
+     "bits_sum": 21248,
+     "connections_sha256": "b7cf08371800182fea0bfaa3aabffefda4e12bcadcdf27fd8e07e8d40be65751",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fc27c6b27d7eap-1",
+      "ce": "0x1.50f951a4eeb42p-2",
+      "f1": "0x1.e55598997b88dp-1",
+      "fpr": "0x1.a747b2b49c25bp-9"
+     },
+     "neurons_above_34_bits": 332,
+     "neurons_per_cluster": [
+      83,
+      249
+     ]
+    },
+    {
+     "bits_max": 56,
+     "bits_min": 39,
+     "bits_sha256": "1155903fdcdbd751d1f4002ac059bd8dbdd96416e61187d5e67e73341477d175",
+     "bits_sum": 11423,
+     "connections_sha256": "84635184450ce005a7e1be89b663d76a22c01a7888a2386d5e4aca5620631cc8",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.faea48db74ea6p-1",
+      "ce": "0x1.511a551ad82a6p-2",
+      "f1": "0x1.def3cc7c2436ep-1",
+      "fpr": "0x1.d8ca3a7bd394bp-8"
+     },
+     "neurons_above_34_bits": 265,
+     "neurons_per_cluster": [
+      201,
+      64
+     ]
+    }
+   ],
+   "selected": [
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "37372cd94ed33bc3e51e52d509d0acb0d0f72a636a0595af785b614a4afa634c",
+     "bits_sum": 18048,
+     "connections_sha256": "f70adeb7b1602b4bda16bc9746fd3b9aca2cdba26a9b7396669d630de6699923",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fc4574fcc85b3p-1",
+      "ce": "0x1.511f216e78422p-2",
+      "f1": "0x1.e642742433ad0p-1",
+      "fpr": "0x1.b0a23a7c9ada6p-9"
+     },
+     "neurons_above_34_bits": 282,
+     "neurons_per_cluster": [
+      159,
+      123
+     ]
+    },
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "1534c13d2513a060c600d3a95e51575efd44260620c6c1a8b6113bf3f64b3288",
+     "bits_sum": 20864,
+     "connections_sha256": "0d8428bab30e69e21c206d9b39ce9579a241a686b168555377a2b4c19e88aadc",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fc2f1e6cf9c8ep-1",
+      "ce": "0x1.510a938d421d0p-2",
+      "f1": "0x1.e598c72a41c25p-1",
+      "fpr": "0x1.b04fa9a26bf32p-9"
+     },
+     "neurons_above_34_bits": 326,
+     "neurons_per_cluster": [
+      83,
+      243
+     ]
+    },
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "15cb8a1404d1762080a1e7aecb9c21a20f0e37e40656fdaabf747a8dcf65f682",
+     "bits_sum": 21248,
+     "connections_sha256": "b7cf08371800182fea0bfaa3aabffefda4e12bcadcdf27fd8e07e8d40be65751",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fc27c6b27d7eap-1",
+      "ce": "0x1.50f951a4eeb42p-2",
+      "f1": "0x1.e55598997b88dp-1",
+      "fpr": "0x1.a747b2b49c25bp-9"
+     },
+     "neurons_above_34_bits": 332,
+     "neurons_per_cluster": [
+      83,
+      249
+     ]
+    },
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "1534c13d2513a060c600d3a95e51575efd44260620c6c1a8b6113bf3f64b3288",
+     "bits_sum": 20864,
+     "connections_sha256": "738bc162c5eb030f77a6d619c810294829731148acf63b4cc72082c17f6e0e7f",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fc259ab93ef40p-1",
+      "ce": "0x1.50f8cb1ef5b56p-2",
+      "f1": "0x1.e552726973d6dp-1",
+      "fpr": "0x1.b1b57841ee690p-9"
+     },
+     "neurons_above_34_bits": 326,
+     "neurons_per_cluster": [
+      83,
+      243
+     ]
+    },
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "742737be4666c6aa1809016dec3f489431a54b5cfc39f819d1083e1c49478c78",
+     "bits_sum": 21952,
+     "connections_sha256": "14257dc26dc5504d1aa1e459ea748f189bbd16984caa28063c62b6576c0438ea",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fbadf35009210p-1",
+      "ce": "0x1.512771e61e63ep-2",
+      "f1": "0x1.e3f3d52f86b9dp-1",
+      "fpr": "0x1.a952a3c16e9cep-8"
+     },
+     "neurons_above_34_bits": 343,
+     "neurons_per_cluster": [
+      121,
+      222
+     ]
+    },
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "742737be4666c6aa1809016dec3f489431a54b5cfc39f819d1083e1c49478c78",
+     "bits_sum": 21952,
+     "connections_sha256": "14257dc26dc5504d1aa1e459ea748f189bbd16984caa28063c62b6576c0438ea",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fbadf35009210p-1",
+      "ce": "0x1.512771e61e63ep-2",
+      "f1": "0x1.e3f3d52f86b9dp-1",
+      "fpr": "0x1.a952a3c16e9cep-8"
+     },
+     "neurons_above_34_bits": 343,
+     "neurons_per_cluster": [
+      121,
+      222
+     ]
+    },
+    {
+     "bits_max": 45,
+     "bits_min": 39,
+     "bits_sha256": "bc94c4d42fc9690ca7157752ba86bf52f99130132d3c5fc30c9ef92ecbc01501",
+     "bits_sum": 13212,
+     "connections_sha256": "5ee056f6fa891bc145e759d52362ce170a3fe3c33cc8eb9f66f40b3432b0e438",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fb75b1029cd56p-1",
+      "ce": "0x1.50d59c519e689p-2",
+      "f1": "0x1.dff6d1a4e313ap-1",
+      "fpr": "0x1.aab8717435f0bp-9"
+     },
+     "neurons_above_34_bits": 326,
+     "neurons_per_cluster": [
+      83,
+      243
+     ]
+    },
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "1a8361a21a9715f2e42790a7c1c1c57eafb4bf4d0072e2d809bbfd03a020f145",
+     "bits_sum": 17856,
+     "connections_sha256": "ffdd3bad526e018ae6cb41ea68d7ccabca14403c4de65d52edd58809991f5671",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fb97185e6b8d6p-1",
+      "ce": "0x1.50f63e32078a2p-2",
+      "f1": "0x1.e39604b044493p-1",
+      "fpr": "0x1.c4af59a006c70p-8"
+     },
+     "neurons_above_34_bits": 279,
+     "neurons_per_cluster": [
+      165,
+      114
+     ]
+    },
+    {
+     "bits_max": 61,
+     "bits_min": 54,
+     "bits_sha256": "0ba87ffd7f2cc8d3129e9edc6cac330ddfb6047e1743aeb86da7fc3632741801",
+     "bits_sum": 14425,
+     "connections_sha256": "6a97b0b12fcd56d9c3ea7af338988e8adf9689d503dbd8e4b56127134e53a854",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fb7709283616dp-1",
+      "ce": "0x1.50da4c16afc3ap-2",
+      "f1": "0x1.e20fa4d033352p-1",
+      "fpr": "0x1.8819e71448c0cp-8"
+     },
+     "neurons_above_34_bits": 246,
+     "neurons_per_cluster": [
+      83,
+      163
+     ]
+    }
+   ],
+   "viable": 12
+  },
+  "cap64_dup": {
+   "call_arguments": {
+    "accuracy_threshold": "0x1.f75104d551d69p-14",
+    "assortative_mating_ratio": "0x1.b333333333333p-1",
+    "bits_mutation_rate": "0x0.0p+0",
+    "cluster_crossover_ratio": "0x1.0000000000000p-1",
+    "crossover_bits": "blend_cluster",
+    "crossover_rate": "0x1.6666666666666p-1",
+    "dedupe_fill": true,
+    "dedupe_neurons": false,
+    "eval_subset_idx": 0,
+    "fitness_scores": [
+     "0x1.0e8cbd7706423p+0",
+     "0x1.152472c38563ep+0",
+     "0x1.0e6fc5da56022p+0",
+     "0x1.1667534611a44p+0",
+     "0x1.1ea80d83d3e9ep+0",
+     "0x1.134af66e1b98fp+0",
+     "0x1.10cdd2238b35cp+0",
+     "0x1.22fcfb1f61cbbp+0",
+     "0x1.1b5b9543380b8p+0",
+     "0x1.1ab6ca67ab519p+0"
+    ],
+    "generation": 3,
+    "max_attempts": 60,
+    "max_bits": 64,
+    "max_neurons": 250,
+    "max_neurons_total": null,
+    "min_bits": 4,
+    "min_neurons": 5,
+    "mutable_clusters": null,
+    "neurons_mutation_rate": "0x1.999999999999ap-4",
+    "phase_type": 0,
+    "pool_shuffle_ratio": "0x1.999999999999ap-1",
+    "population_ce": [
+     "0x1.512e7a4abde0ap-2",
+     "0x1.515b452d4d533p-2",
+     "0x1.510670f3325dap-2",
+     "0x1.50f2959128e9ep-2",
+     "0x1.567390583665ap-2",
+     "0x1.512b4f5bf317ap-2",
+     "0x1.50cc36ded25fap-2",
+     "0x1.5b95b8f15d158p-2",
+     "0x1.534bee76e9c43p-2",
+     "0x1.51aaadb0fb7bbp-2"
+    ],
+    "return_best_n": true,
+    "seed": 917526203802381735,
+    "target_count": 12,
+    "total_generations": 250,
+    "tournament_size": 3,
+    "train_subset_idx": 0
+   },
+   "evaluated": 12,
+   "offspring_seed": 917526203802381735,
+   "parents": [
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "d703382f5e5f8729e52775d4f5bcc0bd9abe6a021ce447680c7fe0bccbfb200b",
+     "bits_sum": 31360,
+     "connections_sha256": "fcbdc576bd36822bc016e6466f0020457c62ed2186d8db083de7f8e1df9f5087",
+     "duplicate_neurons": 97,
+     "metrics": {
+      "acc": "0x1.fc367623f563bp-1",
+      "ce": "0x1.512e7a4abde0ap-2",
+      "f1": "0x1.e5e972ab4e1a6p-1",
+      "fpr": "0x1.c4bd1cbf3347dp-9"
+     },
+     "neurons_above_34_bits": 490,
+     "neurons_per_cluster": [
+      248,
+      242
+     ]
+    },
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "c7662ee8a463cf1bd932a7b61df2dc0efd5e1bad81964a9fb5a96205e3c6a91f",
+     "bits_sum": 18432,
+     "connections_sha256": "379f603b07392532e295bdeb3787a2aee8a9e3ce85d3ac259a8c71cdf837228f",
+     "duplicate_neurons": 56,
+     "metrics": {
+      "acc": "0x1.fb6d9fef6bfb6p-1",
+      "ce": "0x1.515b452d4d533p-2",
+      "f1": "0x1.e2b1044fad763p-1",
+      "fpr": "0x1.de0ee116e87d3p-8"
+     },
+     "neurons_above_34_bits": 288,
+     "neurons_per_cluster": [
+      124,
+      164
+     ]
+    },
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "ac0af197d844d96d5de61dc021dcced2e2493ff62dc9d411d361c6ce57d7ede0",
+     "bits_sum": 23424,
+     "connections_sha256": "892b8ec04d1acf07074b967f7035e26fcbec66386394a78c7711f7be13fe688d",
+     "duplicate_neurons": 73,
+     "metrics": {
+      "acc": "0x1.fc3a642f71f80p-1",
+      "ce": "0x1.510670f3325dap-2",
+      "f1": "0x1.e63513f6d03aep-1",
+      "fpr": "0x1.e9821f836a28dp-9"
+     },
+     "neurons_above_34_bits": 366,
+     "neurons_per_cluster": [
+      120,
+      246
+     ]
+    },
+    {
+     "bits_max": 48,
+     "bits_min": 48,
+     "bits_sha256": "e2bba6f6466d1af9604bd58eefeac67909c801566b50728e39ed107e40924fd6",
+     "bits_sum": 9936,
+     "connections_sha256": "09c4721494d5ebec45e2c7364cac21fb4de2826fdf5028a6a24d1ad3532a1dcf",
+     "duplicate_neurons": 40,
+     "metrics": {
+      "acc": "0x1.fb38286f4d5c3p-1",
+      "ce": "0x1.50f2959128e9ep-2",
+      "f1": "0x1.e1b0065a2d8f6p-1",
+      "fpr": "0x1.05fbafb659cf0p-7"
+     },
+     "neurons_above_34_bits": 207,
+     "neurons_per_cluster": [
+      89,
+      118
+     ]
+    },
+    {
+     "bits_max": 24,
+     "bits_min": 24,
+     "bits_sha256": "e83979d45ad11ebc91b1bb6467c1f00e240deeb4ab4068dd0f244d08753bb692",
+     "bits_sum": 7920,
+     "connections_sha256": "e52533c751da4a8cab0b16ba395fd579ec7a3bae6b30cb478a3803d66a6bbd4e",
+     "duplicate_neurons": 65,
+     "metrics": {
+      "acc": "0x1.faa1feec3ea8bp-1",
+      "ce": "0x1.567390583665ap-2",
+      "f1": "0x1.dee7112e78548p-1",
+      "fpr": "0x1.42d5f15aa68c2p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      102,
+      228
+     ]
+    },
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "b953611cd6a64b61849e00e8572c32c741971067d3e004631cfa0874ac6585f7",
+     "bits_sum": 26624,
+     "connections_sha256": "bac9c2197068e7f853dd5f0ecf4eaec7fcf0686aaf9475c8d6cfd40c4430b1d4",
+     "duplicate_neurons": 83,
+     "metrics": {
+      "acc": "0x1.fba4bf0b93782p-1",
+      "ce": "0x1.512b4f5bf317ap-2",
+      "f1": "0x1.e3948cf044b6dp-1",
+      "fpr": "0x1.9ddf661544fd0p-8"
+     },
+     "neurons_above_34_bits": 416,
+     "neurons_per_cluster": [
+      216,
+      200
+     ]
+    },
+    {
+     "bits_max": 48,
+     "bits_min": 48,
+     "bits_sha256": "e9165cf8981a726ef8386e6bbe702821061e297a4e1cd860467437c16e41d26b",
+     "bits_sum": 16656,
+     "connections_sha256": "c6c1699071127b95b550cd3811dfb92811f96241a0356c9964bb9061fd9ef67b",
+     "duplicate_neurons": 69,
+     "metrics": {
+      "acc": "0x1.fbd02e7a38ae0p-1",
+      "ce": "0x1.50cc36ded25fap-2",
+      "f1": "0x1.e26c1bf793eb5p-1",
+      "fpr": "0x1.758059d489082p-9"
+     },
+     "neurons_above_34_bits": 347,
+     "neurons_per_cluster": [
+      105,
+      242
+     ]
+    },
+    {
+     "bits_max": 24,
+     "bits_min": 24,
+     "bits_sha256": "dc31555136c01b8b728af462eab48d4b984423ef8396ae5bfa878bc0c049bd35",
+     "bits_sum": 4248,
+     "connections_sha256": "54994e4871ad9f2ed81e0a3223e66a046ee8b9269fd8240aabfd28bf952ec0f1",
+     "duplicate_neurons": 34,
+     "metrics": {
+      "acc": "0x1.fa8f2c7ead2f5p-1",
+      "ce": "0x1.5b95b8f15d158p-2",
+      "f1": "0x1.dec29785b5f2ap-1",
+      "fpr": "0x1.53648c93e66fap-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      104,
+      73
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "ae888f12cc54d92ba2740ce1e6ea65076f9df9b37aaa7d2d0e21536198932589",
+     "bits_sum": 6358,
+     "connections_sha256": "6378e1af5d4ff5e005e094d4d88cd589d6f482ce61f6152f85245968b0b838f0",
+     "duplicate_neurons": 37,
+     "metrics": {
+      "acc": "0x1.fac754590c01dp-1",
+      "ce": "0x1.534bee76e9c43p-2",
+      "f1": "0x1.dfabb6e09d1d0p-1",
+      "fpr": "0x1.37e56fc727e9ep-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      120,
+      67
+     ]
+    },
+    {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "30732420bc2c4bee6a7cb370d8d374fc9edc1bb696f61b78b23f3c7e1dbc0a28",
+     "bits_sum": 5474,
+     "connections_sha256": "1fee9c43c701a4d1fd6a1d6f693e00240b452b17c17dff9f0e51a96b03ccc8f2",
+     "duplicate_neurons": 32,
+     "metrics": {
+      "acc": "0x1.fab3fd8e22a1ap-1",
+      "ce": "0x1.51aaadb0fb7bbp-2",
+      "f1": "0x1.df4f844f66a5ep-1",
+      "fpr": "0x1.3f576e6a27e10p-7"
+     },
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      76,
+      85
+     ]
+    }
+   ],
+   "phase_type": 0,
+   "returned": [
+    {
+     "bits_max": 48,
+     "bits_min": 48,
+     "bits_sha256": "e9165cf8981a726ef8386e6bbe702821061e297a4e1cd860467437c16e41d26b",
+     "bits_sum": 16656,
+     "connections_sha256": "c6c1699071127b95b550cd3811dfb92811f96241a0356c9964bb9061fd9ef67b",
+     "duplicate_neurons": 69,
+     "metrics": {
+      "acc": "0x1.fbd02e7a38ae0p-1",
+      "ce": "0x1.50cc36ded25fap-2",
+      "f1": "0x1.e26c1bf793eb5p-1",
+      "fpr": "0x1.758059d489082p-9"
+     },
+     "neurons_above_34_bits": 347,
+     "neurons_per_cluster": [
+      105,
+      242
+     ]
+    },
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "d703382f5e5f8729e52775d4f5bcc0bd9abe6a021ce447680c7fe0bccbfb200b",
+     "bits_sum": 31360,
+     "connections_sha256": "11da2c6e2be3a08abf95c65258dc9054c2532b0c8659d865e0e52a8c4081e446",
+     "duplicate_neurons": 52,
+     "metrics": {
+      "acc": "0x1.fc413785a2acdp-1",
+      "ce": "0x1.5128f8ab53060p-2",
+      "f1": "0x1.e63727d9c6da3p-1",
+      "fpr": "0x1.c167e2bd42670p-9"
+     },
+     "neurons_above_34_bits": 490,
+     "neurons_per_cluster": [
+      248,
+      242
+     ]
+    },
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "ac0af197d844d96d5de61dc021dcced2e2493ff62dc9d411d361c6ce57d7ede0",
+     "bits_sum": 23424,
+     "connections_sha256": "892b8ec04d1acf07074b967f7035e26fcbec66386394a78c7711f7be13fe688d",
+     "duplicate_neurons": 73,
+     "metrics": {
+      "acc": "0x1.fc3a642f71f80p-1",
+      "ce": "0x1.510670f3325dap-2",
+      "f1": "0x1.e63513f6d03aep-1",
+      "fpr": "0x1.e9821f836a28dp-9"
+     },
+     "neurons_above_34_bits": 366,
+     "neurons_per_cluster": [
+      120,
+      246
+     ]
+    },
+    {
+     "bits_max": 48,
+     "bits_min": 48,
+     "bits_sha256": "e2bba6f6466d1af9604bd58eefeac67909c801566b50728e39ed107e40924fd6",
+     "bits_sum": 9936,
+     "connections_sha256": "09c4721494d5ebec45e2c7364cac21fb4de2826fdf5028a6a24d1ad3532a1dcf",
+     "duplicate_neurons": 40,
+     "metrics": {
+      "acc": "0x1.fb38286f4d5c3p-1",
+      "ce": "0x1.50f2959128e9ep-2",
+      "f1": "0x1.e1b0065a2d8f6p-1",
+      "fpr": "0x1.05fbafb659cf0p-7"
+     },
+     "neurons_above_34_bits": 207,
+     "neurons_per_cluster": [
+      89,
+      118
+     ]
+    },
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "ac0af197d844d96d5de61dc021dcced2e2493ff62dc9d411d361c6ce57d7ede0",
+     "bits_sum": 23424,
+     "connections_sha256": "892b8ec04d1acf07074b967f7035e26fcbec66386394a78c7711f7be13fe688d",
+     "duplicate_neurons": 73,
+     "metrics": {
+      "acc": "0x1.fc3a642f71f80p-1",
+      "ce": "0x1.510670f3325dap-2",
+      "f1": "0x1.e63513f6d03aep-1",
+      "fpr": "0x1.e9821f836a28dp-9"
+     },
+     "neurons_above_34_bits": 366,
+     "neurons_per_cluster": [
+      120,
+      246
+     ]
+    },
+    {
+     "bits_max": 57,
+     "bits_min": 51,
+     "bits_sha256": "eac03dea93c47af0be547bce2c3c13bab5028631433ecdce1750f9826b15fa0f",
+     "bits_sum": 20142,
+     "connections_sha256": "43ec4c2ada53ef0ba3fa2eaeca63b97166776a6167d8b07e4c9f6c701165c17c",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fc14f4462dbbap-1",
+      "ce": "0x1.50c00d2b2eba2p-2",
+      "f1": "0x1.e46cfc61e77d0p-1",
+      "fpr": "0x1.6468227cf74d3p-9"
+     },
+     "neurons_above_34_bits": 366,
+     "neurons_per_cluster": [
+      120,
+      246
+     ]
+    },
+    {
+     "bits_max": 64,
+     "bits_min": 51,
+     "bits_sha256": "513f48dbeb95d9371923ec30a41457ed4ff85f190b1e2d739eef9a54a9b30c17",
+     "bits_sum": 20843,
+     "connections_sha256": "da11d77f80b58c78dee6bbefc79862a7d5c7b3d228292a72f6b32169af4673cd",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fbf819c954228p-1",
+      "ce": "0x1.50e08db936a5ap-2",
+      "f1": "0x1.e2d8cc769b9c8p-1",
+      "fpr": "0x1.cd3b741c7fe0ep-10"
+     },
+     "neurons_above_34_bits": 347,
+     "neurons_per_cluster": [
+      105,
+      242
+     ]
+    },
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "8c16d8395f1dd669f8228621ae25857548ae10679801ece35035996161914da2",
+     "bits_sum": 23232,
+     "connections_sha256": "50cf68b1f6cd92fe79906eeed03e0944a959fdf1b9d4fc834b9ea845fb0f4b1d",
+     "duplicate_neurons": 70,
+     "metrics": {
+      "acc": "0x1.fc3a2f3c21a1ap-1",
+      "ce": "0x1.510469fb9c4fep-2",
+      "f1": "0x1.e62b3b3a8b780p-1",
+      "fpr": "0x1.e2bc25fa21985p-9"
+     },
+     "neurons_above_34_bits": 363,
+     "neurons_per_cluster": [
+      117,
+      246
+     ]
+    },
+    {
+     "bits_max": 54,
+     "bits_min": 50,
+     "bits_sha256": "3710196b5f3d885d771ebbe315d3ac842c5449c641ae98f5377f5f8a2c810acb",
+     "bits_sum": 17770,
+     "connections_sha256": "1cef73967730d345bcbfd5b4a73d5b8de85fb75ce290d757a8fc0531076c39c4",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fc1332364a0cep-1",
+      "ce": "0x1.50ef292407288p-2",
+      "f1": "0x1.e5021d6175763p-1",
+      "fpr": "0x1.df82711605a76p-9"
+     },
+     "neurons_above_34_bits": 347,
+     "neurons_per_cluster": [
+      105,
+      242
+     ]
+    },
+    {
+     "bits_max": 61,
+     "bits_min": 48,
+     "bits_sha256": "01db741aabea1397aa662de6d511a227d2935e29a295e539859d857b6a4b87bf",
+     "bits_sum": 19128,
+     "connections_sha256": "1445644f4bf5b8930cfdecadc0a58082b6d2ac04e9651f5d4eb29efa9f4186f0",
+     "duplicate_neurons": 7,
+     "metrics": {
+      "acc": "0x1.fbec9f12e7565p-1",
+      "ce": "0x1.50f15b5e1dd39p-2",
+      "f1": "0x1.e4bc6a3c64dbdp-1",
+      "fpr": "0x1.44da01a8dff6fp-8"
+     },
+     "neurons_above_34_bits": 366,
+     "neurons_per_cluster": [
+      120,
+      246
+     ]
+    },
+    {
+     "bits_max": 58,
+     "bits_min": 50,
+     "bits_sha256": "672a001ec9535eff3a46e535d570197025a167533fa1b02024e721f7049a8dac",
+     "bits_sum": 24628,
+     "connections_sha256": "13a66d25c10b44f11212b75abf3575f54fd0c1894102f9e3d4567e6949bff9f0",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fc28cf71efb26p-1",
+      "ce": "0x1.51090a98794a4p-2",
+      "f1": "0x1.e6076687bb602p-1",
+      "fpr": "0x1.1788e382dab32p-8"
+     },
+     "neurons_above_34_bits": 458,
+     "neurons_per_cluster": [
+      216,
+      242
+     ]
+    },
+    {
+     "bits_max": 59,
+     "bits_min": 49,
+     "bits_sha256": "cae430e10e26760e9732a52561e6f79666ac723ece56a77230778b9133bb7a70",
+     "bits_sum": 20394,
+     "connections_sha256": "050749b35da0965d78bf85e096f65673cf45b48c79f8debec5c5d8367eddc6b7",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fc1be2160d743p-1",
+      "ce": "0x1.50ae37c3562f6p-2",
+      "f1": "0x1.e45dfaa43780ep-1",
+      "fpr": "0x1.31c49aee10f3ep-9"
+     },
+     "neurons_above_34_bits": 366,
+     "neurons_per_cluster": [
+      120,
+      246
+     ]
+    }
+   ],
+   "selected": [
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "d703382f5e5f8729e52775d4f5bcc0bd9abe6a021ce447680c7fe0bccbfb200b",
+     "bits_sum": 31360,
+     "connections_sha256": "11da2c6e2be3a08abf95c65258dc9054c2532b0c8659d865e0e52a8c4081e446",
+     "duplicate_neurons": 52,
+     "metrics": {
+      "acc": "0x1.fc413785a2acdp-1",
+      "ce": "0x1.5128f8ab53060p-2",
+      "f1": "0x1.e63727d9c6da3p-1",
+      "fpr": "0x1.c167e2bd42670p-9"
+     },
+     "neurons_above_34_bits": 490,
+     "neurons_per_cluster": [
+      248,
+      242
+     ]
+    },
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "8c16d8395f1dd669f8228621ae25857548ae10679801ece35035996161914da2",
+     "bits_sum": 23232,
+     "connections_sha256": "50cf68b1f6cd92fe79906eeed03e0944a959fdf1b9d4fc834b9ea845fb0f4b1d",
+     "duplicate_neurons": 70,
+     "metrics": {
+      "acc": "0x1.fc3a2f3c21a1ap-1",
+      "ce": "0x1.510469fb9c4fep-2",
+      "f1": "0x1.e62b3b3a8b780p-1",
+      "fpr": "0x1.e2bc25fa21985p-9"
+     },
+     "neurons_above_34_bits": 363,
+     "neurons_per_cluster": [
+      117,
+      246
+     ]
+    },
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "ac0af197d844d96d5de61dc021dcced2e2493ff62dc9d411d361c6ce57d7ede0",
+     "bits_sum": 23424,
+     "connections_sha256": "892b8ec04d1acf07074b967f7035e26fcbec66386394a78c7711f7be13fe688d",
+     "duplicate_neurons": 73,
+     "metrics": {
+      "acc": "0x1.fc3a642f71f80p-1",
+      "ce": "0x1.510670f3325dap-2",
+      "f1": "0x1.e63513f6d03aep-1",
+      "fpr": "0x1.e9821f836a28dp-9"
+     },
+     "neurons_above_34_bits": 366,
+     "neurons_per_cluster": [
+      120,
+      246
+     ]
+    },
+    {
+     "bits_max": 64,
+     "bits_min": 64,
+     "bits_sha256": "ac0af197d844d96d5de61dc021dcced2e2493ff62dc9d411d361c6ce57d7ede0",
+     "bits_sum": 23424,
+     "connections_sha256": "892b8ec04d1acf07074b967f7035e26fcbec66386394a78c7711f7be13fe688d",
+     "duplicate_neurons": 73,
+     "metrics": {
+      "acc": "0x1.fc3a642f71f80p-1",
+      "ce": "0x1.510670f3325dap-2",
+      "f1": "0x1.e63513f6d03aep-1",
+      "fpr": "0x1.e9821f836a28dp-9"
+     },
+     "neurons_above_34_bits": 366,
+     "neurons_per_cluster": [
+      120,
+      246
+     ]
+    },
+    {
+     "bits_max": 59,
+     "bits_min": 49,
+     "bits_sha256": "cae430e10e26760e9732a52561e6f79666ac723ece56a77230778b9133bb7a70",
+     "bits_sum": 20394,
+     "connections_sha256": "050749b35da0965d78bf85e096f65673cf45b48c79f8debec5c5d8367eddc6b7",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fc1be2160d743p-1",
+      "ce": "0x1.50ae37c3562f6p-2",
+      "f1": "0x1.e45dfaa43780ep-1",
+      "fpr": "0x1.31c49aee10f3ep-9"
+     },
+     "neurons_above_34_bits": 366,
+     "neurons_per_cluster": [
+      120,
+      246
+     ]
+    },
+    {
+     "bits_max": 57,
+     "bits_min": 51,
+     "bits_sha256": "eac03dea93c47af0be547bce2c3c13bab5028631433ecdce1750f9826b15fa0f",
+     "bits_sum": 20142,
+     "connections_sha256": "43ec4c2ada53ef0ba3fa2eaeca63b97166776a6167d8b07e4c9f6c701165c17c",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fc14f4462dbbap-1",
+      "ce": "0x1.50c00d2b2eba2p-2",
+      "f1": "0x1.e46cfc61e77d0p-1",
+      "fpr": "0x1.6468227cf74d3p-9"
+     },
+     "neurons_above_34_bits": 366,
+     "neurons_per_cluster": [
+      120,
+      246
+     ]
+    },
+    {
+     "bits_max": 58,
+     "bits_min": 50,
+     "bits_sha256": "672a001ec9535eff3a46e535d570197025a167533fa1b02024e721f7049a8dac",
+     "bits_sum": 24628,
+     "connections_sha256": "13a66d25c10b44f11212b75abf3575f54fd0c1894102f9e3d4567e6949bff9f0",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fc28cf71efb26p-1",
+      "ce": "0x1.51090a98794a4p-2",
+      "f1": "0x1.e6076687bb602p-1",
+      "fpr": "0x1.1788e382dab32p-8"
+     },
+     "neurons_above_34_bits": 458,
+     "neurons_per_cluster": [
+      216,
+      242
+     ]
+    },
+    {
+     "bits_max": 54,
+     "bits_min": 50,
+     "bits_sha256": "3710196b5f3d885d771ebbe315d3ac842c5449c641ae98f5377f5f8a2c810acb",
+     "bits_sum": 17770,
+     "connections_sha256": "1cef73967730d345bcbfd5b4a73d5b8de85fb75ce290d757a8fc0531076c39c4",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fc1332364a0cep-1",
+      "ce": "0x1.50ef292407288p-2",
+      "f1": "0x1.e5021d6175763p-1",
+      "fpr": "0x1.df82711605a76p-9"
+     },
+     "neurons_above_34_bits": 347,
+     "neurons_per_cluster": [
+      105,
+      242
+     ]
+    },
+    {
+     "bits_max": 64,
+     "bits_min": 51,
+     "bits_sha256": "513f48dbeb95d9371923ec30a41457ed4ff85f190b1e2d739eef9a54a9b30c17",
+     "bits_sum": 20843,
+     "connections_sha256": "da11d77f80b58c78dee6bbefc79862a7d5c7b3d228292a72f6b32169af4673cd",
+     "duplicate_neurons": 0,
+     "metrics": {
+      "acc": "0x1.fbf819c954228p-1",
+      "ce": "0x1.50e08db936a5ap-2",
+      "f1": "0x1.e2d8cc769b9c8p-1",
+      "fpr": "0x1.cd3b741c7fe0ep-10"
+     },
+     "neurons_above_34_bits": 347,
+     "neurons_per_cluster": [
+      105,
+      242
+     ]
+    }
+   ],
+   "viable": 12
+  }
+ },
+ "dataset": {
+  "desirability_ce_anchor": "0x1.1a24464d1503dp-5",
+  "n_train": 1267407,
+  "n_val": 158426,
+  "total_input_bits": 1104,
+  "y_train_sha256": "a88fb15968481a8445ff862a74c48c408444a589ac7123e5c6fd0bb4fb98942b",
+  "y_val_sha256": "9c0ecd4be807d035785f302671af161a9c27a1a3288e15b2b653220ee5e40568"
+ },
+ "generation": 3,
+ "meta": {
+  "abi": 28,
+  "captured_utc": "2026-11-12T16:19:58+00:00",
+  "env": {
+   "RAYON_NUM_THREADS": "4",
+   "WNN_ALLOW_PY_FALLBACK": null,
+   "WNN_COALESCE_GROUPS": null,
+   "WNN_EVAL_IN_PLACE": "1",
+   "WNN_HYBRID_SPEED_RATIO": "8",
+   "WNN_NO_METAL": null,
+   "WNN_ORDER_INDEPENDENT_TRAIN": "1"
+  },
+  "git_dirty_src_wnn": "",
+  "git_head": "d091d93adf2236e7d5f46e021e9da6e8ae380603",
+  "git_tree_src_wnn": "fe98e3e0da9387629b8bfe569790ac23601fccdb",
+  "harness_sha256": "04c668cced91b8650eaa225e92614dc4145ab811f26924ab7baad165d33d57fc",
+  "peak_rss_gb": 9.42,
+  "runtime_s": 287.5,
+  "wheel_binary": "/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/lib/python3.13/site-packages/ram_accelerator/ram_accelerator.abi3.so",
+  "wheel_binary_mtime_utc": "2026-11-09T18:47:04+00:00",
+  "wheel_binary_sha256": "14734ec14a0d560158668c876d7445a59dfbc4ee33f80a7267efa9695c456292"
+ },
+ "mode": "breeding",
+ "payload_sha256": "b9adb17b5f3b2388fd777b85c7f2ad678f5f153d8a88eaf45945b8ea9fbfa196",
+ "reference_flow": 7509
+}

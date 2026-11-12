@@ -21,6 +21,13 @@ Modes
                      on the worker's (optimizer, test) evaluator pair and compare the TEST
                      decode modes against test_summaries.threshold_metadata. Those rows are
                      already reported, so this TEST read is allowed.
+  --breeding         W1b: one GA generation's offspring search, through the real
+                     ArchitectureGAStrategy (built as experiment.py builds it for the controls'
+                     "GA Neurons" phase) -> IDSEvaluator.search_offspring -> Rust. Seeded parent
+                     pools at bit caps 34 (the controls' regime) and 64 (the arm's), each with and
+                     without duplicate neurons. Digest: the exact call arguments, the parents' CV
+                     metrics and fitness, every returned child (bits / neurons / connections
+                     hashes + metrics) and the percentile-selected offspring. TEST is never loaded.
   --compare A B      bit-for-bit comparison of two output files (exit 1 on any difference).
 
 DB is opened read-only. Run with `nice -n 10`, one process.
@@ -321,6 +328,188 @@ def run_digest(db: sqlite3.Connection, only: list[str] | None) -> dict:
 		"cases": cases, "cv_pooled": pooled}
 
 
+# ------------------------------------------------------------------ W1b: GA breeding (search_offspring)
+
+BREEDING_PARENTS = 10
+BREEDING_OFFSPRING = 9
+BREEDING_GENERATION = 3
+BREEDING_TRAIN_IDX = 0
+BREEDING_DUP_FRACTION = 0.2
+GA_PHASE_GENERATIONS = 250
+# (name, bit cap = the flow's max_bits, per-genome widths the parents draw from, duplicate neurons?)
+BREEDING_CASES = (
+	("cap34", 34, (14, 24, 34, 34), False),
+	("cap34_dup", 34, (14, 24, 34, 34), True),
+	("cap64", 64, (24, 34, 48, 64, 64), False),
+	("cap64_dup", 64, (24, 34, 48, 64, 64), True),
+)
+
+
+def cluster_neurons(rng, count: int, bits: int, total_bits: int, duplicates: bool) -> list[list[int]]:
+	"""`count` neurons of one cluster; with `duplicates`, the last fifth are exact
+	copies of earlier neurons of the same cluster (the multiplicity layer's input)."""
+	distinct = count - int(count * BREEDING_DUP_FRACTION) if duplicates else count
+	neurons = [[int(c) for c in rng.integers(0, total_bits, bits)] for _ in range(distinct)]
+	copies = [neurons[int(i)] for i in rng.integers(0, distinct, count - distinct)]
+	return neurons + copies
+
+
+def make_parent(rng, widths: tuple[int, ...], duplicates: bool, total_bits: int, lo: int, hi: int):
+	"""A grid-like parent: one width for the whole genome, neuron counts in [lo, hi]."""
+	from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
+	bits = int(rng.choice(widths))
+	counts = [int(n) for n in rng.integers(lo, hi + 1, 2)]
+	neurons = [n for count in counts for n in cluster_neurons(rng, count, bits, total_bits, duplicates)]
+	return ClusterGenome(bits_per_neuron=[bits] * len(neurons), neurons_per_cluster=counts,
+		connections=[c for neuron in neurons for c in neuron])
+
+
+def make_parents(case: tuple, total_bits: int, params: dict) -> list:
+	import numpy as np
+	name, _cap, widths, duplicates = case
+	rng = np.random.default_rng(GENOME_SEED_BASE + 500 + [c[0] for c in BREEDING_CASES].index(name))
+	lo, hi = max(int(params["min_neurons"]), 60), int(params["max_neurons"])
+	return [make_parent(rng, widths, duplicates, total_bits, lo, hi) for _ in range(BREEDING_PARENTS)]
+
+
+def duplicate_neurons(genome) -> int:
+	"""Neurons that repeat an earlier neuron of the same cluster (description only)."""
+	seen, repeats, offset, neuron = set(), 0, 0, 0
+	for cluster, count in enumerate(genome.neurons_per_cluster):
+		for _ in range(count):
+			bits = genome.bits_per_neuron[neuron]
+			key = (cluster, tuple(genome.connections[offset:offset + bits]))
+			repeats += key in seen
+			seen.add(key)
+			offset, neuron = offset + bits, neuron + 1
+	return repeats
+
+
+def bred_record(genome) -> dict:
+	record = genome_record(genome)
+	record["duplicate_neurons"] = duplicate_neurons(genome)
+	if getattr(genome, "metrics", None) is not None:
+		record["metrics"] = {key: _hex(getattr(genome.metrics, key)) for key in ("ce", "acc", "f1", "fpr")}
+	return record
+
+
+def ga_configs(params: dict, optimizer, parents: list, max_bits: int, total_bits: int) -> tuple:
+	"""(ArchitectureConfig, GAConfig) for the controls' "GA Neurons" phase, field by
+	field as Experiment builds them from the worker's ExperimentConfig (worker.py
+	_run_flow_experiments + experiment.py). Only max_bits is overridable (the arm)."""
+	from wnn.ram.experiments.experiment import _phase_defaults
+	from wnn.ram.fitness import FitnessCalculatorType
+	from wnn.ram.strategies.connectivity.architecture_strategies import ArchitectureConfig
+	from wnn.ram.strategies.connectivity.framework import GAConfig
+	min_bits, min_neurons, max_neurons = int(params["min_bits"]), int(params["min_neurons"]), int(params["max_neurons"])
+	default_bits, default_neurons = _phase_defaults(parents, min_bits, max_bits, min_neurons, max_neurons)
+	arch = ArchitectureConfig(
+		num_clusters=2, min_bits=min_bits, max_bits=max_bits, min_neurons=min_neurons, max_neurons=max_neurons,
+		optimize_bits=False, optimize_neurons=True, optimize_connections=False,
+		default_bits=default_bits, default_neurons=default_neurons, bits_grid=None, total_input_bits=total_bits,
+		mutable_clusters=None, cluster_crossover_ratio=params["cluster_crossover_ratio"],
+		pool_shuffle_ratio=params["pool_shuffle_ratio"], assortative_mating_ratio=params["assortative_mating_ratio"],
+		dedupe_neurons=bool(params.get("ga_dedupe_neurons", False)), dedupe_fill=bool(params.get("ga_dedupe_fill", True)),
+		crossover_bits=str(params.get("ga_crossover_bits", "inherit")), max_neurons_total=params.get("max_neurons_total"),
+		joint_mutation=bool(params.get("ga_joint_mutation", False)), receptive_fields=None,
+	)
+	ga = GAConfig(
+		generations=GA_PHASE_GENERATIONS, population_size=BREEDING_OFFSPRING, patience=int(params["patience"]),
+		mutation_rate=float(params.get("mutation_rate", 0.1)), immigrant_fraction=float(params.get("immigrant_fraction", 0.0)),
+		initial_threshold=None, threshold_delta=params.get("threshold_step", 1) / 100.0,
+		threshold_reference=GA_PHASE_GENERATIONS, fitness_percentile=params.get("fitness_percentile"),
+		fitness_calculator_type=FitnessCalculatorType[str(params["fitness_calculator"]).upper()],
+		fitness_weight_ce=params["fitness_weight_ce"], fitness_weight_acc=params["fitness_weight_acc"],
+		fitness_weight_f1=params["fitness_weight_f1"], fitness_weight_fpr=params["fitness_weight_fpr"],
+		fitness_aggregation=params.get("fitness_aggregation", "harmonic"),
+		zrank_clamp=params.get("fitness_zrank_clamp", 3.0), ce_anchor=optimizer.desirability_ce_anchor(),
+		min_accuracy_floor=0.0,
+	)
+	return arch, ga
+
+
+def ga_strategy(params: dict, optimizer, parents: list, max_bits: int, total_bits: int):
+	"""The real ArchitectureGAStrategy, positioned at one generation of its loop."""
+	from wnn.ram.strategies.factory import OptimizerStrategyFactory, OptimizerStrategyType
+	arch, ga = ga_configs(params, optimizer, parents, max_bits, total_bits)
+	strategy = OptimizerStrategyFactory.create(OptimizerStrategyType.ARCHITECTURE_GA, ga, arch_config=arch,
+		seed=int(params["seed"]), logger=_log, batch_evaluator=optimizer)
+	strategy._setup_fitness_calculator()
+	strategy._phase_train_idx = BREEDING_TRAIN_IDX
+	strategy._reseed_generation(BREEDING_GENERATION)
+	return strategy
+
+
+class SearchRecorder:
+	"""Wraps IDSEvaluator.search_offspring: forwards the GA's call untouched and
+	keeps what was passed (the call arguments) and what Rust returned."""
+
+	def __init__(self, evaluator):
+		self._search = evaluator.search_offspring
+		self.arguments: dict = {}
+		self.result = None
+
+	def __call__(self, population, logger=None, **arguments):
+		self.arguments = dict(arguments, population_ce=[_hex(ce) for _, ce in population])
+		self.result = self._search(population=population, logger=logger, **arguments)
+		return self.result
+
+
+def arguments_record(arguments: dict) -> dict:
+	"""JSON form of the recorded call (floats exact, nothing dropped)."""
+	record = {}
+	for key, value in sorted(arguments.items()):
+		if isinstance(value, float):
+			record[key] = _hex(value)
+		elif key == "fitness_scores" and value is not None:
+			record[key] = [_hex(v) for v in value]
+		else:
+			record[key] = value
+	return record
+
+
+def breed_case(optimizer, params: dict, case: tuple, total_bits: int) -> dict:
+	name, max_bits, _widths, _duplicates = case
+	started = time.time()
+	parents = make_parents(case, total_bits, params)
+	population = list(zip(parents, optimizer.evaluate_batch(parents)))
+	strategy = ga_strategy(params, optimizer, parents, max_bits, total_bits)
+	recorder = SearchRecorder(optimizer)
+	optimizer.search_offspring = recorder
+	try:
+		threshold = strategy._compute_threshold(BREEDING_GENERATION / strategy.config.threshold_reference)
+		selected = strategy._generate_offspring(population, BREEDING_OFFSPRING, threshold, BREEDING_GENERATION)
+	finally:
+		del optimizer.search_offspring
+	record = {
+		"phase_type": int(strategy._phase_type), "offspring_seed": int(strategy._offspring_seed),
+		"call_arguments": arguments_record(recorder.arguments),
+		"parents": [bred_record(g) for g in parents],
+		"returned": [bred_record(g) for g in recorder.result.genomes],
+		"evaluated": int(recorder.result.evaluated), "viable": int(recorder.result.viable),
+		"selected": [bred_record(g) for g, _metrics in selected],
+	}
+	_log(f"  {name}: {time.time() - started:.0f}s, {len(record['returned'])} returned of {record['evaluated']} evaluated, "
+		f"{len(record['selected'])} selected, child bits up to {max(r['bits_max'] for r in record['returned'])}, "
+		f"child duplicate neurons {sum(r['duplicate_neurons'] for r in record['returned'])}")
+	return record
+
+
+def run_breeding(db: sqlite3.Connection, only: list[str] | None) -> dict:
+	from wnn.ram.experiments.IdsEvaluatorFactory import IdsEvaluatorFactory
+	params = flow_params(db, REFERENCE_FLOW)
+	apply_production_env(params)
+	s = settings_for(params)
+	check_reference_settings(s)
+	factory = IdsEvaluatorFactory(log=_log)
+	dataset = val_as_report(factory.load(s))
+	optimizer, _report = build_pair(factory, dataset, s)
+	total_bits = int(dataset.X_train.total_bits)
+	cases = [case for case in BREEDING_CASES if only is None or case[0] in only]
+	return {"mode": "breeding", "reference_flow": REFERENCE_FLOW, "dataset": dataset_record(dataset, optimizer),
+		"generation": BREEDING_GENERATION, "cases": {case[0]: breed_case(optimizer, params, case, total_bits) for case in cases}}
+
+
 # ------------------------------------------------------------------ W3: retrain the controls' finals
 
 def stored_final(db: sqlite3.Connection, flow_id: int) -> tuple[str, dict, int]:
@@ -403,6 +592,11 @@ def flatten(node, prefix: str = "") -> dict:
 		for key, value in node.items():
 			out.update(flatten(value, f"{prefix}/{key}"))
 		return out
+	if isinstance(node, list) and any(isinstance(item, (dict, list)) for item in node):
+		out = {f"{prefix}/#len": len(node)}
+		for index, item in enumerate(node):
+			out.update(flatten(item, f"{prefix}/{index}"))
+		return out
 	return {prefix: node}
 
 
@@ -434,10 +628,19 @@ def write_output(payload: dict, out: str, started: float) -> None:
 def parse_args() -> argparse.Namespace:
 	parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 	parser.add_argument("--out", help="output JSON (digest / retrain modes)")
-	parser.add_argument("--cases", nargs="+", help="digest mode: only these case names (timing probes)")
+	parser.add_argument("--cases", nargs="+", help="digest / breeding mode: only these case names (timing probes)")
+	parser.add_argument("--breeding", action="store_true", help="W1b mode: one GA generation's offspring search")
 	parser.add_argument("--retrain-finals", nargs="+", type=int, metavar="FLOW", help=f"W3 mode, e.g. {CONTROL_FLOWS}")
 	parser.add_argument("--compare", nargs=2, metavar=("A", "B"), help="compare two output files bit for bit")
 	return parser.parse_args()
+
+
+def run_mode(db: sqlite3.Connection, args: argparse.Namespace) -> dict:
+	if args.retrain_finals:
+		return run_retrain(db, args.retrain_finals)
+	if args.breeding:
+		return run_breeding(db, args.cases)
+	return run_digest(db, args.cases)
 
 
 def main() -> int:
@@ -449,7 +652,7 @@ def main() -> int:
 	os.environ.setdefault("RAYON_NUM_THREADS", "4")
 	started = time.time()
 	db = sqlite3.connect(DB_URI, uri=True)
-	payload = run_retrain(db, args.retrain_finals) if args.retrain_finals else run_digest(db, args.cases)
+	payload = run_mode(db, args)
 	write_output(payload, args.out, started)
 	return 0 if payload.get("all_exact", True) else 1
 
