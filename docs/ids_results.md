@@ -322,6 +322,32 @@ and ties raw RF on F1 (−0.12) at lower FPR. Lowest FPR overall: raw MLP 2.34 a
 ~2/3 of lattice-encon's 0.84 pp gap to XGBoost. Caveat: WNN rows use the legacy feature ranking; the feature-list
 equality with the baselines' top-20 is not verified line by line. unswr version below.
 
+### IDS-56 P2: min-share vote at θ=0.05 vs θ=0.1 on unswt, TEST partition (added 12/11/2026)
+
+Pre-registered (docs/ids56_readout.md §5 P2): adopt θ=0.05 over θ=0.1 only if it wins F1 paired ≥ 4/5 without an FPR
+loss. 10 flows 7521–7530 (`ms005` × {encoff, encon} × r20419–23), same recipe as the IDS-56 unswt arms. GA best_f1,
+`margin_val_cal`, n=5, mean ± SD.
+
+```
+arm                 F1             FPR          cells
+lattice encoff      90.75 ± 0.17   4.95 ± 0.74  214K
+ms01 encoff         90.71 ± 0.12   4.19 ± 0.93  199K
+ms005 encoff        91.37 ± 0.11   3.90 ± 0.46  205K
+lattice encon       91.25 ± 0.11   4.12 ± 0.73  355K
+ms01 encon          91.83 ± 0.07   3.86 ± 0.63  333K
+ms005 encon         91.86 ± 0.08   4.05 ± 0.70  340K
+```
+
+Paired by seed, ms005 − ms01:
+- encoff: ΔF1 +0.55 / +0.46 / +0.83 / +0.64 / +0.81 (5/5 up, mean +0.66); ΔFPR mean −0.29 (2/5 higher). **PASSES
+  the rule → θ=0.05 adopted for encoff.**
+- encon: ΔF1 +0.08 / +0.11 / −0.00 / −0.13 / +0.09 (3/5 up, mean +0.03); ΔFPR mean +0.19. **Does not pass → θ=0.1
+  stays for encon.**
+
+Read: the post-hoc θ≈0.05 peak for encoff (from the IDS-56 mechanism probe) replicates on a pre-registered run. The
+vote's useful θ depends on the address resolution: encoff wants the lower θ, encon is flat between 0.05 and 0.1. Best
+unswt WNN is unchanged within noise (ms005-encon 91.86 / 4.05 vs ms01-encon 91.83 / 3.86).
+
 ### IDS-56 on UNSW random_3way (unswr) + classical baselines, TEST partition (added 12/11/2026)
 
 20/20 unswr flows (7501–7520): {lattice, ms01} × {encoff, encon} × r20419–r20423, BINARY 2-cluster 2m max250,
