@@ -18,6 +18,10 @@ import sys
 RENAME = {"--report-seeds": "--test-seeds", "--report-seed": "--test-seed",
           "--report-episodes": "--test-episodes"}
 SAVE_FLAGS = ("--save-stage-checkpoints", "--save-winner")
+# recalc only (13/11/2026, S5p substitute test): the run's OWN stage-select flags are dropped so the re-pick rule's
+# flags are the only selection setting. Runs flown with rule P (block 8) carry them; the 30 block-4/5 runs carry none,
+# so for those this is a no-op (verified 13/11: 30/30 argv lines have neither flag).
+SELECT_FLAGS = ("--val-units", "--select-tail")
 
 
 def argv_tokens(path):
@@ -28,12 +32,12 @@ def argv_tokens(path):
 	return lines[0][len("[argv] "):].split()
 
 
-def strip_saves(toks):
+def strip_saves(toks, drop=SAVE_FLAGS):
 	out, skip = [], False
 	for t in toks:
 		if skip:
 			skip = False
-		elif t in SAVE_FLAGS:
+		elif t in drop:
 			skip = True
 		else:
 			out.append(RENAME.get(t, t))
@@ -47,8 +51,9 @@ def refuse_overlap(base, extra):
 
 
 def main(a):
-	base = strip_saves(argv_tokens(a[0]))
-	if a[1] == "recalc":
+	recalc = a[1] == "recalc"
+	base = strip_saves(argv_tokens(a[0]), SAVE_FLAGS + SELECT_FLAGS if recalc else SAVE_FLAGS)
+	if recalc:
 		head, extra = ["--recalc-headline", a[2]], a[3:]
 	elif a[1] == "fly":
 		head, extra = ["--save-stage-checkpoints", a[2], "--save-winner", a[3]], a[4:]

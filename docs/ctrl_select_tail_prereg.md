@@ -66,3 +66,15 @@ turns S5p from a descriptive secondary into a pre-registered **substitute test**
   It cannot un-adopt P; if it reverses (P more fails than B on block 8), report it to Luiz.
 - Report per-run picks and a paired S5p-vs-P table regardless of outcome. Nothing above may change after the first S5p
   re-pick lands; any change is a new pre-registration.
+
+## Amendment 3 (13/11/2026, Luiz; written BEFORE any S5p re-pick was run)
+State when written: 0 `.S5p.log` files exist. Block 8 flew 14 runs, not 15: `_P_ileak_full_s3` was SKIPPED on Luiz's order
+after ileak failed the safety gate at 7/7000 pooled fails on s1+s2 (runs.log SKIP line, 13/11 13:37 UTC).
+
+- **Test set:** 44 runs = the 30 of Amendment 1 + the **14** block-8 runs that exist
+  (`experiments/ctrl_select_tail/runs_s5p_44.txt`; block-8 list `runs_block8_14.txt`). B re-picks (descriptive) on the same 14.
+- **Re-pick mechanics (no effect on any earlier pick):** `rebuild_argv.py recalc` now drops the run's own `--val-units` /
+  `--select-tail` flags before adding the rule's, because block-8 runs were flown with P. The 30 block-4/5 argv lines carry
+  neither flag (verified 30/30), so their B and P picks are unchanged (rebuilt argv diff vs the previous rebuilder: identical).
+- Nothing else changes: the S5p-vs-P rule of Amendment 2 (fails S5p <= P AND mean err/steady not worse than P by > 0.05°)
+  is evaluated over these 44 runs.

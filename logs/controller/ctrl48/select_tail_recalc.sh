@@ -5,7 +5,7 @@
 #   P  = --val-units 20 --select-tail p99                                                 PRIMARY rule
 #   S20 = --val-units 20 alone ; S5p = --select-tail p99 alone                            descriptive only
 # Each run's argv = its own .out [argv] line (rebuild_argv.py: report->test rename, --save-* dropped).
-# Usage: select_tail_recalc.sh <run-list file, one tag per line> [rules, default "B P S20 S5p"]
+# Usage: [SKIP_RESULT=1] select_tail_recalc.sh <run-list file, one tag per line> [rules, default "B P S20 S5p"]
 # Progress: logs/controller/ctrl48/runs.log RECALC lines (k/N); outputs experiments/ctrl_select_tail/<tag>.<rule>.log
 cd /Users/lacg/wnn
 L=logs/controller/ctrl48
@@ -30,6 +30,10 @@ for r in $RULES; do               # rule-major: every B and P lands before any d
 		echo "$(date -u +%FT%TZ) RECALC $k/$N $t $r rc=$rc $(grep -a '^\[recalc\] PICK' $out | sed -E 's/.*(headline=[^ ]+).*report\(([0-9]+) units\): (.*)/\1 \3/')" >> $L/runs.log
 	done
 done
+if [ "$SKIP_RESULT" = "1" ]; then   # S5p pass (Amendment 2): never regenerate the committed P-vs-B readout
+	echo "$(date -u +%FT%TZ) SELECTTAIL PASS DONE rules [$RULES] list $LIST" >> $L/runs.log
+	exit 0
+fi
 $VENV/bin/python $L/select_tail_result.py $LIST && git add -f docs/ctrl_select_tail_result.md $O \
 	&& git commit -q -m "CTRL-48 part 1: tail-aware selection prereg readout (docs/ctrl_select_tail_result.md)
 
