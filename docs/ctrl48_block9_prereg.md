@@ -24,3 +24,11 @@ The chosen arm becomes the base for the next block.
 ## Reported, descriptive only
 Pooled s1-s6 per arm (fails/21000, steady, err, pos) — mixes ABI 49/50 and rules B/P for dc_ms01 s1-s3, disclosed, never decides.
 Nothing above may change after the first block-9 END line.
+
+## Amendment 1 (13/11/2026, Luiz; written BEFORE any block-9 run — the driver was still waiting for 'S5P DONE')
+- **Seeds s4-s10** (base seeds 31337004-31337010), SEED-MAJOR = **14 runs**; n=10 per arm counting the earlier s1-s3.
+- The decision rule is unchanged in form and is evaluated on **s4-s10** (same ABI, same rule P, same seeds for both arms):
+  gate = pooled fails over s4-s10 <= 0.05% (<= 12/24500) AND not significantly worse than the other arm (exact one-sided
+  conditional binomial, p < 0.05); then both only if mean steady better by > 0.03° AND mean err not worse by > 0.03°, else dc_ms01.
+- Added, descriptive only: per arm, the number of seeds whose controller had 0 fails, out of 7 (s4-s10) and out of 10 (s1-s10),
+  with the 95% lower bound on the fail-free-seed fraction (exact binomial; 10/10 -> ~74%).
