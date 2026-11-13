@@ -4,6 +4,11 @@ Written 13/11/2026 (experiment-design agent) from Luiz's 13/11 design. The paren
 `docs/ids_results.md` "IDS56U — pre-registered test readout (n=3)", commit 5cc00f24. The rule it inherits is
 `docs/ids56_unweighted_vote_prereg.md` §3, with the class-weight audit in §1.
 
+**APPROVED by Luiz 13/11/2026 ~13:35 UTC: the per-dataset rescaled thresholds (§4) AND the grouped release order (per dataset,
+dedupe ON before OFF, control next to its arm, cicids first; ms01 after; backlog last). Flows 7549-7566 created PAUSED
+(18, 2 experiments each); release order = logs/ids/ids_sequence_1311.txt, run by logs/ids/ids_sequencer.sh (one flow at a time,
+after A1 7546-7548). Nothing in §4-§5 may change from here on.**
+
 ## Review verdict (experiment-design, 13/11/2026): GO-WITH-CHANGES
 
 **Nothing was queued, paused, resumed or cancelled. The worker (IDS-57 A1, flow 7546) was not touched.** Only
