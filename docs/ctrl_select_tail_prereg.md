@@ -44,3 +44,25 @@ shaped this change.
   Run list: `experiments/ctrl_select_tail/runs_blocks45_a49_amended.txt`.
 - Nothing else changes: rules P and B, the secondaries, the scoring (35 test units x 100 episodes, fixed scorer) and
   all three pass criteria stand as written above, evaluated over the 30 runs.
+
+## Amendment 2 (13/11/2026, Luiz; written BEFORE any S5p or S20 re-pick was run)
+State when written: the primary test is complete (P ADOPTED 3/3, `docs/ctrl_select_tail_result.md`, 7125992c). No S5p or
+S20 re-pick exists (`experiments/ctrl_select_tail/` holds only `.B.log` / `.P.log`; runs.log has no S5p/S20 RECALC line).
+
+**Purpose.** S5p (5 val units + p99 tail term) costs B's selection time (~5.6 min vs P's ~15 min per run). This amendment
+turns S5p from a descriptive secondary into a pre-registered **substitute test**: can the cheaper rule replace P?
+
+- **S20 is DROPPED** (Luiz 13/11): it costs as much as P and cannot save time.
+- **Test set:** the 30 runs of Amendment 1 (`runs_blocks45_a49_amended.txt`) **plus all 15 block-8 runs** (ABI 50, P inline,
+  control + 4 arms x s1-s3) = 45 runs. Runs after block 8, on the block-8 checkpoints as they stand.
+- **Comparison:** S5p vs P on the same runs, every pick scored on the 35 test units x 100 episodes (fixed scorer). For the
+  30 old runs the P picks already on file are reused; for block 8 the P pick is each run's own published headline.
+- **S5p replaces P only if BOTH hold over the 45 runs:**
+  1. total test fails S5p <= P;
+  2. mean test err and mean test steady, S5p not worse than P by more than 0.05° each.
+  Otherwise P stays. No third criterion (a "picks differ" count is not required: identical picks mean S5p is a free
+  substitute).
+- **Also run, descriptive only:** B re-picks of the 15 block-8 runs = an out-of-sample P-vs-B replication on new configs.
+  It cannot un-adopt P; if it reverses (P more fails than B on block 8), report it to Luiz.
+- Report per-run picks and a paired S5p-vs-P table regardless of outcome. Nothing above may change after the first S5p
+  re-pick lands; any change is a new pre-registration.
