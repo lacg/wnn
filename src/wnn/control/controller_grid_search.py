@@ -198,6 +198,7 @@ class ControllerGridSearch(GenericGridSearch):
 			obs_alt_err=getattr(args, "obs_alt_err", False),
 			obs_vz=getattr(args, "obs_vz", False),
 			integral_leak=args.integral_leak, integral_scale=args.integral_scale,
+			yaw_integral_leak=getattr(args, "yaw_integral_leak", None),  # ARM 3 (ABI 50)
 			decouple_outputs=args.decouple_outputs,
 			bits_per_feature=args.bits_per_feature,
 			feature_balance_ratio=args.feature_balance_ratio,

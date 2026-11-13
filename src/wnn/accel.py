@@ -151,7 +151,13 @@ import os
 #   ids_vote_share, θ ∈ (0, 0.5] on a 1/100 grid; None = the plain vote =
 #   bit-identical to ABI 27). Bumped so ids_vote_share can't run on a wheel that
 #   would silently train the plain vote.
-EXPECTED_ABI = 28
+# 29 (12/11/2026): write-rule consolidation — ram_core owns every per-cell write
+# primitive for both wheels (cell_write.rs + common.metal wnn_*). No Python surface
+# change; every IDS path bit-identical. Ships with controller ABI 50.
+#   Same ABI 29 (not deployed in between): additive READ-ONLY
+#   IDSCacheWrapper.export_neuron_outputs (IDS-57 arm E) — per-row per-neuron
+#   cells + all-cluster scores; reached through IDSEvaluator.export_neuron_outputs.
+EXPECTED_ABI = 29
 
 BUILD_HINT = (
 	"Rebuild the accelerator: cd src/wnn/ram/strategies/accelerator && "

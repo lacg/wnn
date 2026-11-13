@@ -39,6 +39,12 @@ pub const QUAD_TRUE: i64 = 3;
 /// Weights for QUAD_WEIGHTED forward pass accumulation
 pub const QUAD_WEIGHTS: [f32; 4] = [0.0, 0.25, 0.75, 1.0];
 
+/// The EXPECTED read of an untrained 3-state u-cell under the PLN fair coin
+/// (0.5). PLN's deterministic weight, its coin probability, and the drone
+/// controller's fixed TERNARY empty value all name this one number. GPU twin:
+/// common.metal `WNN_PLN_U_EXPECTED`.
+pub const PLN_U_EXPECTED: f32 = 0.5;
+
 // =============================================================================
 // Bit-Packing Constants
 // =============================================================================
@@ -147,7 +153,7 @@ pub fn cell_to_weight(cell: i64, memory_mode: u8, empty_value: f32) -> f32
 		{
 			FALSE => 0.0,
 			TRUE => 1.0,
-			_ => 0.5,
+			_ => PLN_U_EXPECTED,
 		},
 		_ => match cell
 		{
@@ -209,7 +215,7 @@ pub fn pln_coin(cell: i64, rng: u64) -> f32
 		_ =>
 		{
 			let u = (rng >> 40) as f32 / (1u64 << 24) as f32;
-			if u < 0.5
+			if u < PLN_U_EXPECTED
 			{
 				1.0
 			}
@@ -1224,8 +1230,7 @@ impl ClusterStorage
 				let word_offset = neuron_idx * *words_per_neuron + word_idx;
 				let shift = cell_idx * BITS_PER_CELL;
 				let old_cell = (words[word_offset] >> shift) & CELL_MASK;
-				let delta = 2 * (target_true as i64) - 1;
-				let new_cell = (old_cell + delta).clamp(QUAD_FALSE, QUAD_TRUE);
+				let new_cell = crate::cell_write::quad_step(old_cell as u8, target_true) as i64;
 				let mask = CELL_MASK << shift;
 				words[word_offset] = (words[word_offset] & !mask) | (new_cell << shift);
 			}
@@ -1238,8 +1243,7 @@ impl ClusterStorage
 				let old_cell = *neurons[neuron_idx]
 					.get(&(address as u32))
 					.unwrap_or(empty_cell) as i64;
-				let delta = 2 * (target_true as i64) - 1;
-				let new_cell = (old_cell + delta).clamp(QUAD_FALSE, QUAD_TRUE);
+				let new_cell = crate::cell_write::quad_step(old_cell as u8, target_true) as i64;
 				if new_cell == *empty_cell as i64
 				{
 					neurons[neuron_idx].remove(&(address as u32));

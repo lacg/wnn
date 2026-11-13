@@ -67,6 +67,8 @@ mod ctrl39_tests; // CTRL-39: the MEMORY recorder reads the FLOWN command (train
 #[cfg(test)]
 mod ctrl40_tests; // CTRL-40: Metal split train/record for the applied-actuator inputs (CPU parity)
 #[cfg(test)]
+mod ctrl50_yaw_tests; // ARM 3 (12/11/2026): --yaw-integral-leak (CPU features, CPU/GPU score + split parity)
+#[cfg(test)]
 mod ctrl46_tests; // CTRL-46 (ABI 46): vote write rule (CPU/GPU, order independence) + estimate-built labels
 #[cfg(test)]
 mod init_vxy_tests; // ABI 48: training-only initial horizontal velocity (draw order, validation)
@@ -448,7 +450,21 @@ mod metal_controller;
 ///   run whose teacher ladder comes from the training-cascade sampler (translation
 ///   + airframe): that collector refused the ABI-32 plant and the refit silently
 ///   fell back to the teacher ladder. Pin: ctrl49_tests.rs.
-pub const ABI_VERSION: u32 = 49;
+/// ABI 50 (12/11/2026, write-rule consolidation; NO Python surface change): the
+///   controller's cell semantics (fire bit, nudge step / toward-value, plants,
+///   nudge distance, coin prob, unwritten cell) are the shared ram_core cell_write.rs
+///   primitives (+ common.metal wnn_* twins); controller/cell_mode.rs keeps only
+///   decode. Default flags bit-identical (cargo parity sweeps + phased_ga goldens).
+///   ONE behaviour change, GPU-split-train only (WNN_CONTROLLER_GPU_TRAIN=1) with
+///   PLN: controller_train sent PLN through the QUAD nudge; it now LastWrites like
+///   the CPU (parity_controller_train now sweeps TERNARY/BINARY/PLN).
+///   Same ABI (nothing deployed in between): ARM 3 (Luiz 12/11/2026) additive kwarg
+///   `yaw_integral_leak=None` on WnnController and dagger_train_batch_inplace (+ getter)
+///   — a separate leak for the yaw integral features (yaw_err_i, yaw_i_pa), CPU and
+///   Metal (Params/TrainParams/FwdParams gain a trailing float). None ⇒ integral_leak,
+///   bit-identical. Pin: ctrl50_yaw_tests.rs. (ARM 2 --yaw-centred-ladder is Python-only:
+///   thresholds reach Rust as data.)
+pub const ABI_VERSION: u32 = 50;
 
 /// ABI 44: how output neurogenesis lays out the output layer — "segment" = every
 /// bank / E-I half resizes at its own tail (pre-44 Python resized the flat tail).

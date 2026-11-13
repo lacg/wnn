@@ -846,6 +846,32 @@ class IDSEvaluator(BaseEvaluator):
 			self._empty_value, self._neuron_sample_rate, 0,
 		))
 
+	def export_neuron_outputs(
+		self,
+		genome,
+		partition: str = "val",
+		rows: "Optional[list[int]]" = None,
+		packed: bool = False,
+	) -> "NeuronOutputsExport":
+		"""READ-ONLY (IDS-57 arm E): train ONCE exactly as evaluate_at_thresholds
+		does and return every logical neuron's output cell per row of `partition`
+		("train" | "val" | "test"), plus the production scores of ALL clusters and
+		the row labels. `rows` = indices into the partition (sample the large
+		train partition with it); `packed` = 2 bits per neuron (a quarter the
+		memory). Computed in Rust; in-memory datasets only."""
+		from wnn.accel import BUILD_HINT
+		from wnn.ram.architecture.NeuronOutputsExport import NeuronOutputsExport
+		if self._streaming_mode:
+			raise NotImplementedError("export_neuron_outputs: streaming datasets are not exportable yet")
+		if not hasattr(self._cache, "export_neuron_outputs"):
+			raise RuntimeError(f"export_neuron_outputs needs worker ABI 29 with the per-neuron export. {BUILD_HINT}")
+		bits_flat, neurons_flat, connections_flat = self._flatten_genomes([genome])
+		return NeuronOutputsExport.from_tuple(self._cache.export_neuron_outputs(
+			bits_flat, neurons_flat, connections_flat,
+			self._empty_value, self._neuron_sample_rate, 0,
+			partition, None if rows is None else [int(r) for r in rows], packed,
+		))
+
 	def evaluate_multiclass_at_thresholds(self, genome) -> dict:
 		"""Train ONCE, score eval/train(/val) as K-vectors, return per-mode
 		multiclass metrics computed on the EVAL set.

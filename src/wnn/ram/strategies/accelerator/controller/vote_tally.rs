@@ -37,6 +37,7 @@
 //! windows and records may be visited in any order, on the CPU or the GPU walk, and
 //! produce the same cells.
 
+use ram_core::cell_mode::CellMode;
 use ram_core::cell_mode::{CounterBin, WriteRule};
 use ram_core::sparse_memory::SparseLayerMemory;
 use ram_core::vote_share::{vote_net_to_cell, VoteShare};
@@ -83,11 +84,11 @@ impl VoteTally
 	#[inline]
 	pub(crate) fn visit_state_value(&mut self, neuron: usize, address: u64, target: u8, mode: u8)
 	{
-		if target == crate::cell_mode::true_cell(mode)
+		if target == CellMode::of(mode).true_cell()
 		{
 			self.visit(true, neuron, address, true);
 		}
-		else if target == crate::cell_mode::false_cell(mode)
+		else if target == CellMode::of(mode).false_cell()
 		{
 			self.visit(true, neuron, address, false);
 		}
@@ -146,7 +147,7 @@ mod tests
 
 	fn mem(mode: u8) -> SparseLayerMemory
 	{
-		SparseLayerMemory::new_with_default(2, 8, crate::cell_mode::canonical_default_cell(mode))
+		SparseLayerMemory::new_with_default(2, 8, CellMode::of(mode).default_cell(ram_core::cell_mode::UnwrittenLean::True))
 	}
 
 	/// Hand case at θ = 0.25 (own 3 : other 1): 1 TRUE vs 2 FALSE → +3 − 2 = +1 → TRUE

@@ -25,14 +25,12 @@
 //! via RK4. Decoders + reward + monotonicity are pure-data utilities that
 //! work end-to-end.
 
+use ram_core::cell_mode::{CellMode, UnwrittenLean};
 use std::collections::VecDeque;
 
 use pyo3::prelude::*;
 
-use crate::cell_mode::{
-	cell_fire_bit, decode_motor_cells, false_cell, nudge_cell, nudge_cell_value, output_target_bit,
-	true_cell,
-};
+use crate::cell_mode::{decode_motor_cells, output_target_bit};
 use crate::controller_training::solve_partial_connectivity_qsr_reachable;
 use ram_core::neuron_memory::compute_address_sparse;
 use ram_core::sparse_memory::SparseLayerMemory;
@@ -1609,7 +1607,7 @@ impl WnnController
 		}
 		for (n, &v) in new_state.iter().enumerate()
 		{
-			oi[frame_bits + n] = cell_fire_bit(v, self.memory_mode);
+			oi[frame_bits + n] = CellMode::of(self.memory_mode).fire_bit(v);
 		}
 		oi
 	}
@@ -1792,6 +1790,26 @@ impl WnnController
 
 	/// num_features (9 + enabled H2 extras) + obs-feature config the GPU scorer
 	/// needs to mirror compute_features. Uniform across a population.
+	/// ARM 3 (12/11/2026): set the yaw-integral leak. None keeps integral_leak (the
+	/// bit-identical default). Refuses a leak outside (0, 1].
+	pub(crate) fn set_yaw_integral_leak(&mut self, leak: Option<f32>) -> Result<(), String>
+	{
+		let Some(v) = leak else { return Ok(()) };
+		if !(v > 0.0 && v <= 1.0)
+		{
+			return Err(format!("yaw_integral_leak must be in (0, 1]; got {v}"));
+		}
+		self.yaw_integral_leak = v;
+		Ok(())
+	}
+
+	/// ARM 3: the yaw-integral leak for the GPU hosts (a separate accessor so the
+	/// positionally-destructured obs_params tuple does not move).
+	pub(crate) fn yaw_integral_leak_value(&self) -> f32
+	{
+		self.yaw_integral_leak
+	}
+
 	pub(crate) fn obs_params(
 		&self,
 	) -> (
@@ -2659,14 +2677,14 @@ impl WnnController
 			state_memory: SparseLayerMemory::new_with_default(
 				state_neurons,
 				state_bits_per_neuron,
-				crate::cell_mode::canonical_default_cell(memory_mode),
+				CellMode::of(memory_mode).default_cell(UnwrittenLean::True),
 			),
 			state_connections,
 			output_bits_per_neuron,
 			output_memory: SparseLayerMemory::new_with_default(
 				num_output_neurons,
 				output_bits_per_neuron,
-				crate::cell_mode::canonical_default_cell(memory_mode),
+				CellMode::of(memory_mode).default_cell(UnwrittenLean::True),
 			),
 			output_connections,
 			thresholds,
@@ -2717,6 +2735,7 @@ impl WnnController
 			obs_yaw_err,
 			obs_yaw_err_i,
 			integral_leak,
+			yaw_integral_leak: integral_leak,
 			integral_scale,
 			dt,
 			decouple_outputs,
@@ -2943,6 +2962,13 @@ impl WnnController
 	pub(crate) fn output_cell(&self, neuron: usize, addr: u64) -> u8
 	{
 		self.output_memory.read_cell(neuron, addr)
+	}
+
+	/// `output_cell` with a miss resolving to the memory's canonical default
+	/// (BINARY FALSE writes are deleted on the CPU but kept by the GPU table).
+	pub(crate) fn output_cell_or_default(&self, neuron: usize, addr: u64) -> u8
+	{
+		self.output_memory.read_cell_or_default(neuron, addr)
 	}
 
 	/// All trained output cells (neuron → (addr, value)), for enumerating the
@@ -3516,6 +3542,12 @@ pub struct WnnController
 	obs_pwm: bool,      // current throttle accumulator (num_motors features)
 	integral_leak: f32, // leaky-integral decay for the "_i" features (DISTINCT
 	// from delta_leak, which is the OUTPUT accumulator's leak)
+	// ARM 3 (Luiz 12/11/2026, docs/ctrl_steady_gap_block6.md §3-4): the leak of the
+	// YAW integrals only (yaw_err_i, and yaw_i_pa when obs_peraxis_yaw). Defaults to
+	// integral_leak (bit-identical); --yaw-integral-leak sets it so the yaw channel
+	// can carry a true integrator (0.9995 ≈ 2 s memory at 1 kHz) against a per-unit
+	// yaw-torque trim while roll_i / pitch_i / tilt_i keep integral_leak.
+	yaw_integral_leak: f32,
 	integral_scale: f32, // pre-threshold scale applied to integral features
 	// --- Yaw-anchor (Phase A, 26/06/2026): a CLEAN scalar yaw-error channel ---
 	// obs_yaw_err exposes (target_yaw − anchored yaw_heading) as ONE proportional
@@ -3765,6 +3797,7 @@ impl WnnController
 		est_ki = 0.1,
 		ctbr = None,
 		obs_att_bias_pred = false,
+		yaw_integral_leak = None,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -3815,6 +3848,7 @@ impl WnnController
 		est_ki: f32,
 		ctbr: Option<crate::ctbr::CtbrSpec>,
 		obs_att_bias_pred: bool,
+		yaw_integral_leak: Option<f32>,
 	) -> PyResult<Self>
 	{
 		// CTRL-46: the bias-predictor rows are the VERY tail (after the cascade blocks).
@@ -3902,7 +3936,16 @@ impl WnnController
 			c.enable_att_bias_pred(abp_thresholds)
 				.map_err(pyo3::exceptions::PyValueError::new_err)?;
 		}
+		c.set_yaw_integral_leak(yaw_integral_leak).map_err(pyo3::exceptions::PyValueError::new_err)?;
 		Ok(c)
+	}
+
+	/// ARM 3: the leak of the yaw integral features (== integral_leak unless
+	/// --yaw-integral-leak set it).
+	#[getter]
+	pub fn yaw_integral_leak(&self) -> f32
+	{
+		self.yaw_integral_leak
 	}
 
 	/// CTRL-46: whether the Mahony-bias predictor block (`--obs-att-bias-pred`) is on.
@@ -4652,7 +4695,7 @@ impl WnnController
 				self.output_bits_per_neuron,
 			);
 			let current = self.output_memory.read_cell(n, address);
-			let new_value = nudge_cell(current, target_true, self.memory_mode);
+			let new_value = CellMode::of(self.memory_mode).nudge_step(current, target_true);
 			if new_value != current
 			{
 				self.output_memory.write_cell(n, address, new_value, true);
@@ -4704,7 +4747,7 @@ impl WnnController
 				self.state_bits_per_neuron,
 			);
 			let current = self.state_memory.read_cell(n, address);
-			let new_value = nudge_cell(current, target_true, self.memory_mode);
+			let new_value = CellMode::of(self.memory_mode).nudge_step(current, target_true);
 			if new_value != current
 			{
 				self.state_memory.write_cell(n, address, new_value, true);
@@ -4852,11 +4895,11 @@ impl WnnController
 				// drive the cell fully to that side (mode-native TRUE/FALSE).
 				let target_val: u8 = if desired_state_bits[n]
 				{
-					true_cell(self.memory_mode)
+					CellMode::of(self.memory_mode).true_cell()
 				}
 				else
 				{
-					false_cell(self.memory_mode)
+					CellMode::of(self.memory_mode).false_cell()
 				};
 				let conn_start = n * self.state_bits_per_neuron;
 				let conn_end = conn_start + self.state_bits_per_neuron;
@@ -4866,7 +4909,7 @@ impl WnnController
 					self.state_bits_per_neuron,
 				);
 				let current = self.state_memory.read_cell(n, address);
-				let new_value = nudge_cell_value(current, target_val, self.memory_mode);
+				let new_value = CellMode::of(self.memory_mode).nudge_toward_value(current, target_val);
 				if new_value != current
 				{
 					self.state_memory.write_cell(n, address, new_value, true);
@@ -5620,7 +5663,7 @@ impl WnnController
 		// back into the address (08/06/2026).
 		for (n, &v) in self.prev_state.iter().enumerate()
 		{
-			input_bits[sensor_total + n] = cell_fire_bit(v, self.memory_mode);
+			input_bits[sensor_total + n] = CellMode::of(self.memory_mode).fire_bit(v);
 		}
 
 		// Cache the state-layer input AS-OF this step so train_state_step
@@ -5874,7 +5917,7 @@ impl WnnController
 				}
 				for (n, &v) in self.prev_state.iter().enumerate()
 				{
-					in_state[sensor_window + n] = cell_fire_bit(v, self.memory_mode);
+					in_state[sensor_window + n] = CellMode::of(self.memory_mode).fire_bit(v);
 				}
 
 				let mut new_state = vec![0u8; self.state_neurons];
@@ -6024,9 +6067,10 @@ impl WnnController
 			{
 				&[roll_err, pitch_err]
 			};
-			for &e in errs
+			let leaks = [self.integral_leak, self.integral_leak, self.yaw_integral_leak];
+			for (&e, &leak) in errs.iter().zip(leaks.iter())
 			{
-				self.integral_acc[iacc] = self.integral_leak * self.integral_acc[iacc] + e;
+				self.integral_acc[iacc] = leak * self.integral_acc[iacc] + e;
 				feats.push(self.integral_acc[iacc] * self.integral_scale);
 				iacc += 1;
 			}
@@ -6067,7 +6111,7 @@ impl WnnController
 		}
 		if self.obs_yaw_err_i
 		{
-			self.integral_acc[iacc] = self.integral_leak * self.integral_acc[iacc] + yaw_err;
+			self.integral_acc[iacc] = self.yaw_integral_leak * self.integral_acc[iacc] + yaw_err;
 			feats.push(self.integral_acc[iacc] * self.integral_scale);
 		}
 		// L1 d̂ observer (canonical order LAST, after the yaw channel). Mirrors
@@ -6404,7 +6448,7 @@ impl WnnController
 	fn raw_bank_decode(&self, m: usize) -> f32
 	{
 		let start = m * self.levels_per_motor;
-		if crate::cell_mode::is_stochastic(self.memory_mode)
+		if CellMode::of(self.memory_mode).is_stochastic()
 		{
 			self.decode_motor_cells_coin(m)
 		}
@@ -6535,7 +6579,7 @@ impl WnnController
 				DIST_CH_MEM_COIN,
 				level as u32,
 			);
-			if u < crate::cell_mode::cell_coin_prob(cell, self.memory_mode)
+			if u < CellMode::of(self.memory_mode).coin_prob(cell, crate::cell_mode::TERNARY_EMPTY_VALUE)
 			{
 				fired += 1.0;
 			}
@@ -6714,7 +6758,7 @@ impl WnnController
 					self.state_memory.write_cell(
 						c,
 						addr,
-						crate::cell_mode::plant_cell(on, self.memory_mode),
+						CellMode::of(self.memory_mode).plant_cell(on),
 						true,
 					);
 				}
@@ -6810,7 +6854,7 @@ impl WnnController
 							self.state_memory.write_cell(
 								c,
 								addr,
-								crate::cell_mode::plant_cell(sv == 1 || tv == 1, self.memory_mode),
+								CellMode::of(self.memory_mode).plant_cell(sv == 1 || tv == 1),
 								true,
 							);
 						}
@@ -6837,7 +6881,7 @@ impl WnnController
 								self.state_memory.write_cell(
 									c,
 									addr,
-									crate::cell_mode::plant_cell(on, self.memory_mode),
+									CellMode::of(self.memory_mode).plant_cell(on),
 									true,
 								);
 							}
@@ -6941,7 +6985,7 @@ impl WnnController
 				self.state_memory.write_cell(
 					k,
 					a as u64,
-					crate::cell_mode::plant_cell(on, self.memory_mode),
+					CellMode::of(self.memory_mode).plant_cell(on),
 					true,
 				);
 			}
@@ -7056,7 +7100,7 @@ impl WnnController
 				}
 				for (n, &v) in self.prev_state.iter().enumerate()
 				{
-					in_state[sensor_window + n] = cell_fire_bit(v, self.memory_mode);
+					in_state[sensor_window + n] = CellMode::of(self.memory_mode).fire_bit(v);
 				}
 				let mut new_state = vec![0u8; self.state_neurons];
 				for n in 0..self.state_neurons
@@ -7080,7 +7124,7 @@ impl WnnController
 				// targeted corrections then ADD to hover rather than replace it.
 				let state_active = new_state
 					.iter()
-					.any(|&v| cell_fire_bit(v, self.memory_mode));
+					.any(|&v| CellMode::of(self.memory_mode).fire_bit(v));
 				if selective && !state_active
 				{
 					self.prev_state = new_state;
@@ -7125,7 +7169,7 @@ impl WnnController
 					let ce = cs + obpn;
 					let addr = compute_address_sparse(&in_out, &self.output_connections[cs..ce], obpn);
 					let cur = self.output_memory.read_cell(n, addr);
-					let nv = nudge_cell(cur, target_true, self.memory_mode);
+					let nv = CellMode::of(self.memory_mode).nudge_step(cur, target_true);
 					if nv != cur
 					{
 						self.output_memory.write_cell(n, addr, nv, true);
@@ -7308,7 +7352,7 @@ pub fn strategy_5_qsr_weighted(
 	{
 		let start = m * levels_per_motor;
 		let max_bucket = (levels_per_motor - 1) as i64;
-		let bucket = if crate::cell_mode::is_quad(memory_mode)
+		let bucket = if CellMode::of(memory_mode).is_quad_family()
 		{
 			// QUAD path kept as the original literal computation (float-order
 			// identical to pre-ABI-12).
@@ -7359,7 +7403,7 @@ pub fn strategy_1_count_true(
 		let start = m * levels_per_motor;
 		let count: u32 = output_cells[start..start + levels_per_motor]
 			.iter()
-			.filter(|&&c| cell_fire_bit(c, memory_mode))
+			.filter(|&&c| CellMode::of(memory_mode).fire_bit(c))
 			.count() as u32;
 		buckets.push(count);
 	}
@@ -7443,7 +7487,7 @@ pub(crate) fn monotonicity_violations_core(
 				seen_one = false; // new antagonist bank = fresh thermometer
 				prev_was_zero = false;
 			}
-			let bit = cell_fire_bit(c, memory_mode);
+			let bit = CellMode::of(memory_mode).fire_bit(c);
 			if bit
 			{
 				if prev_was_zero && seen_one

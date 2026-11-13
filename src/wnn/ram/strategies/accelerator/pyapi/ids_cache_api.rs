@@ -863,6 +863,64 @@ impl IDSCacheWrapper
 		})
 	}
 
+	/// READ-ONLY per-neuron export (IDS-57 arm E; additive, worker ABI 29).
+	/// Trains ONE genome exactly as `evaluate_at_thresholds` / `export_trained`
+	/// do and returns, for `partition` ("train" | "val" | "test"):
+	///   (cells, scores, labels, neurons_per_cluster, cell_weights, packed)
+	/// - `cells`  uint8 [rows, N] — each logical neuron's effective cell (genome
+	///   order, cluster-major); `packed=True` → [rows, ceil(N/4)], 2 bits per
+	///   neuron LSB-first (neuron j: byte j//4, shift 2*(j%4)).
+	/// - `scores` float64 [rows, K] — the production scorer's score of EVERY
+	///   cluster (column 0 is what evaluate_at_thresholds scores).
+	/// - `labels` int64 [rows]; `cell_weights` = weight per cell code (None for
+	///   QSR/PLN). mean(cell_weights[cells]) per cluster == scores, bit-exact.
+	/// `rows` = indices into the partition (sample the train partition with it);
+	/// refused for QSR/PLN.
+	#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+	#[pyo3(signature = (bits_flat, neurons_flat, connections_flat, empty_value, neuron_sample_rate, rng_seed, partition, rows=None, packed=false))]
+	fn export_neuron_outputs<'py>(
+		&self,
+		py: Python<'py>,
+		bits_flat: Vec<usize>,
+		neurons_flat: Vec<usize>,
+		connections_flat: Vec<i64>,
+		empty_value: f32,
+		neuron_sample_rate: f32,
+		rng_seed: u64,
+		partition: &str,
+		rows: Option<Vec<usize>>,
+		packed: bool,
+	) -> PyResult<(
+		Bound<'py, numpy::PyArray2<u8>>,
+		Bound<'py, numpy::PyArray2<f64>>,
+		Bound<'py, numpy::PyArray1<i64>>,
+		Vec<usize>,
+		Option<[f32; 4]>,
+		bool,
+	)>
+	{
+		use numpy::{IntoPyArray, PyArrayMethods};
+		validate_flat_genomes_py(&bits_flat, &neurons_flat, &connections_flat, 1, self.inner.num_genome_clusters())?;
+		let out = py
+			.allow_threads(|| {
+				ids_cache::export_neuron_outputs_ids_cached(
+					&self.inner, &bits_flat, &neurons_flat, &connections_flat, empty_value, neuron_sample_rate,
+					rng_seed, partition, rows.as_deref(), packed,
+				)
+			})
+			.map_err(pyo3::exceptions::PyValueError::new_err)?;
+		let width = crate::adaptive::NeuronOutputs::row_width(out.total_neurons(), out.packed);
+		let clusters = out.neurons_per_cluster.len();
+		Ok((
+			out.cells.into_pyarray(py).reshape([out.num_rows, width])?,
+			out.scores.into_pyarray(py).reshape([out.num_rows, clusters])?,
+			out.labels.into_pyarray(py),
+			out.neurons_per_cluster,
+			out.cell_weights,
+			out.packed,
+		))
+	}
+
 	/// Multiclass (K-cluster) analogue of `evaluate_at_thresholds`.
 	///
 	/// Trains a single genome ONCE, scores eval + train (+ val when the cache

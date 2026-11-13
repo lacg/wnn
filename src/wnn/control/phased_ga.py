@@ -490,6 +490,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                obs_att_estimator: bool = False,
                obs_att_bias_pred: bool = False,
                integral_leak: float = 0.99, integral_scale: float = 1.0,
+               yaw_integral_leak: float | None = None,
                dt: float = 0.001,
                decouple_outputs: bool = False, bits_per_feature: int = 8,
                feature_balance_ratio: float = 0.0,
@@ -544,6 +545,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		obs_att_estimator=obs_att_estimator,
 		obs_att_bias_pred=obs_att_bias_pred,
 		integral_leak=integral_leak, integral_scale=integral_scale,
+		yaw_integral_leak=yaw_integral_leak,
 		dt=dt,
 		decouple_outputs=decouple_outputs,
 		feature_balance_ratio=feature_balance_ratio,
@@ -3218,6 +3220,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                help="CTRL-48: quantile (legacy) or centred = symmetric +-Q_|x|(p) thresholds, p on a "
 	                     "^1.5 curve (finer near 0), for the zero-referenced features only "
 	                     "(feature_layout.ZERO_REFERENCED); the rest keep quantile.")
+	ap.add_argument("--yaw-centred-ladder", action="store_true",
+	                help="ARM 2 (Luiz 12/11/2026, docs/ctrl_steady_gap_block6.md §3-4): the yaw-ERROR inputs "
+	                     "ONLY (yaw_err, yaw_err_i, and yaw_err_pa / yaw_i_pa when present) take a centred "
+	                     "ladder with 0 ALWAYS a bin edge: symmetric +-Q_|x|(p) pairs on the ^1.5 curve (finest "
+	                     "near 0), a second 0 threshold filling the even-bpf slot. Every other feature keeps "
+	                     "its ladder (--calib-ladder). Applies to every fit: grid, held-out/test refits and the "
+	                     "student refit. Off (default) = byte-identical. A new lineage: thresholds are part of "
+	                     "the address function.")
 	ap.add_argument("--drop-features", type=str, default="",
 	                help="CTRL-48: comma-separated feature-layout names no connection may land on (e.g. "
 	                     "acc_x,acc_y under the specific-force IMU). Connection space only: the frame, "
@@ -3279,6 +3289,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "point). Report-only; never feeds selection (gating would un-hold-out it).")
 	ap.add_argument("--integral-leak", type=float, default=0.99,
 	                help="H2: leaky-integral decay for the _i obs features (distinct from --delta-leak). Default 0.99.")
+	ap.add_argument("--yaw-integral-leak", type=float, default=None, metavar="LEAK",
+	                help="ARM 3 (Luiz 12/11/2026, docs/ctrl_steady_gap_block6.md §3-4): a SEPARATE leak for the "
+	                     "yaw integral inputs only (yaw_err_i, and yaw_i_pa with --obs-peraxis-yaw), e.g. 0.9995 "
+	                     "(~2 s memory at 1 kHz: a true integrator against a per-unit yaw-torque trim). "
+	                     "roll_i / pitch_i / tilt_i keep --integral-leak. In (0, 1]. Unset (default) = "
+	                     "--integral-leak for yaw too, byte-identical. CPU and GPU.")
 	ap.add_argument("--integral-scale", type=float, default=1.0,
 	                help="H2: pre-threshold scale for the integral obs features. Default 1.0.")
 	# Option A: train the recurrent STATE as a LEARNED integrator (direct thermo-
@@ -4086,6 +4102,22 @@ def resolve_ctrl46_args(args) -> None:
 			                 "already reads: it needs --obs-vel-xy (no new signal is allowed in).")
 
 
+def resolve_yaw_channel_args(args) -> None:
+	"""ARM 2/3 (12/11/2026): refuse an out-of-range --yaw-integral-leak, and a yaw flag on a
+	run with no yaw-error input to act on (it would silently no-op)."""
+	leak = getattr(args, "yaw_integral_leak", None)
+	if leak is not None and not 0.0 < float(leak) <= 1.0:
+		raise SystemExit(f"--yaw-integral-leak {leak}: must be in (0, 1]")
+	yaw_p = getattr(args, "obs_yaw_err", False) or (getattr(args, "obs_peraxis_p", False) and getattr(args, "obs_peraxis_yaw", False))
+	yaw_i = getattr(args, "obs_yaw_err_i", False) or (getattr(args, "obs_peraxis_i", False) and getattr(args, "obs_peraxis_yaw", False))
+	if leak is not None and not yaw_i:
+		raise SystemExit("--yaw-integral-leak needs a yaw integral input: --obs-yaw-err-i (or "
+		                 "--obs-peraxis-i with --obs-peraxis-yaw).")
+	if getattr(args, "yaw_centred_ladder", False) and not (yaw_p or yaw_i):
+		raise SystemExit("--yaw-centred-ladder needs a yaw-error input: --obs-yaw-err / --obs-yaw-err-i "
+		                 "(or --obs-peraxis-p/-i with --obs-peraxis-yaw).")
+
+
 def ctrl46_tokens(args) -> dict:
 	"""Provenance write= / label= / abp= values (defaults = ABI 45: last / true / off)."""
 	rule = getattr(args, "write_rule", "last")
@@ -4117,6 +4149,7 @@ def episode_config_from_args(args) -> EpisodeConfig:
 	from wnn.control.airframe import Airframe as _Airframe
 	resolve_abi32_plant(args)  # ABI 32 (idempotent): real-life defaults under translation
 	resolve_ctrl46_args(args)  # CTRL-46 (idempotent): write rule, label attitude, abp
+	resolve_yaw_channel_args(args)  # ARM 2/3 (12/11/2026)
 	dist = DisturbanceConfig.preset(args.disturbance, seed=911)
 	if getattr(args, "motor_fault", None):
 		if dist is None:

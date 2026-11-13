@@ -13,7 +13,7 @@
 //! (`sparse_memory::train_batch_sparse`); the GPU only ever reads the sorted
 //! export. That is the existing architecture, stated on the public surface.
 
-use crate::cell_mode::CellMode;
+use crate::cell_mode::{CellMode, UnwrittenLean};
 use crate::neuron_memory::{
 	cell_to_weight_rng, compute_address_packed, pack_packed_to_u64, qsr_key,
 };
@@ -214,7 +214,7 @@ impl Forward for CpuForward
 		let l = req.layout;
 		let r = req.read;
 		let mode = r.cell_mode.as_u8();
-		let miss = r.cell_mode.miss_cell(r.coverage_aware);
+		let miss = r.cell_mode.miss_cell(UnwrittenLean::False, r.coverage_aware);
 		let (words, wpe) = pack_packed_to_u64(req.input);
 		let num_examples = req.input.num_rows();
 		let mut out = vec![0.0f32; num_examples * l.num_clusters];
@@ -493,7 +493,7 @@ mod tests
 			f.memory.keys.clear();
 			f.memory.values.clear();
 			let want =
-				crate::neuron_memory::cell_to_weight(mode.default_cell() as i64, mode.as_u8(), 0.37);
+				crate::neuron_memory::cell_to_weight(mode.default_cell(UnwrittenLean::False) as i64, mode.as_u8(), 0.37);
 			let mut read = ReadParams::deterministic(mode);
 			read.empty_value = 0.37;
 			// A stochastic miss is a coin (PLN fair, QSR at the WEAK_FALSE weight
@@ -600,7 +600,7 @@ mod tests
 					// mode's hit weights can be 0 — BINARY with all-FALSE values
 					// is the only way to get there, which the seed does not do).
 					let baseline = crate::neuron_memory::cell_to_weight(
-						mode.miss_cell(coverage_aware) as i64,
+						mode.miss_cell(UnwrittenLean::False, coverage_aware) as i64,
 						mode.as_u8(),
 						0.37,
 					);

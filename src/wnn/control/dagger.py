@@ -403,6 +403,7 @@ def train_dagger(
 		obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
 		obs_att_estimator=getattr(spec, 'obs_att_estimator', False), ctbr=_ctbr_arg(spec),
 		obs_att_bias_pred=getattr(spec, 'obs_att_bias_pred', False),  # CTRL-46 (ABI 46)
+		yaw_integral_leak=getattr(spec, 'yaw_integral_leak', None),  # ARM 3 (ABI 50)
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 		dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt, integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,

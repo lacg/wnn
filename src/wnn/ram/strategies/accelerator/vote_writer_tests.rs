@@ -170,7 +170,7 @@ fn gpu_train(g: &Genome, data: &Data, mode: u8, rule: WriteRule, cw: Option<&[u3
 /// and a stored one compare equal, exactly as every scorer sees them).
 fn cells(e: &GenomeExport, mode: u8) -> Vec<i64>
 {
-	let miss = CellMode::from_u8(mode).unwrap().default_cell();
+	let miss = CellMode::from_u8(mode).unwrap().default_cell(ram_core::cell_mode::UnwrittenLean::False);
 	let mut out = Vec::new();
 	for (gi, group) in e.groups.iter().enumerate()
 	{
@@ -232,7 +232,7 @@ fn vote_hand_case_one_attack_three_normals()
 	let g = Genome::identity(4);
 	for mode in VOTE_MODES
 	{
-		let untrained = CellMode::from_u8(mode).unwrap().default_cell() as i64;
+		let untrained = CellMode::from_u8(mode).unwrap().default_cell(ram_core::cell_mode::UnwrittenLean::False) as i64;
 		let (lat, _) = cpu_train(&g, &data, mode, WriteRule::of_code(mode), None);
 		assert_eq!(lat[0].read(0, 5), TRUE, "mode {mode}: default writer, one attack pins TRUE");
 		let (mem, cexp) = cpu_train(&g, &data, mode, vote(mode), None);
@@ -416,7 +416,7 @@ fn vote_matches_sparse_trainer_reference()
 			for a in 0..(1u64 << bits)
 			{
 				assert_eq!(
-					ids.read_cell_at(0, local, a, cm.default_cell()),
+					ids.read_cell_at(0, local, a, cm.default_cell(ram_core::cell_mode::UnwrittenLean::False)),
 					reference.read_cell_or_default(neuron, a) as i64,
 					"mode {mode}: neuron {neuron} address {a}"
 				);

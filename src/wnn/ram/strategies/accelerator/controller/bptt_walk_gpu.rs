@@ -11,6 +11,7 @@
 //! Opt-in (WNN_CONTROLLER_GPU_BPTT=1, or `--gpu-bptt` in phased_ga): the IDS worker
 //! shares the Metal GPU.
 
+use ram_core::cell_mode::{CellMode, UnwrittenLean};
 use metal::*;
 use std::mem;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -363,7 +364,7 @@ fn walk_plans_gpu_inner(
 	let w = bptt_walker()?;
 	let (nm, levels, obpn, sn, sbpn, mode, _full) = c.bptt_dims();
 	let (frame_bits, sensor_window, sil, oil, num_out) = c.bptt_geometry();
-	let default_cell = crate::cell_mode::canonical_default_cell(mode);
+	let default_cell = CellMode::of(mode).default_cell(UnwrittenLean::True);
 	// Chunks of whole windows.
 	let mut chunks: Vec<(usize, usize, usize)> = Vec::new(); // (first plan, end plan, records)
 	let mut i = 0;

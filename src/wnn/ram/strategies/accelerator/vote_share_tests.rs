@@ -99,7 +99,7 @@ fn min_share_hand_case_single_cluster()
 	let g = Genome::identity(4);
 	for mode in VOTE_MODES
 	{
-		let untrained = CellMode::from_u8(mode).unwrap().default_cell() as i64;
+		let untrained = CellMode::from_u8(mode).unwrap().default_cell(ram_core::cell_mode::UnwrittenLean::False) as i64;
 		let (plain, _) = cpu_train(&g, &data, mode, vote(mode), None);
 		assert_eq!(plain[0].read(0, 5), FALSE, "mode {mode}: plain vote 1 vs 3");
 		let (mem, cexp) = cpu_train(&g, &data, mode, min_share(mode, 0.1), None);
@@ -141,7 +141,7 @@ fn min_share_class_weights_scale_before_the_share()
 	let heavy = rows_at(&heavy, 1);
 	for mode in VOTE_MODES
 	{
-		let untrained = CellMode::from_u8(mode).unwrap().default_cell() as i64;
+		let untrained = CellMode::from_u8(mode).unwrap().default_cell(ram_core::cell_mode::UnwrittenLean::False) as i64;
 		let cw = [3u32, 1];
 		let (mem, cexp) = cpu_train(&g, &data, mode, min_share(mode, 0.1), Some(&cw));
 		assert_eq!(mem[0].read(0, 5), untrained, "mode {mode}: +9 −9");
@@ -182,7 +182,7 @@ fn min_share_multi_cluster_hand_case()
 	let g = Genome { bits: vec![4; 3], npc: vec![1; 3], conns: (0..3).flat_map(|_| 0..4i64).collect() };
 	for mode in VOTE_MODES
 	{
-		let untrained = CellMode::from_u8(mode).unwrap().default_cell() as i64;
+		let untrained = CellMode::from_u8(mode).unwrap().default_cell(ram_core::cell_mode::UnwrittenLean::False) as i64;
 		let (mem, cexp) = cpu_train(&g, &data, mode, min_share(mode, 0.1), None);
 		let s = cexp.groups[0].neurons;
 		let at = |a: usize| [mem[0].read(0, a), mem[0].read(s, a), mem[0].read(2 * s, a)];
@@ -238,7 +238,7 @@ fn min_share_matches_reference_tally()
 			let reference = reference_tallies(&g, &data, k, n, bits, s, &cw);
 			for mode in VOTE_MODES
 			{
-				let untrained = CellMode::from_u8(mode).unwrap().default_cell() as i64;
+				let untrained = CellMode::from_u8(mode).unwrap().default_cell(ram_core::cell_mode::UnwrittenLean::False) as i64;
 				let (_, export) = cpu_train(&g, &data, mode, min_share(mode, theta), Some(&cw));
 				let stride = export.groups[0].neurons;
 				for (neuron, tallies) in reference.iter().enumerate()

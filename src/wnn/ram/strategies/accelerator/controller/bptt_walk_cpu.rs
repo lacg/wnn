@@ -10,6 +10,7 @@
 //!     memory as of the record; they meet only in the vote/aggregate, whose integer
 //!     sums do not depend on evaluation order).
 
+use ram_core::cell_mode::{CellMode, UnwrittenLean};
 use super::*;
 use crate::bptt_plan::{BpttL4, BpttWindowPlan, NO_STATE_OVERRIDE};
 use crate::controller_training::solve_qsr_reachable_view;
@@ -266,7 +267,7 @@ impl WnnController
 	{
 		let sn = self.state_neurons;
 		let npa = sn / 3;
-		let (t_cell, f_cell) = (true_cell(self.memory_mode), false_cell(self.memory_mode));
+		let (t_cell, f_cell) = (CellMode::of(self.memory_mode).true_cell(), CellMode::of(self.memory_mode).false_cell());
 		let mut out = vec![NO_STATE_OVERRIDE; plan.n_rec * sn];
 		for d in 0..plan.n_rec
 		{
@@ -298,7 +299,7 @@ impl WnnController
 			in_state[..sensor_window].copy_from_slice(&plan.sensor[d * sensor_window..(d + 1) * sensor_window]);
 			for (n, &v) in self.prev_state.iter().enumerate()
 			{
-				in_state[sensor_window + n] = cell_fire_bit(v, self.memory_mode);
+				in_state[sensor_window + n] = CellMode::of(self.memory_mode).fire_bit(v);
 			}
 			let mut new_state = vec![0u8; self.state_neurons];
 			for n in 0..self.state_neurons
@@ -372,7 +373,7 @@ impl WnnController
 		let levels = self.levels_per_motor;
 		let obpn = self.output_bits_per_neuron;
 		let mode = self.memory_mode;
-		let default_cell = crate::cell_mode::canonical_default_cell(mode);
+		let default_cell = CellMode::of(mode).default_cell(UnwrittenLean::True);
 		// Views exist only where a solve runs (sn>0); sn=0 is the direct-write fast path.
 		let mut views: Option<(SolverView, SolverView)> = if state_bits_in > 0
 		{
@@ -476,8 +477,8 @@ impl WnnController
 			};
 
 			// (c) Commit STATE layer toward the desired state at the recorded address.
-			let t_cell = true_cell(mode);
-			let f_cell = false_cell(mode);
+			let t_cell = CellMode::of(mode).true_cell();
+			let f_cell = CellMode::of(mode).false_cell();
 			for n in 0..self.state_neurons
 			{
 				let ov = plan.state_target.as_ref().map(|v| v[d * self.state_neurons + n]).unwrap_or(NO_STATE_OVERRIDE);
@@ -509,11 +510,11 @@ impl WnnController
 				let cur = self.state_memory.read_cell(n, addr);
 				if protect_learned
 					&& cur != ram_core::neuron_memory::EMPTY_U8
-					&& cell_fire_bit(cur, mode) != cell_fire_bit(target_val, mode)
+					&& CellMode::of(mode).fire_bit(cur) != CellMode::of(mode).fire_bit(target_val)
 				{
 					continue;
 				}
-				let nv = nudge_cell_value(cur, target_val, mode);
+				let nv = CellMode::of(mode).nudge_toward_value(cur, target_val);
 				if nv != cur
 				{
 					self.state_memory.write_cell(n, addr, nv, true);
@@ -539,11 +540,11 @@ impl WnnController
 				let cur = self.output_memory.read_cell(n, addr);
 				if protect_learned
 					&& cur != ram_core::neuron_memory::EMPTY_U8
-					&& cell_fire_bit(cur, mode) != target_true
+					&& CellMode::of(mode).fire_bit(cur) != target_true
 				{
 					continue;
 				}
-				let nv = nudge_cell(cur, target_true, mode);
+				let nv = CellMode::of(mode).nudge_step(cur, target_true);
 				if nv != cur
 				{
 					self.output_memory.write_cell(n, addr, nv, true);

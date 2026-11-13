@@ -9,13 +9,14 @@
 use metal::*;
 use std::mem;
 
-/// Compute default cell value for a memory mode
+/// Compute default cell value for a memory mode — the IDS lean
+/// (`UnwrittenLean::False`: a 4-state miss reads WEAK_FALSE).
 pub fn default_cell_for_mode(memory_mode: u8) -> u32
 {
 	// The table lives on `CellMode` (cell_mode.rs) — one source for macOS, the
 	// non-macOS stub and the public API. Unknown codes fall to WEAK_FALSE as
 	// before (the kernels treat any unknown mode as QUAD).
-	crate::cell_mode::CellMode::from_u8(memory_mode).map_or(1, |m| m.default_cell() as u32)
+	crate::cell_mode::CellMode::from_u8(memory_mode).map_or(1, |m| m.default_cell(crate::cell_mode::UnwrittenLean::False) as u32)
 }
 
 /// Coverage-aware miss default (28/08/2026, docs/COVERAGE_AWARE_SCORER_SPEC.md).

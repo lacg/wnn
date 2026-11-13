@@ -290,6 +290,9 @@ struct Params
 	// by the horizontal velocity obs and this thread's Mahony quaternion with the
 	// estimator's own gains (est_kp / est_ki). 0 ⇒ the ABI-45 rollout.
 	uint abp_on;
+	// ARM 3 (12/11/2026), appended in lockstep with RolloutParams: the leak of the
+	// yaw integrals (yaw_err_i, yaw_i_pa). == integral_leak unless --yaw-integral-leak.
+	float yaw_integral_leak;
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -802,30 +805,20 @@ struct FwdParams
 	// initializers that predate it zero-fill (att_est_on = 0 ⇒ legacy).
 	uint att_est_on;
 	float att_up_x, att_up_y, att_up_z;
+	// ARM 3 (12/11/2026): the yaw-integral leak — APPENDED LAST and assigned after the
+	// positional initializer (F.yaw_integral_leak = P.yaw_integral_leak) at every site.
+	float yaw_integral_leak;
 };
 
-// TERNARY untrained-cell decode weight — the controller's fixed PLN convention
-// (cell_mode::TERNARY_EMPTY_VALUE twin).
-constant float CTRL_TERNARY_EMPTY = 0.5f;
-
-// 1-bit recurrent fire-bit per state cell — cell_mode::cell_fire_bit twin.
-// QUAD: the QSR MSB (fired side). TERNARY/BINARY: cell == TRUE(1); the
-// unwritten sparse read (EMPTY=2) does NOT fire.
+// Cell semantics (fire bit, nudge step, nudge distance, the TERNARY empty value
+// WNN_PLN_U_EXPECTED) come from common.metal wnn_* — twins of ram_core
+// cell_write.rs. CTRL_TERNARY_EMPTY / ctrl_fire_bit / ctrl_nudge_distance /
+// slot_set_direct were removed 12/11/2026 (write-rule consolidation).
 // Output decode TOPOLOGY (03/08/2026) — orthogonal to memory_mode. cell_mode.rs
 // twins: DECODE_CUMULATIVE / DECODE_ANTAGONIST. Keyed separately from the mode so
 // QUAD can take the antagonist path; BINARY still gets it by default.
 #define WNN_DECODE_CUMULATIVE 0u
 #define WNN_DECODE_ANTAGONIST 1u
-
-inline bool ctrl_fire_bit(uint cell, uint memory_mode)
-{
-	// Twin of cell_mode::cell_fire_bit: every NON-quad mode (TERNARY, BINARY, PLN)
-	// fires on TRUE(1) only. PLN was missing until ABI 35 and took the QUAD MSB rule,
-	// so an EMPTY(2) PLN state cell read as fired on the GPU and not on the CPU.
-	if (memory_mode == WNN_MODE_TERNARY || memory_mode == WNN_MODE_BINARY || memory_mode == WNN_MODE_PLN)
-		return cell == 1u;
-	return ((cell >> 1) & 1u) != 0u;
-}
 
 // =============================================================================
 // derive_features — section (1) of the per-step forward: append the enabled H2
@@ -896,7 +889,8 @@ inline void derive_features(
 			float errs[3] = {roll_err, pitch_err, yaw_err};
 			for (uint k = 0u; k < npa; k++)
 			{
-				integ[ii] = P.integral_leak * integ[ii] + errs[k];
+				float leak = (k == 2u) ? P.yaw_integral_leak : P.integral_leak; // ARM 3: yaw_i_pa
+				integ[ii] = leak * integ[ii] + errs[k];
 				sensors[fi++] = integ[ii] * P.integral_scale;
 				ii++;
 			}
@@ -914,7 +908,7 @@ inline void derive_features(
 		}
 		if (P.obs_yaw_err_i != 0u)
 		{
-			integ[ii] = P.integral_leak * integ[ii] + yaw_err;
+			integ[ii] = P.yaw_integral_leak * integ[ii] + yaw_err; // ARM 3
 			sensors[fi++] = integ[ii] * P.integral_scale;
 			ii++;
 		}
@@ -1182,7 +1176,7 @@ inline void forward_state(
 				// untrained EMPTY cells); surfaced by the train parity test 2026-06-20.
 				uint nn = cu - P.sensor_total;
 				uchar v = prev_state[nn];
-				bit = ctrl_fire_bit((uint)v, P.memory_mode);
+				bit = wnn_fire_bit((uint)v, P.memory_mode);
 			}
 			wnn_addr_push(acc, i, bit);
 		}
@@ -1237,7 +1231,7 @@ inline ulong out_neuron_addr(
 			// 1-bit fire-bit (see forward_state): direct new_state-neuron index.
 			uint nn = cu - P.frame_bits;
 			uchar v = new_state[nn];
-			bit = ctrl_fire_bit((uint)v, P.memory_mode);
+			bit = wnn_fire_bit((uint)v, P.memory_mode);
 		}
 		wnn_addr_push(acc, i, bit);
 	}
@@ -1528,6 +1522,7 @@ kernel void controller_rollout(
 								 P.out_full_window, P.frame_stride,
 								 P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
 								 P.memory_mode, P.output_decode};
+	F.yaw_integral_leak = P.yaw_integral_leak; // ARM 3
 	// CTRL-38: the cascade d̂ observer's per-episode state (cascade_dhat.rs reset).
 	CasObs cas_o;
 	for (uint m = 0u; m < 4u; m++)
@@ -1784,7 +1779,7 @@ kernel void controller_rollout(
 					}
 					// Thermometer "on" = mode fire-bit; a 1→0→1 gap is a monotonicity
 					// violation (mirrors controller::monotonicity_violations_core).
-					if (ctrl_fire_bit(qv, P.memory_mode))
+					if (wnn_fire_bit(qv, P.memory_mode))
 					{
 						if (prev_zero && seen_one)
 							mono_step += 1.0f;
@@ -1795,7 +1790,7 @@ kernel void controller_rollout(
 					{
 						prev_zero = true;
 					}
-					float w = wnn_cell_weight(qv, P.memory_mode, CTRL_TERNARY_EMPTY);
+					float w = wnn_cell_weight(qv, P.memory_mode, WNN_PLN_U_EXPECTED);
 					// QSR/PLN per-timestep stochastic decode (Part 5): the deterministic
 					// weight IS the fire probability, so draw a fresh coin per physical
 					// step t — u = dist_uniform(coin_seed, t, motor m, DIST_CH_MEM_COIN,
@@ -2423,6 +2418,8 @@ struct TrainParams
 	// CTRL-46 (ABI 46), appended in lockstep: the replay writes the RECORDED Mahony-bias
 	// prediction (abp_rec) into the sensors' last two slots (the CPU replay_obs twin).
 	uint abp_on;
+	// ARM 3 (12/11/2026), appended in lockstep: the yaw-integral leak (Params twin).
+	float yaw_integral_leak;
 };
 
 // Mirror of WnnController::output_decode_target (controller.rs): map a per-motor
@@ -2468,15 +2465,6 @@ inline bool ctrl_output_target_bit(float d, uint level_idx, uint levels, uint ou
 		return net < 0.0f && (uint)(-net * (float)levels) > (level_idx - half_l);
 	}
 	return (uint)(d * (float)levels) > level_idx;
-}
-
-// TERNARY/BINARY training write — cell_mode::nudge_cell twin (last-write-wins
-// direct set; the controller's DAGGER must be able to CORRECT earlier labels,
-// unlike the IDS worker's TRUE-wins/one-shot batch semantics). Single writer
-// per genome ⇒ deterministic, matches the CPU sequence exactly.
-inline void slot_set_direct(device atomic_uint *slot_values, uint slot, bool target_true)
-{
-	atomic_store_explicit(&slot_values[slot], target_true ? 1u : 0u, memory_order_relaxed);
 }
 
 // CTRL-40: before a replay step's derive_features — the recorded applied-actuator
@@ -2574,6 +2562,7 @@ kernel void controller_train(
 								 P.out_full_window, P.frame_stride,
 								 P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
 								 P.memory_mode, P.output_decode};
+	F.yaw_integral_leak = P.yaw_integral_leak; // ARM 3
 
 	uint E = ep_count[g];
 	for (uint ej = 0u; ej < E; ej++)
@@ -2671,7 +2660,7 @@ kernel void controller_train(
 			// (preserve the hover-hold default), but still advance prev_state.
 			bool state_active = false;
 			for (uint n = 0u; n < P.n_state; n++)
-				if (ctrl_fire_bit((uint)new_state[n], P.memory_mode))
+				if (wnn_fire_bit((uint)new_state[n], P.memory_mode))
 				{
 					state_active = true;
 					break;
@@ -2695,12 +2684,10 @@ kernel void controller_train(
 				uint slot = find_or_claim_slot(out_markers, out_keys, slot_off[gn], slot_cap[gn], addr);
 				if (slot != 0xFFFFFFFFu)
 				{
-					// QUAD: clamped ±1 lattice nudge. TERNARY/BINARY: direct set
-					// (cell_mode::nudge_cell twin — see slot_set_direct).
-					if (P.memory_mode == WNN_MODE_TERNARY || P.memory_mode == WNN_MODE_BINARY)
-						slot_set_direct(out_values, slot, target_true);
-					else
-						slot_nudge(out_values, slot, target_true);
+					// The mode's sequential writer (marker_slots slot_nudge_cell):
+					// 4-state nudge, else LastWrite. Was a literal TERNARY||BINARY
+					// check that sent PLN through the QUAD nudge (CPU sets PLN).
+					slot_nudge_cell(out_values, slot, target_true, P.memory_mode);
 					writes += 1u;
 				}
 			}
@@ -2792,6 +2779,7 @@ kernel void controller_record(
 								 P.out_full_window, P.frame_stride,
 								 P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
 								 P.memory_mode, P.output_decode};
+	F.yaw_integral_leak = P.yaw_integral_leak; // ARM 3
 
 	uchar prev_state[MAX_STATE_NEURONS];
 	uchar new_state[MAX_STATE_NEURONS];
@@ -2900,7 +2888,7 @@ kernel void controller_record(
 				set_packed_bit(rec_out_ins, ob, within);
 		}
 		for (uint n = 0u; n < P.n_state; n++)
-			if (ctrl_fire_bit((uint)new_state[n], P.memory_mode))
+			if (wnn_fire_bit((uint)new_state[n], P.memory_mode))
 				set_packed_bit(rec_out_ins, ob, P.frame_bits + n);
 
 		// in_state = [ K-window ring (thresholded, zero-padded front) | prev_state MSBs ]
@@ -2918,7 +2906,7 @@ kernel void controller_record(
 			}
 		}
 		for (uint n = 0u; n < P.n_state; n++)
-			if (ctrl_fire_bit((uint)prev_state[n], P.memory_mode))
+			if (wnn_fire_bit((uint)prev_state[n], P.memory_mode))
 				set_packed_bit(rec_state_ins, sb, P.sensor_total + n);
 
 		rec_pwm[rec * 4 + 0] = pid_pwms[s4 + 0];
@@ -3468,9 +3456,8 @@ kernel void controller_state_commit(
 	uint gn = gid; // (genome, neuron) region index
 	uint off = st_off[gn];
 	uint cap = st_cap[gn];
-	// QUAD family nudges on the ±1 lattice; TERNARY/BINARY set directly. Twin of
-	// cell_mode::nudge_cell — QSR shares QUAD's lattice (is_quad), PLN shares TERNARY's.
-	bool quad = (P.memory_mode == 1u || P.memory_mode == 2u || P.memory_mode == 4u);
+	// The mode's sequential writer (marker_slots slot_nudge_cell): 4-state nudge,
+	// else LastWrite — QSR shares QUAD's lattice, PLN shares TERNARY's writer.
 	uint writes = 0u;
 
 	// Scan the whole commit list and apply only this region's commits, IN LIST ORDER.
@@ -3484,10 +3471,7 @@ kernel void controller_state_commit(
 		if (slot == 0xFFFFFFFFu)
 			continue; // region full — cap is sized to prevent this
 		bool target_true = cm_target[i] != 0u;
-		if (quad)
-			slot_nudge(st_values, slot, target_true);
-		else
-			slot_set_direct(st_values, slot, target_true);
+		slot_nudge_cell(st_values, slot, target_true, P.memory_mode);
 		writes += 1u;
 	}
 	// Per-genome diagnostic; each thread owns a distinct neuron so this accumulates.
@@ -3496,7 +3480,7 @@ kernel void controller_state_commit(
 }
 
 // ---------------------------------------------------------------------------
-// SOLVER COST PRIMITIVE — cell_mode::nudge_distance twin.
+// SOLVER COST PRIMITIVE — common.metal wnn_nudge_distance (CellMode::nudge_distance).
 //
 // "How far is this cell from satisfying a boolean target", the innermost term of
 // the beam solver's candidate cost (controller_training.rs: base = QSR_DISTANCE_COST
@@ -3505,27 +3489,12 @@ kernel void controller_state_commit(
 // picks different addresses than the CPU — with no crash and no obviously wrong
 // output, only worse training.
 //
-// Lives with the controller rather than core/shaders/common.metal because its CPU
-// home is controller/cell_mode.rs, not ram_core. QUAD family (QUAD_BINARY=1,
-// QUAD_WEIGHTED=2, QSR=4) measures lattice steps on the 0..3 scale; TERNARY/BINARY/PLN
-// score 0 already-target, 1 untrained (EMPTY), 2 explicit opposite — a flip is dearer
-// than filling a blank because it erases learned evidence.
-inline uint ctrl_nudge_distance(uint cell, bool target_true, uint mode)
-{
-	bool quad = (mode == 1u || mode == 2u || mode == 4u);
-	if (quad)
-	{
-		uint c = cell & 0x3u;
-		return target_true ? (3u - c) : c;
-	}
-	uint want = target_true ? WNN_CELL_TRUE : WNN_CELL_FALSE;
-	if (cell == want)
-		return 0u;
-	if (cell == WNN_CELL_EMPTY)
-		return 1u;
-	return 2u;
-}
-
+// Moved to core/shaders/common.metal on 12/11/2026 (its CPU home is now ram_core
+// cell_write.rs). QUAD family (QUAD_BINARY=1, QUAD_WEIGHTED=2, QSR=4) measures
+// lattice steps on the 0..3 scale; TERNARY/BINARY/PLN score 0 already-target,
+// 1 untrained (EMPTY), 2 explicit opposite — a flip is dearer than filling a blank
+// because it erases learned evidence.
+//
 // Exhaustive parity probe: thread = one (cell, target, mode) combination. The space
 // is 4x2x6 = 48, so this is proven EXHAUSTIVELY rather than sampled.
 kernel void controller_nudge_distance_probe(
@@ -3538,7 +3507,7 @@ kernel void controller_nudge_distance_probe(
 {
 	if (i >= n)
 		return;
-	out[i] = ctrl_nudge_distance((uint)cells[i], targets[i] != 0u, (uint)modes[i]);
+	out[i] = wnn_nudge_distance((uint)cells[i], targets[i] != 0u, (uint)modes[i]);
 }
 
 // Projected address — controller_training::projected_address twin.
@@ -3580,7 +3549,7 @@ kernel void controller_projected_address_probe(
 // where the differing saturations DO participate — that is not covered by this.)
 inline uint ctrl_candidate_rank(uint cell, bool target_true, uint mode, ulong addr, ulong proj)
 {
-	uint d = ctrl_nudge_distance(cell, target_true, mode);
+	uint d = wnn_nudge_distance(cell, target_true, mode);
 	uint h = (uint)popcount(addr ^ proj);
 	return 7u * d + h;
 }
@@ -3603,4 +3572,5 @@ kernel void controller_candidate_rank_probe(
 
 // The per-record phase-1 / beam kernels (controller_phase1_topk, controller_beam_search)
 // were RETIRED in ABI 35: the whole sn>0 walk now runs in controller_bptt.metal, which
-// reuses ctrl_nudge_distance / ctrl_candidate_rank / ctrl_fire_bit from this file.
+// reuses ctrl_candidate_rank from this file and wnn_nudge_distance / wnn_fire_bit
+// from common.metal.

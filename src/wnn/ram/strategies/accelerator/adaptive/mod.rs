@@ -59,6 +59,8 @@ mod unit_table;
 pub use unit_table::{cell_weight_quarters, UnitTable};
 mod eval_single;
 pub use eval_single::*;
+mod neuron_outputs;
+pub use neuron_outputs::NeuronOutputs;
 mod calib_sample;
 pub use calib_sample::CalibSet;
 mod eval_hybrid;

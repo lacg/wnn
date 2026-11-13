@@ -5,6 +5,7 @@
 //! item-B rewrite (window-lived SolverView, select-nth top-k, concurrent solves) to
 //! bit-identity on every shape the GPU walk is later compared on.
 
+use ram_core::cell_mode::{CellMode, UnwrittenLean};
 use crate::controller::{ReplayObs, WnnController};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
@@ -338,7 +339,7 @@ mod tests
 	fn with_overrides(plans: &mut [crate::bptt_plan::BpttWindowPlan], sn: usize, mode: u8, seed: u64)
 	{
 		let mut rng = SmallRng::seed_from_u64(seed);
-		let (t, f) = (crate::cell_mode::true_cell(mode), crate::cell_mode::false_cell(mode));
+		let (t, f) = (CellMode::of(mode).true_cell(), CellMode::of(mode).false_cell());
 		for p in plans.iter_mut()
 		{
 			p.state_target = Some(
@@ -478,7 +479,7 @@ mod tests
 	{
 		let shape = WalkShape { mode: 3, sn: 4, sbpn: 12, obpn: 12, levels: 8, bpf: 4, window_k: 2, prod: false, seed: 0xE9, tail: 0.3 };
 		let base = walk_controller(&shape);
-		let default = crate::cell_mode::canonical_default_cell(shape.mode);
+		let default = CellMode::of(shape.mode).default_cell(UnwrittenLean::True);
 		let other = if default == 0 { 1 } else { 0 };
 		let cells: Vec<(usize, u64)> = (0..3000u64).map(|i| ((i % 32) as usize, i.wrapping_mul(0x9E37_79B9) & 0xFFF)).collect();
 		let (a, b) = (base.clone(), base.clone());

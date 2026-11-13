@@ -21,10 +21,15 @@
 //! untrained/miss default in mode X" — `metal_sparse::default_cell_for_mode`
 //! (both platforms) delegates here. Before this file the non-macOS stub had its
 //! own two-arm copy that returned WEAK_FALSE for BINARY and PLN (wrong for both).
+//!
+//! The per-cell WRITE primitives (lattice step, fire bit, plants, nudge
+//! distance, coin probability) live in `cell_write.rs` as a second `impl
+//! CellMode` block — shared by the IDS worker and the drone controller.
 
 use crate::neuron_memory::{
 	BINARY, EMPTY_U8, FALSE_U8, PLN, QSR, QUAD_BINARY, QUAD_WEAK_FALSE, QUAD_WEIGHTED, TERNARY,
 };
+pub use crate::unwritten_lean::UnwrittenLean;
 use crate::vote_share::VoteShare;
 
 /// How one training visit writes a cell. THE dispatch every IDS trainer keys
@@ -114,8 +119,9 @@ impl CounterBin
 	{
 		match rule
 		{
+			// Vote never reaches a 4-state mode, so the lean is irrelevant here.
 			WriteRule::Vote(_) => Some(CounterBin::Vote {
-				tie: CellMode::from_u8(memory_mode).map_or(EMPTY_U8, |m| m.default_cell()),
+				tie: CellMode::from_u8(memory_mode).map_or(EMPTY_U8, |m| m.default_cell(UnwrittenLean::False)),
 			}),
 			WriteRule::Nudge if crate::neuron_memory::order_independent_training_active(memory_mode) =>
 			{
@@ -356,15 +362,18 @@ impl CellMode
 
 	/// The cell an UNWRITTEN address reads as — the initial state of every cell
 	/// and the sparse-miss default. TERNARY/PLN: EMPTY(2); BINARY: FALSE(0)
-	/// ("never seen → no vote"); QUAD_*/QSR: WEAK_FALSE(1).
+	/// ("never seen → no vote"); QUAD_*/QSR: the `lean` side of the lattice —
+	/// `False` WEAK_FALSE(1) (the IDS worker), `True` WEAK_TRUE(2) = EMPTY_U8
+	/// (the drone controller's hover-neutral bank). See `UnwrittenLean`.
 	#[inline]
-	pub fn default_cell(self) -> u8
+	pub fn default_cell(self, lean: UnwrittenLean) -> u8
 	{
-		match self
+		match (self, lean)
 		{
-			CellMode::Ternary | CellMode::Pln => EMPTY_U8,
-			CellMode::Binary => FALSE_U8,
-			CellMode::QuadBinary | CellMode::QuadWeighted | CellMode::Qsr => QUAD_WEAK_FALSE as u8,
+			(CellMode::Ternary | CellMode::Pln, _) => EMPTY_U8,
+			(CellMode::Binary, _) => FALSE_U8,
+			(_, UnwrittenLean::False) => QUAD_WEAK_FALSE as u8,
+			(_, UnwrittenLean::True) => EMPTY_U8,
 		}
 	}
 
@@ -373,7 +382,7 @@ impl CellMode
 	/// weighs 0.0 in EVERY mode, so a class is penalised in proportion to how
 	/// much of its memory is empty. `coverage_aware == false` is bit-exact OFF.
 	#[inline]
-	pub fn miss_cell(self, coverage_aware: bool) -> u8
+	pub fn miss_cell(self, lean: UnwrittenLean, coverage_aware: bool) -> u8
 	{
 		if coverage_aware
 		{
@@ -381,7 +390,7 @@ impl CellMode
 		}
 		else
 		{
-			self.default_cell()
+			self.default_cell(lean)
 		}
 	}
 }
@@ -426,7 +435,7 @@ mod tests
 		{
 			assert_eq!(
 				empty_word_for_mode(mode.as_u8()),
-				build_empty_word(mode.default_cell() as i64),
+				build_empty_word(mode.default_cell(UnwrittenLean::False) as i64),
 				"{mode}: sparse miss default and dense empty word disagree"
 			);
 		}
@@ -442,12 +451,12 @@ mod tests
 		{
 			assert_eq!(
 				default_cell_for_mode(mode.as_u8()),
-				mode.default_cell() as u32,
+				mode.default_cell(UnwrittenLean::False) as u32,
 				"{mode}"
 			);
 			assert_eq!(
 				default_cell_for_coverage(mode.as_u8(), false),
-				mode.miss_cell(false) as u32
+				mode.miss_cell(UnwrittenLean::False, false) as u32
 			);
 			assert_eq!(default_cell_for_coverage(mode.as_u8(), true), 0);
 		}
@@ -458,7 +467,7 @@ mod tests
 	#[test]
 	fn default_cell_weights_per_mode()
 	{
-		let w = |m: CellMode| cell_to_weight(m.default_cell() as i64, m.as_u8(), 0.37);
+		let w = |m: CellMode| cell_to_weight(m.default_cell(UnwrittenLean::False) as i64, m.as_u8(), 0.37);
 		assert_eq!(w(CellMode::Ternary), 0.37);
 		assert_eq!(w(CellMode::Pln), 0.5);
 		assert_eq!(w(CellMode::QuadWeighted), 0.25);
@@ -488,7 +497,7 @@ mod tests
 		// the OI slot default OI_INITIAL=0 replaces — see marker_train.rs).
 		for mode in CellMode::ALL.into_iter().filter(|m| m.uses_oi_counters())
 		{
-			assert_eq!(mode.default_cell(), QUAD_WEAK_FALSE as u8, "{mode}");
+			assert_eq!(mode.default_cell(UnwrittenLean::False), QUAD_WEAK_FALSE as u8, "{mode}");
 		}
 	}
 
@@ -598,12 +607,12 @@ mod tests
 		for mode in [CellMode::Binary, CellMode::Ternary, CellMode::Pln]
 		{
 			let bin = CounterBin::for_training(WriteRule::Vote(VoteShare::MAJORITY), mode.as_u8()).expect("vote always counts");
-			assert_eq!(bin, CounterBin::Vote { tie: mode.default_cell() });
+			assert_eq!(bin, CounterBin::Vote { tie: mode.default_cell(UnwrittenLean::False) });
 			let share = VoteShare::from_theta(0.1).unwrap();
 			assert_eq!(CounterBin::for_training(WriteRule::Vote(share), mode.as_u8()), Some(bin), "{mode}: θ never changes the binning");
 			assert_eq!(bin.cell(tally(&[1, -1, -1, -1])), FALSE_U8, "{mode}: 1 vs 3");
 			assert_eq!(bin.cell(tally(&[3, -1, -1])), TRUE_U8, "{mode}: weighted 3 vs 2");
-			assert_eq!(bin.cell(tally(&[1, -1])), mode.default_cell(), "{mode}: tie");
+			assert_eq!(bin.cell(tally(&[1, -1])), mode.default_cell(UnwrittenLean::False), "{mode}: tie");
 			assert_eq!(CounterBin::for_training(mode.write_rule(), mode.as_u8()), None, "{mode}: direct writer");
 		}
 		assert_eq!(CounterBin::Vote { tie: EMPTY_U8 }.cell(tally(&[1, -1])), EMPTY_U8);

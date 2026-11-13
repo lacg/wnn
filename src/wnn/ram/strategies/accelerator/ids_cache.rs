@@ -1255,6 +1255,84 @@ pub fn export_trained_ids_cached(
 	crate::trained_layer::TrainedLayer::from_export(&export, logical, settings, eval_scores, val_scores)
 }
 
+/// READ-ONLY per-neuron export (IDS-57 arm E): train ONE genome exactly as
+/// `evaluate_at_thresholds_ids_cached` / `export_trained_ids_cached` do (full
+/// train set, the cache's memory mode / write rule / vote share / class
+/// weights, `train_genome_export`) and return, for one partition ("train",
+/// "val" or "test" = the cache's eval set), every logical neuron's effective
+/// cell per row plus the production scorer's per-row scores for ALL clusters.
+///
+/// `rows` (indices into the partition, any order, repeats allowed) exports a
+/// subset — how the large train partition is sampled. Refused for the
+/// stochastic modes (QSR / PLN key their coin on the row index, so a subset's
+/// scores would not be the full pass's). `packed` = 2 bits per neuron.
+#[allow(clippy::too_many_arguments)]
+pub fn export_neuron_outputs_ids_cached(
+	cache: &IDSCache,
+	bits_flat: &[usize],
+	neurons_flat: &[usize],
+	connections_flat: &[i64],
+	empty_value: f32,
+	neuron_sample_rate: f32,
+	rng_seed: u64,
+	partition: &str,
+	rows: Option<&[usize]>,
+	packed: bool,
+) -> Result<crate::adaptive::NeuronOutputs, String>
+{
+	let train = cache.full_train();
+	let subset = match partition
+	{
+		"train" => train,
+		"test" => cache.full_eval(),
+		"val" => cache.full_val().ok_or("neuron outputs: this cache holds no val partition (2-way split)")?,
+		other => return Err(format!("neuron outputs: unknown partition {other:?} (train | val | test)")),
+	};
+	let settings = cache.eval_settings(empty_value);
+	let selected = select_partition_rows(subset, rows, settings.memory_mode)?;
+	let (input_bits, labels) = match &selected
+	{
+		Some((bits, labels)) => (bits, labels.clone()),
+		None => (&subset.input_bits, subset.targets.clone()),
+	};
+	let export = crate::adaptive::train_genome_export(
+		bits_flat,
+		neurons_flat,
+		connections_flat,
+		cache.num_genome_clusters(),
+		&train.input_bits,
+		&train.targets,
+		&train.negatives,
+		train.num_examples,
+		cache.num_negatives(),
+		cache.total_features(),
+		settings,
+		neuron_sample_rate,
+		rng_seed,
+		cache.class_weights.as_deref(),
+	);
+	export.neuron_outputs(input_bits, labels, neurons_flat, cache.total_features(), settings, packed)
+}
+
+/// The `rows` subset of a partition as (input bits, labels); None = all rows.
+fn select_partition_rows(
+	subset: &IDSSubset,
+	rows: Option<&[usize]>,
+	memory_mode: u8,
+) -> Result<Option<(PackedBits, Vec<i64>)>, String>
+{
+	let Some(rows) = rows else { return Ok(None) };
+	if ram_core::cell_mode::CellMode::from_u8(memory_mode).is_some_and(|m| m.is_stochastic())
+	{
+		return Err("neuron outputs: a row subset is refused for QSR / PLN (the coin is keyed on the row index)".into());
+	}
+	if let Some(&bad) = rows.iter().find(|&&r| r >= subset.num_examples)
+	{
+		return Err(format!("neuron outputs: row {bad} out of range (partition has {} rows)", subset.num_examples));
+	}
+	Ok(Some((subset.input_bits.select_rows(rows), rows.iter().map(|&r| subset.targets[r]).collect())))
+}
+
 /// Multiclass (K-cluster) analogue of `evaluate_at_thresholds_ids_cached`.
 ///
 /// Trains ONCE, scores eval + train (+ val when the cache holds a Protocol-v2

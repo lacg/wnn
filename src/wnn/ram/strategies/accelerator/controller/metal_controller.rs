@@ -6,6 +6,7 @@
 //! genomes are shape-identical, so a single uniform kernel handles the whole
 //! population. See controller.rs for the CPU reference being mirrored.
 
+use ram_core::cell_mode::{CellMode, UnwrittenLean};
 use metal::*;
 use std::mem;
 
@@ -374,6 +375,9 @@ struct RolloutParams
 	// + 1 (CTRL-46, ABI 46), appended in lockstep with the shader twin: the Mahony-bias
 	// predictor block (att_bias_pred.rs), 2 features at the very tail. 0 ⇒ ABI 45.
 	abp_on: u32,
+	// + 1 (ARM 3, 12/11/2026), appended in lockstep with the shader twin: the yaw-
+	// integral leak (== integral_leak unless --yaw-integral-leak).
+	yaw_integral_leak: f32,
 }
 
 /// CTRL-38: the cascade feature blocks as the score kernel needs them, read off the
@@ -1203,6 +1207,7 @@ impl ControllerRolloutEvaluator
 				cas_resid_inv_a: ctbr.and_then(|c| c.cas.resid).map_or([0.0; 3], |r| r.inv_a),
 				cas_resid_w: ctbr.and_then(|c| c.cas.resid).map_or([0.0; 3], |r| r.w),
 				abp_on: abp_on as u32,
+				yaw_integral_leak: controllers[0].yaw_integral_leak_value(),
 			};
 
 			let b_q0 = self.buf(q0_chunk);
@@ -2072,6 +2077,8 @@ struct TrainParams
 	// CTRL-46 (ABI 46), appended at END of BOTH structs in lockstep: the replay writes
 	// the recorded bias prediction (abp_rec) into the sensors' last two slots.
 	abp_on: u32,
+	// ARM 3 (12/11/2026), appended at END of BOTH structs in lockstep: the yaw-integral leak.
+	yaw_integral_leak: f32,
 }
 
 /// Per-genome recorded trajectory batch, flat across genomes (matches the kernel's
@@ -2631,6 +2638,7 @@ impl ControllerTrainer
 			cas_resid_inv_a: CascadeGpu::from_controller(controllers[0]).resid.map_or([0.0; 3], |r| r.inv_a),
 			cas_resid_w: CascadeGpu::from_controller(controllers[0]).resid.map_or([0.0; 3], |r| r.w),
 			abp_on: controllers[0].att_bias_pred_on() as u32,
+			yaw_integral_leak: controllers[0].yaw_integral_leak_value(),
 		};
 
 		let b_sc = self.buf(&state_conns);
@@ -2852,6 +2860,7 @@ impl ControllerTrainer
 			cas_resid_inv_a: CascadeGpu::from_controller(controllers[0]).resid.map_or([0.0; 3], |r| r.inv_a),
 			cas_resid_w: CascadeGpu::from_controller(controllers[0]).resid.map_or([0.0; 3], |r| r.w),
 			abp_on: controllers[0].att_bias_pred_on() as u32,
+			yaw_integral_leak: controllers[0].yaw_integral_leak_value(),
 		};
 
 		let rec_out = vec![0u32; total_records * out_words];
@@ -3727,7 +3736,7 @@ impl ControllerTrainer
 			.map(|combo| {
 				let (tv, sv) = (combo & 1, (combo >> 1) & 1);
 				let on = sv == 1 || (tv == 1) == high_on;
-				crate::cell_mode::plant_cell(on, mode)
+				CellMode::of(mode).plant_cell(on)
 			})
 			.collect();
 		let entries = self.plant_table_dispatch(
@@ -3817,7 +3826,7 @@ impl ControllerTrainer
 				let cv: Vec<u8> = (0..4)
 					.map(|combo| {
 						let (tv, sv) = (combo & 1, (combo >> 1) & 1);
-						crate::cell_mode::plant_cell(sv == 1 || tv == 1, mode)
+						CellMode::of(mode).plant_cell(sv == 1 || tv == 1)
 					})
 					.collect();
 				(vec![tp, sp], cv)
@@ -3833,7 +3842,7 @@ impl ControllerTrainer
 				let cv: Vec<u8> = (0..8)
 					.map(|combo| {
 						let (tv, lv, sv) = (combo & 1, (combo >> 1) & 1, (combo >> 2) & 1);
-						crate::cell_mode::plant_cell(sv == 1 || (tv == 1 && lv == 1), mode)
+						CellMode::of(mode).plant_cell(sv == 1 || (tv == 1 && lv == 1))
 					})
 					.collect();
 				(vec![tp, lp, sp], cv)
@@ -3879,8 +3888,8 @@ impl ControllerTrainer
 		let mode = controller.memory_mode_u8();
 		let p = BidirPlantParams {
 			sbpn: sbpn as u32,
-			on_val: crate::cell_mode::plant_cell(true, mode) as u32,
-			off_val: crate::cell_mode::plant_cell(false, mode) as u32,
+			on_val: CellMode::of(mode).plant_cell(true) as u32,
+			off_val: CellMode::of(mode).plant_cell(false) as u32,
 		};
 		let b_par = self.device.new_buffer_with_data(
 			&p as *const _ as *const _,
@@ -4344,13 +4353,23 @@ pub fn run_controller_train_parity_test() -> Vec<(String, bool, String)>
 		));
 		return results;
 	}
-	for &selective in &[false, true]
+	// Mode 2 (QUAD) is the historical anchor; TERNARY / BINARY / PLN (12/11/2026,
+	// write-rule consolidation) pin the direct-set writer — the GPU kernel used to
+	// send PLN through the QUAD nudge while the CPU set PLN cells directly.
+	for &(mode, selective) in &[(2u8, false), (2, true), (0, false), (3, false), (5, false)]
 	{
-		match controller_train_parity_once(selective)
+		match controller_train_parity_once(selective, mode)
 		{
 			Ok((mismatches, cpu_cells, addrs)) =>
 			{
-				let name = format!("controller_train_parity(selective={selective})");
+				let name = if mode == 2
+				{
+					format!("controller_train_parity(selective={selective})")
+				}
+				else
+				{
+					format!("controller_train_parity(mode={mode}, selective={selective})")
+				};
 				results.push((
 					name,
 					mismatches == 0,
@@ -4358,7 +4377,7 @@ pub fn run_controller_train_parity_test() -> Vec<(String, bool, String)>
 				));
 			}
 			Err(e) => results.push((
-				format!("controller_train_parity(selective={selective})"),
+				format!("controller_train_parity(mode={mode}, selective={selective})"),
 				false,
 				e,
 			)),
@@ -4526,14 +4545,14 @@ fn build_parity_fixture_variant(
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		fixture_ctbr(variant),
-		false,
+		false, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 	for _ in 0..(n_state * 4)
 	{
 		let n = (xs(&mut rng) % n_state as u64) as usize;
 		let addr = xs(&mut rng) % (1u64 << sbpn);
-		c.plant_state_cell(n, addr, crate::cell_mode::true_cell(memory_mode));
+		c.plant_state_cell(n, addr, CellMode::of(memory_mode).true_cell());
 	}
 
 	let (e_count, t_steps) = (3usize, 40usize);
@@ -4622,9 +4641,9 @@ fn fixture_ctbr(_variant: FixtureVariant) -> Option<crate::ctbr::CtbrSpec>
 	None
 }
 
-fn controller_train_parity_once(selective: bool) -> Result<(usize, usize, usize), String>
+fn controller_train_parity_once(selective: bool, memory_mode: u8) -> Result<(usize, usize, usize), String>
 {
-	let f = build_parity_fixture(selective as u64)?;
+	let f = build_parity_fixture_mode(selective as u64, memory_mode, None)?;
 	let num_out = f.num_out;
 	let mut c = f.c;
 
@@ -4676,10 +4695,14 @@ fn controller_train_parity_once(selective: bool) -> Result<(usize, usize, usize)
 		}
 		addrs += all.len();
 		let gpu_map: std::collections::HashMap<u64, u8> = gpu_entries.iter().copied().collect();
+		// Canonical cells: a miss reads as the memory's canonical default on BOTH
+		// sides (the CPU deletes default-valued writes — BINARY FALSE(0) — while the
+		// GPU table keeps them; the cell FUNCTION is the same).
+		let default = CellMode::of(memory_mode).default_cell(UnwrittenLean::True);
 		for a in all
 		{
-			let gv = *gpu_map.get(&a).unwrap_or(&2u8); // GPU miss → EMPTY=2
-			let cv = c.output_cell(n, a); // CPU read_cell (miss → EMPTY=2)
+			let gv = *gpu_map.get(&a).unwrap_or(&default);
+			let cv = c.output_cell_or_default(n, a);
 			if gv != cv
 			{
 				mismatches += 1;
@@ -4963,11 +4986,11 @@ pub fn run_controller_candidate_rank_parity_test() -> Vec<(String, bool, String)
 		let mut by_f64: Vec<usize> = (0..n).collect();
 		by_f64.sort_by(|&a, &b| {
 			let ca = 7.0f64
-				* crate::cell_mode::nudge_distance(cells[a], targets[a] != 0, modes[a]) as f64
+				* CellMode::of(modes[a]).nudge_distance(cells[a], targets[a] != 0) as f64
 				+ (addrs[a] ^ projs[a]).count_ones() as f64
 				+ sat;
 			let cb = 7.0f64
-				* crate::cell_mode::nudge_distance(cells[b], targets[b] != 0, modes[b]) as f64
+				* CellMode::of(modes[b]).nudge_distance(cells[b], targets[b] != 0) as f64
 				+ (addrs[b] ^ projs[b]).count_ones() as f64
 				+ sat;
 			ca.partial_cmp(&cb).unwrap().then(addrs[a].cmp(&addrs[b]))
@@ -5205,7 +5228,7 @@ pub fn run_controller_nudge_distance_parity_test() -> Vec<(String, bool, String)
 	let mut bad = Vec::new();
 	for i in 0..cells.len()
 	{
-		let want = crate::cell_mode::nudge_distance(cells[i], targets[i] != 0, modes[i]) as u32;
+		let want = CellMode::of(modes[i]).nudge_distance(cells[i], targets[i] != 0) as u32;
 		if want != got[i]
 		{
 			bad.push(format!(
@@ -5310,7 +5333,7 @@ pub fn run_controller_state_commit_parity_test() -> Vec<(String, bool, String)>
 		for c in &commits
 		{
 			let cur = cpu.state_cell(c.neuron as usize, c.addr);
-			let nv = crate::cell_mode::nudge_cell(cur, c.target_true, mode);
+			let nv = CellMode::of(mode).nudge_step(cur, c.target_true);
 			cpu.write_state_cell_internal(c.neuron as usize, c.addr, nv);
 		}
 
@@ -6399,7 +6422,7 @@ fn controller_plant_latch_parity_once(high_on: bool) -> Result<(usize, usize, us
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		None, // ctbr OFF (ABI 38: the motor-level controller)
-		false,
+		false, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -6593,7 +6616,7 @@ fn controller_plant_counter_parity_once() -> Result<(usize, usize, usize), Strin
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		None, // ctbr OFF (ABI 38: the motor-level controller)
-		false,
+		false, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -6775,7 +6798,7 @@ fn controller_plant_bidir_parity_once() -> Result<(usize, usize, usize), String>
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		None, // ctbr OFF (ABI 38: the motor-level controller)
-		false,
+		false, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7454,7 +7477,7 @@ fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool)
 		false, false, false,
 		false, false,
 		false, 1, 1.0, false, false, 2.0, 0.1, None,
-		false,
+		false, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7609,7 +7632,7 @@ fn controller_record_att_est_parity_once() -> Result<(usize, usize, usize, bool)
 		false, false,
 		false, 1, 1.0, false,
 		true, 2.0, 0.1, None, // obs_att_estimator ON; ctbr OFF
-		false,
+		false, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7753,7 +7776,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 		true, true, true, // stage-1 vertical channel ON
 		false, false,     // stage-2 horizontal OFF
 		false, 1, 1.0, false, false, 2.0, 0.1, None,
-		false,
+		false, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -8119,7 +8142,8 @@ mod tests
 		// + cas_kt(1) + cas_l_gain(1). Same lockstep rule.
 		// + 7 (CTRL-48, ABI 45): cas_resid(1) + cas_resid_inv_a(3) + cas_resid_w(3).
 		// + 1 (CTRL-46, ABI 46): abp_on.
-		assert_eq!(mem::size_of::<RolloutParams>(), 172 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
+		// + 1 (ARM 3, 12/11/2026): yaw_integral_leak.
+		assert_eq!(mem::size_of::<RolloutParams>(), 173 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============
@@ -8249,7 +8273,7 @@ mod tests
 		.expect("test controller");
 		if plant
 		{
-			let cell_hi = if crate::cell_mode::is_quad(memory_mode)
+			let cell_hi = if CellMode::of(memory_mode).is_quad_family()
 			{
 				4u8
 			}

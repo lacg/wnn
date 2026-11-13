@@ -8,7 +8,7 @@
 // ranking across threads, and one writer per neuron for the commits.
 //
 // Prepended at compile time: common.metal (WnnAddr), marker_slots.metal (slot_hash),
-// controller_rollout.metal (ctrl_nudge_distance, ctrl_fire_bit, ctrl_candidate_rank).
+// controller_rollout.metal (ctrl_candidate_rank; cell semantics from common.metal wnn_*).
 // Cell semantics come ONLY from those; nothing here re-defines a cell weight.
 //
 // MEMORY: per (layer, neuron) region an append-only ENTRY list (ulong addr<<8 | cell)
@@ -69,37 +69,9 @@ inline bool bw_bit(device const uint *w, uint j)
 	return ((w[j >> 5] >> (j & 31u)) & 1u) != 0u;
 }
 
-inline bool bw_quad(uint mode)
-{
-	return mode == 1u || mode == 2u || mode == 4u;
-}
-
-// cell_mode::nudge_cell twin.
-inline uint bw_nudge_cell(uint cur, bool t, uint mode)
-{
-	if (bw_quad(mode))
-	{
-		uint c = cur & 3u;
-		return t ? min(c + 1u, 3u) : (c == 0u ? 0u : c - 1u);
-	}
-	return t ? WNN_CELL_TRUE : WNN_CELL_FALSE;
-}
-
-// cell_mode::nudge_cell_value twin.
-inline uint bw_nudge_value(uint cur, uint target, uint mode)
-{
-	if (bw_quad(mode))
-	{
-		uint c = cur & 3u, tv = target & 3u;
-		return c < tv ? c + 1u : (c > tv ? c - 1u : c);
-	}
-	return target;
-}
-
-inline uint bw_true_cell(uint mode)
-{
-	return bw_quad(mode) ? 3u : WNN_CELL_TRUE;
-}
+// Cell write semantics (nudge step / toward-value / true cell / fire bit /
+// nudge distance) come from common.metal wnn_* — the twins of ram_core
+// cell_write.rs. The bw_* copies that lived here were removed 12/11/2026.
 
 // Index probe: entry id of `addr` in the region, or BW_NONE.
 inline uint bw_find(device const uint *idx, device const ulong *ent, uint4 meta, ulong addr)
@@ -250,7 +222,7 @@ inline void bw_phase1(
 					bw_topk_insert(r, a, c, k, ln_rank[src * BW_MAX_KTOP + i], ln_addr[src * BW_MAX_KTOP + i]);
 			}
 			// (b) untrained cells at ascending Hamming radius (value EMPTY).
-			uint def_base = ctrl_nudge_distance(WNN_CELL_EMPTY, target_true, mode) * 7u;
+			uint def_base = wnn_nudge_distance(WNN_CELL_EMPTY, target_true, mode) * 7u;
 			uint collected = 0u, examined = 0u;
 			bool stop = false;
 			for (uint h = 0u; h <= n_bits && !stop; ++h)
@@ -439,7 +411,7 @@ kernel void controller_bptt_walk(
 			if (tid == 0u)
 			{
 				for (uint n = 0u; n < sn; ++n)
-					if (ctrl_fire_bit(prev_state[n], mode))
+					if (wnn_fire_bit(prev_state[n], mode))
 					{
 						uint j = P.sensor_window + n;
 						sid[j >> 5] |= (1u << (j & 31u));
@@ -453,7 +425,7 @@ kernel void controller_bptt_walk(
 			{
 				for (uint n = 0u; n < sn; ++n)
 				{
-					if (ctrl_fire_bit(new_state[n], mode))
+					if (wnn_fire_bit(new_state[n], mode))
 					{
 						uint j = P.frame_bits + n;
 						oid[j >> 5] |= (1u << (j & 31u));
@@ -648,9 +620,9 @@ kernel void controller_bptt_walk(
 						continue;
 					}
 					uint cur = bw_read(o_idx, o_ent, o_meta[n], addr);
-					if (P.protect != 0u && cur != WNN_CELL_EMPTY && ctrl_fire_bit(cur, mode) != t)
+					if (P.protect != 0u && cur != WNN_CELL_EMPTY && wnn_fire_bit(cur, mode) != t)
 						continue;
-					uint nv = bw_nudge_cell(cur, t, mode);
+					uint nv = wnn_nudge_step(cur, t, mode);
 					if (nv != cur)
 					{
 						bw_write(o_idx, o_ent, o_cnt + n, o_meta[n], addr, nv, P.default_cell, &stats[2]);
@@ -661,19 +633,19 @@ kernel void controller_bptt_walk(
 				{
 					uint sn_i = n - P.num_out;
 					uint ov = P.has_override != 0u ? (uint)sover[(rec0 + d) * sn + sn_i] : 255u;
-					uint tv = ov != 255u ? ov : (ds[sn_i] != 0u ? bw_true_cell(mode) : WNN_CELL_FALSE);
+					uint tv = ov != 255u ? ov : (ds[sn_i] != 0u ? wnn_true_cell(mode) : WNN_CELL_FALSE);
 					ulong addr = bw_address(sid, s_conn + sn_i * P.sbpn, P.sbpn);
 					if (P.vote != 0u)
 					{
 						// VoteTally::visit_state_value: TRUE cell +, FALSE cell −, else no vote.
 						visit_addr[vslot] = addr;
-						visit_dir[vslot] = tv == bw_true_cell(mode) ? 1u : (tv == WNN_CELL_FALSE ? 0u : 255u);
+						visit_dir[vslot] = tv == wnn_true_cell(mode) ? 1u : (tv == WNN_CELL_FALSE ? 0u : 255u);
 						continue;
 					}
 					uint cur = bw_read(s_idx, s_ent, s_meta[sn_i], addr);
-					if (P.protect != 0u && cur != WNN_CELL_EMPTY && ctrl_fire_bit(cur, mode) != ctrl_fire_bit(tv, mode))
+					if (P.protect != 0u && cur != WNN_CELL_EMPTY && wnn_fire_bit(cur, mode) != wnn_fire_bit(tv, mode))
 						continue;
-					uint nv = bw_nudge_value(cur, tv, mode);
+					uint nv = wnn_nudge_toward_value(cur, tv, mode);
 					if (nv != cur)
 					{
 						bw_write(s_idx, s_ent, s_cnt + sn_i, s_meta[sn_i], addr, nv, P.default_cell, &stats[2]);

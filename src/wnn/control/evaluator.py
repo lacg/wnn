@@ -33,7 +33,7 @@ import numpy as np
 
 from wnn.control._accel import AttitudeSim, WnnController
 
-from .feature_layout import feature_layout
+from .feature_layout import YAW_ERROR_FEATURES, feature_layout
 from .threshold_calibration import CalibrationFit, ThresholdCalibration
 from .pid import AttitudePID, AttitudePIDConfig
 from .training import (
@@ -248,6 +248,10 @@ class ControllerSpec:
 	# the estimate's own quaternion/gains. Requires obs_att_estimator and obs_vel_xy.
 	obs_att_bias_pred: bool = False
 	integral_leak: float = 0.99   # leaky-integral decay for "_i" (≠ delta_leak)
+	# ARM 3 (Luiz 12/11/2026, --yaw-integral-leak): the leak of the YAW integrals only
+	# (yaw_err_i, yaw_i_pa); roll/pitch/tilt keep integral_leak. None = integral_leak
+	# (bit-identical). docs/ctrl_steady_gap_block6.md §3-4.
+	yaw_integral_leak: float | None = None
 	integral_scale: float = 1.0   # pre-threshold scale for integral features
 	dt: float = 0.001             # physics step (s); MUST match episode/plant dt (yaw integ.)
 	# H3 (18/06): the 4 output banks are CONTROLS [T, τ_roll, τ_pitch, τ_yaw] mixed to
@@ -655,6 +659,7 @@ def _feature_controller(spec: ControllerSpec) -> WnnController:
 			obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
 		obs_att_estimator=getattr(spec, 'obs_att_estimator', False), ctbr=ctbr_arg(spec),
 		obs_att_bias_pred=getattr(spec, 'obs_att_bias_pred', False),  # CTRL-46 (ABI 46)
+		yaw_integral_leak=getattr(spec, 'yaw_integral_leak', None),  # ARM 3 (ABI 50)
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 		dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
@@ -674,8 +679,22 @@ def _centred_thresholds(arr: np.ndarray, bpf: int, outer_quantile) -> np.ndarray
 	return np.concatenate([-mags[::-1], mid, mags])
 
 
+def _yaw_centred_thresholds(arr: np.ndarray, bpf: int, outer_quantile) -> np.ndarray:
+	"""ARM 2 (--yaw-centred-ladder) for a yaw-error input: 0 is ALWAYS a bin edge, so
+	every nonzero sample's sign is in its code; h = (bpf-1)//2 symmetric pairs at
+	±Q_|x|(p_j), p_j = (j/h)^1.5 · p_max (the _centred_thresholds curve: finest near 0,
+	outermost pair at the quantile ladder's outer mass). Even bpf has one slot left
+	over; it is a SECOND threshold at 0 (exact symmetry; the sign carried by two bits)."""
+	q0 = float(outer_quantile) if outer_quantile is not None else 1.0 / (bpf + 1)
+	h = (bpf - 1) // 2
+	p = (np.arange(1, h + 1) / h) ** 1.5 * (1.0 - 2.0 * q0) if h else np.array([])
+	mags = np.quantile(np.abs(arr), p) if h else np.array([])
+	zeros = [0.0] * (bpf - 2 * h)
+	return np.concatenate([-mags[::-1], zeros, mags])
+
+
 def _thresholds_from_samples(samples_per_feature, spec, method, outer_quantile, extra_samples,
-                             ladder: str = "quantile") -> list[float]:
+                             ladder: str = "quantile", yaw_centred: bool = False) -> list[float]:
 	"""Per-feature thermometer thresholds from the sampled operating distribution
 	(base 9 + enabled H2 extras) — shared by the Python reference-rollout fitter and
 	the Rust training-cascade sampler (CTRL-17 G1). ladder="centred" (CTRL-48) swaps
@@ -684,6 +703,7 @@ def _thresholds_from_samples(samples_per_feature, spec, method, outer_quantile, 
 	nf = spec.num_features()
 	bpf = spec.bits_per_feature
 	zero_ref = [d.zero_ref for d in feature_layout(spec)] if ladder == "centred" else [False] * nf
+	yaw_c = [d.name in YAW_ERROR_FEATURES for d in feature_layout(spec)] if yaw_centred else [False] * nf
 	thresholds = []
 	for f in range(nf):
 		# STUDENT STATES (option A, 10/08/2026). The fitter rolls out PID — a BETTER
@@ -701,7 +721,9 @@ def _thresholds_from_samples(samples_per_feature, spec, method, outer_quantile, 
 		if arr.size == 0:
 			# Feature never observed (constant target?). Fall back to [-1, 1] linear.
 			arr = np.array([-1.0, 1.0])
-		if method == "quantile" and zero_ref[f]:
+		if method == "quantile" and yaw_c[f]:
+			ts = _yaw_centred_thresholds(arr, bpf, outer_quantile)
+		elif method == "quantile" and zero_ref[f]:
 			ts = _centred_thresholds(arr, bpf, outer_quantile)
 		elif method == "quantile":
 			# Uniform percentiles 1/(bpf+1)..bpf/(bpf+1)
@@ -774,7 +796,7 @@ def fit_calibration(
 	extra = _pooled_extra_samples(spec, cal, extra_samples)
 	samples = _calibration_samples(spec, cal, seed, geometry, alloc, episode_config)
 	thresholds = _thresholds_from_samples(samples, spec, method, cal.outer_quantile, extra,
-	                                      ladder=cal.ladder)
+	                                      ladder=cal.ladder, yaw_centred=cal.yaw_centred)
 	return CalibrationFit(thresholds=thresholds,
 	                      constant_features=_zero_spread_features(samples, extra))
 
@@ -1434,6 +1456,7 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 			obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
 		obs_att_estimator=getattr(spec, 'obs_att_estimator', False), ctbr=ctbr_arg(spec),
 		obs_att_bias_pred=getattr(spec, 'obs_att_bias_pred', False),  # CTRL-46 (ABI 46)
+		yaw_integral_leak=getattr(spec, 'yaw_integral_leak', None),  # ARM 3 (ABI 50)
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
@@ -2039,6 +2062,7 @@ class ControllerEvaluator:
 			# would label on accel-only features while deploy flies estimated ones.
 			obs_att_estimator=getattr(first_spec, 'obs_att_estimator', False), ctbr=ctbr_arg(first_spec),
 			obs_att_bias_pred=getattr(first_spec, 'obs_att_bias_pred', False),  # CTRL-46 (ABI 46)
+			yaw_integral_leak=getattr(first_spec, 'yaw_integral_leak', None),  # ARM 3 (ABI 50)
 			output_full_window=getattr(first_spec, 'output_full_window', False),
 			frame_stride=int(getattr(first_spec, 'frame_stride', 1)),
 			**_target_levels_kwarg(ra, first_spec),
@@ -2149,6 +2173,7 @@ class ControllerEvaluator:
 			obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
 		obs_att_estimator=getattr(spec, 'obs_att_estimator', False), ctbr=ctbr_arg(spec),
 		obs_att_bias_pred=getattr(spec, 'obs_att_bias_pred', False),  # CTRL-46 (ABI 46)
+		yaw_integral_leak=getattr(spec, 'yaw_integral_leak', None),  # ARM 3 (ABI 50)
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,

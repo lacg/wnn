@@ -77,6 +77,7 @@ def record_input_entropy(spec: ControllerSpec, thresholds: list, state_connectio
 		action_repeat=spec.action_repeat,
 		memory_mode=spec.memory_mode_int(),
 		ctbr=_ctbr_arg(spec),
+		yaw_integral_leak=getattr(spec, 'yaw_integral_leak', None),  # ARM 3 (ABI 50)
 	)
 	# axonogenesis getters (last_state_layer_input / last_output_layer_input) are live
 	# in the compiled accelerator (controller.rs:626/632) — verified 05/06/2026.
