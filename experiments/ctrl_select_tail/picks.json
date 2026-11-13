@@ -1,0 +1,812 @@
+{
+ "C-S2-d_wposx2_a49_rf_c200_dres_full_s1": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "MEMORY#1",
+   "units": 35,
+   "stable": 99.97,
+   "err": 1.467,
+   "steady": 0.9,
+   "fails": 1,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "MEMORY#1",
+   "units": 35,
+   "stable": 99.97,
+   "err": 1.467,
+   "steady": 0.9,
+   "fails": 1,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "MEMORY#1"
+ },
+ "C-S2-d_wposx2_a49_rf_c200_dres_quad_full_s1": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "NEURONS#0",
+   "units": 35,
+   "stable": 99.83,
+   "err": 1.503,
+   "steady": 0.9,
+   "fails": 6,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "MEMORY#1",
+   "units": 35,
+   "stable": 99.8,
+   "err": 1.52,
+   "steady": 0.91,
+   "fails": 7,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "NEURONS#0"
+ },
+ "C-S2-d_wposx2_a49_rf_c200_dres_ms01_full_s1": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "NEURONS#2",
+   "units": 35,
+   "stable": 99.97,
+   "err": 1.424,
+   "steady": 0.9,
+   "fails": 1,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "NEURONS#0",
+   "units": 35,
+   "stable": 100.0,
+   "err": 1.448,
+   "steady": 0.97,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "NEURONS#2"
+ },
+ "C-S2-d_wposx2_a49_rf_c200_dres_lv32_full_s1": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "NEURONS#0",
+   "units": 35,
+   "stable": 99.83,
+   "err": 1.542,
+   "steady": 1.0,
+   "fails": 6,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "NEURONS#2",
+   "units": 35,
+   "stable": 99.97,
+   "err": 1.512,
+   "steady": 1.0,
+   "fails": 1,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "NEURONS#0"
+ },
+ "C-S2-d_wposx2_a49_rf_c200_dres_mlab_full_s1": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "NEURONS#0",
+   "units": 35,
+   "stable": 99.26,
+   "err": 1.506,
+   "steady": 0.99,
+   "fails": 26,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "NEURONS#0",
+   "units": 35,
+   "stable": 99.26,
+   "err": 1.506,
+   "steady": 0.99,
+   "fails": 26,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "NEURONS#0"
+ },
+ "C-S2-d_wposx2_a49_rf_c200_dres_biasin_full_s1": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "NEURONS#0",
+   "units": 35,
+   "stable": 99.91,
+   "err": 1.461,
+   "steady": 0.89,
+   "fails": 3,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "NEURONS#0",
+   "units": 35,
+   "stable": 99.91,
+   "err": 1.461,
+   "steady": 0.89,
+   "fails": 3,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "NEURONS#0"
+ },
+ "C-S2-d_wposx2_a49_rf_c200_dres_full_s2": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "NEURONS#2",
+   "units": 35,
+   "stable": 100.0,
+   "err": 1.575,
+   "steady": 0.99,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "MEMORY#1",
+   "units": 35,
+   "stable": 100.0,
+   "err": 1.675,
+   "steady": 1.13,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "NEURONS#2"
+ },
+ "C-S2-d_wposx2_a49_rf_c200_dres_quad_full_s2": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "MEMORY#2",
+   "units": 35,
+   "stable": 99.94,
+   "err": 1.521,
+   "steady": 1.0,
+   "fails": 2,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "NEURONS#1",
+   "units": 35,
+   "stable": 99.97,
+   "err": 1.528,
+   "steady": 1.02,
+   "fails": 1,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "MEMORY#2"
+ },
+ "C-S2-d_wposx2_a49_rf_c200_dres_ms01_full_s2": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "NEURONS#2",
+   "units": 35,
+   "stable": 100.0,
+   "err": 1.654,
+   "steady": 1.16,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "NEURONS#0",
+   "units": 35,
+   "stable": 100.0,
+   "err": 1.702,
+   "steady": 1.2,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "NEURONS#2"
+ },
+ "C-S2-d_wposx2_a49_rf_c200_dres_lv32_full_s2": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "NEURONS#0",
+   "units": 35,
+   "stable": 99.97,
+   "err": 1.639,
+   "steady": 1.05,
+   "fails": 1,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "NEURONS#0",
+   "units": 35,
+   "stable": 99.97,
+   "err": 1.639,
+   "steady": 1.05,
+   "fails": 1,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "NEURONS#0"
+ },
+ "C-S2-d_wposx2_a49_rf_c200_dres_mlab_full_s2": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "NEURONS#1",
+   "units": 35,
+   "stable": 99.63,
+   "err": 1.622,
+   "steady": 1.16,
+   "fails": 13,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "NEURONS#0",
+   "units": 35,
+   "stable": 99.83,
+   "err": 1.624,
+   "steady": 1.19,
+   "fails": 6,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "NEURONS#1"
+ },
+ "C-S2-d_wposx2_a49_rf_c200_dres_biasin_full_s2": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "MEMORY#2",
+   "units": 35,
+   "stable": 100.0,
+   "err": 1.557,
+   "steady": 1.0,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "NEURONS#0",
+   "units": 35,
+   "stable": 100.0,
+   "err": 1.504,
+   "steady": 0.97,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "MEMORY#2"
+ },
+ "C-S2-d_wposx2_a49_rf_c200_dres_full_s3": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "NEURONS#2",
+   "units": 35,
+   "stable": 99.97,
+   "err": 1.47,
+   "steady": 0.99,
+   "fails": 1,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "NEURONS#1",
+   "units": 35,
+   "stable": 100.0,
+   "err": 1.506,
+   "steady": 1.04,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "NEURONS#2"
+ },
+ "C-S2-d_wposx2_a49_rf_c200_dres_quad_full_s3": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "NEURONS#0",
+   "units": 35,
+   "stable": 100.0,
+   "err": 1.439,
+   "steady": 0.92,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "NEURONS#0",
+   "units": 35,
+   "stable": 100.0,
+   "err": 1.439,
+   "steady": 0.92,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "NEURONS#0"
+ },
+ "C-S2-d_wposx2_a49_rf_c200_dres_ms01_full_s3": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "NEURONS#0",
+   "units": 35,
+   "stable": 100.0,
+   "err": 1.506,
+   "steady": 0.97,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "NEURONS#0",
+   "units": 35,
+   "stable": 100.0,
+   "err": 1.506,
+   "steady": 0.97,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "NEURONS#0"
+ },
+ "C-S2-d_wposx2_a49_rf_c200_dres_lv32_full_s3": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "NEURONS#0",
+   "units": 35,
+   "stable": 99.97,
+   "err": 1.499,
+   "steady": 1.05,
+   "fails": 1,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "MEMORY#2",
+   "units": 35,
+   "stable": 100.0,
+   "err": 1.505,
+   "steady": 0.97,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "NEURONS#0"
+ },
+ "C-S2-d_wposx2_a49_rf_c200_dres_mlab_full_s3": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "NEURONS#2",
+   "units": 35,
+   "stable": 99.86,
+   "err": 1.491,
+   "steady": 1.0,
+   "fails": 5,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "MEMORY#2",
+   "units": 35,
+   "stable": 99.97,
+   "err": 1.482,
+   "steady": 1.01,
+   "fails": 1,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "NEURONS#2"
+ },
+ "C-S2-d_wposx2_a49_rf_c200_dres_biasin_full_s3": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "MEMORY#2",
+   "units": 35,
+   "stable": 99.97,
+   "err": 1.416,
+   "steady": 0.8,
+   "fails": 1,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "NEURONS#1",
+   "units": 35,
+   "stable": 100.0,
+   "err": 1.371,
+   "steady": 0.8,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "MEMORY#2"
+ },
+ "C-S2-d_wposx2_a49_rf_c200_dres_oq02_full_s1": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "NEURONS#2",
+   "units": 35,
+   "stable": 100.0,
+   "err": 1.718,
+   "steady": 1.21,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "NEURONS#2",
+   "units": 35,
+   "stable": 100.0,
+   "err": 1.718,
+   "steady": 1.21,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "NEURONS#2"
+ },
+ "C-S2-d_wposx2_a49_rf_c200_dres_cent_oq02_full_s1": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "GRID#0",
+   "units": 35,
+   "stable": 99.97,
+   "err": 1.57,
+   "steady": 0.97,
+   "fails": 1,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "GRID#0",
+   "units": 35,
+   "stable": 99.97,
+   "err": 1.57,
+   "steady": 0.97,
+   "fails": 1,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "GRID#0"
+ },
+ "C-S2-d_wposx2_a49_rf_c200_dres_ct30_full_s1": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "NEURONS#0",
+   "units": 35,
+   "stable": 99.94,
+   "err": 1.558,
+   "steady": 1.03,
+   "fails": 2,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "MEMORY#2",
+   "units": 35,
+   "stable": 99.91,
+   "err": 1.585,
+   "steady": 1.09,
+   "fails": 3,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "NEURONS#0"
+ },
+ "C-S2-d_wposx2_a49_rf_c200_dres_tvxy045_full_s1": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "NEURONS#0",
+   "units": 35,
+   "stable": 99.97,
+   "err": 1.655,
+   "steady": 0.91,
+   "fails": 1,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "NEURONS#1",
+   "units": 35,
+   "stable": 99.89,
+   "err": 1.7,
+   "steady": 1.04,
+   "fails": 4,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "NEURONS#0"
+ },
+ "C-S2-d_wposx2_a49_rf_c200_dres_oq02_full_s2": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "NEURONS#1",
+   "units": 35,
+   "stable": 99.97,
+   "err": 1.73,
+   "steady": 1.25,
+   "fails": 1,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "MEMORY#2",
+   "units": 35,
+   "stable": 100.0,
+   "err": 1.703,
+   "steady": 1.24,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "NEURONS#1"
+ },
+ "C-S2-d_wposx2_a49_rf_c200_dres_cent_oq02_full_s2": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "NEURONS#0",
+   "units": 35,
+   "stable": 100.0,
+   "err": 1.753,
+   "steady": 1.22,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "NEURONS#2",
+   "units": 35,
+   "stable": 100.0,
+   "err": 1.73,
+   "steady": 1.19,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "NEURONS#0"
+ },
+ "C-S2-d_wposx2_a49_rf_c200_dres_ct30_full_s2": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "NEURONS#0",
+   "units": 35,
+   "stable": 100.0,
+   "err": 1.687,
+   "steady": 1.21,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "NEURONS#1",
+   "units": 35,
+   "stable": 99.97,
+   "err": 1.72,
+   "steady": 1.24,
+   "fails": 1,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "NEURONS#0"
+ },
+ "C-S2-d_wposx2_a49_rf_c200_dres_tvxy045_full_s2": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "NEURONS#0",
+   "units": 35,
+   "stable": 100.0,
+   "err": 1.616,
+   "steady": 0.94,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "NEURONS#0",
+   "units": 35,
+   "stable": 100.0,
+   "err": 1.616,
+   "steady": 0.94,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "NEURONS#0"
+ },
+ "C-S2-d_wposx2_a49_rf_c200_dres_oq02_full_s3": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "MEMORY#2",
+   "units": 35,
+   "stable": 99.97,
+   "err": 1.55,
+   "steady": 1.15,
+   "fails": 1,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "MEMORY#2",
+   "units": 35,
+   "stable": 99.97,
+   "err": 1.55,
+   "steady": 1.15,
+   "fails": 1,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "MEMORY#2"
+ },
+ "C-S2-d_wposx2_a49_rf_c200_dres_cent_oq02_full_s3": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "NEURONS#1",
+   "units": 35,
+   "stable": 100.0,
+   "err": 1.581,
+   "steady": 1.1,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "NEURONS#0",
+   "units": 35,
+   "stable": 100.0,
+   "err": 1.551,
+   "steady": 1.08,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "NEURONS#1"
+ },
+ "C-S2-d_wposx2_a49_rf_c200_dres_ct30_full_s3": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "NEURONS#0",
+   "units": 35,
+   "stable": 100.0,
+   "err": 1.491,
+   "steady": 1.01,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "NEURONS#0",
+   "units": 35,
+   "stable": 100.0,
+   "err": 1.491,
+   "steady": 1.01,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "NEURONS#0"
+ },
+ "C-S2-d_wposx2_a49_rf_c200_dres_tvxy045_full_s3": {
+  "B": {
+   "val_units": 5,
+   "select": "off",
+   "genome": "NEURONS#1",
+   "units": 35,
+   "stable": 99.91,
+   "err": 1.915,
+   "steady": 1.13,
+   "fails": 3,
+   "episodes": 3500
+  },
+  "P": {
+   "val_units": 20,
+   "select": "p99",
+   "genome": "GRID#0",
+   "units": 35,
+   "stable": 100.0,
+   "err": 1.829,
+   "steady": 1.17,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "S20": null,
+  "S5p": null,
+  "orig": "NEURONS#1"
+ }
+}

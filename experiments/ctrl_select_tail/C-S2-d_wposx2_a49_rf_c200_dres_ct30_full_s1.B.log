@@ -1,0 +1,1019 @@
+[bptt] sn>0 trainer device=cpu (wheel default) (WNN_CONTROLLER_GPU_BPTT=0)
+[AXIS-F] motor lag T=0.2000 s (tau=50.00 ms) [explicit] armed for ALL rollouts (training AND scoring AND baselines)
+[GATE-λ] DAgger gate + checkpoint rank on λ_alt=0 λ_pos=0.243664 (alt explicit, pos derived; tilt 30.0°)
+[RG-TILT] DAgger trainer tilt curriculum 8°→30° (checkpoint eval at 30°); scorer --tilt 5°
+[RG-GATE] DAgger episode gate = off (every episode is written)
+[PLANT] imu=specific-force rotor_drag=0.78 att_features=estimator att_err_ref=tilt translation=True motor_lag=0.2s(explicit)
+[CTBR] output_mode=ctbr: WNN outer loop at 100 Hz (action_repeat 10) over the firmware rate PID at 500 Hz; banks [T, p, q, r] range=[0.25, 4.2, 4.2, 2.0] gamma=[1.0, 2.0, 2.0, 2.0]; teacher=mpcof; delta_control=on (ablation)
+[W2] disturbance=L4C armed for ALL rollouts (tau_bias=0.0000 N·m, gust_sigma=0.0000, asym_mag=±20%, gyro_sigma=0.01073277832)
+Phased-GA controller search: grid (1×1=1) + 15n + 400b + 5c + 120m  (target 540 GA gens)
+Pop=50 elitism=20% crossover=50% eval_episodes=100 steps=2000 tilt=5.0° levels=16 fitness_pools=CRN(all 5 pools/gen) patience=frozen-best madfloor=off
+[provenance] wheel=ram_controller-2026.212.37 abi=49 wheel_sha256=df5af9bbd7ec17f3 git=4067eb06+dirty motor_lag=0.2s:explicit obs_pwm=off train_asym=per_episode:0.2 arch=cascade:teacher=mpcof:inner=pidfw_rate@500Hz:outer_hz=100:range=0.25,4.2,4.2,2:gamma=1,2,2,2:obs=dhat_resid recorder=flown neuro=segment rf=axis:cross=0.2 calib=eps:200,regime:flown,ladder:quantile drop=off write=last label=true abp=off select=off train_ic=off fitness_pools=CRN(all 5 pools/gen)
+[argv] --levels 16 --lamarckian --skip-stages neurons,bits --max-cells 180000 --max-cells-strict --neurons-gens 5 --neurons-patience 3 --conns-gens 5 --conns-patience 3 --memory-gens 120 --memory-patience 2 --pop 50 --num-eval-folds 5 --check-interval 2 --magnitude-aware-patience --eval-episodes 100 --memory-eval-episodes 200 --steps 2000 --tilt 5.0 --fit-aggregation zscore --zrank-clamp 3.0 --gate-stable 0.70 --gate-err 8.0 --delta-gamma 1.0 --grid-bits 24 --grid-output-neurons 256 --max-output-neurons 256 --test-episodes 100 --holdout-pop-sample 8 --runs 1 --memory-mode BINARY --airframe cf21_brushless --disturbance L4C --teacher mpcof --obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err --obs-yaw-err-i --obs-collective-cmd --obs-alt-err --obs-vz --translation --reward-lambda-alt 0 --grid-state-neurons 0 --max-state-neurons 0 --skip-stages connections,bits --max-output-neurons 512 --max-cells 1000000000 --teacher-hover derived --fit-weight-err-sq 0.28125 --fit-weight-stable 0.225 --fit-weight-steady 0.39375 --fit-weight-pos 0.1 --xy-offset 0.5 --obs-pos-err-xy --obs-vel-xy --att-err-ref tilt --neurons-gens 15 --neurons-patience 3 --eval-mem-budget auto --rotor-drag 0.78 --motor-lag-s 0.20 --output-mode ctbr --action-repeat 10 --ctbr-delta-law --delta-leak 0.7 --delta-max 0.6 --rg-gate off --fit-weight-err-sq 0.2557 --fit-weight-stable 0.2045 --fit-weight-steady 0.3580 --fit-weight-pos 0.1818 --receptive-fields axis --rf-cross 0.2 --calib-episodes 200 --obs-cascade-dhat-residual --threshold-calib-tilt 30 --test-seeds 99990101 99990102 99990103 99990104 99990105 99990106 99990107 99990108 99990109 99990110 99990111 99990112 99990113 99990114 99990115 99990116 99990117 99990118 99990119 99990120 99990121 99990122 99990123 99990124 99990125 99990126 99990127 99990128 99990129 99990130 99990131 99990132 99990133 99990134 99990135 --base-seed 31337001 --recalc-headline logs/controller/ctrl48/ckpt_C-S2-d_wposx2_a49_rf_c200_dres_ct30_full_s1
+  [stage-ckpt] stage0_grid.yaml.gz: GRID population=3 (top-3 streamed)
+  [stage-ckpt] stage1_neurons.yaml.gz: NEURONS population=3 (top-3 streamed)
+  [stage-ckpt] stage4_memory.yaml.gz: MEMORY population=3 (top-3 streamed)
+[seeds] [explicit] base=31337001 run=0 | train=4196112846 test=3412990376 val=163226054
+[val-units] 5 stage-select val units 163226054..163226058 — disjoint from 35 test units and train=4196112846/test=3412990376 (raw seeds + K=5 fold pool seeds) — checked
+
+[recalc] re-selecting the headline over 3 stages (GRID, NEURONS, MEMORY) from logs/controller/ctrl48/ckpt_C-S2-d_wposx2_a49_rf_c200_dres_ct30_full_s1
+
+========================================================================
+  HELD-OUT REPORT [GRID#0-VAL163226054] (report-only) — population (1 genomes) on FRESH seed 163226054, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.46°  steady=1.02°  jerk=0.0022  mono_viol=5  alt=0.160m  pos=0.354m  dx=0.181m  dy=0.206m  effort=2.130  reward=-2.04
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.46±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.30°  steady=1.67°  alt=0.178m  pos=0.350m  dx=0.176m  dy=0.179m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=1.99°  steady=1.39°  alt=0.178m  pos=0.365m  dx=0.189m  dy=0.193m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.30°  steady=1.67°  alt=0.178m  pos=0.350m  dx=0.176m  dy=0.179m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.08°  steady=0.51°  alt=0.178m  pos=0.348m  dx=0.174m  dy=0.178m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [GRID#0-VAL163226055] (report-only) — population (1 genomes) on FRESH seed 163226055, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.73°  steady=1.24°  jerk=0.0023  mono_viol=7  alt=0.124m  pos=0.333m  dx=0.191m  dy=0.194m  effort=1.914  reward=-2.59
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.73±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.92°  steady=2.39°  alt=0.132m  pos=0.328m  dx=0.186m  dy=0.182m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.06°  steady=1.21°  alt=0.132m  pos=0.342m  dx=0.200m  dy=0.190m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.93°  steady=2.39°  alt=0.132m  pos=0.328m  dx=0.186m  dy=0.182m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.28°  steady=0.63°  alt=0.132m  pos=0.319m  dx=0.184m  dy=0.172m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [GRID#0-VAL163226056] (report-only) — population (1 genomes) on FRESH seed 163226056, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.37°  steady=0.85°  jerk=0.0023  mono_viol=5  alt=0.129m  pos=0.349m  dx=0.188m  dy=0.210m  effort=1.890  reward=-1.92
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.37±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.76°  steady=3.00°  alt=0.136m  pos=0.331m  dx=0.183m  dy=0.183m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=3.45°  steady=2.64°  alt=0.136m  pos=0.347m  dx=0.195m  dy=0.197m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.77°  steady=3.00°  alt=0.136m  pos=0.331m  dx=0.183m  dy=0.183m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.18°  steady=0.58°  alt=0.136m  pos=0.325m  dx=0.177m  dy=0.182m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [GRID#0-VAL163226057] (report-only) — population (1 genomes) on FRESH seed 163226057, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.63°  steady=1.04°  jerk=0.0023  mono_viol=7  alt=0.119m  pos=0.351m  dx=0.195m  dy=0.211m  effort=1.916  reward=-2.45
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.63±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.12°  steady=2.71°  alt=0.138m  pos=0.340m  dx=0.186m  dy=0.184m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=1.81°  steady=0.87°  alt=0.138m  pos=0.350m  dx=0.191m  dy=0.196m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.13°  steady=2.71°  alt=0.139m  pos=0.340m  dx=0.186m  dy=0.184m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.35°  steady=0.65°  alt=0.138m  pos=0.324m  dx=0.169m  dy=0.179m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [GRID#0-VAL163226058] (report-only) — population (1 genomes) on FRESH seed 163226058, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.50°  steady=1.09°  jerk=0.0023  mono_viol=5  alt=0.122m  pos=0.347m  dx=0.198m  dy=0.208m  effort=1.890  reward=-2.16
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.50±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.22°  steady=2.66°  alt=0.140m  pos=0.341m  dx=0.189m  dy=0.189m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.31°  steady=1.38°  alt=0.140m  pos=0.354m  dx=0.200m  dy=0.200m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.23°  steady=2.66°  alt=0.140m  pos=0.341m  dx=0.189m  dy=0.189m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.29°  steady=0.62°  alt=0.140m  pos=0.330m  dx=0.183m  dy=0.181m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [GRID#1-VAL163226054] (report-only) — population (1 genomes) on FRESH seed 163226054, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.97°  steady=1.59°  jerk=0.0024  mono_viol=9  alt=0.158m  pos=0.364m  dx=0.192m  dy=0.214m  effort=2.131  reward=-3.06
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.97±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.30°  steady=1.67°  alt=0.178m  pos=0.350m  dx=0.176m  dy=0.179m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=1.99°  steady=1.39°  alt=0.178m  pos=0.365m  dx=0.189m  dy=0.193m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.30°  steady=1.67°  alt=0.178m  pos=0.350m  dx=0.176m  dy=0.179m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.08°  steady=0.51°  alt=0.178m  pos=0.348m  dx=0.174m  dy=0.178m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [GRID#1-VAL163226055] (report-only) — population (1 genomes) on FRESH seed 163226055, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=2.11°  steady=1.79°  jerk=0.0025  mono_viol=7  alt=0.122m  pos=0.345m  dx=0.206m  dy=0.197m  effort=1.915  reward=-3.32
+  population (held-out, descriptive):        stable=100.0±0.0%  err=2.11±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.92°  steady=2.39°  alt=0.132m  pos=0.328m  dx=0.186m  dy=0.182m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.06°  steady=1.21°  alt=0.132m  pos=0.342m  dx=0.200m  dy=0.190m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.93°  steady=2.39°  alt=0.132m  pos=0.328m  dx=0.186m  dy=0.182m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.28°  steady=0.63°  alt=0.132m  pos=0.319m  dx=0.184m  dy=0.172m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [GRID#1-VAL163226056] (report-only) — population (1 genomes) on FRESH seed 163226056, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=2.15°  steady=1.69°  jerk=0.0027  mono_viol=9  alt=0.141m  pos=0.368m  dx=0.203m  dy=0.212m  effort=1.892  reward=-3.60
+  population (held-out, descriptive):        stable=100.0±0.0%  err=2.15±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.76°  steady=3.00°  alt=0.136m  pos=0.331m  dx=0.183m  dy=0.183m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=3.45°  steady=2.64°  alt=0.136m  pos=0.347m  dx=0.195m  dy=0.197m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.77°  steady=3.00°  alt=0.136m  pos=0.331m  dx=0.183m  dy=0.183m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.18°  steady=0.58°  alt=0.136m  pos=0.325m  dx=0.177m  dy=0.182m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [GRID#1-VAL163226057] (report-only) — population (1 genomes) on FRESH seed 163226057, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.95°  steady=1.36°  jerk=0.0023  mono_viol=9  alt=0.115m  pos=0.357m  dx=0.196m  dy=0.219m  effort=1.916  reward=-3.02
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.95±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.12°  steady=2.71°  alt=0.138m  pos=0.340m  dx=0.186m  dy=0.184m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=1.81°  steady=0.87°  alt=0.138m  pos=0.350m  dx=0.191m  dy=0.196m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.13°  steady=2.71°  alt=0.139m  pos=0.340m  dx=0.186m  dy=0.184m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.35°  steady=0.65°  alt=0.138m  pos=0.324m  dx=0.169m  dy=0.179m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [GRID#1-VAL163226058] (report-only) — population (1 genomes) on FRESH seed 163226058, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.95°  steady=1.52°  jerk=0.0025  mono_viol=9  alt=0.118m  pos=0.352m  dx=0.205m  dy=0.210m  effort=1.892  reward=-3.03
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.95±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.22°  steady=2.66°  alt=0.140m  pos=0.341m  dx=0.189m  dy=0.189m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.31°  steady=1.38°  alt=0.140m  pos=0.354m  dx=0.200m  dy=0.200m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.23°  steady=2.66°  alt=0.140m  pos=0.341m  dx=0.189m  dy=0.189m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.29°  steady=0.62°  alt=0.140m  pos=0.330m  dx=0.183m  dy=0.181m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+[progress] dagger-batch: 1/1 (100%) done
+
+========================================================================
+  HELD-OUT REPORT [GRID#2-VAL163226054] (report-only) — population (1 genomes) on FRESH seed 163226054, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.68°  steady=1.47°  jerk=0.0022  mono_viol=5  alt=0.171m  pos=0.375m  dx=0.193m  dy=0.213m  effort=2.129  reward=-2.26
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.68±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.30°  steady=1.67°  alt=0.178m  pos=0.350m  dx=0.176m  dy=0.179m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=1.99°  steady=1.39°  alt=0.178m  pos=0.365m  dx=0.189m  dy=0.193m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.30°  steady=1.67°  alt=0.178m  pos=0.350m  dx=0.176m  dy=0.179m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.08°  steady=0.51°  alt=0.178m  pos=0.348m  dx=0.174m  dy=0.178m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [GRID#2-VAL163226055] (report-only) — population (1 genomes) on FRESH seed 163226055, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.47°  steady=1.05°  jerk=0.0022  mono_viol=5  alt=0.128m  pos=0.340m  dx=0.202m  dy=0.189m  effort=1.915  reward=-2.18
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.47±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.92°  steady=2.39°  alt=0.132m  pos=0.328m  dx=0.186m  dy=0.182m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.06°  steady=1.21°  alt=0.132m  pos=0.342m  dx=0.200m  dy=0.190m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.93°  steady=2.39°  alt=0.132m  pos=0.328m  dx=0.186m  dy=0.182m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.28°  steady=0.63°  alt=0.132m  pos=0.319m  dx=0.184m  dy=0.172m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [GRID#2-VAL163226056] (report-only) — population (1 genomes) on FRESH seed 163226056, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.97°  steady=1.82°  jerk=0.0027  mono_viol=8  alt=0.135m  pos=0.358m  dx=0.205m  dy=0.200m  effort=1.891  reward=-2.84
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.97±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.76°  steady=3.00°  alt=0.136m  pos=0.331m  dx=0.183m  dy=0.183m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=3.45°  steady=2.64°  alt=0.136m  pos=0.347m  dx=0.195m  dy=0.197m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.77°  steady=3.00°  alt=0.136m  pos=0.331m  dx=0.183m  dy=0.183m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.18°  steady=0.58°  alt=0.136m  pos=0.325m  dx=0.177m  dy=0.182m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [GRID#2-VAL163226057] (report-only) — population (1 genomes) on FRESH seed 163226057, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.59°  steady=1.09°  jerk=0.0021  mono_viol=6  alt=0.119m  pos=0.351m  dx=0.185m  dy=0.216m  effort=1.916  reward=-2.32
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.59±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.12°  steady=2.71°  alt=0.138m  pos=0.340m  dx=0.186m  dy=0.184m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=1.81°  steady=0.87°  alt=0.138m  pos=0.350m  dx=0.191m  dy=0.196m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.13°  steady=2.71°  alt=0.139m  pos=0.340m  dx=0.186m  dy=0.184m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.35°  steady=0.65°  alt=0.138m  pos=0.324m  dx=0.169m  dy=0.179m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [GRID#2-VAL163226058] (report-only) — population (1 genomes) on FRESH seed 163226058, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.60°  steady=1.16°  jerk=0.0023  mono_viol=6  alt=0.120m  pos=0.353m  dx=0.212m  dy=0.202m  effort=1.891  reward=-2.37
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.60±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.22°  steady=2.66°  alt=0.140m  pos=0.341m  dx=0.189m  dy=0.189m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.31°  steady=1.38°  alt=0.140m  pos=0.354m  dx=0.200m  dy=0.200m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.23°  steady=2.66°  alt=0.140m  pos=0.341m  dx=0.189m  dy=0.189m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.29°  steady=0.62°  alt=0.140m  pos=0.330m  dx=0.183m  dy=0.181m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [NEURONS#0-VAL163226054] (report-only) — population (1 genomes) on FRESH seed 163226054, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.35°  steady=0.88°  jerk=0.0021  mono_viol=5  alt=0.164m  pos=0.351m  dx=0.179m  dy=0.197m  effort=2.129  reward=-1.81
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.35±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.30°  steady=1.67°  alt=0.178m  pos=0.350m  dx=0.176m  dy=0.179m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=1.99°  steady=1.39°  alt=0.178m  pos=0.365m  dx=0.189m  dy=0.193m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.30°  steady=1.67°  alt=0.178m  pos=0.350m  dx=0.176m  dy=0.179m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.08°  steady=0.51°  alt=0.178m  pos=0.348m  dx=0.174m  dy=0.178m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [NEURONS#0-VAL163226055] (report-only) — population (1 genomes) on FRESH seed 163226055, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.57°  steady=0.88°  jerk=0.0022  mono_viol=5  alt=0.123m  pos=0.343m  dx=0.206m  dy=0.199m  effort=1.914  reward=-2.33
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.57±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.92°  steady=2.39°  alt=0.132m  pos=0.328m  dx=0.186m  dy=0.182m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.06°  steady=1.21°  alt=0.132m  pos=0.342m  dx=0.200m  dy=0.190m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.93°  steady=2.39°  alt=0.132m  pos=0.328m  dx=0.186m  dy=0.182m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.28°  steady=0.63°  alt=0.132m  pos=0.319m  dx=0.184m  dy=0.172m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [NEURONS#0-VAL163226056] (report-only) — population (1 genomes) on FRESH seed 163226056, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.37°  steady=0.86°  jerk=0.0022  mono_viol=5  alt=0.128m  pos=0.342m  dx=0.185m  dy=0.205m  effort=1.889  reward=-1.80
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.37±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.76°  steady=3.00°  alt=0.136m  pos=0.331m  dx=0.183m  dy=0.183m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=3.45°  steady=2.64°  alt=0.136m  pos=0.347m  dx=0.195m  dy=0.197m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.77°  steady=3.00°  alt=0.136m  pos=0.331m  dx=0.183m  dy=0.183m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.18°  steady=0.58°  alt=0.136m  pos=0.325m  dx=0.177m  dy=0.182m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [NEURONS#0-VAL163226057] (report-only) — population (1 genomes) on FRESH seed 163226057, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.50°  steady=1.05°  jerk=0.0022  mono_viol=5  alt=0.115m  pos=0.340m  dx=0.188m  dy=0.204m  effort=1.916  reward=-2.11
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.50±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.12°  steady=2.71°  alt=0.138m  pos=0.340m  dx=0.186m  dy=0.184m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=1.81°  steady=0.87°  alt=0.138m  pos=0.350m  dx=0.191m  dy=0.196m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.13°  steady=2.71°  alt=0.139m  pos=0.340m  dx=0.186m  dy=0.184m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.35°  steady=0.65°  alt=0.138m  pos=0.324m  dx=0.169m  dy=0.179m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [NEURONS#0-VAL163226058] (report-only) — population (1 genomes) on FRESH seed 163226058, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.36°  steady=0.86°  jerk=0.0022  mono_viol=4  alt=0.116m  pos=0.339m  dx=0.192m  dy=0.206m  effort=1.890  reward=-1.91
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.36±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.22°  steady=2.66°  alt=0.140m  pos=0.341m  dx=0.189m  dy=0.189m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.31°  steady=1.38°  alt=0.140m  pos=0.354m  dx=0.200m  dy=0.200m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.23°  steady=2.66°  alt=0.140m  pos=0.341m  dx=0.189m  dy=0.189m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.29°  steady=0.62°  alt=0.140m  pos=0.330m  dx=0.183m  dy=0.181m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [NEURONS#1-VAL163226054] (report-only) — population (1 genomes) on FRESH seed 163226054, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.41°  steady=1.03°  jerk=0.0021  mono_viol=7  alt=0.166m  pos=0.363m  dx=0.203m  dy=0.191m  effort=2.132  reward=-1.88
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.41±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.30°  steady=1.67°  alt=0.178m  pos=0.350m  dx=0.176m  dy=0.179m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=1.99°  steady=1.39°  alt=0.178m  pos=0.365m  dx=0.189m  dy=0.193m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.30°  steady=1.67°  alt=0.178m  pos=0.350m  dx=0.176m  dy=0.179m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.08°  steady=0.51°  alt=0.178m  pos=0.348m  dx=0.174m  dy=0.178m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [NEURONS#1-VAL163226055] (report-only) — population (1 genomes) on FRESH seed 163226055, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.62°  steady=1.24°  jerk=0.0022  mono_viol=7  alt=0.121m  pos=0.338m  dx=0.207m  dy=0.188m  effort=1.915  reward=-2.34
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.62±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.92°  steady=2.39°  alt=0.132m  pos=0.328m  dx=0.186m  dy=0.182m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.06°  steady=1.21°  alt=0.132m  pos=0.342m  dx=0.200m  dy=0.190m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.93°  steady=2.39°  alt=0.132m  pos=0.328m  dx=0.186m  dy=0.182m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.28°  steady=0.63°  alt=0.132m  pos=0.319m  dx=0.184m  dy=0.172m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [NEURONS#1-VAL163226056] (report-only) — population (1 genomes) on FRESH seed 163226056, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.39°  steady=0.94°  jerk=0.0023  mono_viol=7  alt=0.131m  pos=0.362m  dx=0.216m  dy=0.198m  effort=1.891  reward=-1.82
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.39±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.76°  steady=3.00°  alt=0.136m  pos=0.331m  dx=0.183m  dy=0.183m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=3.45°  steady=2.64°  alt=0.136m  pos=0.347m  dx=0.195m  dy=0.197m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.77°  steady=3.00°  alt=0.136m  pos=0.331m  dx=0.183m  dy=0.183m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.18°  steady=0.58°  alt=0.136m  pos=0.325m  dx=0.177m  dy=0.182m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [NEURONS#1-VAL163226057] (report-only) — population (1 genomes) on FRESH seed 163226057, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.50°  steady=1.07°  jerk=0.0024  mono_viol=8  alt=0.117m  pos=0.342m  dx=0.193m  dy=0.200m  effort=1.916  reward=-2.16
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.50±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.12°  steady=2.71°  alt=0.138m  pos=0.340m  dx=0.186m  dy=0.184m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=1.81°  steady=0.87°  alt=0.138m  pos=0.350m  dx=0.191m  dy=0.196m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.13°  steady=2.71°  alt=0.139m  pos=0.340m  dx=0.186m  dy=0.184m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.35°  steady=0.65°  alt=0.138m  pos=0.324m  dx=0.169m  dy=0.179m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [NEURONS#1-VAL163226058] (report-only) — population (1 genomes) on FRESH seed 163226058, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.63°  steady=1.22°  jerk=0.0023  mono_viol=7  alt=0.113m  pos=0.349m  dx=0.218m  dy=0.197m  effort=1.891  reward=-2.41
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.63±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.22°  steady=2.66°  alt=0.140m  pos=0.341m  dx=0.189m  dy=0.189m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.31°  steady=1.38°  alt=0.140m  pos=0.354m  dx=0.200m  dy=0.200m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.23°  steady=2.66°  alt=0.140m  pos=0.341m  dx=0.189m  dy=0.189m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.29°  steady=0.62°  alt=0.140m  pos=0.330m  dx=0.183m  dy=0.181m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [NEURONS#2-VAL163226054] (report-only) — population (1 genomes) on FRESH seed 163226054, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.49°  steady=1.27°  jerk=0.0021  mono_viol=5  alt=0.171m  pos=0.370m  dx=0.193m  dy=0.203m  effort=2.128  reward=-1.98
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.49±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.30°  steady=1.67°  alt=0.178m  pos=0.350m  dx=0.176m  dy=0.179m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=1.99°  steady=1.39°  alt=0.178m  pos=0.365m  dx=0.189m  dy=0.193m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.30°  steady=1.67°  alt=0.178m  pos=0.350m  dx=0.176m  dy=0.179m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.08°  steady=0.51°  alt=0.178m  pos=0.348m  dx=0.174m  dy=0.178m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [NEURONS#2-VAL163226055] (report-only) — population (1 genomes) on FRESH seed 163226055, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.65°  steady=1.25°  jerk=0.0022  mono_viol=5  alt=0.122m  pos=0.340m  dx=0.207m  dy=0.187m  effort=1.914  reward=-2.44
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.65±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.92°  steady=2.39°  alt=0.132m  pos=0.328m  dx=0.186m  dy=0.182m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.06°  steady=1.21°  alt=0.132m  pos=0.342m  dx=0.200m  dy=0.190m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.93°  steady=2.39°  alt=0.132m  pos=0.328m  dx=0.186m  dy=0.182m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.28°  steady=0.63°  alt=0.132m  pos=0.319m  dx=0.184m  dy=0.172m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [NEURONS#2-VAL163226056] (report-only) — population (1 genomes) on FRESH seed 163226056, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.63°  steady=1.36°  jerk=0.0022  mono_viol=5  alt=0.125m  pos=0.351m  dx=0.206m  dy=0.196m  effort=1.890  reward=-2.19
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.63±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.76°  steady=3.00°  alt=0.136m  pos=0.331m  dx=0.183m  dy=0.183m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=3.45°  steady=2.64°  alt=0.136m  pos=0.347m  dx=0.195m  dy=0.197m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.77°  steady=3.00°  alt=0.136m  pos=0.331m  dx=0.183m  dy=0.183m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.18°  steady=0.58°  alt=0.136m  pos=0.325m  dx=0.177m  dy=0.182m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [NEURONS#2-VAL163226057] (report-only) — population (1 genomes) on FRESH seed 163226057, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.48°  steady=1.12°  jerk=0.0022  mono_viol=5  alt=0.113m  pos=0.340m  dx=0.178m  dy=0.210m  effort=1.915  reward=-2.17
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.48±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.12°  steady=2.71°  alt=0.138m  pos=0.340m  dx=0.186m  dy=0.184m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=1.81°  steady=0.87°  alt=0.138m  pos=0.350m  dx=0.191m  dy=0.196m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.13°  steady=2.71°  alt=0.139m  pos=0.340m  dx=0.186m  dy=0.184m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.35°  steady=0.65°  alt=0.138m  pos=0.324m  dx=0.169m  dy=0.179m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [NEURONS#2-VAL163226058] (report-only) — population (1 genomes) on FRESH seed 163226058, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.52°  steady=1.05°  jerk=0.0023  mono_viol=5  alt=0.116m  pos=0.345m  dx=0.208m  dy=0.195m  effort=1.890  reward=-2.18
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.52±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.22°  steady=2.66°  alt=0.140m  pos=0.341m  dx=0.189m  dy=0.189m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.31°  steady=1.38°  alt=0.140m  pos=0.354m  dx=0.200m  dy=0.200m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.23°  steady=2.66°  alt=0.140m  pos=0.341m  dx=0.189m  dy=0.189m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.29°  steady=0.62°  alt=0.140m  pos=0.330m  dx=0.183m  dy=0.181m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#0-VAL163226054] (report-only) — population (1 genomes) on FRESH seed 163226054, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.35°  steady=0.88°  jerk=0.0021  mono_viol=5  alt=0.164m  pos=0.351m  dx=0.179m  dy=0.197m  effort=2.129  reward=-1.81
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.35±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.30°  steady=1.67°  alt=0.178m  pos=0.350m  dx=0.176m  dy=0.179m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=1.99°  steady=1.39°  alt=0.178m  pos=0.365m  dx=0.189m  dy=0.193m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.30°  steady=1.67°  alt=0.178m  pos=0.350m  dx=0.176m  dy=0.179m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.08°  steady=0.51°  alt=0.178m  pos=0.348m  dx=0.174m  dy=0.178m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#0-VAL163226055] (report-only) — population (1 genomes) on FRESH seed 163226055, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.57°  steady=0.88°  jerk=0.0022  mono_viol=5  alt=0.123m  pos=0.343m  dx=0.206m  dy=0.199m  effort=1.914  reward=-2.33
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.57±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.92°  steady=2.39°  alt=0.132m  pos=0.328m  dx=0.186m  dy=0.182m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.06°  steady=1.21°  alt=0.132m  pos=0.342m  dx=0.200m  dy=0.190m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.93°  steady=2.39°  alt=0.132m  pos=0.328m  dx=0.186m  dy=0.182m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.28°  steady=0.63°  alt=0.132m  pos=0.319m  dx=0.184m  dy=0.172m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#0-VAL163226056] (report-only) — population (1 genomes) on FRESH seed 163226056, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.37°  steady=0.86°  jerk=0.0022  mono_viol=5  alt=0.128m  pos=0.342m  dx=0.185m  dy=0.205m  effort=1.889  reward=-1.80
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.37±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.76°  steady=3.00°  alt=0.136m  pos=0.331m  dx=0.183m  dy=0.183m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=3.45°  steady=2.64°  alt=0.136m  pos=0.347m  dx=0.195m  dy=0.197m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.77°  steady=3.00°  alt=0.136m  pos=0.331m  dx=0.183m  dy=0.183m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.18°  steady=0.58°  alt=0.136m  pos=0.325m  dx=0.177m  dy=0.182m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#0-VAL163226057] (report-only) — population (1 genomes) on FRESH seed 163226057, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.50°  steady=1.05°  jerk=0.0022  mono_viol=5  alt=0.115m  pos=0.340m  dx=0.188m  dy=0.204m  effort=1.916  reward=-2.11
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.50±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.12°  steady=2.71°  alt=0.138m  pos=0.340m  dx=0.186m  dy=0.184m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=1.81°  steady=0.87°  alt=0.138m  pos=0.350m  dx=0.191m  dy=0.196m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.13°  steady=2.71°  alt=0.139m  pos=0.340m  dx=0.186m  dy=0.184m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.35°  steady=0.65°  alt=0.138m  pos=0.324m  dx=0.169m  dy=0.179m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#0-VAL163226058] (report-only) — population (1 genomes) on FRESH seed 163226058, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.36°  steady=0.86°  jerk=0.0022  mono_viol=4  alt=0.116m  pos=0.339m  dx=0.192m  dy=0.206m  effort=1.890  reward=-1.91
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.36±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.22°  steady=2.66°  alt=0.140m  pos=0.341m  dx=0.189m  dy=0.189m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.31°  steady=1.38°  alt=0.140m  pos=0.354m  dx=0.200m  dy=0.200m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.23°  steady=2.66°  alt=0.140m  pos=0.341m  dx=0.189m  dy=0.189m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.29°  steady=0.62°  alt=0.140m  pos=0.330m  dx=0.183m  dy=0.181m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#1-VAL163226054] (report-only) — population (1 genomes) on FRESH seed 163226054, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.41°  steady=1.03°  jerk=0.0021  mono_viol=7  alt=0.166m  pos=0.363m  dx=0.203m  dy=0.191m  effort=2.132  reward=-1.88
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.41±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.30°  steady=1.67°  alt=0.178m  pos=0.350m  dx=0.176m  dy=0.179m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=1.99°  steady=1.39°  alt=0.178m  pos=0.365m  dx=0.189m  dy=0.193m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.30°  steady=1.67°  alt=0.178m  pos=0.350m  dx=0.176m  dy=0.179m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.08°  steady=0.51°  alt=0.178m  pos=0.348m  dx=0.174m  dy=0.178m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#1-VAL163226055] (report-only) — population (1 genomes) on FRESH seed 163226055, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.62°  steady=1.24°  jerk=0.0022  mono_viol=7  alt=0.121m  pos=0.338m  dx=0.207m  dy=0.188m  effort=1.915  reward=-2.34
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.62±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.92°  steady=2.39°  alt=0.132m  pos=0.328m  dx=0.186m  dy=0.182m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.06°  steady=1.21°  alt=0.132m  pos=0.342m  dx=0.200m  dy=0.190m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.93°  steady=2.39°  alt=0.132m  pos=0.328m  dx=0.186m  dy=0.182m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.28°  steady=0.63°  alt=0.132m  pos=0.319m  dx=0.184m  dy=0.172m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#1-VAL163226056] (report-only) — population (1 genomes) on FRESH seed 163226056, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.39°  steady=0.94°  jerk=0.0023  mono_viol=7  alt=0.131m  pos=0.362m  dx=0.216m  dy=0.198m  effort=1.891  reward=-1.82
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.39±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.76°  steady=3.00°  alt=0.136m  pos=0.331m  dx=0.183m  dy=0.183m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=3.45°  steady=2.64°  alt=0.136m  pos=0.347m  dx=0.195m  dy=0.197m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.77°  steady=3.00°  alt=0.136m  pos=0.331m  dx=0.183m  dy=0.183m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.18°  steady=0.58°  alt=0.136m  pos=0.325m  dx=0.177m  dy=0.182m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#1-VAL163226057] (report-only) — population (1 genomes) on FRESH seed 163226057, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.50°  steady=1.07°  jerk=0.0024  mono_viol=8  alt=0.117m  pos=0.342m  dx=0.193m  dy=0.200m  effort=1.916  reward=-2.16
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.50±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.12°  steady=2.71°  alt=0.138m  pos=0.340m  dx=0.186m  dy=0.184m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=1.81°  steady=0.87°  alt=0.138m  pos=0.350m  dx=0.191m  dy=0.196m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.13°  steady=2.71°  alt=0.139m  pos=0.340m  dx=0.186m  dy=0.184m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.35°  steady=0.65°  alt=0.138m  pos=0.324m  dx=0.169m  dy=0.179m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#1-VAL163226058] (report-only) — population (1 genomes) on FRESH seed 163226058, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.63°  steady=1.22°  jerk=0.0023  mono_viol=7  alt=0.113m  pos=0.349m  dx=0.218m  dy=0.197m  effort=1.891  reward=-2.41
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.63±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.22°  steady=2.66°  alt=0.140m  pos=0.341m  dx=0.189m  dy=0.189m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.31°  steady=1.38°  alt=0.140m  pos=0.354m  dx=0.200m  dy=0.200m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.23°  steady=2.66°  alt=0.140m  pos=0.341m  dx=0.189m  dy=0.189m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.29°  steady=0.62°  alt=0.140m  pos=0.330m  dx=0.183m  dy=0.181m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#2-VAL163226054] (report-only) — population (1 genomes) on FRESH seed 163226054, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.41°  steady=1.05°  jerk=0.0022  mono_viol=5  alt=0.168m  pos=0.362m  dx=0.190m  dy=0.199m  effort=2.128  reward=-1.88
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.41±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.30°  steady=1.67°  alt=0.178m  pos=0.350m  dx=0.176m  dy=0.179m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=1.99°  steady=1.39°  alt=0.178m  pos=0.365m  dx=0.189m  dy=0.193m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.30°  steady=1.67°  alt=0.178m  pos=0.350m  dx=0.176m  dy=0.179m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.08°  steady=0.51°  alt=0.178m  pos=0.348m  dx=0.174m  dy=0.178m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#2-VAL163226055] (report-only) — population (1 genomes) on FRESH seed 163226055, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.55°  steady=1.03°  jerk=0.0023  mono_viol=5  alt=0.123m  pos=0.342m  dx=0.207m  dy=0.194m  effort=1.914  reward=-2.33
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.55±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.92°  steady=2.39°  alt=0.132m  pos=0.328m  dx=0.186m  dy=0.182m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.06°  steady=1.21°  alt=0.132m  pos=0.342m  dx=0.200m  dy=0.190m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.93°  steady=2.39°  alt=0.132m  pos=0.328m  dx=0.186m  dy=0.182m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.28°  steady=0.63°  alt=0.132m  pos=0.319m  dx=0.184m  dy=0.172m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#2-VAL163226056] (report-only) — population (1 genomes) on FRESH seed 163226056, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.34°  steady=1.01°  jerk=0.0024  mono_viol=5  alt=0.132m  pos=0.356m  dx=0.202m  dy=0.204m  effort=1.890  reward=-1.75
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.34±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.76°  steady=3.00°  alt=0.136m  pos=0.331m  dx=0.183m  dy=0.183m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=3.45°  steady=2.64°  alt=0.136m  pos=0.347m  dx=0.195m  dy=0.197m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.77°  steady=3.00°  alt=0.136m  pos=0.331m  dx=0.183m  dy=0.183m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.18°  steady=0.58°  alt=0.136m  pos=0.325m  dx=0.177m  dy=0.182m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#2-VAL163226057] (report-only) — population (1 genomes) on FRESH seed 163226057, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.43°  steady=0.95°  jerk=0.0023  mono_viol=6  alt=0.115m  pos=0.343m  dx=0.187m  dy=0.208m  effort=1.917  reward=-2.07
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.43±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.12°  steady=2.71°  alt=0.138m  pos=0.340m  dx=0.186m  dy=0.184m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=1.81°  steady=0.87°  alt=0.138m  pos=0.350m  dx=0.191m  dy=0.196m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.13°  steady=2.71°  alt=0.139m  pos=0.340m  dx=0.186m  dy=0.184m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.35°  steady=0.65°  alt=0.138m  pos=0.324m  dx=0.169m  dy=0.179m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#2-VAL163226058] (report-only) — population (1 genomes) on FRESH seed 163226058, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.64°  steady=1.11°  jerk=0.0023  mono_viol=5  alt=0.121m  pos=0.352m  dx=0.204m  dy=0.208m  effort=1.890  reward=-2.43
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.64±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.22°  steady=2.66°  alt=0.140m  pos=0.341m  dx=0.189m  dy=0.189m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.31°  steady=1.38°  alt=0.140m  pos=0.354m  dx=0.200m  dy=0.200m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.23°  steady=2.66°  alt=0.140m  pos=0.341m  dx=0.189m  dy=0.189m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.29°  steady=0.62°  alt=0.140m  pos=0.330m  dx=0.183m  dy=0.181m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  STAGE TABLE — every stage published; headline = val-selected (union rank)
+========================================================================
+  GRID      (no held-out)
+    GRID#0         val 100.0%/1.54°/1.05°     rw -2.23 jrk 0.0023 mono 5.9 alt 0.131m pos 0.347m fit=-0.0586
+    GRID#1         val 100.0%/2.03°/1.59°     rw -3.21 jrk 0.0025 mono 8.7 alt 0.131m pos 0.357m fit=2.0102
+    GRID#2         val 100.0%/1.66°/1.32°     rw -2.39 jrk 0.0023 mono 5.9 alt 0.135m pos 0.355m fit=1.0513
+  NEURONS   (no held-out)
+    NEURONS#0      val 100.0%/1.43°/0.90°     rw -1.99 jrk 0.0022 mono 4.8 alt 0.129m pos 0.343m fit=-0.8679  <- HEADLINE
+    NEURONS#1      val 100.0%/1.51°/1.10°     rw -2.12 jrk 0.0023 mono 7.5 alt 0.130m pos 0.351m fit=0.0000
+    NEURONS#2      val 100.0%/1.55°/1.21°     rw -2.19 jrk 0.0022 mono 4.8 alt 0.129m pos 0.349m fit=0.3056
+  MEMORY    (no held-out)
+    MEMORY#0       val 100.0%/1.43°/0.90°     rw -1.99 jrk 0.0022 mono 4.8 alt 0.129m pos 0.343m fit=-0.8679
+    MEMORY#1       val 100.0%/1.51°/1.10°     rw -2.12 jrk 0.0023 mono 7.5 alt 0.130m pos 0.351m fit=0.0000
+    MEMORY#2       val 100.0%/1.47°/1.03°     rw -2.09 jrk 0.0023 mono 5.1 alt 0.132m pos 0.351m fit=-0.1811
+  (published triple = REPORT seeds, always pop[0]; 'val' = mean over 5 disjoint val seeds 163226054..163226058; fit = ZRank(gate=(0.70,8.0°), err²=0.2557, stable=0.2045, steady=0.358, alt=0.0, pos=0.1818), ONE z-score weighted-rank over ALL 9 candidates — top-3 of every stage together)
+  [stage-select] HEADLINE stage=NEURONS genome=NEURONS#0 (union rank over 9 candidates = top-3 of every stage, on 5 val seeds; NEVER on the test seeds)
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990101, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.30°  steady=0.88°  jerk=0.0021  mono_viol=5  alt=0.159m  pos=0.367m  dx=0.188m  dy=0.198m  effort=1.785  reward=-1.78
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.30±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.59°  steady=2.15°  alt=0.158m  pos=0.346m  dx=0.181m  dy=0.182m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=1.41°  steady=0.61°  alt=0.159m  pos=0.360m  dx=0.194m  dy=0.193m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.60°  steady=2.15°  alt=0.159m  pos=0.346m  dx=0.181m  dy=0.181m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.25°  steady=0.61°  alt=0.159m  pos=0.341m  dx=0.179m  dy=0.178m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990102, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.33°  steady=0.88°  jerk=0.0022  mono_viol=4  alt=0.139m  pos=0.352m  dx=0.182m  dy=0.212m  effort=1.835  reward=-1.75
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.33±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.43°  steady=1.90°  alt=0.150m  pos=0.337m  dx=0.165m  dy=0.195m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=1.79°  steady=1.09°  alt=0.150m  pos=0.351m  dx=0.177m  dy=0.205m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.43°  steady=1.90°  alt=0.151m  pos=0.336m  dx=0.165m  dy=0.195m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.14°  steady=0.57°  alt=0.151m  pos=0.330m  dx=0.164m  dy=0.184m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990103, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.39°  steady=0.90°  jerk=0.0022  mono_viol=6  alt=0.193m  pos=0.404m  dx=0.214m  dy=0.203m  effort=2.140  reward=-1.95
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.39±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.27°  steady=2.81°  alt=0.187m  pos=0.375m  dx=0.197m  dy=0.186m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.22°  steady=1.27°  alt=0.187m  pos=0.388m  dx=0.210m  dy=0.196m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.28°  steady=2.81°  alt=0.187m  pos=0.375m  dx=0.197m  dy=0.186m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.44°  steady=0.81°  alt=0.187m  pos=0.367m  dx=0.192m  dy=0.179m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990104, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.54°  steady=1.03°  jerk=0.0022  mono_viol=4  alt=0.135m  pos=0.360m  dx=0.182m  dy=0.217m  effort=1.832  reward=-2.06
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.54±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.95°  steady=2.34°  alt=0.154m  pos=0.347m  dx=0.179m  dy=0.195m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.34°  steady=1.55°  alt=0.154m  pos=0.361m  dx=0.191m  dy=0.206m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.95°  steady=2.33°  alt=0.154m  pos=0.347m  dx=0.179m  dy=0.195m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.20°  steady=0.59°  alt=0.154m  pos=0.338m  dx=0.175m  dy=0.185m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990105, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.61°  steady=1.14°  jerk=0.0022  mono_viol=5  alt=0.132m  pos=0.347m  dx=0.189m  dy=0.199m  effort=2.016  reward=-2.37
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.61±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.32°  steady=2.96°  alt=0.146m  pos=0.340m  dx=0.189m  dy=0.175m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=1.87°  steady=0.90°  alt=0.146m  pos=0.351m  dx=0.196m  dy=0.188m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.34°  steady=2.96°  alt=0.146m  pos=0.340m  dx=0.189m  dy=0.175m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.49°  steady=0.79°  alt=0.146m  pos=0.329m  dx=0.178m  dy=0.174m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990106, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.28°  steady=0.83°  jerk=0.0021  mono_viol=4  alt=0.167m  pos=0.356m  dx=0.182m  dy=0.190m  effort=1.727  reward=-1.65
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.28±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.36°  steady=1.72°  alt=0.177m  pos=0.352m  dx=0.184m  dy=0.170m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.02°  steady=1.41°  alt=0.177m  pos=0.366m  dx=0.195m  dy=0.182m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.35°  steady=1.71°  alt=0.177m  pos=0.352m  dx=0.183m  dy=0.170m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.06°  steady=0.50°  alt=0.177m  pos=0.348m  dx=0.178m  dy=0.169m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990107, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.36°  steady=0.98°  jerk=0.0022  mono_viol=4  alt=0.117m  pos=0.350m  dx=0.201m  dy=0.215m  effort=1.953  reward=-1.89
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.36±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.95°  steady=2.29°  alt=0.138m  pos=0.336m  dx=0.182m  dy=0.196m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.54°  steady=1.82°  alt=0.138m  pos=0.353m  dx=0.195m  dy=0.210m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.95°  steady=2.29°  alt=0.138m  pos=0.336m  dx=0.182m  dy=0.196m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.18°  steady=0.57°  alt=0.138m  pos=0.330m  dx=0.179m  dy=0.191m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990108, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.47°  steady=0.97°  jerk=0.0021  mono_viol=5  alt=0.122m  pos=0.360m  dx=0.218m  dy=0.206m  effort=1.993  reward=-1.99
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.47±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.76°  steady=2.10°  alt=0.143m  pos=0.345m  dx=0.207m  dy=0.178m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.42°  steady=1.76°  alt=0.143m  pos=0.363m  dx=0.222m  dy=0.191m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.76°  steady=2.10°  alt=0.143m  pos=0.345m  dx=0.207m  dy=0.177m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.16°  steady=0.58°  alt=0.143m  pos=0.342m  dx=0.204m  dy=0.176m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990109, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.36°  steady=0.96°  jerk=0.0021  mono_viol=5  alt=0.124m  pos=0.334m  dx=0.186m  dy=0.195m  effort=1.936  reward=-1.77
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.36±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.89°  steady=2.35°  alt=0.148m  pos=0.333m  dx=0.186m  dy=0.174m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.21°  steady=1.42°  alt=0.148m  pos=0.347m  dx=0.196m  dy=0.188m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.90°  steady=2.35°  alt=0.148m  pos=0.333m  dx=0.186m  dy=0.174m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.22°  steady=0.62°  alt=0.148m  pos=0.326m  dx=0.177m  dy=0.173m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990110, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.35°  steady=0.91°  jerk=0.0021  mono_viol=4  alt=0.125m  pos=0.347m  dx=0.187m  dy=0.217m  effort=1.892  reward=-1.75
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.35±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.90°  steady=2.26°  alt=0.134m  pos=0.334m  dx=0.176m  dy=0.198m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.51°  steady=1.80°  alt=0.134m  pos=0.351m  dx=0.190m  dy=0.211m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.90°  steady=2.26°  alt=0.134m  pos=0.334m  dx=0.176m  dy=0.198m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.14°  steady=0.56°  alt=0.134m  pos=0.329m  dx=0.176m  dy=0.192m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990111, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.85°  steady=1.24°  jerk=0.0023  mono_viol=6  alt=0.123m  pos=0.344m  dx=0.172m  dy=0.222m  effort=2.001  reward=-3.18
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.85±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=91.0%  err=4.30°  steady=3.90°  alt=0.132m  pos=0.351m  dx=0.188m  dy=0.208m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.49°  steady=1.23°  alt=0.132m  pos=0.353m  dx=0.189m  dy=0.214m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=91.0%  err=4.33°  steady=3.91°  alt=0.132m  pos=0.350m  dx=0.188m  dy=0.207m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.75°  steady=0.89°  alt=0.132m  pos=0.320m  dx=0.165m  dy=0.189m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990112, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=99.0%  err=2.03°  steady=1.40°  jerk=0.0023  mono_viol=5  alt=0.148m  pos=0.354m  dx=0.193m  dy=0.206m  effort=2.058  reward=-3.98
+  population (held-out, descriptive):        stable=99.0±0.0%  err=2.03±0.00°   (pop max stable=99.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=81.0%  err=4.56°  steady=4.19°  alt=0.166m  pos=0.372m  dx=0.221m  dy=0.184m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.59°  steady=1.29°  alt=0.166m  pos=0.374m  dx=0.214m  dy=0.198m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=81.0%  err=4.58°  steady=4.19°  alt=0.167m  pos=0.372m  dx=0.221m  dy=0.183m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.94°  steady=1.06°  alt=0.166m  pos=0.341m  dx=0.180m  dy=0.181m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990113, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.42°  steady=0.98°  jerk=0.0021  mono_viol=5  alt=0.129m  pos=0.359m  dx=0.209m  dy=0.207m  effort=2.000  reward=-1.90
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.42±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.75°  steady=2.17°  alt=0.151m  pos=0.340m  dx=0.191m  dy=0.182m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.19°  steady=1.44°  alt=0.150m  pos=0.356m  dx=0.205m  dy=0.194m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.76°  steady=2.17°  alt=0.151m  pos=0.340m  dx=0.191m  dy=0.181m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.21°  steady=0.61°  alt=0.151m  pos=0.335m  dx=0.188m  dy=0.177m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990114, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.27°  steady=0.85°  jerk=0.0021  mono_viol=5  alt=0.146m  pos=0.374m  dx=0.205m  dy=0.221m  effort=1.797  reward=-1.67
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.27±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.05°  steady=1.59°  alt=0.163m  pos=0.362m  dx=0.201m  dy=0.194m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=1.14°  steady=0.49°  alt=0.163m  pos=0.379m  dx=0.214m  dy=0.209m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.05°  steady=1.59°  alt=0.163m  pos=0.362m  dx=0.200m  dy=0.194m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.18°  steady=0.59°  alt=0.163m  pos=0.358m  dx=0.196m  dy=0.194m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990115, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.77°  steady=1.07°  jerk=0.0023  mono_viol=5  alt=0.145m  pos=0.353m  dx=0.188m  dy=0.212m  effort=2.083  reward=-2.73
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.77±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=67.0%  err=4.81°  steady=3.94°  alt=0.165m  pos=0.356m  dx=0.181m  dy=0.193m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=4.34°  steady=3.28°  alt=0.165m  pos=0.368m  dx=0.195m  dy=0.201m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=67.0%  err=4.82°  steady=3.93°  alt=0.165m  pos=0.356m  dx=0.181m  dy=0.193m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.40°  steady=0.73°  alt=0.165m  pos=0.345m  dx=0.179m  dy=0.182m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990116, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.45°  steady=1.00°  jerk=0.0021  mono_viol=5  alt=0.151m  pos=0.346m  dx=0.174m  dy=0.195m  effort=1.779  reward=-1.94
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.45±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.14°  steady=1.68°  alt=0.159m  pos=0.332m  dx=0.169m  dy=0.174m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=1.21°  steady=0.53°  alt=0.159m  pos=0.345m  dx=0.181m  dy=0.184m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.14°  steady=1.68°  alt=0.159m  pos=0.332m  dx=0.169m  dy=0.173m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.12°  steady=0.52°  alt=0.159m  pos=0.327m  dx=0.167m  dy=0.169m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990117, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.47°  steady=0.90°  jerk=0.0023  mono_viol=5  alt=0.124m  pos=0.340m  dx=0.185m  dy=0.207m  effort=1.888  reward=-2.08
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.47±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.35°  steady=2.80°  alt=0.136m  pos=0.334m  dx=0.180m  dy=0.191m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.38°  steady=1.41°  alt=0.136m  pos=0.345m  dx=0.192m  dy=0.198m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.36°  steady=2.80°  alt=0.136m  pos=0.333m  dx=0.180m  dy=0.190m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.31°  steady=0.62°  alt=0.136m  pos=0.321m  dx=0.175m  dy=0.179m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990118, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=2.09°  steady=1.14°  jerk=0.0025  mono_viol=5  alt=0.155m  pos=0.375m  dx=0.200m  dy=0.211m  effort=1.817  reward=-3.98
+  population (held-out, descriptive):        stable=100.0±0.0%  err=2.09±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=56.0%  err=4.89°  steady=4.24°  alt=0.150m  pos=0.354m  dx=0.184m  dy=0.201m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=3.51°  steady=2.17°  alt=0.150m  pos=0.363m  dx=0.198m  dy=0.203m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=56.0%  err=4.91°  steady=4.24°  alt=0.150m  pos=0.354m  dx=0.184m  dy=0.201m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.71°  steady=0.81°  alt=0.150m  pos=0.337m  dx=0.181m  dy=0.180m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990119, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.37°  steady=0.93°  jerk=0.0022  mono_viol=5  alt=0.159m  pos=0.367m  dx=0.201m  dy=0.192m  effort=1.803  reward=-1.85
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.37±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.61°  steady=2.07°  alt=0.151m  pos=0.340m  dx=0.191m  dy=0.171m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=1.78°  steady=1.00°  alt=0.151m  pos=0.355m  dx=0.204m  dy=0.181m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.61°  steady=2.07°  alt=0.151m  pos=0.340m  dx=0.191m  dy=0.171m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.21°  steady=0.56°  alt=0.151m  pos=0.334m  dx=0.186m  dy=0.166m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990120, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.30°  steady=0.83°  jerk=0.0021  mono_viol=4  alt=0.153m  pos=0.374m  dx=0.212m  dy=0.202m  effort=1.743  reward=-1.72
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.30±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.83°  steady=2.22°  alt=0.175m  pos=0.369m  dx=0.205m  dy=0.181m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.20°  steady=1.43°  alt=0.175m  pos=0.383m  dx=0.218m  dy=0.194m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.83°  steady=2.22°  alt=0.176m  pos=0.368m  dx=0.205m  dy=0.181m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.19°  steady=0.57°  alt=0.175m  pos=0.362m  dx=0.199m  dy=0.179m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990121, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.99°  steady=1.07°  jerk=0.0025  mono_viol=5  alt=0.129m  pos=0.351m  dx=0.186m  dy=0.219m  effort=1.948  reward=-4.05
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.99±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=39.0%  err=5.12°  steady=4.60°  alt=0.140m  pos=0.358m  dx=0.186m  dy=0.213m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=3.30°  steady=1.86°  alt=0.139m  pos=0.364m  dx=0.197m  dy=0.215m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=36.0%  err=5.14°  steady=4.60°  alt=0.140m  pos=0.358m  dx=0.186m  dy=0.213m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.94°  steady=1.01°  alt=0.140m  pos=0.333m  dx=0.180m  dy=0.188m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990122, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.47°  steady=0.96°  jerk=0.0022  mono_viol=5  alt=0.112m  pos=0.338m  dx=0.200m  dy=0.199m  effort=2.036  reward=-2.18
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.47±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.62°  steady=3.01°  alt=0.156m  pos=0.353m  dx=0.198m  dy=0.182m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.74°  steady=1.75°  alt=0.156m  pos=0.364m  dx=0.207m  dy=0.194m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.63°  steady=3.01°  alt=0.157m  pos=0.352m  dx=0.198m  dy=0.181m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.41°  steady=0.71°  alt=0.157m  pos=0.340m  dx=0.187m  dy=0.177m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990123, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=2.49°  steady=1.50°  jerk=0.0026  mono_viol=4  alt=0.133m  pos=0.372m  dx=0.185m  dy=0.245m  effort=1.872  reward=-5.55
+  population (held-out, descriptive):        stable=100.0±0.0%  err=2.49±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=18.0%  err=5.53°  steady=4.80°  alt=0.148m  pos=0.380m  dx=0.173m  dy=0.249m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=3.97°  steady=2.44°  alt=0.148m  pos=0.383m  dx=0.183m  dy=0.247m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=17.0%  err=5.55°  steady=4.80°  alt=0.148m  pos=0.380m  dx=0.172m  dy=0.248m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.93°  steady=0.87°  alt=0.148m  pos=0.347m  dx=0.167m  dy=0.211m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990124, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.39°  steady=0.99°  jerk=0.0022  mono_viol=5  alt=0.123m  pos=0.362m  dx=0.227m  dy=0.201m  effort=1.940  reward=-1.89
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.39±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.79°  steady=2.35°  alt=0.137m  pos=0.347m  dx=0.206m  dy=0.184m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=1.75°  steady=0.90°  alt=0.137m  pos=0.362m  dx=0.219m  dy=0.196m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.80°  steady=2.35°  alt=0.137m  pos=0.347m  dx=0.206m  dy=0.183m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.30°  steady=0.65°  alt=0.137m  pos=0.338m  dx=0.200m  dy=0.179m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990125, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.42°  steady=1.13°  jerk=0.0022  mono_viol=4  alt=0.156m  pos=0.352m  dx=0.178m  dy=0.203m  effort=1.775  reward=-1.80
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.42±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.99°  steady=2.30°  alt=0.160m  pos=0.331m  dx=0.163m  dy=0.182m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.78°  steady=2.12°  alt=0.160m  pos=0.345m  dx=0.174m  dy=0.196m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.99°  steady=2.30°  alt=0.161m  pos=0.331m  dx=0.163m  dy=0.182m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.05°  steady=0.54°  alt=0.160m  pos=0.326m  dx=0.157m  dy=0.180m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990126, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.33°  steady=0.85°  jerk=0.0022  mono_viol=5  alt=0.128m  pos=0.345m  dx=0.218m  dy=0.186m  effort=1.951  reward=-1.81
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.33±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.18°  steady=2.75°  alt=0.130m  pos=0.328m  dx=0.201m  dy=0.168m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.07°  steady=1.15°  alt=0.130m  pos=0.341m  dx=0.213m  dy=0.179m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.19°  steady=2.75°  alt=0.130m  pos=0.328m  dx=0.201m  dy=0.168m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.34°  steady=0.69°  alt=0.130m  pos=0.317m  dx=0.193m  dy=0.164m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990127, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.30°  steady=0.89°  jerk=0.0020  mono_viol=5  alt=0.270m  pos=0.453m  dx=0.172m  dy=0.207m  effort=1.653  reward=-1.63
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.30±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=1.30°  steady=0.80°  alt=0.229m  pos=0.391m  dx=0.165m  dy=0.188m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=0.64°  steady=0.18°  alt=0.229m  pos=0.404m  dx=0.177m  dy=0.201m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=1.29°  steady=0.80°  alt=0.229m  pos=0.391m  dx=0.165m  dy=0.188m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.01°  steady=0.52°  alt=0.229m  pos=0.389m  dx=0.164m  dy=0.186m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990128, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.40°  steady=0.93°  jerk=0.0020  mono_viol=6  alt=0.145m  pos=0.368m  dx=0.195m  dy=0.219m  effort=2.064  reward=-1.97
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.40±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.47°  steady=2.02°  alt=0.161m  pos=0.356m  dx=0.174m  dy=0.203m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=1.51°  steady=0.74°  alt=0.161m  pos=0.370m  dx=0.187m  dy=0.212m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=2.47°  steady=2.02°  alt=0.161m  pos=0.356m  dx=0.174m  dy=0.203m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.25°  steady=0.64°  alt=0.161m  pos=0.346m  dx=0.172m  dy=0.192m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990129, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.52°  steady=1.07°  jerk=0.0022  mono_viol=5  alt=0.120m  pos=0.357m  dx=0.192m  dy=0.232m  effort=1.874  reward=-2.01
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.52±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.00°  steady=2.33°  alt=0.146m  pos=0.346m  dx=0.180m  dy=0.206m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.68°  steady=1.97°  alt=0.146m  pos=0.362m  dx=0.194m  dy=0.218m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.00°  steady=2.32°  alt=0.146m  pos=0.346m  dx=0.180m  dy=0.206m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.10°  steady=0.55°  alt=0.146m  pos=0.338m  dx=0.179m  dy=0.197m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990130, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.39°  steady=0.99°  jerk=0.0023  mono_viol=5  alt=0.132m  pos=0.365m  dx=0.195m  dy=0.230m  effort=1.893  reward=-1.96
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.39±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.89°  steady=3.13°  alt=0.135m  pos=0.341m  dx=0.186m  dy=0.200m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=3.39°  steady=2.48°  alt=0.135m  pos=0.358m  dx=0.196m  dy=0.216m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.90°  steady=3.13°  alt=0.135m  pos=0.341m  dx=0.185m  dy=0.199m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.29°  steady=0.63°  alt=0.135m  pos=0.337m  dx=0.178m  dy=0.201m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990131, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=2.10°  steady=1.61°  jerk=0.0024  mono_viol=5  alt=0.133m  pos=0.347m  dx=0.178m  dy=0.217m  effort=2.067  reward=-3.35
+  population (held-out, descriptive):        stable=100.0±0.0%  err=2.10±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.03°  steady=2.34°  alt=0.170m  pos=0.361m  dx=0.180m  dy=0.201m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.75°  steady=2.05°  alt=0.170m  pos=0.376m  dx=0.193m  dy=0.215m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.04°  steady=2.34°  alt=0.170m  pos=0.361m  dx=0.180m  dy=0.201m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.14°  steady=0.53°  alt=0.170m  pos=0.355m  dx=0.176m  dy=0.197m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990132, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.57°  steady=1.05°  jerk=0.0022  mono_viol=6  alt=0.137m  pos=0.363m  dx=0.216m  dy=0.203m  effort=2.083  reward=-2.18
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.57±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=4.20°  steady=3.40°  alt=0.168m  pos=0.356m  dx=0.200m  dy=0.175m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=3.91°  steady=3.07°  alt=0.167m  pos=0.373m  dx=0.216m  dy=0.188m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=4.20°  steady=3.40°  alt=0.168m  pos=0.356m  dx=0.200m  dy=0.174m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.23°  steady=0.66°  alt=0.168m  pos=0.355m  dx=0.199m  dy=0.175m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990133, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.57°  steady=1.03°  jerk=0.0022  mono_viol=5  alt=0.138m  pos=0.372m  dx=0.220m  dy=0.202m  effort=2.006  reward=-2.53
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.57±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=99.0%  err=4.05°  steady=3.45°  alt=0.155m  pos=0.367m  dx=0.221m  dy=0.180m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.85°  steady=1.71°  alt=0.155m  pos=0.377m  dx=0.225m  dy=0.193m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=99.0%  err=4.06°  steady=3.45°  alt=0.155m  pos=0.367m  dx=0.220m  dy=0.180m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.57°  steady=0.80°  alt=0.155m  pos=0.349m  dx=0.198m  dy=0.178m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990134, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=99.0%  err=2.00°  steady=1.09°  jerk=0.0024  mono_viol=5  alt=0.162m  pos=0.362m  dx=0.184m  dy=0.203m  effort=2.106  reward=-4.02
+  population (held-out, descriptive):        stable=99.0±0.0%  err=2.00±0.00°   (pop max stable=99.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=39.0%  err=5.06°  steady=4.58°  alt=0.171m  pos=0.365m  dx=0.171m  dy=0.208m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=3.27°  steady=1.84°  alt=0.170m  pos=0.367m  dx=0.182m  dy=0.204m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=39.0%  err=5.09°  steady=4.59°  alt=0.171m  pos=0.365m  dx=0.170m  dy=0.207m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=2.14°  steady=1.27°  alt=0.171m  pos=0.340m  dx=0.168m  dy=0.176m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-NEURONS#0] (report-only) — population (1 genomes) on FRESH seed 99990135, train/select seed 4196112846
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.60°  steady=0.95°  jerk=0.0023  mono_viol=5  alt=0.149m  pos=0.367m  dx=0.211m  dy=0.204m  effort=2.113  reward=-2.40
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.60±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.70°  steady=3.03°  alt=0.181m  pos=0.368m  dx=0.189m  dy=0.189m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=3.08°  steady=2.17°  alt=0.181m  pos=0.380m  dx=0.204m  dy=0.198m
+  vs PID>rate(h10)[est]  (cascade rival C2 at the outer rate, est-fed):stable=100.0%  err=3.71°  steady=3.03°  alt=0.181m  pos=0.368m  dx=0.189m  dy=0.189m
+  vs MPCOF>rate(h10)[est]  (cascade rival C4 — the mpcof teacher's own law, est-fed):stable=100.0%  err=1.35°  steady=0.73°  alt=0.181m  pos=0.357m  dx=0.187m  dy=0.176m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+  [test-seeds] HEADLINE-NEURONS#0 MULTI-SEED held-out (35 seeds [99990101, 99990102, 99990103, 99990104, 99990105, 99990106, 99990107, 99990108, 99990109, 99990110, 99990111, 99990112, 99990113, 99990114, 99990115, 99990116, 99990117, 99990118, 99990119, 99990120, 99990121, 99990122, 99990123, 99990124, 99990125, 99990126, 99990127, 99990128, 99990129, 99990130, 99990131, 99990132, 99990133, 99990134, 99990135]): stable=99.9±0.2%  err=1.56±0.29°  steady=1.03±0.18°  jerk=0.0022±0.0001  mono_viol=5±0  alt=0.143±0.027m  pos=0.361±0.021m  dx=0.195±0.015m  dy=0.208±0.012m  effort=1.927±0.125  stable_fail=2/3500
+  [stage-select] HEADLINE held-out: stable=99.9% err=1.56°  steady=1.03°  jerk=0.0022  mono_viol=5  alt=0.143m  pos=0.361m  dx=0.195m  dy=0.208m  effort=1.927
+[recalc] PICK logs/controller/ctrl48/ckpt_C-S2-d_wposx2_a49_rf_c200_dres_ct30_full_s1 val_units=5 select=off headline=NEURONS#0 stage=NEURONS report(35 units): stable=99.94% err=1.558°  steady=1.03°  jerk=0.0022  mono_viol=5  alt=0.143m  pos=0.361m  dx=0.195m  dy=0.208m  effort=1.927 fails=2/3500
+      337.53 real       188.34 user         2.57 sys
+          1857536000  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+             1680269  page reclaims
+                  86  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                1346  voluntary context switches
+               26015  involuntary context switches
+       4557486533083  instructions retired
+        764135311409  cycles elapsed
+          1804879960  peak memory footprint
