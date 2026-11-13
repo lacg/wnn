@@ -393,6 +393,87 @@ Read:
 - Caveat as for unswt: WNN rows use the legacy feature ranking; equality with the baselines' top-20 list is not
   verified line by line.
 
+### IDS56U — pre-registered test readout (n=3) (added 13/11/2026)
+
+Pre-registration: `docs/ids56_unweighted_vote_prereg.md` §3 (adoption rule revised in review, §5). Arm `nb02` =
+7501 recipe with `ids_write_rule=vote`, `ids_vote_share=0.02`, `balance_classes=false`, `ids_encoding_dedupe=off`.
+Flows 7543 / 7544 / 7545 (r20421 / r20422 / r20423, the clean seeds θ was NOT chosen on). Controls = IDS-56 lattice
+encoff on the same seeds, not re-flown: 7509 / 7513 / 7517. Decision metric, as pre-registered: GA phase,
+`genome_type=best_f1`, `test_point=final`, mode `margin_val_cal` (τ calibrated on VAL, scored on the 10% TEST
+partition: 152,390 normal / 6,036 attack). F1 = macro-F1. All numbers below are TEST. Source:
+`test_summaries.threshold_metadata`.
+Readout guard: `worker_abi` = 28 for all 6 flows (arm and control equal per pair) → same-build comparison, guard passes.
+The VAL futility gate passed 3/3 earlier; it is not part of this readout.
+
+```
+TEST, GA best_f1 final, margin_val_cal, % (attack-F1 and TPR from the confusion matrix)
+seed   | flow arm/ctl | F1 arm  F1 ctl  dF1   | FPR arm FPR ctl dFPR   | Acc arm Acc ctl dAcc  | aF1 arm aF1 ctl daF1  | TPR arm TPR ctl dTPR  | neurons arm/ctl | cells arm/ctl
+-------+--------------+-----------------------+------------------------+-----------------------+-----------------------+-----------------------+-----------------+----------------
+r20421 | 7543 / 7509  | 94.70   94.12   +0.58 | 0.209   0.201   +0.009 | 99.26   99.18   +0.07 | 89.78   88.66   +1.13 | 85.77   83.66   +2.10 | 496 / 493       | 664K / 710K
+r20422 | 7544 / 7513  | 94.47   94.11   +0.35 | 0.251   0.225   +0.026 | 99.22   99.18   +0.04 | 89.34   88.65   +0.68 | 85.84   84.15   +1.69 | 499 / 499       | 699K / 658K
+r20423 | 7545 / 7517  | 94.50   94.33   +0.17 | 0.247   0.203   +0.044 | 99.22   99.21   +0.01 | 89.40   89.06   +0.34 | 85.87   84.39   +1.47 | 493 / 497       | 574K / 628K
+-------+--------------+-----------------------+------------------------+-----------------------+-----------------------+-----------------------+-----------------+----------------
+mean   |              | 94.55   94.19         | 0.236   0.210          | 99.23   99.19         | 89.51   88.79         | 85.82   84.07         | 496 / 496       | 646K / 666K
+paired |              | dF1  +0.37 ± 0.21     | dFPR +0.026 ± 0.018    | dAcc +0.04 ± 0.03     | daF1 +0.71 ± 0.40     | dTPR +1.76 ± 0.32     | d -0.3 ± 3.5    | d -20K ± 53K
+```
+
+Extra benign false alarms on TEST (arm − control): +13 / +39 / +67 of 152,390.
+
+Rule applied in order (prereg §3, n=3):
+1. REJECT? wins = 3/3 (each ΔF1 ≥ +0.05: +0.58, +0.35, +0.17), so not ≤ 1/3; mean ΔFPR +0.026 ≤ +0.15 → no.
+2. ADOPT? wins 3/3 ✓; mean ΔF1 +0.37 ≥ +0.15 ✓; mean ΔFPR +0.026 ≤ +0.05 ✓; every seed ΔFPR ≤ +0.10
+   (max +0.044) ✓ → **yes**.
+
+**VERDICT: ADOPT** (provisional, n=3 clean seeds). The unweighted min-share vote θ=0.02 becomes the unswr write rule
+for the IDS-56 line. Per the prereg's scope this is not a paper claim; no n=5 extension is triggered (ADOPT is the
+first match). There is no θ shopping: only θ=0.02 was flown.
+
+All 10 stored modes, GA best_f1 final, TEST, mean ± SD (n=3), Δ = arm − control paired:
+
+```
+mode              | F1 arm        F1 ctl        dF1          | FPR arm       FPR ctl       dFPR          | Acc arm      Acc ctl      dAcc
+------------------+--------------------------------------------+---------------------------------------------+--------------------------------------
+argmax            | 94.55±0.13    94.18±0.12    +0.37±0.20   | 0.236±0.023   0.215±0.013   +0.021±0.011  | 99.23±0.02   99.19±0.02   +0.04±0.03
+margin_fixed0     | 94.55±0.13    94.18±0.12    +0.37±0.20   | 0.236±0.023   0.215±0.013   +0.021±0.011  | 99.23±0.02   99.19±0.02   +0.04±0.03
+margin_train_cal  | 94.55±0.12    94.18±0.12    +0.37±0.20   | 0.236±0.023   0.213±0.015   +0.022±0.010  | 99.23±0.02   99.19±0.02   +0.04±0.03
+margin_val_cal    | 94.55±0.13    94.19±0.12    +0.37±0.21   | 0.236±0.023   0.210±0.013   +0.026±0.018  | 99.23±0.02   99.19±0.02   +0.04±0.03
+margin_train_f1   | 94.55±0.12    94.18±0.12    +0.37±0.20   | 0.236±0.023   0.213±0.015   +0.022±0.010  | 99.23±0.02   99.19±0.02   +0.04±0.03
+margin_val_f1     | 94.55±0.13    94.19±0.12    +0.37±0.21   | 0.236±0.023   0.210±0.013   +0.026±0.018  | 99.23±0.02   99.19±0.02   +0.04±0.03
+argmax_platt      | 87.82±0.47    83.62±0.16    +4.21±0.63   | 0.033±0.005   0.030±0.007   +0.003±0.009  | 98.53±0.04   98.15±0.01   +0.39±0.06
+argmax_beta       | 91.54±1.65    77.49±24.66   +14.05±25.72 | 0.953±0.152   0.646±0.568   +0.306±0.695  | 98.69±0.18   97.87±1.45   +0.82±1.57
+argmax_classnorm  | 87.53±0.23    83.95±0.13    +3.58±0.27   | 2.459±0.058   3.451±0.039   -0.992±0.074  | 97.63±0.06   96.68±0.04   +0.95±0.07
+margin_classnorm  | 94.21±0.19    93.33±0.16    +0.88±0.18   | 0.325±0.037   0.400±0.030   -0.074±0.025  | 99.17±0.03   99.05±0.03   +0.13±0.03
+```
+
+Other genome types (margin_val_cal, TEST, mean ΔF1 / ΔFPR): best_fpr +0.13 / +0.013 (ΔF1 SD 0.55; arm 7545 best_fpr
+picked a 93.82-F1 genome), best_acc +0.36 / +0.028, best_ce +0.31 / +0.027, best_fitness +0.37 / +0.028. Same sign
+pattern as best_f1 everywhere except best_fpr, which is noise-level. argmax_beta is unstable in both arms (a control
+seed collapses to ~49 F1), so its Δ is not interpretable.
+
+Read:
+- **This is a Pareto move along the curve, not dominance**, as the prereg anticipated: FPR is higher on 3/3 seeds
+  (+0.009 / +0.026 / +0.044) and TPR is higher on 3/3 (+1.5 to +2.1 pp). The mean FPR cost (+0.026 pp ≈ 40 benign
+  rows) is within the pre-registered +0.05 pp tolerance.
+- On the class-normalized modes the arm dominates: margin_classnorm 94.21 / 0.325 vs 93.33 / 0.400 (F1 up, FPR down
+  on 3/3 seeds).
+- The weighted vote's tiny-genome attractor is gone: the arm's GA keeps ~496 neurons (control ~496), versus 93–103
+  neurons for weighted ms01 on the same seeds (7511 / 7515 / 7519: 93.94 / 0.74, 93.98 / 0.82, 93.65 / 1.05). There is
+  no cost difference against lattice (cells −20K ± 53K, which is noise).
+- Against classical (TEST, measured numbers in the unswr table above): the arm's 94.55 / 0.236 is still −0.84 pp F1
+  vs thermo RF (95.39 / 0.39) and −0.98 vs thermo XGBoost (95.53 / 0.42), with lower FPR than both (−0.15 / −0.18 pp).
+  That is n=3 vs single classical runs, so it is not a paper statement yet.
+
+Caveats:
+- **Budget asymmetry on r20421:** arm 7543 ran 140 GA iterations (10.96 h) against 80 for control 7509 (4.70 h). The
+  other pairs ran 60 vs 90 (7544/7513) and 60 vs 70 (7545/7517), so the arm ran fewer generations there. r20421 is
+  also the largest-ΔF1 seed (+0.58). Patience-driven generations are a mediator, not a confounder (IDSZ), and the
+  rule passes without that seed's margin: the other two give +0.35 / +0.17. This is reported, not used to adjust.
+- ΔF1 shrinks and ΔFPR grows across the three seeds (+0.58 / +0.35 / +0.17; +0.009 / +0.026 / +0.044). At n=3 this
+  is not evidence of anything, but a 4th/5th seed landing at ΔF1 < +0.05 or ΔFPR > +0.10 would not be surprising.
+- Attribution is the package "vote θ=0.02 + unweighted tally" vs lattice (prereg §1 caveat). The ms01 flows separate
+  vote from weighting only loosely, because θ differs (0.1 vs 0.02).
+- Pairing is matched starting points (same folds, same grid connectivity); the GA diverges from gen 1.
+
 ### IDS-56 rule-7 tables (generated: `scripts/build_sp_5tables.py --prefix 'IDS56-unswt-%'`)
 # IDS-56 — min-share vote (ms01, theta=0.1) vs lattice x encoding dedupe off/on (unswt temporal_3way, 16bWb, rate 0.25)
 
