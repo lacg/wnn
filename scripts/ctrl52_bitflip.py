@@ -1,6 +1,6 @@
 """CTRL-52: bit-flip (single-event-upset) fault injection on the deployed controller image.
 
-Simulation only. Scores through the INSTALLED ram_controller wheel (ABI 49) — the
+Simulation only. Scores through the INSTALLED ram_controller wheel (ABI 50) — the
 scorer is never reimplemented; this file only corrupts stored parameters in the
 exact format the hardware stores them, decodes that corrupted image back into the
 genome the scorer flies, and calls the scorer.
@@ -46,7 +46,7 @@ def load_subject(tag: str):
 	from wnn.control import phased_ga as P
 	from wnn.seeds import resolve_seed_set
 	import ram_controller
-	assert ram_controller.ABI_VERSION == 49, ram_controller.ABI_VERSION
+	assert ram_controller.ABI_VERSION == 50, ram_controller.ABI_VERSION
 	text = open(D + tag + ".out", errors="replace").read()
 	argv = shlex.split([l for l in text.splitlines() if l.startswith("[argv]")][0][len("[argv]"):])
 	head = re.findall(r"stage-select\] HEADLINE stage.*?genome=(\S+)", text)[-1]

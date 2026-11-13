@@ -14,7 +14,7 @@ VENV=/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv
 LIST=$1; RULES=${2:-"B P S20 S5p"}
 [ -f "$LIST" ] || { echo "usage: $0 <run-list> [rules]"; exit 2; }
 mkdir -p $O
-$VENV/bin/python -c "import ram_controller as c; assert c.ABI_VERSION == 49" || { echo "$(date -u +%FT%TZ) SELECTTAIL ABORT: ram_controller is not ABI 49" >> $L/runs.log; exit 1; }
+$VENV/bin/python -c "import ram_controller as c; assert c.ABI_VERSION == 50" || { echo "$(date -u +%FT%TZ) SELECTTAIL ABORT: ram_controller is not ABI 50" >> $L/runs.log; exit 1; }
 rule_flags() { case $1 in B) echo "";; P) echo "--val-units 20 --select-tail p99";; S20) echo "--val-units 20";; S5p) echo "--select-tail p99";; esac; }
 TAGS=(); while IFS= read -r x; do TAGS+=("$x"); done < <(grep -vE '^[[:space:]]*(#|$)' $LIST)
 N=$(( ${#TAGS[@]} * $(echo $RULES | wc -w) )); k=0

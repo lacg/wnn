@@ -1,0 +1,254 @@
+{
+ "all_exact": true,
+ "flows": {
+  "7509": {
+   "all_confusions_match": true,
+   "differences": {},
+   "exact_match": true,
+   "genome": {
+    "bits_max": 34,
+    "bits_min": 34,
+    "bits_sha256": "cd45305e17a3ac58e28972aeacd8102f0ea4327299f711cfd3ebd16df8e9a5b5",
+    "bits_sum": 16762,
+    "connections_sha256": "cdb743c93a4fd36d76418a0acf8132da389c2358da95ea8cf6a0cc37b2d75b89",
+    "neurons_above_34_bits": 0,
+    "neurons_per_cluster": [
+     250,
+     243
+    ]
+   },
+   "genome_hash": "4a486f07ca5fa6fc",
+   "modes_compared": [
+    "argmax",
+    "argmax_beta",
+    "argmax_classnorm",
+    "argmax_platt",
+    "margin_classnorm",
+    "margin_fixed0",
+    "margin_train_cal",
+    "margin_train_f1",
+    "margin_val_cal",
+    "margin_val_f1"
+   ],
+   "modes_missing": [],
+   "retrained_margin_val_cal": {
+    "acc": "0x1.fbd313fd17652p-1",
+    "attack_f1": "0x1.c5eebdd7baf76p-1",
+    "benign_fpr": "0x1.07317e43c0f4fp-9",
+    "ce": "0x1.ed23aeff2de9dp-6",
+    "confusion": [
+     [
+      152084,
+      306
+     ],
+     [
+      986,
+      5050
+     ]
+    ],
+    "f1": "0x1.e1e22c8f36b64p-1",
+    "fpr": "0x1.07317e43c0f4fp-9",
+    "macro_f1": "0x1.e1e22c8f36b64p-1",
+    "tau": "0x1.5d80000000000p-10",
+    "weighted_f1": "0x1.fbb45d87fa8b2p-1"
+   },
+   "seed": 20421,
+   "stored_margin_val_cal": {
+    "acc": "0x1.fbd313fd17652p-1",
+    "attack_f1": "0x1.c5eebdd7baf76p-1",
+    "benign_fpr": "0x1.07317e43c0f4fp-9",
+    "ce": "0x1.ed23aeff2de9dp-6",
+    "confusion": [
+     [
+      152084,
+      306
+     ],
+     [
+      986,
+      5050
+     ]
+    ],
+    "f1": "0x1.e1e22c8f36b64p-1",
+    "fpr": "0x1.07317e43c0f4fp-9",
+    "macro_f1": "0x1.e1e22c8f36b64p-1",
+    "tau": "0x1.5d80000000000p-10",
+    "weighted_f1": "0x1.fbb45d87fa8b2p-1"
+   },
+   "stored_worker_abi": 28
+  },
+  "7513": {
+   "all_confusions_match": true,
+   "differences": {},
+   "exact_match": true,
+   "genome": {
+    "bits_max": 34,
+    "bits_min": 34,
+    "bits_sha256": "a54f062ceb46601c947a7f83f94cbe926af64b4707f0f377a78fa988e32fcc8e",
+    "bits_sum": 16966,
+    "connections_sha256": "f6c1cefda72134eb3baa073f1e3a365aebb7b0c700edffdce36e0585f483d324",
+    "neurons_above_34_bits": 0,
+    "neurons_per_cluster": [
+     250,
+     249
+    ]
+   },
+   "genome_hash": "8ecab079c3ac7c72",
+   "modes_compared": [
+    "argmax",
+    "argmax_beta",
+    "argmax_classnorm",
+    "argmax_platt",
+    "margin_classnorm",
+    "margin_fixed0",
+    "margin_train_cal",
+    "margin_train_f1",
+    "margin_val_cal",
+    "margin_val_f1"
+   ],
+   "modes_missing": [],
+   "retrained_margin_val_cal": {
+    "acc": "0x1.fbcc759935a85p-1",
+    "attack_f1": "0x1.c5e8da6b830f9p-1",
+    "benign_fpr": "0x1.270471ec92d9ap-9",
+    "ce": "0x1.f8d547c68eaf5p-6",
+    "confusion": [
+     [
+      152047,
+      343
+     ],
+     [
+      957,
+      5079
+     ]
+    ],
+    "f1": "0x1.e1dd74058de4cp-1",
+    "fpr": "0x1.270471ec92d9ap-9",
+    "macro_f1": "0x1.e1dd74058de4cp-1",
+    "tau": "0x1.fb6f000000000p-9",
+    "weighted_f1": "0x1.fbb0b91a7f933p-1"
+   },
+   "seed": 20422,
+   "stored_margin_val_cal": {
+    "acc": "0x1.fbcc759935a85p-1",
+    "attack_f1": "0x1.c5e8da6b830f9p-1",
+    "benign_fpr": "0x1.270471ec92d9ap-9",
+    "ce": "0x1.f8d547c68eaf5p-6",
+    "confusion": [
+     [
+      152047,
+      343
+     ],
+     [
+      957,
+      5079
+     ]
+    ],
+    "f1": "0x1.e1dd74058de4cp-1",
+    "fpr": "0x1.270471ec92d9ap-9",
+    "macro_f1": "0x1.e1dd74058de4cp-1",
+    "tau": "0x1.fb6f000000000p-9",
+    "weighted_f1": "0x1.fbb0b91a7f933p-1"
+   },
+   "stored_worker_abi": 28
+  },
+  "7517": {
+   "all_confusions_match": true,
+   "differences": {},
+   "exact_match": true,
+   "genome": {
+    "bits_max": 34,
+    "bits_min": 34,
+    "bits_sha256": "99f41b2cae714395ab44f392453bcc68ba6ba854357fd8e7cf7711946b1c637d",
+    "bits_sum": 16898,
+    "connections_sha256": "632d5bae6099cba09bef3b0c7101ada3586237f8d3f249ebf89079df65004693",
+    "neurons_above_34_bits": 0,
+    "neurons_per_cluster": [
+     248,
+     249
+    ]
+   },
+   "genome_hash": "43660139270ab4b3",
+   "modes_compared": [
+    "argmax",
+    "argmax_beta",
+    "argmax_classnorm",
+    "argmax_platt",
+    "margin_classnorm",
+    "margin_fixed0",
+    "margin_train_cal",
+    "margin_train_f1",
+    "margin_val_cal",
+    "margin_val_f1"
+   ],
+   "modes_missing": [],
+   "retrained_margin_val_cal": {
+    "acc": "0x1.fbf4ffbcfc4cbp-1",
+    "attack_f1": "0x1.c8019c8019c81p-1",
+    "benign_fpr": "0x1.09c60e8fb64cap-9",
+    "ce": "0x1.ef3db67e1e814p-6",
+    "confusion": [
+     [
+      152081,
+      309
+     ],
+     [
+      942,
+      5094
+     ]
+    ],
+    "f1": "0x1.e2f45d374c03fp-1",
+    "fpr": "0x1.09c60e8fb64cap-9",
+    "macro_f1": "0x1.e2f45d374c03fp-1",
+    "tau": "0x1.9800000000000p-16",
+    "weighted_f1": "0x1.fbd96f43690eap-1"
+   },
+   "seed": 20423,
+   "stored_margin_val_cal": {
+    "acc": "0x1.fbf4ffbcfc4cbp-1",
+    "attack_f1": "0x1.c8019c8019c81p-1",
+    "benign_fpr": "0x1.09c60e8fb64cap-9",
+    "ce": "0x1.ef3db67e1e814p-6",
+    "confusion": [
+     [
+      152081,
+      309
+     ],
+     [
+      942,
+      5094
+     ]
+    ],
+    "f1": "0x1.e2f45d374c03fp-1",
+    "fpr": "0x1.09c60e8fb64cap-9",
+    "macro_f1": "0x1.e2f45d374c03fp-1",
+    "tau": "0x1.9800000000000p-16",
+    "weighted_f1": "0x1.fbd96f43690eap-1"
+   },
+   "stored_worker_abi": 28
+  }
+ },
+ "meta": {
+  "abi": 29,
+  "captured_utc": "2026-11-13T09:08:46+00:00",
+  "env": {
+   "RAYON_NUM_THREADS": "4",
+   "WNN_ALLOW_PY_FALLBACK": null,
+   "WNN_COALESCE_GROUPS": null,
+   "WNN_EVAL_IN_PLACE": "1",
+   "WNN_HYBRID_SPEED_RATIO": "8",
+   "WNN_NO_METAL": null,
+   "WNN_ORDER_INDEPENDENT_TRAIN": "1"
+  },
+  "git_dirty_src_wnn": "",
+  "git_head": "03fecd97551b9a466b2d06189838fece404d07e0",
+  "git_tree_src_wnn": "65058b1729f56baa34a1181be8ae881aee1ea655",
+  "harness_sha256": "04c668cced91b8650eaa225e92614dc4145ab811f26924ab7baad165d33d57fc",
+  "peak_rss_gb": 11.62,
+  "runtime_s": 12.2,
+  "wheel_binary": "/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/lib/python3.13/site-packages/ram_accelerator/ram_accelerator.abi3.so",
+  "wheel_binary_mtime_utc": "2026-11-13T09:03:04+00:00",
+  "wheel_binary_sha256": "894d7e0d0624a8b9414846d70181c0f7c77a66138db8ec1d4755fab649c41b15"
+ },
+ "mode": "retrain_finals",
+ "payload_sha256": "b9994fcf89febd893a2be0a491b5f97ca410a87b9728001044cd37ce19fac9d0"
+}

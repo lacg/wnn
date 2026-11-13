@@ -20,17 +20,17 @@ both were re-run under the final harness on ABI 28 and are bit-identical to the 
 
 | | Before (W1) | After (W2/W3) |
 |---|---|---|
-| Captured | 12/11/2026 15:47 UTC (10:47 ET) | _to fill_ |
-| By | quality-assurance agent (not the implementer) | _to fill_ |
-| `ram_accelerator.ABI_VERSION` (installed) | 28 | _to fill (must be 29)_ |
-| Installed binary | `/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/lib/python3.13/site-packages/ram_accelerator/ram_accelerator.abi3.so`, installed 09/11/2026 18:47 UTC | _to fill_ |
-| Binary sha256 | `14734ec14a0d560158668c876d7445a59dfbc4ee33f80a7267efa9695c456292` | _to fill_ |
-| Wheel archive sha256 (`direct_url.json`, `experiments/staged/ram_accelerator-2026.212.37-cp311-abi3-macosx_11_0_arm64.whl`) | `219d62898f027682919e62a68fb8446e7989bbf22f21a4fbcffbac3f25177b19` | _to fill_ |
-| Worker tree git SHA (`/Users/lacg/wnn` HEAD) | `069c6011de0a2dc628b58f22af6868ac3cc7623f` | _to fill_ |
-| `src/wnn` tree SHA (`git rev-parse HEAD:src/wnn`), dirty? | `fe98e3e0da9387629b8bfe569790ac23601fccdb`, clean | _to fill_ |
-| `wnn.accel.EXPECTED_ABI` | 28 | _to fill_ |
-| Breeding digest file (W1b) | `experiments/ids57_abi_equivalence/w1b_breeding_abi28.json`, captured 12/11/2026 16:19 UTC at HEAD `d091d93adf2236e7d5f46e021e9da6e8ae380603` (same `src/wnn` tree `fe98e3e0...`, clean), file sha256 `c6ab15c1e81e671568d7532d5bec6432c8b6826b4b169ed01e41c81c62ff1fc7`, payload sha256 `b9adb17b5f3b2388fd777b85c7f2ad678f5f153d8a88eaf45945b8ea9fbfa196` | `experiments/ids57_abi_equivalence/w2b_breeding_abi29.json` _to fill_ |
-| Digest file | `experiments/ids57_abi_equivalence/w1_abi28.json`, file sha256 `438e4cd17cc3476cb0233d5694a1c1b93374e301cbec9f8d4d4772de885c7b1f`, payload sha256 `df297d9d466f48baac91d8aa1d665b73f7187530b70633d96caff6414318034c` | `experiments/ids57_abi_equivalence/w2_abi29.json` _to fill_ |
+| Captured | 12/11/2026 15:47 UTC (10:47 ET) | 13/11/2026 09:05 UTC (04:05 ET), worker DOWN (stopped at the 7545 boundary by worker_swap.py) |
+| By | quality-assurance agent (not the implementer) | main session, harness unchanged (sha256 04c668cc...) |
+| `ram_accelerator.ABI_VERSION` (installed) | 28 | 29 |
+| Installed binary | `/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/lib/python3.13/site-packages/ram_accelerator/ram_accelerator.abi3.so`, installed 09/11/2026 18:47 UTC | same path, installed 13/11/2026 ~09:04 UTC from the worktree dist_abi29_50/ wheel |
+| Binary sha256 | `14734ec14a0d560158668c876d7445a59dfbc4ee33f80a7267efa9695c456292` | `894d7e0d0624a8b9414846d70181c0f7c77a66138db8ec1d4755fab649c41b15` |
+| Wheel archive sha256 (`direct_url.json`, `experiments/staged/ram_accelerator-2026.212.37-cp311-abi3-macosx_11_0_arm64.whl`) | `219d62898f027682919e62a68fb8446e7989bbf22f21a4fbcffbac3f25177b19` | `dac797450c582a747ce4c874793ad33e11ac5ab0b1acda49187d55d775a8e8f4` (.claude/worktrees/agent-a162d4e33a11c36bb/dist_abi29_50/) |
+| Worker tree git SHA (`/Users/lacg/wnn` HEAD) | `069c6011de0a2dc628b58f22af6868ac3cc7623f` | `03fecd97` (merge of unify-write-rules-core) |
+| `src/wnn` tree SHA (`git rev-parse HEAD:src/wnn`), dirty? | `fe98e3e0da9387629b8bfe569790ac23601fccdb`, clean | `65058b1729f56baa34a1181be8ae881aee1ea655`, clean |
+| `wnn.accel.EXPECTED_ABI` | 28 | 29 |
+| Breeding digest file (W1b) | `experiments/ids57_abi_equivalence/w1b_breeding_abi28.json`, captured 12/11/2026 16:19 UTC at HEAD `d091d93adf2236e7d5f46e021e9da6e8ae380603` (same `src/wnn` tree `fe98e3e0...`, clean), file sha256 `c6ab15c1e81e671568d7532d5bec6432c8b6826b4b169ed01e41c81c62ff1fc7`, payload sha256 `b9adb17b5f3b2388fd777b85c7f2ad678f5f153d8a88eaf45945b8ea9fbfa196` | `experiments/ids57_abi_equivalence/w2b_breeding_abi29.json`, file sha256 `5d32ccba44057d0d73a8a4b0a1d85238b9ce2c208e963e26bbf558497c80c69b`, payload sha256 `b9adb17b5f3b2388fd777b85c7f2ad678f5f153d8a88eaf45945b8ea9fbfa196` |
+| Digest file | `experiments/ids57_abi_equivalence/w1_abi28.json`, file sha256 `438e4cd17cc3476cb0233d5694a1c1b93374e301cbec9f8d4d4772de885c7b1f`, payload sha256 `df297d9d466f48baac91d8aa1d665b73f7187530b70633d96caff6414318034c` | `experiments/ids57_abi_equivalence/w2_abi29.json`, file sha256 `7f441ee9ff08bc2231200225a47585b95c8aecb484a0fe61fa0a9772660ddbc7`, payload sha256 `df297d9d466f48baac91d8aa1d665b73f7187530b70633d96caff6414318034c` |
 
 Notes on "before":
 - The live worker (pid 83938, started 12/11 04:23 ET) and its flow runner for 7543 (pid 64353, started 07:54 ET) have
@@ -238,7 +238,17 @@ W2b pass = `VERDICT: BIT-IDENTICAL`, payload `b9adb17b5f3b2388fd777b85c7f2ad678f
 About 5 minutes. A W2b difference with W2 identical means breeding changed while scoring did not: the ABI 29 arm is
 then still internally valid, but the controls would not replay on ABI 29, so it goes to Luiz under the same §8 rule.
 
-Result: _to fill (verbatim `--compare` output, W2 and W2b)._
+Result (13/11/2026 ~09:06 UTC, verbatim `--compare` tails):
+```
+W2:  A: w1_abi28.json  ABI 28  git 069c6011de  payload df297d9d466f48baac91d8aa1d665b73f7187530b70633d96caff6414318034c
+     B: w2_abi29.json  ABI 29  git 03fecd9755  payload df297d9d466f48baac91d8aa1d665b73f7187530b70633d96caff6414318034c
+     fields compared: 1193, differing: 0
+     VERDICT: BIT-IDENTICAL
+W2b: A: w1b_breeding_abi28.json  ABI 28  git d091d93adf  payload b9adb17b5f3b2388fd777b85c7f2ad678f5f153d8a88eaf45945b8ea9fbfa196
+     B: w2b_breeding_abi29.json  ABI 29  git 03fecd9755  payload b9adb17b5f3b2388fd777b85c7f2ad678f5f153d8a88eaf45945b8ea9fbfa196
+     fields compared: 1638, differing: 0
+     VERDICT: BIT-IDENTICAL
+```
 
 ## W3: retrain the controls' GA finals on ABI 29 (open)
 
@@ -253,8 +263,14 @@ Pass = `all_exact: true` in the output and `VERDICT: BIT-IDENTICAL` against the 
 requirement is the confusion matrices (`all_confusions_match`); the harness also holds the floats to exact equality.
 About 20 seconds.
 
-Result: _to fill._
+Result (13/11/2026 ~09:07 UTC): exit 0, `all_exact: true`, `all_confusions_match: true` for 7509, 7513, 7517.
+```
+A: w3_sanity_abi28.json  ABI 28  git 069c6011de  payload b9994fcf89febd893a2be0a491b5f97ca410a87b9728001044cd37ce19fac9d0
+B: w3_abi29.json         ABI 29  git 03fecd9755  payload b9994fcf89febd893a2be0a491b5f97ca410a87b9728001044cd37ce19fac9d0
+fields compared: 117, differing: 0
+VERDICT: BIT-IDENTICAL
+```
 
 ## Verdict
 
-_Open until W2, W2b and W3 are filled. W1 and W1b alone prove nothing about ABI 29._
+**PASS (13/11/2026).** W2, W2b and W3 are all BIT-IDENTICAL to their ABI-28 references: ABI 29 scores, breeds and retrains the controls exactly as ABI 28. The worker was relaunched on ABI 29 only after all three passed (PID 3161, 09:08 UTC); 7546 (first A1 flow) admitted 09:08:54 UTC with max_bits=64, so all three A1 flows run on ABI 29 and pair cleanly with the ABI-28 controls 7509/7513/7517.
