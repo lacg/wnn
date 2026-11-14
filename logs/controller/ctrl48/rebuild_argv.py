@@ -4,6 +4,9 @@
   rebuild_argv.py <run.out> recalc <ckpt_dir> [extra flags...]
       --recalc-headline <ckpt_dir> + extra flags; the run's own --save-* flags are dropped
       (a recalc trains and writes nothing; the save paths never affect scoring).
+  rebuild_argv.py <run.out> stress <ckpt_dir> <n_units> [extra flags...]
+      like recalc, but the run's --test-seeds list is replaced by 99990101..99990100+n_units
+      (the fail-free stress test, 14/11/2026: same genome pick, many more test units).
   rebuild_argv.py <run.out> fly <ckpt_dir> <winner_path> [extra flags...]
       a NEW run on the same recipe (block 7: the block-6 dc control + one stack): the save
       paths are replaced by the new tag's, extra flags appended.
@@ -44,6 +47,20 @@ def strip_saves(toks, drop=SAVE_FLAGS):
 	return out
 
 
+def strip_test_seeds(toks):
+	"""Drop --test-seeds and ALL its integer values (nargs='+')."""
+	out, skipping = [], False
+	for t in toks:
+		if t == "--test-seeds":
+			skipping = True
+		elif skipping and not t.startswith("--"):
+			continue
+		else:
+			skipping = False
+			out.append(t)
+	return out
+
+
 def refuse_overlap(base, extra):
 	clash = sorted({t for t in extra if t.startswith("--")} & set(base))
 	if clash:
@@ -51,9 +68,13 @@ def refuse_overlap(base, extra):
 
 
 def main(a):
-	recalc = a[1] == "recalc"
+	recalc = a[1] in ("recalc", "stress")
 	base = strip_saves(argv_tokens(a[0]), SAVE_FLAGS + SELECT_FLAGS if recalc else SAVE_FLAGS)
-	if recalc:
+	if a[1] == "stress":
+		base = strip_test_seeds(base)
+		units = [str(99990100 + i) for i in range(1, int(a[3]) + 1)]
+		head, extra = ["--test-seeds"] + units + ["--recalc-headline", a[2]], a[4:]
+	elif recalc:
 		head, extra = ["--recalc-headline", a[2]], a[3:]
 	elif a[1] == "fly":
 		head, extra = ["--save-stage-checkpoints", a[2], "--save-winner", a[3]], a[4:]
