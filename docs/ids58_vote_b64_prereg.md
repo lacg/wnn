@@ -1,5 +1,7 @@
 # IDS58: pre-registration of the vote + b64 combination on unswr
 
+**LUIZ 14/11/2026: decisions 1, 2, 3, 5 APPROVED** (primary = combined vs A1; VAL gate before creating flows; vote-path ABI-29 certification for the secondary; headline rule as proposed: if 64 bits do not earn their cells over the 34-bit vote, IDS56U stays the unswr headline and combined is the max-accuracy row, else combined is the headline). **Decision 4 changed:** IDS58 runs NOW — the cicids validation was stopped (7549 paused) to close the unswr config first.
+
 Written 13/11/2026 (experiment-design agent) for Luiz, who approved the idea on 13/11/2026 ("yes, let's do this
 first"). Basis: the IDS56U readout (vote θ=0.02 unweighted, ADOPT) and the IDS-57 A1 readout (max_bits 64, ADOPT,
 Pareto move), both in `docs/ids_results.md`; their pre-registrations `docs/ids56_unweighted_vote_prereg.md` and
