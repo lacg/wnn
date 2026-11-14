@@ -32,3 +32,14 @@ Nothing above may change after the first block-9 END line.
   conditional binomial, p < 0.05); then both only if mean steady better by > 0.03° AND mean err not worse by > 0.03°, else dc_ms01.
 - Added, descriptive only: per arm, the number of seeds whose controller had 0 fails, out of 7 (s4-s10) and out of 10 (s1-s10),
   with the 95% lower bound on the fail-free-seed fraction (exact binomial; 10/10 -> ~74%).
+
+## Amendment 2 (14/11/2026 ~12:00 UTC, Luiz; written BEFORE s10 landed — block 9 at s8 of s10)
+- **The decision uses ALL TEN seeds s1-s10 per arm** (Luiz: "that is my expectation").
+- To put every published controller under the same selection rule, dc_ms01 s1-s3 (block 6, flown ABI 49, picked with B)
+  are **re-picked under rule P** from their saved checkpoints (`--recalc-headline`, no retraining; list
+  experiments/ctrl_select_tail/runs_dcms01_s123.txt), run right after 'BLOCK9 DONE'. Those P picks replace the B picks for
+  dc_ms01 s1-s3. both s1-s3 are block 8 (ABI 50, P) as flown. The ABI 49 searches are admissible: controller ABI 50 reproduced
+  an ABI 49 run bit-for-bit with the new flags off (block-8 smoke, runs.log 13/11 03:37 UTC).
+- Rule (unchanged in form, now over s1-s10 = 35,000 episodes per arm): gate = pooled fails <= 0.05% (<= 17/35000) AND not
+  significantly worse than the other arm (exact one-sided conditional binomial, p < 0.05); then both only if mean steady
+  better by > 0.03° AND mean err not worse by > 0.03°, else dc_ms01. The s4-s10 result is reported alongside (descriptive).
