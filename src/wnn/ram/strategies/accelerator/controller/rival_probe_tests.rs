@@ -12,7 +12,7 @@
 //!     cargo test -p ram_controller --lib --no-default-features --release \
 //!     rival_probe_tests::val_sweep -- --ignored --nocapture --test-threads 1
 
-use crate::rival_probe::{RivalProbe, RivalProbeReport};
+use crate::rival_probe::{RivalProbe, RivalProbeReport, StudentAlphabet};
 use std::collections::HashMap;
 
 type Row = (f64, f64, f64, f64, f64, f64, f64, f64);
@@ -102,9 +102,9 @@ fn bias_compensation_is_est_only_and_tracks_the_bias()
 // The val-unit sweeps (ignored: minutes of CPU, need the fixture).
 // ---------------------------------------------------------------------------------
 
-struct Unit
+pub(crate) struct Unit
 {
-	seed: u64,
+	pub(crate) seed: u64,
 	/// Parsed as an integer: a u64 seed does not survive an f64.
 	dist_seed: u64,
 	f: HashMap<String, Vec<f64>>,
@@ -135,35 +135,35 @@ impl Unit
 		Unit { seed, dist_seed: dist_seed.expect("fixture has no dist_seed"), f }
 	}
 
-	fn v(&self, k: &str) -> &Vec<f64>
+	pub(crate) fn v(&self, k: &str) -> &Vec<f64>
 	{
 		self.f.get(k).unwrap_or_else(|| panic!("fixture has no key {k}"))
 	}
 
-	fn s(&self, k: &str) -> f64
+	pub(crate) fn s(&self, k: &str) -> f64
 	{
 		let v = self.v(k);
 		assert_eq!(v.len(), 1, "{k} is not a scalar");
 		v[0]
 	}
 
-	fn b(&self, k: &str) -> bool
+	pub(crate) fn b(&self, k: &str) -> bool
 	{
 		self.s(k) != 0.0
 	}
 
-	fn v32(&self, k: &str) -> Vec<f32>
+	pub(crate) fn v32(&self, k: &str) -> Vec<f32>
 	{
 		self.v(k).iter().map(|&x| x as f32).collect()
 	}
 
-	fn a32<const N: usize>(&self, k: &str) -> [f32; N]
+	pub(crate) fn a32<const N: usize>(&self, k: &str) -> [f32; N]
 	{
 		let v = self.v32(k);
 		v.try_into().unwrap_or_else(|_| panic!("{k}: wrong length"))
 	}
 
-	fn a64<const N: usize>(&self, k: &str) -> [f64; N]
+	pub(crate) fn a64<const N: usize>(&self, k: &str) -> [f64; N]
 	{
 		self.v(k).clone().try_into().unwrap_or_else(|_| panic!("{k}: wrong length"))
 	}
@@ -175,11 +175,18 @@ impl Unit
 
 	fn score(&self, use_est: bool, probe: Option<&mut RivalProbe>) -> Row
 	{
+		self.score_tweaked(use_est, Tweak::default(), probe)
+	}
+
+	/// The same row with the TASK changed (position-loop ω_n, episode length) — the
+	/// what-ifs of docs/ctrl_gap_after_block9.md §C. Default = the fixture's own values.
+	fn score_tweaked(&self, use_est: bool, tw: Tweak, probe: Option<&mut RivalProbe>) -> Row
+	{
 		crate::dagger_train::score_classical_baseline_probed(
 			4,
 			self.v32("init_qs"),
 			self.v32("init_omegas"),
-			self.s("steps") as usize,
+			tw.steps.unwrap_or(self.s("steps") as usize),
 			self.s("stable_deg"),
 			self.b("dist_enabled"),
 			self.a32("dist_tau_bias"),
@@ -220,7 +227,7 @@ impl Unit
 			self.s("alt_pd_max_delta"),
 			self.v32("s2_init_x"),
 			self.v32("s2_init_y"),
-			self.s("pos_omega_n"),
+			tw.pos_omega_n.unwrap_or(self.s("pos_omega_n")),
 			self.s("pos_zeta"),
 			self.s("pos_max_tilt_rad"),
 			self.s("motor_lag_s") as f32,
@@ -234,7 +241,14 @@ impl Unit
 	}
 }
 
-fn units() -> Vec<Unit>
+#[derive(Clone, Copy, Default)]
+struct Tweak
+{
+	pos_omega_n: Option<f64>,
+	steps: Option<usize>,
+}
+
+pub(crate) fn units() -> Vec<Unit>
 {
 	let u = units_from("WNN_INDI_PROBE_FIXTURE", false);
 	assert_eq!(u.len(), 20, "the pre-registration names 20 val units, found {}", u.len());
@@ -256,15 +270,56 @@ fn units_from(var: &str, allow_test: bool) -> Vec<Unit>
 /// One arm on every unit: per-unit (row, report), units in parallel.
 fn fly(units: &[Unit], use_est: bool, make: &(dyn Fn() -> RivalProbe + Sync)) -> Vec<(Row, RivalProbeReport)>
 {
+	fly_tweaked(units, use_est, Tweak::default(), make)
+}
+
+fn fly_tweaked(units: &[Unit], use_est: bool, tw: Tweak, make: &(dyn Fn() -> RivalProbe + Sync)) -> Vec<(Row, RivalProbeReport)>
+{
 	use rayon::prelude::*;
 	units
 		.par_iter()
 		.map(|u| {
 			let mut p = make();
-			let r = u.score(use_est, Some(&mut p));
+			let r = u.score_tweaked(use_est, tw, Some(&mut p));
 			(r, p.report())
 		})
 		.collect()
+}
+
+fn print_position_table(title: &str, units: &[Unit], arms: &[Arm])
+{
+	println!("\n{title}");
+	println!("| arm | stable % | err ° | steady ° | pos m | fails | pos at start m | fifth 1 | fifth 2 | fifth 3 | fifth 4 | fifth 5 (hold) | pos at end m | mean abs dx / dy / dz m | hold abs dx / dy / dz m | hold speed m/s |");
+	println!("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
+	for a in arms
+	{
+		let pu = &a.per_unit;
+		let fails: usize = pu.iter().zip(units).map(|((r, _), u)| ((1.0 - r.0) * u.episodes() as f64).round() as usize).sum();
+		let m = |f: &dyn Fn(&RivalProbeReport) -> f64| mean(pu.iter().map(|(_, p)| f(p)));
+		println!(
+			"| {} | {:.2} | {:.3} | {:.3} | {:.3} | {} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} / {:.3} / {:.3} | {:.3} / {:.3} / {:.3} | {:.3} |",
+			a.name,
+			100.0 * mean(pu.iter().map(|(r, _)| r.0)),
+			mean(pu.iter().map(|(r, _)| r.1)),
+			mean(pu.iter().map(|(r, _)| r.2)),
+			mean(pu.iter().map(|(r, _)| r.4)),
+			fails,
+			m(&|p| p.pos_first_last[0]),
+			m(&|p| p.pos_fifths[0]),
+			m(&|p| p.pos_fifths[1]),
+			m(&|p| p.pos_fifths[2]),
+			m(&|p| p.pos_fifths[3]),
+			m(&|p| p.pos_fifths[4]),
+			m(&|p| p.pos_first_last[1]),
+			m(&|p| p.abs_xyz[0]),
+			m(&|p| p.abs_xyz[1]),
+			m(&|p| p.abs_xyz[2]),
+			m(&|p| p.hold_abs_xyz[0]),
+			m(&|p| p.hold_abs_xyz[1]),
+			m(&|p| p.hold_abs_xyz[2]),
+			m(&|p| p.hold_speed),
+		);
+	}
 }
 
 struct Arm
@@ -399,4 +454,60 @@ fn test_confirmation_bias_compensated_mpcof()
 		Arm { name: "MPCOF>rate(h10) oracle-fed (bound, not a rival)".into(), per_unit: fly(&units, false, &RivalProbe::measure_only) },
 	];
 	print_table("N2 — bias-compensated MPCOF, TEST (35 units × 100 episodes), one shot", &units, &arms, 0);
+}
+
+/// The cascade student's output law as flown in block 8/9 ("both": --ctbr-delta-law
+/// --delta-leak 0.7 --delta-max 0.6, ranges 0.25 / 4.2 / 4.2 / 2, γ 1 / 2 / 2 / 2).
+fn both_alphabet(levels: u32) -> StudentAlphabet
+{
+	StudentAlphabet { leak: 0.7, delta_max: 0.6, range: [0.25, 4.2, 4.2, 2.0], gamma: [1.0, 2.0, 2.0, 2.0], levels }
+}
+
+/// docs/ctrl_gap_after_block9.md §B.2 (quantisation) and §C (position) — VAL units only.
+#[test]
+#[ignore = "val-unit sweep: needs WNN_INDI_PROBE_FIXTURE; minutes of CPU"]
+fn val_gap_and_position()
+{
+	let units = units();
+	self_check(&units);
+	let comp = || RivalProbe::measure_only().with_bias_comp();
+	// §B.2 — the label law through the student's alphabet and 100 Hz hold.
+	let mut arms = vec![
+		Arm { name: "label law, est + bias comp (student-observable attitude)".into(), per_unit: fly(&units, true, &comp) },
+	];
+	for levels in [128u32, 64, 32, 16]
+	{
+		arms.push(Arm {
+			name: format!("  + student alphabet, {levels} cells/bank"),
+			per_unit: fly(&units, true, &move || RivalProbe::measure_only().with_bias_comp().with_student_alphabet(both_alphabet(levels))),
+		});
+	}
+	arms.push(Arm { name: "label law, oracle-fed".into(), per_unit: fly(&units, false, &RivalProbe::measure_only) });
+	arms.push(Arm {
+		name: "  + student alphabet, 64 cells/bank".into(),
+		per_unit: fly(&units, false, &|| RivalProbe::measure_only().with_student_alphabet(both_alphabet(64))),
+	});
+	print_table("B.2 — label law through the student's output alphabet, MPCOF>rate(h10), VAL (20 units × 100 episodes)", &units, &arms, 0);
+
+	// §C — position budget on the shipped task, then the task what-ifs.
+	let mut pos = vec![
+		Arm { name: "est-fed SHIPPED".into(), per_unit: fly(&units, true, &RivalProbe::measure_only) },
+		Arm { name: "est-fed + bias comp".into(), per_unit: fly(&units, true, &comp) },
+		Arm { name: "oracle-fed".into(), per_unit: fly(&units, false, &RivalProbe::measure_only) },
+	];
+	for wn in [1.5f64, 2.0, 3.0]
+	{
+		pos.push(Arm {
+			name: format!("TASK CHANGE ω_n = {wn} rad/s, est + bias comp"),
+			per_unit: fly_tweaked(&units, true, Tweak { pos_omega_n: Some(wn), steps: None }, &comp),
+		});
+	}
+	for steps in [4000usize, 8000]
+	{
+		pos.push(Arm {
+			name: format!("TASK CHANGE {} s episodes, est + bias comp", steps / 1000),
+			per_unit: fly_tweaked(&units, true, Tweak { pos_omega_n: None, steps: Some(steps) }, &comp),
+		});
+	}
+	print_position_table("C — position budget, MPCOF>rate(h10), VAL (20 units × 100 episodes); fifths are consecutive fifths of the episode", &units, &pos);
 }

@@ -4232,6 +4232,12 @@ pub(crate) fn score_classical_baseline_probed(
 				let label = teacher
 					.ctbr_label(q, gyro, tgt, ctbr_outer_hold, coll)
 					.map_err(pyo3::exceptions::PyValueError::new_err)?;
+				// Probe only: the label through the student's output alphabet.
+				let label = match probe.as_deref_mut()
+				{
+					Some(p) => p.flown_label(t, ctbr_outer_hold, label),
+					None => label,
+				};
 				o.fly(label, gyro)
 			}
 			else
@@ -4306,6 +4312,10 @@ pub(crate) fn score_classical_baseline_probed(
 			if let Some(p) = probe.as_deref_mut()
 			{
 				p.record(t >= tail_start, &sim, &att_ref);
+				if let Some(cfg) = s1.as_ref()
+				{
+					p.record_position(t, steps, &sim, cfg.target_altitude);
+				}
 			}
 			steps_done += 1;
 		}

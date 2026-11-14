@@ -86,6 +86,8 @@ mod att_bias_pred; // CTRL-46 (ABI 46): onboard predictor of the Mahony specific
 mod rival_probe; // opt-in probe on the classical-rival scorer (INDI spec §10: observer gain, bias compensation)
 #[cfg(test)]
 mod rival_probe_tests; // probe-off bit-identity + the #[ignore] val-unit sweeps of the INDI spec §10
+#[cfg(test)]
+mod label_replay_tests; // docs/ctrl_gap_after_block9.md §B.3: the teacher's label along a recorded STUDENT flight (#[ignore], val units)
 mod att_estimator; // ABI 32: the WNN's Mahony attitude estimate (obs_att_estimator)
 mod att_err_ref; // CTRL-17 G5 (ABI 32): attitude error vs the position loop tilt reference
 mod plant_opts; // ABI 32: specific-force IMU + rotor drag as ONE value every sim host applies
