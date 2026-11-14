@@ -331,3 +331,7 @@ Caveat on who did the work: prereg §7 asks for W3v to be run by an agent other 
 Here the same quality-assurance agent did both, as the task brief asked. The rule-specific code in v2 is only the
 settings guard; the vote itself is applied by the worker's factory. An independent re-run is the command above, and
 it takes about 1 minute.
+
+**W3v independent re-run (main session, 14/11/2026, not the harness author):** same command, harness sha256 47913ea3...,
+exit 0; `--compare` vs w3v_vote_abi29.json: 592 fields, 0 differing, payload 7963a464...c1acb3 — VERDICT: BIT-IDENTICAL.
+The IDS58 secondary comparison (combined vs IDS56U, ABI 29 vs 28) is therefore certified same-behaviour across builds.
