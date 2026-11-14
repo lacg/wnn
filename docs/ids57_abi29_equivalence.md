@@ -274,3 +274,60 @@ VERDICT: BIT-IDENTICAL
 ## Verdict
 
 **PASS (13/11/2026).** W2, W2b and W3 are all BIT-IDENTICAL to their ABI-28 references: ABI 29 scores, breeds and retrains the controls exactly as ABI 28. The worker was relaunched on ABI 29 only after all three passed (PID 3161, 09:08 UTC); 7546 (first A1 flow) admitted 09:08:54 UTC with max_bits=64, so all three A1 flows run on ABI 29 and pair cleanly with the ABI-28 controls 7509/7513/7517.
+
+## W3v: vote path on ABI 29
+
+Addendum (14/11/2026), decision 3 of `docs/ids58_vote_b64_prereg.md`, approved by Luiz 14/11. The W3 record above
+covers the lattice rule only (harness v1 refused other rules in its reference-settings check). W3v covers the vote
+rule: the IDS56U flows 7543 / 7544 / 7545 (unswr, encoding dedupe off, `ids_write_rule=vote`,
+`ids_vote_share=0.02`, `balance_classes=false`, 34 bits, flown on worker ABI 28) retrained on the installed ABI 29
+wheel.
+
+Harness: `scripts/ids57_abi_equivalence.py` **v2**, sha256
+`47913ea326957fd86cbab85288d6b29a10dc993bee94ef48deb0b2ed5d340677`. What v2 changes in `--retrain-finals`:
+- It accepts `lattice` or `vote`. The rule, θ and class balance reach Rust only through the worker's own path
+  (`IdsEvaluatorSettings.from_params` -> `IdsEvaluatorFactory.flat` -> `IDSEvaluator` ->
+  `IDSCacheWrapper.set_write_rule`). The harness only checks that the resolved settings carry the flow's stored values.
+  It refuses on any mismatch, and also refuses non-flat / receptive-field / streaming flows. It records the resolved
+  path in `meta.retrain_paths`.
+- It checks that the flows sharing one dataset load agree on every dataset-defining setting.
+- `--genome-types` (optional) adds the other GA final genome types. `--negative-control` (optional) retrains the first
+  flow's `best_f1` genome under the lattice rule, which must NOT match.
+- With neither option set, the payload is exactly v1's. Lattice re-check: `--retrain-finals 7509 7513 7517` under v2
+  gives payload `b9994fcf...ac9d0`, compared with `w3_abi29.json`: 117 fields, 0 differing, **BIT-IDENTICAL**
+  (`experiments/ids57_abi_equivalence/w3_lattice_harness_v2_abi29.json`).
+
+```bash
+PY=/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/bin/python; export PYTHONPATH=/Users/lacg/wnn/src/wnn
+nice -n 10 $PY scripts/ids57_abi_equivalence.py --retrain-finals 7543 7544 7545 \
+  --genome-types best_ce best_acc best_fpr best_fitness --negative-control \
+  --out experiments/ids57_abi_equivalence/w3v_vote_abi29.json   # exit 0 = all exact AND control differs
+```
+
+Result (14/11/2026 11:41 UTC, ABI 29, binary sha256 `894d7e0d...41b15`, HEAD `be2f567d`, `src/wnn` clean, 46 s,
+peak RSS 11.6 GB): exit 0, `all_exact: true`. File sha256 `85e6dc27aad861a3cbdf01793e7f9cd856fe222f26c9b586d25af3fc6d879eaf`,
+payload sha256 `7963a464425c31e4270f42460fc95770e98e270dd99e8bb89797df6c89c1acb3`. Resolved path for all three flows:
+`vote`, θ 0.02, `balance_classes=False`, BINARY, order-independent training on.
+
+| Flow | Seed | `best_f1` genome | TEST `margin_val_cal`, stored (ABI 28) | Retrained (ABI 29) | Genome types exact (of 5) | Modes exact per type |
+|---|---|---|---|---|---|---|
+| 7543 | 20421 | `bd17e44bf04d0a53` | [[152071, 319], [859, 5177]] | [[152071, 319], [859, 5177]] | 5 | 10 / 10 |
+| 7544 | 20422 | `f93963e91dc0a253` | [[152008, 382], [855, 5181]] | [[152008, 382], [855, 5181]] | 5 | 10 / 10 |
+| 7545 | 20423 | `6fa463a7b7023b34` | [[152014, 376], [853, 5183]] | [[152014, 376], [853, 5183]] | 5 | 10 / 10 |
+
+- All 15 (flow, genome type) rows match, covering 12 distinct genomes. Every stored decode mode matches: argmax,
+  argmax_beta, argmax_classnorm, argmax_platt, margin_classnorm, margin_fixed0, margin_train_cal, margin_train_f1,
+  margin_val_cal and margin_val_f1.
+- The confusion matrices match exactly, and so does every stored float (ce, acc, f1, fpr, macro / weighted F1,
+  benign FPR, attack F1, tau). No mode is missing.
+- **Negative control:** the 7543 `best_f1` genome retrained under the lattice rule gives `margin_val_cal`
+  [[151096, 1294], [233, 5803]], which does not match. So the comparison does detect a write-rule change.
+
+**Verdict W3v: BIT-IDENTICAL.** On these genomes, the vote write path (θ 0.02, unweighted) on ABI 29 reproduces the
+ABI 28 results exactly. This certifies the cross-build secondary contrast of `docs/ids58_vote_b64_prereg.md` §6.2
+(C vs U) with respect to the wheel.
+
+Caveat on who did the work: prereg §7 asks for W3v to be run by an agent other than the one that widens the harness.
+Here the same quality-assurance agent did both, as the task brief asked. The rule-specific code in v2 is only the
+settings guard; the vote itself is applied by the worker's factory. An independent re-run is the command above, and
+it takes about 1 minute.

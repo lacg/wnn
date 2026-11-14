@@ -21,6 +21,16 @@ Modes
                      on the worker's (optimizer, test) evaluator pair and compare the TEST
                      decode modes against test_summaries.threshold_metadata. Those rows are
                      already reported, so this TEST read is allowed.
+                     Harness v2 (14/11/2026, W3v): the write rule may be "lattice" or "vote".
+                     The rule, ids_vote_share and balance_classes reach Rust only through the
+                     worker's own path (IdsEvaluatorSettings.from_params -> IdsEvaluatorFactory.flat
+                     -> IDSEvaluator -> IDSCacheWrapper.set_write_rule); the harness only CHECKS
+                     that the resolved settings carry the flow's stored values and records them
+                     in meta. Options (v2, both off by default = the v1 lattice payload):
+                       --genome-types  also retrain the other GA final genome types
+                       --negative-control  retrain the first flow's best_f1 genome once more
+                                       with the lattice rule; it must NOT match (proves the
+                                       comparison can see a write-rule change)
   --breeding         W1b: one GA generation's offspring search, through the real
                      ArchitectureGAStrategy (built as experiment.py builds it for the controls'
                      "GA Neurons" phase) -> IDSEvaluator.search_offspring -> Rust. Seeded parent
@@ -59,6 +69,12 @@ PRODUCTION_ENV = {"WNN_EVAL_IN_PLACE": "1"}
 RECORDED_ENV = ("WNN_EVAL_IN_PLACE", "WNN_HYBRID_SPEED_RATIO", "WNN_ORDER_INDEPENDENT_TRAIN", "WNN_NO_METAL",
 	"WNN_COALESCE_GROUPS", "WNN_ALLOW_PY_FALLBACK", "RAYON_NUM_THREADS")
 FLOAT_FIELDS = ("ce", "acc", "macro_f1", "weighted_f1", "benign_fpr", "f1", "fpr", "attack_f1", "tau")
+HARNESS_VERSION = 2  # v1 = lattice-only (sha256 04c668cc...); v2 adds the vote rule to --retrain-finals
+RETRAIN_RULES = ("lattice", "vote")
+DEFAULT_GENOME_TYPE = "best_f1"
+# Settings that decide the loaded dataset: flows retrained together must agree on all of them.
+DATASET_FIELDS = ("dataset_name", "split", "classification", "n_bits", "feature_selection", "rest_bits", "ids_raw",
+	"invalid_encoding", "auto_max_bits", "encoded_storage", "streaming", "encoding_dedupe", "feature_ranking")
 
 
 # ------------------------------------------------------------------ small helpers
@@ -119,12 +135,14 @@ def wheel_record() -> dict:
 		"git_tree_src_wnn": _git("rev-parse", "HEAD:src/wnn"),
 		"git_dirty_src_wnn": _git("status", "--porcelain", "--", "src/wnn"),
 		"harness_sha256": _file_sha(Path(__file__).resolve()),
+		"harness_version": HARNESS_VERSION,
 	}
 
 
-def run_meta(started: float) -> dict:
+def run_meta(started: float, extra: dict) -> dict:
 	return {
 		**wheel_record(),
+		**extra,
 		"env": {key: os.environ.get(key) for key in RECORDED_ENV},
 		"captured_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
 		"runtime_s": round(time.time() - started, 1),
@@ -512,14 +530,15 @@ def run_breeding(db: sqlite3.Connection, only: list[str] | None) -> dict:
 
 # ------------------------------------------------------------------ W3: retrain the controls' finals
 
-def stored_final(db: sqlite3.Connection, flow_id: int) -> tuple[str, dict, int]:
-	"""(genome_hash, stored decode modes, worker_abi) of the GA best_f1 final row."""
-	row = db.execute("""select ts.genome_hash, ts.threshold_metadata, ts.worker_abi from test_summaries ts
+def stored_final(db: sqlite3.Connection, flow_id: int, genome_type: str = DEFAULT_GENOME_TYPE) -> tuple[str, dict, int]:
+	"""(genome_hash, stored decode modes, worker_abi) of the GA `genome_type` final row."""
+	rows = db.execute("""select ts.genome_hash, ts.threshold_metadata, ts.worker_abi from test_summaries ts
 		join experiments e on e.id = ts.experiment_id
-		where ts.flow_id=? and e.phase_type='ga_neurons' and ts.test_point='final' and ts.genome_type='best_f1'""",
-		(flow_id,)).fetchone()
-	if row is None:
-		raise SystemExit(f"flow {flow_id}: no GA best_f1 final row in test_summaries")
+		where ts.flow_id=? and e.phase_type='ga_neurons' and ts.test_point='final' and ts.genome_type=?""",
+		(flow_id, genome_type)).fetchall()
+	if len(rows) != 1:
+		raise SystemExit(f"flow {flow_id}: expected one GA {genome_type} final row in test_summaries, found {len(rows)}")
+	row = rows[0]
 	return row[0], json.loads(row[1]), int(row[2])
 
 
@@ -550,33 +569,105 @@ def compare_modes(stored: dict, fresh: dict) -> dict:
 		"all_confusions_match": confusion_ok, "exact_match": confusion_ok and not diffs, "differences": diffs}
 
 
-def retrain_final(db: sqlite3.Connection, factory, dataset, flow_id: int) -> dict:
-	params = flow_params(db, flow_id)
-	apply_production_env(params)
-	s = settings_for(params)
-	genome_hash, stored, stored_abi = stored_final(db, flow_id)
+def check_retrain_settings(flow_id: int, params: dict, s) -> None:
+	"""v2 guard: the resolved settings must carry the flow's STORED rule, theta and
+	class balance (no silent default), and the flow must be on the flat path this
+	mode rebuilds (factory.flat; receptive fields are attached only by create())."""
+	stored_rule = params.get("ids_write_rule") or "lattice"
+	checks = {
+		"write_rule": (s.write_rule, stored_rule),
+		"balance_classes": (bool(s.balance_classes), bool(params.get("balance_classes", False))),
+		"classification": (s.classification, "binary"),
+		"receptive_fields": (s.receptive_fields, "off"),
+		"streaming": (bool(s.streaming), False),
+	}
+	if stored_rule == "vote":
+		checks["vote_share"] = (s.vote_share, params.get("ids_vote_share"))
+	wrong = {key: pair for key, pair in checks.items() if pair[0] != pair[1]}
+	if s.write_rule not in RETRAIN_RULES:
+		wrong["write_rule_supported"] = (s.write_rule, RETRAIN_RULES)
+	if wrong:
+		raise SystemExit(f"flow {flow_id}: retrain path refused, (resolved, expected) = {wrong}")
+
+
+def path_settings(flow_id: int, params: dict, s) -> dict:
+	"""Provenance (meta): what the worker's construction path resolved for this flow."""
+	return {"flow": flow_id, "write_rule": s.write_rule, "vote_share": s.vote_share,
+		"balance_classes": bool(s.balance_classes), "memory_mode": s.memory_mode_name,
+		"order_independent_train": bool(s.order_independent_train), "neuron_sample_rate": s.neuron_sample_rate,
+		"max_bits": s.max_bits, "seed": s.seed, "dataset": {key: getattr(s, key) for key in DATASET_FIELDS}}
+
+
+def retrain_genome(db: sqlite3.Connection, test_evaluator, flow_id: int, params: dict, genome_type: str) -> dict:
+	genome_hash, stored, stored_abi = stored_final(db, flow_id, genome_type)
 	genome = stored_genome(db, genome_hash)
-	_optimizer, test_evaluator = factory.flat(dataset, s)
 	fresh = test_evaluator.evaluate_multiclass_at_thresholds(genome)["modes"]
 	verdict = compare_modes(stored, fresh)
 	record = {"seed": params["seed"], "genome_hash": genome_hash, "stored_worker_abi": stored_abi,
 		"genome": genome_record(genome), "stored_margin_val_cal": mode_record(stored["margin_val_cal"]),
 		"retrained_margin_val_cal": mode_record(fresh["margin_val_cal"]), **verdict}
-	_log(f"  flow {flow_id}: margin_val_cal {fresh['margin_val_cal']['confusion']} vs stored "
+	_log(f"  flow {flow_id} {genome_type}: margin_val_cal {fresh['margin_val_cal']['confusion']} vs stored "
 		f"{stored['margin_val_cal']['confusion']} -> exact_match={verdict['exact_match']}")
-	del _optimizer, test_evaluator
-	gc.collect()
 	return record
 
 
-def run_retrain(db: sqlite3.Connection, flow_ids: list[int]) -> dict:
-	"""The three controls share one dataset load (same dataset params; only the seed differs)."""
+def retrain_flow(db: sqlite3.Connection, factory, dataset, flow_id: int, genome_types: list[str],
+		params_override: dict | None = None) -> tuple[dict, dict]:
+	"""({genome_type: record}, path settings) for one flow, on ONE evaluator pair
+	built by the worker's factory from the flow's params (+ an override for the
+	negative control only)."""
+	params = {**flow_params(db, flow_id), **(params_override or {})}
+	apply_production_env(params)
+	s = settings_for(params)
+	check_retrain_settings(flow_id, params, s)
+	_optimizer, test_evaluator = factory.flat(dataset, s)
+	records = {gt: retrain_genome(db, test_evaluator, flow_id, params, gt) for gt in genome_types}
+	del _optimizer, test_evaluator
+	gc.collect()
+	return records, path_settings(flow_id, params, s)
+
+
+def check_shared_dataset(db: sqlite3.Connection, flow_ids: list[int]) -> None:
+	"""One dataset load serves every flow only if they agree on what decides it."""
+	first = {key: getattr(settings_for(flow_params(db, flow_ids[0])), key) for key in DATASET_FIELDS}
+	for flow_id in flow_ids[1:]:
+		other = {key: getattr(settings_for(flow_params(db, flow_id)), key) for key in DATASET_FIELDS}
+		if other != first:
+			raise SystemExit(f"flow {flow_id} loads a different dataset than {flow_ids[0]}: "
+				f"{ {k: (first[k], other[k]) for k in first if first[k] != other[k]} }")
+
+
+def negative_control(db: sqlite3.Connection, factory, dataset, flow_id: int) -> dict:
+	"""The first vote flow's best_f1 genome retrained under the LATTICE rule (theta
+	dropped): if this also matched, the comparison could not see the write rule."""
+	override = {"ids_write_rule": "lattice", "ids_vote_share": None}
+	records, settings = retrain_flow(db, factory, dataset, flow_id, [DEFAULT_GENOME_TYPE], override)
+	record = records[DEFAULT_GENOME_TYPE]
+	return {"flow": flow_id, "override": override, "write_rule": settings["write_rule"],
+		"exact_match": record["exact_match"], "all_confusions_match": record["all_confusions_match"],
+		"retrained_margin_val_cal": record["retrained_margin_val_cal"], "differs": not record["exact_match"]}
+
+
+def run_retrain(db: sqlite3.Connection, flow_ids: list[int], genome_types: list[str] | None,
+		with_negative_control: bool) -> dict:
+	"""The flows share one dataset load (same dataset params; checked). With the
+	defaults (best_f1 only, no control) the payload is exactly the v1 payload."""
 	from wnn.ram.experiments.IdsEvaluatorFactory import IdsEvaluatorFactory
+	check_shared_dataset(db, flow_ids)
 	factory = IdsEvaluatorFactory(log=_log)
 	dataset = factory.load(settings_for(flow_params(db, flow_ids[0])))
-	flows = {str(flow_id): retrain_final(db, factory, dataset, flow_id) for flow_id in flow_ids}
-	return {"mode": "retrain_finals", "flows": flows,
-		"all_exact": all(record["exact_match"] for record in flows.values())}
+	types = [DEFAULT_GENOME_TYPE] + [gt for gt in (genome_types or []) if gt != DEFAULT_GENOME_TYPE]
+	results = {flow_id: retrain_flow(db, factory, dataset, flow_id, types) for flow_id in flow_ids}
+	flows = {str(f): records[DEFAULT_GENOME_TYPE] for f, (records, _s) in results.items()}
+	exact = [record["exact_match"] for records, _s in results.values() for record in records.values()]
+	payload = {"mode": "retrain_finals", "flows": flows, "all_exact": all(exact)}
+	if len(types) > 1:
+		payload["other_genome_types"] = {str(f): {gt: r for gt, r in records.items() if gt != DEFAULT_GENOME_TYPE}
+			for f, (records, _s) in results.items()}
+	if with_negative_control:
+		payload["negative_control"] = negative_control(db, factory, dataset, flow_ids[0])
+	payload["meta_extra"] = {"retrain_paths": [settings for _r, settings in results.values()]}
+	return payload
 
 
 # ------------------------------------------------------------------ compare two outputs
@@ -616,7 +707,8 @@ def run_compare(path_a: str, path_b: str) -> int:
 # ------------------------------------------------------------------ entry point
 
 def write_output(payload: dict, out: str, started: float) -> None:
-	document = {"meta": run_meta(started), **payload}
+	extra = payload.pop("meta_extra", {})
+	document = {"meta": run_meta(started, extra), **payload}
 	document["payload_sha256"] = _sha(json.dumps(payload, sort_keys=True).encode())
 	path = Path(out)
 	path.parent.mkdir(parents=True, exist_ok=True)
@@ -631,13 +723,17 @@ def parse_args() -> argparse.Namespace:
 	parser.add_argument("--cases", nargs="+", help="digest / breeding mode: only these case names (timing probes)")
 	parser.add_argument("--breeding", action="store_true", help="W1b mode: one GA generation's offspring search")
 	parser.add_argument("--retrain-finals", nargs="+", type=int, metavar="FLOW", help=f"W3 mode, e.g. {CONTROL_FLOWS}")
+	parser.add_argument("--genome-types", nargs="+", metavar="TYPE",
+		help="retrain mode (v2): also these GA final genome types, e.g. best_ce best_acc best_fpr best_fitness")
+	parser.add_argument("--negative-control", action="store_true",
+		help="retrain mode (v2): first flow's best_f1 genome under the lattice rule; must NOT match")
 	parser.add_argument("--compare", nargs=2, metavar=("A", "B"), help="compare two output files bit for bit")
 	return parser.parse_args()
 
 
 def run_mode(db: sqlite3.Connection, args: argparse.Namespace) -> dict:
 	if args.retrain_finals:
-		return run_retrain(db, args.retrain_finals)
+		return run_retrain(db, args.retrain_finals, args.genome_types, args.negative_control)
 	if args.breeding:
 		return run_breeding(db, args.cases)
 	return run_digest(db, args.cases)
@@ -654,7 +750,8 @@ def main() -> int:
 	db = sqlite3.connect(DB_URI, uri=True)
 	payload = run_mode(db, args)
 	write_output(payload, args.out, started)
-	return 0 if payload.get("all_exact", True) else 1
+	control_ok = payload.get("negative_control", {}).get("differs", True)
+	return 0 if payload.get("all_exact", True) and control_ok else 1
 
 
 if __name__ == "__main__":

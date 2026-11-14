@@ -1,0 +1,1275 @@
+{
+ "all_exact": true,
+ "flows": {
+  "7543": {
+   "all_confusions_match": true,
+   "differences": {},
+   "exact_match": true,
+   "genome": {
+    "bits_max": 34,
+    "bits_min": 34,
+    "bits_sha256": "71103cdc70d88e49d0abed222d9929fc5bd04dafcbb8f0503114662e68e3eaaf",
+    "bits_sum": 16864,
+    "connections_sha256": "da25afb32e848208116ccb375febd74b2273891cca3730e213dfad4af7de585b",
+    "neurons_above_34_bits": 0,
+    "neurons_per_cluster": [
+     250,
+     246
+    ]
+   },
+   "genome_hash": "bd17e44bf04d0a53",
+   "modes_compared": [
+    "argmax",
+    "argmax_beta",
+    "argmax_classnorm",
+    "argmax_platt",
+    "margin_classnorm",
+    "margin_fixed0",
+    "margin_train_cal",
+    "margin_train_f1",
+    "margin_val_cal",
+    "margin_val_f1"
+   ],
+   "modes_missing": [],
+   "retrained_margin_val_cal": {
+    "acc": "0x1.fc31650c68278p-1",
+    "attack_f1": "0x1.cbb2ecbb2ecbbp-1",
+    "benign_fpr": "0x1.125fef8ce81bcp-9",
+    "ce": "0x1.88304656ecf9bp-6",
+    "confusion": [
+     [
+      152071,
+      319
+     ],
+     [
+      859,
+      5177
+     ]
+    ],
+    "f1": "0x1.e4dc9bb88a945p-1",
+    "fpr": "0x1.125fef8ce81bcp-9",
+    "macro_f1": "0x1.e4dc9bb88a945p-1",
+    "tau": "0x1.f6f0000000000p-11",
+    "weighted_f1": "0x1.fc1b70235f0c2p-1"
+   },
+   "seed": 20421,
+   "stored_margin_val_cal": {
+    "acc": "0x1.fc31650c68278p-1",
+    "attack_f1": "0x1.cbb2ecbb2ecbbp-1",
+    "benign_fpr": "0x1.125fef8ce81bcp-9",
+    "ce": "0x1.88304656ecf9bp-6",
+    "confusion": [
+     [
+      152071,
+      319
+     ],
+     [
+      859,
+      5177
+     ]
+    ],
+    "f1": "0x1.e4dc9bb88a945p-1",
+    "fpr": "0x1.125fef8ce81bcp-9",
+    "macro_f1": "0x1.e4dc9bb88a945p-1",
+    "tau": "0x1.f6f0000000000p-11",
+    "weighted_f1": "0x1.fc1b70235f0c2p-1"
+   },
+   "stored_worker_abi": 28
+  },
+  "7544": {
+   "all_confusions_match": true,
+   "differences": {},
+   "exact_match": true,
+   "genome": {
+    "bits_max": 34,
+    "bits_min": 34,
+    "bits_sha256": "a54f062ceb46601c947a7f83f94cbe926af64b4707f0f377a78fa988e32fcc8e",
+    "bits_sum": 16966,
+    "connections_sha256": "fb4322c78f30de7126a939587883564338817337a86b446a4af317408669b658",
+    "neurons_above_34_bits": 0,
+    "neurons_per_cluster": [
+     250,
+     249
+    ]
+   },
+   "genome_hash": "f93963e91dc0a253",
+   "modes_compared": [
+    "argmax",
+    "argmax_beta",
+    "argmax_classnorm",
+    "argmax_platt",
+    "margin_classnorm",
+    "margin_fixed0",
+    "margin_train_cal",
+    "margin_train_f1",
+    "margin_val_cal",
+    "margin_val_f1"
+   ],
+   "modes_missing": [],
+   "retrained_margin_val_cal": {
+    "acc": "0x1.fc0094ebc7571p-1",
+    "attack_f1": "0x1.c9658c4df44d8p-1",
+    "benign_fpr": "0x1.488fc5c8084e3p-9",
+    "ce": "0x1.a0d349b66f293p-6",
+    "confusion": [
+     [
+      152008,
+      382
+     ],
+     [
+      855,
+      5181
+     ]
+    ],
+    "f1": "0x1.e3a9328f9df4cp-1",
+    "fpr": "0x1.488fc5c8084e3p-9",
+    "macro_f1": "0x1.e3a9328f9df4cp-1",
+    "tau": "0x1.ae94000000000p-9",
+    "weighted_f1": "0x1.fbec81e877992p-1"
+   },
+   "seed": 20422,
+   "stored_margin_val_cal": {
+    "acc": "0x1.fc0094ebc7571p-1",
+    "attack_f1": "0x1.c9658c4df44d8p-1",
+    "benign_fpr": "0x1.488fc5c8084e3p-9",
+    "ce": "0x1.a0d349b66f293p-6",
+    "confusion": [
+     [
+      152008,
+      382
+     ],
+     [
+      855,
+      5181
+     ]
+    ],
+    "f1": "0x1.e3a9328f9df4cp-1",
+    "fpr": "0x1.488fc5c8084e3p-9",
+    "macro_f1": "0x1.e3a9328f9df4cp-1",
+    "tau": "0x1.ae94000000000p-9",
+    "weighted_f1": "0x1.fbec81e877992p-1"
+   },
+   "stored_worker_abi": 28
+  },
+  "7545": {
+   "all_confusions_match": true,
+   "differences": {},
+   "exact_match": true,
+   "genome": {
+    "bits_max": 33,
+    "bits_min": 31,
+    "bits_sha256": "2fc0c193de029599a717e834e3f81cb4df2c5c68c6b6985349770429f2d72c08",
+    "bits_sum": 15769,
+    "connections_sha256": "760b942cea713a968f4329e20c60f87d30ea93b113b244b84c23d76cc83b8e6c",
+    "neurons_above_34_bits": 0,
+    "neurons_per_cluster": [
+     250,
+     243
+    ]
+   },
+   "genome_hash": "6fa463a7b7023b34",
+   "modes_compared": [
+    "argmax",
+    "argmax_beta",
+    "argmax_classnorm",
+    "argmax_platt",
+    "margin_classnorm",
+    "margin_fixed0",
+    "margin_train_cal",
+    "margin_train_f1",
+    "margin_val_cal",
+    "margin_val_f1"
+   ],
+   "modes_missing": [],
+   "retrained_margin_val_cal": {
+    "acc": "0x1.fc07334fa913ep-1",
+    "attack_f1": "0x1.c9bb28c769b0ap-1",
+    "benign_fpr": "0x1.4366a5301d9ecp-9",
+    "ce": "0x1.a5f37f74ee692p-6",
+    "confusion": [
+     [
+      152014,
+      376
+     ],
+     [
+      853,
+      5183
+     ]
+    ],
+    "f1": "0x1.e3d5b96072c50p-1",
+    "fpr": "0x1.4366a5301d9ecp-9",
+    "macro_f1": "0x1.e3d5b96072c50p-1",
+    "tau": "0x1.58c0000000000p-15",
+    "weighted_f1": "0x1.fbf31481b3f24p-1"
+   },
+   "seed": 20423,
+   "stored_margin_val_cal": {
+    "acc": "0x1.fc07334fa913ep-1",
+    "attack_f1": "0x1.c9bb28c769b0ap-1",
+    "benign_fpr": "0x1.4366a5301d9ecp-9",
+    "ce": "0x1.a5f37f74ee692p-6",
+    "confusion": [
+     [
+      152014,
+      376
+     ],
+     [
+      853,
+      5183
+     ]
+    ],
+    "f1": "0x1.e3d5b96072c50p-1",
+    "fpr": "0x1.4366a5301d9ecp-9",
+    "macro_f1": "0x1.e3d5b96072c50p-1",
+    "tau": "0x1.58c0000000000p-15",
+    "weighted_f1": "0x1.fbf31481b3f24p-1"
+   },
+   "stored_worker_abi": 28
+  }
+ },
+ "meta": {
+  "abi": 29,
+  "captured_utc": "2026-11-14T11:41:20+00:00",
+  "env": {
+   "RAYON_NUM_THREADS": "4",
+   "WNN_ALLOW_PY_FALLBACK": null,
+   "WNN_COALESCE_GROUPS": null,
+   "WNN_EVAL_IN_PLACE": "1",
+   "WNN_HYBRID_SPEED_RATIO": "8",
+   "WNN_NO_METAL": null,
+   "WNN_ORDER_INDEPENDENT_TRAIN": "1"
+  },
+  "git_dirty_src_wnn": "",
+  "git_head": "be2f567d4e03eb98088f3a3a13ae9b28b3b80dd9",
+  "git_tree_src_wnn": "65058b1729f56baa34a1181be8ae881aee1ea655",
+  "harness_sha256": "47913ea326957fd86cbab85288d6b29a10dc993bee94ef48deb0b2ed5d340677",
+  "harness_version": 2,
+  "peak_rss_gb": 11.56,
+  "retrain_paths": [
+   {
+    "balance_classes": false,
+    "dataset": {
+     "auto_max_bits": 32,
+     "classification": "binary",
+     "dataset_name": "unsw-nb15",
+     "encoded_storage": "memory",
+     "encoding_dedupe": false,
+     "feature_ranking": "legacy",
+     "feature_selection": "top20",
+     "ids_raw": false,
+     "invalid_encoding": "none",
+     "n_bits": 64,
+     "rest_bits": null,
+     "split": "random_3way",
+     "streaming": false
+    },
+    "flow": 7543,
+    "max_bits": 34,
+    "memory_mode": "BINARY",
+    "neuron_sample_rate": 0.25,
+    "order_independent_train": true,
+    "seed": 20421,
+    "vote_share": 0.02,
+    "write_rule": "vote"
+   },
+   {
+    "balance_classes": false,
+    "dataset": {
+     "auto_max_bits": 32,
+     "classification": "binary",
+     "dataset_name": "unsw-nb15",
+     "encoded_storage": "memory",
+     "encoding_dedupe": false,
+     "feature_ranking": "legacy",
+     "feature_selection": "top20",
+     "ids_raw": false,
+     "invalid_encoding": "none",
+     "n_bits": 64,
+     "rest_bits": null,
+     "split": "random_3way",
+     "streaming": false
+    },
+    "flow": 7544,
+    "max_bits": 34,
+    "memory_mode": "BINARY",
+    "neuron_sample_rate": 0.25,
+    "order_independent_train": true,
+    "seed": 20422,
+    "vote_share": 0.02,
+    "write_rule": "vote"
+   },
+   {
+    "balance_classes": false,
+    "dataset": {
+     "auto_max_bits": 32,
+     "classification": "binary",
+     "dataset_name": "unsw-nb15",
+     "encoded_storage": "memory",
+     "encoding_dedupe": false,
+     "feature_ranking": "legacy",
+     "feature_selection": "top20",
+     "ids_raw": false,
+     "invalid_encoding": "none",
+     "n_bits": 64,
+     "rest_bits": null,
+     "split": "random_3way",
+     "streaming": false
+    },
+    "flow": 7545,
+    "max_bits": 34,
+    "memory_mode": "BINARY",
+    "neuron_sample_rate": 0.25,
+    "order_independent_train": true,
+    "seed": 20423,
+    "vote_share": 0.02,
+    "write_rule": "vote"
+   }
+  ],
+  "runtime_s": 46.2,
+  "wheel_binary": "/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/lib/python3.13/site-packages/ram_accelerator/ram_accelerator.abi3.so",
+  "wheel_binary_mtime_utc": "2026-11-13T09:03:04+00:00",
+  "wheel_binary_sha256": "894d7e0d0624a8b9414846d70181c0f7c77a66138db8ec1d4755fab649c41b15"
+ },
+ "mode": "retrain_finals",
+ "negative_control": {
+  "all_confusions_match": false,
+  "differs": true,
+  "exact_match": false,
+  "flow": 7543,
+  "override": {
+   "ids_vote_share": null,
+   "ids_write_rule": "lattice"
+  },
+  "retrained_margin_val_cal": {
+   "acc": "0x1.fb10a747105b3p-1",
+   "attack_f1": "0x1.c477ff883c59ap-1",
+   "benign_fpr": "0x1.163ec7fed81f6p-7",
+   "ce": "0x1.f265fbd1f202cp-6",
+   "confusion": [
+    [
+     151096,
+     1294
+    ],
+    [
+     233,
+     5803
+    ]
+   ],
+   "f1": "0x1.e0f2816667804p-1",
+   "fpr": "0x1.163ec7fed81f6p-7",
+   "macro_f1": "0x1.e0f2816667804p-1",
+   "tau": "-0x1.01e2240000000p-8",
+   "weighted_f1": "0x1.fb417a9adb82fp-1"
+  },
+  "write_rule": "lattice"
+ },
+ "other_genome_types": {
+  "7543": {
+   "best_acc": {
+    "all_confusions_match": true,
+    "differences": {},
+    "exact_match": true,
+    "genome": {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "71103cdc70d88e49d0abed222d9929fc5bd04dafcbb8f0503114662e68e3eaaf",
+     "bits_sum": 16864,
+     "connections_sha256": "da25afb32e848208116ccb375febd74b2273891cca3730e213dfad4af7de585b",
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      250,
+      246
+     ]
+    },
+    "genome_hash": "bd17e44bf04d0a53",
+    "modes_compared": [
+     "argmax",
+     "argmax_beta",
+     "argmax_classnorm",
+     "argmax_platt",
+     "margin_classnorm",
+     "margin_fixed0",
+     "margin_train_cal",
+     "margin_train_f1",
+     "margin_val_cal",
+     "margin_val_f1"
+    ],
+    "modes_missing": [],
+    "retrained_margin_val_cal": {
+     "acc": "0x1.fc31650c68278p-1",
+     "attack_f1": "0x1.cbb2ecbb2ecbbp-1",
+     "benign_fpr": "0x1.125fef8ce81bcp-9",
+     "ce": "0x1.88304656ecf9bp-6",
+     "confusion": [
+      [
+       152071,
+       319
+      ],
+      [
+       859,
+       5177
+      ]
+     ],
+     "f1": "0x1.e4dc9bb88a945p-1",
+     "fpr": "0x1.125fef8ce81bcp-9",
+     "macro_f1": "0x1.e4dc9bb88a945p-1",
+     "tau": "0x1.f6f0000000000p-11",
+     "weighted_f1": "0x1.fc1b70235f0c2p-1"
+    },
+    "seed": 20421,
+    "stored_margin_val_cal": {
+     "acc": "0x1.fc31650c68278p-1",
+     "attack_f1": "0x1.cbb2ecbb2ecbbp-1",
+     "benign_fpr": "0x1.125fef8ce81bcp-9",
+     "ce": "0x1.88304656ecf9bp-6",
+     "confusion": [
+      [
+       152071,
+       319
+      ],
+      [
+       859,
+       5177
+      ]
+     ],
+     "f1": "0x1.e4dc9bb88a945p-1",
+     "fpr": "0x1.125fef8ce81bcp-9",
+     "macro_f1": "0x1.e4dc9bb88a945p-1",
+     "tau": "0x1.f6f0000000000p-11",
+     "weighted_f1": "0x1.fc1b70235f0c2p-1"
+    },
+    "stored_worker_abi": 28
+   },
+   "best_ce": {
+    "all_confusions_match": true,
+    "differences": {},
+    "exact_match": true,
+    "genome": {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "a54f062ceb46601c947a7f83f94cbe926af64b4707f0f377a78fa988e32fcc8e",
+     "bits_sum": 16966,
+     "connections_sha256": "48357df3b92ceaf250523d9e866f12ec9fdc1dc7f0c9a9ef680debc736711841",
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      250,
+      249
+     ]
+    },
+    "genome_hash": "7223f96925db86cb",
+    "modes_compared": [
+     "argmax",
+     "argmax_beta",
+     "argmax_classnorm",
+     "argmax_platt",
+     "margin_classnorm",
+     "margin_fixed0",
+     "margin_train_cal",
+     "margin_train_f1",
+     "margin_val_cal",
+     "margin_val_f1"
+    ],
+    "modes_missing": [],
+    "retrained_margin_val_cal": {
+     "acc": "0x1.fc29f2dc0a331p-1",
+     "attack_f1": "0x1.caf1f1625ade4p-1",
+     "benign_fpr": "0x1.ea431860171d9p-10",
+     "ce": "0x1.84897fa213c83p-6",
+     "confusion": [
+      [
+       152105,
+       285
+      ],
+      [
+       902,
+       5134
+      ]
+     ],
+     "f1": "0x1.e47a3ff235c24p-1",
+     "fpr": "0x1.ea431860171d9p-10",
+     "macro_f1": "0x1.e47a3ff235c24p-1",
+     "tau": "0x1.059c800000000p-8",
+     "weighted_f1": "0x1.fc107e1bdd058p-1"
+    },
+    "seed": 20421,
+    "stored_margin_val_cal": {
+     "acc": "0x1.fc29f2dc0a331p-1",
+     "attack_f1": "0x1.caf1f1625ade4p-1",
+     "benign_fpr": "0x1.ea431860171d9p-10",
+     "ce": "0x1.84897fa213c83p-6",
+     "confusion": [
+      [
+       152105,
+       285
+      ],
+      [
+       902,
+       5134
+      ]
+     ],
+     "f1": "0x1.e47a3ff235c24p-1",
+     "fpr": "0x1.ea431860171d9p-10",
+     "macro_f1": "0x1.e47a3ff235c24p-1",
+     "tau": "0x1.059c800000000p-8",
+     "weighted_f1": "0x1.fc107e1bdd058p-1"
+    },
+    "stored_worker_abi": 28
+   },
+   "best_fitness": {
+    "all_confusions_match": true,
+    "differences": {},
+    "exact_match": true,
+    "genome": {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "71103cdc70d88e49d0abed222d9929fc5bd04dafcbb8f0503114662e68e3eaaf",
+     "bits_sum": 16864,
+     "connections_sha256": "da25afb32e848208116ccb375febd74b2273891cca3730e213dfad4af7de585b",
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      250,
+      246
+     ]
+    },
+    "genome_hash": "bd17e44bf04d0a53",
+    "modes_compared": [
+     "argmax",
+     "argmax_beta",
+     "argmax_classnorm",
+     "argmax_platt",
+     "margin_classnorm",
+     "margin_fixed0",
+     "margin_train_cal",
+     "margin_train_f1",
+     "margin_val_cal",
+     "margin_val_f1"
+    ],
+    "modes_missing": [],
+    "retrained_margin_val_cal": {
+     "acc": "0x1.fc31650c68278p-1",
+     "attack_f1": "0x1.cbb2ecbb2ecbbp-1",
+     "benign_fpr": "0x1.125fef8ce81bcp-9",
+     "ce": "0x1.88304656ecf9bp-6",
+     "confusion": [
+      [
+       152071,
+       319
+      ],
+      [
+       859,
+       5177
+      ]
+     ],
+     "f1": "0x1.e4dc9bb88a945p-1",
+     "fpr": "0x1.125fef8ce81bcp-9",
+     "macro_f1": "0x1.e4dc9bb88a945p-1",
+     "tau": "0x1.f6f0000000000p-11",
+     "weighted_f1": "0x1.fc1b70235f0c2p-1"
+    },
+    "seed": 20421,
+    "stored_margin_val_cal": {
+     "acc": "0x1.fc31650c68278p-1",
+     "attack_f1": "0x1.cbb2ecbb2ecbbp-1",
+     "benign_fpr": "0x1.125fef8ce81bcp-9",
+     "ce": "0x1.88304656ecf9bp-6",
+     "confusion": [
+      [
+       152071,
+       319
+      ],
+      [
+       859,
+       5177
+      ]
+     ],
+     "f1": "0x1.e4dc9bb88a945p-1",
+     "fpr": "0x1.125fef8ce81bcp-9",
+     "macro_f1": "0x1.e4dc9bb88a945p-1",
+     "tau": "0x1.f6f0000000000p-11",
+     "weighted_f1": "0x1.fc1b70235f0c2p-1"
+    },
+    "stored_worker_abi": 28
+   },
+   "best_fpr": {
+    "all_confusions_match": true,
+    "differences": {},
+    "exact_match": true,
+    "genome": {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "a54f062ceb46601c947a7f83f94cbe926af64b4707f0f377a78fa988e32fcc8e",
+     "bits_sum": 16966,
+     "connections_sha256": "8f7a0d6dcf903eebbd9faac480503a5eba870457078f1e8174574608a65fa5f7",
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      250,
+      249
+     ]
+    },
+    "genome_hash": "05d5b8d27e807a4e",
+    "modes_compared": [
+     "argmax",
+     "argmax_beta",
+     "argmax_classnorm",
+     "argmax_platt",
+     "margin_classnorm",
+     "margin_fixed0",
+     "margin_train_cal",
+     "margin_train_f1",
+     "margin_val_cal",
+     "margin_val_f1"
+    ],
+    "modes_missing": [],
+    "retrained_margin_val_cal": {
+     "acc": "0x1.fc33e071dcce4p-1",
+     "attack_f1": "0x1.cb99b2b754ee9p-1",
+     "benign_fpr": "0x1.f64db9c2900c5p-10",
+     "ce": "0x1.86e7b551e9163p-6",
+     "confusion": [
+      [
+       152098,
+       292
+      ],
+      [
+       883,
+       5153
+      ]
+     ],
+     "f1": "0x1.e4d0ae58668e4p-1",
+     "fpr": "0x1.f64db9c2900c5p-10",
+     "macro_f1": "0x1.e4d0ae58668e4p-1",
+     "tau": "0x1.eeca000000000p-10",
+     "weighted_f1": "0x1.fc1bcbf84b468p-1"
+    },
+    "seed": 20421,
+    "stored_margin_val_cal": {
+     "acc": "0x1.fc33e071dcce4p-1",
+     "attack_f1": "0x1.cb99b2b754ee9p-1",
+     "benign_fpr": "0x1.f64db9c2900c5p-10",
+     "ce": "0x1.86e7b551e9163p-6",
+     "confusion": [
+      [
+       152098,
+       292
+      ],
+      [
+       883,
+       5153
+      ]
+     ],
+     "f1": "0x1.e4d0ae58668e4p-1",
+     "fpr": "0x1.f64db9c2900c5p-10",
+     "macro_f1": "0x1.e4d0ae58668e4p-1",
+     "tau": "0x1.eeca000000000p-10",
+     "weighted_f1": "0x1.fc1bcbf84b468p-1"
+    },
+    "stored_worker_abi": 28
+   }
+  },
+  "7544": {
+   "best_acc": {
+    "all_confusions_match": true,
+    "differences": {},
+    "exact_match": true,
+    "genome": {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "a54f062ceb46601c947a7f83f94cbe926af64b4707f0f377a78fa988e32fcc8e",
+     "bits_sum": 16966,
+     "connections_sha256": "9366e42d552137aa2c97cf1d6eb9054e6f334a04179c138c1596e69af0fec778",
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      250,
+      249
+     ]
+    },
+    "genome_hash": "afa21313d9c009e2",
+    "modes_compared": [
+     "argmax",
+     "argmax_beta",
+     "argmax_classnorm",
+     "argmax_platt",
+     "margin_classnorm",
+     "margin_fixed0",
+     "margin_train_cal",
+     "margin_train_f1",
+     "margin_val_cal",
+     "margin_val_f1"
+    ],
+    "modes_missing": [],
+    "retrained_margin_val_cal": {
+     "acc": "0x1.fc0310513bfdep-1",
+     "attack_f1": "0x1.c9816f6ae9c98p-1",
+     "benign_fpr": "0x1.451f0562c12e9p-9",
+     "ce": "0x1.a13d7634a47e8p-6",
+     "confusion": [
+      [
+       152012,
+       378
+      ],
+      [
+       856,
+       5180
+      ]
+     ],
+     "f1": "0x1.e3b7ca1d0e0b2p-1",
+     "fpr": "0x1.451f0562c12e9p-9",
+     "macro_f1": "0x1.e3b7ca1d0e0b2p-1",
+     "tau": "0x1.b5f3000000000p-9",
+     "weighted_f1": "0x1.fbeed13ffc39ep-1"
+    },
+    "seed": 20422,
+    "stored_margin_val_cal": {
+     "acc": "0x1.fc0310513bfdep-1",
+     "attack_f1": "0x1.c9816f6ae9c98p-1",
+     "benign_fpr": "0x1.451f0562c12e9p-9",
+     "ce": "0x1.a13d7634a47e8p-6",
+     "confusion": [
+      [
+       152012,
+       378
+      ],
+      [
+       856,
+       5180
+      ]
+     ],
+     "f1": "0x1.e3b7ca1d0e0b2p-1",
+     "fpr": "0x1.451f0562c12e9p-9",
+     "macro_f1": "0x1.e3b7ca1d0e0b2p-1",
+     "tau": "0x1.b5f3000000000p-9",
+     "weighted_f1": "0x1.fbeed13ffc39ep-1"
+    },
+    "stored_worker_abi": 28
+   },
+   "best_ce": {
+    "all_confusions_match": true,
+    "differences": {},
+    "exact_match": true,
+    "genome": {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "a54f062ceb46601c947a7f83f94cbe926af64b4707f0f377a78fa988e32fcc8e",
+     "bits_sum": 16966,
+     "connections_sha256": "f46d766333a3530a1de39a1d60e642ce34715bd28706f5b7d6dae24dd244186e",
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      250,
+      249
+     ]
+    },
+    "genome_hash": "b03bd229a85eda3b",
+    "modes_compared": [
+     "argmax",
+     "argmax_beta",
+     "argmax_classnorm",
+     "argmax_platt",
+     "margin_classnorm",
+     "margin_fixed0",
+     "margin_train_cal",
+     "margin_train_f1",
+     "margin_val_cal",
+     "margin_val_f1"
+    ],
+    "modes_missing": [],
+    "retrained_margin_val_cal": {
+     "acc": "0x1.fc0dd1b38ad0bp-1",
+     "attack_f1": "0x1.ca23dccc9698ap-1",
+     "benign_fpr": "0x1.451f0562c12e9p-9",
+     "ce": "0x1.9e8bf129fb87fp-6",
+     "confusion": [
+      [
+       152012,
+       378
+      ],
+      [
+       843,
+       5193
+      ]
+     ],
+     "f1": "0x1.e40bc86fb2f0ap-1",
+     "fpr": "0x1.451f0562c12e9p-9",
+     "macro_f1": "0x1.e40bc86fb2f0ap-1",
+     "tau": "0x1.7af8000000000p-12",
+     "weighted_f1": "0x1.fbfa5a87d3b36p-1"
+    },
+    "seed": 20422,
+    "stored_margin_val_cal": {
+     "acc": "0x1.fc0dd1b38ad0bp-1",
+     "attack_f1": "0x1.ca23dccc9698ap-1",
+     "benign_fpr": "0x1.451f0562c12e9p-9",
+     "ce": "0x1.9e8bf129fb87fp-6",
+     "confusion": [
+      [
+       152012,
+       378
+      ],
+      [
+       843,
+       5193
+      ]
+     ],
+     "f1": "0x1.e40bc86fb2f0ap-1",
+     "fpr": "0x1.451f0562c12e9p-9",
+     "macro_f1": "0x1.e40bc86fb2f0ap-1",
+     "tau": "0x1.7af8000000000p-12",
+     "weighted_f1": "0x1.fbfa5a87d3b36p-1"
+    },
+    "stored_worker_abi": 28
+   },
+   "best_fitness": {
+    "all_confusions_match": true,
+    "differences": {},
+    "exact_match": true,
+    "genome": {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "a54f062ceb46601c947a7f83f94cbe926af64b4707f0f377a78fa988e32fcc8e",
+     "bits_sum": 16966,
+     "connections_sha256": "9366e42d552137aa2c97cf1d6eb9054e6f334a04179c138c1596e69af0fec778",
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      250,
+      249
+     ]
+    },
+    "genome_hash": "afa21313d9c009e2",
+    "modes_compared": [
+     "argmax",
+     "argmax_beta",
+     "argmax_classnorm",
+     "argmax_platt",
+     "margin_classnorm",
+     "margin_fixed0",
+     "margin_train_cal",
+     "margin_train_f1",
+     "margin_val_cal",
+     "margin_val_f1"
+    ],
+    "modes_missing": [],
+    "retrained_margin_val_cal": {
+     "acc": "0x1.fc0310513bfdep-1",
+     "attack_f1": "0x1.c9816f6ae9c98p-1",
+     "benign_fpr": "0x1.451f0562c12e9p-9",
+     "ce": "0x1.a13d7634a47e8p-6",
+     "confusion": [
+      [
+       152012,
+       378
+      ],
+      [
+       856,
+       5180
+      ]
+     ],
+     "f1": "0x1.e3b7ca1d0e0b2p-1",
+     "fpr": "0x1.451f0562c12e9p-9",
+     "macro_f1": "0x1.e3b7ca1d0e0b2p-1",
+     "tau": "0x1.b5f3000000000p-9",
+     "weighted_f1": "0x1.fbeed13ffc39ep-1"
+    },
+    "seed": 20422,
+    "stored_margin_val_cal": {
+     "acc": "0x1.fc0310513bfdep-1",
+     "attack_f1": "0x1.c9816f6ae9c98p-1",
+     "benign_fpr": "0x1.451f0562c12e9p-9",
+     "ce": "0x1.a13d7634a47e8p-6",
+     "confusion": [
+      [
+       152012,
+       378
+      ],
+      [
+       856,
+       5180
+      ]
+     ],
+     "f1": "0x1.e3b7ca1d0e0b2p-1",
+     "fpr": "0x1.451f0562c12e9p-9",
+     "macro_f1": "0x1.e3b7ca1d0e0b2p-1",
+     "tau": "0x1.b5f3000000000p-9",
+     "weighted_f1": "0x1.fbeed13ffc39ep-1"
+    },
+    "stored_worker_abi": 28
+   },
+   "best_fpr": {
+    "all_confusions_match": true,
+    "differences": {},
+    "exact_match": true,
+    "genome": {
+     "bits_max": 34,
+     "bits_min": 34,
+     "bits_sha256": "a54f062ceb46601c947a7f83f94cbe926af64b4707f0f377a78fa988e32fcc8e",
+     "bits_sum": 16966,
+     "connections_sha256": "d1f6d933d02a09b8c3eae7ca71d23bba640527a4f1c71a362d8f1583f780e944",
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      250,
+      249
+     ]
+    },
+    "genome_hash": "cb5063bffde3663c",
+    "modes_compared": [
+     "argmax",
+     "argmax_beta",
+     "argmax_classnorm",
+     "argmax_platt",
+     "margin_classnorm",
+     "margin_fixed0",
+     "margin_train_cal",
+     "margin_train_f1",
+     "margin_val_cal",
+     "margin_val_f1"
+    ],
+    "modes_missing": [],
+    "retrained_margin_val_cal": {
+     "acc": "0x1.fbfc71ed5a412p-1",
+     "attack_f1": "0x1.c9002202642b0p-1",
+     "benign_fpr": "0x1.3accc432ebcfap-9",
+     "ce": "0x1.9ebc74edbf87cp-6",
+     "confusion": [
+      [
+       152024,
+       366
+      ],
+      [
+       876,
+       5160
+      ]
+     ],
+     "f1": "0x1.e37572e0d1528p-1",
+     "fpr": "0x1.3accc432ebcfap-9",
+     "macro_f1": "0x1.e37572e0d1528p-1",
+     "tau": "0x1.f62c000000000p-9",
+     "weighted_f1": "0x1.fbe6a3fd33e3fp-1"
+    },
+    "seed": 20422,
+    "stored_margin_val_cal": {
+     "acc": "0x1.fbfc71ed5a412p-1",
+     "attack_f1": "0x1.c9002202642b0p-1",
+     "benign_fpr": "0x1.3accc432ebcfap-9",
+     "ce": "0x1.9ebc74edbf87cp-6",
+     "confusion": [
+      [
+       152024,
+       366
+      ],
+      [
+       876,
+       5160
+      ]
+     ],
+     "f1": "0x1.e37572e0d1528p-1",
+     "fpr": "0x1.3accc432ebcfap-9",
+     "macro_f1": "0x1.e37572e0d1528p-1",
+     "tau": "0x1.f62c000000000p-9",
+     "weighted_f1": "0x1.fbe6a3fd33e3fp-1"
+    },
+    "stored_worker_abi": 28
+   }
+  },
+  "7545": {
+   "best_acc": {
+    "all_confusions_match": true,
+    "differences": {},
+    "exact_match": true,
+    "genome": {
+     "bits_max": 33,
+     "bits_min": 31,
+     "bits_sha256": "2fc0c193de029599a717e834e3f81cb4df2c5c68c6b6985349770429f2d72c08",
+     "bits_sum": 15769,
+     "connections_sha256": "760b942cea713a968f4329e20c60f87d30ea93b113b244b84c23d76cc83b8e6c",
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      250,
+      243
+     ]
+    },
+    "genome_hash": "6fa463a7b7023b34",
+    "modes_compared": [
+     "argmax",
+     "argmax_beta",
+     "argmax_classnorm",
+     "argmax_platt",
+     "margin_classnorm",
+     "margin_fixed0",
+     "margin_train_cal",
+     "margin_train_f1",
+     "margin_val_cal",
+     "margin_val_f1"
+    ],
+    "modes_missing": [],
+    "retrained_margin_val_cal": {
+     "acc": "0x1.fc07334fa913ep-1",
+     "attack_f1": "0x1.c9bb28c769b0ap-1",
+     "benign_fpr": "0x1.4366a5301d9ecp-9",
+     "ce": "0x1.a5f37f74ee692p-6",
+     "confusion": [
+      [
+       152014,
+       376
+      ],
+      [
+       853,
+       5183
+      ]
+     ],
+     "f1": "0x1.e3d5b96072c50p-1",
+     "fpr": "0x1.4366a5301d9ecp-9",
+     "macro_f1": "0x1.e3d5b96072c50p-1",
+     "tau": "0x1.58c0000000000p-15",
+     "weighted_f1": "0x1.fbf31481b3f24p-1"
+    },
+    "seed": 20423,
+    "stored_margin_val_cal": {
+     "acc": "0x1.fc07334fa913ep-1",
+     "attack_f1": "0x1.c9bb28c769b0ap-1",
+     "benign_fpr": "0x1.4366a5301d9ecp-9",
+     "ce": "0x1.a5f37f74ee692p-6",
+     "confusion": [
+      [
+       152014,
+       376
+      ],
+      [
+       853,
+       5183
+      ]
+     ],
+     "f1": "0x1.e3d5b96072c50p-1",
+     "fpr": "0x1.4366a5301d9ecp-9",
+     "macro_f1": "0x1.e3d5b96072c50p-1",
+     "tau": "0x1.58c0000000000p-15",
+     "weighted_f1": "0x1.fbf31481b3f24p-1"
+    },
+    "stored_worker_abi": 28
+   },
+   "best_ce": {
+    "all_confusions_match": true,
+    "differences": {},
+    "exact_match": true,
+    "genome": {
+     "bits_max": 33,
+     "bits_min": 31,
+     "bits_sha256": "8a9e686549f60ea4732ed3f243b36a12769ecf725f50530899bcfd80730fa5a8",
+     "bits_sum": 15868,
+     "connections_sha256": "cba10d174371c14dd933f33d0bc63df73e082789ae317c9d1bc25dfa70ab9e71",
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      250,
+      246
+     ]
+    },
+    "genome_hash": "24902123f2292ed5",
+    "modes_compared": [
+     "argmax",
+     "argmax_beta",
+     "argmax_classnorm",
+     "argmax_platt",
+     "margin_classnorm",
+     "margin_fixed0",
+     "margin_train_cal",
+     "margin_train_f1",
+     "margin_val_cal",
+     "margin_val_f1"
+    ],
+    "modes_missing": [],
+    "retrained_margin_val_cal": {
+     "acc": "0x1.fbf922bb6962bp-1",
+     "attack_f1": "0x1.c8d7ac1187ae4p-1",
+     "benign_fpr": "0x1.3e3d849832ef4p-9",
+     "ce": "0x1.a238cf70d9149p-6",
+     "confusion": [
+      [
+       152020,
+       370
+      ],
+      [
+       876,
+       5160
+      ]
+     ],
+     "f1": "0x1.e3605b30c6a50p-1",
+     "fpr": "0x1.3e3d849832ef4p-9",
+     "macro_f1": "0x1.e3605b30c6a50p-1",
+     "tau": "0x1.61c4000000000p-10",
+     "weighted_f1": "0x1.fbe370bcd583ap-1"
+    },
+    "seed": 20423,
+    "stored_margin_val_cal": {
+     "acc": "0x1.fbf922bb6962bp-1",
+     "attack_f1": "0x1.c8d7ac1187ae4p-1",
+     "benign_fpr": "0x1.3e3d849832ef4p-9",
+     "ce": "0x1.a238cf70d9149p-6",
+     "confusion": [
+      [
+       152020,
+       370
+      ],
+      [
+       876,
+       5160
+      ]
+     ],
+     "f1": "0x1.e3605b30c6a50p-1",
+     "fpr": "0x1.3e3d849832ef4p-9",
+     "macro_f1": "0x1.e3605b30c6a50p-1",
+     "tau": "0x1.61c4000000000p-10",
+     "weighted_f1": "0x1.fbe370bcd583ap-1"
+    },
+    "stored_worker_abi": 28
+   },
+   "best_fitness": {
+    "all_confusions_match": true,
+    "differences": {},
+    "exact_match": true,
+    "genome": {
+     "bits_max": 33,
+     "bits_min": 31,
+     "bits_sha256": "8a9e686549f60ea4732ed3f243b36a12769ecf725f50530899bcfd80730fa5a8",
+     "bits_sum": 15868,
+     "connections_sha256": "769567b40d47a8055ef552cd005bce281a8a6a14c9185b284a5550a13482b4a1",
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      250,
+      246
+     ]
+    },
+    "genome_hash": "0e98d32a38719c76",
+    "modes_compared": [
+     "argmax",
+     "argmax_beta",
+     "argmax_classnorm",
+     "argmax_platt",
+     "margin_classnorm",
+     "margin_fixed0",
+     "margin_train_cal",
+     "margin_train_f1",
+     "margin_val_cal",
+     "margin_val_f1"
+    ],
+    "modes_missing": [],
+    "retrained_margin_val_cal": {
+     "acc": "0x1.fc0ea58007085p-1",
+     "attack_f1": "0x1.ca2476d6fd217p-1",
+     "benign_fpr": "0x1.40d214e428470p-9",
+     "ce": "0x1.a49cd8468e236p-6",
+     "confusion": [
+      [
+       152017,
+       373
+      ],
+      [
+       847,
+       5189
+      ]
+     ],
+     "f1": "0x1.e40c4e6593428p-1",
+     "fpr": "0x1.40d214e428470p-9",
+     "macro_f1": "0x1.e40c4e6593428p-1",
+     "tau": "0x1.e5e4000000000p-11",
+     "weighted_f1": "0x1.fbfacdf0e2885p-1"
+    },
+    "seed": 20423,
+    "stored_margin_val_cal": {
+     "acc": "0x1.fc0ea58007085p-1",
+     "attack_f1": "0x1.ca2476d6fd217p-1",
+     "benign_fpr": "0x1.40d214e428470p-9",
+     "ce": "0x1.a49cd8468e236p-6",
+     "confusion": [
+      [
+       152017,
+       373
+      ],
+      [
+       847,
+       5189
+      ]
+     ],
+     "f1": "0x1.e40c4e6593428p-1",
+     "fpr": "0x1.40d214e428470p-9",
+     "macro_f1": "0x1.e40c4e6593428p-1",
+     "tau": "0x1.e5e4000000000p-11",
+     "weighted_f1": "0x1.fbfacdf0e2885p-1"
+    },
+    "stored_worker_abi": 28
+   },
+   "best_fpr": {
+    "all_confusions_match": true,
+    "differences": {},
+    "exact_match": true,
+    "genome": {
+     "bits_max": 33,
+     "bits_min": 31,
+     "bits_sha256": "e330de8491f4b84275850d1b6ac30a2c6328f7632d05599137e3420d9d25d1da",
+     "bits_sum": 15967,
+     "connections_sha256": "091caad878c6596de6ad231f269911b59d66e4ffb4350f8cb7af8633776f936f",
+     "neurons_above_34_bits": 0,
+     "neurons_per_cluster": [
+      250,
+      249
+     ]
+    },
+    "genome_hash": "5547f1ffcadcb50a",
+    "modes_compared": [
+     "argmax",
+     "argmax_beta",
+     "argmax_classnorm",
+     "argmax_platt",
+     "margin_classnorm",
+     "margin_fixed0",
+     "margin_train_cal",
+     "margin_train_f1",
+     "margin_val_cal",
+     "margin_val_f1"
+    ],
+    "modes_missing": [],
+    "retrained_margin_val_cal": {
+     "acc": "0x1.fba3eb756f03fp-1",
+     "attack_f1": "0x1.c2f80f61d5ca3p-1",
+     "benign_fpr": "0x1.fee79abfc1db7p-10",
+     "ce": "0x1.a960e29824788p-6",
+     "confusion": [
+      [
+       152093,
+       297
+      ],
+      [
+       1052,
+       4984
+      ]
+     ],
+     "f1": "0x1.e05aacd30dac0p-1",
+     "fpr": "0x1.fee79abfc1db7p-10",
+     "macro_f1": "0x1.e05aacd30dac0p-1",
+     "tau": "0x1.0167000000000p-8",
+     "weighted_f1": "0x1.fb8011dae9157p-1"
+    },
+    "seed": 20423,
+    "stored_margin_val_cal": {
+     "acc": "0x1.fba3eb756f03fp-1",
+     "attack_f1": "0x1.c2f80f61d5ca3p-1",
+     "benign_fpr": "0x1.fee79abfc1db7p-10",
+     "ce": "0x1.a960e29824788p-6",
+     "confusion": [
+      [
+       152093,
+       297
+      ],
+      [
+       1052,
+       4984
+      ]
+     ],
+     "f1": "0x1.e05aacd30dac0p-1",
+     "fpr": "0x1.fee79abfc1db7p-10",
+     "macro_f1": "0x1.e05aacd30dac0p-1",
+     "tau": "0x1.0167000000000p-8",
+     "weighted_f1": "0x1.fb8011dae9157p-1"
+    },
+    "stored_worker_abi": 28
+   }
+  }
+ },
+ "payload_sha256": "7963a464425c31e4270f42460fc95770e98e270dd99e8bb89797df6c89c1acb3"
+}

@@ -1,0 +1,67 @@
+[06:40:35] Loading unsw-nb15 dataset (classification=binary, split=random_3way, feature_selection=top20, invalid_encoding=none, encoded_storage=memory, encoding_dedupe=off, feature_ranking=legacy)...
+[06:40:40]   Train: 1,267,407 examples, Test: 158,426 examples, Classes: 2, Features: 1104
+[06:40:40] Using 80/20 split: K-fold on 80% train, 20% val for reporting only
+[06:40:40] Creating optimizer IDSEvaluator (1,267,407 train / 158,426 eval, 5 parts, k_folds=5, kfold_per_gen=5)...
+[06:40:40]   neuron_sample_rate=0.25, balance_classes=False
+[06:40:40]   undersample_majority=False
+[06:40:40] Creating test IDSEvaluator (1,267,407 train / 158,426 eval, 1 part, shared cache)...
+[MARKER_TRAINER] GPU init: Apple M4 Max | est_simt_lanes=1280 | max_threads/tg=1024 | recommended_working_set=55.7GB
+[MARKER_TRAIN_BATCHED] 1 genomes × 496 neurons × 1267407 examples (1 chunks of ≤5000000) in 648.79ms
+[06:40:43]   flow 7543 best_f1: margin_val_cal [[152071, 319], [859, 5177]] vs stored [[152071, 319], [859, 5177]] -> exact_match=True
+[MARKER_TRAIN_BATCHED] 1 genomes × 499 neurons × 1267407 examples (1 chunks of ≤5000000) in 537.23ms
+[06:40:45]   flow 7543 best_ce: margin_val_cal [[152105, 285], [902, 5134]] vs stored [[152105, 285], [902, 5134]] -> exact_match=True
+[MARKER_TRAIN_BATCHED] 1 genomes × 496 neurons × 1267407 examples (1 chunks of ≤5000000) in 517.37ms
+[06:40:48]   flow 7543 best_acc: margin_val_cal [[152071, 319], [859, 5177]] vs stored [[152071, 319], [859, 5177]] -> exact_match=True
+[MARKER_TRAIN_BATCHED] 1 genomes × 499 neurons × 1267407 examples (1 chunks of ≤5000000) in 605.78ms
+[06:40:51]   flow 7543 best_fpr: margin_val_cal [[152098, 292], [883, 5153]] vs stored [[152098, 292], [883, 5153]] -> exact_match=True
+[MARKER_TRAIN_BATCHED] 1 genomes × 496 neurons × 1267407 examples (1 chunks of ≤5000000) in 842.22ms
+[06:40:53]   flow 7543 best_fitness: margin_val_cal [[152071, 319], [859, 5177]] vs stored [[152071, 319], [859, 5177]] -> exact_match=True
+[06:40:53]   Train: 1,267,407 examples, Test: 158,426 examples, Classes: 2, Features: 1104
+[06:40:53] Using 80/20 split: K-fold on 80% train, 20% val for reporting only
+[06:40:53] Creating optimizer IDSEvaluator (1,267,407 train / 158,426 eval, 5 parts, k_folds=5, kfold_per_gen=5)...
+[06:40:53]   neuron_sample_rate=0.25, balance_classes=False
+[06:40:53]   undersample_majority=False
+[06:40:53] Creating test IDSEvaluator (1,267,407 train / 158,426 eval, 1 part, shared cache)...
+[MARKER_TRAIN_BATCHED] 1 genomes × 499 neurons × 1267407 examples (1 chunks of ≤5000000) in 729.99ms
+[06:40:56]   flow 7544 best_f1: margin_val_cal [[152008, 382], [855, 5181]] vs stored [[152008, 382], [855, 5181]] -> exact_match=True
+[MARKER_TRAIN_BATCHED] 1 genomes × 499 neurons × 1267407 examples (1 chunks of ≤5000000) in 923.27ms
+[06:41:00]   flow 7544 best_ce: margin_val_cal [[152012, 378], [843, 5193]] vs stored [[152012, 378], [843, 5193]] -> exact_match=True
+[MARKER_TRAIN_BATCHED] 1 genomes × 499 neurons × 1267407 examples (1 chunks of ≤5000000) in 792.19ms
+[06:41:02]   flow 7544 best_acc: margin_val_cal [[152012, 378], [856, 5180]] vs stored [[152012, 378], [856, 5180]] -> exact_match=True
+[MARKER_TRAIN_BATCHED] 1 genomes × 499 neurons × 1267407 examples (1 chunks of ≤5000000) in 852.35ms
+[06:41:05]   flow 7544 best_fpr: margin_val_cal [[152024, 366], [876, 5160]] vs stored [[152024, 366], [876, 5160]] -> exact_match=True
+[MARKER_TRAIN_BATCHED] 1 genomes × 499 neurons × 1267407 examples (1 chunks of ≤5000000) in 635.10ms
+[06:41:07]   flow 7544 best_fitness: margin_val_cal [[152012, 378], [856, 5180]] vs stored [[152012, 378], [856, 5180]] -> exact_match=True
+[06:41:08]   Train: 1,267,407 examples, Test: 158,426 examples, Classes: 2, Features: 1104
+[06:41:08] Using 80/20 split: K-fold on 80% train, 20% val for reporting only
+[06:41:08] Creating optimizer IDSEvaluator (1,267,407 train / 158,426 eval, 5 parts, k_folds=5, kfold_per_gen=5)...
+[06:41:08]   neuron_sample_rate=0.25, balance_classes=False
+[06:41:08]   undersample_majority=False
+[06:41:08] Creating test IDSEvaluator (1,267,407 train / 158,426 eval, 1 part, shared cache)...
+[MARKER_TRAIN_BATCHED] 1 genomes × 493 neurons × 1267407 examples (1 chunks of ≤5000000) in 587.44ms
+[06:41:10]   flow 7545 best_f1: margin_val_cal [[152014, 376], [853, 5183]] vs stored [[152014, 376], [853, 5183]] -> exact_match=True
+[MARKER_TRAIN_BATCHED] 1 genomes × 496 neurons × 1267407 examples (1 chunks of ≤5000000) in 520.72ms
+[06:41:11]   flow 7545 best_ce: margin_val_cal [[152020, 370], [876, 5160]] vs stored [[152020, 370], [876, 5160]] -> exact_match=True
+[MARKER_TRAIN_BATCHED] 1 genomes × 493 neurons × 1267407 examples (1 chunks of ≤5000000) in 608.64ms
+[06:41:13]   flow 7545 best_acc: margin_val_cal [[152014, 376], [853, 5183]] vs stored [[152014, 376], [853, 5183]] -> exact_match=True
+[MARKER_TRAIN_BATCHED] 1 genomes × 499 neurons × 1267407 examples (1 chunks of ≤5000000) in 626.68ms
+[06:41:15]   flow 7545 best_fpr: margin_val_cal [[152093, 297], [1052, 4984]] vs stored [[152093, 297], [1052, 4984]] -> exact_match=True
+[MARKER_TRAIN_BATCHED] 1 genomes × 496 neurons × 1267407 examples (1 chunks of ≤5000000) in 634.73ms
+[06:41:17]   flow 7545 best_fitness: margin_val_cal [[152017, 373], [847, 5189]] vs stored [[152017, 373], [847, 5189]] -> exact_match=True
+[06:41:17]   Train: 1,267,407 examples, Test: 158,426 examples, Classes: 2, Features: 1104
+[06:41:17] Using 80/20 split: K-fold on 80% train, 20% val for reporting only
+[06:41:17] Creating optimizer IDSEvaluator (1,267,407 train / 158,426 eval, 5 parts, k_folds=5, kfold_per_gen=5)...
+[06:41:17]   neuron_sample_rate=0.25, balance_classes=False
+[06:41:17]   undersample_majority=False
+[06:41:17] Creating test IDSEvaluator (1,267,407 train / 158,426 eval, 1 part, shared cache)...
+[MARKER_TRAIN_BATCHED] 1 genomes × 496 neurons × 1267407 examples (1 chunks of ≤5000000) in 651.60ms
+[06:41:19]   flow 7543 best_f1: margin_val_cal [[151096, 1294], [233, 5803]] vs stored [[152071, 319], [859, 5177]] -> exact_match=False
+[06:41:20] wrote experiments/ids57_abi_equivalence/w3v_vote_abi29.json (ABI 29, payload 7963a464425c31e4270f42460fc95770e98e270dd99e8bb89797df6c89c1acb3, 46.2s, peak RSS 11.56 GB)
+  [FEATURES] ranking=legacy source=TOP20_RF_FEATURES (legacy) top=20: ['ct_dst_sport_ltm', 'ct_src_dport_ltm', 'ct_srv_dst', 'ct_state_ttl', 'Dintpkt', 'dmeansz', 'Dpkts', 'dttl', 'dur', 'sbytes', 'Sintpkt', 'Sjit', 'smeansz', 'Spkts', 'sttl', 'swin', 'tcprtt', 'proto', 'service', 'state']
+  Loading from HuggingFace: lacg030175/UNSW-NB15 (random_3way)...
+  Random_3way split: 1,267,407 train, 158,426 test, 158,426 val
+  Using 43 features
+  Encoder: 1104 total bits (distributive, 64 bits/feature, feature_selection=top20, 20 features)
+  Train: 1,219,123 normal, 48,284 attack
+  Test:  152,390 normal, 6,036 attack
+  Val:   152,391 normal, 6,035 attack
