@@ -26,7 +26,10 @@ use crate::position_loop::PositionLoop;
 
 /// Held-out position-hold score for ONE classical teacher flying the full
 /// cascade. Returns (mean position error m, final position error m,
-/// stable_rate, attitude err deg, attitude steady deg).
+/// stable_rate, attitude err deg, attitude steady deg, hold-window mean 3-D
+/// position error m, hold-window mean |dz| m) — the last two (ABI 51) over
+/// t >= ceil(0.8·steps), per-episode mean then mean over the episodes that
+/// reached the window (NaN when none did).
 ///
 /// `init_p` is 3 floats per episode (x, y, z offsets from the target in metres):
 /// the episode STARTS off-target and the teacher must fly back, which is what
@@ -55,7 +58,10 @@ use crate::position_loop::PositionLoop;
 	motor_lag_s = 0.0,
 	// ABI 32: the real-life plant + the G5 attitude-error reference (this scorer
 	// always flies translation with displaced starts). OFF ⇒ ABI 31.
-	imu_specific_force = false, rotor_drag = 0.0, att_err_tilt_ref = false))]
+	imu_specific_force = false, rotor_drag = 0.0, att_err_tilt_ref = false,
+	// L3 (ABI 51): the altitude integrator in front of the altitude PD — 0 off
+	// (bit-identical), 1 pi, 2 pole3 (altitude_integrator.rs).
+	alt_integral = 0))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_position_teacher(
 	teacher_id: u8,
@@ -104,7 +110,8 @@ pub fn score_position_teacher(
 	imu_specific_force: bool,
 	rotor_drag: f32,
 	att_err_tilt_ref: bool,
-) -> PyResult<(f64, f64, f64, f64, f64)>
+	alt_integral: u8,
+) -> PyResult<(f64, f64, f64, f64, f64, f64, f64)>
 {
 	let err = |m: String| pyo3::exceptions::PyValueError::new_err(m);
 	let (plant, att_ref) = crate::stage1::stage1_extras(
@@ -158,6 +165,10 @@ pub fn score_position_teacher(
 		alt_max_delta,
 	)
 	.map_err(err)?;
+	// L3: one integrator per episode in front of that PD (OFF ⇒ `shape` is identity).
+	let alt_int0 = crate::altitude_integrator::AltIntegralMode::from_u8(alt_integral)
+		.and_then(|mode| crate::altitude_integrator::AltitudeIntegrator::new(mode, &pd, af_gravity as f64, af_dt))
+		.map_err(err)?;
 
 	let af = AirframeRs {
 		dt: af_dt,
@@ -220,6 +231,7 @@ pub fn score_position_teacher(
 	let (mut sum_pos_err, mut sum_final_err) = (0.0f64, 0.0f64);
 	let (mut sum_att_err, mut sum_steady) = (0.0f64, 0.0f64);
 	let (mut n_stable, mut steady_eps) = (0usize, 0usize);
+	let (mut sum_hold_pos, mut sum_hold_dz) = (0.0f64, 0.0f64); // ABI 51 hold window
 
 	for ep in 0..num_episodes
 	{
@@ -236,6 +248,7 @@ pub fn score_position_teacher(
 		];
 		let (px, py, pz) = (init_p[ep * 3], init_p[ep * 3 + 1], init_p[ep * 3 + 2]);
 		teacher.reset();
+		let mut alt_int = alt_int0; // L3: fresh per episode
 		sim.reset(Some(init_q), Some(init_om));
 		// Translation AFTER reset (reset zeroes the states) — cpu_score's order.
 		sim.set_translation_core(mass).map_err(err)?;
@@ -266,6 +279,7 @@ pub fn score_position_teacher(
 
 		let (mut ep_pos, mut ep_att) = (0.0f64, 0.0f64);
 		let (mut tail_sum, mut tail_cnt) = (0.0f64, 0usize);
+		let (mut tail_pos, mut tail_dz) = (0.0f64, 0.0f64);
 		let mut done = 0usize;
 		let mut last_applied = [0.5f64; 4];
 		let mut diverged = false;
@@ -287,6 +301,8 @@ pub fn score_position_teacher(
 			let (x, y) = sim.position_xy();
 			let (vx, vy) = sim.velocity_xy();
 			teacher.observe(gyro, last_applied);
+			// L3: the altitude-law inputs (target altitude 0 ⇒ e = −z); off = raw.
+			let alt_law = alt_int.shape(-sim.altitude_rs(), sim.vertical_velocity_rs());
 			let cmd = teacher.step_full_state(
 				q,
 				gyro,
@@ -297,8 +313,8 @@ pub fn score_position_teacher(
 				vx as f64,
 				-(y as f64),
 				vy as f64,
-				-(sim.altitude_rs() as f64),
-				sim.vertical_velocity_rs() as f64,
+				alt_law.0 as f64,
+				alt_law.1 as f64,
 			);
 			let pwm = [cmd[0] as f32, cmd[1] as f32, cmd[2] as f32, cmd[3] as f32];
 			sim.step(pwm);
@@ -313,6 +329,8 @@ pub fn score_position_teacher(
 			{
 				tail_sum += ae;
 				tail_cnt += 1;
+				tail_pos += pe;
+				tail_dz += (sim.altitude_rs() as f64).abs();
 			}
 			done += 1;
 		}
@@ -329,6 +347,8 @@ pub fn score_position_teacher(
 		if tail_cnt > 0
 		{
 			sum_steady += tail_sum / tail_cnt as f64;
+			sum_hold_pos += tail_pos / tail_cnt as f64;
+			sum_hold_dz += tail_dz / tail_cnt as f64;
 			steady_eps += 1;
 		}
 	}
@@ -347,5 +367,7 @@ pub fn score_position_teacher(
 		{
 			f64::NAN
 		},
+		if steady_eps > 0 { sum_hold_pos / steady_eps as f64 } else { f64::NAN },
+		if steady_eps > 0 { sum_hold_dz / steady_eps as f64 } else { f64::NAN },
 	))
 }

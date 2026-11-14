@@ -14,15 +14,15 @@ use crate::plant_opts::PlantOpts;
 use crate::stage1::Stage1Cfg;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 
-const DT: f32 = 0.001;
+pub(crate) const DT: f32 = 0.001;
 // cf21-like plant (the stage-2 airframe scale): arm, k_thrust, k_drag, inertia.
-const ARM: f32 = 0.0707;
-const KT: f32 = 0.2;
-const KD: f32 = 0.0057;
-const INERTIA: [f32; 3] = [3.0e-5, 3.0e-5, 5.3e-5];
-const G: f32 = 9.81;
-const MASS: f32 = 0.0393;
-const EPS: usize = 4;
+pub(crate) const ARM: f32 = 0.0707;
+pub(crate) const KT: f32 = 0.2;
+pub(crate) const KD: f32 = 0.0057;
+pub(crate) const INERTIA: [f32; 3] = [3.0e-5, 3.0e-5, 5.3e-5];
+pub(crate) const G: f32 = 9.81;
+pub(crate) const MASS: f32 = 0.0393;
+pub(crate) const EPS: usize = 4;
 const STEPS: usize = 400;
 
 /// sn=0 stage-2 controller with the per-axis attitude features (roll/pitch err,
@@ -80,7 +80,7 @@ fn controller_with(seed: u64, estimator: bool, cells: usize) -> WnnController
 	c
 }
 
-fn ics() -> (Vec<f32>, Vec<f32>)
+pub(crate) fn ics() -> (Vec<f32>, Vec<f32>)
 {
 	let mut rng = SmallRng::seed_from_u64(91);
 	let (mut q0, mut w0) = (Vec::new(), Vec::new());
@@ -110,6 +110,7 @@ pub(crate) fn cfg(plant: PlantOpts, att_ref: AttErrRef) -> Stage1Cfg
 		init_y: (0..EPS).map(|e| -0.45 + 0.3 * e as f32).collect(),
 		plant,
 		att_ref,
+		alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 	};
 	c.validate(EPS).expect("abi32 fixture must validate");
 	c
@@ -120,7 +121,7 @@ pub(crate) fn tilt_ref() -> AttErrRef
 	AttErrRef::tilt(G as f64, 1.0, 1.0, 0.5236).unwrap()
 }
 
-fn cpu(c: &WnnController, s1: &Stage1Cfg, steps: usize) -> [f64; 17]
+pub(crate) fn cpu(c: &WnnController, s1: &Stage1Cfg, steps: usize) -> [f64; 19]
 {
 	let (q0, w0) = ics();
 	let mut c = c.clone();
@@ -148,20 +149,20 @@ fn close(gpu: f64, cpu: f64, rel: f64, floor: f64, what: &str)
 }
 
 /// CPU == GPU on err, reward, pos_err, alt, dx, dy (rows 1, 0, 13, 14, 15, 16).
-fn assert_parity(c: &WnnController, s1: &Stage1Cfg, what: &str) -> [f64; 17]
+fn assert_parity(c: &WnnController, s1: &Stage1Cfg, what: &str) -> [f64; 19]
 {
 	assert_parity_steps(c, s1, STEPS, what)
 }
 
-pub(crate) fn assert_parity_steps(c: &WnnController, s1: &Stage1Cfg, steps: usize, what: &str) -> [f64; 17]
+pub(crate) fn assert_parity_steps(c: &WnnController, s1: &Stage1Cfg, steps: usize, what: &str) -> [f64; 19]
 {
 	let cr = cpu(c, s1, steps);
 	if let Some(gr) = gpu(c, s1, steps)
 	{
-		assert_eq!(gr.len(), 17, "{what}: GPU row must carry dx/dy (17 metrics)");
+		assert_eq!(gr.len(), 19, "{what}: GPU row must carry dx/dy + the hold column (19 metrics)");
 		close(gr[1], cr[1], 2e-2, 1e-4, &format!("{what} err"));
 		close(gr[0], cr[0], 5e-2, 1e-3, &format!("{what} reward"));
-		for (i, name) in [(13, "pos"), (14, "alt"), (15, "dx"), (16, "dy")]
+		for (i, name) in [(13, "pos"), (14, "alt"), (15, "dx"), (16, "dy"), (17, "pos_hold"), (18, "dz_hold")]
 		{
 			close(gr[i], cr[i], 5e-2, 1e-3, &format!("{what} {name}"));
 		}
@@ -169,7 +170,7 @@ pub(crate) fn assert_parity_steps(c: &WnnController, s1: &Stage1Cfg, steps: usiz
 	cr
 }
 
-pub(crate) fn differs(a: &[f64; 17], b: &[f64; 17], idx: &[usize], what: &str)
+pub(crate) fn differs(a: &[f64; 19], b: &[f64; 19], idx: &[usize], what: &str)
 {
 	assert!(
 		idx.iter().any(|&i| (a[i] - b[i]).abs() > 1e-9),
@@ -457,12 +458,12 @@ fn prod_dist(on: bool) -> Option<crate::controller::Disturbance>
 	})
 }
 
-fn prod_rows(c: &WnnController, s1: &Stage1Cfg, steps: usize, dist: bool) -> ([f64; 17], Option<Vec<f64>>)
+fn prod_rows(c: &WnnController, s1: &Stage1Cfg, steps: usize, dist: bool) -> ([f64; 19], Option<Vec<f64>>)
 {
 	prod_rows_lag(c, s1, steps, dist, 0.0)
 }
 
-fn prod_rows_lag(c: &WnnController, s1: &Stage1Cfg, steps: usize, dist: bool, lag: f32) -> ([f64; 17], Option<Vec<f64>>)
+fn prod_rows_lag(c: &WnnController, s1: &Stage1Cfg, steps: usize, dist: bool, lag: f32) -> ([f64; 19], Option<Vec<f64>>)
 {
 	let (q0, w0) = ics();
 	let d = prod_dist(dist);

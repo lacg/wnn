@@ -310,7 +310,9 @@ pub(crate) fn pool_axes(rig: &mut Rig, cfg: &RewardGatedConfigPacked, c: &WnnCon
 /// stage); returns [stable %, tail |roll|°, tail |pitch|°, tail |yaw|°].
 fn fly_axes(rig: &mut Rig, cfg: &RewardGatedConfigPacked, c: &WnnController, student: bool, n: usize) -> [f64; 10]
 {
-	use crate::episode_regime::{anchor_controller, draw_translation_episode, feed_live_obs, scored_att_err, OuterLoops};
+	use crate::episode_regime::{
+		alt_integrator_for, anchor_controller, draw_translation_episode, feed_live_obs, scored_att_err, sense_altitude, OuterLoops,
+	};
 	let hold = c.action_repeat_n().max(1);
 	let loops = OuterLoops::for_cfg(cfg);
 	let mut rng = SmallRng::seed_from_u64(0xA7E5);
@@ -333,6 +335,7 @@ fn fly_axes(rig: &mut Rig, cfg: &RewardGatedConfigPacked, c: &WnnController, stu
 		cc.reset(crate::controller::yaw_from_quat_rs(q0));
 		cc.seed_att_estimator(q0);
 		anchor_controller(&mut cc, cfg, coll);
+		let mut alt_int = alt_integrator_for(cfg); // L3: fresh per episode
 		let mut pilot = crate::ctbr::CtbrOverRate::new(spec(c).rate_stage(), hold);
 		let mut last = [0.5f32; 4];
 		let (mut errs, mut eul, mut div) = (Vec::new(), Vec::new(), false);
@@ -346,9 +349,10 @@ fn fly_axes(rig: &mut Rig, cfg: &RewardGatedConfigPacked, c: &WnnController, stu
 			}
 			let (gyro, accel) = rig.sim.read_imu();
 			let q = rig.sim.quaternion();
+			let alt_law = sense_altitude(&mut alt_int, &rig.sim, cfg.target_altitude);
 			let pwm = if student
 			{
-				feed_live_obs(&mut cc, &rig.sim, cfg, coll);
+				feed_live_obs(&mut cc, &rig.sim, cfg, coll, alt_law.0);
 				let v = cc.step(gyro, accel, rig.target);
 				let (inr, sp) = (cc.diag_ctbr_inner_state().unwrap(), cc.ctbr_held_setpoint().unwrap());
 				isp.push([inr[0] / ilim[0], inr[1] / ilim[1], inr[2] / ilim[2], sp[1], sp[2], sp[3]]);
@@ -357,7 +361,7 @@ fn fly_axes(rig: &mut Rig, cfg: &RewardGatedConfigPacked, c: &WnnController, stu
 			else
 			{
 				teacher.observe(gyro, last.map(|v| v as f64));
-				let label = loops.expert_ctbr(teacher, &rig.sim, q, gyro, rig.target, cfg.target_altitude, hold);
+				let label = loops.expert_ctbr(teacher, &rig.sim, q, gyro, rig.target, alt_law, hold);
 				pilot.fly(label, gyro).map(|v| v as f32)
 			};
 			last = pwm;
@@ -436,7 +440,7 @@ fn gauss(rng: &mut SmallRng) -> f64
 /// per-episode weather incl. the train-time motor asymmetry). (stable %, err °, steady °).
 fn fly(rig: &mut Rig, cfg: &RewardGatedConfigPacked, c: &WnnController, xf: &Xf, n: usize, tilt: f64, seed: u64) -> (f64, f64, f64)
 {
-	use crate::episode_regime::{draw_translation_episode, scored_att_err, OuterLoops};
+	use crate::episode_regime::{alt_integrator_for, draw_translation_episode, scored_att_err, sense_altitude, OuterLoops};
 	let hold = c.action_repeat_n().max(1);
 	let loops = OuterLoops::for_cfg(cfg);
 	let mut rng = SmallRng::seed_from_u64(seed);
@@ -453,6 +457,7 @@ fn fly(rig: &mut Rig, cfg: &RewardGatedConfigPacked, c: &WnnController, xf: &Xf,
 		crate::dagger_train::apply_cfg_disturbance(&mut rig.sim, cfg, &mut rng);
 		let teacher = rig.teachers.get_mut(cfg.teacher_id_for(0, ep));
 		teacher.reset();
+		let mut alt_int = alt_integrator_for(cfg); // L3: fresh per episode
 		let mut pilot = crate::ctbr::CtbrOverRate::new(spec(c).rate_stage(), hold);
 		let mut last = [0.5f32; 4];
 		let mut held = [0.0f64; 4];
@@ -467,7 +472,8 @@ fn fly(rig: &mut Rig, cfg: &RewardGatedConfigPacked, c: &WnnController, xf: &Xf,
 			let (gyro, _a) = rig.sim.read_imu();
 			let q = rig.sim.quaternion();
 			teacher.observe(gyro, last.map(|v| v as f64));
-			let label = loops.expert_ctbr(teacher, &rig.sim, q, gyro, rig.target, cfg.target_altitude, hold);
+			let alt_law = sense_altitude(&mut alt_int, &rig.sim, cfg.target_altitude);
+			let label = loops.expert_ctbr(teacher, &rig.sim, q, gyro, rig.target, alt_law, hold);
 			if t % hold == 0
 			{
 				held = match xf

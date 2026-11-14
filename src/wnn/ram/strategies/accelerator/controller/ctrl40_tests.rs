@@ -71,7 +71,7 @@ pub(crate) fn rollouts(c: &mut WnnController, cfg: &RewardGatedConfigPacked, n: 
 	(0..n).map(|_| rollout_and_label_rs(c, &mut teacher, &mut sim, cfg, 0.08, &mut rng, [0.0; 3])).collect()
 }
 
-fn replay_obs(t: &TrajectoryRs) -> ReplayObs
+pub(crate) fn replay_obs(t: &TrajectoryRs) -> ReplayObs
 {
 	ReplayObs {
 		vert: t.vert_obs.clone(),
@@ -84,9 +84,9 @@ fn replay_obs(t: &TrajectoryRs) -> ReplayObs
 	}
 }
 
-type Streams = (Vec<Vec<[f32; 3]>>, Vec<Vec<[f32; 3]>>, Vec<Vec<[f32; 3]>>, Vec<Vec<[f32; 4]>>);
+pub(crate) type Streams = (Vec<Vec<[f32; 3]>>, Vec<Vec<[f32; 3]>>, Vec<Vec<[f32; 3]>>, Vec<Vec<[f32; 4]>>);
 
-fn streams(trs: &[TrajectoryRs]) -> Streams
+pub(crate) fn streams(trs: &[TrajectoryRs]) -> Streams
 {
 	(
 		trs.iter().map(|t| t.gyros.clone()).collect(),

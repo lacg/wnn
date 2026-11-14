@@ -38,8 +38,10 @@ fn small(teacher: u8, use_est: bool, probe: Option<&mut RivalProbe>) -> pyo3::Py
 		2.0, 1.0, 0.25,
 		s1.init_x.clone(), s1.init_y.clone(), 1.0, 1.0, 0.5236,
 		0.20, true, 0.0, true, 10,
+		0, // alt_integral off
 		probe,
 	)
+	.map(crate::dagger_train::rival_first8)
 }
 
 /// Probe off ⇒ the shipped scorer, bit for bit — for both cascade rivals and both feeds.
@@ -235,8 +237,10 @@ impl Unit
 			self.s("rotor_drag") as f32,
 			self.b("att_err_tilt_ref"),
 			self.s("ctbr_outer_hold") as usize,
+			0, // alt_integral off
 			probe,
 		)
+		.map(crate::dagger_train::rival_first8)
 		.unwrap_or_else(|e| panic!("unit {}: {e}", self.seed))
 	}
 }

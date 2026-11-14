@@ -26,6 +26,11 @@ use crate::controller::{
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+/// Metrics in a scorer row before ABI 51 appended the hold-window column (rows 17,
+/// 18). The byte-identity pins captured on earlier ABIs digest exactly this prefix.
+#[cfg(test)]
+pub(crate) const PRE_ABI51_ROW_METRICS: usize = 17;
+
 /// Roll out ONE controller over `num_eps` episodes with EXPLICIT initial conditions
 /// (q0/omega0, same contract as score_controllers_metal) and return a 12-metric row.
 /// Mirrors eval_closed_loop_rs's inner loop; the caller supplies a clone it may mutate.
@@ -86,7 +91,7 @@ pub(crate) fn rollout_one(
 	// rollout, bit-identical to every pre-13/08 result. Caller has validated it
 	// against num_eps before the rayon fan-out.
 	stage1: Option<&crate::stage1::Stage1Cfg>,
-) -> [f64; 17]
+) -> [f64; 19]
 {
 	let mut sim = AttitudeSim::new(dt, arm, k_thrust, k_drag, inertia, gravity);
 	if motor_lag_s > 0.0
@@ -150,6 +155,9 @@ pub(crate) fn rollout_one(
 	let mut sum_alterr = 0.0f64; // stage 1+2: mean |altitude error| (m)
 	let mut sum_dx = 0.0f64; // ABI 32: mean |x error| (m)
 	let mut sum_dy = 0.0f64; // ABI 32: mean |y error| (m)
+	// ABI 51 hold-window column (kernel twin): per-episode mean over t >= tail_start
+	// of the 3-D position error and of |dz|; 0 for an episode that never reached it.
+	let (mut sum_hold_pos, mut sum_hold_dz) = (0.0f64, 0.0f64);
 	let mut n_stable = 0usize;
 	// Transient/display metrics (20/07/2026): previously hardcoded 0.0 on this
 	// path, so any run with WNN_CONTROLLER_GPU_EVAL=0 reported steady=0.00° and
@@ -235,6 +243,9 @@ pub(crate) fn rollout_one(
 		let mut ep_sum_poserr = 0.0f64;
 		let mut ep_sum_alterr = 0.0f64;
 		let (mut ep_sum_dx, mut ep_sum_dy) = (0.0f64, 0.0f64);
+		let (mut tail_pos, mut tail_dz) = (0.0f64, 0.0f64); // ABI 51 hold window
+		// L3: this episode's altitude integrator (a fresh copy of the prototype).
+		let mut alt_int = stage1.map_or(crate::altitude_integrator::AltitudeIntegrator::OFF, |s| s.alt_int);
 		let mut ep_jerk = 0.0f64;
 		let mut ep_jerk_count = 0usize;
 		let mut ep_effort = 0.0f64;
@@ -276,11 +287,10 @@ pub(crate) fn rollout_one(
 			// controller simply never appends them.
 			if let Some(s1) = stage1
 			{
-				c.set_vertical_obs(
-					s1.collective_pwm(ep, gravity, k_thrust),
-					s1.target_altitude - sim.altitude_rs(),
-					sim.vertical_velocity_rs(),
-				);
+				// L3: alt_err is the altitude law's input — integrator-shaped when on
+				// (the trainer's feed_live_obs twin), target − z otherwise. vz stays raw.
+				let (alt_err, _) = alt_int.shape(s1.target_altitude - sim.altitude_rs(), sim.vertical_velocity_rs());
+				c.set_vertical_obs(s1.collective_pwm(ep, gravity, k_thrust), alt_err, sim.vertical_velocity_rs());
 				// STAGE 2: target is the ORIGIN, so the error is just −position.
 				let [hx, hy] = sim.position_xy_rs();
 				let [hvx, hvy] = sim.velocity_xy_rs();
@@ -434,7 +444,13 @@ pub(crate) fn rollout_one(
 			{
 				let [hx, hy] = sim.position_xy_rs();
 				let ae = (s1.target_altitude - sim.altitude_rs()) as f64;
-				ep_sum_poserr += ((hx * hx + hy * hy) as f64 + ae * ae).sqrt();
+				let pos3d = ((hx * hx + hy * hy) as f64 + ae * ae).sqrt();
+				ep_sum_poserr += pos3d;
+				if _t >= tail_start
+				{
+					tail_pos += pos3d;
+					tail_dz += ae.abs();
+				}
 				// The VERTICAL component alone (15/08/2026) — pos_err cannot be
 				// decomposed, so drifting and falling looked identical in a table.
 				ep_sum_alterr += ae.abs();
@@ -518,6 +534,18 @@ pub(crate) fn rollout_one(
 			sum_dx += ep_sum_dx / ep_steps as f64;
 			sum_dy += ep_sum_dy / ep_steps as f64;
 		}
+		// Hold window: diverged before reaching it ⇒ the whole-episode means (the
+		// kernel's `steady` fallback, so a failing episode stays finite and counted).
+		if tail_cnt > 0
+		{
+			sum_hold_pos += tail_pos / tail_cnt as f64;
+			sum_hold_dz += tail_dz / tail_cnt as f64;
+		}
+		else if ep_steps > 0
+		{
+			sum_hold_pos += ep_sum_poserr / ep_steps as f64;
+			sum_hold_dz += ep_sum_alterr / ep_steps as f64;
+		}
 		sum_mono += mono_last;
 		// Steady: mean err over the tail-20% window. Diverged before reaching it
 		// ⇒ no samples ⇒ fall back to the whole-episode mean (kernel's else-branch).
@@ -588,6 +616,10 @@ pub(crate) fn rollout_one(
 		// ABI 32 (Luiz 31/10): appended — mean |dx|, mean |dy| (m).
 		sum_dx / n,
 		sum_dy / n,
+		// ABI 51: appended — the hold-window position column: mean 3-D position
+		// error and mean |dz| (m) over t >= ceil(0.8·steps). 0.0 with translation off.
+		sum_hold_pos / n,
+		sum_hold_dz / n,
 	]
 }
 
@@ -656,6 +688,16 @@ pub(crate) fn rollout_one(
 	pos_omega = 1.0,
 	pos_zeta = 1.0,
 	pos_max_tilt_rad = 0.5236,
+	// L3 (ABI 51): the altitude integrator that shapes the student's `alt_err`
+	// observation (altitude_integrator.rs) — 0 off (bit-identical; the alt_pd_*
+	// kwargs are then not read), 1 pi, 2 pole3. Its gains come from the altitude PD
+	// the TRAINER's label used: pass the training config's alt_pd_omega / alt_pd_zeta
+	// / alt_pd_max_delta and its nominal mass (af_mass) as alt_pd_mass.
+	alt_integral = 0,
+	alt_pd_omega = 2.0,
+	alt_pd_zeta = 1.0,
+	alt_pd_max_delta = 0.25,
+	alt_pd_mass = 0.0,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_controllers_cpu(
@@ -713,6 +755,11 @@ pub fn score_controllers_cpu(
 	pos_omega: f32,
 	pos_zeta: f32,
 	pos_max_tilt_rad: f32,
+	alt_integral: u8,
+	alt_pd_omega: f64,
+	alt_pd_zeta: f64,
+	alt_pd_max_delta: f64,
+	alt_pd_mass: f64,
 ) -> PyResult<Vec<Vec<f64>>>
 {
 	if controllers.is_empty()
@@ -735,6 +782,22 @@ pub fn score_controllers_cpu(
 	{
 		return Err(verr("score_controllers_cpu: att_err_tilt_ref needs translation=True".to_string()));
 	}
+	// L3: the student's altitude integrator (OFF at mode 0, nothing else read).
+	if alt_integral != 0 && !translation
+	{
+		return Err(verr("score_controllers_cpu: alt_integral needs translation=True".to_string()));
+	}
+	let alt_int = crate::altitude_integrator::AltitudeIntegrator::from_plant(
+		alt_integral,
+		alt_pd_mass,
+		gravity as f64,
+		k_thrust as f64,
+		alt_pd_omega,
+		alt_pd_zeta,
+		alt_pd_max_delta,
+		dt,
+	)
+	.map_err(verr)?;
 	// STAGE 1: build + validate ONCE, before the rayon fan-out, so the workers
 	// can index the per-episode vectors unconditionally (the geometry idiom).
 	let stage1_cfg = if translation
@@ -751,6 +814,7 @@ pub fn score_controllers_cpu(
 			init_y,
 			plant,
 			att_ref,
+			alt_int,
 		};
 		cfg
 			.validate(num_episodes)

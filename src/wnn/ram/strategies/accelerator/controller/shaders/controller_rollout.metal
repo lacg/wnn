@@ -293,6 +293,19 @@ struct Params
 	// ARM 3 (12/11/2026), appended in lockstep with RolloutParams: the leak of the
 	// yaw integrals (yaw_err_i, yaw_i_pa). == integral_leak unless --yaw-integral-leak.
 	float yaw_integral_leak;
+	// L3 of block 10 (ABI 51), appended in lockstep with RolloutParams: the altitude
+	// integrator that shapes the student's alt_err observation (altitude_integrator.rs
+	// twin). alt_int_g = [k_e, k_i, k_v, i_max, w2, c, az_limit]. 0 ⇒ alt_err = target − z.
+	uint alt_int_on;
+	float alt_int_g[7];
+	// L1 of block 10 (ABI 51), appended in lockstep: roll_err / pitch_err measured
+	// against the tilt reference, bias-corrected (tilt_ref_err.rs twin) — the position
+	// loop's shape. 0 ⇒ target − estimate.
+	uint tre_on;
+	float tre_bxy;
+	float tre_omega;
+	float tre_zeta;
+	float tre_max_tilt;
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -394,12 +407,23 @@ inline float3 rotate_body_to_world(float4 q, float3 v)
 // CTRL-17 G5: the position loop's tilt reference as a quaternion (w,x,y,z) in
 // .xyzw — twin of PositionLoop::tilt_ref + att_err_ref.rs rp_to_quat (yaw 0).
 // Target is the origin ⇒ e = −position. f32 here, f64 on the CPU.
+// The position loop's tilt reference (roll, pitch) in .xy from the horizontal error
+// (target − position) and velocity — twin of PositionLoop::tilt_ref. ONE function
+// for the G5 scorer reference (tilt_ref_quat) and the L1 student feature
+// (tilt_ref_err_target), so the two cannot drift.
+inline float2 tilt_ref_rp(float ex, float vx, float ey, float vy, float bxy, float omega, float zeta, float max_tilt)
+{
+	float w2 = omega * omega;
+	float c2 = 2.0f * zeta * omega;
+	float pitch = clamp((w2 * ex - c2 * vx) / bxy, -max_tilt, max_tilt);
+	float roll = clamp(-(w2 * ey - c2 * vy) / bxy, -max_tilt, max_tilt);
+	return float2(roll, pitch);
+}
+
 inline float4 tilt_ref_quat(float xp, float yp, float vxp, float vyp, constant Params &P)
 {
-	float w2 = P.att_ref_omega * P.att_ref_omega;
-	float c2 = 2.0f * P.att_ref_zeta * P.att_ref_omega;
-	float pitch = clamp((w2 * (-xp) - c2 * vxp) / P.att_ref_bxy, -P.att_ref_max_tilt, P.att_ref_max_tilt);
-	float roll = clamp(-(w2 * (-yp) - c2 * vyp) / P.att_ref_bxy, -P.att_ref_max_tilt, P.att_ref_max_tilt);
+	float2 rp = tilt_ref_rp(-xp, vxp, -yp, vyp, P.att_ref_bxy, P.att_ref_omega, P.att_ref_zeta, P.att_ref_max_tilt);
+	float roll = rp.x, pitch = rp.y;
 	float cr = cos(roll * 0.5f), sr = sin(roll * 0.5f);
 	float cp = cos(pitch * 0.5f), sp = sin(pitch * 0.5f);
 	return float4(cr * cp, sr * cp, cr * sp, -sr * sp);
@@ -964,6 +988,22 @@ inline void derive_features(
 	}
 }
 
+// L1 of block 10 (ABI 51, --obs-tilt-ref-err): the targets derive_features measures
+// roll_err / pitch_err against — (target + tilt reference) + predicted bias — twin
+// of tilt_ref_err.rs TiltRefErr::effective_target. The tilt reference is the
+// position law (tilt_ref_rp, the one function the G5 scorer reference uses too) on
+// the student's horizontal observation; the bias prediction is this step's value in
+// the sensors' last two slots (abp_step live, abp_rec in a replay). Call AFTER the
+// horizontal observation and the bias prediction of the step are in place and
+// BEFORE derive_features.
+inline void tilt_ref_err_target(thread FwdParams &F, float target0, float target1, thread const float *sensors,
+																float bxy, float omega, float zeta, float max_tilt)
+{
+	float2 rp = tilt_ref_rp(F.horiz_err_x, F.horiz_vx, F.horiz_err_y, F.horiz_vy, bxy, omega, zeta, max_tilt);
+	F.target0 = (target0 + rp.x) + sensors[F.num_features - 2u];
+	F.target1 = (target1 + rp.y) + sensors[F.num_features - 1u];
+}
+
 // CTRL-38: the cascade MPCOF teacher's offset-free observer, f32 twin of
 // controller/cascade_dhat.rs CascadeDhat::observe (prime on the first call, seed the
 // actuator filter AT the first command, then the plant's lag; d̂ ← clamp(d̂ +
@@ -1340,6 +1380,9 @@ kernel void controller_rollout(
 	float sum_effort = 0.0f;
 	float sum_alterr = 0.0f; // stage 1+2: Σ |altitude error| (m)
 	float sum_dx = 0.0f, sum_dy = 0.0f; // ABI 32: Σ |x|, Σ |y| (m)
+	// ABI 51: the hold-window position column — Σ over t >= tail_start of the 3-D
+	// position error and of |dz| (cpu_score.rs twin).
+	float tail_pos = 0.0f, tail_dz = 0.0f;
 	float sum_poserr = 0.0f; // stage 1+2: Σ 3D position error (m)   // Σ_t Σ_m pwm² (allocation-effort proxy)
 	float mono_last = 0.0f;
 	// Transient-speed tracking (mirrors run_episode). initial_err/band_rel set on
@@ -1544,6 +1587,9 @@ kernel void controller_rollout(
 		abp_s.v_prev[a] = 0.0f;
 	}
 	abp_s.have_prev = false;
+	// L3 of block 10: the altitude integral I (m·s), zero at episode start
+	// (AltitudeIntegrator::reset).
+	float alt_I = 0.0f;
 
 	for (uint t = 0u; t < P.steps; t++)
 	{
@@ -1670,6 +1716,20 @@ kernel void controller_rollout(
 		{
 			F.vert_collective_cmd = coll_anchor;
 			F.vert_alt_err = P.target_altitude - zpos;
+			// L3 of block 10: the student reads the altitude law's INPUT — the error
+			// reshaped by the integral of the previous steps' errors — and then the
+			// integral advances, held while the PD's unclamped command is at its limit.
+			// Twin of AltitudeIntegrator::shape (same expressions, same order).
+			if (P.alt_int_on != 0u)
+			{
+				float ae0 = F.vert_alt_err;
+				float e_eff = P.alt_int_g[0] * ae0 + P.alt_int_g[1] * alt_I;
+				float vz_eff = P.alt_int_g[2] * vz;
+				float az_des = P.alt_int_g[4] * e_eff - P.alt_int_g[5] * vz_eff;
+				if (fabs(az_des) < P.alt_int_g[6])
+					alt_I = clamp(alt_I + ae0 * P.dt, -P.alt_int_g[3], P.alt_int_g[3]);
+				F.vert_alt_err = e_eff;
+			}
 			F.vert_vz = vz;
 			// STAGE 2: target is the ORIGIN, so the error is just −position.
 			F.horiz_err_x = -xpos;
@@ -1696,6 +1756,10 @@ kernel void controller_rollout(
 		// twin of compute_features' append_att_bias_features.
 		if (ABP && P.abp_on != 0u)
 			abp_step(P, sensors, abp_s, F.horiz_vx, F.horiz_vy, mq);
+		// L1 of block 10: the bias prediction above already precedes derive_features
+		// here, so the effective roll / pitch targets are built from it directly.
+		if (ABP && P.abp_on != 0u && P.tre_on != 0u)
+			tilt_ref_err_target(F, P.target0, P.target1, sensors, P.tre_bxy, P.tre_omega, P.tre_zeta, P.tre_max_tilt);
 
 		// Action-repeat: hold steps tick ONLY the physical-time accumulators
 		// (derive_features) and re-emit the last DECISION step's PWM — no ring
@@ -2243,7 +2307,13 @@ kernel void controller_rollout(
 		if (P.translation_on != 0u)
 		{
 			float ae_ = P.target_altitude - zpos;
-			sum_poserr += sqrt(xpos * xpos + ypos * ypos + ae_ * ae_);
+			float pos3d_ = sqrt(xpos * xpos + ypos * ypos + ae_ * ae_);
+			sum_poserr += pos3d_;
+			if (t >= tail_start)
+			{
+				tail_pos += pos3d_;
+				tail_dz += fabs(ae_);
+			}
 			// 15/08/2026: the VERTICAL component on its own. pos_err alone cannot
 			// be decomposed, so a drifting run could not be told apart from a
 			// falling one. The rivals have had this column since chunk D.
@@ -2293,11 +2363,18 @@ kernel void controller_rollout(
 	// slot 0 = effort, slot 1 = mean 3D position error (m), slot 2 = mean
 	// |altitude error| (m). Slots 1-2 are 0 when translation is off.
 	// Widened again 31/10/2026 (ABI 32): slots 3-4 = mean |x|, mean |y| (m).
-	out_effort[idx * 5u] = steps > 0u ? (sum_effort / (float)steps) : 0.0f;
-	out_effort[idx * 5u + 1u] = steps > 0u ? (sum_poserr / (float)steps) : 0.0f;
-	out_effort[idx * 5u + 2u] = steps > 0u ? (sum_alterr / (float)steps) : 0.0f;
-	out_effort[idx * 5u + 3u] = steps > 0u ? (sum_dx / (float)steps) : 0.0f;
-	out_effort[idx * 5u + 4u] = steps > 0u ? (sum_dy / (float)steps) : 0.0f;
+	// Widened again 14/11/2026 (ABI 51): slots 5-6 = the hold-window (t >= tail_start)
+	// mean 3-D position error and mean |dz| (m); an episode that never reached the
+	// window falls back to its whole-episode means, like out_steady.
+	out_effort[idx * 7u] = steps > 0u ? (sum_effort / (float)steps) : 0.0f;
+	out_effort[idx * 7u + 1u] = steps > 0u ? (sum_poserr / (float)steps) : 0.0f;
+	out_effort[idx * 7u + 2u] = steps > 0u ? (sum_alterr / (float)steps) : 0.0f;
+	out_effort[idx * 7u + 3u] = steps > 0u ? (sum_dx / (float)steps) : 0.0f;
+	out_effort[idx * 7u + 4u] = steps > 0u ? (sum_dy / (float)steps) : 0.0f;
+	out_effort[idx * 7u + 5u] = tail_cnt > 0u ? (tail_pos / (float)tail_cnt)
+																						: (steps > 0u ? sum_poserr / (float)steps : 0.0f);
+	out_effort[idx * 7u + 6u] = tail_cnt > 0u ? (tail_dz / (float)tail_cnt)
+																						: (steps > 0u ? sum_alterr / (float)steps : 0.0f);
 	out_mono[idx] = mono_last;
 	// Diverged before reaching the tail window → no settled samples; fall back to
 	// the whole-episode mean (already a failing episode, just keep it finite).
@@ -2420,6 +2497,14 @@ struct TrainParams
 	uint abp_on;
 	// ARM 3 (12/11/2026), appended in lockstep: the yaw-integral leak (Params twin).
 	float yaw_integral_leak;
+	// L1 of block 10 (ABI 51), appended in lockstep: the tilt-reference, bias-corrected
+	// roll / pitch error, recomputed from the streams the replay already re-applies
+	// (horiz_obs, att_up_rec, abp_rec) — nothing new is recorded. 0 ⇒ off.
+	uint tre_on;
+	float tre_bxy;
+	float tre_omega;
+	float tre_zeta;
+	float tre_max_tilt;
 };
 
 // Mirror of WnnController::output_decode_target (controller.rs): map a per-motor
@@ -2640,6 +2725,9 @@ kernel void controller_train(
 			{
 				sensors[P.num_features - 2u] = abp_rec[(s3 / 3u) * 2u];
 				sensors[P.num_features - 1u] = abp_rec[(s3 / 3u) * 2u + 1u];
+				// L1 of block 10: the effective targets from the recorded streams.
+				if (P.tre_on != 0u)
+					tilt_ref_err_target(F, P.target0, P.target1, sensors, P.tre_bxy, P.tre_omega, P.tre_zeta, P.tre_max_tilt);
 			}
 
 			// Action-repeat hold: accumulators tick; no ring push / forward /
@@ -2858,6 +2946,9 @@ kernel void controller_record(
 		{
 			sensors[P.num_features - 2u] = abp_rec[(s3 / 3u) * 2u];
 			sensors[P.num_features - 1u] = abp_rec[(s3 / 3u) * 2u + 1u];
+			// L1 of block 10: the effective targets from the recorded streams.
+			if (P.tre_on != 0u)
+				tilt_ref_err_target(F, P.target0, P.target1, sensors, P.tre_bxy, P.tre_omega, P.tre_zeta, P.tre_max_tilt);
 		}
 
 		// Action-repeat hold: accumulators tick; no ring push / forward / record.

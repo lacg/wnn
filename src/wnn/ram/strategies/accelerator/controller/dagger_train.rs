@@ -406,6 +406,14 @@ pub struct RewardGatedConfigPacked
 	// the recorder are untouched; expert_drives (teacher flies on its label) is refused.
 	#[pyo3(get)]
 	pub dagger_label_estimate: bool,
+	// --- L3 (ABI 51, `--alt-integral {off, pi, pole3}`): the altitude integrator in
+	// front of the altitude PD (altitude_integrator.rs) — 0 off (bit-identical), 1 pi,
+	// 2 pole3. One integrator per episode feeds the teacher's label / flown cascade
+	// (OuterLoops) AND the student's `alt_err` observation (feed_live_obs) in every
+	// training rollout: DAgger, per-round eval, calibration sampler, recorder.
+	// Translation only; pole3 needs alt_pd_zeta == 1.
+	#[pyo3(get)]
+	pub alt_integral: u8,
 }
 
 #[pymethods]
@@ -452,6 +460,7 @@ impl RewardGatedConfigPacked
 		dist_motor_asym_mag = 0.0,
 		write_vote = false, vote_share = None, dagger_label_estimate = false,
 		init_vxy = 0.0,
+		alt_integral = 0,
 ))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -543,6 +552,7 @@ impl RewardGatedConfigPacked
 		vote_share: Option<f64>,
 		dagger_label_estimate: bool,
 		init_vxy: f32,
+		alt_integral: u8,
 	) -> PyResult<Self>
 	{
 		let cfg = Self {
@@ -634,8 +644,10 @@ impl RewardGatedConfigPacked
 			vote_share,
 			dagger_label_estimate,
 			init_vxy,
+			alt_integral,
 		};
 		cfg.validate_abi32().map_err(pyo3::exceptions::PyValueError::new_err)?;
+		cfg.validate_alt_integral().map_err(pyo3::exceptions::PyValueError::new_err)?;
 		cfg.write_vote_share().map_err(pyo3::exceptions::PyValueError::new_err)?;
 		cfg.validate_init_vxy().map_err(pyo3::exceptions::PyValueError::new_err)?;
 		if !(dist_motor_asym_mag.is_finite() && (0.0..1.0).contains(&dist_motor_asym_mag))
@@ -655,6 +667,34 @@ impl RewardGatedConfigPacked
 	{
 		crate::plant_opts::PlantOpts::new(self.imu_specific_force, self.rotor_drag)
 			.expect("RewardGatedConfigPacked: plant options validated at construction")
+	}
+
+	/// L3 (ABI 51): the altitude integrator needs the altitude loop it sits in front of
+	/// (translation), a known mode, and — for pole3 — zeta = 1. Off validates nothing.
+	pub(crate) fn validate_alt_integral(&self) -> Result<(), String>
+	{
+		if self.alt_integral == 0
+		{
+			return Ok(());
+		}
+		if !self.translation
+		{
+			return Err(format!(
+				"alt_integral = {} needs translation: without it there is no altitude loop to integrate",
+				self.alt_integral
+			));
+		}
+		crate::altitude_integrator::AltitudeIntegrator::from_plant(
+			self.alt_integral,
+			self.af_mass as f64,
+			self.af_gravity as f64,
+			self.af_k_thrust as f64,
+			self.alt_pd_omega as f64,
+			self.alt_pd_zeta as f64,
+			self.alt_pd_max_delta as f64,
+			self.dt as f32,
+		)
+		.map(|_| ())
 	}
 
 	/// ABI 48: init_vxy must be a finite bound >= 0, and > 0 only where the horizontal
@@ -935,7 +975,8 @@ use crate::controller::{
 use crate::episode_regime::alt_pd_for;
 use crate::episode_regime::{
 	scored_att_err,
-	anchor_controller, draw_translation_episode, feed_live_obs, step_reward, OuterLoops,
+	alt_integrator_for, anchor_controller, draw_translation_episode, feed_live_obs, sense_altitude, step_reward,
+	OuterLoops,
 };
 use crate::optimal::Teacher;
 use rand::rngs::SmallRng;
@@ -1791,6 +1832,9 @@ pub(crate) fn rollout_and_label_inner(
 	// STAGE 1+2: the teacher's outer altitude + position loops (both None ⇒ the
 	// attitude-only teacher, the bit-identical legacy path).
 	let loops = OuterLoops::for_cfg(cfg);
+	// L3: this episode's altitude integrator (OFF unless cfg.alt_integral) — one
+	// instance feeds the student's alt_err observation AND the teacher's altitude PD.
+	let mut alt_int = alt_integrator_for(cfg);
 	// ABI 38: the teacher's command — and, under expert_drives, what flies: the
 	// motor command (motor path, unchanged) or the CTBR label through the
 	// student's own inner stage (episode_regime::ExpertPilot).
@@ -1864,8 +1908,10 @@ pub(crate) fn rollout_and_label_inner(
 
 		// SCOPE C STAGE 1+2: the live vertical + horizontal observation for THIS
 		// step, at the same start-of-step snapshot as the IMU — the exact twin of
-		// the scorer's rollout (episode_regime::feed_live_obs).
-		feed_live_obs(controller, sim, cfg, ep_collective_pwm);
+		// the scorer's rollout (episode_regime::feed_live_obs). L3: the altitude-law
+		// inputs are sensed ONCE here and shared with the label below.
+		let alt_law = sense_altitude(&mut alt_int, sim, cfg.target_altitude);
+		feed_live_obs(controller, sim, cfg, ep_collective_pwm, alt_law.0);
 		if expert_pwm_proxy
 		{
 			controller.set_pwm_accumulator(flown_prev);
@@ -1915,7 +1961,7 @@ pub(crate) fn rollout_and_label_inner(
 		{
 			q
 		};
-		let (expert_pwm, expert_flown) = pilot.command(&loops, teacher, sim, q_label, gyro, target_64, cfg.target_altitude);
+		let (expert_pwm, expert_flown) = pilot.command(&loops, teacher, sim, q_label, gyro, target_64, alt_law);
 		// D0: the LABEL — the teacher's pwm re-based on its own hover when the
 		// switch is on, the raw pwm otherwise (teacher_label_f32).
 		let expert_pwm_f32 = teacher_label_f32(expert_pwm, rebase);
@@ -2339,6 +2385,9 @@ pub fn eval_closed_loop_rs(
 		controller.seed_att_estimator(init_q); // ABI 32 (no-op when off)
 		// STAGE 1: the episode opens at its commanded collective (after reset).
 		anchor_controller(controller, cfg, ep_collective_pwm);
+		// L3: the student's alt_err observation is the integrator-shaped error, as in
+		// the training rollout and the scorers (fresh per episode).
+		let mut alt_int = alt_integrator_for(cfg);
 
 		let mut ep_reward = 0.0_f64;
 		let mut ep_sum_err = 0.0_f64;
@@ -2355,7 +2404,8 @@ pub fn eval_closed_loop_rs(
 			}
 			let (gyro, accel) = sim.read_imu();
 			// G3: LIVE vertical + horizontal features, never the frozen last value.
-			feed_live_obs(controller, sim, cfg, ep_collective_pwm);
+			let alt_law = sense_altitude(&mut alt_int, sim, cfg.target_altitude);
+			feed_live_obs(controller, sim, cfg, ep_collective_pwm, alt_law.0);
 			let pwm = controller_step_4(controller, gyro, accel, target);
 
 			// Jerk: Σ_m (pwm[m] - prev_pwm[m])². First step uses hover as prev
@@ -2669,6 +2719,21 @@ pub(crate) fn validate_train_regime(
 		));
 	}
 	crate::episode_regime::validate_ctbr_regime(controller, cfg)?;
+	// L1 of block 10: the tilt reference inside the student's roll/pitch error must be
+	// the position law the LABEL's cascade flies (pos_loop_for) — a different shape
+	// would centre the input on a reference the teacher is not tracking. (Its channel
+	// requirement — translation with xy_offset > 0 — is the horizontal-features
+	// check above: the option needs obs_pos_err_xy.)
+	if let Some(shape) = controller.tilt_ref_err_shape()
+	{
+		let want = [cfg.af_gravity, cfg.pos_omega, cfg.pos_zeta, cfg.pos_max_tilt_rad];
+		if shape != want
+		{
+			return Err(format!(
+				"obs_tilt_ref_err: the student's tilt-reference law {shape:?} [b_xy, omega_n, zeta, max_tilt] is 				 not the training config's position loop {want:?} [af_gravity, pos_omega, pos_zeta, 				 pos_max_tilt_rad] — build it from the same values"
+			));
+		}
+	}
 	if cfg.teacher_hover_mode > TEACHER_HOVER_DERIVED
 	{
 		return Err(format!(
@@ -3178,6 +3243,11 @@ pub fn dagger_train_inplace(
 	// controller the batch builds must integrate yaw like the one that flies).
 	// None ⇒ integral_leak, bit-identical.
 	yaw_integral_leak = None,
+	// L1 of block 10 (ABI 51): the tilt-reference, bias-corrected roll/pitch error
+	// — same three-place invariant (it changes the VALUE of two inputs, not the
+	// layout, so a missing forward would be silent). Some((gravity, pos_omega_n,
+	// pos_zeta, pos_max_tilt_rad)); None ⇒ off, bit-identical.
+	obs_tilt_ref_err = None,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn dagger_train_batch_inplace(
@@ -3259,6 +3329,7 @@ pub fn dagger_train_batch_inplace(
 	ctbr: Option<crate::ctbr::CtbrSpec>,
 	obs_att_bias_pred: bool,
 	yaw_integral_leak: Option<f32>,
+	obs_tilt_ref_err: Option<(f32, f32, f32, f32)>,
 ) -> PyResult<Vec<(Py<WnnController>, TrainStats)>>
 {
 	use rayon::prelude::*;
@@ -3367,7 +3438,7 @@ pub fn dagger_train_batch_inplace(
 					2.0, // est_kp — the rivals' Mahony default (TeacherFeed / est_kp)
 					0.1, // est_ki
 					ctbr.clone(),
-					obs_att_bias_pred, yaw_integral_leak,
+					obs_att_bias_pred, yaw_integral_leak, obs_tilt_ref_err,
 				)?;
 				controller
 					.set_target_levels_core(target_levels)
@@ -3714,7 +3785,10 @@ pub fn eval_ensemble_closed_loop(
 	// from the af_pid_* cascade: the inner loop the cascade student flies. N = the
 	// student's action_repeat for a matched outer rate; N = 1 for id 0 is the
 	// firmware's own cascade (equal to the motor-level PID row by construction).
-	ctbr_outer_hold = 0))]
+	ctbr_outer_hold = 0,
+	// L3 (ABI 51): the altitude integrator in front of the rival's altitude PD —
+	// 0 off (bit-identical), 1 pi, 2 pole3 (altitude_integrator.rs). Translation only.
+	alt_integral = 0))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_classical_baseline(
 	teacher_id: u8,
@@ -3769,7 +3843,8 @@ pub fn score_classical_baseline(
 	rotor_drag: f32,
 	att_err_tilt_ref: bool,
 	ctbr_outer_hold: usize,
-) -> PyResult<(f64, f64, f64, f64, f64, f64, f64, f64)>
+	alt_integral: u8,
+) -> PyResult<(f64, f64, f64, f64, f64, f64, f64, f64, f64, f64)>
 {
 	score_classical_baseline_probed(
 		teacher_id,
@@ -3824,8 +3899,18 @@ pub fn score_classical_baseline(
 		rotor_drag,
 		att_err_tilt_ref,
 		ctbr_outer_hold,
+		alt_integral,
 		None,
 	)
+}
+
+/// The eight pre-ABI-51 values of a `score_classical_baseline` row (the two hold-window
+/// values dropped) — for the pin / parity tests whose digests cover exactly those.
+#[cfg(test)]
+#[allow(clippy::type_complexity)]
+pub(crate) fn rival_first8(r: (f64, f64, f64, f64, f64, f64, f64, f64, f64, f64)) -> (f64, f64, f64, f64, f64, f64, f64, f64)
+{
+	(r.0, r.1, r.2, r.3, r.4, r.5, r.6, r.7)
 }
 
 /// The body of `score_classical_baseline`, with an OPT-IN measurement / what-if probe
@@ -3885,8 +3970,9 @@ pub(crate) fn score_classical_baseline_probed(
 	rotor_drag: f32,
 	att_err_tilt_ref: bool,
 	ctbr_outer_hold: usize,
+	alt_integral: u8,
 	mut probe: Option<&mut crate::rival_probe::RivalProbe>,
-) -> PyResult<(f64, f64, f64, f64, f64, f64, f64, f64)>
+) -> PyResult<(f64, f64, f64, f64, f64, f64, f64, f64, f64, f64)>
 {
 	let (plant, att_ref) = crate::stage1::stage1_extras(
 		imu_specific_force,
@@ -3940,6 +4026,7 @@ pub(crate) fn score_classical_baseline_probed(
 			init_y: s2_init_y,
 			plant,
 			att_ref,
+			alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 		};
 		cfg
 			.validate(num_episodes)
@@ -3970,6 +4057,21 @@ pub(crate) fn score_classical_baseline_probed(
 	else
 	{
 		None
+	};
+	// L3 (ABI 51): the altitude integrator in front of that PD (OFF at mode 0 —
+	// `shape` is then the identity and every operand below is the pre-ABI-51 one).
+	let alt_int0 = match (alt_pd.as_ref(), alt_integral)
+	{
+		(_, 0) => crate::altitude_integrator::AltitudeIntegrator::OFF,
+		(Some(pd), m) => crate::altitude_integrator::AltIntegralMode::from_u8(m)
+			.and_then(|mode| crate::altitude_integrator::AltitudeIntegrator::new(mode, pd, af_gravity as f64, af_dt))
+			.map_err(pyo3::exceptions::PyValueError::new_err)?,
+		(None, m) =>
+		{
+			return Err(pyo3::exceptions::PyValueError::new_err(format!(
+				"score_classical_baseline: alt_integral = {m} needs translation=True (there is no altitude loop otherwise)"
+			)));
+		}
 	};
 	// STAGE 2: the outer position loop, armed ONLY when horizontal draws arrived.
 	// Mirrors pos_loop_for() — the gains DERIVE from the plant's own gravity
@@ -4081,6 +4183,10 @@ pub(crate) fn score_classical_baseline_probed(
 															 // this is a genuinely different number even with no horizontal draws.
 	let mut sum_pos3d = 0.0_f64;
 	let (mut sum_dx, mut sum_dy) = (0.0_f64, 0.0_f64); // ABI 32: mean |dx|, |dy| (m)
+	// ABI 51 hold-window column: per-episode means over t >= tail_start (the `steady`
+	// window) of the 3-D position error and of |dz|, summed over the episodes that
+	// reached the window (steady_eps).
+	let (mut sum_hold_pos, mut sum_hold_dz) = (0.0_f64, 0.0_f64);
 
 	for ep in 0..num_episodes
 	{
@@ -4100,6 +4206,7 @@ pub(crate) fn score_classical_baseline_probed(
 		{
 			o.reset();
 		}
+		let mut alt_int = alt_int0; // L3: a fresh integrator per episode
 		sim.reset(Some(init_q), Some(init_omega));
 		// STAGE 1: per-episode plant draw + vertical ICs, AFTER reset (which
 		// zeroes z/vz) — cpu_score::score_one's order.
@@ -4165,6 +4272,7 @@ pub(crate) fn score_classical_baseline_probed(
 		let (mut ep_sum_dx, mut ep_sum_dy) = (0.0_f64, 0.0_f64); // ABI 32
 		let mut tail_sum = 0.0_f64;
 		let mut tail_cnt = 0_usize;
+		let (mut tail_pos, mut tail_dz) = (0.0_f64, 0.0_f64); // ABI 51 hold window
 		let mut steps_done = 0_usize;
 		let mut diverged = false;
 		for t in 0..steps
@@ -4184,6 +4292,13 @@ pub(crate) fn score_classical_baseline_probed(
 			{
 				p.observe_feed(q, sim.quaternion());
 			}
+			// L3: this step's altitude-law inputs (alt_err_eff, vz_eff), sensed once at
+			// the start-of-step snapshot. Integrator off ⇒ exactly (target − z, vz).
+			let alt_law = match s1.as_ref()
+			{
+				Some(cfg) => alt_int.shape(cfg.target_altitude - sim.altitude_rs(), sim.vertical_velocity_rs()),
+				None => (0.0, 0.0),
+			};
 			// Offset-free MPC observer (no-op for pid/lqr/mpc/lqi) — same call the
 			// training loop makes before the teacher plans this step.
 			teacher.observe(
@@ -4202,12 +4317,9 @@ pub(crate) fn score_classical_baseline_probed(
 				// firmware rate PID underneath (episode_regime::expert_ctbr's shape).
 				let (coll, tgt) = match (s1.as_ref(), alt_pd.as_ref())
 				{
-					(Some(cfg), Some(pd)) =>
+					(Some(_), Some(pd)) =>
 					{
-						let coll = pd.delta(
-							(cfg.target_altitude - sim.altitude_rs()) as f64,
-							sim.vertical_velocity_rs() as f64,
-						);
+						let coll = pd.delta(alt_law.0 as f64, alt_law.1 as f64);
 						let tgt = match pos_loop.as_ref()
 						{
 							Some(pl) =>
@@ -4247,7 +4359,7 @@ pub(crate) fn score_classical_baseline_probed(
 				// STAGE 2: the FULL cascade — position loop sets the tilt reference
 				// the attitude teacher then tracks. Target is the origin, so the
 				// horizontal error is just -position.
-				(Some(cfg), Some(pd), Some(pl)) =>
+				(Some(_), Some(pd), Some(pl)) =>
 				{
 					let (x, y) = sim.position_xy();
 					let (vx, vy) = sim.velocity_xy();
@@ -4261,17 +4373,17 @@ pub(crate) fn score_classical_baseline_probed(
 						vx as f64,
 						-(y as f64),
 						vy as f64,
-						(cfg.target_altitude - sim.altitude_rs()) as f64,
-						sim.vertical_velocity_rs() as f64,
+						alt_law.0 as f64,
+						alt_law.1 as f64,
 					)
 				}
-				(Some(cfg), Some(pd), None) => teacher.step_with_collective(
+				(Some(_), Some(pd), None) => teacher.step_with_collective(
 					q,
 					gyro,
 					target,
 					pd,
-					(cfg.target_altitude - sim.altitude_rs()) as f64,
-					sim.vertical_velocity_rs() as f64,
+					alt_law.0 as f64,
+					alt_law.1 as f64,
 				),
 				_ => teacher.step_rs(q, gyro, target),
 				}
@@ -4300,9 +4412,15 @@ pub(crate) fn score_classical_baseline_probed(
 				let dz = (cfg.target_altitude - sim.altitude_rs()) as f64;
 				ep_sum_poserr += dz.abs();
 				let (x, y) = sim.position_xy();
-				ep_sum_pos3d += ((x as f64).powi(2) + (y as f64).powi(2) + dz * dz).sqrt();
+				let pos3d = ((x as f64).powi(2) + (y as f64).powi(2) + dz * dz).sqrt();
+				ep_sum_pos3d += pos3d;
 				ep_sum_dx += (x as f64).abs();
 				ep_sum_dy += (y as f64).abs();
+				if t >= tail_start
+				{
+					tail_pos += pos3d;
+					tail_dz += dz.abs();
+				}
 			}
 			if t >= tail_start
 			{
@@ -4341,10 +4459,13 @@ pub(crate) fn score_classical_baseline_probed(
 		if tail_cnt > 0
 		{
 			sum_steady += tail_sum / tail_cnt as f64;
+			sum_hold_pos += tail_pos / tail_cnt as f64;
+			sum_hold_dz += tail_dz / tail_cnt as f64;
 			steady_eps += 1;
 		}
 	}
 	let n = num_episodes.max(1) as f64;
+	let hold_on = s1.is_some() && steady_eps > 0;
 	Ok((
 		n_stable as f64 / n,
 		(sum_mean_err / n).to_degrees(),
@@ -4392,6 +4513,12 @@ pub(crate) fn score_classical_baseline_probed(
 		// with translation off, like the 3-D column.
 		if s1.is_some() { sum_dx / n } else { f64::NAN },
 		if s1.is_some() { sum_dy / n } else { f64::NAN },
+		// 9th/10th (ABI 51): the HOLD-WINDOW position column — mean 3-D position
+		// error and mean |dz| (m) over t >= ceil(0.8·steps), the `steady` window:
+		// per-episode mean, then the mean over the episodes that reached the window.
+		// NaN with translation off or when no episode reached it.
+		if hold_on { sum_hold_pos / steady_eps as f64 } else { f64::NAN },
+		if hold_on { sum_hold_dz / steady_eps as f64 } else { f64::NAN },
 	))
 }
 
@@ -4702,7 +4829,9 @@ mod rival_plant_tests
 			0.0,
 			false,
 			0,
+			0, // alt_integral off
 		)
+		.map(rival_first8)
 		.expect("scorer must accept a well-formed plant")
 	}
 
@@ -4906,6 +5035,7 @@ mod d0_hover_anchor_tests
 			dist_motor_asym_mag: 0.0,
 			write_vote: false, vote_share: None, dagger_label_estimate: false,
 			init_vxy: 0.0,
+			alt_integral: 0,
 		}
 	}
 
@@ -5436,6 +5566,7 @@ mod motor_lag_axis_f_tests
 			dist_motor_asym_mag: 0.0,
 			write_vote: false, vote_share: None, dagger_label_estimate: false,
 			init_vxy: 0.0,
+			alt_integral: 0,
 		}
 	}
 
@@ -5518,8 +5649,9 @@ mod motor_lag_axis_f_tests
 			false, 2.0, 0.1,
 			false, 0.0, vec![], vec![], vec![], vec![],
 			2.0, 1.0, 0.25, vec![], vec![], 1.0, 1.0, 0.5236,
-			motor_lag_s, false, 0.0, false, 0,
+			motor_lag_s, false, 0.0, false, 0, 0,
 		)
+		.map(rival_first8)
 		.expect("baseline scores")
 	}
 

@@ -10,6 +10,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
 mod actuator_lag; // ABI 34: the lag-aware teachers' actuator-state estimate
+mod altitude_integrator; // L3 (ABI 51): altitude integrator in front of the altitude PD (--alt-integral)
 mod altitude_pd; // scope C stage 1: outer altitude loop handing a collective to a teacher
 mod box_qp; // exact box-QP solver for the MPC teachers (PDAS + primal active-set)
 mod arch_ops; // architecture (connectivity) operators (counter_rng, Rust-first)
@@ -69,6 +70,14 @@ mod ctrl40_tests; // CTRL-40: Metal split train/record for the applied-actuator 
 #[cfg(test)]
 mod ctrl50_yaw_tests; // ARM 3 (12/11/2026): --yaw-integral-leak (CPU features, CPU/GPU score + split parity)
 #[cfg(test)]
+mod ctrl51_flags_off_tests; // ABI 51: every new argument at its default is the ABI-50 path
+#[cfg(test)]
+mod ctrl51_hold_tests; // ABI 51: hold-window position column — recomputation, CPU/GPU rows
+#[cfg(test)]
+mod ctrl51_tilt_ref_tests; // L1 of block 10 (ABI 51): tilt-reference roll/pitch error — definition, replay, CPU/GPU score/split/walk parity
+#[cfg(test)]
+mod ctrl51_alt_integral_tests; // L3 of block 10 (ABI 51): altitude integrator — law, anti-windup, droop, hosts, CPU/GPU score parity
+#[cfg(test)]
 mod ctrl46_tests; // CTRL-46 (ABI 46): vote write rule (CPU/GPU, order independence) + estimate-built labels
 #[cfg(test)]
 mod init_vxy_tests; // ABI 48: training-only initial horizontal velocity (draw order, validation)
@@ -82,6 +91,7 @@ mod ctrl48_tests; // CTRL-48: the cascade unabsorbed-disturbance block — physi
 mod abi38_tests; // ABI 38: the cascade controller — identity, rivals, CPU/GPU parity, trainers
 #[cfg(test)]
 mod abi34_tests; // ABI 34: lag-aware teachers, one pwm convention under motor lag, T=0 pins
+mod tilt_ref_err; // L1 (ABI 51): roll/pitch error vs the tilt reference, bias-corrected (--obs-tilt-ref-err)
 mod att_bias_pred; // CTRL-46 (ABI 46): onboard predictor of the Mahony specific-force bias (--obs-att-bias-pred)
 mod rival_probe; // opt-in probe on the classical-rival scorer (INDI spec §10: observer gain, bias compensation)
 #[cfg(test)]
@@ -469,7 +479,30 @@ mod metal_controller;
 ///   Metal (Params/TrainParams/FwdParams gain a trailing float). None ⇒ integral_leak,
 ///   bit-identical. Pin: ctrl50_yaw_tests.rs. (ARM 2 --yaw-centred-ladder is Python-only:
 ///   thresholds reach Rust as data.)
-pub const ABI_VERSION: u32 = 50;
+/// ABI 51 (14/11/2026, CTRL-48 block 10 levers — docs/ctrl48_block10_levers_spec.md;
+///   every addition default-OFF and bit-identical with the flags off: the pin suites
+///   run through the new arguments at their defaults, + ctrl51_flags_off_tests.rs):
+///   * L1 `obs_tilt_ref_err=None` on WnnController and dagger_train_batch_inplace
+///     (+ getter): Some((gravity, pos_omega_n, pos_zeta, pos_max_tilt_rad)) measures
+///     roll_err / pitch_err (and their integrals) against the position loop's tilt
+///     reference, corrected by the predicted Mahony bias — the VALUE of two existing
+///     inputs, no layout change (tilt_ref_err.rs). Needs obs_peraxis_p,
+///     obs_att_bias_pred, obs_pos_err_xy, obs_vel_xy. CPU + the Metal rollout / train /
+///     record kernels (Params / TrainParams gain 5 trailing words); a replay recomputes
+///     it from the streams it already re-applies. Pin: ctrl51_tilt_ref_tests.rs.
+///   * L3 `alt_integral=0` (0 off, 1 pi, 2 pole3) on RewardGatedConfigPacked (+ get),
+///     score_classical_baseline, score_position_teacher, and — with `alt_pd_omega`,
+///     `alt_pd_zeta`, `alt_pd_max_delta`, `alt_pd_mass` — on score_controllers_cpu /
+///     score_controllers_metal: one altitude integrator per episode in front of the
+///     unchanged altitude PD (altitude_integrator.rs), in the rivals, the DAgger label
+///     and every teacher-flown rollout (OuterLoops), and as the student's `alt_err`
+///     observation (CPU + the Metal rollout kernel; Params gains 8 trailing words).
+///     Pin: ctrl51_alt_integral_tests.rs.
+///   * Hold-window position column (output only): score_classical_baseline returns
+///     10 values (+ hold 3-D position error, hold |dz|, m), score_position_teacher 7;
+///     the WNN scorer rows grow 17 → 19 (rows 17, 18) and the Metal per-episode rows
+///     13 → 15. Existing values and their order unchanged. Pin: ctrl51_hold_tests.rs.
+pub const ABI_VERSION: u32 = 51;
 
 /// ABI 44: how output neurogenesis lays out the output layer — "segment" = every
 /// bank / E-I half resizes at its own tail (pre-44 Python resized the flat tail).
@@ -1140,6 +1173,7 @@ fn recorder_stage1_cfg(
 				// sim). The draws object carries neither; nothing is scored here.
 				plant: plant_opts::PlantOpts::OFF,
 				att_ref: att_err_ref::AttErrRef::LEVEL,
+				alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 			};
 			cfg
 				.validate(n_eps)

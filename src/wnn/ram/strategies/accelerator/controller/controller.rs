@@ -1921,6 +1921,43 @@ impl WnnController
 		Ok(())
 	}
 
+	/// L1 of block 10 (ABI 51): measure roll_err / pitch_err (and their integrals)
+	/// against the position loop's tilt reference, bias-corrected (tilt_ref_err.rs).
+	/// The arguments are the position loop's plant and shape (b_xy = gravity). Refused
+	/// unless every signal the new value is built from is ALREADY a student input: the
+	/// per-axis error inputs it replaces, the bias predictor (so also the estimator and
+	/// obs_vel_xy), and the horizontal position error.
+	pub(crate) fn enable_tilt_ref_err(&mut self, gravity: f32, omega_n: f32, zeta: f32, max_tilt_rad: f32) -> Result<(), String>
+	{
+		if !self.obs_peraxis_p
+		{
+			return Err("obs_tilt_ref_err needs obs_peraxis_p: it redefines the roll_err / pitch_err inputs".into());
+		}
+		if self.att_bias.is_none()
+		{
+			return Err("obs_tilt_ref_err needs obs_att_bias_pred: the error is corrected by the predicted 			            Mahony bias (which needs obs_att_estimator and obs_vel_xy)"
+				.into());
+		}
+		if !(self.obs_pos_err_xy && self.obs_vel_xy)
+		{
+			return Err("obs_tilt_ref_err needs obs_pos_err_xy and obs_vel_xy: the tilt reference is the 			            position law on the horizontal observation the student already reads"
+				.into());
+		}
+		if self.tilt_ref_err.is_some()
+		{
+			return Err("obs_tilt_ref_err is already on".into());
+		}
+		self.tilt_ref_err = Some(crate::tilt_ref_err::TiltRefErr::new(gravity, omega_n, zeta, max_tilt_rad)?);
+		Ok(())
+	}
+
+	/// L1 of block 10: the tilt-reference law's shape [b_xy, omega_n, zeta, max_tilt]
+	/// for the GPU hosts (None ⇒ off).
+	pub(crate) fn tilt_ref_err_shape(&self) -> Option<[f32; 4]>
+	{
+		self.tilt_ref_err.map(|t| t.shape())
+	}
+
 	/// CTRL-46: the predictor's last emitted [abp_r, abp_p] (what a rollout records);
 	/// zeros when the block is off.
 	pub(crate) fn att_bias_last(&self) -> [f32; 2]
@@ -2816,6 +2853,7 @@ impl WnnController
 			att_est: None,
 			vote_tally: None,
 			att_bias: None,
+			tilt_ref_err: None,
 			collective_anchor: 0.5,
 		})
 	}
@@ -3628,6 +3666,10 @@ pub struct WnnController
 	// CTRL-46 item 3 (--obs-att-bias-pred): the onboard predictor of the Mahony
 	// estimator's specific-force bias, 2 features at the layout tail. None ⇒ off.
 	att_bias: Option<crate::att_bias_pred::AttBiasPredictor>,
+	// L1 of block 10 (ABI 51, --obs-tilt-ref-err): measure roll_err / pitch_err
+	// against the position loop's tilt reference, bias-corrected (tilt_ref_err.rs).
+	// None ⇒ target − estimate, bit-identical.
+	tilt_ref_err: Option<crate::tilt_ref_err::TiltRefErr>,
 	// L1 (06/08/2026) — d̂ disturbance observer, the mpcof teacher's instrument moved
 	// into the student. Some(b) ⇒ 3 extra features (roll/pitch/yaw estimated external
 	// angular acceleration). The screen's D2 decomposition showed the student's error
@@ -3798,6 +3840,7 @@ impl WnnController
 		ctbr = None,
 		obs_att_bias_pred = false,
 		yaw_integral_leak = None,
+		obs_tilt_ref_err = None,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -3849,6 +3892,10 @@ impl WnnController
 		ctbr: Option<crate::ctbr::CtbrSpec>,
 		obs_att_bias_pred: bool,
 		yaw_integral_leak: Option<f32>,
+		// L1 of block 10 (ABI 51): Some((gravity, pos_omega_n, pos_zeta,
+		// pos_max_tilt_rad)) — the position loop's plant and shape — turns on the
+		// tilt-reference, bias-corrected roll/pitch error. None ⇒ off, bit-identical.
+		obs_tilt_ref_err: Option<(f32, f32, f32, f32)>,
 	) -> PyResult<Self>
 	{
 		// CTRL-46: the bias-predictor rows are the VERY tail (after the cascade blocks).
@@ -3937,7 +3984,23 @@ impl WnnController
 				.map_err(pyo3::exceptions::PyValueError::new_err)?;
 		}
 		c.set_yaw_integral_leak(yaw_integral_leak).map_err(pyo3::exceptions::PyValueError::new_err)?;
+		// L1 of block 10: after the bias predictor (it is one of its requirements).
+		if let Some((g, w, z, m)) = obs_tilt_ref_err
+		{
+			c.enable_tilt_ref_err(g, w, z, m).map_err(pyo3::exceptions::PyValueError::new_err)?;
+		}
 		Ok(c)
+	}
+
+	/// L1 of block 10: the tilt-reference error option — None when off, else the
+	/// position loop's (b_xy = gravity, omega_n, zeta, max_tilt_rad) it was built with.
+	#[getter]
+	pub fn obs_tilt_ref_err(&self) -> Option<(f32, f32, f32, f32)>
+	{
+		self.tilt_ref_err.map(|t| {
+			let s = t.shape();
+			(s[0], s[1], s[2], s[3])
+		})
 	}
 
 	/// ARM 3: the leak of the yaw integral features (== integral_leak unless
@@ -6032,8 +6095,23 @@ impl WnnController
 		{
 			self.yaw_heading += gyro[2];
 		}
-		let roll_err = target[0] - roll_est;
-		let pitch_err = target[1] - pitch_est;
+		// L1 of block 10: with obs_tilt_ref_err the roll / pitch error is measured
+		// against (target + tilt reference + predicted bias). The predictor is then
+		// stepped HERE — once per physical step, before the attitude block — and its
+		// value cached for the trailing abp inputs. Off: target − estimate, and the
+		// predictor is stepped at the tail as before (bit-identical).
+		let abp_early = if self.tilt_ref_err.is_some() { self.step_att_bias() } else { None };
+		let (target_r, target_p) = match (self.tilt_ref_err, abp_early)
+		{
+			(Some(law), Some(abp)) =>
+			{
+				let t = law.effective_target(target, self.horiz_obs, abp);
+				(t[0], t[1])
+			}
+			_ => (target[0], target[1]),
+		};
+		let roll_err = target_r - roll_est;
+		let pitch_err = target_p - pitch_est;
 		let yaw_err = target[2] - self.yaw_heading;
 		// Append enabled features (canonical order); update integrals in lockstep.
 		let mut iacc = 0usize;
@@ -6194,7 +6272,7 @@ impl WnnController
 			feats.push(self.horiz_obs[3]);
 		}
 		self.append_cascade_features(&mut feats, gyro);
-		self.append_att_bias_features(&mut feats);
+		self.append_att_bias_features(&mut feats, abp_early);
 		self.last_feature_vector.clone_from(&feats);
 		feats
 	}
@@ -6210,13 +6288,22 @@ impl WnnController
 	/// the estimator it models) on the horizontal velocity the student reads
 	/// (horiz_obs[2..4]) and the estimate quaternion this compute_features just
 	/// produced. A replay re-applies the recorded value. No-op when off.
-	fn append_att_bias_features(&mut self, feats: &mut Vec<f32>)
+	/// `stepped` = this step's value when compute_features already ticked the
+	/// predictor before the attitude block (obs_tilt_ref_err); None ⇒ tick it here.
+	fn append_att_bias_features(&mut self, feats: &mut Vec<f32>, stepped: Option<[f32; 2]>)
 	{
-		let Some(p) = self.att_bias.as_mut()
-		else
+		if let Some(v) = stepped.or_else(|| self.step_att_bias())
 		{
-			return;
-		};
+			feats.extend_from_slice(&v);
+		}
+	}
+
+	/// One physical-step tick of the bias predictor (None when the block is off): the
+	/// recorded value in a replay, else the model on the horizontal velocity the
+	/// student reads and the estimate quaternion this compute_features just produced.
+	fn step_att_bias(&mut self) -> Option<[f32; 2]>
+	{
+		let p = self.att_bias.as_mut()?;
 		let v = if p.has_replay()
 		{
 			p.step([0.0; 2], [1.0, 0.0, 0.0, 0.0]) // returns the recorded value, advances nothing
@@ -6230,7 +6317,7 @@ impl WnnController
 				.expect("obs_att_bias_pred: live step without a live estimator quaternion (enable_att_bias_pred guarantees the estimator)");
 			p.step([self.horiz_obs[2], self.horiz_obs[3]], q)
 		};
-		feats.extend_from_slice(&v);
+		Some(v)
 	}
 
 	fn append_cascade_features(&mut self, feats: &mut Vec<f32>, gyro: [f32; 3])

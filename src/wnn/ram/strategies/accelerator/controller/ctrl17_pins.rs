@@ -107,6 +107,7 @@ pub(crate) fn pin_translation_cfg(xy: f32) -> RewardGatedConfigPacked
 		0.1, 0.0, 2.0, 1.0, 0.25, xy, 0.0, 0.0, 1.0, 1.0, 0.5236, 1, 0.0, false, 0.0, false, 0.0,
 		false, None, false, // CTRL-46: write rule LastWrite, true-quaternion labels
 		0.0, // ABI 48: init_vxy = 0 (at rest, draws nothing)
+		0, // ABI 51: alt_integral off
 	)
 	.expect("pin config must validate");
 	c.teacher = 0;

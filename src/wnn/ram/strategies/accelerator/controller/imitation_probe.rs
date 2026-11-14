@@ -459,6 +459,7 @@ pub(crate) fn closed_loop_scorer(cfg: &RewardGatedConfigPacked, c: &WnnControlle
 		plant: cfg.plant_opts(),
 		// G5: the run's own reference (tilt under --att-err-ref tilt, else LEVEL).
 		att_ref: crate::episode_regime::att_err_ref_for(cfg),
+		alt_int: crate::episode_regime::alt_integrator_for(cfg),
 	};
 	let mut cc = c.clone();
 	let row = crate::cpu_score::rollout_one(
@@ -711,6 +712,7 @@ pub(crate) fn from_fixture(path: &str) -> (WnnController, RewardGatedConfigPacke
 		kw.get("dagger_label_delta").map(|v| v == "true").unwrap_or(false),
 		b("obs_att_estimator"), 2.0, 0.1, ctbr_from_kw(&kw),
 		kw.get("obs_att_bias_pred").map(|v| v == "true").unwrap_or(false), kw.get("yaw_integral_leak").map(|v| v.parse().unwrap()),
+		None, // obs_tilt_ref_err (ABI 51) — off in the probe fixtures
 	)
 	.expect("fixture controller");
 	c.set_target_levels_core(kw.get("target_levels").map(|v| v.parse().unwrap()).unwrap_or(0)).unwrap();

@@ -162,8 +162,8 @@ fn identity_run(lag: f32, translation: bool) -> usize
 			}
 			let (g1, _a1) = s1.read_imu();
 			let (g2, a2) = s2.read_imu();
-			let cmd = loops.expert(&mut t_motor, &s1, s1.quaternion(), g1, [0.0; 3], cfg.target_altitude);
-			let label = loops.expert_ctbr(&mut t_label, &s2, s2.quaternion(), g2, [0.0; 3], cfg.target_altitude, 1);
+			let cmd = loops.expert(&mut t_motor, &s1, s1.quaternion(), g1, [0.0; 3], (cfg.target_altitude - s1.altitude_rs(), s1.vertical_velocity_rs()));
+			let label = loops.expert_ctbr(&mut t_label, &s2, s2.quaternion(), g2, [0.0; 3], (cfg.target_altitude - s2.altitude_rs(), s2.vertical_velocity_rs()), 1);
 			c.ctbr_inject_setpoint(label);
 			let pwm = c.step(g2, a2, [0.0; 3]);
 			let want = cmd.map(|v| v as f32);
@@ -231,8 +231,9 @@ fn rival_ctbr_res(teacher: u8, lag: f32, hold: usize) -> pyo3::PyResult<(f64, f6
 		true, 0.0, s1.init_z.clone(), s1.init_vz.clone(), s1.mass.clone(), s1.collective_frac.clone(),
 		2.0, 1.0, 0.25,
 		s1.init_x.clone(), s1.init_y.clone(), 1.0, 1.0, 0.5236,
-		lag, false, 0.0, true, hold,
+		lag, false, 0.0, true, hold, 0,
 	)
+	.map(crate::dagger_train::rival_first8)
 }
 
 /// mpcof's CTBR label is a body rate that opposes the attitude error, and zero at

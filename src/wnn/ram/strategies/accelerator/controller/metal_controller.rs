@@ -75,6 +75,9 @@ pub struct PidFwCfg
 /// Kernel-side rotor-table width — lockstep with MAX_ROTORS in
 /// controller_rollout.metal (octo-X is the widest preset).
 const MAX_ROTORS_GPU: usize = 8;
+/// Floats per (genome, episode) in the rollout kernel's out_effort buffer:
+/// [effort, pos_err, alt_err, |dx|, |dy|, hold pos_err, hold |dz|] (ABI 51: 5 → 7).
+const EFFORT_SLOTS: usize = 7;
 
 /// One rotor of the geometry buffer(27) — 48 B, all-f32, field-for-field
 /// lockstep with the Metal `RotorGpu` struct. `k_thrust` is the EFFECTIVE
@@ -378,6 +381,15 @@ struct RolloutParams
 	// + 1 (ARM 3, 12/11/2026), appended in lockstep with the shader twin: the yaw-
 	// integral leak (== integral_leak unless --yaw-integral-leak).
 	yaw_integral_leak: f32,
+	// + 8 (L3 of block 10, ABI 51), appended in lockstep with the shader twin: the
+	// altitude integrator shaping the student's alt_err observation
+	// (AltitudeIntegrator::gpu_gains: [k_e, k_i, k_v, i_max, w2, c, az_limit]).
+	alt_int_on: u32,
+	alt_int_g: [f32; 7],
+	// + 5 (L1 of block 10, ABI 51), appended in lockstep: the tilt-reference,
+	// bias-corrected roll/pitch error — the position loop's shape (TiltRefErr::shape).
+	tre_on: u32,
+	tre_shape: [f32; 4],
 }
 
 /// CTRL-38: the cascade feature blocks as the score kernel needs them, read off the
@@ -1018,6 +1030,9 @@ impl ControllerRolloutEvaluator
 		let mut sum_alterr_per_g = vec![0.0f64; g]; // stage 1+2: mean |alt err| (m), summed
 		let mut sum_dx_per_g = vec![0.0f64; g]; // ABI 32: mean |dx| (m), summed
 		let mut sum_dy_per_g = vec![0.0f64; g]; // ABI 32: mean |dy| (m), summed
+		// ABI 51: the hold-window position column (pos, |dz|), summed per genome.
+		let mut sum_hold_pos_per_g = vec![0.0f64; g];
+		let mut sum_hold_dz_per_g = vec![0.0f64; g];
 		let stable_thresh = (5.0_f64).to_radians();
 
 		let chunk_size = episodes_per_chunk();
@@ -1208,6 +1223,10 @@ impl ControllerRolloutEvaluator
 				cas_resid_w: ctbr.and_then(|c| c.cas.resid).map_or([0.0; 3], |r| r.w),
 				abp_on: abp_on as u32,
 				yaw_integral_leak: controllers[0].yaw_integral_leak_value(),
+				alt_int_on: stage1.is_some_and(|s| s.alt_int.is_on()) as u32,
+				alt_int_g: stage1.map_or([0.0; 7], |s| s.alt_int.gpu_gains()),
+				tre_on: controllers[0].tilt_ref_err_shape().is_some() as u32,
+				tre_shape: controllers[0].tilt_ref_err_shape().unwrap_or([0.0; 4]),
 			};
 
 			let b_q0 = self.buf(q0_chunk);
@@ -1246,7 +1265,8 @@ impl ControllerRolloutEvaluator
 			// — the Metal buffer table is full at 31 slots, so the new metric
 			// rides in this buffer instead of a new binding.
 			// ABI 32: 5 floats/idx — [effort, pos_err, alt_err, |dx|, |dy|].
-			let b_effort = mk_out(n_out_chunk * 5 * mem::size_of::<f32>());
+			// ABI 51: 7 — + [hold-window pos_err, hold-window |dz|] (EFFORT_SLOTS).
+			let b_effort = mk_out(n_out_chunk * EFFORT_SLOTS * mem::size_of::<f32>());
 
 			let cmd = self.queue.new_command_buffer();
 			let enc = cmd.new_compute_command_encoder();
@@ -1340,7 +1360,7 @@ impl ControllerRolloutEvaluator
 			let iaev = unsafe { std::slice::from_raw_parts(b_iae.contents() as *const f32, n_out_chunk) };
 			let isev = unsafe { std::slice::from_raw_parts(b_ise.contents() as *const f32, n_out_chunk) };
 			let effortv =
-				unsafe { std::slice::from_raw_parts(b_effort.contents() as *const f32, n_out_chunk * 5) };
+				unsafe { std::slice::from_raw_parts(b_effort.contents() as *const f32, n_out_chunk * EFFORT_SLOTS) };
 			for gi in 0..g
 			{
 				for ce in 0..chunk_ep_count
@@ -1359,11 +1379,13 @@ impl ControllerRolloutEvaluator
 					sum_itae_per_g[gi] += itaev[idx] as f64;
 					sum_iae_per_g[gi] += iaev[idx] as f64;
 					sum_ise_per_g[gi] += isev[idx] as f64;
-					sum_effort_per_g[gi] += effortv[idx * 5] as f64;
-					sum_poserr_per_g[gi] += effortv[idx * 5 + 1] as f64;
-					sum_alterr_per_g[gi] += effortv[idx * 5 + 2] as f64;
-					sum_dx_per_g[gi] += effortv[idx * 5 + 3] as f64;
-					sum_dy_per_g[gi] += effortv[idx * 5 + 4] as f64;
+					sum_effort_per_g[gi] += effortv[idx * EFFORT_SLOTS] as f64;
+					sum_poserr_per_g[gi] += effortv[idx * EFFORT_SLOTS + 1] as f64;
+					sum_alterr_per_g[gi] += effortv[idx * EFFORT_SLOTS + 2] as f64;
+					sum_dx_per_g[gi] += effortv[idx * EFFORT_SLOTS + 3] as f64;
+					sum_dy_per_g[gi] += effortv[idx * EFFORT_SLOTS + 4] as f64;
+					sum_hold_pos_per_g[gi] += effortv[idx * EFFORT_SLOTS + 5] as f64;
+					sum_hold_dz_per_g[gi] += effortv[idx * EFFORT_SLOTS + 6] as f64;
 					let is_stable = divv[idx] == 0 && mean_err <= stable_thresh;
 					if is_stable
 					{
@@ -1378,14 +1400,17 @@ impl ControllerRolloutEvaluator
 							if divv[idx] != 0 { 1.0 } else { 0.0 },
 							mean_err,
 							steadyv[idx] as f64,
-							effortv[idx * 5 + 2] as f64,
-							effortv[idx * 5 + 1] as f64,
-							effortv[idx * 5] as f64,
+							effortv[idx * EFFORT_SLOTS + 2] as f64,
+							effortv[idx * EFFORT_SLOTS + 1] as f64,
+							effortv[idx * EFFORT_SLOTS] as f64,
 							jerkv[idx] as f64,
 							stepsv[idx] as f64,
 							// ABI 32: appended — mean |dx|, |dy| (m).
-							effortv[idx * 5 + 3] as f64,
-							effortv[idx * 5 + 4] as f64,
+							effortv[idx * EFFORT_SLOTS + 3] as f64,
+							effortv[idx * EFFORT_SLOTS + 4] as f64,
+							// ABI 51: appended — hold-window pos_err, |dz| (m).
+							effortv[idx * EFFORT_SLOTS + 5] as f64,
+							effortv[idx * EFFORT_SLOTS + 6] as f64,
 						]);
 					}
 				}
@@ -1408,7 +1433,7 @@ impl ControllerRolloutEvaluator
 		{
 			for _ in 0..g
 			{
-				out.push(vec![0.0_f64; 17]);
+				out.push(vec![0.0_f64; 19]);
 			}
 		}
 		else
@@ -1435,6 +1460,9 @@ impl ControllerRolloutEvaluator
 					// ABI 32 (Luiz 31/10): appended — mean |dx|, mean |dy| (m).
 					sum_dx_per_g[gi] / n,
 					sum_dy_per_g[gi] / n,
+					// ABI 51: appended — the hold-window position column (m).
+					sum_hold_pos_per_g[gi] / n,
+					sum_hold_dz_per_g[gi] / n,
 				]);
 			}
 		}
@@ -1525,6 +1553,16 @@ impl ControllerRolloutEvaluator
 	// g*num_episodes per-episode rows (see score_with_episodes). false ⇒
 	// exactly the pre-14/09 return. The aggregate rows are identical either way.
 	per_episode = false,
+	// L3 (ABI 51): the altitude integrator that shapes the student's `alt_err`
+	// observation (altitude_integrator.rs) — 0 off (bit-identical; the alt_pd_*
+	// kwargs are then not read), 1 pi, 2 pole3. Its gains come from the altitude PD
+	// the TRAINER's label used: pass the training config's alt_pd_omega / alt_pd_zeta
+	// / alt_pd_max_delta and its nominal mass (af_mass) as alt_pd_mass.
+	alt_integral = 0,
+	alt_pd_omega = 2.0,
+	alt_pd_zeta = 1.0,
+	alt_pd_max_delta = 0.25,
+	alt_pd_mass = 0.0,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_controllers_metal(
@@ -1594,6 +1632,11 @@ pub fn score_controllers_metal(
 	pos_zeta: f32,
 	pos_max_tilt_rad: f32,
 	per_episode: bool,
+	alt_integral: u8,
+	alt_pd_omega: f64,
+	alt_pd_zeta: f64,
+	alt_pd_max_delta: f64,
+	alt_pd_mass: f64,
 ) -> PyResult<Vec<Vec<f64>>>
 {
 	let verr = pyo3::exceptions::PyValueError::new_err;
@@ -1612,6 +1655,22 @@ pub fn score_controllers_metal(
 	{
 		return Err(verr("score_controllers_metal: att_err_tilt_ref needs translation=True".to_string()));
 	}
+	// L3: the student's altitude integrator (OFF at mode 0, nothing else read).
+	if alt_integral != 0 && !translation
+	{
+		return Err(verr("score_controllers_metal: alt_integral needs translation=True".to_string()));
+	}
+	let alt_int = crate::altitude_integrator::AltitudeIntegrator::from_plant(
+		alt_integral,
+		alt_pd_mass,
+		gravity as f64,
+		k_thrust as f64,
+		alt_pd_omega,
+		alt_pd_zeta,
+		alt_pd_max_delta,
+		dt,
+	)
+	.map_err(verr)?;
 	// STAGE 1: built here, validated inside score() against num_episodes.
 	let stage1_cfg = if translation
 	{
@@ -1627,6 +1686,7 @@ pub fn score_controllers_metal(
 			init_y,
 			plant,
 			att_ref,
+			alt_int,
 		})
 	}
 	else
@@ -2079,6 +2139,11 @@ struct TrainParams
 	abp_on: u32,
 	// ARM 3 (12/11/2026), appended at END of BOTH structs in lockstep: the yaw-integral leak.
 	yaw_integral_leak: f32,
+	// L1 of block 10 (ABI 51), appended at END of BOTH structs in lockstep: the
+	// tilt-reference, bias-corrected roll/pitch error (TiltRefErr::shape) — recomputed
+	// by the replay from horiz_obs / att_up / abp_rec, nothing new recorded.
+	tre_on: u32,
+	tre_shape: [f32; 4],
 }
 
 /// Per-genome recorded trajectory batch, flat across genomes (matches the kernel's
@@ -2639,6 +2704,8 @@ impl ControllerTrainer
 			cas_resid_w: CascadeGpu::from_controller(controllers[0]).resid.map_or([0.0; 3], |r| r.w),
 			abp_on: controllers[0].att_bias_pred_on() as u32,
 			yaw_integral_leak: controllers[0].yaw_integral_leak_value(),
+			tre_on: controllers[0].tilt_ref_err_shape().is_some() as u32,
+			tre_shape: controllers[0].tilt_ref_err_shape().unwrap_or([0.0; 4]),
 		};
 
 		let b_sc = self.buf(&state_conns);
@@ -2861,6 +2928,8 @@ impl ControllerTrainer
 			cas_resid_w: CascadeGpu::from_controller(controllers[0]).resid.map_or([0.0; 3], |r| r.w),
 			abp_on: controllers[0].att_bias_pred_on() as u32,
 			yaw_integral_leak: controllers[0].yaw_integral_leak_value(),
+			tre_on: controllers[0].tilt_ref_err_shape().is_some() as u32,
+			tre_shape: controllers[0].tilt_ref_err_shape().unwrap_or([0.0; 4]),
 		};
 
 		let rec_out = vec![0u32; total_records * out_words];
@@ -4545,7 +4614,7 @@ fn build_parity_fixture_variant(
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		fixture_ctbr(variant),
-		false, None,
+		false, None, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 	for _ in 0..(n_state * 4)
@@ -6422,7 +6491,7 @@ fn controller_plant_latch_parity_once(high_on: bool) -> Result<(usize, usize, us
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		None, // ctbr OFF (ABI 38: the motor-level controller)
-		false, None,
+		false, None, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -6616,7 +6685,7 @@ fn controller_plant_counter_parity_once() -> Result<(usize, usize, usize), Strin
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		None, // ctbr OFF (ABI 38: the motor-level controller)
-		false, None,
+		false, None, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -6798,7 +6867,7 @@ fn controller_plant_bidir_parity_once() -> Result<(usize, usize, usize), String>
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		None, // ctbr OFF (ABI 38: the motor-level controller)
-		false, None,
+		false, None, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7477,7 +7546,7 @@ fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool)
 		false, false, false,
 		false, false,
 		false, 1, 1.0, false, false, 2.0, 0.1, None,
-		false, None,
+		false, None, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7632,7 +7701,7 @@ fn controller_record_att_est_parity_once() -> Result<(usize, usize, usize, bool)
 		false, false,
 		false, 1, 1.0, false,
 		true, 2.0, 0.1, None, // obs_att_estimator ON; ctbr OFF
-		false, None,
+		false, None, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7776,7 +7845,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 		true, true, true, // stage-1 vertical channel ON
 		false, false,     // stage-2 horizontal OFF
 		false, 1, 1.0, false, false, 2.0, 0.1, None,
-		false, None,
+		false, None, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -8143,7 +8212,9 @@ mod tests
 		// + 7 (CTRL-48, ABI 45): cas_resid(1) + cas_resid_inv_a(3) + cas_resid_w(3).
 		// + 1 (CTRL-46, ABI 46): abp_on.
 		// + 1 (ARM 3, 12/11/2026): yaw_integral_leak.
-		assert_eq!(mem::size_of::<RolloutParams>(), 173 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
+		// + 8 (L3 of block 10, ABI 51): alt_int_on + alt_int_g[7].
+		// + 5 (L1 of block 10, ABI 51): tre_on + tre_shape[4].
+		assert_eq!(mem::size_of::<RolloutParams>(), 186 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============
@@ -9488,7 +9559,7 @@ mod tests
 	/// this pins the PLUMBING at the two values the axis flies:
 	/// T = 0.15 (nominal, τ = 37.5 ms) and T = 0.0375 (a 4x faster actuator, the
 	/// value a τ/T confusion would pass), against the SAME kernel argument.
-	fn cpu_scorer_row(c: &mut WnnController, q0: &[f32], w0: &[f32], eps: usize, steps: usize, lag: f32) -> [f64; 17]
+	fn cpu_scorer_row(c: &mut WnnController, q0: &[f32], w0: &[f32], eps: usize, steps: usize, lag: f32) -> [f64; 19]
 	{
 		let (num_motors, levels, ..) = c.gpu_dims();
 		crate::cpu_score::rollout_one(
@@ -9607,6 +9678,7 @@ mod tests
 			init_y: vec![],
 			plant: crate::plant_opts::PlantOpts::OFF,
 			att_ref: crate::att_err_ref::AttErrRef::LEVEL,
+			alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 		};
 		s1.validate(num_eps).expect("fixture config must validate");
 
@@ -9689,6 +9761,7 @@ mod tests
 			init_y: vec![],
 			plant: crate::plant_opts::PlantOpts::OFF,
 			att_ref: crate::att_err_ref::AttErrRef::LEVEL,
+			alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 		};
 		let gpu_noalt = ev
 			.score(
@@ -9779,6 +9852,7 @@ mod tests
 			init_y: (0..num_eps).map(|e| -0.5 + 0.25 * e as f32).collect(),
 			plant: crate::plant_opts::PlantOpts::OFF,
 			att_ref: crate::att_err_ref::AttErrRef::LEVEL,
+			alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 		};
 		s2.validate(num_eps).expect("stage-2 fixture must validate");
 
@@ -9894,6 +9968,7 @@ mod tests
 			init_y: s2.init_y.clone(),
 			plant: crate::plant_opts::PlantOpts::OFF,
 			att_ref: crate::att_err_ref::AttErrRef::LEVEL,
+			alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 		};
 		let gpu_nopos = ev
 			.score(
@@ -10854,6 +10929,9 @@ mod tests
 
 	fn digest_rows(rows: &[f64]) -> u64
 	{
+		// ABI 51 appended the hold-window column: the pinned digests cover the
+		// metrics that existed when they were captured.
+		let rows = &rows[..rows.len().min(crate::cpu_score::PRE_ABI51_ROW_METRICS)];
 		let mut h = 0xcbf2_9ce4_8422_2325u64;
 		for v in rows
 		{

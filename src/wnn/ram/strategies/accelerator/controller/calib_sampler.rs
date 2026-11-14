@@ -29,7 +29,9 @@ use crate::dagger_train::{
 	TeacherBank,
 };
 use crate::imitation_probe::ImitCapture;
-use crate::episode_regime::{anchor_controller, draw_translation_episode, feed_live_obs, OuterLoops};
+use crate::episode_regime::{
+	alt_integrator_for, anchor_controller, draw_translation_episode, feed_live_obs, sense_altitude, OuterLoops,
+};
 use crate::optimal::Teacher;
 use rand::rngs::SmallRng;
 use rand::SeedableRng;
@@ -149,6 +151,8 @@ impl CalibEpisode<'_>
 		// ABI 38: the teacher's cascade as it flies (a CTBR student's teacher flies
 		// through the student's own inner stage) — fresh per episode.
 		let mut pilot = crate::episode_regime::ExpertPilot::for_controller(controller);
+		// L3: the episode's altitude integrator (observation + the flown cascade).
+		let mut alt_int = alt_integrator_for(self.cfg);
 		let proxy_pwm = controller.obs_pwm_flag();
 		let mut prev_applied = [controller.collective_anchor(); 4];
 		let mut last_applied = [0.5f32; 4];
@@ -162,7 +166,8 @@ impl CalibEpisode<'_>
 			let (gyro, accel) = sim.read_imu();
 			let q = sim.quaternion();
 			teacher.observe(gyro, last_applied.map(|v| v as f64));
-			feed_live_obs(controller, sim, self.cfg, collective);
+			let alt_law = sense_altitude(&mut alt_int, sim, self.cfg.target_altitude);
+			feed_live_obs(controller, sim, self.cfg, collective, alt_law.0);
 			if proxy_pwm
 			{
 				controller.set_pwm_accumulator(prev_applied);
@@ -176,7 +181,7 @@ impl CalibEpisode<'_>
 			{
 				col.push(controller.last_feature_vector_ref()[f]);
 			}
-			let (_label, flown) = pilot.command(self.loops, teacher, sim, q, gyro, target, self.cfg.target_altitude);
+			let (_label, flown) = pilot.command(self.loops, teacher, sim, q, gyro, target, alt_law);
 			let applied = flown.map(|v| v as f32);
 			controller.observe_applied(applied);
 			sim.step(applied);

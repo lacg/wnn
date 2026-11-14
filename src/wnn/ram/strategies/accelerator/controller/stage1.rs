@@ -15,6 +15,7 @@
 // a controller observes that it is sinking, not its own mass). It is never a
 // feature — see docs/scope_c_full_controller_spec.md.
 
+use crate::altitude_integrator::AltitudeIntegrator;
 use crate::att_err_ref::AttErrRef;
 use crate::plant_opts::PlantOpts;
 
@@ -49,6 +50,11 @@ pub struct Stage1Cfg
 	/// ABI 32 (CTRL-17 G5): what the per-step attitude error is measured
 	/// against. LEVEL ⇒ the legacy identity reference, bit-identically.
 	pub att_ref: AttErrRef,
+	/// L3 (ABI 51): the altitude integrator that shapes the student's `alt_err`
+	/// observation — the SAME law the trainer's label and observation use
+	/// (altitude_integrator.rs). A zero-state prototype: each episode flies a fresh
+	/// copy. AltitudeIntegrator::OFF ⇒ alt_err = target − z, bit-identically.
+	pub alt_int: AltitudeIntegrator,
 }
 
 /// ABI 32: the scorer kwargs (imu_specific_force, rotor_drag, att_err_tilt_ref +
@@ -186,6 +192,7 @@ mod tests
 			init_y: vec![],
 			plant: PlantOpts::OFF,
 			att_ref: AttErrRef::LEVEL,
+			alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 		}
 	}
 
@@ -234,6 +241,7 @@ mod tests
 			init_y: vec![],
 			plant: PlantOpts::OFF,
 			att_ref: AttErrRef::LEVEL,
+			alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 		};
 		// Stage-1 (horizontal off): stride 6 with zero-padded x0/y0.
 		assert_eq!(

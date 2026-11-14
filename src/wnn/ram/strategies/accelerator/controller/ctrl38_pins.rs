@@ -71,6 +71,9 @@ pub(crate) fn calib_digest(c: &WnnController) -> u64
 
 fn rows_digest(r: &[f64]) -> u64
 {
+	// ABI 51 appended the hold-window column: the pinned digests cover the metrics
+	// that existed when they were captured (the first PRE_ABI51_ROW_METRICS).
+	let r = &r[..r.len().min(crate::cpu_score::PRE_ABI51_ROW_METRICS)];
 	let mut h = Fnv::new();
 	h.f64s(r);
 	h.0
