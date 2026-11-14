@@ -8,7 +8,7 @@ each is flown on ~9x more test units?
 ## What is run (no training, no search)
 - For each of the block-9 WINNING arm's 10 published controllers (s1-s10): `--recalc-headline` under rule P with
   `--test-seeds 99990101..99990400` (300 CF2.1 units x 100 episodes = 30,000 episodes per controller; the first 35 are the
-  usual test units, 265 are new and touched here for the first time). Driver logs/controller/ctrl48/stress_test.sh;
+  usual test units; of the other 265, units 99990201-210 were scored once before as report-only fresh units in the CTRL-45 validity audit, and 99990201-05 are the reserved multi-axis 'D5' final test seeds — none was ever used for selection; the remaining 255 are touched here for the first time). Driver logs/controller/ctrl48/stress_test.sh;
   parser logs/controller/ctrl48/stress_result.py REFUSES a run whose re-pick is not the published headline.
 - The MPCOF cascade (teacher, est-fed) is scored by the same report blocks on the SAME units and episodes.
 - Tooling check: on an existing 35-unit recalc log the parser reproduces MPCOF 0 fails / 1.353° / 0.685° / 0.341 m.
