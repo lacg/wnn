@@ -185,7 +185,8 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
-AS OF 14/11/2026 12:10 UTC — REPORT FORMAT (Luiz 14/11: standardize): every paired/head-to-head controller table uses the COMPACT PAIR form — one row per seed (ALL seeds of the comparison, e.g. s1-s10), columns `stable % | err ° | steady ° | pos m | fails` each as `A | B`, then `Δ (B − A): err · steady · pos · fails`; a pool line underneath (`running pools <range>: A x/N · B y/N (gate ceiling ...)`). Example:
+AS OF 14/11/2026 12:10 UTC — REPORT FORMAT (Luiz 14/11: standardize): every paired/head-to-head controller table uses the COMPACT PAIR form — one row per seed (ALL seeds of the comparison, e.g. s1-s10), columns `stable % | err ° | steady ° | pos m | fails` each as `A | B`, then `Δ (B − A): err · steady · pos · fails`; a pool line underneath (`running pools <range>: A x/N · B y/N (gate ceiling ...)`). ALWAYS a legend line ABOVE the table naming A and B (Luiz 14/11), e.g. `A = dc_ms01 · B = both`. Example:
+  A = dc_ms01 · B = both
   seed   stable %        err °          steady °       pos m           fails   Δ (both − dc_ms01): err · steady · pos · fails
   s4     99.9 | 100.0    1.44 | 1.40    0.94 | 0.83    0.357 | 0.358   3 | 1   −0.04 · −0.11 · +0.001 · −2
 AS OF 14/11/2026 11:50 UTC — IDS58 RUNNING: VAL gate PASS (303e0c5f; vote VAL gain at 64b only +0.04 pp -> realistic AMBIGUOUS/REJECT prior), W3v vote-path certification BIT-IDENTICAL + independent re-run (f280df44). 7549 paused 11:44Z; 7567-7569 released (7567 running since 11:44:27Z, vote/0.02/bal=false/max_bits 64 confirmed in worker log). IDS BLOCK cohorts: `IDS58 n/3` + paused IDS56C/IDS56UC. Cost alert one-shot 15/11 02:47 EST (20 h). Block 9 ticks show ALL seeds s1-s10 per arm (Luiz 14/11), decision on ALL s1-s10 (prereg Amendment 2; dc_ms01 s1-s3 re-picked under P after BLOCK9 DONE, ends "BLOCK9 REPICK DONE").
