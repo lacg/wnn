@@ -474,6 +474,124 @@ Caveats:
   vote from weighting only loosely, because θ differs (0.1 vs 0.02).
 - Pairing is matched starting points (same folds, same grid connectivity); the GA diverges from gen 1.
 
+### IDS-57 A1 — pre-registered test readout (n=3) (added 13/11/2026)
+
+Pre-registration: `docs/ids57_a1_prereg.md` (§3 metric, §5 guards, §6 rule, §8 wheel ruling, §10 obligations), with
+Luiz's decisions of 12/11 (commit 522aa5f2): the +0.40 pp floor stays, the cost stop is an alert only, no n=5 after an
+ADOPT, follow-up = 100 bits. Arm `b64` = the IDS-56 lattice encoff recipe with **only** `max_bits: 34 -> 64` (params
+diff verified from `flows.config_json` for each pair: exactly one key, `max_bits` 34 -> 64). Flows 7546 / 7547 / 7548
+(r20421 / r20422 / r20423). Controls = IDS-56 lattice encoff on the same seeds, not re-flown: 7509 / 7513 / 7517.
+Decision metric, as pre-registered: GA phase, `genome_type=best_f1`, `test_point=final`, mode `margin_val_cal` (τ
+calibrated on VAL, scored on the 10% TEST partition: 152,390 normal / 6,036 attack). F1 = macro-F1. All numbers
+below are TEST. Source: `test_summaries.threshold_metadata`.
+Readout guard (§8): `worker_abi` = 29 on all three arm rows, 28 on all three control rows. Cross-ABI pairing accepted
+on the recorded equivalence proof `docs/ids57_abi29_equivalence.md`: W2 (scoring digests incl. 48- and 64-bit
+cases), W2b (GA breeding) and W3 (retrain of the controls' GA finals, DB confusion matrices reproduced) all
+BIT-IDENTICAL to the ABI 28 references; verdict PASS 13/11/2026, worker relaunched on ABI 29 before 7546 was admitted.
+
+```
+TEST, GA best_f1 final, margin_val_cal, % (attack-F1 and TPR from the confusion matrix)
+seed   | flow arm/ctl | F1 arm  F1 ctl  dF1   | FPR arm FPR ctl dFPR   | Acc arm Acc ctl dAcc  | aF1 arm aF1 ctl daF1  | TPR arm TPR ctl dTPR  | neurons arm/ctl | cells arm/ctl
+-------+--------------+-----------------------+------------------------+-----------------------+-----------------------+-----------------------+-----------------+----------------
+r20421 | 7546 / 7509  | 94.93   94.12   +0.82 | 0.258   0.201   +0.057 | 99.28   99.18   +0.09 | 90.24   88.66   +1.58 | 87.57   83.66   +3.91 | 499 / 493       | 1971K / 710K
+r20422 | 7547 / 7513  | 94.93   94.11   +0.82 | 0.248   0.225   +0.023 | 99.28   99.18   +0.10 | 90.24   88.65   +1.58 | 87.36   84.15   +3.21 | 499 / 499       | 1942K / 658K
+r20423 | 7548 / 7517  | 94.94   94.33   +0.61 | 0.279   0.203   +0.076 | 99.28   99.21   +0.07 | 90.25   89.06   +1.19 | 88.02   84.39   +3.63 | 496 / 497       | 1981K / 628K
+-------+--------------+-----------------------+------------------------+-----------------------+-----------------------+-----------------------+-----------------+----------------
+mean   |              | 94.93   94.19         | 0.262   0.210          | 99.28   99.19         | 90.24   88.79         | 87.65   84.07         | 498 / 496       | 1965K / 666K
+paired |              | dF1  +0.75 ± 0.12     | dFPR +0.052 ± 0.027    | dAcc +0.09 ± 0.02     | daF1 +1.45 ± 0.23     | dTPR +3.58 ± 0.35     | d +1.7 ± 3.8    | d +1299K ± 48K
+```
+
+Extra benign false alarms on TEST (arm − control): +87 / +35 / +116 of 152,390. Missed attacks: −236 / −194 / −219
+of 6,036.
+
+Rule applied in order (prereg §6, n=3; win ≥ +0.15, loss ≤ −0.15, over the cap = arm FPR > 0.42 %):
+1. REJECT? wins = 3/3 (+0.82, +0.82, +0.61), not ≤ 1/3; mean dF1 +0.75 ≥ +0.15; arm seeds over the cap 0/3
+   (0.258, 0.248, 0.279) → no.
+2. ADOPT? wins 3/3 ✓; mean dF1 +0.748 ≥ +0.40 ✓; no arm seed over the cap ✓ → **yes**.
+Label (§6): dominant needs mean dFPR ≤ +0.05 AND every seed ≤ +0.10. Seeds +0.057 / +0.023 / +0.076 (all ≤ +0.10),
+mean +0.0521 at stored precision (238 extra false alarms / 3 / 152,390) > +0.05 → **Pareto move**.
+Width sanity (§5.4): every arm GA neuron is wider than 34 bits (60-63, table below), so the arm tested the hypothesis.
+
+**VERDICT: ADOPT — Pareto move** (provisional, n=3). b64 becomes the unswr accuracy configuration for the IDS-57 line;
+later arms (A2/B/C, and the 100-bit follow-up) take 7546-7548 as controls. Per Luiz's 12/11 decision r20419-20 are
+NOT flown (they fly only on AMBIGUOUS). Per §6 wording: "higher F1 at a higher false-alarm rate"; the 34-bit row keeps
+"lowest FPR" and the small-model size; no sentence may say b64 "beats" the 34-bit model. Not a paper claim.
+
+Cost and genome size (arm beside control; §10.2):
+
+```
+flow | seed   | ABI | GA gens | GA wall h | s/gen | flow wall h | grid min | neurons/cluster | bits per neuron (cluster 0 ; cluster 1) | cells (logical = physical)
+-----+--------+-----+---------+-----------+-------+-------------+----------+-----------------+-----------------------------------------+---------------------------
+7546 | r20421 | 29  |   80    |   6.18    |  278  |    6.22     |   2.0    | 250 / 249       | 250 x 61 ; 249 x 63                     | 1,970,635
+7509 | r20421 | 28  |   80    |   4.68    |  210  |    4.70     |   1.1    | 250 / 243       | 250 x 34 ; 243 x 34                     |   710,285
+7547 | r20422 | 29  |   60    |   4.69    |  281  |    4.73     |   1.9    | 250 / 249       | 250 x 60 ; 249 x 63                     | 1,942,165
+7513 | r20422 | 28  |   90    |   5.28    |  211  |    5.30     |   1.2    | 250 / 249       | 250 x 34 ; 249 x 34                     |   658,328
+7548 | r20423 | 29  |   80    |   6.25    |  281  |    6.29     |   1.9    | 250 / 246       | 250 x 61 ; 246 x 63                     | 1,981,177
+7517 | r20423 | 28  |   70    |   4.03    |  207  |    4.05     |   1.2    | 248 / 249       | 248 x 34 ; 249 x 34                     |   628,328
+-----+--------+-----+---------+-----------+-------+-------------+----------+-----------------+-----------------------------------------+---------------------------
+arm mean ± SD             73±12    5.71±0.88   280    5.75±0.88                498 neurons, 60-63 bits                      1.965M ± 0.020M
+ctl mean ± SD             80±10    4.66±0.62   209    4.69±0.62                496 neurons, 34 bits                         0.666M ± 0.041M
+```
+
+- Cells ×2.95 (+1.30M ± 0.05M paired), at the same neuron count: the whole size increase is address width.
+- Per generation ×1.34 (280 s vs 209 s). Flow wall +1.06 ± 1.46 h; the arm ran fewer GA generations on 2/3 seeds
+  (patience-driven, a mediator). The §7 cost stop never came near its trigger (longest arm GA 6.25 h vs 20 h).
+- Every neuron is uniform within its cluster: cluster 0 at 60-61 bits, cluster 1 at 63, i.e. 1-4 bits under the 64
+  cap. The grid winners (best_f1) sat at 60 / 64 / 64 bits (250×2 neurons). **The 64-bit cap is close to binding
+  again**, which is the condition for the pre-agreed 100-bit follow-up (own prereg, VAL gate at 100 and 128 first).
+
+All 10 stored modes, GA best_f1 final, TEST, mean ± SD (n=3), Δ = arm − control paired:
+
+```
+mode              | F1 arm        F1 ctl        dF1          | FPR arm       FPR ctl       dFPR          | Acc arm      Acc ctl      dAcc
+------------------+--------------------------------------------+---------------------------------------------+--------------------------------------
+argmax            | 94.93±0.02    94.18±0.12    +0.75±0.13   | 0.267±0.017   0.215±0.013   +0.052±0.027  | 99.28±0.00   99.19±0.02   +0.09±0.02
+margin_fixed0     | 94.93±0.02    94.18±0.12    +0.75±0.13   | 0.267±0.017   0.215±0.013   +0.052±0.027  | 99.28±0.00   99.19±0.02   +0.09±0.02
+margin_train_cal  | 94.94±0.02    94.18±0.12    +0.76±0.13   | 0.264±0.014   0.213±0.015   +0.050±0.027  | 99.28±0.00   99.19±0.02   +0.09±0.02
+margin_val_cal    | 94.93±0.00    94.19±0.12    +0.75±0.12   | 0.262±0.016   0.210±0.013   +0.052±0.027  | 99.28±0.00   99.19±0.02   +0.09±0.02
+margin_train_f1   | 94.94±0.02    94.18±0.12    +0.76±0.13   | 0.264±0.014   0.213±0.015   +0.050±0.027  | 99.28±0.00   99.19±0.02   +0.09±0.02
+margin_val_f1     | 94.93±0.00    94.19±0.12    +0.75±0.12   | 0.262±0.016   0.210±0.013   +0.052±0.027  | 99.28±0.00   99.19±0.02   +0.09±0.02
+argmax_platt      | 83.36±0.22    83.62±0.16    -0.26±0.09   | 0.005±0.000   0.030±0.007   -0.025±0.007  | 98.14±0.02   98.15±0.01   -0.01±0.01
+argmax_beta       | 88.79±3.72    77.49±24.66   +11.31±26.62 | 0.736±0.289   0.646±0.568   +0.090±0.716  | 98.43±0.32   97.87±1.45   +0.56±1.62
+argmax_classnorm  | 81.07±0.13    83.95±0.13    -2.88±0.23   | 4.384±0.047   3.451±0.039   +0.932±0.075  | 95.78±0.04   96.68±0.04   -0.90±0.07
+margin_classnorm  | 92.99±0.05    93.33±0.16    -0.34±0.19   | 0.703±0.026   0.400±0.030   +0.304±0.053  | 98.94±0.01   99.05±0.03   -0.11±0.03
+```
+
+Other genome types (margin_val_cal, TEST, mean ΔF1 / ΔFPR): best_fpr +0.74 / +0.045, best_acc +0.73 / +0.053,
+best_ce +0.69 / +0.054, best_fitness +0.72 / +0.052. Same sign pattern as best_f1 on every genome type (F1 up 3/3,
+FPR up). argmax_beta is unstable in the control (one seed collapses), so its Δ is not interpretable.
+
+Read:
+- **A Pareto move along the curve, as the prereg expected** (options doc: +0.6 to +1.0 F1, FPR about +0.1). Measured
+  +0.75 F1 / +0.052 FPR; TPR +3.2 to +3.9 pp on every seed. The FPR cost sits 0.002 pp (about 3 benign rows per seed)
+  over the dominance tolerance, so the label is decided by a hair; it is reported as the rule gives it.
+- The arm's GA lands at the same point on every seed: F1 94.934 ± 0.003 (control SD 0.122). Three seeds converging
+  to within 0.01 pp at widths just under the cap is consistent with the cap binding again; it is not evidence of a
+  ceiling of the architecture.
+- The class-normalized modes reverse (margin_classnorm −0.34 F1 / +0.30 FPR, argmax_classnorm −2.88 / +0.93), unlike
+  IDS56U where they favoured the arm. argmax_platt gives the arm a very-low-FPR point (83.36 / 0.005 vs 83.62 /
+  0.030): that is the Pareto-mining point, not a decision input.
+- Against classical (TEST, measured numbers in the unswr table above): 94.93 / 0.262 is −0.46 pp F1 vs thermo RF
+  (95.39 / 0.39) and −0.60 vs thermo XGBoost (95.53 / 0.42), with lower FPR than both (−0.13 / −0.16 pp). n=3 vs
+  single classical runs; "gap closed" needs the comparator's seed spread (§10), so not a paper statement.
+
+Caveats:
+- **Size:** b64 is a ~3× larger model (1.97M vs 0.67M cells). The +0.40 floor was set as the price of about 3.3× cells
+  (§4); the measured ratio is 2.95×. The 34-bit row stays the small-model row; the paper cannot quote b64 F1 with the
+  34-bit size. A1 changes the cap only, so "width beats size" is not established (equal-cells is a separate arm).
+- **Cross-ABI pairing** (29 vs 28) rests on the W1-W4 bit-identity record, not on a re-flown control.
+- **Shared controls (§9):** 7509 / 7513 / 7517 have now been read against two arms: IDS56U nb02 (ADOPT, Pareto move)
+  and IDS-57 A1 b64 (ADOPT, Pareto move). The two adopted changes were never flown together; A1 kept the lattice
+  write rule, so "vote θ=0.02 + b64" is untested.
+- **Selection on TEST (§9):** the direction of the capacity search followed a TEST diagnosis of the control genomes
+  (options doc §2b-2d); the cap value itself was chosen on VAL and train-only CV. Adoption is a TEST-informed
+  decision on the same partition as IDS-55/56/56U.
+- **Still owed by §10 (not done in this readout, changes nothing):** item 6 VAL concordance (offline retrain of the six
+  GA finals, rule applied on VAL), item 5 XGBoost scored at each arm seed's own false-alarm count, item 3 full Rule-7
+  Grid-vs-GA 5-table set and the FPR-banded Pareto view, item 4 the F1-vs-cells figure.
+- Pairing is matched starting points (same folds); the grid changes with the cap (part of the treatment) and the GA
+  diverges from gen 1.
+
 ### IDS-56 rule-7 tables (generated: `scripts/build_sp_5tables.py --prefix 'IDS56-unswt-%'`)
 # IDS-56 — min-share vote (ms01, theta=0.1) vs lattice x encoding dedupe off/on (unswt temporal_3way, 16bWb, rate 0.25)
 
