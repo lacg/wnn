@@ -363,7 +363,7 @@ fn wnn_hold_rows_average_the_reached_episodes_cpu_match_gpu()
 }
 
 /// No episode reached the window ⇒ the hold rows are NaN (as the rival scorer's), on
-/// the CPU and on Metal.
+/// the CPU and on Metal (aggregate and every per-episode value).
 #[cfg(target_os = "macos")]
 #[test]
 fn wnn_hold_rows_nan_when_nothing_reached_the_window()
@@ -378,4 +378,35 @@ fn wnn_hold_rows_nan_when_nothing_reached_the_window()
 	let r = diverge_cpu(&c, &late, 4, 400);
 	assert_eq!(r[2], 0.0, "fixture: every episode must fail (stable {})", r[2]);
 	assert!(r[17].is_nan() && r[18].is_nan(), "CPU hold rows with nothing reached: {:?}", &r[17..]);
+	assert!(r[13].is_finite() && r[14].is_finite(), "the whole-episode rows stay finite");
+	if std::env::var("WNN_SKIP_GPU_TESTS").is_ok()
+	{
+		return;
+	}
+	let Ok(ev) = crate::metal_controller::ControllerRolloutEvaluator::new()
+	else
+	{
+		return;
+	};
+	use crate::abi32_tests::{ics, ARM as A, DT as D, EPS, G as GR, INERTIA as IN, KD as KDR, KT as K};
+	let d = crate::controller::Disturbance {
+		tau_bias: [0.0; 3],
+		gust_sigma: 0.0,
+		gust_tau_c: 0.1,
+		motor_asym: DIVERGE_ASYM,
+		gyro_sigma: 0.0,
+		gyro_bias_walk: 0.0,
+		accel_sigma: 0.0,
+		dropout_prob: 0.0,
+		dropout_len_steps: 0,
+		obs_delay_steps: 0,
+		torque_scale_jitter: 0.0,
+		seed: 5,
+	};
+	let (q0, w0) = ics();
+	let (agg, eps) = ev
+		.score_with_episodes(&[&c], &q0, &w0, EPS, 400, (D, A, K, IN, GR), KDR, 0.0, [0.0; 3], Some(d), None, None, None, Some(&late))
+		.expect("gpu score");
+	assert!(eps.iter().all(|e| e[13].is_nan() && e[14].is_nan()), "GPU: every per-episode hold value is NaN");
+	assert!(agg[0][17].is_nan() && agg[0][18].is_nan(), "GPU hold rows with nothing reached: {:?}", &agg[0][17..]);
 }

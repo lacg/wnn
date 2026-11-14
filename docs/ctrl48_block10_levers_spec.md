@@ -309,7 +309,9 @@ mean |yaw offset| deg                                             | 0.330  | 0.4
 
 ### Round-2 verification
 - `cargo test -p ram_controller --lib --no-default-features`: **398 passed, 0 failed, 25 ignored**. That is 11 new tests: 3 in `yaw_trim_err.rs`, 6 in `ctrl51_yaw_trim_tests.rs`, 2 in `ctrl51_hold_tests.rs`.
-- The abi32 parity helper now treats NaN on both sides of a hold row as agreement. The alt-integral parity fixture has no episode reaching the window under the new convention, so CPU and Metal both report NaN.
+- Parity helpers (Luiz: `close()` stays STRICT). Only the hold rows (`pos_hold` / `dz_hold`) go through a separate `close_hold_row()`: NaN on both sides counts as agreement, NaN on one side fails, and finite values use the strict `close()`. Every other row is compared exactly as before.
+- `alt_integral_score_cpu_matches_gpu` moved from seed 51 to seed 53. Under the new convention seed 51 lost every episode before the window in `off` / `pi`. Seed 53 keeps episodes to the window in all three modes, and the test now asserts finite hold rows, so CPU vs GPU compares real numbers.
+- The all-diverged NaN case is `wnn_hold_rows_nan_when_nothing_reached_the_window`, now on Metal too: the aggregate and every per-episode value are NaN.
 - L2y tests:
   - κ is the teacher's yaw law.
   - Lag sensitivity is < 0.2 %.

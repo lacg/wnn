@@ -144,12 +144,6 @@ pub(crate) fn gpu(c: &WnnController, s1: &Stage1Cfg, steps: usize) -> Option<Vec
 
 fn close(gpu: f64, cpu: f64, rel: f64, floor: f64, what: &str)
 {
-	// The hold-window rows are NaN on BOTH sides when no episode reached the window
-	// (block-10 convention, cpu_score::hold_mean) — agreement, not a mismatch.
-	if gpu.is_nan() && cpu.is_nan()
-	{
-		return;
-	}
 	let tol = floor.max(cpu.abs() * rel);
 	assert!((gpu - cpu).abs() <= tol, "{what}: gpu={gpu} cpu={cpu} tol={tol}");
 }
@@ -168,12 +162,29 @@ pub(crate) fn assert_parity_steps(c: &WnnController, s1: &Stage1Cfg, steps: usiz
 		assert_eq!(gr.len(), 19, "{what}: GPU row must carry dx/dy + the hold column (19 metrics)");
 		close(gr[1], cr[1], 2e-2, 1e-4, &format!("{what} err"));
 		close(gr[0], cr[0], 5e-2, 1e-3, &format!("{what} reward"));
-		for (i, name) in [(13, "pos"), (14, "alt"), (15, "dx"), (16, "dy"), (17, "pos_hold"), (18, "dz_hold")]
+		for (i, name) in [(13, "pos"), (14, "alt"), (15, "dx"), (16, "dy")]
 		{
 			close(gr[i], cr[i], 5e-2, 1e-3, &format!("{what} {name}"));
 		}
+		for (i, name) in [(17, "pos_hold"), (18, "dz_hold")]
+		{
+			close_hold_row(gr[i], cr[i], &format!("{what} {name}"));
+		}
 	}
 	cr
+}
+
+/// The hold-window rows ONLY (17 pos_hold, 18 dz_hold): NaN on both sides is agreement
+/// — no episode reached the window, cpu_score::hold_mean — and NaN on one side is a
+/// mismatch; otherwise the strict `close`. Every other row stays strict.
+fn close_hold_row(gpu: f64, cpu: f64, what: &str)
+{
+	if gpu.is_nan() || cpu.is_nan()
+	{
+		assert!(gpu.is_nan() && cpu.is_nan(), "{what}: NaN on one side only: gpu={gpu} cpu={cpu}");
+		return;
+	}
+	close(gpu, cpu, 5e-2, 1e-3, what);
 }
 
 pub(crate) fn differs(a: &[f64; 19], b: &[f64; 19], idx: &[usize], what: &str)

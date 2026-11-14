@@ -495,6 +495,12 @@ fn every_training_host_applies_it()
 #[cfg(target_os = "macos")]
 fn alt_student(seed: u64) -> WnnController
 {
+	alt_student_cells(seed, 1 << 8)
+}
+
+/// `cells` random output cells per neuron (256 = every address of the 8-bit neurons).
+fn alt_student_cells(seed: u64, cells: usize) -> WnnController
+{
 	use rand::{Rng, SeedableRng};
 	let (levels, bpf, window, obpn, nf) = (4usize, 3usize, 2usize, 8usize, 18usize);
 	let mut rng = rand::rngs::SmallRng::seed_from_u64(seed);
@@ -521,9 +527,10 @@ fn alt_student(seed: u64) -> WnnController
 	.expect("alt student must construct");
 	for n in 0..num_out
 	{
-		for k in 0..(1u64 << obpn)
+		for k in 0..cells
 		{
-			c.write_output_cell_internal(n, k, if rng.gen_bool(0.5) { 1 } else { 0 });
+			let addr = if cells >= (1 << obpn) { k as u64 } else { rng.gen_range(0..(1u64 << obpn)) };
+			c.write_output_cell_internal(n, addr, if rng.gen_bool(0.5) { 1 } else { 0 });
 		}
 	}
 	c
@@ -542,10 +549,17 @@ fn alt_integral_score_cpu_matches_gpu()
 		s.alt_int = integ(mode);
 		s
 	};
-	let c = alt_student(51);
+	// Seed 53: every mode keeps some episodes to the hold window (seed 51 lost them all
+	// under off / pi), so the hold rows compare REAL numbers CPU vs GPU. The all-diverged
+	// NaN case is ctrl51_hold_tests::wnn_hold_rows_nan_when_nothing_reached_the_window.
+	let c = alt_student(53);
 	let off = assert_parity_steps(&c, &with(AltIntegralMode::Off), 300, "alt off");
 	let pi = assert_parity_steps(&c, &with(AltIntegralMode::Pi), 300, "alt pi");
 	let p3 = assert_parity_steps(&c, &with(AltIntegralMode::Pole3), 300, "alt pole3");
+	for (r, m) in [(&off, "off"), (&pi, "pi"), (&p3, "pole3")]
+	{
+		assert!(r[17].is_finite() && r[18].is_finite() && r[17] > 0.0, "alt {m}: no episode reached the hold window — the hold rows would compare NaN ({}, {})", r[17], r[18]);
+	}
 	differs(&off, &pi, &[0, 1, 13, 14], "alt_integral pi");
 	differs(&off, &p3, &[0, 1, 13, 14], "alt_integral pole3");
 	if metal::Device::system_default().is_some()
@@ -557,3 +571,4 @@ fn alt_integral_score_cpu_matches_gpu()
 		}
 	}
 }
+
