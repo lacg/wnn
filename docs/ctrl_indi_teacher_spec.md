@@ -263,3 +263,37 @@ Section 2.3 says INDI ≈ a faster d̂. That can be tested without writing INDI:
 - **D5. Score F1 in stage 0.** Bias-compensated MPCOF addresses 0.52° where INDI addresses 0.17°. Recommended to score alongside, and to consider as the first "stronger teacher" if INDI misses the bar.
 - **D6. Unknown teacher id becomes a hard error** instead of a silent PID (recommended).
 - **D7. Adaptive INDI.** Out of v1 (recommended).
+
+---
+
+## 10. Stage −1 + bias-compensated MPCOF: what is run and what each outcome means (PRE-REGISTRATION, 14/11/2026)
+
+Approved by Luiz 14/11/2026 (D4 and D5). Evaluation only. INDI itself is not approved and is not built.
+Written and committed BEFORE any number in section 11 was scored.
+
+### 10.1 Common protocol
+- **Units: VAL only.** The 20 stage-select val units of the "both" s1 run (base seed 31337001): seeds **163226054..163226073**, taken through `val_units.py::checked_val_unit_seeds` (so the disjointness from the test units and from the train/test pool seeds is asserted, not assumed). The fixture script additionally refuses any seed in 99990101..99990400. No test unit is scored.
+- **Episodes.** 100 per unit (2000 total), 2000 steps, the K = 5 fold-0 pool seed of each unit, exactly as `classical_baseline.cascade_rival_metrics` draws a rival row.
+- **Regime.** The run's own `[argv]` (cf21_brushless, L4C, translation, xy offset 0.5, tilt reference, motor lag 0.20 s, rotor drag 0.78, specific-force IMU). Episode inputs are produced by the shipped Python samplers and written to a fixture; the scoring is an `#[ignore]` cargo test on the shipped Rust scorer with default-off probe parameters. No wheel is built.
+- **Row.** MPCOF>rate(h10): the MPCOF outer decision held 10 ticks over the firmware rate PID. Est-fed (Mahony) and oracle-fed (true quaternion) are reported separately and labelled.
+- **Metrics.** stable % / err ° / steady ° / pos m / fails (episodes not stable, out of 2000), plus the hold-window (t ≥ 1.6 s) per-axis mean |error|: roll, pitch (TRUE Euler angle minus the tilt reference) and yaw (absolute TRUE heading). All val numbers: tuning-grade, never to be placed next to a test number without saying so.
+- **Self-check before any reading.** The probe with every option off must reproduce the unprobed scorer bit for bit on the same unit.
+- **One pass.** The settings below are fixed here. Anything added after seeing numbers is labelled post hoc.
+
+### 10.2 Stage −1: observer speed
+- **Arms.** The cascade observer gain l of `cascade_dhat.rs` (per 1 kHz tick; τ = 1 ms / l): 0.005, 0.01, **0.02 (shipped)**, 0.05, 0.1, 0.2, 0.5, i.e. τ = 200, 100, 50, 20, 10, 5, 2 ms. Only the TEACHER's observer instance is changed; nothing else in the law moves.
+- **Question.** Does a faster (INDI-like) disturbance estimate improve the hold on this plant?
+- **Outcomes.**
+  - No setting improves est-fed steady by more than **0.03°** against the shipped 0.02 without adding fails: **INDI's inner-loop route is closed** on this plant. The spec's stage 0 for INDI is not built.
+  - Some faster setting improves est-fed steady by more than 0.03° with fails not above the shipped row and err not worse by more than 0.03°: the route **stays open**, and the size of the gain says whether INDI (or simply that gain, fallback F2) is worth a stage 0.
+  - The oracle-fed column is read the same way and reported as the label-source view. A gain that appears only oracle-fed means the estimator masks it for a rival but the labels would still carry it; that is reported as such, not as "open".
+  - Yaw is reported per setting. A yaw gain alone, without a steady gain above 0.03°, does not open the route.
+
+### 10.3 Bias-compensated MPCOF (fallback F1)
+- **What it is.** The shipped est-fed MPCOF cascade, with the attitude reference handed to the teacher shifted by the predicted Mahony bias: target' = tilt reference + [abp_r, abp_p, 0], where [abp_r, abp_p] is `att_bias_pred.rs::AttBiasPredictor` (the student's `--obs-att-bias-pred` law, unchanged), i.e. the predicted (estimate − truth) of roll and pitch. Yaw is untouched.
+- **Information it uses.** The Mahony estimate quaternion; the horizontal velocity (the same sim signal the student reads as `--obs-vel-xy` and the rival's own position loop already reads; noise-free in sim, as for them); the Mahony gains, dt and nominal g. **It never reads the true quaternion.** A student with `--obs-att-bias-pred` observes the same two numbers.
+- **Outcomes** (Δ against the shipped est-fed row on the same 20 units).
+  - Est-fed steady improves by more than **0.10°**, with 0 extra fails, err not worse by more than 0.03° and pos not worse by more than 0.005 m: it **becomes the stage-0 teacher candidate**, to be confirmed once on the 35 test units, only on Luiz's go.
+  - Improves by 0.03° to 0.10°: a direction, not adopted as built.
+  - Improves by less than 0.03°, or adds fails: does not work as built.
+- **Not claimed either way.** Whether labels from it help a student. The DAgger labels already come from the true quaternion, so this row is a rival-side and est-label-side quantity; that question is stage 2's.
