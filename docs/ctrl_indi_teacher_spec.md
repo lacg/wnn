@@ -297,3 +297,96 @@ Written and committed BEFORE any number in section 11 was scored.
   - Improves by 0.03° to 0.10°: a direction, not adopted as built.
   - Improves by less than 0.03°, or adds fails: does not work as built.
 - **Not claimed either way.** Whether labels from it help a student. The DAgger labels already come from the true quaternion, so this row is a rival-side and est-label-side quantity; that question is stage 2's.
+
+---
+
+## 11. Stage −1 + bias-compensated MPCOF: RESULTS (VAL, 14/11/2026)
+
+**Every number in this section is a VAL number** (tuning-grade): 20 val units 163226054..163226073 × 100 episodes = 2000 episodes, MPCOF>rate(h10), the "both" s1 run's regime. No test unit was scored. Do not place these next to the 35-unit test rows without saying so.
+
+How it was run:
+- Fixture: `scripts/ctrl_indi_val_fixture.py` (the shipped Python samplers; arguments written to `/tmp/ctrl_indi_probe/fixture`).
+- Scoring: `rival_probe_tests::val_sweep`, an `#[ignore]` cargo test on the shipped Rust scorer with the default-off probe of `rival_probe.rs`. No wheel built, no ABI change. Logs: `/tmp/ctrl_indi_probe/val_sweep.log`, `val_sweep2.log`.
+- Self-check passed: with the probe off the scorer is bit-identical to the unprobed one, and the cargo build reproduces the INSTALLED wheel's est-fed row on unit 163226054 (1.0000 / 1.0818° / 0.5084° / 0.3481 m).
+- Existing suite after the change: `cargo test -p ram_controller --lib --no-default-features` = 359 passed, 0 failed, 21 ignored.
+- The shipped est-fed row on these val units (100.00 / 1.345 / 0.685 / 0.339 / 0 fails) happens to sit on the test row (1.35 / 0.68 / 0.341 / 0). That is a coincidence of two different unit sets, not a test read.
+
+Columns: Δ steady and "units better/worse" are paired per unit against the shipped row of the same feed. Hold columns are the t ≥ 1.6 s mean |error|: roll and pitch are TRUE Euler angles minus the tilt reference (rotations about BODY x / y), yaw is the absolute TRUE heading. "Fed bias" is Euler(fed quaternion) − Euler(true quaternion) at the tick the teacher was fed.
+
+### 11.1 Stage −1: observer speed
+
+Est-fed (VAL):
+```
+arm                        | stable % | err °  | steady ° | pos m | fails/2000 | Δ steady ° | units better/worse | hold roll ° | hold pitch ° | hold yaw ° | fed bias r/p °
+---------------------------+----------+--------+----------+-------+------------+------------+--------------------+-------------+--------------+------------+---------------
+l = 0.005 (τ = 200 ms)     | 100.00   | 2.039  | 1.148    | 0.346 | 0          | +0.463     | 0/20               | 0.746       | 0.736        | 0.074      | 0.54 / 0.53
+l = 0.01  (τ = 100 ms)     | 100.00   | 1.579  | 0.811    | 0.341 | 0          | +0.127     | 0/20               | 0.528       | 0.509        | 0.073      | 0.40 / 0.38
+l = 0.02  (τ = 50 ms) SHIP | 100.00   | 1.345  | 0.685    | 0.339 | 0          |  0.000     | -                  | 0.444       | 0.424        | 0.076      | 0.35 / 0.34
+l = 0.05  (τ = 20 ms)      | 100.00   | 1.228  | 0.636    | 0.339 | 0          | -0.048     | 19/1               | 0.408       | 0.389        | 0.097      | 0.33 / 0.32
+l = 0.1   (τ = 10 ms)      | 100.00   | 1.208  | 0.642    | 0.339 | 0          | -0.043     | 15/5               | 0.400       | 0.382        | 0.146      | 0.32 / 0.32
+l = 0.2   (τ = 5 ms)       | 100.00   | 1.240  | 0.701    | 0.339 | 0          | +0.016     | 7/13               | 0.401       | 0.383        | 0.264      | 0.32 / 0.31
+l = 0.5   (τ = 2 ms)       | 100.00   | 1.478  | 1.027    | 0.341 | 0          | +0.342     | 0/20               | 0.432       | 0.419        | 0.667      | 0.32 / 0.31
+```
+
+Oracle-fed (VAL; the label-source view, not a rival):
+```
+arm                        | stable % | err °  | steady ° | pos m | fails/2000 | Δ steady ° | units better/worse | hold roll ° | hold pitch ° | hold yaw °
+---------------------------+----------+--------+----------+-------+------------+------------+--------------------+-------------+--------------+-----------
+l = 0.005 (τ = 200 ms)     | 100.00   | 1.114  | 0.185    | 0.359 | 0          | +0.017     | 3/17               | 0.109       | 0.111        | 0.067
+l = 0.01  (τ = 100 ms)     | 100.00   | 0.833  | 0.170    | 0.356 | 0          | +0.002     | 7/13               | 0.098       | 0.101        | 0.069
+l = 0.02  (τ = 50 ms) SHIP | 100.00   | 0.689  | 0.168    | 0.355 | 0          |  0.000     | -                  | 0.095       | 0.097        | 0.073
+l = 0.05  (τ = 20 ms)      | 100.00   | 0.624  | 0.185    | 0.355 | 0          | +0.016     | 0/20               | 0.094       | 0.097        | 0.096
+l = 0.1   (τ = 10 ms)      | 100.00   | 0.634  | 0.228    | 0.355 | 0          | +0.059     | 0/20               | 0.097       | 0.100        | 0.146
+l = 0.2   (τ = 5 ms)       | 100.00   | 0.712  | 0.340    | 0.355 | 0          | +0.171     | 0/20               | 0.108       | 0.112        | 0.263
+l = 0.5   (τ = 2 ms)       | 100.00   | 1.056  | 0.766    | 0.357 | 0          | +0.598     | 0/20               | 0.171       | 0.181        | 0.667
+```
+
+Reading against §10.2:
+- **By the letter of the rule the route stays open.** l = 0.05 improves est-fed steady by 0.048° (19 of 20 units), above the 0.03° line, with 0 fails and err better (−0.117°).
+- **The gain is small and is not the one INDI was proposed for.**
+  - **Nothing is gained in yaw. Yaw gets worse with every faster setting, in both feeds**: 0.076° → 0.097° → 0.146° → 0.264° → 0.667°. Yaw has 11× less authority than roll/pitch (§3), so the raw gyro-difference noise a faster observer lets through costs most there.
+  - The est-fed steady gain is in roll/pitch (0.444 / 0.424 → 0.408 / 0.389), and it comes with a smaller fed bias (0.35 → 0.33): part of it is a calmer flight feeding the Mahony filter less acceleration, not better moment rejection.
+  - **Oracle-fed, the shipped gain is already the steady optimum** (0.168°; l = 0.05 is +0.016° and worse on 20 of 20 units). The label source has no steady headroom in the observer speed.
+- **There is transient headroom**: err improves at l = 0.05 in both feeds (est −0.117°, oracle −0.065°), and turns back up beyond l = 0.1.
+- The shipped τ = 50 ms sits near the optimum of a fairly flat bowl. Slower is clearly worse; faster trades roll/pitch transient against yaw noise.
+- **Verdict.** The inner loop has about 0.05° of est-fed steady and about 0.1° of err to give, none in yaw, and all of it is reachable by changing one constant (fallback F2). That does not justify building INDI (a second-order filter at 8 Hz would sit between the l = 0.02 and l = 0.05 rows in bandwidth). My recommendation is to close the INDI route; the rule as written leaves it open, so that is Luiz's call (section 11.4).
+
+### 11.2 Bias-compensated MPCOF (F1)
+
+```
+arm                                              | stable % | err °  | steady ° | pos m | fails/2000 | Δ steady ° | units better/worse | hold roll ° | hold pitch ° | hold yaw ° | fed bias r/p ° | after compensation r/p °
+-------------------------------------------------+----------+--------+----------+-------+------------+------------+--------------------+-------------+--------------+------------+----------------+-------------------------
+MPCOF>rate(h10) est-fed SHIPPED (VAL)            | 100.00   | 1.345  | 0.685    | 0.339 | 0          |  0.000     | -                  | 0.444       | 0.424        | 0.076      | 0.35 / 0.34    | 0.35 / 0.34
+MPCOF>rate(h10) est-fed + bias compensation (VAL)| 100.00   | 0.693  | 0.171    | 0.355 | 0          | -0.514     | 20/0               | 0.095       | 0.098        | 0.075      | 0.11 / 0.10    | 0.02 / 0.02
+MPCOF>rate(h10) oracle-fed (bound, not a rival)  | 100.00   | 0.689  | 0.168    | 0.355 | 0          | -0.516     | 20/0               | 0.095       | 0.097        | 0.073      | 0.00 / 0.00    | 0.00 / 0.00
+```
+
+Reading against §10.3:
+- **Bias compensation works.** Est-fed steady 0.685° → 0.171° (−0.514°, 20 of 20 units), err 1.345° → 0.693°, 0 fails. The compensated est-fed row lands on the oracle-fed row to within 0.003° steady and 0.004° err: the predictor recovers essentially all of what the true quaternion would give.
+- The predictor leaves 0.02° of the fed bias unexplained in the hold. The bias itself is also smaller in the compensated flight (0.11° vs 0.35°), because a vehicle that stops regulating a biased estimate accelerates less.
+- **One pre-registered condition is NOT met: position.** pos 0.339 m → 0.355 m, +0.016 m against an allowance of +0.005 m. The oracle-fed row has the same 0.355 m, so this is not a defect of the compensation: the shipped est-fed row's slightly better position comes with its attitude bias. Why a biased attitude returns 1.6 cm closer on average was not investigated.
+- **So by the rule as written it does not promote itself.** Steady (5× the bar), fails and err pass; pos fails. Whether +1.6 cm of position for −0.51° of steady is acceptable is Luiz's decision.
+- **Information, restated.** The compensated teacher reads the Mahony estimate, the horizontal velocity (the student's `--obs-vel-xy` signal, already read by the rival's position loop; noise-free in sim for all three), the Mahony gains, dt and g. It never reads the true quaternion; `rival_probe.rs` reads the truth only to measure. A student with `--obs-att-bias-pred` observes the same two numbers. The row is est-fed in the sense of the 13/08 rule.
+
+### 11.3 Post hoc (added after the pre-registered arms were read)
+
+```
+arm                                               | stable % | err °  | steady ° | pos m | fails/2000 | Δ steady ° | hold roll ° | hold pitch ° | hold yaw °
+--------------------------------------------------+----------+--------+----------+-------+------------+------------+-------------+--------------+-----------
+POST HOC: est-fed + bias compensation + l = 0.05  | 100.00   | 0.628  | 0.187    | 0.355 | 0          | -0.498     | 0.095       | 0.098        | 0.097
+```
+- The two levers do not stack on steady: once the bias is removed, the faster observer costs 0.016° of steady through yaw (0.075° → 0.097°) and buys 0.065° of err. It reproduces the oracle-fed l = 0.05 row. This confirms that the est-fed steady gain of §11.1 was an estimator-side effect.
+
+### 11.4 What this means, and the next decision
+
+1. **Does the inner loop have headroom?** Very little, and not where INDI was aimed. About 0.05° est-fed steady and 0.1° err, nothing in yaw, zero steady headroom for the label source. The teacher's moment-disturbance channel is essentially closed, as §2.3 predicted.
+2. **Does bias compensation work?** Yes. The MPCOF rival's 0.68° steady was an estimator limit, and an onboard predictor removes it: 0.17° on val.
+3. **A consequence for the comparison that Luiz should see.** The student has had `--obs-att-bias-pred` since block 7; the MPCOF rival has not. Given the same onboard information the rival is about 0.17° steady / 0.69° err on val, against the student's 0.77° / 1.37° on test. If this holds on the test units, "the student is within 0.09° of its teacher" is true only of the rival that lacks the student's bias information.
+4. **A consequence for the "stronger teacher" thesis.** The DAgger labels already come from the true quaternion, i.e. from a law that holds 0.17° on these units. The student flies 0.77°. The student's steady ceiling is therefore not its teacher: the label source is already 0.6° ahead. A stronger label source (INDI or otherwise) cannot move a student that is limited by what it observes and resolves, not by what it is told.
+
+**Decisions for Luiz:**
+- **N1. INDI.** Close the INDI route (recommended), or keep it open on the letter of the rule (0.048° > 0.03°).
+- **N2. F1 on test.** Accept the position cost (+0.016 m, equal to the oracle's) and confirm the bias-compensated MPCOF once on the 35 test units, as a new est-fed rival row; or hold it.
+- **N3. If N2 confirms:** which MPCOF row is the paper's rival, the shipped one or the equal-information one. This is a claims question for `experiment-design` and the paper-claims audit as well.
+- **N4. Observer gain 0.05 (F2).** Worth about 0.1° of err. Not recommended as a standalone change: it worsens yaw, it is the wrong direction for the label source's steady, and the student's d̂ feature shares the constant and its kernel twin.
+- **N5. Where the student's remaining 0.6° to its label source is.** That, not a new teacher, is the next investigation I would propose (block-6 format, against the oracle-fed law).

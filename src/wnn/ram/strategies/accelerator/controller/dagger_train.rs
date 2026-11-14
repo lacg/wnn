@@ -3771,6 +3771,123 @@ pub fn score_classical_baseline(
 	ctbr_outer_hold: usize,
 ) -> PyResult<(f64, f64, f64, f64, f64, f64, f64, f64)>
 {
+	score_classical_baseline_probed(
+		teacher_id,
+		init_qs,
+		init_omegas,
+		steps,
+		stable_deg,
+		dist_enabled,
+		dist_tau_bias,
+		dist_gust_sigma,
+		dist_gust_tau_c,
+		dist_motor_asym,
+		dist_gyro_sigma,
+		dist_gyro_bias_walk,
+		dist_accel_sigma,
+		dist_seed,
+		dist_dropout_prob,
+		dist_dropout_len_steps,
+		dist_obs_delay_steps,
+		dist_torque_scale_jitter,
+		af_arm_length,
+		af_k_thrust,
+		af_k_drag,
+		af_inertia,
+		af_gravity,
+		af_dt,
+		af_pid_att,
+		af_pid_rate,
+		af_pid_out_limit_n,
+		af_pid_hover_n,
+		af_pid_attitude_hz,
+		af_pid_lpf_hz,
+		use_estimator,
+		est_kp,
+		est_ki,
+		translation,
+		s1_target_altitude,
+		s1_init_z,
+		s1_init_vz,
+		s1_mass,
+		s1_collective_frac,
+		alt_pd_omega,
+		alt_pd_zeta,
+		alt_pd_max_delta,
+		s2_init_x,
+		s2_init_y,
+		pos_omega_n,
+		pos_zeta,
+		pos_max_tilt_rad,
+		motor_lag_s,
+		imu_specific_force,
+		rotor_drag,
+		att_err_tilt_ref,
+		ctbr_outer_hold,
+		None,
+	)
+}
+
+/// The body of `score_classical_baseline`, with an OPT-IN measurement / what-if probe
+/// (rival_probe.rs — docs/ctrl_indi_teacher_spec.md §10). `probe = None` is the shipped
+/// scorer: no branch below changes an operand or the order of an operation.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn score_classical_baseline_probed(
+	teacher_id: u8,
+	init_qs: Vec<f32>,     // 4 floats per episode (w, x, y, z)
+	init_omegas: Vec<f32>, // 3 floats per episode
+	steps: usize,
+	stable_deg: f64,
+	dist_enabled: bool,
+	dist_tau_bias: [f32; 3],
+	dist_gust_sigma: f32,
+	dist_gust_tau_c: f32,
+	dist_motor_asym: [f32; 4],
+	dist_gyro_sigma: f32,
+	dist_gyro_bias_walk: f32,
+	dist_accel_sigma: f32,
+	dist_seed: u64,
+	dist_dropout_prob: f32,
+	dist_dropout_len_steps: u32,
+	dist_obs_delay_steps: u32,
+	dist_torque_scale_jitter: f32,
+	af_arm_length: f32,
+	af_k_thrust: f32,
+	af_k_drag: f32,
+	af_inertia: [f32; 3],
+	af_gravity: f32,
+	af_dt: f32,
+	af_pid_att: [f64; 12],
+	af_pid_rate: [f64; 12],
+	af_pid_out_limit_n: f64,
+	af_pid_hover_n: f64,
+	af_pid_attitude_hz: f64,
+	af_pid_lpf_hz: f64,
+	use_estimator: bool,
+	est_kp: f64,
+	est_ki: f64,
+	translation: bool,
+	s1_target_altitude: f32,
+	s1_init_z: Vec<f32>,
+	s1_init_vz: Vec<f32>,
+	s1_mass: Vec<f32>,
+	s1_collective_frac: Vec<f32>,
+	alt_pd_omega: f64,
+	alt_pd_zeta: f64,
+	alt_pd_max_delta: f64,
+	s2_init_x: Vec<f32>,
+	s2_init_y: Vec<f32>,
+	pos_omega_n: f64,
+	pos_zeta: f64,
+	pos_max_tilt_rad: f64,
+	motor_lag_s: f32,
+	imu_specific_force: bool,
+	rotor_drag: f32,
+	att_err_tilt_ref: bool,
+	ctbr_outer_hold: usize,
+	mut probe: Option<&mut crate::rival_probe::RivalProbe>,
+) -> PyResult<(f64, f64, f64, f64, f64, f64, f64, f64)>
+{
 	let (plant, att_ref) = crate::stage1::stage1_extras(
 		imu_specific_force,
 		rotor_drag,
@@ -3909,6 +4026,11 @@ pub fn score_classical_baseline(
 	};
 	let mut sim = af.sim();
 	let mut teacher = af.teacher(teacher_id);
+	if let Some(p) = probe.as_deref_mut()
+	{
+		p.arm(&mut teacher, use_estimator.then_some((est_kp, est_ki)), af_dt)
+			.map_err(pyo3::exceptions::PyValueError::new_err)?;
+	}
 	let target = [0.0_f32, 0.0, 0.0];
 	// ABI 38: the cascade rival's outer-over-rate composition (None ⇒ motor-level).
 	let mut over_rate = if ctbr_outer_hold > 0
@@ -4019,6 +4141,10 @@ pub fn score_classical_baseline(
 			);
 		}
 
+		if let Some(p) = probe.as_deref_mut()
+		{
+			p.begin_episode();
+		}
 		// MPCOF observer needs the action applied LAST step; 0.5 hover on step 0
 		// (matches the training loop's last_applied init).
 		let mut last_applied = [0.5f32; 4];
@@ -4054,6 +4180,10 @@ pub fn score_classical_baseline(
 				Some(e) => e.update(gyro, accel),
 				None => sim.quaternion(),
 			};
+			if let Some(p) = probe.as_deref_mut()
+			{
+				p.observe_feed(q, sim.quaternion());
+			}
 			// Offset-free MPC observer (no-op for pid/lqr/mpc/lqi) — same call the
 			// training loop makes before the teacher plans this step.
 			teacher.observe(
@@ -4092,6 +4222,12 @@ pub fn score_classical_baseline(
 						(coll, tgt)
 					}
 					_ => (0.0, target),
+				};
+				// Probe only (F1): the reference shifted by the predicted Mahony bias.
+				let tgt = match probe.as_deref_mut()
+				{
+					Some(p) => p.compensated_target(tgt, sim.velocity_xy_rs(), q),
+					None => tgt,
 				};
 				let label = teacher
 					.ctbr_label(q, gyro, tgt, ctbr_outer_hold, coll)
@@ -4167,7 +4303,15 @@ pub fn score_classical_baseline(
 				tail_sum += err;
 				tail_cnt += 1;
 			}
+			if let Some(p) = probe.as_deref_mut()
+			{
+				p.record(t >= tail_start, &sim, &att_ref);
+			}
 			steps_done += 1;
+		}
+		if let Some(p) = probe.as_deref_mut()
+		{
+			p.end_episode();
 		}
 		sum_poserr += ep_sum_poserr / steps_done.max(1) as f64;
 		sum_pos3d += ep_sum_pos3d / steps_done.max(1) as f64;

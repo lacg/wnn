@@ -1800,6 +1800,17 @@ impl AttitudeMpcOfRs
 		self.ctbr.is_some()
 	}
 
+	/// PROBE ONLY (stage −1, docs/ctrl_indi_teacher_spec.md §10): the cascade law's
+	/// observer gain. Refused without the cascade law.
+	pub(crate) fn set_ctbr_observer_gain(&mut self, l: f64) -> Result<(), String>
+	{
+		match self.ctbr.as_mut()
+		{
+			Some(c) => c.set_observer_gain(l),
+			None => Err("set_ctbr_observer_gain: this mpcof has no cascade law attached".into()),
+		}
+	}
+
 	fn ctbr_active(&self) -> Option<&crate::ctbr_mpcof::CtbrMpcOf>
 	{
 		self.ctbr.as_deref().filter(|c| c.active())
@@ -2363,6 +2374,17 @@ impl Teacher
 			Teacher::PidFw(_) => true,
 			Teacher::MpcOf(m) => m.supports_ctbr(),
 			_ => false,
+		}
+	}
+
+	/// PROBE ONLY (stage −1): the MPCOF cascade's observer gain; every other teacher
+	/// has no such observer and is refused.
+	pub(crate) fn set_ctbr_observer_gain(&mut self, l: f64) -> Result<(), String>
+	{
+		match self
+		{
+			Teacher::MpcOf(m) => m.set_ctbr_observer_gain(l),
+			_ => Err("set_ctbr_observer_gain: only the mpcof cascade teacher has the offset-free observer".into()),
 		}
 	}
 

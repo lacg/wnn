@@ -121,6 +121,12 @@ impl CtbrMpcOf
 		}
 	}
 
+	/// PROBE ONLY (stage −1): the observer gain of this teacher's CascadeDhat.
+	pub(crate) fn set_observer_gain(&mut self, l: f64) -> Result<(), String>
+	{
+		self.obs.set_observer_gain(l)
+	}
+
 	pub(crate) fn active(&self) -> bool
 	{
 		self.active

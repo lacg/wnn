@@ -45,6 +45,9 @@ pub(crate) struct CascadeDhat
 	/// The plant's lag coefficient 4dt/max(T, 4dt) (actuator_lag::motor_lag_alpha).
 	alpha: f64,
 	clamp: [f64; 3],
+	/// Observer gain per plant tick. CTBR_MPC_L_GAIN unless a probe overrides it
+	/// (set_observer_gain — the stage −1 sweep, docs/ctrl_indi_teacher_spec.md §10).
+	l_gain: f64,
 	lag_pwm: [f64; 4],
 	primed: bool,
 	seeded: bool,
@@ -64,6 +67,7 @@ impl CascadeDhat
 			dt: dt as f64,
 			alpha: crate::actuator_lag::motor_lag_alpha(motor_lag_s, dt),
 			clamp: [c[0] * out_limit_n, c[1] * out_limit_n, c[2] * out_limit_n],
+			l_gain: CTBR_MPC_L_GAIN,
 			lag_pwm: [0.0; 4],
 			primed: false,
 			seeded: false,
@@ -89,6 +93,19 @@ impl CascadeDhat
 		self.alpha = crate::actuator_lag::motor_lag_alpha(motor_lag_s, dt);
 	}
 
+	/// PROBE ONLY (stage −1, docs/ctrl_indi_teacher_spec.md §10): override the observer
+	/// gain of THIS instance. Never called on a shipped path — every label, rival and
+	/// student feature keeps CTBR_MPC_L_GAIN. 0 < l ≤ 1 (l = 1 is the raw residual).
+	pub(crate) fn set_observer_gain(&mut self, l: f64) -> Result<(), String>
+	{
+		if !(l.is_finite() && l > 0.0 && l <= 1.0)
+		{
+			return Err(format!("CascadeDhat: observer gain {l} must be in (0, 1]"));
+		}
+		self.l_gain = l;
+		Ok(())
+	}
+
 	/// The (gyro just read, pwm applied last tick) pair; the first call after reset
 	/// is the t = 0 placeholder (prime only).
 	pub(crate) fn observe(&mut self, gyro: [f32; 3], applied_pwm: [f64; 4])
@@ -101,7 +118,7 @@ impl CascadeDhat
 				let rate_dot = (g[a] - prev[a]) / self.dt;
 				let residual = rate_dot - self.c[a] * ua[a] - self.dhat[a];
 				let lim = self.clamp[a];
-				self.dhat[a] = (self.dhat[a] + CTBR_MPC_L_GAIN * residual).clamp(-lim, lim);
+				self.dhat[a] = (self.dhat[a] + self.l_gain * residual).clamp(-lim, lim);
 			}
 		}
 		self.last_gyro = Some(g);
