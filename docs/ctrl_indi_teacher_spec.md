@@ -390,3 +390,11 @@ POST HOC: est-fed + bias compensation + l = 0.05  | 100.00   | 0.628  | 0.187   
 - **N3. If N2 confirms:** which MPCOF row is the paper's rival, the shipped one or the equal-information one. This is a claims question for `experiment-design` and the paper-claims audit as well.
 - **N4. Observer gain 0.05 (F2).** Worth about 0.1° of err. Not recommended as a standalone change: it worsens yaw, it is the wrong direction for the label source's steady, and the student's d̂ feature shares the constant and its kernel twin.
 - **N5. Where the student's remaining 0.6° to its label source is.** That, not a new teacher, is the next investigation I would propose (block-6 format, against the oracle-fed law).
+
+---
+
+## 12. N2: one-shot TEST confirmation of the bias-compensated MPCOF rival
+
+- **Approval (Luiz, 14/11/2026):** N1 INDI route CLOSED; N2 confirm the bias-compensated MPCOF once on the 35 test units; N3 to `experiment-design` after N2; N5 investigate the student's gap.
+- **Accepted for this confirmation:** the +0.016 m position miss on val (§11.2) against the pre-registered +0.005 m. The confirmation is report-only.
+- **What is scored, once:** units 99990101..99990135 × 100 episodes, three arms only (shipped est-fed, est-fed + bias compensation, oracle-fed bound). Arm 1 must reproduce the published 100.0 / 1.35 / 0.68 / 0.341 / 0 fails or the run stops. No tuning afterwards, no extra arms; the post hoc l = 0.05 row is not scored on test.
