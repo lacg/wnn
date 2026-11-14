@@ -33,7 +33,8 @@ import numpy as np
 
 from wnn.control._accel import AttitudeSim, WnnController
 
-from .feature_layout import YAW_ERROR_FEATURES, feature_layout
+from .feature_layout import (TILT_ERROR_FEATURES, YAW_ERROR_FEATURES, YAW_INTEGRAL_FEATURES,
+                             YAW_PROPORTIONAL_FEATURES, feature_layout)
 from .threshold_calibration import CalibrationFit, ThresholdCalibration
 from .pid import AttitudePID, AttitudePIDConfig
 from .training import (
@@ -252,6 +253,14 @@ class ControllerSpec:
 	# (yaw_err_i, yaw_i_pa); roll/pitch/tilt keep integral_leak. None = integral_leak
 	# (bit-identical). docs/ctrl_steady_gap_block6.md §3-4.
 	yaw_integral_leak: float | None = None
+	# Block 10 L1 (--obs-tilt-ref-err, ABI 51): roll_err / pitch_err become the
+	# bias-corrected error against the position loop's tilt reference. The value is
+	# that loop's shape (gravity, omega_n, zeta, max tilt rad); None = off, bit-identical.
+	obs_tilt_ref_err: tuple | None = None
+	# Block 10 L2y (--obs-yaw-trim-err, ABI 51): the yaw error inputs are measured against
+	# the yaw target shifted by the trim the cascade's yaw rate loop rides on
+	# (target − κ·cresid_z, κ derived in Rust from the ctbr contract). False = off.
+	obs_yaw_trim_err: bool = False
 	integral_scale: float = 1.0   # pre-threshold scale for integral features
 	dt: float = 0.001             # physics step (s); MUST match episode/plant dt (yaw integ.)
 	# H3 (18/06): the 4 output banks are CONTROLS [T, τ_roll, τ_pitch, τ_yaw] mixed to
@@ -660,10 +669,24 @@ def _feature_controller(spec: ControllerSpec) -> WnnController:
 		obs_att_estimator=getattr(spec, 'obs_att_estimator', False), ctbr=ctbr_arg(spec),
 		obs_att_bias_pred=getattr(spec, 'obs_att_bias_pred', False),  # CTRL-46 (ABI 46)
 		yaw_integral_leak=getattr(spec, 'yaw_integral_leak', None),  # ARM 3 (ABI 50)
+		obs_tilt_ref_err=tilt_ref_err_kw(spec),  # block 10 L1 (ABI 51)
+		obs_yaw_trim_err=yaw_trim_err_kw(spec),  # block 10 L2y (ABI 51)
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 		dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
 		integral_leak=spec.integral_leak, integral_scale=spec.integral_scale)
+
+
+def yaw_trim_err_kw(spec) -> bool:
+	"""Block 10 L2y: ControllerSpec.obs_yaw_trim_err as the bool the wheel takes."""
+	return bool(getattr(spec, "obs_yaw_trim_err", False))
+
+
+def tilt_ref_err_kw(spec) -> "tuple | None":
+	"""Block 10 L1: ControllerSpec.obs_tilt_ref_err as the 4-float tuple the wheel takes
+	(a spec reloaded from a checkpoint carries a list), or None when off."""
+	shape = getattr(spec, "obs_tilt_ref_err", None)
+	return None if not shape else tuple(float(x) for x in shape)
 
 
 def _centred_thresholds(arr: np.ndarray, bpf: int, outer_quantile) -> np.ndarray:
@@ -693,8 +716,66 @@ def _yaw_centred_thresholds(arr: np.ndarray, bpf: int, outer_quantile) -> np.nda
 	return np.concatenate([-mags[::-1], zeros, mags])
 
 
+# Block 10 (docs/ctrl48_block10_levers_spec.md): the DENSE ladder's fixed inner cuts, in
+# radians. Tilt (L1): the offsets to resolve are 0.1-0.5 deg. Yaw (L2): +-0.10, +-0.25 deg.
+DENSE_TILT_INNER_RAD = tuple(float(np.radians(d)) for d in (0.08, 0.20, 0.45))
+DENSE_YAW_INNER_RAD = tuple(float(np.radians(d)) for d in (0.10, 0.25))
+# L2y (--obs-yaw-trim-err): the trim-referenced yaw error spans the trim-equivalent angle
+# (|x| 97.5 % at 2.4-2.9 deg on the block-9 VAL flights), so its fixed cuts spread over
+# that range instead of crowding 0: +-0.25, +-0.75, +-1.50 deg.
+DENSE_YAW_TRIM_INNER_RAD = tuple(float(np.radians(d)) for d in (0.25, 0.75, 1.50))
+
+
+def _dense_thresholds(arr: np.ndarray, bpf: int, inner, outer_quantile) -> np.ndarray:
+	"""Block-10 DENSE ladder for a zero-referenced input: h = bpf//2 symmetric pairs and,
+	on an odd ladder only, one cut at 0 (an even ladder spends no cut on 0 — the dead
+	band is +-inner[0]). The first pairs are the FIXED `inner` magnitudes (hold-scale
+	resolution, which a quantile fit on a transient-dominated distribution does not
+	give); the remaining pairs are |x| quantiles of the samples beyond the last fixed
+	cut, evenly spaced in mass up to the quantile ladder's outer mass 1 - 2*q0."""
+	q0 = float(outer_quantile) if outer_quantile is not None else 1.0 / (bpf + 1)
+	h = bpf // 2
+	mags = [float(m) for m in inner[:h]]
+	rest = h - len(mags)
+	if rest > 0:
+		tail = np.abs(arr)[np.abs(arr) > mags[-1]] if mags else np.abs(arr)
+		ps = (np.arange(1, rest + 1) / rest) * (1.0 - 2.0 * q0)
+		outer = np.quantile(tail, ps) if tail.size else np.array([])
+		last = mags[-1] if mags else 0.0
+		for j in range(rest):
+			# Strictly increasing even on a degenerate tail (no samples / ties): double.
+			cand = float(outer[j]) if j < len(outer) else 0.0
+			last = cand if cand > last * (1.0 + 1e-9) and cand > 0.0 else (2.0 * last if last > 0.0 else 1.0)
+			mags.append(last)
+	mags = np.asarray(mags)
+	mid = [0.0] if bpf % 2 else []
+	return np.concatenate([-mags[::-1], mid, mags])
+
+
+def _yaw_integral_gain(spec) -> float:
+	"""Steady-state value of a yaw-integral input per radian of held yaw error:
+	integral_scale / (1 - leak) (the leaky sum compute_features builds)."""
+	leak = getattr(spec, "yaw_integral_leak", None)
+	leak = float(spec.integral_leak if leak is None else leak)
+	return float(spec.integral_scale) / max(1.0 - leak, 1e-9)
+
+
+def _dense_inner_for(name: str, spec, yaw_dense: bool, tilt_dense: bool, yaw_trim_dense: bool = False):
+	"""The fixed inner cuts of feature `name` under the block-10 dense ladders, or None."""
+	if yaw_trim_dense and name in YAW_PROPORTIONAL_FEATURES:
+		return DENSE_YAW_TRIM_INNER_RAD
+	if yaw_dense and name in YAW_ERROR_FEATURES:
+		gain = _yaw_integral_gain(spec) if name in YAW_INTEGRAL_FEATURES else 1.0
+		return tuple(c * gain for c in DENSE_YAW_INNER_RAD)
+	if tilt_dense and name in TILT_ERROR_FEATURES:
+		return DENSE_TILT_INNER_RAD
+	return None
+
+
 def _thresholds_from_samples(samples_per_feature, spec, method, outer_quantile, extra_samples,
-                             ladder: str = "quantile", yaw_centred: bool = False) -> list[float]:
+                             ladder: str = "quantile", yaw_centred: bool = False,
+                             yaw_dense: bool = False, tilt_dense: bool = False,
+                             yaw_trim_dense: bool = False) -> list[float]:
 	"""Per-feature thermometer thresholds from the sampled operating distribution
 	(base 9 + enabled H2 extras) — shared by the Python reference-rollout fitter and
 	the Rust training-cascade sampler (CTRL-17 G1). ladder="centred" (CTRL-48) swaps
@@ -704,6 +785,8 @@ def _thresholds_from_samples(samples_per_feature, spec, method, outer_quantile, 
 	bpf = spec.bits_per_feature
 	zero_ref = [d.zero_ref for d in feature_layout(spec)] if ladder == "centred" else [False] * nf
 	yaw_c = [d.name in YAW_ERROR_FEATURES for d in feature_layout(spec)] if yaw_centred else [False] * nf
+	dense_inner = [_dense_inner_for(d.name, spec, yaw_dense and yaw_centred, tilt_dense, yaw_trim_dense)
+	               for d in feature_layout(spec)] if (yaw_dense or tilt_dense or yaw_trim_dense) else [None] * nf
 	thresholds = []
 	for f in range(nf):
 		# STUDENT STATES (option A, 10/08/2026). The fitter rolls out PID — a BETTER
@@ -721,7 +804,9 @@ def _thresholds_from_samples(samples_per_feature, spec, method, outer_quantile, 
 		if arr.size == 0:
 			# Feature never observed (constant target?). Fall back to [-1, 1] linear.
 			arr = np.array([-1.0, 1.0])
-		if method == "quantile" and yaw_c[f]:
+		if method == "quantile" and dense_inner[f] is not None:
+			ts = _dense_thresholds(arr, bpf, dense_inner[f], outer_quantile)
+		elif method == "quantile" and yaw_c[f]:
 			ts = _yaw_centred_thresholds(arr, bpf, outer_quantile)
 		elif method == "quantile" and zero_ref[f]:
 			ts = _centred_thresholds(arr, bpf, outer_quantile)
@@ -796,7 +881,9 @@ def fit_calibration(
 	extra = _pooled_extra_samples(spec, cal, extra_samples)
 	samples = _calibration_samples(spec, cal, seed, geometry, alloc, episode_config)
 	thresholds = _thresholds_from_samples(samples, spec, method, cal.outer_quantile, extra,
-	                                      ladder=cal.ladder, yaw_centred=cal.yaw_centred)
+	                                      ladder=cal.ladder, yaw_centred=cal.yaw_centred,
+	                                      yaw_dense=cal.yaw_dense, tilt_dense=cal.tilt_dense,
+	                                      yaw_trim_dense=cal.yaw_trim_dense)
 	return CalibrationFit(thresholds=thresholds,
 	                      constant_features=_zero_spread_features(samples, extra))
 
@@ -911,6 +998,11 @@ def _calibration_samples(spec, cal: "ThresholdCalibration", seed, geometry, allo
 	# byte-identical.
 	if _stage1_cal and _ec_translation and geometry is None:
 		return _training_cascade_samples(spec, episode_config, cal, seed)
+	# Block 10 L3: the Python rollout below feeds the student's alt_err RAW. With the
+	# altitude integrator on, only the Rust training cascade produces the reshaped input.
+	if getattr(episode_config, "alt_integral", "off") != "off":
+		raise ValueError("alt_integral is on: the thermometer must be fitted on the Rust training cascade "
+		                 "(translation, no overactuated geometry) — the Python calibration rollout has no integrator")
 	# CTRL-48: the curriculum-tilt pool is built from the training cascade's sampler;
 	# the legacy Python rollout below has no such sampler — refuse, never ignore.
 	if cal.regime != "flown":
@@ -1326,6 +1418,7 @@ def reference_packed_config(ec, teacher: str = "pid", teacher_hover_mode: str = 
 		teacher_hover_mode=_TEACHER_HOVER_MODES[teacher_hover_mode],
 		**_plant_train_kwargs(ec),
 		**ec.motor_lag_kwargs(),
+		**ec.alt_integral_kwargs(),  # block 10 L3 (ABI 51)
 		# ABI 32: the calibration sampler + MEMORY recorder fly the real-life
 		# plant too (AirframeRs::from_cfg arms it). Nothing is SCORED here, so
 		# the G5 reference is not passed.
@@ -1457,6 +1550,8 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		obs_att_estimator=getattr(spec, 'obs_att_estimator', False), ctbr=ctbr_arg(spec),
 		obs_att_bias_pred=getattr(spec, 'obs_att_bias_pred', False),  # CTRL-46 (ABI 46)
 		yaw_integral_leak=getattr(spec, 'yaw_integral_leak', None),  # ARM 3 (ABI 50)
+		obs_tilt_ref_err=tilt_ref_err_kw(spec),  # block 10 L1 (ABI 51)
+		obs_yaw_trim_err=yaw_trim_err_kw(spec),  # block 10 L2y (ABI 51)
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
@@ -2010,6 +2105,7 @@ class ControllerEvaluator:
 			# AXIS F: the TRAINING rollout + per-round eval fly the same lagged
 			# plant the scorers and baselines do (empty when the axis is off).
 			**rg.episode_config.motor_lag_kwargs(),
+			**rg.episode_config.alt_integral_kwargs(),  # block 10 L3 (ABI 51)
 			# ABI 32: real-life plant (AirframeRs) + G5 gate/checkpoint reference.
 			**rg.episode_config.imu_kwargs(), **rg.episode_config.att_ref_kwargs(),
 		)
@@ -2063,6 +2159,8 @@ class ControllerEvaluator:
 			obs_att_estimator=getattr(first_spec, 'obs_att_estimator', False), ctbr=ctbr_arg(first_spec),
 			obs_att_bias_pred=getattr(first_spec, 'obs_att_bias_pred', False),  # CTRL-46 (ABI 46)
 			yaw_integral_leak=getattr(first_spec, 'yaw_integral_leak', None),  # ARM 3 (ABI 50)
+			obs_tilt_ref_err=tilt_ref_err_kw(first_spec),  # block 10 L1 (ABI 51)
+			obs_yaw_trim_err=yaw_trim_err_kw(first_spec),  # block 10 L2y (ABI 51)
 			output_full_window=getattr(first_spec, 'output_full_window', False),
 			frame_stride=int(getattr(first_spec, 'frame_stride', 1)),
 			**_target_levels_kwarg(ra, first_spec),
@@ -2154,6 +2252,7 @@ class ControllerEvaluator:
 			# AXIS F: the TRAINING rollout + per-round eval fly the same lagged
 			# plant the scorers and baselines do (empty when the axis is off).
 			**rg.episode_config.motor_lag_kwargs(),
+			**rg.episode_config.alt_integral_kwargs(),  # block 10 L3 (ABI 51)
 			# ABI 32: real-life plant (AirframeRs) + G5 gate/checkpoint reference.
 			**rg.episode_config.imu_kwargs(), **rg.episode_config.att_ref_kwargs(),
 		)
@@ -2174,6 +2273,8 @@ class ControllerEvaluator:
 		obs_att_estimator=getattr(spec, 'obs_att_estimator', False), ctbr=ctbr_arg(spec),
 		obs_att_bias_pred=getattr(spec, 'obs_att_bias_pred', False),  # CTRL-46 (ABI 46)
 		yaw_integral_leak=getattr(spec, 'yaw_integral_leak', None),  # ARM 3 (ABI 50)
+		obs_tilt_ref_err=tilt_ref_err_kw(spec),  # block 10 L1 (ABI 51)
+		obs_yaw_trim_err=yaw_trim_err_kw(spec),  # block 10 L2y (ABI 51)
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
@@ -2377,7 +2478,7 @@ class ControllerEvaluator:
 				agg = scorer(
 					controllers, q0, omega0, self.num_eval, ec.steps_per_episode,
 					geometry=geo_rows, rotor_asym=geo_asym,
-					**ec.sim_kwargs(), **ec.motor_lag_kwargs(),
+					**ec.sim_kwargs(), **ec.motor_lag_kwargs(), **ec.alt_integral_scorer_kwargs(),
 					**ec.imu_kwargs(), **ec.att_ref_kwargs(),
 					**alloc_kwargs, **stage1_kwargs)
 			else:
@@ -2404,7 +2505,7 @@ class ControllerEvaluator:
 					dist_obs_delay_steps=int(dist.obs_delay_steps),
 					dist_torque_scale_jitter=float(dist.torque_scale_jitter),
 					geometry=geo_rows, rotor_asym=geo_asym,
-					**ec.sim_kwargs(), **ec.motor_lag_kwargs(),
+					**ec.sim_kwargs(), **ec.motor_lag_kwargs(), **ec.alt_integral_scorer_kwargs(),
 					**ec.imu_kwargs(), **ec.att_ref_kwargs(),
 					**alloc_kwargs, **stage1_kwargs)
 		except Exception as e:
@@ -2446,6 +2547,11 @@ class ControllerEvaluator:
 			# attitude-only report lines stay exactly as they were.
 			dx_m = row[15] if (s1_on and len(row) > 16) else None
 			dy_m = row[16] if (s1_on and len(row) > 16) else None
+			# 18th/19th (ABI 51, block 10): the HOLD-window (last 20% of steps) mean 3-D
+			# position error and mean |dz| in METRES — the transient split off. None unless
+			# the run translates or on an older wheel.
+			pos_hold_m = row[17] if (s1_on and len(row) > 18) else None
+			dz_hold_m = row[18] if (s1_on and len(row) > 18) else None
 			out.append((float(mean_reward), {
 				"mean_reward": float(mean_reward),
 				"mean_attitude_error_rad": float(mean_err_rad),
@@ -2471,6 +2577,8 @@ class ControllerEvaluator:
 				"mean_altitude_error_m": (float(alt_err_m) if alt_err_m is not None else None),
 				"mean_dx_m": (float(dx_m) if dx_m is not None else None),
 				"mean_dy_m": (float(dy_m) if dy_m is not None else None),
+				"mean_position_hold_m": (float(pos_hold_m) if pos_hold_m is not None else None),
+				"mean_dz_hold_m": (float(dz_hold_m) if dz_hold_m is not None else None),
 				"mean_ise": float(ise),
 				# Allocation-effort proxy (Σu², Phase 3): the Σu² fitness input.
 				"mean_effort": (float(effort) if effort is not None else None),
@@ -2929,6 +3037,8 @@ class ControllerEvaluator:
 				mean_altitude_error_m=(float(_aem) if _aem is not None else None),
 				mean_dx_m=(float(_dx) if _dx is not None else None),
 				mean_dy_m=(float(_dy) if _dy is not None else None),
+				mean_position_hold_m=m.get("mean_position_hold_m"),
+				mean_dz_hold_m=m.get("mean_dz_hold_m"),
 			)
 			if write_back or return_stats:
 				# Fill counts straight from Rust; the old _cell_stats ALSO called
@@ -3054,7 +3164,9 @@ class ControllerEvaluator:
 		                mean_altitude_error_m=(float(m["mean_altitude_error_m"])
 		                                       if m.get("mean_altitude_error_m") is not None else None),
 		                mean_dx_m=(float(m["mean_dx_m"]) if m.get("mean_dx_m") is not None else None),
-		                mean_dy_m=(float(m["mean_dy_m"]) if m.get("mean_dy_m") is not None else None))
+		                mean_dy_m=(float(m["mean_dy_m"]) if m.get("mean_dy_m") is not None else None),
+		                mean_position_hold_m=m.get("mean_position_hold_m"),
+		                mean_dz_hold_m=m.get("mean_dz_hold_m"))
 		        for (r, m) in scored]
 
 	def _score_grouped(self, controllers: list, shape_keys: list) -> list:

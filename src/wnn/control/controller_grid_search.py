@@ -199,6 +199,9 @@ class ControllerGridSearch(GenericGridSearch):
 			obs_vz=getattr(args, "obs_vz", False),
 			integral_leak=args.integral_leak, integral_scale=args.integral_scale,
 			yaw_integral_leak=getattr(args, "yaw_integral_leak", None),  # ARM 3 (ABI 50)
+			# Block 10 L1 (ABI 51): the position loop's shape, from the run's EpisodeConfig.
+			obs_tilt_ref_err=(self._ec.tilt_ref_shape() if getattr(args, "obs_tilt_ref_err", False) else None),
+			obs_yaw_trim_err=bool(getattr(args, "obs_yaw_trim_err", False)),  # block 10 L2y (ABI 51)
 			decouple_outputs=args.decouple_outputs,
 			bits_per_feature=args.bits_per_feature,
 			feature_balance_ratio=args.feature_balance_ratio,

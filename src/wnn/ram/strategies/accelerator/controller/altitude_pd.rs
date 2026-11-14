@@ -74,6 +74,14 @@ impl AltitudePd
 		})
 	}
 
+	/// (omega_n, zeta, az_limit): the loop's shape and the acceleration at which the
+	/// collective clamp binds (b_z·max_delta, m/s²) — read-only, for the altitude
+	/// integrator's gains and its conditional integration (altitude_integrator.rs).
+	pub fn law(&self) -> (f64, f64, f64)
+	{
+		(self.omega_n, self.zeta, self.b_z * self.max_delta)
+	}
+
 	/// Per-motor collective correction δ for this step.
 	/// `alt_err` = target − z (positive ⇒ climb), `vz` = +up.
 	#[inline]

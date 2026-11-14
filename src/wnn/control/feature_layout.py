@@ -112,6 +112,15 @@ ZERO_REFERENCED: frozenset[str] = frozenset({
 # yaw-centred ladder (0 a bin edge); every other feature keeps its ladder.
 YAW_ERROR_FEATURES: frozenset[str] = frozenset({"yaw_err", "yaw_err_i", "yaw_err_pa", "yaw_i_pa"})
 
+# Block 10 (Luiz 14/11/2026, docs/ctrl48_block10_levers_spec.md): the DENSE ladder's
+# families. The yaw INTEGRAL inputs take the yaw cuts scaled by the integral's
+# steady-state gain; the tilt-error pair is the L1 input (--obs-tilt-ref-err).
+YAW_INTEGRAL_FEATURES: frozenset[str] = frozenset({"yaw_err_i", "yaw_i_pa"})
+TILT_ERROR_FEATURES: frozenset[str] = frozenset({"roll_err", "pitch_err"})
+# L2y (--obs-yaw-trim-err): the PROPORTIONAL yaw-error inputs, which take the L2y dense
+# ladder (their integrals keep their own fit: they integrate the trim-shifted error).
+YAW_PROPORTIONAL_FEATURES: frozenset[str] = frozenset({"yaw_err", "yaw_err_pa"})
+
 
 def _block_name(name: str) -> str:
 	"""Per-motor names ("pwm_3") belong to their block ("pwm")."""

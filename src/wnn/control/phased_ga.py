@@ -491,6 +491,8 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                obs_att_bias_pred: bool = False,
                integral_leak: float = 0.99, integral_scale: float = 1.0,
                yaw_integral_leak: float | None = None,
+               obs_tilt_ref_err: tuple | None = None,
+               obs_yaw_trim_err: bool = False,
                dt: float = 0.001,
                decouple_outputs: bool = False, bits_per_feature: int = 8,
                feature_balance_ratio: float = 0.0,
@@ -546,6 +548,8 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		obs_att_bias_pred=obs_att_bias_pred,
 		integral_leak=integral_leak, integral_scale=integral_scale,
 		yaw_integral_leak=yaw_integral_leak,
+		obs_tilt_ref_err=obs_tilt_ref_err,
+		obs_yaw_trim_err=obs_yaw_trim_err,
 		dt=dt,
 		decouple_outputs=decouple_outputs,
 		feature_balance_ratio=feature_balance_ratio,
@@ -1658,6 +1662,8 @@ def _baseline_row_str(row: dict, is_rival: bool) -> str:
 	        + (f"  pos={pos_m:.3f}m" if _ok(pos_m) else "")
 	        + (f"  dx={row['mean_dx_m']:.3f}m" if _ok(row.get("mean_dx_m")) else "")
 	        + (f"  dy={row['mean_dy_m']:.3f}m" if _ok(row.get("mean_dy_m")) else "")
+	        + (f"  pos_hold={row['mean_position_hold_m']:.3f}m" if _ok(row.get("mean_position_hold_m")) else "")
+	        + (f"  dz_hold={row['mean_dz_hold_m']:.3f}m" if _ok(row.get("mean_dz_hold_m")) else "")
 	        + (f"  effort={eff:.3f}" if eff is not None else ""))
 
 
@@ -1692,6 +1698,9 @@ _HELDOUT_ROW = (
 	# None unless the run translates ⇒ omitted, so attitude-only lines are unchanged.
 	("mean_dx_m",              "dx",        "m", 3),
 	("mean_dy_m",              "dy",        "m", 3),
+	# ABI 51 (block 10): the hold-window position and |dz| — transient split off.
+	("mean_position_hold_m",   "pos_hold",  "m", 3),
+	("mean_dz_hold_m",         "dz_hold",   "m", 3),
 	("mean_effort",            "effort",    "",  3),
 )
 
@@ -2187,7 +2196,8 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 			# noisy enough to notice, which is how the whole gap surfaced.
 			mean_altitude_error_m=avg("mean_altitude_error_m"),
 			mean_position_error_m=avg("mean_position_error_m"),
-			mean_dx_m=avg("mean_dx_m"), mean_dy_m=avg("mean_dy_m"))
+			mean_dx_m=avg("mean_dx_m"), mean_dy_m=avg("mean_dy_m"),
+			mean_position_hold_m=avg("mean_position_hold_m"), mean_dz_hold_m=avg("mean_dz_hold_m"))
 
 	# CANDIDATES = the top-K genomes of EVERY stage, ranked together in one population.
 	# `final_population` survives the orchestrator's release trimmed to K
@@ -3220,12 +3230,44 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                help="CTRL-48: quantile (legacy) or centred = symmetric +-Q_|x|(p) thresholds, p on a "
 	                     "^1.5 curve (finer near 0), for the zero-referenced features only "
 	                     "(feature_layout.ZERO_REFERENCED); the rest keep quantile.")
-	ap.add_argument("--yaw-centred-ladder", action="store_true",
+	ap.add_argument("--obs-tilt-ref-err", action="store_true",
+	                help="Block 10 L1 (ABI 51, docs/ctrl48_block10_levers_spec.md): roll_err / pitch_err (and so "
+	                     "roll_i / pitch_i) become the BIAS-CORRECTED attitude error against the position loop's "
+	                     "TILT REFERENCE: (target + tilt_ref(e, v) + abp) - estimate, computed before the ladder "
+	                     "from signals the student already reads. No input is added or moved. Needs "
+	                     "--obs-peraxis-p, --obs-att-bias-pred, --obs-pos-err-xy, --obs-vel-xy and --xy-offset > 0. "
+	                     "Off (default) = byte-identical. A new lineage.")
+	ap.add_argument("--obs-yaw-trim-err", action="store_true",
+	                help="Block 10 L2y (ABI 51, docs/ctrl48_block10_levers_spec.md): the yaw-error inputs (and so "
+	                     "their integrals) are measured against the yaw target shifted by the TRIM the cascade's "
+	                     "yaw rate loop rides on: target - kappa*cresid_z, kappa = K_I*L/K_theta of the MPCOF "
+	                     "teacher's own yaw law (derived in Rust from the airframe's rate loop, not fitted). One "
+	                     "input then carries the label's trim AND its proportional term. No input is added or "
+	                     "moved. The proportional yaw inputs take the L2y dense ladder (fixed +-0.25, +-0.75, "
+	                     "+-1.50 deg). Needs --output-mode ctbr, --obs-cascade-dhat-residual and a yaw-error input "
+	                     "(--obs-yaw-err, or --obs-peraxis-p with --obs-peraxis-yaw). Off (default) = "
+	                     "byte-identical. A new lineage.")
+	ap.add_argument("--alt-integral", choices=["off", "pi", "pole3"], default="off",
+	                help="Block 10 L3 (ABI 51): an integrator on the altitude error in the collective law, removing "
+	                     "the PD's droop under mass / thrust error. pi = PD poles kept, k_i = omega^3/4; pole3 = "
+	                     "all three poles at -omega (zeta 1). Applied identically to the DAgger label, every "
+	                     "classical rival row and the student's alt_err input (which becomes the reshaped error). "
+	                     "The task (episodes, starts, position loop, scorer) is unchanged. Needs --translation. "
+	                     "Off (default) = byte-identical. Labels AND rival rows change: a new lineage, and "
+	                     "controls / rivals must be re-flown with the same setting.")
+	ap.add_argument("--tilt-err-ladder", choices=["quantile", "dense"], default="dense",
+	                help="Block 10 L1 (with --obs-tilt-ref-err only): the ladder of roll_err / pitch_err. dense "
+	                     "(default) = symmetric pairs with FIXED inner cuts at +-0.08, +-0.20, +-0.45 deg and the "
+	                     "remaining pair(s) at |x| quantiles; quantile = the feature's usual ladder.")
+	ap.add_argument("--yaw-centred-ladder", nargs="?", const="quantile", default=None, choices=["quantile", "dense"],
 	                help="ARM 2 (Luiz 12/11/2026, docs/ctrl_steady_gap_block6.md §3-4): the yaw-ERROR inputs "
 	                     "ONLY (yaw_err, yaw_err_i, and yaw_err_pa / yaw_i_pa when present) take a centred "
 	                     "ladder with 0 ALWAYS a bin edge: symmetric +-Q_|x|(p) pairs on the ^1.5 curve (finest "
 	                     "near 0), a second 0 threshold filling the even-bpf slot. Every other feature keeps "
-	                     "its ladder (--calib-ladder). Applies to every fit: grid, held-out/test refits and the "
+	                     "its ladder (--calib-ladder). Block 10 L2: `--yaw-centred-ladder dense` replaces the "
+	                     "quantile pairs near 0 by FIXED cuts at +-0.10, +-0.25 deg (integral inputs: scaled by "
+	                     "their steady-state gain) and spends no cut on 0; no value = quantile = the ARM-2 ladder. "
+	                     "Applies to every fit: grid, held-out/test refits and the "
 	                     "student refit. Off (default) = byte-identical. A new lineage: thresholds are part of "
 	                     "the address function.")
 	ap.add_argument("--drop-features", type=str, default="",
@@ -4113,9 +4155,47 @@ def resolve_yaw_channel_args(args) -> None:
 	if leak is not None and not yaw_i:
 		raise SystemExit("--yaw-integral-leak needs a yaw integral input: --obs-yaw-err-i (or "
 		                 "--obs-peraxis-i with --obs-peraxis-yaw).")
+	resolve_block10_args(args)
 	if getattr(args, "yaw_centred_ladder", False) and not (yaw_p or yaw_i):
 		raise SystemExit("--yaw-centred-ladder needs a yaw-error input: --obs-yaw-err / --obs-yaw-err-i "
 		                 "(or --obs-peraxis-p/-i with --obs-peraxis-yaw).")
+
+
+def resolve_block10_args(args) -> None:
+	"""Block 10 (ABI 51): refuse an L1 / L3 flag whose prerequisites are missing."""
+	if getattr(args, "obs_tilt_ref_err", False):
+		need = {"--obs-peraxis-p": getattr(args, "obs_peraxis_p", False),
+		        "--obs-att-bias-pred": getattr(args, "obs_att_bias_pred", False),
+		        "--obs-pos-err-xy": getattr(args, "obs_pos_err_xy", False),
+		        "--obs-vel-xy": getattr(args, "obs_vel_xy", False),
+		        "--translation": getattr(args, "translation", False),
+		        "--xy-offset > 0": float(getattr(args, "xy_offset", 0.0)) > 0.0}
+		missing = [k for k, v in need.items() if not v]
+		if missing:
+			raise SystemExit(f"--obs-tilt-ref-err needs {', '.join(missing)}: the tilt reference is built from "
+			                 "the horizontal observation and the bias prediction the student already reads.")
+	if getattr(args, "obs_yaw_trim_err", False):
+		yaw_p = getattr(args, "obs_yaw_err", False) or (getattr(args, "obs_peraxis_p", False)
+		                                               and getattr(args, "obs_peraxis_yaw", False))
+		need = {"--output-mode ctbr": getattr(args, "output_mode", "pwm") == "ctbr",
+		        "--obs-cascade-dhat-residual": getattr(args, "obs_cascade_dhat_residual", False),
+		        "a yaw-error input (--obs-yaw-err, or --obs-peraxis-p with --obs-peraxis-yaw)": yaw_p}
+		missing = [k for k, v in need.items() if not v]
+		if missing:
+			raise SystemExit(f"--obs-yaw-trim-err needs {', '.join(missing)}: the trim is the cascade residual's "
+			                 "cresid_z, referenced by the yaw error the student already reads.")
+		if getattr(args, "yaw_centred_ladder", None) == "dense":
+			raise SystemExit("--obs-yaw-trim-err replaces block-10 L2 (--yaw-centred-ladder dense): the trim-"
+			                 "referenced yaw error takes its own dense ladder — drop `dense`.")
+	if getattr(args, "alt_integral", "off") != "off" and not getattr(args, "translation", False):
+		raise SystemExit("--alt-integral needs --translation (there is no altitude loop without it).")
+
+
+def block10_tokens(args) -> dict:
+	"""Provenance alt= / yawref= values ("" when off, so the line is unchanged)."""
+	mode = getattr(args, "alt_integral", "off")
+	return dict(alt="" if mode == "off" else mode,
+	            yawref="trim" if getattr(args, "obs_yaw_trim_err", False) else "")
 
 
 def ctrl46_tokens(args) -> dict:
@@ -4125,7 +4205,9 @@ def ctrl46_tokens(args) -> dict:
 	return dict(
 		write=rule if rule != "vote" else f"vote:{0.5 if theta is None else theta:g}",
 		label=getattr(args, "dagger_label_attitude", "true"),
-		abp="on" if getattr(args, "obs_att_bias_pred", False) else "off",
+		# Block 10 L1: the tilt-reference error rides on the bias predictor's token.
+		abp=("on+tilt_ref_err" if getattr(args, "obs_tilt_ref_err", False)
+		     else "on" if getattr(args, "obs_att_bias_pred", False) else "off"),
 	)
 
 
@@ -4195,6 +4277,8 @@ def episode_config_from_args(args) -> EpisodeConfig:
 		imu_specific_force=bool(args.imu_specific_force),
 		rotor_drag=float(args.rotor_drag),
 		att_err_ref=str(getattr(args, "att_err_ref", "level")),
+		# Block 10 L3 (ABI 51): the altitude integrator, "off" = bit-identical.
+		alt_integral=str(getattr(args, "alt_integral", "off")),
 	)
 
 
@@ -4472,7 +4556,8 @@ def main():
 	                                         args.action_repeat, ec.dt),
 	                         rf=rf_token(args), calib=calibration_from_args(args).token(),
 	                         drop=drop_token(args), select=select_tail_token(args),
-	                         train_ic=train_ic_token(args), **ctrl46_tokens(args)).line())
+	                         train_ic=train_ic_token(args), **ctrl46_tokens(args),
+	                         **block10_tokens(args)).line())
 	import shlex
 	print(f"[argv] {shlex.join(args.cli_argv)}", flush=True)
 

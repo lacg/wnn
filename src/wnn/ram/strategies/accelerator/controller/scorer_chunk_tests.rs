@@ -72,6 +72,7 @@ fn stage2_full() -> Stage1Cfg
 		init_y: u(-0.5, 0.5),
 		plant: PlantOpts::new(true, 0.78).unwrap(),
 		att_ref: AttErrRef::tilt(G as f64, 1.0, 1.0, 0.5236).unwrap(),
+		alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 	};
 	c.validate(EPS).expect("chunk fixture must validate");
 	c
@@ -95,7 +96,7 @@ fn dist() -> Disturbance
 	}
 }
 
-fn cpu_rows(c: &WnnController, s1: &Stage1Cfg) -> [f64; 17]
+fn cpu_rows(c: &WnnController, s1: &Stage1Cfg) -> [f64; 19]
 {
 	let (q0, w0) = ics();
 	let d = dist();

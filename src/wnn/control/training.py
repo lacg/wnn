@@ -506,6 +506,49 @@ class EpisodeConfig:
 			raise ValueError(f"EpisodeConfig.motor_lag_s must be >= 0 s, got {lag}")
 		return {"motor_lag_s": lag} if lag > 0.0 else {}
 
+	# --- Block 10 L3 (ABI 51, docs/ctrl48_block10_levers_spec.md): the altitude
+	# integrator in the collective law — "off" (the PD, bit-identical), "pi" or
+	# "pole3". ONE setting for the trainer config, every classical rival and the WNN
+	# scorers, so the label, the rivals and the student's alt_err input cannot differ.
+	alt_integral: str = "off"
+
+	_ALT_INTEGRAL_MODES = {"off": 0, "pi": 1, "pole3": 2}
+
+	def alt_integral_mode(self) -> int:
+		if self.alt_integral not in self._ALT_INTEGRAL_MODES:
+			raise ValueError(f"EpisodeConfig.alt_integral {self.alt_integral!r} — one of "
+			                 f"{sorted(self._ALT_INTEGRAL_MODES)}")
+		mode = self._ALT_INTEGRAL_MODES[self.alt_integral]
+		if mode and not self.translation:
+			raise ValueError("EpisodeConfig.alt_integral needs translation (there is no altitude loop without it)")
+		return mode
+
+	def alt_integral_kwargs(self) -> dict:
+		"""`alt_integral=` for the trainer config and the classical-rival scorers (which
+		already carry the altitude PD's shape). Empty when off — byte-identical calls."""
+		mode = self.alt_integral_mode()
+		return {"alt_integral": mode} if mode else {}
+
+	def alt_integral_scorer_kwargs(self) -> dict:
+		"""The WNN scorers' form: they have no altitude law of their own, so with the
+		integrator on they also need the PD it reshapes — built for the NOMINAL mass
+		(the airframe's), as the trainer and the rivals build it. The PD shape itself
+		(omega 2, zeta 1, max delta 0.25) is the Rust default on every path."""
+		mode = self.alt_integral_mode()
+		if not mode:
+			return {}
+		if self.airframe is None:
+			raise ValueError("EpisodeConfig.alt_integral needs an airframe (the PD's nominal mass)")
+		return {"alt_integral": mode, "alt_pd_mass": float(self.airframe.mass)}
+
+	def tilt_ref_shape(self) -> tuple:
+		"""Block 10 L1: the position loop's shape (gravity, omega_n, zeta, max tilt rad) the
+		student's tilt-reference error is built with — the SAME values the trainer config
+		and the scorers' tilt reference use (Rust refuses a mismatch)."""
+		g = float(self.airframe.gravity) if self.airframe is not None else 9.81
+		return (g, float(getattr(self, "pos_omega_n", 1.0)), float(getattr(self, "pos_zeta", 1.0)),
+		        float(getattr(self, "pos_max_tilt_rad", 0.5236)))
+
 	# --- ABI 32 (31/10/2026, Luiz option A): the real-life plant. Both act on the
 	# TRANSLATIONAL dynamics only, so both require `translation` (Rust refuses them
 	# otherwise). Dataclass defaults stay OFF (= the ABI ≤ 31 plant, bit-identical

@@ -14,6 +14,7 @@
 //! Every helper is inert when `cfg.translation` is off: no rng draw, no call on
 //! the sim or controller. Attitude-only runs are therefore byte-identical.
 
+use crate::altitude_integrator::AltitudeIntegrator;
 use crate::altitude_pd::AltitudePd;
 use crate::att_err_ref::AttErrRef;
 use crate::controller::{compute_reward, compute_reward_stage2, AttitudeSim, WnnController};
@@ -73,6 +74,33 @@ pub(crate) fn alt_pd_for(cfg: &RewardGatedConfigPacked) -> Option<AltitudePd>
 	.ok()
 }
 
+/// L3 (ABI 51): the episode's altitude integrator for a config — built on the SAME
+/// altitude PD the teacher's outer loop uses (alt_pd_for), so the label, the rivals
+/// and the student's observation share one law. OFF when cfg.alt_integral == 0 or
+/// translation is off (validate_alt_integral refuses the second with a mode set).
+pub(crate) fn alt_integrator_for(cfg: &RewardGatedConfigPacked) -> AltitudeIntegrator
+{
+	let (Some(pd), Ok(mode)) = (alt_pd_for(cfg), crate::altitude_integrator::AltIntegralMode::from_u8(cfg.alt_integral))
+	else
+	{
+		return AltitudeIntegrator::OFF;
+	};
+	AltitudeIntegrator::new(mode, &pd, cfg.af_gravity as f64, cfg.dt as f32)
+		.expect("alt_integral validated at construction (validate_alt_integral)")
+}
+
+/// L3: THIS step's altitude-law inputs (alt_err_eff, vz_eff), at the start-of-step
+/// snapshot — the ONE read that feeds both the student's `alt_err` observation
+/// (feed_live_obs) and the teacher's altitude PD (OuterLoops::expert / expert_ctbr).
+/// Advances the episode's integrator: call exactly once per physical step, before
+/// either consumer. With the integrator off this is the raw (target − z, vz) every
+/// host computed before ABI 51, bit-for-bit.
+#[inline]
+pub(crate) fn sense_altitude(alt_int: &mut AltitudeIntegrator, sim: &AttitudeSim, target_altitude: f32) -> (f32, f32)
+{
+	alt_int.shape(target_altitude - sim.altitude_rs(), sim.vertical_velocity_rs())
+}
+
 /// This episode's translation PLANT draw and starts, taken from the loop rng in the
 /// order the trainer has always used (mass, z0, vz0, [x0, y0], collective jitter).
 /// Call AFTER `sim.reset` (reset zeroes the translational state). Returns the
@@ -129,22 +157,22 @@ pub(crate) fn anchor_controller(
 /// Hand the controller THIS step's live vertical and horizontal observation, read
 /// at the same start-of-step snapshot as the IMU — the exact twin of the scorers.
 /// Target is the origin at `target_altitude`, so the errors are target − state.
+/// `alt_err` is this step's `sense_altitude(..).0` — the altitude error the altitude
+/// law reads (L3: reshaped by the integrator when on, target − z otherwise). The
+/// vz observation stays the raw velocity.
 pub(crate) fn feed_live_obs(
 	controller: &mut WnnController,
 	sim: &AttitudeSim,
 	cfg: &RewardGatedConfigPacked,
 	collective_pwm: f32,
+	alt_err: f32,
 )
 {
 	if !cfg.translation
 	{
 		return;
 	}
-	controller.set_vertical_obs(
-		collective_pwm,
-		cfg.target_altitude - sim.altitude_rs(),
-		sim.vertical_velocity_rs(),
-	);
+	controller.set_vertical_obs(collective_pwm, alt_err, sim.vertical_velocity_rs());
 	let [hx, hy] = sim.position_xy_rs();
 	let [hvx, hvy] = sim.velocity_xy_rs();
 	controller.set_horizontal_obs(-hx, -hy, hvx, hvy);
@@ -171,6 +199,7 @@ impl OuterLoops
 	/// The teacher's command at the current sim state: the full disclosed cascade
 	/// (position → tilt ref → attitude law, collective on top) when both loops
 	/// exist, the stage-1 cascade with only the altitude PD, else the attitude law.
+	/// `alt_law` = this step's `sense_altitude` (alt_err_eff, vz_eff).
 	#[allow(clippy::too_many_arguments)]
 	pub(crate) fn expert(
 		&self,
@@ -179,11 +208,11 @@ impl OuterLoops
 		q: [f32; 4],
 		gyro: [f32; 3],
 		target: [f32; 3],
-		target_altitude: f32,
+		alt_law: (f32, f32),
 	) -> [f64; 4]
 	{
-		let alt_err = (target_altitude - sim.altitude_rs()) as f64;
-		let vz = sim.vertical_velocity_rs() as f64;
+		let alt_err = alt_law.0 as f64;
+		let vz = alt_law.1 as f64;
 		match (self.pos.as_ref(), self.alt_pd.as_ref())
 		{
 			(Some(pl), Some(pd)) =>
@@ -222,12 +251,12 @@ impl OuterLoops
 		q: [f32; 4],
 		gyro: [f32; 3],
 		target: [f32; 3],
-		target_altitude: f32,
+		alt_law: (f32, f32),
 		outer_steps: usize,
 	) -> [f64; 4]
 	{
-		let alt_err = (target_altitude - sim.altitude_rs()) as f64;
-		let vz = sim.vertical_velocity_rs() as f64;
+		let alt_err = alt_law.0 as f64;
+		let vz = alt_law.1 as f64;
 		let coll = self.alt_pd.as_ref().map_or(0.0, |pd| pd.delta(alt_err, vz));
 		let tgt = match self.pos.as_ref()
 		{
@@ -303,19 +332,19 @@ impl ExpertPilot
 		q: [f32; 4],
 		gyro: [f32; 3],
 		target: [f32; 3],
-		target_altitude: f32,
+		alt_law: (f32, f32),
 	) -> ([f64; 4], [f64; 4])
 	{
 		match self.ctbr.as_mut()
 		{
 			Some((pilot, hold)) =>
 			{
-				let label = loops.expert_ctbr(teacher, sim, q, gyro, target, target_altitude, *hold);
+				let label = loops.expert_ctbr(teacher, sim, q, gyro, target, alt_law, *hold);
 				(label, pilot.fly(label, gyro))
 			}
 			None =>
 			{
-				let pwm = loops.expert(teacher, sim, q, gyro, target, target_altitude);
+				let pwm = loops.expert(teacher, sim, q, gyro, target, alt_law);
 				(pwm, pwm)
 			}
 		}

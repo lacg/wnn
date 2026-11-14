@@ -216,6 +216,7 @@ fn recorder_draws(xy: Option<(f32, f32)>) -> Stage1Cfg
 		init_y: xy.map(|p| vec![p.1]).unwrap_or_default(),
 		plant: crate::plant_opts::PlantOpts::OFF,
 		att_ref: crate::att_err_ref::AttErrRef::LEVEL,
+		alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 	}
 }
 

@@ -47,6 +47,25 @@ pub(crate) const CTBR_MPC_WEIGHTS: AxisWeights = AxisWeights { q_att: 100.0, q_r
 /// Observer gain per plant tick.
 pub(crate) const CTBR_MPC_L_GAIN: f64 = 0.02;
 
+/// Axis `i` of the closed inner loop the planner predicts with: the firmware rate
+/// stage's gains, D filter and decimation, torque gain `c`, lag coefficient `alpha`.
+/// ONE definition for the teacher and the L2y input (yaw_trim_err.rs).
+pub(crate) fn axis_plant(rate: &RateStageFw, c: f64, dt: f32, alpha: f64, i: usize) -> AxisPlant
+{
+	let g = rate.axis_gains(i);
+	AxisPlant {
+		kp: g.kp,
+		ki: g.ki,
+		kd: g.kd,
+		lpf: rate.lpf_coeffs(),
+		dt: dt as f64,
+		dt_rate: rate.dt_rate(),
+		decimation: rate.decimation(),
+		c,
+		alpha,
+	}
+}
+
 pub(crate) struct CtbrMpcOf
 {
 	axes: [AxisPlant; 3],
@@ -79,22 +98,8 @@ impl CtbrMpcOf
 	) -> Self
 	{
 		let alpha = crate::actuator_lag::motor_lag_alpha(motor_lag_s, dt);
-		let lpf = rate.lpf_coeffs();
 		let c = torque_gains(arm_length, k_drag, inertia);
-		let axis = |i: usize| {
-			let g = rate.axis_gains(i);
-			AxisPlant {
-				kp: g.kp,
-				ki: g.ki,
-				kd: g.kd,
-				lpf,
-				dt: dt as f64,
-				dt_rate: rate.dt_rate(),
-				decimation: rate.decimation(),
-				c: c[i],
-				alpha,
-			}
-		};
+		let axis = |i: usize| axis_plant(&rate, c[i], dt, alpha, i);
 		let out = rate.out_limit_n();
 		let mut shadow = rate;
 		shadow.reset();

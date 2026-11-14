@@ -259,7 +259,7 @@ mod tests
 					}
 					n += 1;
 				}
-				let cmd = loops.expert(&mut teacher, &sim, q_true, g, [0.0; 3], cfg.target_altitude);
+				let cmd = loops.expert(&mut teacher, &sim, q_true, g, [0.0; 3], (cfg.target_altitude - sim.altitude_rs(), sim.vertical_velocity_rs()));
 				sim.step(cmd.map(|v| v as f32));
 			}
 		}

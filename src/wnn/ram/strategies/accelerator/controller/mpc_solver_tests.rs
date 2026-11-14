@@ -67,6 +67,7 @@ fn regime(xy: f32, steps: usize, expert_drives: bool) -> RewardGatedConfigPacked
 		dist_motor_asym_mag: 0.0,
 		write_vote: false, vote_share: None, dagger_label_estimate: false,
 		init_vxy: 0.0,
+		alt_integral: 0,
 	}
 }
 

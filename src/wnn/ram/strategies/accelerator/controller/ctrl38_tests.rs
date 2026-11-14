@@ -83,6 +83,12 @@ pub(crate) fn obs_student(sn: usize, ar: usize, seed: u64, rate_i: bool, dhat: b
 /// CTRL-48: obs_student + the residual block (a3).
 pub(crate) fn obs_student3(sn: usize, ar: usize, seed: u64, rate_i: bool, dhat: bool, resid: bool) -> WnnController
 {
+	obs_student3_mode(sn, ar, seed, rate_i, dhat, resid, ram_core::neuron_memory::BINARY)
+}
+
+/// obs_student3 in memory mode `mode` (BINARY decodes antagonist, as production).
+pub(crate) fn obs_student3_mode(sn: usize, ar: usize, seed: u64, rate_i: bool, dhat: bool, resid: bool, mode: u8) -> WnnController
+{
 	let (levels, window, obpn, sbpn) = (8usize, 2usize, 10usize, 6usize);
 	let base_nf = 9 + 2 + 2 + 2 + 3 + 4;
 	let nf = base_nf + 3 * (rate_i as usize) + 3 * (dhat as usize) + 3 * (resid as usize);
@@ -96,7 +102,7 @@ pub(crate) fn obs_student3(sn: usize, ar: usize, seed: u64, rate_i: bool, dhat: 
 		true, 0.1, 0.95, 1.0,
 		false, false, true, true, false, false, true, true,
 		0.99, 1.0, crate::abi38_pins::DT, false, ar,
-		ram_core::neuron_memory::BINARY, Some(crate::cell_mode::DECODE_ANTAGONIST), None, 0.05, false, 0.30,
+		mode, (mode == ram_core::neuron_memory::BINARY).then_some(crate::cell_mode::DECODE_ANTAGONIST), None, 0.05, false, 0.30,
 		true, true, true, true, true, false, 1,
 	)
 	.expect("ctrl38 student must construct");

@@ -175,6 +175,7 @@ pub(crate) fn stage2() -> Stage1Cfg
 		init_y: (0..EPS).map(|e| -0.45 + 0.3 * e as f32).collect(),
 		plant: crate::plant_opts::PlantOpts::OFF,
 		att_ref: crate::att_err_ref::AttErrRef::tilt(G as f64, 1.0, 1.0, 0.5236).unwrap(),
+		alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 	};
 	c.validate(EPS).expect("abi38 stage-2 fixture must validate");
 	c
@@ -182,7 +183,7 @@ pub(crate) fn stage2() -> Stage1Cfg
 
 pub(crate) const ASYM: [f32; 4] = [1.12, 0.9, 1.05, 0.95];
 
-pub(crate) fn cpu_rows(c: &WnnController, steps: usize, lag: f32) -> [f64; 17]
+pub(crate) fn cpu_rows(c: &WnnController, steps: usize, lag: f32) -> [f64; 19]
 {
 	let (q0, w0) = ics();
 	let s1 = stage2();
@@ -225,6 +226,9 @@ pub(crate) fn gpu_rows(c: &WnnController, steps: usize, lag: f32) -> Option<Vec<
 
 fn rows_digest(r: &[f64]) -> u64
 {
+	// ABI 51 appended the hold-window column: the pinned digests cover the metrics
+	// that existed when they were captured (the first PRE_ABI51_ROW_METRICS).
+	let r = &r[..r.len().min(crate::cpu_score::PRE_ABI51_ROW_METRICS)];
 	let mut h = Fnv::new();
 	h.f64s(r);
 	h.0
@@ -244,8 +248,9 @@ pub(crate) fn rival(teacher: u8, lag: f32) -> (f64, f64, f64, f64, f64, f64, f64
 		true, 0.0, s1.init_z.clone(), s1.init_vz.clone(), s1.mass.clone(), s1.collective_frac.clone(),
 		2.0, 1.0, 0.25,
 		s1.init_x.clone(), s1.init_y.clone(), 1.0, 1.0, 0.5236,
-		lag, false, 0.0, true, 0,
+		lag, false, 0.0, true, 0, 0,
 	)
+	.map(crate::dagger_train::rival_first8)
 	.expect("rival must score")
 }
 

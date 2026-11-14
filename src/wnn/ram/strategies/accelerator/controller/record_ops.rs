@@ -91,6 +91,11 @@ pub struct CascadeDriver<'a>
 	/// ABI 38: the teacher's cascade as it FLIES — its motor command, or for a CTBR
 	/// student its CTBR label through the student's own inner stage.
 	pub pilot: crate::episode_regime::ExpertPilot,
+	/// L3 (ABI 51): the episode's altitude integrator (OFF unless cfg.alt_integral)
+	/// and this step's altitude-law inputs, sensed once at the start-of-step snapshot
+	/// (`sense`) for both the student's alt_err observation and the flown cascade.
+	alt_int: crate::altitude_integrator::AltitudeIntegrator,
+	alt_law: (f32, f32),
 }
 
 impl<'a> CascadeDriver<'a>
@@ -105,7 +110,16 @@ impl<'a> CascadeDriver<'a>
 			cfg,
 			last_applied: [0.5; 4],
 			pilot: crate::episode_regime::ExpertPilot::for_controller(student),
+			alt_int: crate::episode_regime::alt_integrator_for(cfg),
+			alt_law: (0.0, 0.0),
 		}
+	}
+
+	/// L3: sense this step's altitude-law inputs (advances the integrator once).
+	fn sense(&mut self, sim: &AttitudeSim) -> (f32, f32)
+	{
+		self.alt_law = crate::episode_regime::sense_altitude(&mut self.alt_int, sim, self.cfg.target_altitude);
+		self.alt_law
 	}
 
 	fn drive(&mut self, sim: &mut AttitudeSim, q: [f32; 4], gyro: [f32; 3], target: [f32; 3]) -> [f32; 4]
@@ -113,7 +127,7 @@ impl<'a> CascadeDriver<'a>
 		self.teacher.observe(gyro, self.last_applied.map(|v| v as f64));
 		let pwm = self
 			.pilot
-			.command(&self.loops, self.teacher, sim, q, gyro, target, self.cfg.target_altitude)
+			.command(&self.loops, self.teacher, sim, q, gyro, target, self.alt_law)
 			.1
 			.map(|v| v as f32);
 		sim.step(pwm);
@@ -156,9 +170,26 @@ impl Driver<'_>
 			{
 				c.teacher.reset();
 				c.pilot.reset();
+				c.alt_int.reset();
 				c.last_applied = [0.5; 4];
 			}
 			Driver::Alloc(_) => {}
+		}
+	}
+	/// L3: the training cascade senses its altitude-law inputs once per step, BEFORE
+	/// the student's observation is set and before `drive`. Some(alt_err_eff) only
+	/// when its integrator is on — the value the student's alt_err observation must
+	/// carry; None keeps the recorder's own (target − z), bit-identically.
+	fn sense_altitude(&mut self, sim: &AttitudeSim) -> Option<f32>
+	{
+		match self
+		{
+			Driver::Cascade(c) =>
+			{
+				let law = c.sense(sim);
+				c.alt_int.is_on().then_some(law.0)
+			}
+			_ => None,
 		}
 	}
 	/// Whether this driver is the training cascade (it seeds the yaw anchor from
@@ -270,6 +301,8 @@ fn run_episode<F: FnMut(&WnnController, &[f32])>(
 			break;
 		}
 		let (gyro, accel) = sim.read_imu();
+		// L3: the cascade's altitude-law inputs for this step (integrator advanced once).
+		let alt_err_eff = driver.sense_altitude(sim);
 		// STAGE 1: same start-of-step snapshot the IMU is read at, matching
 		// cpu_score::score_one so the recorded addresses are the ones scoring
 		// will actually visit.
@@ -277,7 +310,7 @@ fn run_episode<F: FnMut(&WnnController, &[f32])>(
 		{
 			c.set_vertical_obs(
 				s.cfg.collective_pwm(ep, s.gravity, s.k_thrust),
-				s.cfg.target_altitude - sim.altitude_rs(),
+				alt_err_eff.unwrap_or(s.cfg.target_altitude - sim.altitude_rs()),
 				sim.vertical_velocity_rs(),
 			);
 			// G2: the live horizontal observation (zeros while xy is unarmed —
@@ -490,6 +523,7 @@ mod tests
 			init_y: vec![],
 			plant: crate::plant_opts::PlantOpts::OFF,
 			att_ref: crate::att_err_ref::AttErrRef::LEVEL,
+			alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 		};
 		cfg.validate(eps).expect("fixture must be well-formed");
 

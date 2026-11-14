@@ -180,7 +180,7 @@ def score_all(ec, draw: HoldoutDraw, feed: TeacherFeed = TeacherFeed()) -> dict:
 	# The plant the baselines fly MUST be the plant the WNN flies, or the
 	# comparison is between two different aircraft. AXIS F: that includes the
 	# actuator lag (motor_lag_kwargs — empty when the axis is off).
-	fields = {**fields, **ec.airframe_kwargs(), **ec.motor_lag_kwargs(),
+	fields = {**fields, **ec.airframe_kwargs(), **ec.motor_lag_kwargs(), **ec.alt_integral_kwargs(),
 	          **feed.fields(), **_stage1_fields(ec, draw), **_abi32_fields(ec)}
 	out = {}
 	for tid, name in _NAMES.items():
@@ -221,7 +221,8 @@ def teacher_metrics(ec, draw: HoldoutDraw, feed: TeacherFeed, teacher_id: int,
 	from ._accel import score_classical_baseline
 	q0, w0, fields = _episode_fields(ec, draw)
 	s1 = _stage1_fields(ec, draw)
-	fields = {**fields, **ec.airframe_kwargs(), **ec.motor_lag_kwargs(), **feed.fields(), **s1,
+	fields = {**fields, **ec.airframe_kwargs(), **ec.motor_lag_kwargs(), **ec.alt_integral_kwargs(),
+	          **feed.fields(), **s1,
 	          **_abi32_fields(ec)}
 	# 6th value (21/08/2026): mean motor-command jerk, same definition as the
 	# WNN scorer's, so teacher and WNN jerk are directly comparable. Tolerate a
@@ -254,4 +255,8 @@ def teacher_metrics(ec, draw: HoldoutDraw, feed: TeacherFeed, teacher_id: int,
 	        # (7th/8th scorer values); None off translation or on an older wheel.
 	        "mean_dx_m": (float(_r[6]) if s1 and len(_r) > 7 else None),
 	        "mean_dy_m": (float(_r[7]) if s1 and len(_r) > 7 else None),
+	        # ABI 51 (block 10): the HOLD-window (last 20% of steps) 3-D position error
+	        # and |dz| (9th/10th scorer values); None off translation or on an older wheel.
+	        "mean_position_hold_m": (float(_r[8]) if s1 and len(_r) > 9 else None),
+	        "mean_dz_hold_m": (float(_r[9]) if s1 and len(_r) > 9 else None),
 	        "label": feed.label_for(name)}
