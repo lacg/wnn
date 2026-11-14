@@ -452,3 +452,18 @@ Disclosures required by §5 (descriptive, not rule inputs):
   against H1, but it is the prior the readout should state: a substitution-sized effect, closer to the AMBIGUOUS/REJECT
   rows of the §6 operating table than to ADOPT.
 - No TEST column was produced or read. The per-flow load log prints partition supports (row counts) only.
+
+## Note 14/11/2026 — the reporting cell stays `best_f1 · margin_val_cal` (Luiz)
+
+After seeing seed 1 (7567), Luiz asked why `best_f1 · margin_val_cal` is the cell, not the highest one
+(`best_ce · margin_fixed0` 95.06 macro-F1). Ruling: **leave `best_f1 · margin_val_cal`**, no amendment, no added
+secondary. Reasons recorded:
+- Choosing the highest of the 50 TEST cells (5 genome types × 10 threshold modes, spread 0.01–0.1 pp) after
+  seeing them is best-of-N selection on TEST — biased upwards by construction.
+- `best_f1` is chosen by the search on train folds only; `margin_val_cal` fits τ on VAL (Protocol v2), so
+  TEST is touched once. `train_cal` fits τ on data the RAM has memorised.
+- Luiz's view: `best_fitness` is the most principled genome (it is what the GA ranks by); `best_f1` is fine
+  too. Any change of reporting cell goes into a FUTURE cohort's prereg before it runs, never retro-fitted.
+- Seed-1 context (TEST, macro F1, C − A1): the sign is the same in all 15 cells
+  (train_cal / val_cal / τ=0 × 5 genomes), +0.02 to +0.13 pp; the prereg cell is +0.06, best_fitness·val_cal +0.02.
+- 95.06 is MACRO F1 (benign + attack averaged); its attack-class F1 is 90.49.
