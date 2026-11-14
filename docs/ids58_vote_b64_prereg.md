@@ -399,3 +399,56 @@ The live run (not executed) additionally:
 - requires another IDS flow to be running (7531 was running at the time of the dry run);
 - creates each flow by POST /api/flows with 2 experiments and verifies the count in the DB;
 - does PATCH queued, then POST /pause, then GET to confirm `paused`.
+
+## § VAL gate result (14/11/2026, ids-security)
+
+Run 14/11/2026 11:20-11:41 UTC on Luiz's approval of the same day, exactly as §5 fixes it. Worker ABI 29 (asserted
+in the probe). Construction path: `IdsEvaluatorFactory.load` → `IdsEvaluatorFactory._evaluator` → `IDSEvaluator`
+(`IDSCacheWrapper`), with the write rule taken from the flow settings (lattice as flown, `balance_classes=true`; vote
+θ=0.02 with `balance_classes=false`). Training, scoring and the cell export are Rust (`evaluate_multiclass_at_thresholds`,
+`export_trained`). Every evaluator was built on a VAL-as-eval view of the dataset, so the TEST partition was never
+scored. `nice -n 10`, `RAYON_NUM_THREADS=4`. The worker, the flows and `logs/ids/ids_sequencer.sh` were not touched.
+Scratch probe `/tmp/ids58/gate.py` (not committed); raw rows `/tmp/ids58/g_<flow>.jsonl`.
+
+Genomes: GA (`ga_neurons`) `best_f1`, `test_point='final'` (genome hash only was read from `test_summaries`).
+VAL numbers: mode `margin_val_cal` (τ fitted on VAL, scored on VAL; VAL support 152,391 benign / 6,035 attack).
+Changed cells: per logical neuron, union of exported keys, absent key = miss cell (0); the share is of the lattice
+retrain's written cells. In every genome, every changed cell is a lattice TRUE that the vote leaves unwritten.
+
+```
+role         | flow | seed   | bits  | neur | lattice VAL      | vote θ=0.02 VAL  | dF1 pp  | dFPR pp | changed | of written      | neurons
+             |      |        |       |      | F1 %     FPR %   | F1 %     FPR %   |         |         | cells   | cells (frac)    | touched
+-------------+------+--------+-------+------+------------------+------------------+---------+---------+---------+-----------------+--------
+A1 64b gate  | 7546 | r20421 | 61-63 | 499  | 95.3080  0.2526  | 95.3587  0.2717  | +0.0507 | +0.0190 | 1,539   | 1,970,635 0.078% | 294
+A1 64b gate  | 7547 | r20422 | 60-63 | 499  | 95.2718  0.2382  | 95.3171  0.2605  | +0.0453 | +0.0223 | 1,586   | 1,942,165 0.082% | 289
+A1 64b gate  | 7548 | r20423 | 61-63 | 496  | 95.3584  0.2756  | 95.3906  0.2914  | +0.0322 | +0.0157 | 1,520   | 1,981,177 0.077% | 283
+-------------+------+--------+-------+------+------------------+------------------+---------+---------+---------+-----------------+--------
+L 34b ref    | 7509 | r20421 | 34    | 493  | 94.7628  0.1870  | 95.0826  0.2257  | +0.3198 | +0.0387 | 1,570   |   710,285 0.221% | 354
+L 34b ref    | 7513 | r20422 | 34    | 499  | 94.7295  0.2139  | 95.1889  0.2454  | +0.4593 | +0.0315 | 1,728   |   658,328 0.263% | 382
+L 34b ref    | 7517 | r20423 | 34    | 497  | 94.7204  0.1851  | 95.0338  0.2179  | +0.3134 | +0.0328 | 1,647   |   628,328 0.262% | 383
+-------------+------+--------+-------+------+------------------+------------------+---------+---------+---------+-----------------+--------
+mean 64b     |      |        |       |      |                  |                  | +0.0427 | +0.0190 | 1,548   | 0.079%          |
+mean 34b     |      |        |       |      |                  |                  | +0.3642 | +0.0343 | 1,648   | 0.249%          |
+```
+
+VAL TPR (attack recall, lattice → vote): 7546 88.75 → 89.33, 7547 88.32 → 88.95, 7548 89.41 → 89.86 (34b reference:
+7509 85.52 → 87.41, 7513 85.97 → 88.19, 7517 85.34 → 87.08).
+
+Rule application (§5, first match decides nothing; both conditions checked):
+- **Inert** (zero changed cells on all three A1 genomes): NO. The vote changes 1,539 / 1,586 / 1,520 cells.
+- **Harmful** (on ≥ 2/3 genomes, VAL dF1 ≤ 0 OR VAL dFPR > +0.15 pp): NO. 0/3 genomes meet either condition
+  (dF1 +0.032 to +0.051, all > 0; dFPR +0.016 to +0.022, all ≤ +0.15).
+
+**Verdict: PASS.** The arm is not withdrawn. Release of the three paused C flows stays Luiz's go (§9). θ is unchanged
+(0.02); the gate tuned nothing.
+
+Disclosures required by §5 (descriptive, not rule inputs):
+- **Activity fraction vs the 34-bit reference.** At 64 bits the vote touches 0.079% of written cells against 0.249% at
+  34 bits: 31.7% of the reference. That is above the 10% line in §5, so no substitution-prior note is mandated.
+  In absolute terms the vote changes about as many cells at 64 bits (mean 1,548) as at 34 bits (mean 1,648).
+- **Effect size on VAL.** On these lattice-evolved genomes the vote's VAL dF1 at 64 bits (mean +0.043 pp) is about
+  one eighth of the 34-bit reference (+0.364 pp), and below the §6.1 win threshold (+0.05) on 2 of 3 genomes. This is a
+  necessary-condition check on genomes C's GA will not pick (§5, "what the gate cannot do"); it is not evidence for or
+  against H1, but it is the prior the readout should state: a substitution-sized effect, closer to the AMBIGUOUS/REJECT
+  rows of the §6 operating table than to ADOPT.
+- No TEST column was produced or read. The per-flow load log prints partition supports (row counts) only.
