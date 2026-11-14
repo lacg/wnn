@@ -29,6 +29,7 @@ import numpy as np
 D = "/Users/lacg/wnn/logs/controller/ctrl48/"
 STAGE = {"GRID": "stage0_grid", "NEURONS": "stage1_neurons", "MEMORY": "stage4_memory"}
 TRACE_W = 26
+EXTRA_FEATURES = ("roll_err", "pitch_err", "roll_i", "pitch_i", "yaw_err", "yaw_err_i", "cresid_x", "cresid_y", "cresid_z", "gyro_z")
 
 
 def run_args(tag):
@@ -61,7 +62,7 @@ def rp_to_quat(roll, pitch):
 	return [cr * cp, sr * cp, cr * sp, -sr * sp]
 
 
-def replay(RC, c, q0, w0, n_eps, steps, k, ui, n_trace):
+def replay(RC, c, q0, w0, n_eps, steps, k, ui, n_trace, extra_idx=()):
 	sim = RC.AttitudeSim(dt=k.get("dt", 0.001), arm_length=k["arm_length"], k_thrust=k["k_thrust"], k_drag=k["k_drag"],
 	                     inertia=list(k["inertia"]), gravity=k["gravity"])
 	if k.get("motor_lag_s", 0.0) > 0:
@@ -131,7 +132,7 @@ def replay(RC, c, q0, w0, n_eps, steps, k, ui, n_trace):
 				ax[3] += abs(x); ax[4] += abs(y); ax[5] += abs(dz)
 				et = euler(sim.quaternion); ee = euler(qe)
 				rows.append([ui, ep, t, err, et[0] - rr, et[1] - rp, et[2], ee[0] - rr, ee[1] - rp, ee[2], rr, rp, x, y, vx, vy, dz,
-				             fv[-2], fv[-1]])
+				             fv[-2], fv[-1], *[fv[i] for i in extra_idx]])
 		n = max(ec_, 1)
 		eps.append([ui, ep, ts / tc if tc else float("nan"), es / n, ec_, sum(p5) / n,
 		            *[p5[i] / n5[i] if n5[i] else float("nan") for i in range(5)],
@@ -160,6 +161,12 @@ def main():
 	units = val_units(args.units_from)
 	print(f"[trace] {args.tag} headline {g} out_neurons={genome.output_neurons} bits={genome.output_bits_per_neuron} "
 	      f"on {len(units)} VAL units {units[0]}..{units[-1]}", flush=True)
+	# Block-10 pre-check: the student's own input VALUES in the hold (appended to rows after
+	# abp_r, abp_p, in this order), read from the feature vector by name.
+	from wnn.control.feature_layout import feature_names
+	names = feature_names(spec)
+	extra = [n for n in EXTRA_FEATURES if n in names]
+	extra_idx = tuple(names.index(n) for n in extra)
 	cap = {}
 	real = A.score_controllers_cpu
 
@@ -178,7 +185,7 @@ def main():
 		assert len(cap["calls"]) == 1, len(cap["calls"])
 		c, aa, k = cap["calls"][0]
 		k = {**{"dt": 0.001, "dist_seed": 0}, **k}
-		rows, eps, tr = replay(RC, c, aa[0], aa[1], aa[2], aa[3], k, ui, args.trace_episodes)
+		rows, eps, tr = replay(RC, c, aa[0], aa[1], aa[2], aa[3], k, ui, args.trace_episodes, extra_idx)
 		rs = math.degrees(float(np.nanmean(eps[:, 2])))
 		assert abs(rs - m.mean_steady_error_deg) < 0.005, (unit, rs, m.mean_steady_error_deg)
 		R.append(rows); E.append(eps); T.append(tr)
@@ -186,7 +193,7 @@ def main():
 		print(f"[trace] unit {unit}: scorer stable {m.acc*100:.1f}% err {m.mean_attitude_error_deg:.3f} steady "
 		      f"{m.mean_steady_error_deg:.4f} | replay steady {rs:.4f}", flush=True)
 	np.savez(args.out + ".npz", rows=np.vstack(R).astype(np.float32), eps=np.vstack(E), scorer=np.array(S),
-	         units=np.array(units), out_neurons=genome.output_neurons)
+	         units=np.array(units), out_neurons=genome.output_neurons, extra=np.array(extra))
 	np.vstack(T).astype("<f4").tofile(args.out + ".trace.f32")
 	S = np.array(S)
 	print(f"[trace] VAL mean: stable {S[:,1].mean()*100:.2f}% err {S[:,2].mean():.3f} steady {S[:,3].mean():.3f}", flush=True)

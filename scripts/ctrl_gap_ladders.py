@@ -24,6 +24,7 @@ for s in (1, 2, 3):
 	thr = thr.reshape(len(names), per)
 	if s == 1:
 		print("features:", names, "cuts/feature:", per)
+	np.savez(f"/tmp/ctrl_gap/ladders_s{s}.npz", names=np.array(names), thr=thr)
 	for i, n in enumerate(names):
 		t = np.sort(thr[i])
 		if n in ("e_x", "e_y", "v_x", "v_y", "tgt_r", "tgt_p", "roll_err", "pitch_err", "yaw_err", "yaw_err_i", "abp_r", "abp_p"):

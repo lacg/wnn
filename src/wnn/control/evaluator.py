@@ -33,7 +33,7 @@ import numpy as np
 
 from wnn.control._accel import AttitudeSim, WnnController
 
-from .feature_layout import YAW_ERROR_FEATURES, feature_layout
+from .feature_layout import TILT_ERROR_FEATURES, YAW_ERROR_FEATURES, YAW_INTEGRAL_FEATURES, feature_layout
 from .threshold_calibration import CalibrationFit, ThresholdCalibration
 from .pid import AttitudePID, AttitudePIDConfig
 from .training import (
@@ -693,8 +693,59 @@ def _yaw_centred_thresholds(arr: np.ndarray, bpf: int, outer_quantile) -> np.nda
 	return np.concatenate([-mags[::-1], zeros, mags])
 
 
+# Block 10 (docs/ctrl48_block10_levers_spec.md): the DENSE ladder's fixed inner cuts, in
+# radians. Tilt (L1): the offsets to resolve are 0.1-0.5 deg. Yaw (L2): +-0.10, +-0.25 deg.
+DENSE_TILT_INNER_RAD = tuple(float(np.radians(d)) for d in (0.08, 0.20, 0.45))
+DENSE_YAW_INNER_RAD = tuple(float(np.radians(d)) for d in (0.10, 0.25))
+
+
+def _dense_thresholds(arr: np.ndarray, bpf: int, inner, outer_quantile) -> np.ndarray:
+	"""Block-10 DENSE ladder for a zero-referenced input: h = bpf//2 symmetric pairs and,
+	on an odd ladder only, one cut at 0 (an even ladder spends no cut on 0 — the dead
+	band is +-inner[0]). The first pairs are the FIXED `inner` magnitudes (hold-scale
+	resolution, which a quantile fit on a transient-dominated distribution does not
+	give); the remaining pairs are |x| quantiles of the samples beyond the last fixed
+	cut, evenly spaced in mass up to the quantile ladder's outer mass 1 - 2*q0."""
+	q0 = float(outer_quantile) if outer_quantile is not None else 1.0 / (bpf + 1)
+	h = bpf // 2
+	mags = [float(m) for m in inner[:h]]
+	rest = h - len(mags)
+	if rest > 0:
+		tail = np.abs(arr)[np.abs(arr) > mags[-1]] if mags else np.abs(arr)
+		ps = (np.arange(1, rest + 1) / rest) * (1.0 - 2.0 * q0)
+		outer = np.quantile(tail, ps) if tail.size else np.array([])
+		last = mags[-1] if mags else 0.0
+		for j in range(rest):
+			# Strictly increasing even on a degenerate tail (no samples / ties): double.
+			cand = float(outer[j]) if j < len(outer) else 0.0
+			last = cand if cand > last * (1.0 + 1e-9) and cand > 0.0 else (2.0 * last if last > 0.0 else 1.0)
+			mags.append(last)
+	mags = np.asarray(mags)
+	mid = [0.0] if bpf % 2 else []
+	return np.concatenate([-mags[::-1], mid, mags])
+
+
+def _yaw_integral_gain(spec) -> float:
+	"""Steady-state value of a yaw-integral input per radian of held yaw error:
+	integral_scale / (1 - leak) (the leaky sum compute_features builds)."""
+	leak = getattr(spec, "yaw_integral_leak", None)
+	leak = float(spec.integral_leak if leak is None else leak)
+	return float(spec.integral_scale) / max(1.0 - leak, 1e-9)
+
+
+def _dense_inner_for(name: str, spec, yaw_dense: bool, tilt_dense: bool):
+	"""The fixed inner cuts of feature `name` under the block-10 dense ladders, or None."""
+	if yaw_dense and name in YAW_ERROR_FEATURES:
+		gain = _yaw_integral_gain(spec) if name in YAW_INTEGRAL_FEATURES else 1.0
+		return tuple(c * gain for c in DENSE_YAW_INNER_RAD)
+	if tilt_dense and name in TILT_ERROR_FEATURES:
+		return DENSE_TILT_INNER_RAD
+	return None
+
+
 def _thresholds_from_samples(samples_per_feature, spec, method, outer_quantile, extra_samples,
-                             ladder: str = "quantile", yaw_centred: bool = False) -> list[float]:
+                             ladder: str = "quantile", yaw_centred: bool = False,
+                             yaw_dense: bool = False, tilt_dense: bool = False) -> list[float]:
 	"""Per-feature thermometer thresholds from the sampled operating distribution
 	(base 9 + enabled H2 extras) — shared by the Python reference-rollout fitter and
 	the Rust training-cascade sampler (CTRL-17 G1). ladder="centred" (CTRL-48) swaps
@@ -704,6 +755,8 @@ def _thresholds_from_samples(samples_per_feature, spec, method, outer_quantile, 
 	bpf = spec.bits_per_feature
 	zero_ref = [d.zero_ref for d in feature_layout(spec)] if ladder == "centred" else [False] * nf
 	yaw_c = [d.name in YAW_ERROR_FEATURES for d in feature_layout(spec)] if yaw_centred else [False] * nf
+	dense_inner = [_dense_inner_for(d.name, spec, yaw_dense and yaw_centred, tilt_dense)
+	               for d in feature_layout(spec)] if (yaw_dense or tilt_dense) else [None] * nf
 	thresholds = []
 	for f in range(nf):
 		# STUDENT STATES (option A, 10/08/2026). The fitter rolls out PID — a BETTER
@@ -721,7 +774,9 @@ def _thresholds_from_samples(samples_per_feature, spec, method, outer_quantile, 
 		if arr.size == 0:
 			# Feature never observed (constant target?). Fall back to [-1, 1] linear.
 			arr = np.array([-1.0, 1.0])
-		if method == "quantile" and yaw_c[f]:
+		if method == "quantile" and dense_inner[f] is not None:
+			ts = _dense_thresholds(arr, bpf, dense_inner[f], outer_quantile)
+		elif method == "quantile" and yaw_c[f]:
 			ts = _yaw_centred_thresholds(arr, bpf, outer_quantile)
 		elif method == "quantile" and zero_ref[f]:
 			ts = _centred_thresholds(arr, bpf, outer_quantile)
@@ -796,7 +851,8 @@ def fit_calibration(
 	extra = _pooled_extra_samples(spec, cal, extra_samples)
 	samples = _calibration_samples(spec, cal, seed, geometry, alloc, episode_config)
 	thresholds = _thresholds_from_samples(samples, spec, method, cal.outer_quantile, extra,
-	                                      ladder=cal.ladder, yaw_centred=cal.yaw_centred)
+	                                      ladder=cal.ladder, yaw_centred=cal.yaw_centred,
+	                                      yaw_dense=cal.yaw_dense, tilt_dense=cal.tilt_dense)
 	return CalibrationFit(thresholds=thresholds,
 	                      constant_features=_zero_spread_features(samples, extra))
 

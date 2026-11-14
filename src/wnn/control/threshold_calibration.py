@@ -52,6 +52,13 @@ class ThresholdCalibration:
 	# take the yaw-centred ladder — 0 a bin edge, symmetric, finest near 0 — whatever
 	# `ladder` is; every other feature is untouched. False = byte-identical.
 	yaw_centred: bool = False
+	# Block 10 L2 (--yaw-centred-ladder dense): the yaw-error inputs take the DENSE
+	# ladder (fixed inner cuts, no cut at 0 on an even ladder) instead of the
+	# quantile-centred one. Needs yaw_centred. False = byte-identical.
+	yaw_dense: bool = False
+	# Block 10 L1 (--tilt-err-ladder dense, with --obs-tilt-ref-err): roll_err /
+	# pitch_err take the DENSE ladder. False = byte-identical.
+	tilt_dense: bool = False
 	student_samples: tuple | None = field(default=None, repr=False)
 
 	def __post_init__(self):
@@ -61,6 +68,8 @@ class ThresholdCalibration:
 			raise ValueError(f"calibration regime {self.regime!r} — one of {list(CALIB_REGIMES)}")
 		if self.ladder not in CALIB_LADDERS:
 			raise ValueError(f"calibration ladder {self.ladder!r} — one of {list(CALIB_LADDERS)}")
+		if self.yaw_dense and not self.yaw_centred:
+			raise ValueError("calibration yaw_dense is an option of the yaw-centred ladder (yaw_centred=True)")
 		if self.outer_quantile is not None and not 0.0 < float(self.outer_quantile) < 0.5:
 			raise ValueError(f"calibration outer_quantile must be in (0, 0.5) (got {self.outer_quantile})")
 		if self.student_samples is not None and not self.student_sample_count():
@@ -87,7 +96,9 @@ class ThresholdCalibration:
 		if self.outer_quantile is not None:
 			base = f"{base},outerq:{float(self.outer_quantile):g}"
 		if self.yaw_centred:
-			base = f"{base},yaw:centred"
+			base = f"{base},yaw:{'dense' if self.yaw_dense else 'centred'}"
+		if self.tilt_dense:
+			base = f"{base},tilt:dense"
 		return base if self.student_samples is None else f"{base},student:{self.student_sample_count()}"
 
 
@@ -110,6 +121,9 @@ def calibration_from_args(args) -> ThresholdCalibration:
 		full_tilt_deg=float(getattr(args, "rg_full_tilt_deg", 30.0)),
 		outer_quantile=getattr(args, "threshold_outer_quantile", None),
 		yaw_centred=bool(getattr(args, "yaw_centred_ladder", False)),
+		yaw_dense=getattr(args, "yaw_centred_ladder", None) == "dense",
+		tilt_dense=bool(getattr(args, "obs_tilt_ref_err", False))
+		and getattr(args, "tilt_err_ladder", "dense") == "dense",
 		# Set by phased_ga's refit (_refit_thresholds_from_student) once the grid winner
 		# has been rolled out; every later fit site reads it from here.
 		student_samples=getattr(args, "_threshold_refit_samples", None),

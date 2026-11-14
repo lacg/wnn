@@ -3220,12 +3220,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                help="CTRL-48: quantile (legacy) or centred = symmetric +-Q_|x|(p) thresholds, p on a "
 	                     "^1.5 curve (finer near 0), for the zero-referenced features only "
 	                     "(feature_layout.ZERO_REFERENCED); the rest keep quantile.")
-	ap.add_argument("--yaw-centred-ladder", action="store_true",
+	ap.add_argument("--tilt-err-ladder", choices=["quantile", "dense"], default="dense",
+	                help="Block 10 L1 (with --obs-tilt-ref-err only): the ladder of roll_err / pitch_err. dense "
+	                     "(default) = symmetric pairs with FIXED inner cuts at +-0.08, +-0.20, +-0.45 deg and the "
+	                     "remaining pair(s) at |x| quantiles; quantile = the feature's usual ladder.")
+	ap.add_argument("--yaw-centred-ladder", nargs="?", const="quantile", default=None, choices=["quantile", "dense"],
 	                help="ARM 2 (Luiz 12/11/2026, docs/ctrl_steady_gap_block6.md §3-4): the yaw-ERROR inputs "
 	                     "ONLY (yaw_err, yaw_err_i, and yaw_err_pa / yaw_i_pa when present) take a centred "
 	                     "ladder with 0 ALWAYS a bin edge: symmetric +-Q_|x|(p) pairs on the ^1.5 curve (finest "
 	                     "near 0), a second 0 threshold filling the even-bpf slot. Every other feature keeps "
-	                     "its ladder (--calib-ladder). Applies to every fit: grid, held-out/test refits and the "
+	                     "its ladder (--calib-ladder). Block 10 L2: `--yaw-centred-ladder dense` replaces the "
+	                     "quantile pairs near 0 by FIXED cuts at +-0.10, +-0.25 deg (integral inputs: scaled by "
+	                     "their steady-state gain) and spends no cut on 0; no value = quantile = the ARM-2 ladder. "
+	                     "Applies to every fit: grid, held-out/test refits and the "
 	                     "student refit. Off (default) = byte-identical. A new lineage: thresholds are part of "
 	                     "the address function.")
 	ap.add_argument("--drop-features", type=str, default="",
