@@ -47,6 +47,7 @@ fn via_ctor(tilt_ref_err: Option<(f32, f32, f32, f32)>) -> WnnController
 		None,
 		true, None,
 		tilt_ref_err,
+		false, // obs_yaw_trim_err (L2y)
 	)
 	.expect("ctor")
 }
@@ -92,6 +93,8 @@ fn controller_default_is_the_abi50_controller()
 	let (mut a, mut b) = (via_ctor(None), via_abi50_path());
 	assert_eq!(a.obs_tilt_ref_err(), None);
 	assert_eq!(a.tilt_ref_err_shape(), None);
+	assert_eq!(a.obs_yaw_trim_err(), None, "L2y default off");
+	assert_eq!(a.yaw_trim_kappa(), None);
 	assert_eq!(trace(&mut a, 500), trace(&mut b, 500), "the default-constructed controller is not the ABI-50 one");
 	let mut on = via_ctor(Some((9.81, 1.0, 1.0, 0.5236)));
 	assert_eq!(on.obs_tilt_ref_err(), Some((9.81, 1.0, 1.0, 0.5236)));

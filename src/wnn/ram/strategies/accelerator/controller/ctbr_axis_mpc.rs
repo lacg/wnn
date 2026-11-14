@@ -215,6 +215,15 @@ impl CtbrAxisMpc
 		}
 	}
 
+	/// The unconstrained law's FIRST setpoint as a row over the shifted state x̃0:
+	/// sp = row · x̃0 (box inactive) — the linear gains the L2y input is built from
+	/// (yaw_trim_err.rs).
+	pub(crate) fn gain_row(plant: &AxisPlant, n_o: usize, phase: u32, w: AxisWeights, horizon: usize, bound: f64) -> [f64; NS]
+	{
+		let m = CtbrAxisMpc::build(plant, n_o, phase, w, horizon, bound);
+		std::array::from_fn(|j| m.ustar_map.get(0, j))
+	}
+
 	pub(crate) fn reset(&mut self)
 	{
 		self.warm.iter_mut().for_each(|v| *v = 0.0);

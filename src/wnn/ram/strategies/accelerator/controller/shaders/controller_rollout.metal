@@ -306,6 +306,11 @@ struct Params
 	float tre_omega;
 	float tre_zeta;
 	float tre_max_tilt;
+	// L2y of block 10 (ABI 51), appended in lockstep: the yaw error measured against the
+	// trim-shifted target, target2 − yte_kappa·cresid_z (yaw_trim_err.rs twin). cresid_z is
+	// the residual block's last slot. 0 ⇒ target − heading.
+	uint yte_on;
+	float yte_kappa;
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -1769,6 +1774,12 @@ kernel void controller_rollout(
 		// command the plant received last step (pwm_applied) — before derive_features.
 		if (CAS_OBS && (P.cas_rate_i != 0u || P.cas_dhat != 0u || P.cas_resid != 0u))
 			cas_step(P, sensors, cas_o, ctbr_st, pwm_applied);
+		// L2y of block 10: the yaw target the step's yaw error is measured against, from
+		// the residual cas_step just wrote (its last slot) — twin of
+		// YawTrimErr::effective_target. Before derive_features, inside the cascade
+		// specialization (the default pipeline's codegen is untouched).
+		if (CAS_OBS && P.yte_on != 0u)
+			F.target2 = P.target2 - P.yte_kappa * sensors[P.num_features - 2u * P.abp_on - 1u];
 
 		float pwm[MAX_ROTORS];
 		bool hold = (P.action_repeat > 1u) && (t % P.action_repeat != 0u);
@@ -2364,17 +2375,17 @@ kernel void controller_rollout(
 	// |altitude error| (m). Slots 1-2 are 0 when translation is off.
 	// Widened again 31/10/2026 (ABI 32): slots 3-4 = mean |x|, mean |y| (m).
 	// Widened again 14/11/2026 (ABI 51): slots 5-6 = the hold-window (t >= tail_start)
-	// mean 3-D position error and mean |dz| (m); an episode that never reached the
-	// window falls back to its whole-episode means, like out_steady.
+	// mean 3-D position error and mean |dz| (m). An episode that never reached the
+	// window writes HOLD_NOT_REACHED (−1, impossible for a mean of magnitudes) and the
+	// host leaves it out — the rival scorers' convention ("episodes that reached the
+	// window"); the fails are counted in their own column.
 	out_effort[idx * 7u] = steps > 0u ? (sum_effort / (float)steps) : 0.0f;
 	out_effort[idx * 7u + 1u] = steps > 0u ? (sum_poserr / (float)steps) : 0.0f;
 	out_effort[idx * 7u + 2u] = steps > 0u ? (sum_alterr / (float)steps) : 0.0f;
 	out_effort[idx * 7u + 3u] = steps > 0u ? (sum_dx / (float)steps) : 0.0f;
 	out_effort[idx * 7u + 4u] = steps > 0u ? (sum_dy / (float)steps) : 0.0f;
-	out_effort[idx * 7u + 5u] = tail_cnt > 0u ? (tail_pos / (float)tail_cnt)
-																						: (steps > 0u ? sum_poserr / (float)steps : 0.0f);
-	out_effort[idx * 7u + 6u] = tail_cnt > 0u ? (tail_dz / (float)tail_cnt)
-																						: (steps > 0u ? sum_alterr / (float)steps : 0.0f);
+	out_effort[idx * 7u + 5u] = tail_cnt > 0u ? (tail_pos / (float)tail_cnt) : -1.0f;
+	out_effort[idx * 7u + 6u] = tail_cnt > 0u ? (tail_dz / (float)tail_cnt) : -1.0f;
 	out_mono[idx] = mono_last;
 	// Diverged before reaching the tail window → no settled samples; fall back to
 	// the whole-episode mean (already a failing episode, just keep it finite).
@@ -2505,6 +2516,11 @@ struct TrainParams
 	float tre_omega;
 	float tre_zeta;
 	float tre_max_tilt;
+	// L2y of block 10 (ABI 51), appended in lockstep: the yaw error measured against the
+	// trim-shifted target, target2 − yte_kappa·cresid_z (yaw_trim_err.rs twin). cresid_z is
+	// the residual block's last slot. 0 ⇒ target − heading.
+	uint yte_on;
+	float yte_kappa;
 };
 
 // Mirror of WnnController::output_decode_target (controller.rs): map a per-motor
@@ -2720,6 +2736,9 @@ kernel void controller_train(
 			}
 			if (P.dhat_on != 0u || P.cas_rate_i != 0u || P.cas_dhat != 0u || P.cas_resid != 0u)
 				replay_applied_inputs(P, s3 / 3u, dhat_rec, cas_rec, sensors, dhat, dhat_have_last);
+			// L2y of block 10: the trim-shifted yaw target from the replayed residual.
+			if (P.yte_on != 0u)
+				F.target2 = P.target2 - P.yte_kappa * sensors[P.num_features - 2u * P.abp_on - 1u];
 			// CTRL-46: the recorded bias prediction into the sensors' tail.
 			if (P.abp_on != 0u)
 			{
@@ -2941,6 +2960,9 @@ kernel void controller_record(
 		}
 		if (P.dhat_on != 0u || P.cas_rate_i != 0u || P.cas_dhat != 0u || P.cas_resid != 0u)
 			replay_applied_inputs(P, s3 / 3u, dhat_rec, cas_rec, sensors, dhat, dhat_have_last);
+		// L2y of block 10: the trim-shifted yaw target from the replayed residual.
+		if (P.yte_on != 0u)
+			F.target2 = P.target2 - P.yte_kappa * sensors[P.num_features - 2u * P.abp_on - 1u];
 		// CTRL-46: the recorded bias prediction into the sensors' tail.
 		if (P.abp_on != 0u)
 		{

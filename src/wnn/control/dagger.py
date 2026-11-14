@@ -52,7 +52,7 @@ import numpy as np
 from wnn.control._accel import AttitudeSim, WnnController
 
 from .pid import AttitudePID, AttitudePIDConfig, PIDGains
-from .evaluator import ControllerSpec, NUM_FEATURES, tilt_ref_err_kw
+from .evaluator import ControllerSpec, NUM_FEATURES, tilt_ref_err_kw, yaw_trim_err_kw
 from .training import (
 	EpisodeConfig,
 	fitness_function,
@@ -405,6 +405,7 @@ def train_dagger(
 		obs_att_bias_pred=getattr(spec, 'obs_att_bias_pred', False),  # CTRL-46 (ABI 46)
 		yaw_integral_leak=getattr(spec, 'yaw_integral_leak', None),  # ARM 3 (ABI 50)
 		obs_tilt_ref_err=tilt_ref_err_kw(spec),  # block 10 L1 (ABI 51)
+		obs_yaw_trim_err=yaw_trim_err_kw(spec),  # block 10 L2y (ABI 51)
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 		dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt, integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,

@@ -31,6 +31,17 @@ use rayon::prelude::*;
 #[cfg(test)]
 pub(crate) const PRE_ABI51_ROW_METRICS: usize = 17;
 
+/// The Metal kernel's per-episode hold-window value for an episode that never reached
+/// the window (out_effort slots 5-6): −1, impossible for a mean of magnitudes.
+pub(crate) const HOLD_NOT_REACHED: f32 = -1.0;
+
+/// The hold-window column's aggregate: the mean over the `reached` episodes (the rival
+/// scorers' convention), NaN when no episode reached the window.
+pub(crate) fn hold_mean(sum: f64, reached: usize) -> f64
+{
+	if reached > 0 { sum / reached as f64 } else { f64::NAN }
+}
+
 /// Roll out ONE controller over `num_eps` episodes with EXPLICIT initial conditions
 /// (q0/omega0, same contract as score_controllers_metal) and return a 12-metric row.
 /// Mirrors eval_closed_loop_rs's inner loop; the caller supplies a clone it may mutate.
@@ -156,8 +167,10 @@ pub(crate) fn rollout_one(
 	let mut sum_dx = 0.0f64; // ABI 32: mean |x error| (m)
 	let mut sum_dy = 0.0f64; // ABI 32: mean |y error| (m)
 	// ABI 51 hold-window column (kernel twin): per-episode mean over t >= tail_start
-	// of the 3-D position error and of |dz|; 0 for an episode that never reached it.
-	let (mut sum_hold_pos, mut sum_hold_dz) = (0.0f64, 0.0f64);
+	// of the 3-D position error and of |dz|, averaged over the episodes that REACHED
+	// the window (the rival scorers' convention; NaN when none did). Fails are their
+	// own column (stable).
+	let (mut sum_hold_pos, mut sum_hold_dz, mut hold_eps) = (0.0f64, 0.0f64, 0usize);
 	let mut n_stable = 0usize;
 	// Transient/display metrics (20/07/2026): previously hardcoded 0.0 on this
 	// path, so any run with WNN_CONTROLLER_GPU_EVAL=0 reported steady=0.00° and
@@ -534,17 +547,13 @@ pub(crate) fn rollout_one(
 			sum_dx += ep_sum_dx / ep_steps as f64;
 			sum_dy += ep_sum_dy / ep_steps as f64;
 		}
-		// Hold window: diverged before reaching it ⇒ the whole-episode means (the
-		// kernel's `steady` fallback, so a failing episode stays finite and counted).
+		// Hold window: only an episode that reached it contributes (diverged before
+		// it ⇒ left out, as the rival scorers do; the kernel writes HOLD_NOT_REACHED).
 		if tail_cnt > 0
 		{
 			sum_hold_pos += tail_pos / tail_cnt as f64;
 			sum_hold_dz += tail_dz / tail_cnt as f64;
-		}
-		else if ep_steps > 0
-		{
-			sum_hold_pos += ep_sum_poserr / ep_steps as f64;
-			sum_hold_dz += ep_sum_alterr / ep_steps as f64;
+			hold_eps += 1;
 		}
 		sum_mono += mono_last;
 		// Steady: mean err over the tail-20% window. Diverged before reaching it
@@ -618,8 +627,8 @@ pub(crate) fn rollout_one(
 		sum_dy / n,
 		// ABI 51: appended — the hold-window position column: mean 3-D position
 		// error and mean |dz| (m) over t >= ceil(0.8·steps). 0.0 with translation off.
-		sum_hold_pos / n,
-		sum_hold_dz / n,
+		crate::cpu_score::hold_mean(sum_hold_pos, hold_eps),
+		crate::cpu_score::hold_mean(sum_hold_dz, hold_eps),
 	]
 }
 

@@ -33,7 +33,8 @@ import numpy as np
 
 from wnn.control._accel import AttitudeSim, WnnController
 
-from .feature_layout import TILT_ERROR_FEATURES, YAW_ERROR_FEATURES, YAW_INTEGRAL_FEATURES, feature_layout
+from .feature_layout import (TILT_ERROR_FEATURES, YAW_ERROR_FEATURES, YAW_INTEGRAL_FEATURES,
+                             YAW_PROPORTIONAL_FEATURES, feature_layout)
 from .threshold_calibration import CalibrationFit, ThresholdCalibration
 from .pid import AttitudePID, AttitudePIDConfig
 from .training import (
@@ -256,6 +257,10 @@ class ControllerSpec:
 	# bias-corrected error against the position loop's tilt reference. The value is
 	# that loop's shape (gravity, omega_n, zeta, max tilt rad); None = off, bit-identical.
 	obs_tilt_ref_err: tuple | None = None
+	# Block 10 L2y (--obs-yaw-trim-err, ABI 51): the yaw error inputs are measured against
+	# the yaw target shifted by the trim the cascade's yaw rate loop rides on
+	# (target − κ·cresid_z, κ derived in Rust from the ctbr contract). False = off.
+	obs_yaw_trim_err: bool = False
 	integral_scale: float = 1.0   # pre-threshold scale for integral features
 	dt: float = 0.001             # physics step (s); MUST match episode/plant dt (yaw integ.)
 	# H3 (18/06): the 4 output banks are CONTROLS [T, τ_roll, τ_pitch, τ_yaw] mixed to
@@ -665,10 +670,16 @@ def _feature_controller(spec: ControllerSpec) -> WnnController:
 		obs_att_bias_pred=getattr(spec, 'obs_att_bias_pred', False),  # CTRL-46 (ABI 46)
 		yaw_integral_leak=getattr(spec, 'yaw_integral_leak', None),  # ARM 3 (ABI 50)
 		obs_tilt_ref_err=tilt_ref_err_kw(spec),  # block 10 L1 (ABI 51)
+		obs_yaw_trim_err=yaw_trim_err_kw(spec),  # block 10 L2y (ABI 51)
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 		dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
 		integral_leak=spec.integral_leak, integral_scale=spec.integral_scale)
+
+
+def yaw_trim_err_kw(spec) -> bool:
+	"""Block 10 L2y: ControllerSpec.obs_yaw_trim_err as the bool the wheel takes."""
+	return bool(getattr(spec, "obs_yaw_trim_err", False))
 
 
 def tilt_ref_err_kw(spec) -> "tuple | None":
@@ -709,6 +720,10 @@ def _yaw_centred_thresholds(arr: np.ndarray, bpf: int, outer_quantile) -> np.nda
 # radians. Tilt (L1): the offsets to resolve are 0.1-0.5 deg. Yaw (L2): +-0.10, +-0.25 deg.
 DENSE_TILT_INNER_RAD = tuple(float(np.radians(d)) for d in (0.08, 0.20, 0.45))
 DENSE_YAW_INNER_RAD = tuple(float(np.radians(d)) for d in (0.10, 0.25))
+# L2y (--obs-yaw-trim-err): the trim-referenced yaw error spans the trim-equivalent angle
+# (|x| 97.5 % at 2.4-2.9 deg on the block-9 VAL flights), so its fixed cuts spread over
+# that range instead of crowding 0: +-0.25, +-0.75, +-1.50 deg.
+DENSE_YAW_TRIM_INNER_RAD = tuple(float(np.radians(d)) for d in (0.25, 0.75, 1.50))
 
 
 def _dense_thresholds(arr: np.ndarray, bpf: int, inner, outer_quantile) -> np.ndarray:
@@ -745,8 +760,10 @@ def _yaw_integral_gain(spec) -> float:
 	return float(spec.integral_scale) / max(1.0 - leak, 1e-9)
 
 
-def _dense_inner_for(name: str, spec, yaw_dense: bool, tilt_dense: bool):
+def _dense_inner_for(name: str, spec, yaw_dense: bool, tilt_dense: bool, yaw_trim_dense: bool = False):
 	"""The fixed inner cuts of feature `name` under the block-10 dense ladders, or None."""
+	if yaw_trim_dense and name in YAW_PROPORTIONAL_FEATURES:
+		return DENSE_YAW_TRIM_INNER_RAD
 	if yaw_dense and name in YAW_ERROR_FEATURES:
 		gain = _yaw_integral_gain(spec) if name in YAW_INTEGRAL_FEATURES else 1.0
 		return tuple(c * gain for c in DENSE_YAW_INNER_RAD)
@@ -757,7 +774,8 @@ def _dense_inner_for(name: str, spec, yaw_dense: bool, tilt_dense: bool):
 
 def _thresholds_from_samples(samples_per_feature, spec, method, outer_quantile, extra_samples,
                              ladder: str = "quantile", yaw_centred: bool = False,
-                             yaw_dense: bool = False, tilt_dense: bool = False) -> list[float]:
+                             yaw_dense: bool = False, tilt_dense: bool = False,
+                             yaw_trim_dense: bool = False) -> list[float]:
 	"""Per-feature thermometer thresholds from the sampled operating distribution
 	(base 9 + enabled H2 extras) — shared by the Python reference-rollout fitter and
 	the Rust training-cascade sampler (CTRL-17 G1). ladder="centred" (CTRL-48) swaps
@@ -767,8 +785,8 @@ def _thresholds_from_samples(samples_per_feature, spec, method, outer_quantile, 
 	bpf = spec.bits_per_feature
 	zero_ref = [d.zero_ref for d in feature_layout(spec)] if ladder == "centred" else [False] * nf
 	yaw_c = [d.name in YAW_ERROR_FEATURES for d in feature_layout(spec)] if yaw_centred else [False] * nf
-	dense_inner = [_dense_inner_for(d.name, spec, yaw_dense and yaw_centred, tilt_dense)
-	               for d in feature_layout(spec)] if (yaw_dense or tilt_dense) else [None] * nf
+	dense_inner = [_dense_inner_for(d.name, spec, yaw_dense and yaw_centred, tilt_dense, yaw_trim_dense)
+	               for d in feature_layout(spec)] if (yaw_dense or tilt_dense or yaw_trim_dense) else [None] * nf
 	thresholds = []
 	for f in range(nf):
 		# STUDENT STATES (option A, 10/08/2026). The fitter rolls out PID — a BETTER
@@ -864,7 +882,8 @@ def fit_calibration(
 	samples = _calibration_samples(spec, cal, seed, geometry, alloc, episode_config)
 	thresholds = _thresholds_from_samples(samples, spec, method, cal.outer_quantile, extra,
 	                                      ladder=cal.ladder, yaw_centred=cal.yaw_centred,
-	                                      yaw_dense=cal.yaw_dense, tilt_dense=cal.tilt_dense)
+	                                      yaw_dense=cal.yaw_dense, tilt_dense=cal.tilt_dense,
+	                                      yaw_trim_dense=cal.yaw_trim_dense)
 	return CalibrationFit(thresholds=thresholds,
 	                      constant_features=_zero_spread_features(samples, extra))
 
@@ -1532,6 +1551,7 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		obs_att_bias_pred=getattr(spec, 'obs_att_bias_pred', False),  # CTRL-46 (ABI 46)
 		yaw_integral_leak=getattr(spec, 'yaw_integral_leak', None),  # ARM 3 (ABI 50)
 		obs_tilt_ref_err=tilt_ref_err_kw(spec),  # block 10 L1 (ABI 51)
+		obs_yaw_trim_err=yaw_trim_err_kw(spec),  # block 10 L2y (ABI 51)
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
@@ -2140,6 +2160,7 @@ class ControllerEvaluator:
 			obs_att_bias_pred=getattr(first_spec, 'obs_att_bias_pred', False),  # CTRL-46 (ABI 46)
 			yaw_integral_leak=getattr(first_spec, 'yaw_integral_leak', None),  # ARM 3 (ABI 50)
 			obs_tilt_ref_err=tilt_ref_err_kw(first_spec),  # block 10 L1 (ABI 51)
+			obs_yaw_trim_err=yaw_trim_err_kw(first_spec),  # block 10 L2y (ABI 51)
 			output_full_window=getattr(first_spec, 'output_full_window', False),
 			frame_stride=int(getattr(first_spec, 'frame_stride', 1)),
 			**_target_levels_kwarg(ra, first_spec),
@@ -2253,6 +2274,7 @@ class ControllerEvaluator:
 		obs_att_bias_pred=getattr(spec, 'obs_att_bias_pred', False),  # CTRL-46 (ABI 46)
 		yaw_integral_leak=getattr(spec, 'yaw_integral_leak', None),  # ARM 3 (ABI 50)
 		obs_tilt_ref_err=tilt_ref_err_kw(spec),  # block 10 L1 (ABI 51)
+		obs_yaw_trim_err=yaw_trim_err_kw(spec),  # block 10 L2y (ABI 51)
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,

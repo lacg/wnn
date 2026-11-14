@@ -117,6 +117,9 @@ YAW_ERROR_FEATURES: frozenset[str] = frozenset({"yaw_err", "yaw_err_i", "yaw_err
 # steady-state gain; the tilt-error pair is the L1 input (--obs-tilt-ref-err).
 YAW_INTEGRAL_FEATURES: frozenset[str] = frozenset({"yaw_err_i", "yaw_i_pa"})
 TILT_ERROR_FEATURES: frozenset[str] = frozenset({"roll_err", "pitch_err"})
+# L2y (--obs-yaw-trim-err): the PROPORTIONAL yaw-error inputs, which take the L2y dense
+# ladder (their integrals keep their own fit: they integrate the trim-shifted error).
+YAW_PROPORTIONAL_FEATURES: frozenset[str] = frozenset({"yaw_err", "yaw_err_pa"})
 
 
 def _block_name(name: str) -> str:

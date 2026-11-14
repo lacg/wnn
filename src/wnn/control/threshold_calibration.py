@@ -59,6 +59,9 @@ class ThresholdCalibration:
 	# Block 10 L1 (--tilt-err-ladder dense, with --obs-tilt-ref-err): roll_err /
 	# pitch_err take the DENSE ladder. False = byte-identical.
 	tilt_dense: bool = False
+	# Block 10 L2y (--obs-yaw-trim-err): the proportional yaw-error inputs (now the
+	# trim-referenced error) take the L2y DENSE ladder. False = byte-identical.
+	yaw_trim_dense: bool = False
 	student_samples: tuple | None = field(default=None, repr=False)
 
 	def __post_init__(self):
@@ -99,6 +102,8 @@ class ThresholdCalibration:
 			base = f"{base},yaw:{'dense' if self.yaw_dense else 'centred'}"
 		if self.tilt_dense:
 			base = f"{base},tilt:dense"
+		if self.yaw_trim_dense:
+			base = f"{base},yawtrim:dense"
 		return base if self.student_samples is None else f"{base},student:{self.student_sample_count()}"
 
 
@@ -124,6 +129,7 @@ def calibration_from_args(args) -> ThresholdCalibration:
 		yaw_dense=getattr(args, "yaw_centred_ladder", None) == "dense",
 		tilt_dense=bool(getattr(args, "obs_tilt_ref_err", False))
 		and getattr(args, "tilt_err_ladder", "dense") == "dense",
+		yaw_trim_dense=bool(getattr(args, "obs_yaw_trim_err", False)),
 		# Set by phased_ga's refit (_refit_thresholds_from_student) once the grid winner
 		# has been rolled out; every later fit site reads it from here.
 		student_samples=getattr(args, "_threshold_refit_samples", None),

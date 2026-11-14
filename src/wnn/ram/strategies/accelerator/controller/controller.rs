@@ -1958,6 +1958,40 @@ impl WnnController
 		self.tilt_ref_err.map(|t| t.shape())
 	}
 
+	/// L2y of block 10 (ABI 51): measure the yaw error inputs (and their integrals)
+	/// against the yaw target shifted by the trim the yaw rate loop rides on,
+	/// target − κ·cresid_z (yaw_trim_err.rs). κ is derived from this student's own
+	/// cascade contract (rate gains, residual airframe) at its decision hold. Refused
+	/// unless the student reads a yaw error and the residual block it is built from.
+	pub(crate) fn enable_yaw_trim_err(&mut self) -> Result<(), String>
+	{
+		if !(self.obs_yaw_err || (self.obs_peraxis_p && self.obs_peraxis_yaw))
+		{
+			return Err("obs_yaw_trim_err needs a yaw-error input: obs_yaw_err (or obs_peraxis_p with obs_peraxis_yaw)".into());
+		}
+		let spec = self
+			.ctbr
+			.as_ref()
+			.map(|c| c.spec.clone())
+			.ok_or("obs_yaw_trim_err needs the cascade (output_mode=ctbr): the trim is the CTBR rate loop's")?;
+		if self.cascade_obs.as_ref().and_then(|o| o.residual()).is_none()
+		{
+			return Err("obs_yaw_trim_err needs the cascade residual block (obs_dhat_residual_plant): cresid_z is the trim it reads".into());
+		}
+		if self.yaw_trim_err.is_some()
+		{
+			return Err("obs_yaw_trim_err is already on".into());
+		}
+		self.yaw_trim_err = Some(crate::yaw_trim_err::YawTrimErr::from_spec(&spec, self.dt, self.action_repeat)?);
+		Ok(())
+	}
+
+	/// L2y of block 10: κ (rad per unit of cresid_z) for the GPU hosts (None ⇒ off).
+	pub(crate) fn yaw_trim_kappa(&self) -> Option<f32>
+	{
+		self.yaw_trim_err.map(|y| y.kappa())
+	}
+
 	/// CTRL-46: the predictor's last emitted [abp_r, abp_p] (what a rollout records);
 	/// zeros when the block is off.
 	pub(crate) fn att_bias_last(&self) -> [f32; 2]
@@ -2854,6 +2888,7 @@ impl WnnController
 			vote_tally: None,
 			att_bias: None,
 			tilt_ref_err: None,
+			yaw_trim_err: None,
 			collective_anchor: 0.5,
 		})
 	}
@@ -3670,6 +3705,10 @@ pub struct WnnController
 	// against the position loop's tilt reference, bias-corrected (tilt_ref_err.rs).
 	// None ⇒ target − estimate, bit-identical.
 	tilt_ref_err: Option<crate::tilt_ref_err::TiltRefErr>,
+	// L2y of block 10 (ABI 51, --obs-yaw-trim-err): measure the yaw error inputs
+	// against the yaw target shifted by the unabsorbed trim, target − κ·cresid_z
+	// (yaw_trim_err.rs). None ⇒ target − heading, bit-identical.
+	yaw_trim_err: Option<crate::yaw_trim_err::YawTrimErr>,
 	// L1 (06/08/2026) — d̂ disturbance observer, the mpcof teacher's instrument moved
 	// into the student. Some(b) ⇒ 3 extra features (roll/pitch/yaw estimated external
 	// angular acceleration). The screen's D2 decomposition showed the student's error
@@ -3841,6 +3880,7 @@ impl WnnController
 		obs_att_bias_pred = false,
 		yaw_integral_leak = None,
 		obs_tilt_ref_err = None,
+		obs_yaw_trim_err = false,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -3896,6 +3936,10 @@ impl WnnController
 		// pos_max_tilt_rad)) — the position loop's plant and shape — turns on the
 		// tilt-reference, bias-corrected roll/pitch error. None ⇒ off, bit-identical.
 		obs_tilt_ref_err: Option<(f32, f32, f32, f32)>,
+		// L2y of block 10 (ABI 51): measure the yaw error inputs against the yaw target
+		// shifted by the trim the cascade's yaw rate loop rides on (κ derived from the
+		// ctbr contract). false ⇒ off, bit-identical.
+		obs_yaw_trim_err: bool,
 	) -> PyResult<Self>
 	{
 		// CTRL-46: the bias-predictor rows are the VERY tail (after the cascade blocks).
@@ -3989,6 +4033,11 @@ impl WnnController
 		{
 			c.enable_tilt_ref_err(g, w, z, m).map_err(pyo3::exceptions::PyValueError::new_err)?;
 		}
+		// L2y of block 10: after the cascade (its residual block is the requirement).
+		if obs_yaw_trim_err
+		{
+			c.enable_yaw_trim_err().map_err(pyo3::exceptions::PyValueError::new_err)?;
+		}
 		Ok(c)
 	}
 
@@ -4001,6 +4050,14 @@ impl WnnController
 			let s = t.shape();
 			(s[0], s[1], s[2], s[3])
 		})
+	}
+
+	/// L2y of block 10: the yaw-trim error option — None when off, else κ (rad of yaw
+	/// per unit of cresid_z) it was derived with.
+	#[getter]
+	pub fn obs_yaw_trim_err(&self) -> Option<f32>
+	{
+		self.yaw_trim_kappa()
 	}
 
 	/// ARM 3: the leak of the yaw integral features (== integral_leak unless
@@ -6112,7 +6169,18 @@ impl WnnController
 		};
 		let roll_err = target_r - roll_est;
 		let pitch_err = target_p - pitch_est;
-		let yaw_err = target[2] - self.yaw_heading;
+		// L2y of block 10: with obs_yaw_trim_err the yaw error is measured against the
+		// trim-shifted target, target − κ·cresid_z. The cascade block is then ticked
+		// HERE — once per physical step, before the attitude block — and its values
+		// cached for the tail. Off: target − heading, and the block ticks at the tail
+		// as before (bit-identical).
+		let cas_early = if self.yaw_trim_err.is_some() { self.tick_cascade(gyro) } else { None };
+		let target_y = match (self.yaw_trim_err, cas_early, self.cascade_obs.as_ref().and_then(|o| o.residual()))
+		{
+			(Some(law), Some(v), Some(r)) => law.effective_target(target[2], r.of(&v)[2]),
+			_ => target[2],
+		};
+		let yaw_err = target_y - self.yaw_heading;
 		// Append enabled features (canonical order); update integrals in lockstep.
 		let mut iacc = 0usize;
 		if self.obs_tilt_p
@@ -6271,7 +6339,7 @@ impl WnnController
 			feats.push(self.horiz_obs[2]);
 			feats.push(self.horiz_obs[3]);
 		}
-		self.append_cascade_features(&mut feats, gyro);
+		self.append_cascade_features(&mut feats, gyro, cas_early);
 		self.append_att_bias_features(&mut feats, abp_early);
 		self.last_feature_vector.clone_from(&feats);
 		feats
@@ -6320,13 +6388,23 @@ impl WnnController
 		Some(v)
 	}
 
-	fn append_cascade_features(&mut self, feats: &mut Vec<f32>, gyro: [f32; 3])
+	/// `ticked` = this step's six values when compute_features already ticked the
+	/// block before the attitude block (obs_yaw_trim_err); None ⇒ tick it here.
+	fn append_cascade_features(&mut self, feats: &mut Vec<f32>, gyro: [f32; 3], ticked: Option<[f32; 6]>)
 	{
-		if let Some(o) = self.cascade_obs.as_mut()
+		if let Some(v) = ticked.or_else(|| self.tick_cascade(gyro))
 		{
-			let ri = self.ctbr.as_ref().map_or([0.0; 3], |c| c.rate_integral_norm());
-			o.append(feats, ri, gyro, &self.pwm_applied);
+			self.cascade_obs.as_ref().expect("ticked ⇒ the block is on").emit(feats, &v);
 		}
+	}
+
+	/// One physical-step tick of the cascade block (None when it is off): the recorded
+	/// six in a replay, else the live rate-I and observer.
+	fn tick_cascade(&mut self, gyro: [f32; 3]) -> Option<[f32; 6]>
+	{
+		let ri = self.ctbr.as_ref().map_or([0.0; 3], |c| c.rate_integral_norm());
+		let applied = &self.pwm_applied;
+		self.cascade_obs.as_mut().map(|o| o.tick(ri, gyro, applied))
 	}
 
 	/// Subtract the observer feedforward −d̂/b from the decoded motors (no-op unless

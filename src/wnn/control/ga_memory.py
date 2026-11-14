@@ -41,7 +41,7 @@ from wnn.control import _accel as ra   # memory_* cell operators (Rust, counter 
 from wnn.ram.strategies.connectivity.generic_strategies import GenericGAStrategy
 from wnn.ram.fitness import FitnessCalculatorType
 
-from .evaluator import ControllerSpec, tilt_ref_err_kw
+from .evaluator import ControllerSpec, tilt_ref_err_kw, yaw_trim_err_kw
 from .ga_strategy import default_controller_ga_config
 from .training import EpisodeConfig, _sample_initial_state
 
@@ -163,6 +163,7 @@ def record_address_universe(
 		obs_att_bias_pred=getattr(spec, 'obs_att_bias_pred', False),  # CTRL-46 (ABI 46)
 		yaw_integral_leak=getattr(spec, 'yaw_integral_leak', None),  # ARM 3 (ABI 50)
 		obs_tilt_ref_err=tilt_ref_err_kw(spec),  # block 10 L1 (ABI 51)
+		obs_yaw_trim_err=yaw_trim_err_kw(spec),  # block 10 L2y (ABI 51)
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 		dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt, integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
@@ -334,6 +335,7 @@ def build_controller_from_memory(genome: MemoryGenome, thresholds: list[float]) 
 		obs_att_bias_pred=getattr(spec, 'obs_att_bias_pred', False),  # CTRL-46 (ABI 46)
 		yaw_integral_leak=getattr(spec, 'yaw_integral_leak', None),  # ARM 3 (ABI 50)
 		obs_tilt_ref_err=tilt_ref_err_kw(spec),  # block 10 L1 (ABI 51)
+		obs_yaw_trim_err=yaw_trim_err_kw(spec),  # block 10 L2y (ABI 51)
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 		dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt, integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,

@@ -159,6 +159,8 @@ import os
 # — L1; RewardGatedConfigPacked / score_classical_baseline / score_position_teacher /
 # score_controllers_cpu|metal(alt_integral=0|1|2; the WNN scorers also alt_pd_mass) — L3;
 # additive outputs: rival scorers +2 values (hold pos, hold |dz|), WNN rows 17 -> 19.
+# Same ABI 51 (round 2): WnnController / dagger_train_batch_inplace(obs_yaw_trim_err=bool)
+# — L2y; WNN hold rows average the episodes that REACHED the hold window (NaN if none).
 EXPECTED_ABI = 51
 
 BUILD_HINT = (

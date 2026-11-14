@@ -492,6 +492,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                integral_leak: float = 0.99, integral_scale: float = 1.0,
                yaw_integral_leak: float | None = None,
                obs_tilt_ref_err: tuple | None = None,
+               obs_yaw_trim_err: bool = False,
                dt: float = 0.001,
                decouple_outputs: bool = False, bits_per_feature: int = 8,
                feature_balance_ratio: float = 0.0,
@@ -548,6 +549,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		integral_leak=integral_leak, integral_scale=integral_scale,
 		yaw_integral_leak=yaw_integral_leak,
 		obs_tilt_ref_err=obs_tilt_ref_err,
+		obs_yaw_trim_err=obs_yaw_trim_err,
 		dt=dt,
 		decouple_outputs=decouple_outputs,
 		feature_balance_ratio=feature_balance_ratio,
@@ -3235,6 +3237,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "from signals the student already reads. No input is added or moved. Needs "
 	                     "--obs-peraxis-p, --obs-att-bias-pred, --obs-pos-err-xy, --obs-vel-xy and --xy-offset > 0. "
 	                     "Off (default) = byte-identical. A new lineage.")
+	ap.add_argument("--obs-yaw-trim-err", action="store_true",
+	                help="Block 10 L2y (ABI 51, docs/ctrl48_block10_levers_spec.md): the yaw-error inputs (and so "
+	                     "their integrals) are measured against the yaw target shifted by the TRIM the cascade's "
+	                     "yaw rate loop rides on: target - kappa*cresid_z, kappa = K_I*L/K_theta of the MPCOF "
+	                     "teacher's own yaw law (derived in Rust from the airframe's rate loop, not fitted). One "
+	                     "input then carries the label's trim AND its proportional term. No input is added or "
+	                     "moved. The proportional yaw inputs take the L2y dense ladder (fixed +-0.25, +-0.75, "
+	                     "+-1.50 deg). Needs --output-mode ctbr, --obs-cascade-dhat-residual and a yaw-error input "
+	                     "(--obs-yaw-err, or --obs-peraxis-p with --obs-peraxis-yaw). Off (default) = "
+	                     "byte-identical. A new lineage.")
 	ap.add_argument("--alt-integral", choices=["off", "pi", "pole3"], default="off",
 	                help="Block 10 L3 (ABI 51): an integrator on the altitude error in the collective law, removing "
 	                     "the PD's droop under mass / thrust error. pi = PD poles kept, k_i = omega^3/4; pole3 = "
@@ -4162,14 +4174,28 @@ def resolve_block10_args(args) -> None:
 		if missing:
 			raise SystemExit(f"--obs-tilt-ref-err needs {', '.join(missing)}: the tilt reference is built from "
 			                 "the horizontal observation and the bias prediction the student already reads.")
+	if getattr(args, "obs_yaw_trim_err", False):
+		yaw_p = getattr(args, "obs_yaw_err", False) or (getattr(args, "obs_peraxis_p", False)
+		                                               and getattr(args, "obs_peraxis_yaw", False))
+		need = {"--output-mode ctbr": getattr(args, "output_mode", "pwm") == "ctbr",
+		        "--obs-cascade-dhat-residual": getattr(args, "obs_cascade_dhat_residual", False),
+		        "a yaw-error input (--obs-yaw-err, or --obs-peraxis-p with --obs-peraxis-yaw)": yaw_p}
+		missing = [k for k, v in need.items() if not v]
+		if missing:
+			raise SystemExit(f"--obs-yaw-trim-err needs {', '.join(missing)}: the trim is the cascade residual's "
+			                 "cresid_z, referenced by the yaw error the student already reads.")
+		if getattr(args, "yaw_centred_ladder", None) == "dense":
+			raise SystemExit("--obs-yaw-trim-err replaces block-10 L2 (--yaw-centred-ladder dense): the trim-"
+			                 "referenced yaw error takes its own dense ladder — drop `dense`.")
 	if getattr(args, "alt_integral", "off") != "off" and not getattr(args, "translation", False):
 		raise SystemExit("--alt-integral needs --translation (there is no altitude loop without it).")
 
 
 def block10_tokens(args) -> dict:
-	"""Provenance alt= value ("" when off, so the line is unchanged)."""
+	"""Provenance alt= / yawref= values ("" when off, so the line is unchanged)."""
 	mode = getattr(args, "alt_integral", "off")
-	return dict(alt="" if mode == "off" else mode)
+	return dict(alt="" if mode == "off" else mode,
+	            yawref="trim" if getattr(args, "obs_yaw_trim_err", False) else "")
 
 
 def ctrl46_tokens(args) -> dict:

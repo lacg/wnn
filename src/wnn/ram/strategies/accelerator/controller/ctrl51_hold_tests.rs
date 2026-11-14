@@ -258,3 +258,124 @@ fn wnn_hold_rows_cpu_match_gpu()
 		rel_close(mean, agg[0][row], 1e-9, &format!("per-episode column {col} vs aggregate row {row}"));
 	}
 }
+
+/// The diverging fixture below: the abi32 controller on the stage-2 plant with a
+/// ±20 % roll-pair motor asymmetry (no noise). Episodes 0-1 hold; episode 2, and
+/// episode 3 with its collective raised 60 %, roll past 50 rad/s at steps ~255 / ~267,
+/// before the hold window opens at step 320 (far enough that f32 differences cannot
+/// move an episode across the window edge).
+const DIVERGE_ASYM: [f32; 4] = [1.0, 0.8, 1.0, 1.2];
+
+fn diverge_cpu(c: &crate::controller::WnnController, s1: &crate::stage1::Stage1Cfg, eps: usize, steps: usize) -> [f64; 19]
+{
+	use crate::abi32_tests::{ics, ARM as A, DT as D, G as GR, INERTIA as IN, KD as KDR, KT as K};
+	let (q0, w0) = ics();
+	let mut cc = c.clone();
+	crate::cpu_score::rollout_one(
+		&mut cc, &q0[..eps * 4], &w0[..eps * 3], eps, steps, D, A, K, KDR, IN, GR, 0.0, [0.0; 3],
+		true, [0.0; 3], 0.0, 0.1, DIVERGE_ASYM, 0.0, 0.0, 0.0, 5,
+		0.0, 0, 0, 0.0, c.levels_per_motor(), 4, None, None, None, 1.0, 0.4, None, Some(s1),
+	)
+}
+
+/// The first `n` episodes of a Stage1Cfg (episode i keeps its index, so its flight
+/// and its disturbance seed are unchanged).
+fn first_episodes(mut t: crate::stage1::Stage1Cfg, n: usize) -> crate::stage1::Stage1Cfg
+{
+	for v in [&mut t.init_z, &mut t.init_vz, &mut t.mass, &mut t.collective_frac, &mut t.init_x, &mut t.init_y]
+	{
+		v.truncate(n);
+	}
+	t.validate(n).expect("truncated fixture");
+	t
+}
+
+/// HOLD-WINDOW CONVENTION (block 10 ruling, aligned with the rival scorers): the
+/// hold rows average over the episodes that REACHED the window; an episode that
+/// diverged before it is left out (its failure is the stable column's), and the
+/// per-episode Metal rows carry NaN for it.
+///   * the CPU hold rows of 4 episodes (2 diverged) are BIT-identical to the CPU rows
+///     of the 2 held episodes alone, while the whole-episode rows are not;
+///   * Metal: exactly the diverged episodes carry NaN, and the aggregate is the mean
+///     of the reached ones;
+///   * CPU == Metal on the hold rows with divergences in the batch.
+#[cfg(target_os = "macos")]
+#[test]
+fn wnn_hold_rows_average_the_reached_episodes_cpu_match_gpu()
+{
+	use crate::abi32_tests::{cfg, controller, ics, tilt_ref, ARM as A, DT as D, EPS, G as GR, INERTIA as IN, KD as KDR, KT as K};
+	let steps = 400usize;
+	let tail_start = ((steps as f64) * 0.80).ceil() as f64;
+	let plant = crate::plant_opts::PlantOpts::new(true, 0.78).unwrap();
+	let c = controller(7, true);
+	let mut s1 = cfg(plant, tilt_ref());
+	s1.collective_frac[3] = 0.6; // tips episode 3 over as well (2 tips on its own)
+	s1.validate(EPS).unwrap();
+	let all = diverge_cpu(&c, &s1, EPS, steps);
+	let held = diverge_cpu(&c, &first_episodes(cfg(plant, tilt_ref()), 2), 2, steps);
+	assert!(all[2] < 0.75, "fixture: some episodes must fail (stable {})", all[2]);
+	assert_eq!((all[17].to_bits(), all[18].to_bits()), (held[17].to_bits(), held[18].to_bits()), "CPU hold rows must be the reached episodes' alone: {all:?} vs {held:?}");
+	assert!((all[13] - held[13]).abs() > 1e-6, "the whole-episode pos row includes the diverged episodes (vacuous otherwise)");
+	assert!(all[17].is_finite() && all[17] > 0.0 && all[18] > 0.0);
+	if std::env::var("WNN_SKIP_GPU_TESTS").is_ok()
+	{
+		return;
+	}
+	let Ok(ev) = crate::metal_controller::ControllerRolloutEvaluator::new()
+	else
+	{
+		return;
+	};
+	let d = crate::controller::Disturbance {
+		tau_bias: [0.0; 3],
+		gust_sigma: 0.0,
+		gust_tau_c: 0.1,
+		motor_asym: DIVERGE_ASYM,
+		gyro_sigma: 0.0,
+		gyro_bias_walk: 0.0,
+		accel_sigma: 0.0,
+		dropout_prob: 0.0,
+		dropout_len_steps: 0,
+		obs_delay_steps: 0,
+		torque_scale_jitter: 0.0,
+		seed: 5,
+	};
+	let (q0, w0) = ics();
+	let (agg, eps) = ev
+		.score_with_episodes(&[&c], &q0, &w0, EPS, steps, (D, A, K, IN, GR), KDR, 0.0, [0.0; 3], Some(d), None, None, None, Some(&s1))
+		.expect("gpu score");
+	let reached: Vec<&Vec<f64>> = eps.iter().filter(|e| e[10] > tail_start).collect();
+	for e in &eps
+	{
+		let diverged_early = e[3] == 1.0 && e[10] < tail_start;
+		eprintln!("[hold] episode {}: diverged {} steps {} hold pos {} dz {}", e[1], e[3], e[10], e[13], e[14]);
+		assert_eq!(e[13].is_nan() && e[14].is_nan(), diverged_early, "episode {}: NaN exactly when it never reached the window", e[1]);
+	}
+	assert_eq!(reached.len(), 2, "fixture: episodes 0-1 hold, 2-3 diverge before the window");
+	for (row, col) in [(17usize, 13usize), (18, 14)]
+	{
+		let mean = reached.iter().map(|e| e[col]).sum::<f64>() / reached.len() as f64;
+		rel_close(agg[0][row], mean, 1e-9, &format!("GPU row {row} = the reached episodes' mean"));
+		let tol = 1e-3f64.max(5e-2 * all[row].abs());
+		assert!((agg[0][row] - all[row]).abs() <= tol, "row {row}: gpu {} cpu {}", agg[0][row], all[row]);
+	}
+	assert!((agg[0][2] - all[2]).abs() < 1e-12, "stable: gpu {} cpu {}", agg[0][2], all[2]);
+}
+
+/// No episode reached the window ⇒ the hold rows are NaN (as the rival scorer's), on
+/// the CPU and on Metal.
+#[cfg(target_os = "macos")]
+#[test]
+fn wnn_hold_rows_nan_when_nothing_reached_the_window()
+{
+	use crate::abi32_tests::{cfg, controller, tilt_ref};
+	let plant = crate::plant_opts::PlantOpts::new(true, 0.78).unwrap();
+	let c = controller(7, true);
+	// Raise every episode's collective so the asymmetry tips all four.
+	let mut late = cfg(plant, tilt_ref());
+	late.collective_frac = vec![1.0; 4];
+	late.validate(4).unwrap();
+	let r = diverge_cpu(&c, &late, 4, 400);
+	assert_eq!(r[2], 0.0, "fixture: every episode must fail (stable {})", r[2]);
+	assert!(r[17].is_nan() && r[18].is_nan(), "CPU hold rows with nothing reached: {:?}", &r[17..]);
+}

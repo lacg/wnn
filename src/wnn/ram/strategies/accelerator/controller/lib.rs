@@ -76,6 +76,8 @@ mod ctrl51_hold_tests; // ABI 51: hold-window position column — recomputation,
 #[cfg(test)]
 mod ctrl51_tilt_ref_tests; // L1 of block 10 (ABI 51): tilt-reference roll/pitch error — definition, replay, CPU/GPU score/split/walk parity
 #[cfg(test)]
+mod ctrl51_yaw_trim_tests; // L2y of block 10 (ABI 51): trim-shifted yaw error — definition, replay, CPU/GPU score/split/walk parity
+#[cfg(test)]
 mod ctrl51_alt_integral_tests; // L3 of block 10 (ABI 51): altitude integrator — law, anti-windup, droop, hosts, CPU/GPU score parity
 #[cfg(test)]
 mod ctrl46_tests; // CTRL-46 (ABI 46): vote write rule (CPU/GPU, order independence) + estimate-built labels
@@ -91,6 +93,7 @@ mod ctrl48_tests; // CTRL-48: the cascade unabsorbed-disturbance block — physi
 mod abi38_tests; // ABI 38: the cascade controller — identity, rivals, CPU/GPU parity, trainers
 #[cfg(test)]
 mod abi34_tests; // ABI 34: lag-aware teachers, one pwm convention under motor lag, T=0 pins
+mod yaw_trim_err; // L2y (ABI 51): yaw error referenced to the trim the rate loop rides on (--obs-yaw-trim-err)
 mod tilt_ref_err; // L1 (ABI 51): roll/pitch error vs the tilt reference, bias-corrected (--obs-tilt-ref-err)
 mod att_bias_pred; // CTRL-46 (ABI 46): onboard predictor of the Mahony specific-force bias (--obs-att-bias-pred)
 mod rival_probe; // opt-in probe on the classical-rival scorer (INDI spec §10: observer gain, bias compensation)

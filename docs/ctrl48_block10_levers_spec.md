@@ -198,3 +198,130 @@ PID>rate(h10) est-fed, pole3               |  91.25   | 3.366  | 2.792    | 0.30
 5. **L1 ladder.** `dense` (default) or `quantile`; the offline read does not separate them.
 6. **Hold-window convention** for diverged episodes: align the WNN rows to the rival scorers' ("episodes that reached the window") before block 10, or leave it. It matters only for rows with divergences.
 7. **Expected gains to pre-register** (from the block-9 bounds, unchanged): L1 steady 0.80° → 0.5-0.65° (bound 0.49°); L3 pos 0.36 m → about 0.31 m and hold \|dz\| about 0.05 m for a student that learns the law.
+
+---
+
+## ROUND 2 (14/11/2026): rulings, L2y, hold-window alignment
+
+### Rulings (Luiz, 14/11/2026)
+- **L2 (dense yaw ladder): replaced by L2y**, the yaw analogue of L1 (below). `--yaw-centred-ladder dense` stays in the code, off by default, and is not part of block 10. L2y refuses to combine with it.
+- **L3: `pole3`.** Recorded as given: "pi with fixed PD gains cannot be sped up. Raising k_i alone makes the slow complex pair slower and oscillatory: at w=2, slowest tau is 1.72 s for k_i=w^3/4, 2.30 s for w^3/2 and 4.08 s for w^3. Re-placing all three poles at -w IS pole3, slowest tau 0.5 s." (Checked: the closed loop is s³ + 2ζω s² + ω² s + k_i; at ω = 2, ζ = 1 the slowest time constants are 1.723 / 2.300 / 4.08 s, and pole3's triple pole at −2 gives 0.5 s.) **`pi` stays as a documented non-default:** its tests stay, it is not flown.
+- **L3 flies WITH re-flown baselines:** the `both` control and all three reference rows at the same `--alt-integral pole3`.
+- **Arm order:** L1 alone first, against the `both` control. Then a 2×2 of {L2y, L3} on top of L1: L1, L1+L2y, L1+L3, L1+L2y+L3.
+- **L1 ladder: dense.**
+- **Hold-window convention: ALIGNED** (below). Both the WNN rows and the reference scorers average `pos_hold` / `dz_hold` over the episodes that reached the window; fails stay in their own column.
+
+### L2y. Yaw error referenced to the trim (`--obs-yaw-trim-err`)
+
+**Physics** (BODY z = WORLD yaw at the tilts flown; θ = yaw − target = −`yaw_err`, rad).
+- The MPCOF>rate teacher's yaw label is linear in its shifted state (`ctbr_axis_mpc.rs`): sp = K_θ·θ + K_ω·ω + K_ua·(ua − ua_ss) + K_I·(I − I_ss) + ….
+- Yaw has little authority: the rate integrator absorbs a yaw disturbance with τ ≈ 7 s. So for the whole 2 s episode I stays short of its rest value I_ss = −d̂/(c·ki), and the label carries a trim term K_I·(I − I_ss) next to the proportional term.
+- The student already reads the unabsorbed part as `cresid_z` = (I − I_ss)/L (L = yaw rate i_limit) and the error as `yaw_err`. In the hold the label is, to first order:
+  sp ≈ −K_θ·`yaw_err` + K_I·L·`cresid_z` = −K_θ·(`yaw_err` − κ·`cresid_z`), with **κ = K_I·L / K_θ**.
+- Two separately quantised inputs cannot form that sum; L2y forms it in floating point before the ladder.
+- **Derived, not fitted:** the teacher's own unconstrained gain row on the yaw axis (`CtbrAxisMpc::gain_row`), for the student's own rate loop and residual airframe, at its decision hold, rate-loop phase 0, lag-free.
+  - cf21_brushless, n_o = 10: K_θ = −9.586 rad/s per rad, K_I = −0.1372, L = 2.909, so κ = 0.04165 rad (2.39°) per unit of `cresid_z`.
+  - The motor lag moves κ by < 0.2 % over 0-0.3 s. The hold matters: κ = 0.0396 at n_o = 1, 0.0436 at n_o = 20.
+  - Checked in `yaw_trim_err.rs`: the teacher's plan from a state with only a yaw error and an unabsorbed integrator equals −K_θ·(`yaw_err` − κ·`cresid_z`).
+  - The empirical regression on the VAL hold agrees: label ≈ +4.6…+7.3·`yaw_err` − 0.37…−0.39·`cresid_z` − 1.10·`gyro_z` (R² 0.90-0.92). The derived trim gain is −K_I·L = −0.399 and the rate gain K_ω = −1.10.
+
+**Definition** (f32, the student's own signals):
+- `target_yaw_eff = target_yaw − κ·cresid_z`, with `cresid_z` this step's residual (the last slot of the cascade residual block).
+- `yaw_err = target_yaw_eff − yaw_heading`. It goes in the same slot.
+- Every yaw-error input measures against the shifted target: `yaw_err`, and `yaw_err_pa` when per-axis yaw is on. So their integrals (`yaw_err_i`, `yaw_i_pa`) integrate the trim-referenced error, exactly as L1's integrals integrate L1's error.
+  - Consequence: at the teacher's rest the shifted error equals the trim-equivalent angle, not 0. The integral then carries a leaky-smoothed copy of it.
+  - The integral's share of the label could not be measured offline: the trace rows are hold-only, so the integral cannot be rebuilt from t = 0. This is flagged.
+- The Metal kernels change F.target2 before `derive_features` (the L1 pattern). `derive_features` is untouched, so the default pipeline's codegen is unchanged. The rollout-kernel change sits inside the `FC_CASCADE_OBS` specialization.
+- No input is added, removed or moved. The feature count and every layout offset are unchanged.
+
+**Order of evaluation.** With L2y on, the cascade block (rate-I + observer) is ticked once per physical step BEFORE the attitude block, and its six values are cached for the tail. Off, it ticks at the tail as before (bit-identical). The tick reads only the rate loop, gyro and `pwm_applied`, none of which change inside `compute_features`. The Metal rollout kernel already wrote the block before `derive_features` (`cas_step`).
+
+**Replay.** Nothing new is recorded. The replay recomputes `cresid_z` from the recorded six (`cas_rec` / `ReplayObs.cascade`), which it already re-applies.
+
+**Requires** (refused otherwise):
+- `--output-mode ctbr`;
+- `--obs-cascade-dhat-residual`;
+- a yaw-error input (`--obs-yaw-err`, or `--obs-peraxis-p` with `--obs-peraxis-yaw`);
+- the yaw rate loop must have an integrator (ki > 0);
+- not combinable with `--yaw-centred-ladder dense`.
+
+**Ladder.**
+- The proportional yaw inputs (`yaw_err`, `yaw_err_pa`) take the **L2y dense ladder**: fixed ±0.25°, ±0.75°, ±1.50°, then the outer pair at the |x| quantile (mass 1 − 2·q0) of the calibration samples beyond 1.50°.
+- Why not the L1-style near-zero ladder: the input spans the trim-equivalent angle (|x| median 0.7-1.0°, 97.5 % at 2.4-2.9° on the VAL hold), so cuts that crowd 0 waste resolution. The pre-check below shows it.
+- The fixed cuts were chosen from the VAL distribution of x (a tuning partition).
+- Integrals keep their own fit.
+- `calib=` token: `yawtrim:dense`.
+
+**Plumbing.**
+- Rust: `yaw_trim_err.rs`; `WnnController::enable_yaw_trim_err` and the constructor argument `obs_yaw_trim_err`; the getter `obs_yaw_trim_err` returns κ; `dagger_train_batch_inplace(obs_yaw_trim_err=)`; `CascadeObs::{tick, emit}`; Metal `yte_on` and `yte_kappa` appended to `Params` / `TrainParams` and the Rust twins (`RolloutParams` 186 → 188 words).
+- Python: `ControllerSpec.obs_yaw_trim_err`, `--obs-yaw-trim-err`, `ThresholdCalibration.yaw_trim_dense`, provenance `yawref=trim` (absent when off), and the `[params]` registry keys `controller_obs_yaw_trim_err` (plus L1 / L3's `controller_obs_tilt_ref_err`, `controller_tilt_err_ladder`, `controller_alt_integral`, which were missing; phased_ga-only, refused by the flow adapter).
+
+### Pre-check L2y (VAL, offline on the block-9 student flights; `scripts/ctrl_block10_precheck_l2y.py`, κ = 0.04165)
+
+```
+quantity (VAL)                                                    | s1     | s2     | s3
+------------------------------------------------------------------+--------+--------+-------
+YAW hold label carried by today's yaw_err (9 bins)                | 0.078  | 0.059  | 0.125
+  ... by today's yaw_err_i                                        | 0.370  | 0.130  | 0.153
+  ... by today's cresid_z (the trim input)                        | 0.704  | 0.681  | 0.768
+  ... by yaw_err + cresid_z, additive (2 inputs)                  | 0.721  | 0.756  | 0.779
+  ... by yaw_err x cresid_z (81 cells)                            | 0.733  | 0.766  | 0.781
+  ... by the L2y input, dense ladder (9 bins)                     | 0.708  | 0.751  | 0.766
+  ... by the L2y input, quantile cuts                             | 0.709  | 0.752  | 0.765
+  ... by the L2y input, L1-style near-zero cuts                   | 0.664  | 0.710  | 0.700
+  ... by the L2y input, unquantised (linear)                      | 0.709  | 0.759  | 0.783
+RESIDUAL after a table on cresid_z: slope on yaw offset, rad/s/rad| -5.82  | -6.25  | -3.24
+  ... R² on the yaw offset                                        | 0.52   | 0.66   | 0.32
+RESIDUAL after a table on L2y (dense): slope on yaw offset        | -1.55  | -0.98  | -1.21
+  ... R² on the yaw offset                                        | 0.06   | 0.04   | 0.07
+episode-mean label left inside one bin, as yaw deg (/|K_theta|):  |        |        |
+  cresid_z / yaw_err / L2y dense                                  | .26/.80/.22 | .36/.95/.23 | .23/.68/.18
+per-episode TRUE yaw offset carried by today's yaw_err            | 0.627  | 0.764  | 0.745
+  ... by the L2y input (dense)                                    | 0.136  | 0.079  | 0.273
+mean |yaw offset| left inside one yaw_err bin, deg                | 0.190  | 0.226  | 0.192
+mean |yaw offset| deg                                             | 0.330  | 0.424  | 0.343
+```
+- **Supported on the mechanism, modest in size. Built.**
+  - After the best table on today's trim input (`cresid_z`), the episode-mean label residual still carries the missed proportional term: slope −3.2 to −6.2 rad/s per rad of yaw offset, R² 0.32-0.66.
+  - After a table on the one L2y input that slope falls to −1.0 to −1.6, R² 0.04-0.07. Roughly 70-85 % of the missed term is carried.
+  - The episode-mean label left unresolved inside a bin falls from 0.23-0.36° to 0.18-0.23° yaw-equivalent.
+- **The pooled hold-label share barely moves** (0.68-0.77 for `cresid_z`, 0.71-0.77 for L2y), because the trim dominates the label's variance. One L2y input reaches 97-99 % of what the 81-cell joint table on `yaw_err` × `cresid_z` carries.
+  - Contrast L1, where one input went from 0.08-0.29 to 0.78-0.83. Expect L2y's effect on steady to be smaller than L1's.
+- L2y does NOT resolve the true yaw offset by itself (0.08-0.27). By construction it mixes the offset with the trim; what it resolves is the LABEL, which is what the table must reproduce.
+- **Correction to round 1's L2 table.** Round 1 approximated `yaw_err` by −(Mahony yaw estimate) and read "per-episode offset carried 0.88-0.92, 0.12-0.14° left in a bin". The student's actual `yaw_err` input (recorded) is the gyro-dead-reckoned heading. It carries 0.63-0.76 of the true per-episode offset and leaves 0.19-0.23° in a bin.
+  - The difference is the gyro-bias-walk drift of the dead-reckoned heading: unobservable from the student's inputs (Hard Rule 1). L2y inherits it, since it references the same heading.
+
+### Hold-window alignment
+- **Convention, everywhere:** `pos_hold` / `dz_hold` = the mean over the episodes that REACHED the hold window (t ≥ ⌈0.8·steps⌉) of each episode's window mean. NaN when no episode reached it. An episode that diverged before the window is left out; its failure is in the stable / fails column.
+- Reference scorers (`score_classical_baseline`, `score_position_teacher`): already this convention (`steady_eps`), unchanged.
+- WNN CPU scorer (`cpu_score.rs::rollout_one`): the whole-episode fallback for a diverged episode is removed; the mean is over reached episodes (`cpu_score::hold_mean`).
+- Metal kernel (`controller_rollout.metal`, `out_effort` slots 5-6): an episode that never reached the window writes `HOLD_NOT_REACHED` = −1 (impossible for a mean of magnitudes) instead of its whole-episode means.
+  - The Metal host skips it in the aggregate (mean over reached, NaN if none). The per-episode rows (columns 13 / 14) carry NaN for it.
+- Translation off: every reached episode contributes 0, as before.
+- Python already omits NaN from the printed lines and the cross-unit means.
+- **Parity tests** (`ctrl51_hold_tests.rs`):
+  - `wnn_hold_rows_average_the_reached_episodes_cpu_match_gpu`: the abi32 controller on the stage-2 plant with a ±20 % roll-pair asymmetry. Episodes 2 and 3 diverge at steps 255 / 267, before the window opens at 320; episodes 0-1 hold. It checks four things:
+    - the CPU hold rows of all 4 episodes are bit-identical to the CPU rows of episodes 0-1 alone, while the whole-episode pos row differs;
+    - on Metal exactly the two diverged episodes carry NaN;
+    - the Metal aggregate equals the mean of the reached ones;
+    - CPU equals Metal.
+  - `wnn_hold_rows_nan_when_nothing_reached_the_window`: every episode diverges, and the rows are NaN.
+
+### Round-2 verification
+- `cargo test -p ram_controller --lib --no-default-features`: **398 passed, 0 failed, 25 ignored**. That is 11 new tests: 3 in `yaw_trim_err.rs`, 6 in `ctrl51_yaw_trim_tests.rs`, 2 in `ctrl51_hold_tests.rs`.
+- The abi32 parity helper now treats NaN on both sides of a hold row as agreement. The alt-integral parity fixture has no episode reaching the window under the new convention, so CPU and Metal both report NaN.
+- L2y tests:
+  - κ is the teacher's yaw law.
+  - Lag sensitivity is < 0.2 %.
+  - Refusals, and default off (also in `ctrl51_flags_off_tests`).
+  - The input equals the definition bit for bit, and every other input is bit-identical to the off twin, including the residual block that is now ticked early.
+  - Replay equals live, and blanking the cascade stream breaks it.
+  - The CPU scorer equals the Metal scorer at hold 1 / lag 0 and at hold 10 / lag 0.2, and the option moves the result on both.
+  - The Metal split record/train equals the CPU split, and the off twin records different rows.
+  - The trainer's GPU walk equals its CPU walk in QUAD_WEIGHTED and BINARY, and the option reaches the trainer.
+- Python, against the built wheel unpacked in a scratch directory (never installed):
+  - the refusals;
+  - the L2y ladder cuts (±0.25 / ±0.75 / ±1.50° + outer);
+  - the `calib=...,yawtrim:dense` and `yawref=trim` tokens;
+  - an end-to-end `phased_ga` smoke run with L1 + L2y + L3 `pole3` on the block-9 recipe (pop 4, 8 episodes, non-report seeds 777001/777002, GPU scorer), which completes with exit 0. It is a wiring check, not a result.
+- Wheel, built and NOT installed (the installed wheel is still ABI 50): `dist-abi51/ram_controller-2026.212.37-cp311-abi3-macosx_11_0_arm64.whl`, sha256 `0c20d377cc085ed57365566d4a88b68a11d165ed2c117cda22508a09537e20cd`. The last change after the build was test-only (`abi32_tests.rs`, `cfg(test)`).

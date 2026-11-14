@@ -168,10 +168,12 @@ impl CascadeObs
 		self.last
 	}
 
-	/// compute_features' tail: tick the observer (once per physical step — holds
-	/// included) and append the enabled halves. A replay override replaces the live
-	/// value and skips the observer tick (the replay has no flown commands).
-	pub(crate) fn append(&mut self, feats: &mut Vec<f32>, rate_i_norm: [f32; 3], gyro: [f32; 3], applied: &[f32])
+	/// compute_features' cascade block, TICK half: this step's six values — the replay
+	/// override (no observer tick: the replay has no flown commands), else the live
+	/// rate-I and one observer step (once per physical step, holds included) — cached
+	/// as `last`. Normally ticked at the tail; L2y of block 10 ticks it before the
+	/// attitude block and emits at the tail (controller.rs).
+	pub(crate) fn tick(&mut self, rate_i_norm: [f32; 3], gyro: [f32; 3], applied: &[f32]) -> [f32; 6]
 	{
 		let v = match self.replay.take()
 		{
@@ -179,6 +181,12 @@ impl CascadeObs
 			None => self.live(rate_i_norm, gyro, applied),
 		};
 		self.last = v;
+		v
+	}
+
+	/// compute_features' tail, emit half: the enabled halves of `v`, canonical order.
+	pub(crate) fn emit(&self, feats: &mut Vec<f32>, v: &[f32; 6])
+	{
 		if self.rate_i
 		{
 			feats.extend_from_slice(&v[0..3]);
@@ -189,7 +197,7 @@ impl CascadeObs
 		}
 		if let Some(r) = self.resid
 		{
-			feats.extend_from_slice(&r.of(&v));
+			feats.extend_from_slice(&r.of(v));
 		}
 	}
 

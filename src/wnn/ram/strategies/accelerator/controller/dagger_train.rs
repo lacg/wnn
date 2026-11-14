@@ -3248,6 +3248,7 @@ pub fn dagger_train_inplace(
 	// layout, so a missing forward would be silent). Some((gravity, pos_omega_n,
 	// pos_zeta, pos_max_tilt_rad)); None ⇒ off, bit-identical.
 	obs_tilt_ref_err = None,
+	obs_yaw_trim_err = false,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn dagger_train_batch_inplace(
@@ -3330,6 +3331,7 @@ pub fn dagger_train_batch_inplace(
 	obs_att_bias_pred: bool,
 	yaw_integral_leak: Option<f32>,
 	obs_tilt_ref_err: Option<(f32, f32, f32, f32)>,
+	obs_yaw_trim_err: bool,
 ) -> PyResult<Vec<(Py<WnnController>, TrainStats)>>
 {
 	use rayon::prelude::*;
@@ -3438,7 +3440,7 @@ pub fn dagger_train_batch_inplace(
 					2.0, // est_kp — the rivals' Mahony default (TeacherFeed / est_kp)
 					0.1, // est_ki
 					ctbr.clone(),
-					obs_att_bias_pred, yaw_integral_leak, obs_tilt_ref_err,
+					obs_att_bias_pred, yaw_integral_leak, obs_tilt_ref_err, obs_yaw_trim_err,
 				)?;
 				controller
 					.set_target_levels_core(target_levels)

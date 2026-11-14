@@ -242,6 +242,13 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	"controller_val_units",           # stage-select val units per candidate (default 5)
 	"controller_train_xy_offset",     # DAgger trainer xy start bound (m; None = xy_offset)
 	"controller_train_init_vxy",      # DAgger trainer initial v_xy bound (m/s; default 0)
+	# Block 10 (14/11/2026, docs/ctrl48_block10_levers_spec.md, ABI 51): phased_ga
+	# --obs-tilt-ref-err/--tilt-err-ladder (L1), --obs-yaw-trim-err (L2y), --alt-integral
+	# (L3). Phased_ga-only: REFUSED by _refuse_unbuilt_keys like the keys above.
+	"controller_obs_tilt_ref_err",    # L1: roll/pitch error vs the tilt reference, bias-corrected
+	"controller_tilt_err_ladder",     # L1 ladder: dense | quantile
+	"controller_obs_yaw_trim_err",    # L2y: yaw error vs the trim-shifted target
+	"controller_alt_integral",        # L3: off | pi | pole3
 })
 
 

@@ -144,6 +144,12 @@ pub(crate) fn gpu(c: &WnnController, s1: &Stage1Cfg, steps: usize) -> Option<Vec
 
 fn close(gpu: f64, cpu: f64, rel: f64, floor: f64, what: &str)
 {
+	// The hold-window rows are NaN on BOTH sides when no episode reached the window
+	// (block-10 convention, cpu_score::hold_mean) — agreement, not a mismatch.
+	if gpu.is_nan() && cpu.is_nan()
+	{
+		return;
+	}
 	let tol = floor.max(cpu.abs() * rel);
 	assert!((gpu - cpu).abs() <= tol, "{what}: gpu={gpu} cpu={cpu} tol={tol}");
 }

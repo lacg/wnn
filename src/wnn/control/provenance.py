@@ -80,6 +80,9 @@ class ControllerProvenance:
 	# Block 10 L3 (ABI 51): the altitude integrator ("pi" | "pole3"); "" = off, and the
 	# token is then NOT printed, so every pre-block-10 line is unchanged.
 	alt: str = ""
+	# Block 10 L2y (ABI 51): "trim" when the yaw error inputs are trim-referenced
+	# (--obs-yaw-trim-err); "" = off and NOT printed.
+	yawref: str = ""
 
 	def line(self) -> str:
 		"""The single greppable line the ladder copies into the marker."""
@@ -99,7 +102,8 @@ class ControllerProvenance:
 		        f"abp={self.abp} "
 		        f"select={self.select} "
 		        f"train_ic={self.train_ic} "
-		        + (f"alt={self.alt} " if self.alt else "") +
+		        + (f"alt={self.alt} " if self.alt else "")
+		        + (f"yawref={self.yawref} " if self.yawref else "") +
 		        f"fitness_pools={self.fitness_pools}")
 
 
@@ -134,7 +138,7 @@ def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: st
                        rf: str = UNKNOWN, calib: str = UNKNOWN,
                        drop: str = UNKNOWN, write: str = UNKNOWN, label: str = UNKNOWN,
                        abp: str = UNKNOWN, select: str = UNKNOWN,
-                       train_ic: str = UNKNOWN, alt: str = "") -> ControllerProvenance:
+                       train_ic: str = UNKNOWN, alt: str = "", yawref: str = "") -> ControllerProvenance:
 	"""Gather every field, never raising: each accessor degrades to UNKNOWN / 0."""
 	wheel, abi, sha = _wheel_identity()
 	return ControllerProvenance(
@@ -158,6 +162,7 @@ def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: st
 		select=select.replace(" ", "_").replace('"', ""),
 		train_ic=train_ic.replace(" ", "_").replace('"', ""),
 		alt=alt.replace(" ", "_").replace('"', ""),
+		yawref=yawref.replace(" ", "_").replace('"', ""),
 	)
 
 
