@@ -398,3 +398,21 @@ POST HOC: est-fed + bias compensation + l = 0.05  | 100.00   | 0.628  | 0.187   
 - **Approval (Luiz, 14/11/2026):** N1 INDI route CLOSED; N2 confirm the bias-compensated MPCOF once on the 35 test units; N3 to `experiment-design` after N2; N5 investigate the student's gap.
 - **Accepted for this confirmation:** the +0.016 m position miss on val (§11.2) against the pre-registered +0.005 m. The confirmation is report-only.
 - **What is scored, once:** units 99990101..99990135 × 100 episodes, three arms only (shipped est-fed, est-fed + bias compensation, oracle-fed bound). Arm 1 must reproduce the published 100.0 / 1.35 / 0.68 / 0.341 / 0 fails or the run stops. No tuning afterwards, no extra arms; the post hoc l = 0.05 row is not scored on test.
+
+### 12.1 Result — **TEST** (35 units 99990101..99990135 × 100 episodes = 3500 episodes; scored once, 14/11/2026)
+
+Run: `rival_probe_tests::test_confirmation_bias_compensated_mpcof` (an `#[ignore]` cargo test with its own fixture variable; fixture from `scripts/ctrl_indi_val_fixture.py --units test`). Log: `/tmp/ctrl_indi_probe/test_confirm.log`. Gate passed: arm 1 reproduces the published rival (1.352 / 0.684 / 0.341 / 0 fails) and the installed wheel's row on unit 99990101.
+
+```
+arm (TEST)                                      | stable % | err °  | steady ° | pos m | fails/3500 | Δ steady ° | units better/worse | hold roll ° | hold pitch ° | hold yaw ° | fed bias r/p ° | after compensation r/p °
+------------------------------------------------+----------+--------+----------+-------+------------+------------+--------------------+-------------+--------------+------------+----------------+-------------------------
+MPCOF>rate(h10) est-fed SHIPPED                 | 100.00   | 1.352  | 0.684    | 0.341 | 0          |  0.000     | -                  | 0.443       | 0.419        | 0.078      | 0.36 / 0.34    | 0.36 / 0.34
+MPCOF>rate(h10) est-fed + bias compensation     | 100.00   | 0.691  | 0.165    | 0.357 | 0          | -0.519     | 35/0               | 0.094       | 0.083        | 0.078      | 0.11 / 0.10    | 0.02 / 0.02
+MPCOF>rate(h10) oracle-fed (bound, not a rival) | 100.00   | 0.690  | 0.163    | 0.357 | 0          | -0.521     | 35/0               | 0.095       | 0.083        | 0.076      | 0.00 / 0.00    | 0.00 / 0.00
+```
+
+- **Confirmed.** The val result holds on test: est-fed steady 0.684° → 0.165° (35 of 35 units), err 1.352° → 0.691°, 0 fails in 3500. The compensated est-fed row is within 0.002° of the oracle-fed bound.
+- **Position:** 0.341 m → 0.357 m (+0.016 m), the same cost as on val and equal to the oracle-fed row's.
+- **Yaw unchanged** (0.078°). The whole gain is roll/pitch: 0.443 / 0.419° → 0.094 / 0.083°.
+- This was the single look at test for this rival. Nothing was tuned on it and nothing further is scored on it.
+- For N3 (`experiment-design`): the equal-information MPCOF rival is 100.0 / 0.69 / 0.17 / 0.357 / 0 on test, against the student "both" at about 1.37 / 0.77 / 0.36.

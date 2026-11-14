@@ -112,7 +112,7 @@ struct Unit
 
 impl Unit
 {
-	fn load(path: &std::path::Path) -> Unit
+	fn load(path: &std::path::Path, allow_test: bool) -> Unit
 	{
 		let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
 		let mut f = HashMap::new();
@@ -131,7 +131,7 @@ impl Unit
 		}
 		let seed = f["unit_seed"][0] as u64;
 		// Report-only units never enter a tuning read (spec §10.1).
-		assert!(!(99990101..=99990400).contains(&seed), "unit {seed} is a TEST unit — refused");
+		assert!(allow_test || !(99990101..=99990400).contains(&seed), "unit {seed} is a TEST unit — refused");
 		Unit { seed, dist_seed: dist_seed.expect("fixture has no dist_seed"), f }
 	}
 
@@ -236,16 +236,21 @@ impl Unit
 
 fn units() -> Vec<Unit>
 {
-	let dir = std::env::var("WNN_INDI_PROBE_FIXTURE").expect("set WNN_INDI_PROBE_FIXTURE to the fixture directory");
+	let u = units_from("WNN_INDI_PROBE_FIXTURE", false);
+	assert_eq!(u.len(), 20, "the pre-registration names 20 val units, found {}", u.len());
+	u
+}
+
+fn units_from(var: &str, allow_test: bool) -> Vec<Unit>
+{
+	let dir = std::env::var(var).unwrap_or_else(|_| panic!("set {var} to the fixture directory"));
 	let mut paths: Vec<_> = std::fs::read_dir(&dir)
 		.unwrap_or_else(|e| panic!("{dir}: {e}"))
 		.map(|e| e.unwrap().path())
 		.filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("unit_")))
 		.collect();
 	paths.sort();
-	let u: Vec<Unit> = paths.iter().map(|p| Unit::load(p)).collect();
-	assert_eq!(u.len(), 20, "the pre-registration names 20 val units, found {}", u.len());
-	u
+	paths.iter().map(|p| Unit::load(p, allow_test)).collect()
 }
 
 /// One arm on every unit: per-unit (row, report), units in parallel.
@@ -362,4 +367,36 @@ fn val_sweep()
 			print_table("F1 — bias-compensated MPCOF, VAL (20 units × 100 episodes)", &units, &arms, 0);
 		}
 	}
+}
+
+/// Spec §12 (N2, Luiz 14/11/2026): the ONE look at the 35 test units for the
+/// bias-compensated MPCOF rival. Three arms, fixed; arm 1 must reproduce the published
+/// row before anything else is read. Guarded by its own fixture variable so the val
+/// sweep can never pick test units up.
+#[test]
+#[ignore = "REPORT-ONLY one-shot on the 35 test units (spec §12): needs WNN_INDI_TEST_CONFIRM_FIXTURE"]
+fn test_confirmation_bias_compensated_mpcof()
+{
+	let units = units_from("WNN_INDI_TEST_CONFIRM_FIXTURE", true);
+	let seeds: Vec<u64> = units.iter().map(|u| u.seed).collect();
+	assert_eq!(seeds, (99990101..=99990135).collect::<Vec<u64>>(), "exactly the 35 published test units");
+	self_check(&units);
+	let shipped = Arm { name: "MPCOF>rate(h10) est-fed SHIPPED".into(), per_unit: fly(&units, true, &RivalProbe::measure_only) };
+	let (err, steady, pos) = (
+		mean(shipped.per_unit.iter().map(|(r, _)| r.1)),
+		mean(shipped.per_unit.iter().map(|(r, _)| r.2)),
+		mean(shipped.per_unit.iter().map(|(r, _)| r.4)),
+	);
+	let stable = mean(shipped.per_unit.iter().map(|(r, _)| r.0));
+	// docs/ctrl48_fixed_scorer_table.md: 100.0 / 1.35 / 0.68 / 0.341 (0 fails).
+	assert!(
+		stable == 1.0 && (err - 1.35).abs() < 0.005 && (steady - 0.68).abs() < 0.005 && (pos - 0.341).abs() < 0.0005,
+		"the shipped row does not reproduce the published rival: {stable} / {err:.4} / {steady:.4} / {pos:.4} — STOP"
+	);
+	let arms = vec![
+		shipped,
+		Arm { name: "MPCOF>rate(h10) est-fed + bias compensation".into(), per_unit: fly(&units, true, &|| RivalProbe::measure_only().with_bias_comp()) },
+		Arm { name: "MPCOF>rate(h10) oracle-fed (bound, not a rival)".into(), per_unit: fly(&units, false, &RivalProbe::measure_only) },
+	];
+	print_table("N2 — bias-compensated MPCOF, TEST (35 units × 100 episodes), one shot", &units, &arms, 0);
 }

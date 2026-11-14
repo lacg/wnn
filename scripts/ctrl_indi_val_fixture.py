@@ -82,10 +82,13 @@ def main() -> None:
 	ap = argparse.ArgumentParser()
 	ap.add_argument("--run-log", required=True)
 	ap.add_argument("--out", required=True)
+	ap.add_argument("--units", choices=["val", "test"], default="val",
+	                help="val (default): the run's stage-select val units. test: the run's --test-seeds — "
+	                     "REPORT-ONLY, for a one-shot confirmation Luiz approved (spec §12); never for tuning.")
 	args = ap.parse_args()
 	from wnn.control._accel import score_classical_baseline
 	a, ec = _run_args(args.run_log)
-	units = _val_units(a)
+	units = _val_units(a) if args.units == "val" else [int(x) for x in a.test_seeds]
 	out = Path(args.out)
 	out.mkdir(parents=True, exist_ok=True)
 	for i, unit in enumerate(units):
@@ -97,7 +100,7 @@ def main() -> None:
 			lines.append(_line("expect_est_row", [r[0], r[1], r[2], r[4]]))
 			print(f"[fixture] unit {unit} installed-wheel est-fed row: stable {r[0]:.4f} err {r[1]:.4f} steady {r[2]:.4f} pos {r[4]:.4f}")
 		(out / f"unit_{unit}.txt").write_text("\n".join(lines) + "\n")
-	print(f"[fixture] {len(units)} VAL units {units[0]}..{units[-1]} x {a.test_episodes} episodes -> {out}")
+	print(f"[fixture] {len(units)} {args.units.upper()} units {units[0]}..{units[-1]} x {a.test_episodes} episodes -> {out}")
 
 
 if __name__ == "__main__":
