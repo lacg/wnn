@@ -185,7 +185,7 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
-AS OF 14/11/2026 12:10 UTC — REPORT FORMAT (Luiz 14/11: standardize): every paired/head-to-head controller table uses the COMPACT PAIR form — one row per seed (ALL seeds of the comparison, e.g. s1-s10), columns `stable % | err ° | steady ° | pos m | fails` each as `A | B`, then `Δ (B − A): err · steady · pos · fails`; a pool line underneath (`running pools <range>: A x/N · B y/N (gate ceiling ...)`). ALWAYS a legend line ABOVE the table naming A and B (Luiz 14/11), e.g. `A = dc_ms01 · B = both`. Example:
+AS OF 14/11/2026 12:10 UTC — REPORT FORMAT (Luiz 14/11: standardize): every paired/head-to-head controller table uses the COMPACT PAIR form — one row per seed (ALL seeds of the comparison, e.g. s1-s10), columns `stable % | err ° | steady ° | pos m | fails` each as `A | B`, then `Δ (B − A): err · steady · pos · fails`; a pool line underneath (`running pools <range>: A x/N · B y/N (gate ceiling ...)`). ALWAYS a legend line ABOVE the table naming A and B (Luiz 14/11), e.g. `A = dc_ms01 · B = both`; and directly under the header a REFERENCE row for the MPCOF cascade (Luiz 14/11): `MPCOF  100.0  1.35  0.68  0.341  0` (same on every seed; docs/ctrl48_fixed_scorer_table.md). Example:
   A = dc_ms01 · B = both
   seed   stable %        err °          steady °       pos m           fails   Δ (both − dc_ms01): err · steady · pos · fails
   s4     99.9 | 100.0    1.44 | 1.40    0.94 | 0.83    0.357 | 0.358   3 | 1   −0.04 · −0.11 · +0.001 · −2
