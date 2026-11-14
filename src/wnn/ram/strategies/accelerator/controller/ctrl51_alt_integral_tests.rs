@@ -192,7 +192,9 @@ fn refusals()
 /// One rival episode set (firmware PID cascade, oracle-fed, no weather) on the cf21
 /// translating plant. `xy` empty ⇒ stage 1.
 #[allow(clippy::type_complexity)]
-fn rival(
+#[allow(clippy::too_many_arguments)]
+fn rival_of(
+	teacher: u8,
 	c: &RewardGatedConfigPacked,
 	mode: u8,
 	hold: usize,
@@ -206,7 +208,7 @@ fn rival(
 {
 	let n = mass.len();
 	crate::dagger_train::score_classical_baseline(
-		0, q0.to_vec(), w0.to_vec(), steps, 5.0,
+		teacher, q0.to_vec(), w0.to_vec(), steps, 5.0,
 		false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0, 0.0, 0, 0, 0.0,
 		c.af_arm_length, c.af_k_thrust, c.af_k_drag, c.af_inertia, c.af_gravity, c.dt as f32,
 		c.af_pid_att, c.af_pid_rate, c.af_pid_out_limit_n, c.af_pid_hover_n, c.af_pid_attitude_hz, c.af_pid_lpf_hz,
@@ -217,6 +219,22 @@ fn rival(
 		c.pos_omega as f64, c.pos_zeta as f64, c.pos_max_tilt_rad as f64,
 		0.0, false, 0.0, false, hold, mode,
 	)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn rival(
+	c: &RewardGatedConfigPacked,
+	mode: u8,
+	hold: usize,
+	steps: usize,
+	q0: &[f32],
+	w0: &[f32],
+	z0: &[f32],
+	mass: &[f32],
+	xy: &[(f32, f32)],
+) -> pyo3::PyResult<(f64, f64, f64, f64, f64, f64, f64, f64, f64, f64)>
+{
+	rival_of(0, c, mode, hold, steps, q0, w0, z0, mass, xy)
 }
 
 const LEVEL_Q: [f32; 4] = [1.0, 0.0, 0.0, 0.0];
@@ -276,9 +294,15 @@ fn rival_integrator_resets_per_episode()
 /// sense_altitude, the DAgger label path) on the same episode.
 fn outer_loops_flight(c: &RewardGatedConfigPacked, hold: usize, steps: usize, q0: [f32; 4], w0: [f32; 3], z0: f32, mass: f32, xy: (f32, f32)) -> [f64; 4]
 {
+	outer_loops_flight_of(0, c, hold, steps, q0, w0, z0, mass, xy)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn outer_loops_flight_of(teacher_id: u8, c: &RewardGatedConfigPacked, hold: usize, steps: usize, q0: [f32; 4], w0: [f32; 3], z0: f32, mass: f32, xy: (f32, f32)) -> [f64; 4]
+{
 	use crate::episode_regime::{alt_integrator_for, sense_altitude, OuterLoops};
 	let af = crate::dagger_train::AirframeRs::from_cfg(c);
-	let (mut sim, mut teacher) = (af.sim(), af.teacher(0));
+	let (mut sim, mut teacher) = (af.sim(), af.teacher(teacher_id));
 	let loops = OuterLoops::for_cfg(c);
 	let mut alt_int = alt_integrator_for(c);
 	let mut over = (hold > 0).then(|| crate::ctbr::CtbrOverRate::new(af.pid_fw.as_ref().unwrap().rate_stage(), hold));
@@ -353,6 +377,37 @@ fn rival_and_outer_loops_fly_the_same_altitude_law()
 	}
 	// The mode reaches both hosts: the hold |dz| differs between off, pi and pole3.
 	assert!((moved[0] - moved[1]).abs() > 1e-4 && (moved[0] - moved[2]).abs() > 1e-4 && (moved[1] - moved[2]).abs() > 1e-6, "alt_integral is dead: {moved:?}");
+}
+
+/// The same equality for the MPCOF teacher — the label law block 10 flies (the test
+/// above is the firmware PID, teacher 0): motor-level (hold 0) and the cascade at the
+/// student's outer rate (hold 10), all three modes. Oracle-fed on both sides: the
+/// altitude law does not read the attitude feed.
+#[test]
+fn mpcof_rival_and_label_fly_the_same_altitude_law()
+{
+	let (q0, w0) = ([0.9987f32, 0.03, -0.04, 0.0], [0.2f32, -0.1, 0.0]);
+	let (z0, mass, xy) = (-0.12f32, MASS * 1.1, (0.35f32, -0.25f32));
+	for hold in [0usize, 10]
+	{
+		let mut moved = Vec::new();
+		for mode in [0u8, 1, 2]
+		{
+			let c = cfg(mode, 0.5);
+			let r = rival_of(4, &c, mode, hold, 2000, &q0, &w0, &[z0], &[mass], &[xy]).expect("mpcof rival scores");
+			let got = [r.3, r.4, r.8, r.9];
+			let want = outer_loops_flight_of(4, &c, hold, 2000, q0, w0, z0, mass, xy);
+			for i in 0..4
+			{
+				assert!(
+					(got[i] - want[i]).abs() <= 1e-9 * want[i].abs().max(1e-6),
+					"mpcof hold {hold} mode {mode} metric {i}: rival {} vs OuterLoops {}", got[i], want[i]
+				);
+			}
+			moved.push(got[3]);
+		}
+		assert!((moved[0] - moved[1]).abs() > 1e-4 && (moved[0] - moved[2]).abs() > 1e-4, "mpcof hold {hold}: alt_integral is dead: {moved:?}");
+	}
 }
 
 /// The student's alt_err observation IS the altitude law's input (Hard Rule 1): in

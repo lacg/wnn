@@ -67,6 +67,8 @@ impl StudentAlphabet
 }
 
 /// What the probe measured, averaged over episodes (radians, metres).
+// Built only by the cargo tests (the pyfunction passes no probe).
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct RivalProbeReport
 {
@@ -113,6 +115,8 @@ pub(crate) struct RivalProbe
 	pos_eps: usize,
 }
 
+// Built only by the cargo tests (the pyfunction passes no probe).
+#[cfg_attr(not(test), allow(dead_code))]
 impl RivalProbe
 {
 	/// Every option off: the scorer's shipped behaviour, plus the per-axis report.

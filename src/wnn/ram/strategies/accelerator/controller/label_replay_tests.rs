@@ -99,6 +99,9 @@ struct Acc
 	ep_bias_signed: [f64; 4],
 	episodes: f64,
 	max_pwm_gap: f64,
+	/// Hold decision ticks, 11 f32 each: [unit_idx, ep, t, label ×4, student ×4] — the
+	/// offline pre-checks of docs/ctrl48_block10_levers_spec.md (WNN_GAP_LABEL_DUMP).
+	dump: Vec<f32>,
 }
 
 impl Acc
@@ -126,6 +129,7 @@ impl Acc
 		}
 		self.episodes += o.episodes;
 		self.max_pwm_gap = self.max_pwm_gap.max(o.max_pwm_gap);
+		self.dump.extend(o.dump);
 		self
 	}
 }
@@ -188,6 +192,9 @@ fn replay_episode(r: &Rig, ticks: &[f32], acc: &mut Acc)
 		}
 		if t >= tail
 		{
+			acc.dump.extend([rec[0], rec[1], rec[2]]);
+			acc.dump.extend(label.iter().map(|&v| v as f32));
+			acc.dump.extend(sp.iter().map(|&v| v as f32));
 			hold_n += 1.0;
 			for m in 0..4
 			{
@@ -239,6 +246,11 @@ fn label_replay_on_student_states()
 		.reduce(Acc::default, Acc::merge);
 	// GATE: the rebuilt inner loop IS the vehicle's (f32 trace ⇒ ~1e-7 rounding).
 	assert!(acc.max_pwm_gap < 5e-5, "the rebuilt rate loop does not reproduce the recorded motor command (max gap {}) — labels would be planned from the wrong inner state", acc.max_pwm_gap);
+	if let Ok(out) = std::env::var("WNN_GAP_LABEL_DUMP")
+	{
+		let bytes: Vec<u8> = acc.dump.iter().flat_map(|v| v.to_le_bytes()).collect();
+		std::fs::write(&out, bytes).unwrap_or_else(|e| panic!("{out}: {e}"));
+	}
 	println!("\n[label-replay] {path}: {} episodes, {} decision ticks ({} in the hold); rebuilt inner loop vs recorded pwm max gap {:.1e}", acc.episodes, acc.n[0], acc.n[2], acc.max_pwm_gap);
 	println!("| bank | window | label RMS | student RMS | (student − label) RMS | mean abs | error / label RMS | slope student on label | R² | mean abs episode-mean hold bias | mean signed hold bias |");
 	println!("|---|---|---|---|---|---|---|---|---|---|---|");

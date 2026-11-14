@@ -185,7 +185,7 @@ impl Unit
 	fn score_tweaked(&self, use_est: bool, tw: Tweak, probe: Option<&mut RivalProbe>) -> Row
 	{
 		crate::dagger_train::score_classical_baseline_probed(
-			4,
+			tw.teacher.unwrap_or(4),
 			self.v32("init_qs"),
 			self.v32("init_omegas"),
 			tw.steps.unwrap_or(self.s("steps") as usize),
@@ -237,7 +237,7 @@ impl Unit
 			self.s("rotor_drag") as f32,
 			self.b("att_err_tilt_ref"),
 			self.s("ctbr_outer_hold") as usize,
-			0, // alt_integral off
+			tw.alt_integral,
 			probe,
 		)
 		.map(crate::dagger_train::rival_first8)
@@ -250,6 +250,10 @@ struct Tweak
 {
 	pos_omega_n: Option<f64>,
 	steps: Option<usize>,
+	/// Block 10 L3: the altitude integrator mode (0 off, 1 pi, 2 pole3) and the teacher
+	/// (None = MPCOF, Some(0) = the firmware PID cascade).
+	alt_integral: u8,
+	teacher: Option<u8>,
 }
 
 pub(crate) fn units() -> Vec<Unit>
@@ -503,15 +507,43 @@ fn val_gap_and_position()
 	{
 		pos.push(Arm {
 			name: format!("TASK CHANGE ω_n = {wn} rad/s, est + bias comp"),
-			per_unit: fly_tweaked(&units, true, Tweak { pos_omega_n: Some(wn), steps: None }, &comp),
+			per_unit: fly_tweaked(&units, true, Tweak { pos_omega_n: Some(wn), ..Tweak::default() }, &comp),
 		});
 	}
 	for steps in [4000usize, 8000]
 	{
 		pos.push(Arm {
 			name: format!("TASK CHANGE {} s episodes, est + bias comp", steps / 1000),
-			per_unit: fly_tweaked(&units, true, Tweak { pos_omega_n: None, steps: Some(steps) }, &comp),
+			per_unit: fly_tweaked(&units, true, Tweak { steps: Some(steps), ..Tweak::default() }, &comp),
 		});
 	}
 	print_position_table("C — position budget, MPCOF>rate(h10), VAL (20 units × 100 episodes); fifths are consecutive fifths of the episode", &units, &pos);
+}
+
+/// docs/ctrl48_block10_levers_spec.md — L3 pre-check, VAL units only: the label law
+/// (MPCOF>rate, est + bias compensation and oracle-fed) and the firmware PID cascade
+/// rival, altitude integrator off / pi / pole3.
+#[test]
+#[ignore = "val-unit sweep: needs WNN_INDI_PROBE_FIXTURE; minutes of CPU"]
+fn val_alt_integral()
+{
+	let units = units();
+	self_check(&units);
+	let comp = || RivalProbe::measure_only().with_bias_comp();
+	let mut arms = Vec::new();
+	for (who, teacher, use_est, make) in [
+		("MPCOF>rate(h10) est + bias comp", None, true, &comp as &(dyn Fn() -> RivalProbe + Sync)),
+		("MPCOF>rate(h10) oracle-fed", None, false, &RivalProbe::measure_only),
+		("PID>rate(h10) est-fed", Some(0u8), true, &RivalProbe::measure_only),
+	]
+	{
+		for (mode, name) in [(0u8, "off"), (1, "pi"), (2, "pole3")]
+		{
+			arms.push(Arm {
+				name: format!("{who}, alt-integral {name}"),
+				per_unit: fly_tweaked(&units, use_est, Tweak { alt_integral: mode, teacher, ..Tweak::default() }, make),
+			});
+		}
+	}
+	print_position_table("L3 — altitude integrator, VAL (20 units × 100 episodes); fifths are consecutive fifths of the episode", &units, &arms);
 }

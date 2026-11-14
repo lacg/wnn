@@ -220,6 +220,8 @@ class ControllerMetrics(Metrics):
 	mean_altitude_error_m: Optional[float] = None  # stage 1+2: mean |altitude error| (METRES) — the vertical component of pos alone
 	mean_dx_m: Optional[float] = None  # ABI 32: mean |x error| (METRES), None unless the run translates
 	mean_dy_m: Optional[float] = None  # ABI 32: mean |y error| (METRES), None unless the run translates
+	mean_position_hold_m: Optional[float] = None  # ABI 51: mean 3D position error over the HOLD window (last 20% of steps), METRES
+	mean_dz_hold_m: Optional[float] = None  # ABI 51: mean |altitude error| over the HOLD window, METRES
 
 	@property
 	def acc(self) -> float:

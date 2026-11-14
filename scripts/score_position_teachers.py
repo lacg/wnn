@@ -137,10 +137,11 @@ def main():
 	      f"  mean initial displacement")
 
 	for name in [t.strip() for t in a.teachers.split(",") if t.strip()]:
+		# [:5]: ABI 51 appends the hold-window position and |dz| (values 6, 7).
 		pos_err, final_err, stable, att_err, steady = rc.score_position_teacher(
 			TEACHERS[name], qs, oms, ps, float(af.mass), a.steps,
 			pos_omega_n=a.pos_omega_n, pos_zeta=a.pos_zeta,
-			pos_max_tilt_deg=a.max_tilt_deg, **kw)
+			pos_max_tilt_deg=a.max_tilt_deg, **kw)[:5]
 		# The bar is on the SETTLED error, so final position error is the one to
 		# read against Molchanov; mean includes the fly-back transient.
 		verdict = ("PASS" if final_err <= max(MOLCHANOV_M)

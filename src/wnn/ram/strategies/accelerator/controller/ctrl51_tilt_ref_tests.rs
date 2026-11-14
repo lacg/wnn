@@ -316,9 +316,19 @@ fn tre_trainer_cpu_matches_gpu_walk()
 	{
 		return;
 	}
+	// QUAD_WEIGHTED (the default mode) and BINARY (the mode block 10 flies).
+	for mode in [QUAD_WEIGHTED, BINARY]
+	{
+		tre_trainer_parity_in(mode);
+	}
+}
+
+#[cfg(target_os = "macos")]
+fn tre_trainer_parity_in(mode: u8)
+{
 	let cfg = tre_cfg();
 	let run = |on: bool, gpu: bool| {
-		let mut c = tre_student(41, 4, on, 6, QUAD_WEIGHTED);
+		let mut c = tre_student(41, 4, on, 6, mode);
 		let st = crate::dagger_train::dagger_train_inplace_with(&mut c, &cfg, [0.0; 3], 51, gpu);
 		assert!(st.iter_cells_written.iter().sum::<usize>() > 0, "vacuous trainer run");
 		let ex = c.export_cells();

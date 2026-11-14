@@ -29,7 +29,7 @@ from typing import Any, Callable, Optional
 
 import numpy as np
 
-from .evaluator import ControllerSpec, arch_shape_from_spec
+from .evaluator import ControllerSpec, arch_shape_from_spec, tilt_ref_err_kw
 from .arch_strategy import default_controller_arch_config, _random_arch_genome
 from .recurrent_genome import RecurrentArchGenome, RecurrentArchShape, RecurrentArchConfig
 
@@ -78,6 +78,7 @@ def record_input_entropy(spec: ControllerSpec, thresholds: list, state_connectio
 		memory_mode=spec.memory_mode_int(),
 		ctbr=_ctbr_arg(spec),
 		yaw_integral_leak=getattr(spec, 'yaw_integral_leak', None),  # ARM 3 (ABI 50)
+		obs_tilt_ref_err=tilt_ref_err_kw(spec),  # block 10 L1 (ABI 51)
 	)
 	# axonogenesis getters (last_state_layer_input / last_output_layer_input) are live
 	# in the compiled accelerator (controller.rs:626/632) — verified 05/06/2026.

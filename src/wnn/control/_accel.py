@@ -154,7 +154,12 @@ import os
 # the CPU's LastWrite (was the QUAD nudge). Ships with worker ABI 29 (shared ram_core).
 # Same ABI 50: WnnController(yaw_integral_leak=) + dagger_train_batch_inplace(
 # yaw_integral_leak=) — ARM 3 --yaw-integral-leak (None = integral_leak, bit-identical).
-EXPECTED_ABI = 50
+# ABI 51 (14/11/2026, block 10 — docs/ctrl48_block10_levers_spec.md), all default-off:
+# WnnController / dagger_train_batch_inplace(obs_tilt_ref_err=(g, omega_n, zeta, max_tilt))
+# — L1; RewardGatedConfigPacked / score_classical_baseline / score_position_teacher /
+# score_controllers_cpu|metal(alt_integral=0|1|2; the WNN scorers also alt_pd_mass) — L3;
+# additive outputs: rival scorers +2 values (hold pos, hold |dz|), WNN rows 17 -> 19.
+EXPECTED_ABI = 51
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

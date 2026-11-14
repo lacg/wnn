@@ -252,6 +252,10 @@ class ControllerSpec:
 	# (yaw_err_i, yaw_i_pa); roll/pitch/tilt keep integral_leak. None = integral_leak
 	# (bit-identical). docs/ctrl_steady_gap_block6.md §3-4.
 	yaw_integral_leak: float | None = None
+	# Block 10 L1 (--obs-tilt-ref-err, ABI 51): roll_err / pitch_err become the
+	# bias-corrected error against the position loop's tilt reference. The value is
+	# that loop's shape (gravity, omega_n, zeta, max tilt rad); None = off, bit-identical.
+	obs_tilt_ref_err: tuple | None = None
 	integral_scale: float = 1.0   # pre-threshold scale for integral features
 	dt: float = 0.001             # physics step (s); MUST match episode/plant dt (yaw integ.)
 	# H3 (18/06): the 4 output banks are CONTROLS [T, τ_roll, τ_pitch, τ_yaw] mixed to
@@ -660,10 +664,18 @@ def _feature_controller(spec: ControllerSpec) -> WnnController:
 		obs_att_estimator=getattr(spec, 'obs_att_estimator', False), ctbr=ctbr_arg(spec),
 		obs_att_bias_pred=getattr(spec, 'obs_att_bias_pred', False),  # CTRL-46 (ABI 46)
 		yaw_integral_leak=getattr(spec, 'yaw_integral_leak', None),  # ARM 3 (ABI 50)
+		obs_tilt_ref_err=tilt_ref_err_kw(spec),  # block 10 L1 (ABI 51)
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 		dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
 		integral_leak=spec.integral_leak, integral_scale=spec.integral_scale)
+
+
+def tilt_ref_err_kw(spec) -> "tuple | None":
+	"""Block 10 L1: ControllerSpec.obs_tilt_ref_err as the 4-float tuple the wheel takes
+	(a spec reloaded from a checkpoint carries a list), or None when off."""
+	shape = getattr(spec, "obs_tilt_ref_err", None)
+	return None if not shape else tuple(float(x) for x in shape)
 
 
 def _centred_thresholds(arr: np.ndarray, bpf: int, outer_quantile) -> np.ndarray:
@@ -967,6 +979,11 @@ def _calibration_samples(spec, cal: "ThresholdCalibration", seed, geometry, allo
 	# byte-identical.
 	if _stage1_cal and _ec_translation and geometry is None:
 		return _training_cascade_samples(spec, episode_config, cal, seed)
+	# Block 10 L3: the Python rollout below feeds the student's alt_err RAW. With the
+	# altitude integrator on, only the Rust training cascade produces the reshaped input.
+	if getattr(episode_config, "alt_integral", "off") != "off":
+		raise ValueError("alt_integral is on: the thermometer must be fitted on the Rust training cascade "
+		                 "(translation, no overactuated geometry) — the Python calibration rollout has no integrator")
 	# CTRL-48: the curriculum-tilt pool is built from the training cascade's sampler;
 	# the legacy Python rollout below has no such sampler — refuse, never ignore.
 	if cal.regime != "flown":
@@ -1382,6 +1399,7 @@ def reference_packed_config(ec, teacher: str = "pid", teacher_hover_mode: str = 
 		teacher_hover_mode=_TEACHER_HOVER_MODES[teacher_hover_mode],
 		**_plant_train_kwargs(ec),
 		**ec.motor_lag_kwargs(),
+		**ec.alt_integral_kwargs(),  # block 10 L3 (ABI 51)
 		# ABI 32: the calibration sampler + MEMORY recorder fly the real-life
 		# plant too (AirframeRs::from_cfg arms it). Nothing is SCORED here, so
 		# the G5 reference is not passed.
@@ -1513,6 +1531,7 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		obs_att_estimator=getattr(spec, 'obs_att_estimator', False), ctbr=ctbr_arg(spec),
 		obs_att_bias_pred=getattr(spec, 'obs_att_bias_pred', False),  # CTRL-46 (ABI 46)
 		yaw_integral_leak=getattr(spec, 'yaw_integral_leak', None),  # ARM 3 (ABI 50)
+		obs_tilt_ref_err=tilt_ref_err_kw(spec),  # block 10 L1 (ABI 51)
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
@@ -2066,6 +2085,7 @@ class ControllerEvaluator:
 			# AXIS F: the TRAINING rollout + per-round eval fly the same lagged
 			# plant the scorers and baselines do (empty when the axis is off).
 			**rg.episode_config.motor_lag_kwargs(),
+			**rg.episode_config.alt_integral_kwargs(),  # block 10 L3 (ABI 51)
 			# ABI 32: real-life plant (AirframeRs) + G5 gate/checkpoint reference.
 			**rg.episode_config.imu_kwargs(), **rg.episode_config.att_ref_kwargs(),
 		)
@@ -2119,6 +2139,7 @@ class ControllerEvaluator:
 			obs_att_estimator=getattr(first_spec, 'obs_att_estimator', False), ctbr=ctbr_arg(first_spec),
 			obs_att_bias_pred=getattr(first_spec, 'obs_att_bias_pred', False),  # CTRL-46 (ABI 46)
 			yaw_integral_leak=getattr(first_spec, 'yaw_integral_leak', None),  # ARM 3 (ABI 50)
+			obs_tilt_ref_err=tilt_ref_err_kw(first_spec),  # block 10 L1 (ABI 51)
 			output_full_window=getattr(first_spec, 'output_full_window', False),
 			frame_stride=int(getattr(first_spec, 'frame_stride', 1)),
 			**_target_levels_kwarg(ra, first_spec),
@@ -2210,6 +2231,7 @@ class ControllerEvaluator:
 			# AXIS F: the TRAINING rollout + per-round eval fly the same lagged
 			# plant the scorers and baselines do (empty when the axis is off).
 			**rg.episode_config.motor_lag_kwargs(),
+			**rg.episode_config.alt_integral_kwargs(),  # block 10 L3 (ABI 51)
 			# ABI 32: real-life plant (AirframeRs) + G5 gate/checkpoint reference.
 			**rg.episode_config.imu_kwargs(), **rg.episode_config.att_ref_kwargs(),
 		)
@@ -2230,6 +2252,7 @@ class ControllerEvaluator:
 		obs_att_estimator=getattr(spec, 'obs_att_estimator', False), ctbr=ctbr_arg(spec),
 		obs_att_bias_pred=getattr(spec, 'obs_att_bias_pred', False),  # CTRL-46 (ABI 46)
 		yaw_integral_leak=getattr(spec, 'yaw_integral_leak', None),  # ARM 3 (ABI 50)
+		obs_tilt_ref_err=tilt_ref_err_kw(spec),  # block 10 L1 (ABI 51)
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
@@ -2433,7 +2456,7 @@ class ControllerEvaluator:
 				agg = scorer(
 					controllers, q0, omega0, self.num_eval, ec.steps_per_episode,
 					geometry=geo_rows, rotor_asym=geo_asym,
-					**ec.sim_kwargs(), **ec.motor_lag_kwargs(),
+					**ec.sim_kwargs(), **ec.motor_lag_kwargs(), **ec.alt_integral_scorer_kwargs(),
 					**ec.imu_kwargs(), **ec.att_ref_kwargs(),
 					**alloc_kwargs, **stage1_kwargs)
 			else:
@@ -2460,7 +2483,7 @@ class ControllerEvaluator:
 					dist_obs_delay_steps=int(dist.obs_delay_steps),
 					dist_torque_scale_jitter=float(dist.torque_scale_jitter),
 					geometry=geo_rows, rotor_asym=geo_asym,
-					**ec.sim_kwargs(), **ec.motor_lag_kwargs(),
+					**ec.sim_kwargs(), **ec.motor_lag_kwargs(), **ec.alt_integral_scorer_kwargs(),
 					**ec.imu_kwargs(), **ec.att_ref_kwargs(),
 					**alloc_kwargs, **stage1_kwargs)
 		except Exception as e:
@@ -2502,6 +2525,11 @@ class ControllerEvaluator:
 			# attitude-only report lines stay exactly as they were.
 			dx_m = row[15] if (s1_on and len(row) > 16) else None
 			dy_m = row[16] if (s1_on and len(row) > 16) else None
+			# 18th/19th (ABI 51, block 10): the HOLD-window (last 20% of steps) mean 3-D
+			# position error and mean |dz| in METRES — the transient split off. None unless
+			# the run translates or on an older wheel.
+			pos_hold_m = row[17] if (s1_on and len(row) > 18) else None
+			dz_hold_m = row[18] if (s1_on and len(row) > 18) else None
 			out.append((float(mean_reward), {
 				"mean_reward": float(mean_reward),
 				"mean_attitude_error_rad": float(mean_err_rad),
@@ -2527,6 +2555,8 @@ class ControllerEvaluator:
 				"mean_altitude_error_m": (float(alt_err_m) if alt_err_m is not None else None),
 				"mean_dx_m": (float(dx_m) if dx_m is not None else None),
 				"mean_dy_m": (float(dy_m) if dy_m is not None else None),
+				"mean_position_hold_m": (float(pos_hold_m) if pos_hold_m is not None else None),
+				"mean_dz_hold_m": (float(dz_hold_m) if dz_hold_m is not None else None),
 				"mean_ise": float(ise),
 				# Allocation-effort proxy (Σu², Phase 3): the Σu² fitness input.
 				"mean_effort": (float(effort) if effort is not None else None),
@@ -2985,6 +3015,8 @@ class ControllerEvaluator:
 				mean_altitude_error_m=(float(_aem) if _aem is not None else None),
 				mean_dx_m=(float(_dx) if _dx is not None else None),
 				mean_dy_m=(float(_dy) if _dy is not None else None),
+				mean_position_hold_m=m.get("mean_position_hold_m"),
+				mean_dz_hold_m=m.get("mean_dz_hold_m"),
 			)
 			if write_back or return_stats:
 				# Fill counts straight from Rust; the old _cell_stats ALSO called
@@ -3110,7 +3142,9 @@ class ControllerEvaluator:
 		                mean_altitude_error_m=(float(m["mean_altitude_error_m"])
 		                                       if m.get("mean_altitude_error_m") is not None else None),
 		                mean_dx_m=(float(m["mean_dx_m"]) if m.get("mean_dx_m") is not None else None),
-		                mean_dy_m=(float(m["mean_dy_m"]) if m.get("mean_dy_m") is not None else None))
+		                mean_dy_m=(float(m["mean_dy_m"]) if m.get("mean_dy_m") is not None else None),
+		                mean_position_hold_m=m.get("mean_position_hold_m"),
+		                mean_dz_hold_m=m.get("mean_dz_hold_m"))
 		        for (r, m) in scored]
 
 	def _score_grouped(self, controllers: list, shape_keys: list) -> list:

@@ -80,6 +80,9 @@ def replay(RC, c, q0, w0, n_eps, steps, k, ui, n_trace, extra_idx=()):
 		ad = lambda e, v: om * om * e - 2 * ze * om * v
 		return max(-mt, min(mt, -ad(-y, vy) / gvt)), max(-mt, min(mt, ad(-x, vx) / gvt))
 
+	# This replay feeds the student's alt_err RAW; with the block-10 altitude integrator on
+	# the Rust hosts feed the reshaped value, so the replay would not be the scorer's flight.
+	assert not k.get("alt_integral", 0), "ctrl_gap_student_trace: alt_integral is on — this Python replay has no integrator"
 	tail = math.ceil(steps * 0.8)
 	rows, eps = [], []
 	trace = np.zeros((n_trace * steps, TRACE_W), dtype=np.float32)
