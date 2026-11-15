@@ -394,6 +394,9 @@ struct RolloutParams
 	// error against the trim-shifted target, target2 − κ·cresid_z (YawTrimErr::kappa).
 	yte_on: u32,
 	yte_kappa: f32,
+	// + 1 (L2y' of block 10, ABI 52), appended in lockstep with the shader twin: κ of the
+	// proportional-only yaw shift; read only by the FC_YAW_TRIM_P(4) specialization.
+	ytp_kappa: f32,
 }
 
 /// CTRL-38: the cascade feature blocks as the score kernel needs them, read off the
@@ -524,7 +527,8 @@ pub struct ControllerRolloutEvaluator
 	// CTRL-38: the FC_CASCADE_OBS=true specialization (cascade input blocks on),
 	// built on first use. The default pipeline above dead-strips the blocks.
 	// CTRL-46: keyed (cascade, abp) — FC_ATT_BIAS_PRED(3) composes with it.
-	cascade_obs_pipeline: std::cell::RefCell<std::collections::HashMap<(bool, bool), ComputePipelineState>>,
+	// ABI 52: keyed (cascade, abp, ytp) — FC_YAW_TRIM_P(4) composes with both.
+	cascade_obs_pipeline: std::cell::RefCell<std::collections::HashMap<(bool, bool, bool), ComputePipelineState>>,
 	/// TEST-ONLY (ABI 38 label-replay identity on the GPU): Some(firmware attitude
 	/// gains) ⇒ a CTBR population's outer setpoint is the in-kernel firmware attitude
 	/// half (ctbr_outer_pid) instead of the WNN decode.
@@ -612,9 +616,9 @@ impl ControllerRolloutEvaluator
 	/// geometry — CTBR refuses geometry). Only it appends the cascade blocks.
 	/// CTRL-46: `abp` = FC_ATT_BIAS_PRED(3)=true; a constant is set ONLY when on, so the
 	/// (true, false) pipeline is the ABI-45 cascade pipeline exactly.
-	fn cascade_obs_pipeline(&self, cas: bool, abp: bool) -> Result<ComputePipelineState, String>
+	fn cascade_obs_pipeline(&self, cas: bool, abp: bool, ytp: bool) -> Result<ComputePipelineState, String>
 	{
-		if let Some(p) = self.cascade_obs_pipeline.borrow().get(&(cas, abp))
+		if let Some(p) = self.cascade_obs_pipeline.borrow().get(&(cas, abp, ytp))
 		{
 			return Ok(p.clone());
 		}
@@ -628,15 +632,20 @@ impl ControllerRolloutEvaluator
 		{
 			fcv.set_constant_value_at_index(&on as *const bool as *const _, MTLDataType::Bool, 3);
 		}
+		// ABI 52: L2y' (set ONLY when on, so every ABI-51 key is the ABI-51 pipeline).
+		if ytp
+		{
+			fcv.set_constant_value_at_index(&on as *const bool as *const _, MTLDataType::Bool, 4);
+		}
 		let func = self
 			.library
 			.get_function("controller_rollout", Some(fcv))
-			.map_err(|e| format!("controller_rollout specialization (cascade obs {cas}, abp {abp}) failed: {e}"))?;
+			.map_err(|e| format!("controller_rollout specialization (cascade obs {cas}, abp {abp}, ytp {ytp}) failed: {e}"))?;
 		let p = self
 			.device
 			.new_compute_pipeline_state_with_function(&func)
 			.map_err(|e| format!("obs pipeline creation (cascade {cas}, abp {abp}) failed: {e}"))?;
-		self.cascade_obs_pipeline.borrow_mut().insert((cas, abp), p.clone());
+		self.cascade_obs_pipeline.borrow_mut().insert((cas, abp, ytp), p.clone());
 		Ok(p)
 	}
 
@@ -978,7 +987,7 @@ impl ControllerRolloutEvaluator
 		let geom_pipeline = match geometry
 		{
 			Some(rotors) => Some(self.geometry_pipeline(rotors.len() as u32, abp_on)?),
-			None if cas_on || abp_on => Some(self.cascade_obs_pipeline(cas_on, abp_on)?),
+			None if cas_on || abp_on => Some(self.cascade_obs_pipeline(cas_on, abp_on, controllers[0].yaw_trim_p_kappa().is_some())?),
 			None => None,
 		};
 		let pipeline: &ComputePipelineState = geom_pipeline.as_ref().unwrap_or(&self.pipeline);
@@ -1235,6 +1244,7 @@ impl ControllerRolloutEvaluator
 				tre_shape: controllers[0].tilt_ref_err_shape().unwrap_or([0.0; 4]),
 				yte_on: controllers[0].yaw_trim_kappa().is_some() as u32,
 				yte_kappa: controllers[0].yaw_trim_kappa().unwrap_or(0.0),
+				ytp_kappa: controllers[0].yaw_trim_p_kappa().unwrap_or(0.0),
 			};
 
 			let b_q0 = self.buf(q0_chunk);
@@ -2165,6 +2175,9 @@ struct TrainParams
 	// error against the trim-shifted target, target2 − κ·cresid_z (YawTrimErr::kappa).
 	yte_on: u32,
 	yte_kappa: f32,
+	// + 1 (L2y' of block 10, ABI 52), appended in lockstep with the shader twin: κ of the
+	// proportional-only yaw shift; read only by the FC_YAW_TRIM_P(4) specialization.
+	ytp_kappa: f32,
 }
 
 /// Per-genome recorded trajectory batch, flat across genomes (matches the kernel's
@@ -2257,6 +2270,10 @@ pub struct ControllerTrainer
 {
 	device: Device,
 	queue: CommandQueue,
+	// ABI 52: kept for the lazily built FC_YAW_TRIM_P(4) specializations of
+	// controller_train / controller_record (L2y'), built on first use.
+	library: metal::Library,
+	ytp_pipelines: std::cell::RefCell<Option<(ComputePipelineState, ComputePipelineState)>>,
 	pipeline: ComputePipelineState,              // controller_train
 	record_pipeline: ComputePipelineState,       // controller_record (P2a)
 	scan_pipeline: ComputePipelineState,         // controller_scan (P2b)
@@ -2425,6 +2442,8 @@ impl ControllerTrainer
 		Ok(Self {
 			device,
 			queue,
+			library,
+			ytp_pipelines: std::cell::RefCell::new(None),
 			pipeline,
 			record_pipeline,
 			scan_pipeline,
@@ -2440,6 +2459,30 @@ impl ControllerTrainer
 			proj_addr_pipeline,
 			cand_rank_pipeline,
 		})
+	}
+
+	/// L2y' (ABI 52): the FC_YAW_TRIM_P(4) (train, record) pipelines when the population
+	/// carries the option (uniform across it, like every replay option), else None.
+	fn ytp_for(&self, controllers: &[&WnnController]) -> Result<Option<(ComputePipelineState, ComputePipelineState)>, String>
+	{
+		if controllers.first().map_or(true, |c| c.yaw_trim_p_kappa().is_none())
+		{
+			return Ok(None);
+		}
+		if let Some(p) = self.ytp_pipelines.borrow().as_ref()
+		{
+			return Ok(Some(p.clone()));
+		}
+		let mk = |name: &str| -> Result<ComputePipelineState, String> {
+			let fcv = metal::FunctionConstantValues::new();
+			let on = true;
+			fcv.set_constant_value_at_index(&on as *const bool as *const _, MTLDataType::Bool, 4);
+			let func = self.library.get_function(name, Some(fcv)).map_err(|e| format!("{name} (ytp) specialization failed: {e}"))?;
+			self.device.new_compute_pipeline_state_with_function(&func).map_err(|e| format!("{name} (ytp) pipeline creation failed: {e}"))
+		};
+		let p = (mk("controller_train")?, mk("controller_record")?);
+		*self.ytp_pipelines.borrow_mut() = Some(p.clone());
+		Ok(Some(p))
 	}
 
 	fn buf<T>(&self, data: &[T]) -> Buffer
@@ -2729,6 +2772,7 @@ impl ControllerTrainer
 			tre_shape: controllers[0].tilt_ref_err_shape().unwrap_or([0.0; 4]),
 			yte_on: controllers[0].yaw_trim_kappa().is_some() as u32,
 			yte_kappa: controllers[0].yaw_trim_kappa().unwrap_or(0.0),
+			ytp_kappa: controllers[0].yaw_trim_p_kappa().unwrap_or(0.0),
 		};
 
 		let b_sc = self.buf(&state_conns);
@@ -2773,7 +2817,8 @@ impl ControllerTrainer
 
 		let cmd = self.queue.new_command_buffer();
 		let enc = cmd.new_compute_command_encoder();
-		enc.set_compute_pipeline_state(&self.pipeline);
+		let ytp = self.ytp_for(controllers)?;
+		enc.set_compute_pipeline_state(ytp.as_ref().map_or(&self.pipeline, |p| &p.0));
 		let bufs: [&Buffer; 30] = [
 			&b_sc, &b_oc, &b_sk, &b_sv, &b_so, &b_scn, &b_th, &b_epb, &b_epc, &b_stb, &b_stc, &b_gy,
 			&b_ac, &b_tg, &b_pp, &b_mk, &b_ky, &b_vl, &b_soff, &b_scap, &b_par, &b_wr, &b_iy, &b_vo,
@@ -2955,6 +3000,7 @@ impl ControllerTrainer
 			tre_shape: controllers[0].tilt_ref_err_shape().unwrap_or([0.0; 4]),
 			yte_on: controllers[0].yaw_trim_kappa().is_some() as u32,
 			yte_kappa: controllers[0].yaw_trim_kappa().unwrap_or(0.0),
+			ytp_kappa: controllers[0].yaw_trim_p_kappa().unwrap_or(0.0),
 		};
 
 		let rec_out = vec![0u32; total_records * out_words];
@@ -2999,7 +3045,8 @@ impl ControllerTrainer
 
 		let cmd = self.queue.new_command_buffer();
 		let enc = cmd.new_compute_command_encoder();
-		enc.set_compute_pipeline_state(&self.record_pipeline);
+		let ytp = self.ytp_for(controllers)?;
+		enc.set_compute_pipeline_state(ytp.as_ref().map_or(&self.record_pipeline, |p| &p.1));
 		let bufs: [&Buffer; 27] = [
 			&b_sc, &b_sk, &b_sv, &b_so, &b_scn, &b_th, &b_epb, &b_epc, &b_stb, &b_stc, &b_gy, &b_ac,
 			&b_tg, &b_pp, &b_ro, &b_rs, &b_rp, &b_par, &b_iy, &b_rb, &b_vo, &b_ho, &b_pa, &b_au, &b_dr, &b_cr, &b_ab,
@@ -4639,7 +4686,7 @@ fn build_parity_fixture_variant(
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		fixture_ctbr(variant),
-		false, None, None, false,
+		false, None, None, false, false,
 	)
 	.map_err(|e| format!("{e}"))?;
 	for _ in 0..(n_state * 4)
@@ -6516,7 +6563,7 @@ fn controller_plant_latch_parity_once(high_on: bool) -> Result<(usize, usize, us
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		None, // ctbr OFF (ABI 38: the motor-level controller)
-		false, None, None, false,
+		false, None, None, false, false,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -6710,7 +6757,7 @@ fn controller_plant_counter_parity_once() -> Result<(usize, usize, usize), Strin
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		None, // ctbr OFF (ABI 38: the motor-level controller)
-		false, None, None, false,
+		false, None, None, false, false,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -6892,7 +6939,7 @@ fn controller_plant_bidir_parity_once() -> Result<(usize, usize, usize), String>
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		None, // ctbr OFF (ABI 38: the motor-level controller)
-		false, None, None, false,
+		false, None, None, false, false,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7571,7 +7618,7 @@ fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool)
 		false, false, false,
 		false, false,
 		false, 1, 1.0, false, false, 2.0, 0.1, None,
-		false, None, None, false,
+		false, None, None, false, false,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7726,7 +7773,7 @@ fn controller_record_att_est_parity_once() -> Result<(usize, usize, usize, bool)
 		false, false,
 		false, 1, 1.0, false,
 		true, 2.0, 0.1, None, // obs_att_estimator ON; ctbr OFF
-		false, None, None, false,
+		false, None, None, false, false,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7870,7 +7917,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 		true, true, true, // stage-1 vertical channel ON
 		false, false,     // stage-2 horizontal OFF
 		false, 1, 1.0, false, false, 2.0, 0.1, None,
-		false, None, None, false,
+		false, None, None, false, false,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -8240,7 +8287,8 @@ mod tests
 		// + 8 (L3 of block 10, ABI 51): alt_int_on + alt_int_g[7].
 		// + 5 (L1 of block 10, ABI 51): tre_on + tre_shape[4].
 		// + 2 (L2y of block 10, ABI 51): yte_on + yte_kappa.
-		assert_eq!(mem::size_of::<RolloutParams>(), 188 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
+		// + 1 (L2y' of block 10, ABI 52): ytp_kappa.
+		assert_eq!(mem::size_of::<RolloutParams>(), 189 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============

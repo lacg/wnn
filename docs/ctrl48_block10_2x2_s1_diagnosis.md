@@ -105,3 +105,10 @@ ep-mean yaw_err_i: |mean|; corr with yaw  | 6.4; -0.53       | 20.9; +0.46
   - whether stage-select crowns a worse-steady candidate under L3 on s2/s3 too. Read off the stage tables, not from TEST;
   - whether L2y's VAL yaw offset rises again. Rerun `ctrl_gap_student_trace.py` + `ctrl48_2x2_yaw_decomp.py` on the L2y headlines, VAL only.
 - Nothing here changes the pre-registered rule or the 2×2. This is descriptive context for Luiz.
+
+## Correction (round 3, 15/11/2026)
+
+The re-score with the MEASURED pos noise floor (3.1 mm, CTRL-21 estimator; `docs/ctrl48_block10_levers_spec.md` round 3) does NOT change L1+L3 s1's pick. GRID#2 still wins the R = 4 tie on lower fit (−0.031 vs MEMORY#2 +0.061).
+- The MEMORY candidates are 4.3-5.8 mm worse on VAL pos, which is 1.4-1.9× the measured noise. So §2(c) above overstated it.
+- The clamp DID inflate the pos term (+0.545 → +0.306 with the floor). But the pick is a genuine transient + pos against hold-attitude trade on the run's own weights, not purely a sub-noise artifact.
+- Only a floor of about 10 mm, not a measurement, flips it.

@@ -97,6 +97,11 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		aggregation:   str   = "harmonic",
 		zrank_clamp:   float = 3.0,
 		zrank_mad_floor: bool = False,
+		# POS-ONLY scale floor (CTRL-48, 15/11/2026, metres; 0 = legacy). Independent
+		# of zrank_mad_floor: it floors ONLY the pos column's robust scale, at its
+		# measured comparison noise (POS_SCALE_FLOOR_M), so a pos spread far below
+		# noise cannot clamp at ±zrank_clamp. Every other column is untouched.
+		zrank_pos_floor: float = 0.0,
 		gate_stable_min: "float | None" = None,
 		gate_err_max:    "float | None" = None,
 		# The ONE fitted anchor in the controller table. 0.06 is "~2x the median of
@@ -159,6 +164,9 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		# MAD FLOOR (23/09/2026, default OFF = legacy). The clamp bounds the
 		# TAIL; the floor bounds the DENOMINATOR. See MEASURED_SCALE_FLOORS.
 		self.zrank_mad_floor = bool(zrank_mad_floor)
+		if not (float(zrank_pos_floor) >= 0.0):
+			raise ValueError(f"zrank_pos_floor must be >= 0 metres, got {zrank_pos_floor!r}")
+		self.zrank_pos_floor = float(zrank_pos_floor)
 		self.weight_err_sq = float(weight_err_sq)
 		self.weight_stable = float(weight_stable)
 		self.weight_jerk   = float(weight_jerk)
@@ -274,6 +282,10 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		floors: list[float] = []
 
 		def _floor(weight_attr: str) -> float:
+			# The pos-only floor (--zrank-pos-floor) applies on its own; the MAD
+			# floors (--zrank-mad-floor) have no pos entry, so the two never overlap.
+			if weight_attr == "weight_pos" and self.zrank_pos_floor > 0.0:
+				return self.zrank_pos_floor
 			if not self.zrank_mad_floor:
 				return 0.0
 			return float(self.MEASURED_SCALE_FLOORS.get(weight_attr, 0.0))
@@ -421,6 +433,8 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		parts.append(f"alt={self.weight_alt}")
 		if self.zrank_mad_floor:
 			parts.append("madfloor=on")
+		if self.zrank_pos_floor > 0.0:
+			parts.append(f"posfloor={self.zrank_pos_floor:g}m")
 		# pos stays conditional while it is inert (every genome sits at the origin
 		# until --xy-offset > 0, so the rank is one big tie). Make it unconditional
 		# the day stage 2 arms, for the reason above.

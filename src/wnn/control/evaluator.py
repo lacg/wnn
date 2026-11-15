@@ -261,6 +261,9 @@ class ControllerSpec:
 	# the yaw target shifted by the trim the cascade's yaw rate loop rides on
 	# (target − κ·cresid_z, κ derived in Rust from the ctbr contract). False = off.
 	obs_yaw_trim_err: bool = False
+	# Block 10 L2y' (--obs-yaw-trim-err-p, ABI 52): ONLY the proportional yaw inputs carry
+	# the trim shift; the yaw integrals keep the raw heading error. False = off.
+	obs_yaw_trim_err_p: bool = False
 	integral_scale: float = 1.0   # pre-threshold scale for integral features
 	dt: float = 0.001             # physics step (s); MUST match episode/plant dt (yaw integ.)
 	# H3 (18/06): the 4 output banks are CONTROLS [T, τ_roll, τ_pitch, τ_yaw] mixed to
@@ -671,6 +674,7 @@ def _feature_controller(spec: ControllerSpec) -> WnnController:
 		yaw_integral_leak=getattr(spec, 'yaw_integral_leak', None),  # ARM 3 (ABI 50)
 		obs_tilt_ref_err=tilt_ref_err_kw(spec),  # block 10 L1 (ABI 51)
 		obs_yaw_trim_err=yaw_trim_err_kw(spec),  # block 10 L2y (ABI 51)
+		obs_yaw_trim_err_p=yaw_trim_err_p_kw(spec),  # block 10 L2y' (ABI 52)
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 		dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
@@ -680,6 +684,11 @@ def _feature_controller(spec: ControllerSpec) -> WnnController:
 def yaw_trim_err_kw(spec) -> bool:
 	"""Block 10 L2y: ControllerSpec.obs_yaw_trim_err as the bool the wheel takes."""
 	return bool(getattr(spec, "obs_yaw_trim_err", False))
+
+
+def yaw_trim_err_p_kw(spec) -> bool:
+	"""Block 10 L2y': ControllerSpec.obs_yaw_trim_err_p as the bool the wheel takes."""
+	return bool(getattr(spec, "obs_yaw_trim_err_p", False))
 
 
 def tilt_ref_err_kw(spec) -> "tuple | None":
@@ -1552,6 +1561,7 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		yaw_integral_leak=getattr(spec, 'yaw_integral_leak', None),  # ARM 3 (ABI 50)
 		obs_tilt_ref_err=tilt_ref_err_kw(spec),  # block 10 L1 (ABI 51)
 		obs_yaw_trim_err=yaw_trim_err_kw(spec),  # block 10 L2y (ABI 51)
+		obs_yaw_trim_err_p=yaw_trim_err_p_kw(spec),  # block 10 L2y' (ABI 52)
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
@@ -2161,6 +2171,7 @@ class ControllerEvaluator:
 			yaw_integral_leak=getattr(first_spec, 'yaw_integral_leak', None),  # ARM 3 (ABI 50)
 			obs_tilt_ref_err=tilt_ref_err_kw(first_spec),  # block 10 L1 (ABI 51)
 			obs_yaw_trim_err=yaw_trim_err_kw(first_spec),  # block 10 L2y (ABI 51)
+			obs_yaw_trim_err_p=yaw_trim_err_p_kw(first_spec),  # block 10 L2y' (ABI 52)
 			output_full_window=getattr(first_spec, 'output_full_window', False),
 			frame_stride=int(getattr(first_spec, 'frame_stride', 1)),
 			**_target_levels_kwarg(ra, first_spec),
@@ -2275,6 +2286,7 @@ class ControllerEvaluator:
 		yaw_integral_leak=getattr(spec, 'yaw_integral_leak', None),  # ARM 3 (ABI 50)
 		obs_tilt_ref_err=tilt_ref_err_kw(spec),  # block 10 L1 (ABI 51)
 		obs_yaw_trim_err=yaw_trim_err_kw(spec),  # block 10 L2y (ABI 51)
+		obs_yaw_trim_err_p=yaw_trim_err_p_kw(spec),  # block 10 L2y' (ABI 52)
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,

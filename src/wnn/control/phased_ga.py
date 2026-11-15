@@ -290,6 +290,7 @@ def _resume_ga_state_if_targeted(strat, args, stage_num: int) -> None:
 	      f"{strat._resume_start_gen} with the dumped GA state", flush=True)
 
 from wnn.control.provenance import arch_token, collect_provenance, obs_pwm_convention
+from wnn.control.pos_floor import zrank_pos_floor_from_args
 from wnn.control.select_tail import (SELECT_TAIL_MODES, genome0_rows, new_episode_sink,
                                      select_tail_token, tail_cell, tail_footer, tail_rank_winner,
                                      tail_value, validate_select_tail)
@@ -493,6 +494,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                yaw_integral_leak: float | None = None,
                obs_tilt_ref_err: tuple | None = None,
                obs_yaw_trim_err: bool = False,
+               obs_yaw_trim_err_p: bool = False,
                dt: float = 0.001,
                decouple_outputs: bool = False, bits_per_feature: int = 8,
                feature_balance_ratio: float = 0.0,
@@ -550,6 +552,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		yaw_integral_leak=yaw_integral_leak,
 		obs_tilt_ref_err=obs_tilt_ref_err,
 		obs_yaw_trim_err=obs_yaw_trim_err,
+		obs_yaw_trim_err_p=obs_yaw_trim_err_p,
 		dt=dt,
 		decouple_outputs=decouple_outputs,
 		feature_balance_ratio=feature_balance_ratio,
@@ -701,6 +704,7 @@ def _build_ga_config(args, gens: int, patience: int, mutation_rate=None):
 		aggregation=_search_aggregation(args),
 		zrank_clamp=getattr(args, "zrank_clamp", 3.0),
 		zrank_mad_floor=getattr(args, "zrank_mad_floor", False),
+		zrank_pos_floor=zrank_pos_floor_from_args(args),  # CTRL-48: GA pool ranking
 		# Viability gate (21/08): same caller-must-pass-it lesson as alt/pos.
 		gate_stable_min=_gate_args(args)[0],
 		gate_err_max=_gate_args(args)[1],
@@ -752,6 +756,7 @@ def _build_ts_config(args, gens: int, patience: int):
 	tscfg.fitness_gate_stable_min, tscfg.fitness_gate_err_max = _gate_args(args)
 	tscfg.zrank_clamp = getattr(args, "zrank_clamp", 3.0)
 	tscfg.zrank_mad_floor = getattr(args, "zrank_mad_floor", False)
+	tscfg.zrank_pos_floor = zrank_pos_floor_from_args(args)  # CTRL-48: TS pool ranking
 	if tscfg.fitness_aggregation != "harmonic":
 		# The single-objective CONTROLLER type has no aggregation knob — a
 		# non-default aggregation needs the multi-objective calculator even
@@ -1520,6 +1525,7 @@ def _save_winner(path: str, args, spec: ControllerSpec,
 			"aggregation_select": _select_aggregation(args),
 			"zrank_clamp": getattr(args, "zrank_clamp", 3.0),
 			"zrank_mad_floor": getattr(args, "zrank_mad_floor", False),
+			"zrank_pos_floor": zrank_pos_floor_from_args(args),
 		},
 		"meta": {
 			"saved_at_unix": time.time(),
@@ -2272,6 +2278,7 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 			aggregation=_select_aggregation(args),
 			zrank_clamp=getattr(args, "zrank_clamp", 3.0),
 		zrank_mad_floor=getattr(args, "zrank_mad_floor", False),
+		zrank_pos_floor=zrank_pos_floor_from_args(args),  # CTRL-48: stage-select too
 			gate_stable_min=_gate_args(args)[0],
 			gate_err_max=_gate_args(args)[1])
 		# No fallback (13/10/2026). A failing calculator used to fall back to "lowest
@@ -3247,6 +3254,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "+-1.50 deg). Needs --output-mode ctbr, --obs-cascade-dhat-residual and a yaw-error input "
 	                     "(--obs-yaw-err, or --obs-peraxis-p with --obs-peraxis-yaw). Off (default) = "
 	                     "byte-identical. A new lineage.")
+	ap.add_argument("--obs-yaw-trim-err-p", action="store_true",
+	                help="Block 10 L2y' (ABI 52, Luiz 15/11/2026): like --obs-yaw-trim-err, but ONLY the "
+	                     "proportional yaw input(s) carry the trim shift yaw_err - kappa*cresid_z; the yaw "
+	                     "integrals (yaw_err_i, yaw_i_pa) keep integrating the RAW heading error, exactly as "
+	                     "without the option (L2y's integral of the shifted error was its defect, "
+	                     "docs/ctrl48_block10_2x2_s1_diagnosis.md). Same kappa, same requirements, same L2y "
+	                     "dense ladder on the proportional input; mutually exclusive with --obs-yaw-trim-err. "
+	                     "Off (default) = byte-identical. A new lineage.")
 	ap.add_argument("--alt-integral", choices=["off", "pi", "pole3"], default="off",
 	                help="Block 10 L3 (ABI 51): an integrator on the altitude error in the collective law, removing "
 	                     "the PD's droop under mass / thrust error. pi = PD poles kept, k_i = omega^3/4; pole3 = "
@@ -3823,6 +3838,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "(stable 1.1pp, steady 0.18deg — the CRN pool-noise SEM). The clamp "
 	                     "bounds the tail; this bounds the denominator, so a near-saturated "
 	                     "column with a collapsing MAD can no longer dominate. Default OFF.")
+	ap.add_argument("--zrank-pos-floor", default=None,
+	                help="CTRL-48 (15/11/2026): floor the zscore robust scale of the POS column ONLY at its "
+	                     "measured comparison noise, in metres, or `auto` = the measured POS_SCALE_FLOOR_M. "
+	                     "Applies wherever the ZRank combine runs: the grid ranking, the GA/TS pool ranking "
+	                     "and stage-select. Below the floor two genomes' pos values count as a tie-in-noise "
+	                     "instead of clamping at +-zrank_clamp. Independent of --zrank-mad-floor (which has "
+	                     "no pos entry). Unset (default) = byte-identical.")
 	ap.add_argument("--zrank-clamp", type=float, default=3.0,
 	                help="Winsorization bound for --fit-aggregation zscore: per-metric robust "
 	                     "z is clamped to ±this, so no single dimension can capture the score "
@@ -4174,7 +4196,9 @@ def resolve_block10_args(args) -> None:
 		if missing:
 			raise SystemExit(f"--obs-tilt-ref-err needs {', '.join(missing)}: the tilt reference is built from "
 			                 "the horizontal observation and the bias prediction the student already reads.")
-	if getattr(args, "obs_yaw_trim_err", False):
+	if getattr(args, "obs_yaw_trim_err", False) and getattr(args, "obs_yaw_trim_err_p", False):
+		raise SystemExit("--obs-yaw-trim-err (L2y) and --obs-yaw-trim-err-p (L2y') are alternatives — pick one.")
+	if getattr(args, "obs_yaw_trim_err", False) or getattr(args, "obs_yaw_trim_err_p", False):
 		yaw_p = getattr(args, "obs_yaw_err", False) or (getattr(args, "obs_peraxis_p", False)
 		                                               and getattr(args, "obs_peraxis_yaw", False))
 		need = {"--output-mode ctbr": getattr(args, "output_mode", "pwm") == "ctbr",
@@ -4182,10 +4206,10 @@ def resolve_block10_args(args) -> None:
 		        "a yaw-error input (--obs-yaw-err, or --obs-peraxis-p with --obs-peraxis-yaw)": yaw_p}
 		missing = [k for k, v in need.items() if not v]
 		if missing:
-			raise SystemExit(f"--obs-yaw-trim-err needs {', '.join(missing)}: the trim is the cascade residual's "
+			raise SystemExit(f"--obs-yaw-trim-err[-p] needs {', '.join(missing)}: the trim is the cascade residual's "
 			                 "cresid_z, referenced by the yaw error the student already reads.")
 		if getattr(args, "yaw_centred_ladder", None) == "dense":
-			raise SystemExit("--obs-yaw-trim-err replaces block-10 L2 (--yaw-centred-ladder dense): the trim-"
+			raise SystemExit("--obs-yaw-trim-err[-p] replaces block-10 L2 (--yaw-centred-ladder dense): the trim-"
 			                 "referenced yaw error takes its own dense ladder — drop `dense`.")
 	if getattr(args, "alt_integral", "off") != "off" and not getattr(args, "translation", False):
 		raise SystemExit("--alt-integral needs --translation (there is no altitude loop without it).")
@@ -4195,7 +4219,8 @@ def block10_tokens(args) -> dict:
 	"""Provenance alt= / yawref= values ("" when off, so the line is unchanged)."""
 	mode = getattr(args, "alt_integral", "off")
 	return dict(alt="" if mode == "off" else mode,
-	            yawref="trim" if getattr(args, "obs_yaw_trim_err", False) else "")
+	            yawref=("trim" if getattr(args, "obs_yaw_trim_err", False)
+	                    else "trim_p" if getattr(args, "obs_yaw_trim_err_p", False) else ""))
 
 
 def ctrl46_tokens(args) -> dict:
@@ -4545,7 +4570,8 @@ def main():
 	      f"levels={args.levels} "
 	      f"fitness_pools={fitness_pools_label(args)} "
 	      f"patience={'pool0' if args.patience_track_pool0 else 'frozen-best'} "
-	      f"madfloor={'on' if args.zrank_mad_floor else 'off'}")
+	      f"madfloor={'on' if args.zrank_mad_floor else 'off'}"
+	      + (f" posfloor={zrank_pos_floor_from_args(args):g}m" if zrank_pos_floor_from_args(args) > 0 else ""))
 	# R9 (multi-axis spec): one greppable line the ladder copies into the marker —
 	# wheel, ABI, .so hash, git HEAD, pool scheme. Fail-safe by construction.
 	print(collect_provenance(fitness_pools_label(args),

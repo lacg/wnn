@@ -327,3 +327,117 @@ mean |yaw offset| deg                                             | 0.330  | 0.4
   - the `calib=...,yawtrim:dense` and `yawref=trim` tokens;
   - an end-to-end `phased_ga` smoke run with L1 + L2y + L3 `pole3` on the block-9 recipe (pop 4, 8 episodes, non-report seeds 777001/777002, GPU scorer), which completes with exit 0. It is a wiring check, not a result.
 - Wheel, built and NOT installed (the installed wheel is still ABI 50): `dist-abi51/ram_controller-2026.212.37-cp311-abi3-macosx_11_0_arm64.whl`, sha256 `0c20d377cc085ed57365566d4a88b68a11d165ed2c117cda22508a09537e20cd`. The last change after the build was test-only (`abi32_tests.rs`, `cfg(test)`).
+
+---
+
+## ROUND 3 (15/11/2026): L2y′ and the pos-only ZRank floor (built, not installed; controller ABI 52)
+
+Rulings (Luiz, 15/11/2026):
+- The L2y and L2y+L3 arms are stopped (design defect, `docs/ctrl48_block10_2x2_s1_diagnosis.md`). The L3 arm was later halted too, pending the pos floor.
+- Build L2y′ and a narrow pos-only floor. Build only, do not install.
+
+### L2y′: proportional-only yaw trim shift (`--obs-yaw-trim-err-p`)
+
+- **Definition.**
+  - The PROPORTIONAL yaw input(s) carry `yaw_err − κ·cresid_z`: `yaw_err`, and `yaw_err_pa` when per-axis yaw is on. κ and the requirements are L2y's (`yaw_trim_err.rs`).
+  - The yaw INTEGRALS (`yaw_err_i`, `yaw_i_pa`) keep integrating the RAW heading error, bit for bit as without the option.
+  - The proportional input takes the L2y dense ladder. L2y and L2y′ are alternatives: each refuses the other, in Rust and in Python.
+- **Not added: `cresid_z` smoothing.**
+  - It needs a per-episode filter state in the CPU path and in three Metal kernels, plus replay. That is not cheap.
+  - Its time constant has no clean physical anchor. The trim moves on the integrator's ≈ 7 s, but the input noise comes from the 50 ms d̂ observer, so any choice between them is a tuning knob.
+  - Left for a separate default-off option if L2y′ alone is not enough.
+- **Implementation.**
+  - CPU: `compute_features` keeps the raw `yaw_err` for the integrals and pushes `yaw_push = yaw_err − κ·r_z` into the proportional slot(s). The cascade block is ticked early, as for L2y.
+  - Metal: the shift sits inside `derive_features`, which the earlier L1 trick cannot avoid here because the push and the integral share that function. It is therefore gated by a NEW function constant, `FC_YAW_TRIM_P(4)`, set only on:
+    - the cascade rollout pipeline (keyed (cascade, abp, ytp));
+    - lazily specialised `controller_train` / `controller_record` pipelines in `ControllerTrainer`.
+  - Every other pipeline leaves the constant undefined, so the shift is dead-stripped and the ABI-51 compiled code is unchanged. The pins and parity sweeps hold.
+  - `RolloutParams` / `TrainParams` gain one trailing float, `ytp_kappa` (RolloutParams 188 → 189 words). `FwdParams` gains `ytp_kappa` and `ytp_cres`, assigned under `if (YTP)`.
+- **Plumbing.**
+  - Rust: `WnnController(obs_yaw_trim_err_p=False)` and `dagger_train_batch_inplace(obs_yaw_trim_err_p=False)`; the getter returns κ.
+  - Python: `ControllerSpec.obs_yaw_trim_err_p`, `--obs-yaw-trim-err-p`; provenance `yawref=trim_p`; calibration token `yawtrim:dense`; params key `controller_obs_yaw_trim_err_p`.
+  - Facade `EXPECTED_ABI = 52`, on this branch only.
+
+**Pre-check (VAL, offline; `scripts/ctrl_block10_precheck_l2yp.py`).** The proportional input is L2y's value, so round 2's label-share pre-check applies unchanged. The new requirement is that the integral keeps its pre-L2y meaning. In the Rust test `ytp_proportional_shifted_integral_raw` the integral is bit-identical to the off twin's, by construction. On flights:
+
+```
+yaw_err_i (VAL hold): per-episode |mean|, corr(ep-mean yaw_err_i, ep-mean TRUE yaw offset)
+  block-9 both s1 / s2 / s3   (raw integral = what L2y' feeds)   | 6.29 -0.56 | 6.97 -0.62 | 5.63 -0.73
+  block-10 L1 (A) s1 headline (raw integral = what L2y' feeds)   | 6.37 -0.53
+  block-10 L1+L2y s1 headline (SHIFTED integral, the L2y defect) | 20.90 +0.46
+YAW hold label carried (block-9 traces, VAL; s1 | s2 | s3)
+  L2y' proportional input alone (dense ladder)   | 0.708 | 0.751 | 0.766
+  L2y' proportional + raw yaw_err_i (additive)   | 0.725 | 0.755 | 0.770
+  today: yaw_err + yaw_err_i (additive)          | 0.391 | 0.188 | 0.194
+```
+- Same scale (|mean| ≈ 6) and the same sign (−0.53 to −0.73) as every pre-L2y student. L2y's shifted integral was 3.3× larger with the opposite sign.
+- The raw integral adds a little on top of the proportional input (+0.004 to +0.017). The pair carries 0.73-0.77 of the label against 0.19-0.39 for today's two yaw inputs.
+- It cannot say whether the student will USE the pair. That is a flight question.
+
+### Pos-only ZRank floor (`--zrank-pos-floor <m | auto>`)
+
+- **What it does.** The ZRank z-score scale of the POS column ONLY becomes max(1.4826·MAD, floor). Every other column is unchanged.
+  - It is independent of `--zrank-mad-floor`, which has no pos entry and stays off; CTRL-20 was not adopted.
+  - Default unset means byte-identical. `auto` = `POS_SCALE_FLOOR_M` = 0.0031 m (`src/wnn/control/pos_floor.py`).
+  - Python only. Rust `fitness_combine` already takes per-column floors (`MetricColumn.scale_floor`).
+- **Where it acts — both places, because one calculator serves both:**
+  1. **In-search ranking:** the grid's point ranking (`controller_grid_search.py`), the GA pool ranking (`_build_ga_config` → `GAConfig.zrank_pos_floor` → `FitnessCalculatorFactory`), and the TS config.
+  2. **Stage-select:** the union ranking of the top-3 candidates of every stage (`_select_headline_stage`).
+  - The value is also recorded in the checkpoint's fitness dict, the run header (`posfloor=0.0031m`) and the calculator name.
+- **Measurement (CTRL-21 estimator, `scripts/crn_noise_probe.py --frames 3`).** The 57 MEMORY-stage genomes of two block-10 runs were re-scored on three CRN frames of 5 pools × 200 episodes.
+  - Per frame pair, the robust spread across genomes (1.4826·MAD) of D_g = pos_g(F1) − pos_g(F2) is the within-frame comparison noise:
+    - L1+L3 s1: 1.74 / 3.38 / 2.90 mm;
+    - L1 s1: 2.19 / 6.43 / 5.00 mm.
+  - **The median of the six is 3.14 mm, so the floor is 0.0031 m.** This is the same aggregation as CTRL-20's floors.
+  - The pairs disagree by up to 3×, the same genome × frame interaction CTRL-21 found. The A-vs-fresh pairs are larger than B-C.
+  - The stage-select frame (20 val units × 100 episodes, 2× the episodes) would scale it by 1/√2, to ≈ 2.2 mm. One conservative value serves both sites; the re-score also reports 2.2 mm.
+  - Probe JSONs: `/tmp/ctrl_posfloor/PROBE_*.json`. VAL-side seeds only: frame A is the run's own search pools, frames B and C are fresh offsets from the train seed.
+- **Inside the GA pool ranking** (Luiz: "does it mess with choosing which genome is better when they differ by mm?"):
+  - The floor only binds when the pool's own pos spread is below it. The probed MEMORY populations have pos spreads (1.4826·MAD) of 4.3-4.6 mm (L1+L3) and 8.8-9.0 mm (L1). Both are above 3.1 mm, so in those pools **the floor changes nothing**.
+  - Where it binds (late, converged pools; the 9-candidate stage-select), two genomes that differ by Δ mm of pos get a z difference of Δ/3.1 instead of Δ/(collapsed MAD). That z is capped at ±3.
+  - It never reverses the pos ORDER, and it never touches err², stable or steady. It only stops a sub-noise pos difference from counting like a 3σ one.
+  - Like CTRL-20's floors, it changes SELECTION, not variation. It cannot make a pool better.
+
+**Offline re-score of the stage-select tables (VAL only; `scripts/ctrl48_posfloor_rescore.py`).**
+- Each run is an in-process `--recalc-headline` on its exact argv. The candidates are re-scored on the same 20 val units, with the classical rival rows skipped (context only, never ranked) and the run stopped before the pick's TEST scoring.
+- GATE: at floor 0, every run reproduces its logged headline AND its logged candidate fits (|Δ| < 6e-4), so the re-score is the run's own selection.
+
+```
+run (VAL; 20 val units)  | logged pick | floor 0 (gate) | floor 3.1 mm      | floor 2.2 mm | VAL err/steady/pos: logged pick -> 3.1 mm pick
+L1 s1                    | NEURONS#0   | NEURONS#0  OK  | NEURONS#0  same   | NEURONS#0    | 1.074/0.451/0.3388
+L1 s2                    | NEURONS#2   | NEURONS#2  OK  | MEMORY#0 CHANGED  | MEMORY#0     | 1.220/0.559/0.3332 -> 1.164/0.514/0.3354
+L1 s3                    | NEURONS#2   | NEURONS#2  OK  | NEURONS#2  same   | NEURONS#2    | 1.034/0.484/0.3268
+L1 s4                    | GRID#0      | GRID#0     OK  | GRID#0     same   | GRID#0       | 1.171/0.519/0.3301
+L1 s5                    | NEURONS#2   | NEURONS#2  OK  | NEURONS#2  same   | NEURONS#2    | 1.049/0.500/0.3355
+L1 s6                    | NEURONS#2   | NEURONS#2  OK  | NEURONS#2  same   | NEURONS#2    | 1.011/0.386/0.3375
+L1 s7                    | NEURONS#0   | NEURONS#0  OK  | NEURONS#0  same   | NEURONS#0    | 1.083/0.475/0.3352
+L1 s8                    | NEURONS#0   | NEURONS#0  OK  | NEURONS#0  same   | NEURONS#0    | 1.107/0.503/0.3325
+L1 s9                    | MEMORY#1    | MEMORY#1   OK  | MEMORY#1   same   | MEMORY#1     | 1.040/0.442/0.3373
+L1 s10                   | NEURONS#0   | NEURONS#0  OK  | NEURONS#0  same   | NEURONS#0    | 0.992/0.385/0.3339
+L1+L3 s1                 | GRID#2      | GRID#2     OK  | GRID#2     same   | GRID#2       | 1.186/0.629/0.3074
+L1+L2y s1                | MEMORY#1    | MEMORY#1   OK  | MEMORY#1   same   | MEMORY#1     | 1.211/0.617/0.3467
+L1+L2y+L3 s1             | NEURONS#1   | NEURONS#1  OK  | NEURONS#1  same   | NEURONS#1    | 1.253/0.676/0.3086
+```
+- **One pick changes in 13: L1 s2, NEURONS#2 → MEMORY#0.** The new pick is better on VAL err (−0.056°) and steady (−0.045°), and 2.2 mm worse on VAL pos (inside the floor).
+  - TEST, descriptive only: NEURONS#2 1.20 / 0.57 against MEMORY pool[0] (= MEMORY#0) 1.11 / 0.48.
+- **L1+L3 s1 does NOT change at the measured floor. This corrects the s1 diagnosis.** With the floor, MEMORY#2's pos term falls from +0.545 to +0.306, but GRID#2 still wins.
+  - Union-rank tie at R = 4 (GRID#2, MEMORY#1, MEMORY#2). The tie goes to the lower fit: GRID#2 −0.031 against MEMORY#2 +0.061.
+  - GRID#2's edge is the reward column (−0.252, the transient err² term) plus the pos column.
+  - The MEMORY candidates are 4.3-5.8 mm worse on VAL pos. That is 1.4-1.9× the measured floor: a real pos difference by this measurement, not a clamp artifact.
+  - The pick only flips at a floor of about 10 mm (≈ 3× the measured noise), which would no longer be a measurement.
+- So the floor removes the clamp artifact as designed, but on s1 the GRID#2 pick is a genuine trade on the run's own weights: transient + pos against hold attitude. Changing that is a weights question (pos weight 0.18, or ranking pos on `pos_hold`), not a floor question.
+
+### Verification
+- `cargo test -p ram_controller --lib --no-default-features`: **404 passed, 0 failed, 27 ignored**.
+- Every ABI-51 pin and parity sweep passes (flags off = ABI 51; the FC is undefined in every existing pipeline).
+- New (`ctrl52_yaw_trim_p_tests.rs`):
+  - refusals and L2y / L2y′ exclusivity;
+  - proportional input = raw − κ·cresid_z bit for bit, integral bit-identical to the off twin, all other inputs untouched;
+  - replay = live, and blanking the cascade stream breaks it;
+  - CPU scorer = FC_YAW_TRIM_P Metal rollout at hold 1 / lag 0 and hold 10 / lag 0.2, and the result differs from both off and L2y;
+  - the specialised Metal split record/train = the CPU split, and the off twin records different rows;
+  - trainer GPU walk = CPU walk in QUAD_WEIGHTED and BINARY.
+- Python against the ABI-52 wheel unpacked in a scratch directory, never installed:
+  - flags, refusals, `yawref=trim_p`, `posfloor=0.0031m` in the header and the calculator name;
+  - floor arithmetic: four candidates at 0.3070-0.3130 m, pos term +0.545 → +0.308;
+  - an end-to-end `phased_ga` smoke run with L1 + L2y′ + `--zrank-pos-floor auto` on the block-9 recipe (pop 4, non-report seeds 777001/777002, GPU scorer), exit 0. A wiring check, not a result.

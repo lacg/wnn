@@ -248,6 +248,8 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	"controller_obs_tilt_ref_err",    # L1: roll/pitch error vs the tilt reference, bias-corrected
 	"controller_tilt_err_ladder",     # L1 ladder: dense | quantile
 	"controller_obs_yaw_trim_err",    # L2y: yaw error vs the trim-shifted target
+	"controller_obs_yaw_trim_err_p",  # L2y' (ABI 52): proportional-only trim shift, raw integral
+	"controller_zrank_pos_floor",     # pos-only ZRank scale floor (m | auto)
 	"controller_alt_integral",        # L3: off | pi | pole3
 })
 

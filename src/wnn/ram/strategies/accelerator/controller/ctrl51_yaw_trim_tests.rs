@@ -17,14 +17,28 @@ use ram_core::neuron_memory::{BINARY, QUAD_WEIGHTED};
 /// obs_student3 layout: 9 base, roll/pitch err (9, 10), roll/pitch I (11, 12),
 /// yaw_err (13), yaw_err_i (14), 3 vertical, 4 horizontal, then the residual block
 /// (its last slot is cresid_z).
-const YAW_ERR: usize = 13;
-const YAW_I: usize = 14;
+pub(crate) const YAW_ERR: usize = 13;
+pub(crate) const YAW_I: usize = 14;
 
 /// The production-shaped cascade student (obs_student3's features, widths and
 /// residual block) with the yaw inputs made to MATTER: fine cuts on yaw_err /
 /// yaw_err_i and half the output bits on them, so the option steers the policy (a
 /// random ±0.4 ladder would leave a 0.01-rad shift inside one bin). `on` adds L2y.
 fn yte_student_mode(sn: usize, ar: usize, seed: u64, on: bool, mode: u8) -> WnnController
+{
+	yaw_student(sn, ar, seed, if on { YawOpt::L2y } else { YawOpt::Off }, mode)
+}
+
+/// Which yaw-trim option the fixture student carries (L2y = ABI 51, L2y' = ABI 52).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum YawOpt
+{
+	Off,
+	L2y,
+	L2yP,
+}
+
+pub(crate) fn yaw_student(sn: usize, ar: usize, seed: u64, opt: YawOpt, mode: u8) -> WnnController
 {
 	use rand::{Rng, SeedableRng};
 	let (levels, bpf, window, obpn, sbpn) = (8usize, 3usize, 2usize, 10usize, 6usize);
@@ -57,11 +71,13 @@ fn yte_student_mode(sn: usize, ar: usize, seed: u64, on: bool, mode: u8) -> WnnC
 	let resid_thr: Vec<f32> = (0..3 * bpf).map(|i| [-0.25f32, 0.0, 0.25][i % 3]).collect();
 	c.enable_ctbr_with_obs(crate::ctrl38_tests::obs_spec3(false, false, true), resid_thr).expect("cascade + residual");
 	assert_eq!(c.num_features(), nf);
-	if on
+	match opt
 	{
-		c.enable_yaw_trim_err().expect("L2y on");
-		assert_eq!(c.num_features(), nf, "L2y must not change the layout");
+		YawOpt::Off => {}
+		YawOpt::L2y => c.enable_yaw_trim_err().expect("L2y on"),
+		YawOpt::L2yP => c.enable_yaw_trim_err_p().expect("L2y' on"),
 	}
+	assert_eq!(c.num_features(), nf, "the yaw-trim options must not change the layout");
 	c
 }
 

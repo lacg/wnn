@@ -48,6 +48,7 @@ fn via_ctor(tilt_ref_err: Option<(f32, f32, f32, f32)>) -> WnnController
 		true, None,
 		tilt_ref_err,
 		false, // obs_yaw_trim_err (L2y)
+		false, // obs_yaw_trim_err_p (L2y')
 	)
 	.expect("ctor")
 }

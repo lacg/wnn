@@ -1982,8 +1982,50 @@ impl WnnController
 		{
 			return Err("obs_yaw_trim_err is already on".into());
 		}
+		if self.yaw_trim_p.is_some()
+		{
+			return Err("obs_yaw_trim_err (L2y) and obs_yaw_trim_err_p (L2y') are alternatives — pick one".into());
+		}
 		self.yaw_trim_err = Some(crate::yaw_trim_err::YawTrimErr::from_spec(&spec, self.dt, self.action_repeat)?);
 		Ok(())
+	}
+
+	/// L2y' of block 10 (ABI 52, Luiz 15/11/2026): shift ONLY the proportional yaw
+	/// inputs (yaw_err, and yaw_err_pa when per-axis yaw is on) by the trim,
+	/// yaw_err − κ·cresid_z; the yaw integrals (yaw_err_i, yaw_i_pa) keep integrating
+	/// the RAW heading error, exactly as without the option. Same κ and the same
+	/// requirements as L2y (yaw_trim_err.rs); the two are alternatives.
+	pub(crate) fn enable_yaw_trim_err_p(&mut self) -> Result<(), String>
+	{
+		if !(self.obs_yaw_err || (self.obs_peraxis_p && self.obs_peraxis_yaw))
+		{
+			return Err("obs_yaw_trim_err_p needs a yaw-error input: obs_yaw_err (or obs_peraxis_p with obs_peraxis_yaw)".into());
+		}
+		let spec = self
+			.ctbr
+			.as_ref()
+			.map(|c| c.spec.clone())
+			.ok_or("obs_yaw_trim_err_p needs the cascade (output_mode=ctbr): the trim is the CTBR rate loop's")?;
+		if self.cascade_obs.as_ref().and_then(|o| o.residual()).is_none()
+		{
+			return Err("obs_yaw_trim_err_p needs the cascade residual block (obs_dhat_residual_plant): cresid_z is the trim it reads".into());
+		}
+		if self.yaw_trim_p.is_some()
+		{
+			return Err("obs_yaw_trim_err_p is already on".into());
+		}
+		if self.yaw_trim_err.is_some()
+		{
+			return Err("obs_yaw_trim_err (L2y) and obs_yaw_trim_err_p (L2y') are alternatives — pick one".into());
+		}
+		self.yaw_trim_p = Some(crate::yaw_trim_err::YawTrimErr::from_spec(&spec, self.dt, self.action_repeat)?);
+		Ok(())
+	}
+
+	/// L2y': κ for the GPU hosts (None ⇒ off).
+	pub(crate) fn yaw_trim_p_kappa(&self) -> Option<f32>
+	{
+		self.yaw_trim_p.map(|y| y.kappa())
 	}
 
 	/// L2y of block 10: κ (rad per unit of cresid_z) for the GPU hosts (None ⇒ off).
@@ -2889,6 +2931,7 @@ impl WnnController
 			att_bias: None,
 			tilt_ref_err: None,
 			yaw_trim_err: None,
+			yaw_trim_p: None,
 			collective_anchor: 0.5,
 		})
 	}
@@ -3709,6 +3752,9 @@ pub struct WnnController
 	// against the yaw target shifted by the unabsorbed trim, target − κ·cresid_z
 	// (yaw_trim_err.rs). None ⇒ target − heading, bit-identical.
 	yaw_trim_err: Option<crate::yaw_trim_err::YawTrimErr>,
+	// L2y' of block 10 (ABI 52, --obs-yaw-trim-err-p): shift ONLY the proportional yaw
+	// inputs by the trim; the integrals keep the raw heading error. None ⇒ off.
+	yaw_trim_p: Option<crate::yaw_trim_err::YawTrimErr>,
 	// L1 (06/08/2026) — d̂ disturbance observer, the mpcof teacher's instrument moved
 	// into the student. Some(b) ⇒ 3 extra features (roll/pitch/yaw estimated external
 	// angular acceleration). The screen's D2 decomposition showed the student's error
@@ -3881,6 +3927,7 @@ impl WnnController
 		yaw_integral_leak = None,
 		obs_tilt_ref_err = None,
 		obs_yaw_trim_err = false,
+		obs_yaw_trim_err_p = false,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -3940,6 +3987,9 @@ impl WnnController
 		// shifted by the trim the cascade's yaw rate loop rides on (κ derived from the
 		// ctbr contract). false ⇒ off, bit-identical.
 		obs_yaw_trim_err: bool,
+		// L2y' of block 10 (ABI 52): shift only the proportional yaw inputs by the
+		// trim; the yaw integrals stay on the raw heading error. false ⇒ off.
+		obs_yaw_trim_err_p: bool,
 	) -> PyResult<Self>
 	{
 		// CTRL-46: the bias-predictor rows are the VERY tail (after the cascade blocks).
@@ -4038,6 +4088,10 @@ impl WnnController
 		{
 			c.enable_yaw_trim_err().map_err(pyo3::exceptions::PyValueError::new_err)?;
 		}
+		if obs_yaw_trim_err_p
+		{
+			c.enable_yaw_trim_err_p().map_err(pyo3::exceptions::PyValueError::new_err)?;
+		}
 		Ok(c)
 	}
 
@@ -4058,6 +4112,13 @@ impl WnnController
 	pub fn obs_yaw_trim_err(&self) -> Option<f32>
 	{
 		self.yaw_trim_kappa()
+	}
+
+	/// L2y': the proportional-only yaw-trim option — None when off, else κ.
+	#[getter]
+	pub fn obs_yaw_trim_err_p(&self) -> Option<f32>
+	{
+		self.yaw_trim_p_kappa()
 	}
 
 	/// ARM 3: the leak of the yaw integral features (== integral_leak unless
@@ -6174,13 +6235,22 @@ impl WnnController
 		// HERE — once per physical step, before the attitude block — and its values
 		// cached for the tail. Off: target − heading, and the block ticks at the tail
 		// as before (bit-identical).
-		let cas_early = if self.yaw_trim_err.is_some() { self.tick_cascade(gyro) } else { None };
-		let target_y = match (self.yaw_trim_err, cas_early, self.cascade_obs.as_ref().and_then(|o| o.residual()))
+		let cas_early = if self.yaw_trim_err.is_some() || self.yaw_trim_p.is_some() { self.tick_cascade(gyro) } else { None };
+		let resid = self.cascade_obs.as_ref().and_then(|o| o.residual());
+		let target_y = match (self.yaw_trim_err, cas_early, resid)
 		{
 			(Some(law), Some(v), Some(r)) => law.effective_target(target[2], r.of(&v)[2]),
 			_ => target[2],
 		};
 		let yaw_err = target_y - self.yaw_heading;
+		// L2y' (ABI 52): the value the PROPORTIONAL yaw inputs carry — yaw_err − κ·cresid_z
+		// (the kernels' `yaw_err - F.ytp_kappa * cresid_z`); the integrals below keep
+		// yaw_err. Off: yaw_err itself.
+		let yaw_push = match (self.yaw_trim_p, cas_early, resid)
+		{
+			(Some(law), Some(v), Some(r)) => yaw_err - law.kappa() * r.of(&v)[2],
+			_ => yaw_err,
+		};
 		// Append enabled features (canonical order); update integrals in lockstep.
 		let mut iacc = 0usize;
 		if self.obs_tilt_p
@@ -6199,7 +6269,7 @@ impl WnnController
 			feats.push(pitch_err);
 			if self.obs_peraxis_yaw
 			{
-				feats.push(yaw_err);
+				feats.push(yaw_push);
 			} // yaw dropped when ref is unobservable
 		}
 		if self.obs_peraxis_i
@@ -6253,7 +6323,7 @@ impl WnnController
 		// obs_peraxis — sidesteps the roll/pitch atan2 degeneracy at large tilt.
 		if self.obs_yaw_err
 		{
-			feats.push(yaw_err);
+			feats.push(yaw_push);
 		}
 		if self.obs_yaw_err_i
 		{

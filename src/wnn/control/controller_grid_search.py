@@ -33,6 +33,7 @@ from wnn.control.evaluator import (
 	calib_episode_config as _calib_ec,
 )
 from wnn.control.feature_layout import feature_names
+from wnn.control.pos_floor import zrank_pos_floor_from_args
 from wnn.control.threshold_calibration import calibration_from_args
 from wnn.control.recurrent_genome import RecurrentArchGenome
 from wnn.control.arch_strategy import default_controller_arch_config, rf_summary
@@ -140,6 +141,7 @@ class ControllerGridSearch(GenericGridSearch):
 			aggregation=search_aggregation(args),
 			zrank_clamp=getattr(args, "zrank_clamp", 3.0),
 			zrank_mad_floor=getattr(args, "zrank_mad_floor", False),
+			zrank_pos_floor=zrank_pos_floor_from_args(args),  # CTRL-48 (grid = in-search)
 			# Viability gate (21/08): the grid is site 3 of 3 — a gate armed for
 			# the GA but absent here would seed stage 1 from exactly the
 			# degenerate points the gate exists to exclude.
@@ -202,6 +204,7 @@ class ControllerGridSearch(GenericGridSearch):
 			# Block 10 L1 (ABI 51): the position loop's shape, from the run's EpisodeConfig.
 			obs_tilt_ref_err=(self._ec.tilt_ref_shape() if getattr(args, "obs_tilt_ref_err", False) else None),
 			obs_yaw_trim_err=bool(getattr(args, "obs_yaw_trim_err", False)),  # block 10 L2y (ABI 51)
+			obs_yaw_trim_err_p=bool(getattr(args, "obs_yaw_trim_err_p", False)),  # block 10 L2y' (ABI 52)
 			decouple_outputs=args.decouple_outputs,
 			bits_per_feature=args.bits_per_feature,
 			feature_balance_ratio=args.feature_balance_ratio,

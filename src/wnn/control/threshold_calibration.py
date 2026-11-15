@@ -129,7 +129,7 @@ def calibration_from_args(args) -> ThresholdCalibration:
 		yaw_dense=getattr(args, "yaw_centred_ladder", None) == "dense",
 		tilt_dense=bool(getattr(args, "obs_tilt_ref_err", False))
 		and getattr(args, "tilt_err_ladder", "dense") == "dense",
-		yaw_trim_dense=bool(getattr(args, "obs_yaw_trim_err", False)),
+		yaw_trim_dense=bool(getattr(args, "obs_yaw_trim_err", False) or getattr(args, "obs_yaw_trim_err_p", False)),
 		# Set by phased_ga's refit (_refit_thresholds_from_student) once the grid winner
 		# has been rolled out; every later fit site reads it from here.
 		student_samples=getattr(args, "_threshold_refit_samples", None),

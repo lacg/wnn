@@ -54,6 +54,8 @@ class FitnessCalculatorFactory:
 		# reason as aggregation/zrank_clamp: a field this factory drops is a
 		# silent no-op for every caller that builds through here.
 		zrank_mad_floor: bool = False,
+		# CTRL-48 pos-only scale floor (metres; 0 = legacy) — forwarded for the same reason.
+		zrank_pos_floor: float = 0.0,
 		# Viability gate (21/08/2026): forwarded like every other controller
 		# knob — the 17/08 --fit-weight-alt lesson applies verbatim. None = off.
 		gate_stable_min: Optional[float] = None,
@@ -108,6 +110,7 @@ class FitnessCalculatorFactory:
 					weight_alt=weight_alt,       weight_pos=weight_pos,
 					aggregation=aggregation,     zrank_clamp=zrank_clamp,
 					zrank_mad_floor=zrank_mad_floor,
+					zrank_pos_floor=zrank_pos_floor,
 					gate_stable_min=gate_stable_min, gate_err_max=gate_err_max,
 					jerk_anchor=jerk_anchor,
 				)
