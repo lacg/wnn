@@ -14,7 +14,12 @@ while another IDS flow is RUNNING (IDS needs 10 of 13 cores, so the scheduler ca
 refuses otherwise. Release is NOT this script's job: prereg §5 (VAL futility gate on the A1 genomes) must pass first,
 then POST /api/flows/:id/resume on Luiz's go.
 
-Usage: python scripts/queue_ids58_vote_b64.py [--dry-run]"""
+--extension (prereg §6.3, Luiz's go 15/11/2026 after the n=3 AMBIGUOUS): r20419-20, base = lattice controls 7501 / 7505,
+the same four overrides. The A1 pairs for those seeds are flown at the same time (queue_ids57_a1.py --extension), so the
+pairing check vs A1 is by construction (same base, A1 = max_bits only, C = max_bits + the vote package); no IDS56U arm
+exists on those seeds (secondary stays n=3). Created QUEUED, not paused (released on Luiz's go).
+
+Usage: python scripts/queue_ids58_vote_b64.py [--dry-run] [--extension]"""
 import json, sqlite3, sys
 from pathlib import Path
 
@@ -28,6 +33,7 @@ UNWEIGHTED_VOTE = {"ids_write_rule": "vote", "ids_vote_share": THETA, "balance_c
 OVERRIDES = {**UNWEIGHTED_VOTE, "max_bits": MAX_BITS}
 # seed -> (lattice control, IDS56U arm, IDS-57 A1 arm); all three completed, all on the same seed.
 BASES = {20421: (7509, 7543, 7546), 20422: (7513, 7544, 7547), 20423: (7517, 7545, 7548)}
+BASES_EXT = {20419: 7501, 20420: 7505}  # §6.3 extension: lattice control only
 LATTICE_PREFIX = "IDS56-unswr-WbCTRL-desir-BINARY-2m-max250-xo_blend_cluster-rate0.25-rklegacy-lattice-encoff-r"
 NEW_PREFIX = "IDS58-unswr-WbCTRL-desir-BINARY-2m-max250-xo_blend_cluster-rate0.25-rklegacy-nb02-b64-encoff-r"
 # Asserted on the lattice control, never overridden (same list as scripts/queue_ids57_a1.py).
@@ -133,6 +139,42 @@ def plan_seed(db, seed: int) -> tuple[str, str, dict, str]:
 	return name, template, params, describe(control, u, a1)
 
 
+def plan_ext_seed(db, seed: int) -> tuple[str, str, dict, str]:
+	control = BASES_EXT[seed]
+	control_name, template, cp = check_lattice_control(db, control, seed)
+	params = {**cp, **OVERRIDES}
+	Q.check(control_name, params)
+	d_ctl = diff(cp, params)
+	if d_ctl != expected(cp, OVERRIDES):
+		raise SystemExit(f"r{seed}: diff vs control {d_ctl} != the four overrides")
+	name = NEW_PREFIX + str(seed)
+	print(f"{name}\n  base {control} (lattice, 34b)  diff-vs-base {json.dumps(d_ctl)}")
+	desc = (f"IDS58 §6.3 EXTENSION (Luiz 15/11): clone of lattice control {control} with ids_write_rule=vote, "
+	        f"ids_vote_share={THETA}, balance_classes=false, max_bits={MAX_BITS} only. Primary pair: the IDS57 A1 "
+	        f"extension flow of r{seed} (same base, max_bits only). Worker ABI {WORKER_ABI}.")
+	return name, template, params, desc
+
+
+def main_ext(dry_run: bool):
+	if not dry_run:
+		require_worker_abi()
+	db = sqlite3.connect(Q.DB, uri=True)
+	have = {r[0] for r in db.execute("select name from flows")}
+	for seed in BASES_EXT:
+		name, template, params, desc = plan_ext_seed(db, seed)
+		if name in have:
+			print(f"  [skip] {name} exists")
+			continue
+		if dry_run:
+			print("  [dry] not created")
+			continue
+		f = Q.call("POST", Q.API, {"name": name, "description": desc,
+		                           "config": {"template": template, "params": params}, "experiments": Q.EXPS})
+		verify_experiments(f["id"])
+		Q.call("PATCH", f"{Q.API}/{f['id']}", {"status": "queued"})
+		print(" ", f["id"], name, "queued")
+
+
 def main(dry_run: bool):
 	if not dry_run:
 		require_worker_abi()
@@ -151,4 +193,7 @@ def main(dry_run: bool):
 
 
 if __name__ == "__main__":
-	main("--dry-run" in sys.argv)
+	if "--extension" in sys.argv:
+		main_ext("--dry-run" in sys.argv)
+	else:
+		main("--dry-run" in sys.argv)
