@@ -42,3 +42,16 @@ n=10 with the point-estimate rule.
 ## Reported, descriptive only
 Compact pair tables per arm (A = C · B = arm), pos_hold / dz_hold, H − P on steady and pos_hold, gaps vs the
 equal-info COMPARATOR row. Nothing above may change after the first block-10b END line.
+
+## Amendment 1 (Luiz 15/11 ~15:30 EST, written BEFORE any combination run; after C/Y/P s1 were seen)
+Two arms added to every seed, flown after H (seed order C Y P H YP YH; 60 runs ≈ 60 h):
+| arm | extra flags | hypothesis |
+|---|---|---|
+| YP | C + `--obs-yaw-trim-err-p --alt-integral pole3` | L2y′ adds on top of L3 (ranked on pos) |
+| YH | YP + `--fit-pos-metric hold` | L2y′ adds on top of L3 (ranked on pos_hold) |
+Rule for the combinations (paired by seed, same gate as every arm): **YP vs P and YH vs H** — L2y′ "adds on top of L3" if
+mean steady better by > 0.03° AND mean err not worse by > 0.03° AND mean pos not worse by > 0.010 m. Also reported vs C.
+Step 5 of the rule is now: if Y and an L3 arm are adopted AND the matching combination adds on top of that L3 arm, the
+combination is the next base (it has been flown); otherwise the adopted single levers follow the original step 5.
+Interim looks cover YP/YH with the same 99 % criteria (their target = steady, their guards = err and pos).
+Seen before this amendment (disclosed): s1 of C, Y (+0.07 err / +0.07 steady vs C) and P (+0.06 / −0.02 / −0.030 m).
