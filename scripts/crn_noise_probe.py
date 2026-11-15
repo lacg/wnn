@@ -49,7 +49,9 @@ from dataclasses import dataclass
 
 METRICS = ("stable_rate", "mean_attitude_error_deg", "mean_steady_error_deg",
            "mean_altitude_error_m", "mean_position_error_m", "motor_jerk_mean",
-           "mono_violations_total", "mean_effort", "reward")
+           "mono_violations_total", "mean_effort", "reward",
+           # CTRL-48 (15/11/2026): the hold-window 3-D position error (--fit-pos-metric hold).
+           "mean_position_hold_m")
 MAD_K = 1.4826
 FRAME_NAMES = "ABC"
 # Frame seeds for the fresh frames: fixed odd offsets from the train seed, so the

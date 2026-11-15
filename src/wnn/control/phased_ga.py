@@ -290,7 +290,7 @@ def _resume_ga_state_if_targeted(strat, args, stage_num: int) -> None:
 	      f"{strat._resume_start_gen} with the dumped GA state", flush=True)
 
 from wnn.control.provenance import arch_token, collect_provenance, obs_pwm_convention
-from wnn.control.pos_floor import zrank_pos_floor_from_args
+from wnn.control.pos_floor import fit_pos_metric_from_args, zrank_pos_floor_from_args
 from wnn.control.select_tail import (SELECT_TAIL_MODES, genome0_rows, new_episode_sink,
                                      select_tail_token, tail_cell, tail_footer, tail_rank_winner,
                                      tail_value, validate_select_tail)
@@ -705,6 +705,7 @@ def _build_ga_config(args, gens: int, patience: int, mutation_rate=None):
 		zrank_clamp=getattr(args, "zrank_clamp", 3.0),
 		zrank_mad_floor=getattr(args, "zrank_mad_floor", False),
 		zrank_pos_floor=zrank_pos_floor_from_args(args),  # CTRL-48: GA pool ranking
+		fit_pos_metric=fit_pos_metric_from_args(args),     # CTRL-48 block 10b
 		# Viability gate (21/08): same caller-must-pass-it lesson as alt/pos.
 		gate_stable_min=_gate_args(args)[0],
 		gate_err_max=_gate_args(args)[1],
@@ -757,6 +758,7 @@ def _build_ts_config(args, gens: int, patience: int):
 	tscfg.zrank_clamp = getattr(args, "zrank_clamp", 3.0)
 	tscfg.zrank_mad_floor = getattr(args, "zrank_mad_floor", False)
 	tscfg.zrank_pos_floor = zrank_pos_floor_from_args(args)  # CTRL-48: TS pool ranking
+	tscfg.fit_pos_metric = fit_pos_metric_from_args(args)     # CTRL-48 block 10b
 	if tscfg.fitness_aggregation != "harmonic":
 		# The single-objective CONTROLLER type has no aggregation knob — a
 		# non-default aggregation needs the multi-objective calculator even
@@ -1526,6 +1528,7 @@ def _save_winner(path: str, args, spec: ControllerSpec,
 			"zrank_clamp": getattr(args, "zrank_clamp", 3.0),
 			"zrank_mad_floor": getattr(args, "zrank_mad_floor", False),
 			"zrank_pos_floor": zrank_pos_floor_from_args(args),
+			"fit_pos_metric": fit_pos_metric_from_args(args),
 		},
 		"meta": {
 			"saved_at_unix": time.time(),
@@ -2189,6 +2192,12 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 		def avg(attr, default=None):
 			vals = [getattr(m, attr, None) for m in ms]
 			vals = [v for v in vals if v is not None]
+			# The hold-window columns are NaN on a val unit where no episode reached the
+			# window (cpu_score::hold_mean): average over the units that HAVE a value, the
+			# same "reached" convention as inside a unit (all NaN ⇒ None, the calculator's
+			# missing-value rule). Every other column is untouched.
+			if attr in ("mean_position_hold_m", "mean_dz_hold_m"):
+				vals = [v for v in vals if math.isfinite(v)]
 			return statistics.mean(vals) if vals else default
 		return SimpleNamespace(
 			reward=avg("reward", 0.0), stable_rate=avg("stable_rate", 0.0),
@@ -2279,6 +2288,7 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 			zrank_clamp=getattr(args, "zrank_clamp", 3.0),
 		zrank_mad_floor=getattr(args, "zrank_mad_floor", False),
 		zrank_pos_floor=zrank_pos_floor_from_args(args),  # CTRL-48: stage-select too
+			pos_metric=fit_pos_metric_from_args(args),         # CTRL-48 block 10b: stage-select too
 			gate_stable_min=_gate_args(args)[0],
 			gate_err_max=_gate_args(args)[1])
 		# No fallback (13/10/2026). A failing calculator used to fall back to "lowest
@@ -3845,6 +3855,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "and stage-select. Below the floor two genomes' pos values count as a tie-in-noise "
 	                     "instead of clamping at +-zrank_clamp. Independent of --zrank-mad-floor (which has "
 	                     "no pos entry). Unset (default) = byte-identical.")
+	ap.add_argument("--fit-pos-metric", choices=["pos", "hold"], default="pos",
+	                help="CTRL-48 block 10b (Luiz 15/11/2026): which metric the fitness POS column ranks "
+	                     "(weight --fit-weight-pos). pos (default) = the whole-episode mean 3-D position error, "
+	                     "byte-identical; hold = the hold-window (t >= 0.8*steps) mean 3-D position error "
+	                     "(pos_hold). Applies wherever the ZRank combine runs: grid ranking, GA/TS pool "
+	                     "ranking and stage-select. --zrank-pos-floor auto follows the column. A candidate "
+	                     "with no hold-window value (every episode diverged before the window) ranks last "
+	                     "on the column.")
 	ap.add_argument("--zrank-clamp", type=float, default=3.0,
 	                help="Winsorization bound for --fit-aggregation zscore: per-metric robust "
 	                     "z is clamped to ±this, so no single dimension can capture the score "
@@ -4220,7 +4238,8 @@ def block10_tokens(args) -> dict:
 	mode = getattr(args, "alt_integral", "off")
 	return dict(alt="" if mode == "off" else mode,
 	            yawref=("trim" if getattr(args, "obs_yaw_trim_err", False)
-	                    else "trim_p" if getattr(args, "obs_yaw_trim_err_p", False) else ""))
+	                    else "trim_p" if getattr(args, "obs_yaw_trim_err_p", False) else ""),
+	            pos_metric="hold" if fit_pos_metric_from_args(args) == "hold" else "")
 
 
 def ctrl46_tokens(args) -> dict:
@@ -4571,7 +4590,8 @@ def main():
 	      f"fitness_pools={fitness_pools_label(args)} "
 	      f"patience={'pool0' if args.patience_track_pool0 else 'frozen-best'} "
 	      f"madfloor={'on' if args.zrank_mad_floor else 'off'}"
-	      + (f" posfloor={zrank_pos_floor_from_args(args):g}m" if zrank_pos_floor_from_args(args) > 0 else ""))
+	      + (f" posfloor={zrank_pos_floor_from_args(args):g}m" if zrank_pos_floor_from_args(args) > 0 else "")
+	      + (" pos_metric=hold" if fit_pos_metric_from_args(args) == "hold" else ""))
 	# R9 (multi-axis spec): one greppable line the ladder copies into the marker —
 	# wheel, ABI, .so hash, git HEAD, pool scheme. Fail-safe by construction.
 	print(collect_provenance(fitness_pools_label(args),

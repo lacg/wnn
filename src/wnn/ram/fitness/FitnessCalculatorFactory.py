@@ -56,6 +56,8 @@ class FitnessCalculatorFactory:
 		zrank_mad_floor: bool = False,
 		# CTRL-48 pos-only scale floor (metres; 0 = legacy) — forwarded for the same reason.
 		zrank_pos_floor: float = 0.0,
+		# CTRL-48 block 10b: which metric the pos column ranks ("pos" | "hold").
+		pos_metric: str = "pos",
 		# Viability gate (21/08/2026): forwarded like every other controller
 		# knob — the 17/08 --fit-weight-alt lesson applies verbatim. None = off.
 		gate_stable_min: Optional[float] = None,
@@ -111,6 +113,7 @@ class FitnessCalculatorFactory:
 					aggregation=aggregation,     zrank_clamp=zrank_clamp,
 					zrank_mad_floor=zrank_mad_floor,
 					zrank_pos_floor=zrank_pos_floor,
+					pos_metric=pos_metric,
 					gate_stable_min=gate_stable_min, gate_err_max=gate_err_max,
 					jerk_anchor=jerk_anchor,
 				)
