@@ -114,3 +114,6 @@ the 50 cells.
 `scripts/queue_ids59_cicids_b64.py` asserts the pinned recipe on each control, the one-key diff, and 2 experiments per
 flow, and creates the flows QUEUED (Luiz 15/11; FIFO after the IDS58 extension 7570-7573). Flow ids are recorded on
 the Plane story.
+
+**Created 15/11/2026 (after the freeze commit e0f012cb):** 7574 (r20419, control 7531), 7575 (r20420, control 7533),
+7576 (r20421, control 7535); QUEUED, 2 experiments each verified, `max_bits` 64 the only diff. Plane story IDS-59.
