@@ -1,4 +1,4 @@
-# CTRL-48 block 10b — pre-registration (DRAFT for Luiz, 15/11/2026)
+# CTRL-48 block 10b — pre-registration (APPROVED by Luiz 15/11/2026 ~12:20 EST)
 
 Written BEFORE any block-10b run. Luiz 15/11: fly L1+L2y′; L3 as an A/B on the fitness position column (whole-episode
 `pos` vs hold-window `pos_hold`); position floor ON in every arm. Supersedes the stopped 2×2 (L2y defective; L3 stopped
