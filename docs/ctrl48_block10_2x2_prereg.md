@@ -38,3 +38,19 @@ docs/ctrl48_block10_arm1_result.md). Driver logs/controller/ctrl48/ab_block10_2x
 Per seed and mean, compact pair tables per arm (A = L1 · B = arm); pos_hold / dz_hold; the 2×2 interaction
 (L2y+L3 − L2y − L3 + L1) on steady and pos; gaps vs the equal-info COMPARATOR row (pole3 version for L3 arms).
 Nothing above may change after the first 2×2 END line.
+
+## Amendment 1 (Luiz 15/11, before any 2×2 run): interim looks at n = 3, 5, 7, then 10
+The driver is already seed-major (all three arms of seed k finish before seed k+1 starts), so after every 3rd, 5th and
+7th seed all arms have the same n. At each interim look (n = 3, 5, 7), per arm, using the paired per-seed differences
+vs L1 (B − A) and a **99 % two-sided t interval** (stricter than 95 % because we look repeatedly; t(2) = 9.92,
+t(4) = 4.60, t(6) = 3.71):
+- **Early ADOPT:** the target's interval lies entirely on the good side of its threshold (L2y: steady upper bound
+  < −0.03°; L3: pos upper bound < −0.010 m) AND each guard's interval upper bound is < +0.03° (steady and err for L3,
+  err for L2y) AND the arm's pooled fails are ≤ 0.05 % of its episodes so far AND not significantly worse than L1 on
+  the same seeds (exact one-sided conditional binomial, p < 0.05).
+- **Early NOT-ADOPT (futility):** the target's interval lies entirely on the bad side (L2y: steady lower bound
+  > −0.03°; L3: pos lower bound > −0.010 m), OR a gate failure is already certain (pooled fails > 17 out of the full 35,000).
+- Otherwise the arm is **undecided** and the block continues.
+- When EVERY arm has an early verdict, the main session recommends stopping; **Luiz decides** whether to stop the driver.
+  The base then follows step 4 of the rule using the means at that look. If any arm is undecided at n = 7, run to n = 10
+  and apply the original rule (point estimates) to all arms.
