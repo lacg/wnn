@@ -507,6 +507,51 @@ fn stress_units_bias_compensated_mpcof()
 	}
 }
 
+/// docs/ctrl48_block10_2x2_prereg.md, "L3 reference rows" (Luiz 15/11/2026): the three
+/// MPCOF reference rows re-scored ONCE with the altitude integrator (pole3) on the 35
+/// standard TEST units — REPORT-ONLY context for the L3 arms, nothing tuned. Gate: with
+/// the integrator off, all three rows reproduce the published ones before pole3 is read.
+#[test]
+#[ignore = "REPORT-ONLY one-shot on the 35 test units: needs WNN_L3_REF_FIXTURE"]
+fn test_units_reference_rows_alt_integral_pole3()
+{
+	let units = units_from("WNN_L3_REF_FIXTURE", true);
+	let seeds: Vec<u64> = units.iter().map(|u| u.seed).collect();
+	assert_eq!(seeds, (99990101..=99990135).collect::<Vec<u64>>(), "exactly the 35 published test units");
+	self_check(&units);
+	let comp = || RivalProbe::measure_only().with_bias_comp();
+	let rows: [(&str, bool, &(dyn Fn() -> RivalProbe + Sync), [f64; 4]); 3] = [
+		("MPCOF>rate(h10) oracle-fed", false, &RivalProbe::measure_only, [1.0, 0.690, 0.163, 0.357]),
+		("MPCOF>rate(h10) est + bias comp (COMPARATOR)", true, &comp, [1.0, 0.691, 0.165, 0.357]),
+		("MPCOF>rate(h10) est-fed, no bias comp", true, &RivalProbe::measure_only, [1.0, 1.352, 0.684, 0.341]),
+	];
+	let fails = |a: &Arm| -> usize { a.per_unit.iter().zip(&units).map(|((r, _), u)| ((1.0 - r.0) * u.episodes() as f64).round() as usize).sum() };
+	let m = |a: &Arm, f: &dyn Fn(&Row) -> f64| mean(a.per_unit.iter().map(|(r, _)| f(r)));
+	let mut arms = Vec::new();
+	for (mode, label) in [(0u8, "off"), (2u8, "pole3")]
+	{
+		for (name, use_est, make, published) in rows.iter()
+		{
+			let a = Arm { name: format!("{name}, alt-integral {label}"), per_unit: fly_tweaked(&units, *use_est, Tweak { alt_integral: mode, ..Tweak::default() }, *make) };
+			let got = [m(&a, &|r| r.0), m(&a, &|r| r.1), m(&a, &|r| r.2), m(&a, &|r| r.4)];
+			if mode == 0
+			{
+				// docs/ctrl_rival_row_ruling.md rows C / B / A, published at 0.001° / 0.001 m.
+				assert!(
+					got[0] == published[0] && fails(&a) == 0 && (got[1] - published[1]).abs() < 0.0005 && (got[2] - published[2]).abs() < 0.0005 && (got[3] - published[3]).abs() < 0.0005,
+					"{name}, off: {got:?} does not reproduce the published row {published:?} — STOP"
+				);
+			}
+			println!("[result] {}: stable {:.2} err {:.3} steady {:.3} pos {:.3} pos_hold {:.3} dz_hold {:.3} fails {}/{}",
+				a.name, 100.0 * got[0], got[1], got[2], got[3],
+				mean(a.per_unit.iter().map(|(_, p)| p.pos_fifths[4])), mean(a.per_unit.iter().map(|(_, p)| p.hold_abs_xyz[2])),
+				fails(&a), units.len() * 100);
+			arms.push(a);
+		}
+	}
+	print_position_table("L3 reference rows — MPCOF, TEST (35 units × 100 episodes), alt-integral off vs pole3, one shot", &units, &arms);
+}
+
 /// The cascade student's output law as flown in block 8/9 ("both": --ctbr-delta-law
 /// --delta-leak 0.7 --delta-max 0.6, ranges 0.25 / 4.2 / 4.2 / 2, γ 1 / 2 / 2 / 2).
 fn both_alphabet(levels: u32) -> StudentAlphabet

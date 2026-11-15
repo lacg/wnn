@@ -54,3 +54,23 @@ t(4) = 4.60, t(6) = 3.71):
 - When EVERY arm has an early verdict, the main session recommends stopping; **Luiz decides** whether to stop the driver.
   The base then follows step 4 of the rule using the means at that look. If any arm is undecided at n = 7, run to n = 10
   and apply the original rule (point estimates) to all arms.
+
+## L3 reference rows (15/11/2026; report-only context, does not change the rule)
+
+The three MPCOF reference rows re-scored ONCE on the 35 standard TEST units (99990101-135 × 100 episodes, the same episodes as the published rows). The rows were scored with `--alt-integral` off and then with `pole3`, with nothing tuned.
+- Scorer: `rival_probe_tests::test_units_reference_rows_alt_integral_pole3` (cargo `#[ignore]`, test-only). The fixture is `scripts/ctrl_indi_val_fixture.py --units test` on the block-9 s1 run.
+- **Gate passed:** with the integrator off, all three rows reproduce `docs/ctrl_rival_row_ruling.md` rows C / B / A at their printed 0.001 precision.
+
+```
+row (35 TEST units x 100 eps)                 | alt     | stable % | err °  | steady ° | pos m | pos_hold m | dz_hold m | fails
+----------------------------------------------+---------+----------+--------+----------+-------+------------+-----------+------
+oracle-fed (label law; a bound)               | off     | 100.00   | 0.690  | 0.163    | 0.357 | 0.309      | 0.195     | 0/3500
+                                              | pole3   | 100.00   | 0.699  | 0.148    | 0.313 | 0.222      | 0.044     | 0/3500
+est + bias comp (equal-info COMPARATOR)       | off     | 100.00   | 0.691  | 0.165    | 0.357 | 0.309      | 0.195     | 0/3500
+                                              | pole3   | 100.00   | 0.700  | 0.150    | 0.313 | 0.222      | 0.044     | 0/3500
+est-fed, no bias comp                         | off     | 100.00   | 1.352  | 0.684    | 0.341 | 0.280      | 0.195     | 0/3500
+                                              | pole3   |  99.97   | 1.360  | 0.669    | 0.293 | 0.184      | 0.044     | 1/3500
+```
+- For the L3 arms, gaps are quoted against the **pole3 COMPARATOR row: 100.00 / 0.700 / 0.150 / 0.313 m, pos_hold 0.222 m, dz_hold 0.044 m, 0/3500.**
+- pole3 changes only the vertical channel: hold |dz| 0.195 → 0.044 m, and the horizontal hold |dx| / |dy| are identical. pos falls by 0.044-0.048 m and pos_hold by 0.087-0.096 m. Attitude moves by at most +0.009° err and −0.015° steady.
+- The no-bias-comp row picks up 1 fail in 3,500 under pole3, against 0 with it off. That is one episode, not a rate (the 300-unit stress test put this row at 5/30,000 with it off).
