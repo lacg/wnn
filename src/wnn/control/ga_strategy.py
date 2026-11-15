@@ -101,6 +101,8 @@ def default_controller_ga_config(
 	# MAD floor for the zscore scale (23/09/2026) — forwarded like every knob,
 	# same 18/08 lesson. False = legacy.
 	zrank_mad_floor: bool = False,
+	# CTRL-48 pos-only scale floor (metres; 0 = legacy) — forwarded like every knob.
+	zrank_pos_floor: float = 0.0,
 	# Viability gate (21/08/2026): forwarded like every weight — same lesson.
 	# stable is a FRACTION, err in DEGREES; None/None = off.
 	gate_stable_min: "float | None" = None,
@@ -149,6 +151,7 @@ def default_controller_ga_config(
 		fitness_gate_err_max=gate_err_max,
 		zrank_clamp=zrank_clamp,
 		zrank_mad_floor=zrank_mad_floor,
+		zrank_pos_floor=zrank_pos_floor,
 	)
 
 

@@ -78,6 +78,8 @@ mod ctrl51_tilt_ref_tests; // L1 of block 10 (ABI 51): tilt-reference roll/pitch
 #[cfg(test)]
 mod ctrl51_yaw_trim_tests; // L2y of block 10 (ABI 51): trim-shifted yaw error — definition, replay, CPU/GPU score/split/walk parity
 #[cfg(test)]
+mod ctrl52_yaw_trim_p_tests; // L2y' (ABI 52): proportional-only yaw trim shift, raw integral — definition, replay, CPU/GPU score/split/walk parity
+#[cfg(test)]
 mod ctrl51_alt_integral_tests; // L3 of block 10 (ABI 51): altitude integrator — law, anti-windup, droop, hosts, CPU/GPU score parity
 #[cfg(test)]
 mod ctrl46_tests; // CTRL-46 (ABI 46): vote write rule (CPU/GPU, order independence) + estimate-built labels
@@ -505,7 +507,15 @@ mod metal_controller;
 ///     10 values (+ hold 3-D position error, hold |dz|, m), score_position_teacher 7;
 ///     the WNN scorer rows grow 17 → 19 (rows 17, 18) and the Metal per-episode rows
 ///     13 → 15. Existing values and their order unchanged. Pin: ctrl51_hold_tests.rs.
-pub const ABI_VERSION: u32 = 51;
+/// ABI 52 (15/11/2026, Luiz, block 10 round 3; default-off, flags off = ABI 51):
+///   * L2y' `obs_yaw_trim_err_p=False` on WnnController / dagger_train_batch_inplace: the
+///     PROPORTIONAL yaw inputs carry yaw_err − κ·cresid_z, the yaw integrals keep the raw
+///     heading error (yaw_trim_err.rs κ). Metal: FC_YAW_TRIM_P(4) specialization of the
+///     cascade rollout and the controller_train / controller_record pipelines;
+///     RolloutParams / TrainParams gain one trailing float (ytp_kappa).
+///     Pin: ctrl52_yaw_trim_p_tests.rs.
+///   * WNN hold rows (ABI 51 round 2): averaged over the episodes that reached the window.
+pub const ABI_VERSION: u32 = 52;
 
 /// ABI 44: how output neurogenesis lays out the output layer — "segment" = every
 /// bank / E-I half resizes at its own tail (pre-44 Python resized the flat tail).

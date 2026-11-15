@@ -68,6 +68,14 @@ constant bool CAS_OBS = is_function_constant_defined(FC_CASCADE_OBS) ? FC_CASCAD
 // leaves it undefined ⇒ dead-stripped ⇒ the ABI-45 codegen).
 constant bool FC_ATT_BIAS_PRED [[function_constant(3)]];
 constant bool ABP = is_function_constant_defined(FC_ATT_BIAS_PRED) ? FC_ATT_BIAS_PRED : false;
+// L2y' of block 10 (ABI 52, --obs-yaw-trim-err-p): the proportional yaw inputs carry
+// yaw_err − κ·cresid_z while the yaw integrals keep the raw heading error. The shift
+// sits INSIDE derive_features, so it lives in its own specialization (FC_YAW_TRIM_P=true,
+// set on the cascade rollout pipeline and on the controller_train / controller_record
+// pipelines only when the option is on); every other pipeline leaves it undefined ⇒
+// false ⇒ dead-stripped ⇒ the ABI-51 codegen.
+constant bool FC_YAW_TRIM_P [[function_constant(4)]];
+constant bool YTP = is_function_constant_defined(FC_YAW_TRIM_P) ? FC_YAW_TRIM_P : false;
 
 // One rotor of the geometry buffer — 48 B, all-float, mirrors the Rust-side
 // RotorGpu upload. k_thrust is the EFFECTIVE coefficient (nominal x per-rotor
@@ -311,6 +319,9 @@ struct Params
 	// the residual block's last slot. 0 ⇒ target − heading.
 	uint yte_on;
 	float yte_kappa;
+	// L2y' of block 10 (ABI 52), appended in lockstep: κ of the proportional-only yaw
+	// shift (read only by the FC_YAW_TRIM_P specialization).
+	float ytp_kappa;
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -837,6 +848,10 @@ struct FwdParams
 	// ARM 3 (12/11/2026): the yaw-integral leak — APPENDED LAST and assigned after the
 	// positional initializer (F.yaw_integral_leak = P.yaw_integral_leak) at every site.
 	float yaw_integral_leak;
+	// L2y' (ABI 52): κ and the slot of cresid_z (the residual block's last), assigned
+	// after the initializer at every site under `if (YTP)`; read only when YTP.
+	float ytp_kappa;
+	uint ytp_cres;
 };
 
 // Cell semantics (fire bit, nudge step, nudge distance, the TERNARY empty value
@@ -908,7 +923,7 @@ inline void derive_features(
 			sensors[fi++] = pitch_err;
 			if (P.obs_peraxis_yaw != 0u)
 			{
-				sensors[fi++] = yaw_err;
+				sensors[fi++] = YTP ? (yaw_err - P.ytp_kappa * sensors[P.ytp_cres]) : yaw_err; // L2y'
 			} // drop yaw when ref unobservable
 		}
 		if (P.obs_peraxis_i != 0u)
@@ -933,7 +948,7 @@ inline void derive_features(
 		// error + its leaky integral. yaw_heading is the absolute anchored estimate.
 		if (P.obs_yaw_err != 0u)
 		{
-			sensors[fi++] = yaw_err;
+			sensors[fi++] = YTP ? (yaw_err - P.ytp_kappa * sensors[P.ytp_cres]) : yaw_err; // L2y' (integral below stays raw)
 		}
 		if (P.obs_yaw_err_i != 0u)
 		{
@@ -1571,6 +1586,11 @@ kernel void controller_rollout(
 								 P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
 								 P.memory_mode, P.output_decode};
 	F.yaw_integral_leak = P.yaw_integral_leak; // ARM 3
+	if (YTP) // L2y' (ABI 52): the cascade residual's last slot is cresid_z
+	{
+		F.ytp_kappa = P.ytp_kappa;
+		F.ytp_cres = P.num_features - 2u * P.abp_on - 1u;
+	}
 	// CTRL-38: the cascade d̂ observer's per-episode state (cascade_dhat.rs reset).
 	CasObs cas_o;
 	for (uint m = 0u; m < 4u; m++)
@@ -2521,6 +2541,9 @@ struct TrainParams
 	// the residual block's last slot. 0 ⇒ target − heading.
 	uint yte_on;
 	float yte_kappa;
+	// L2y' of block 10 (ABI 52), appended in lockstep: κ of the proportional-only yaw
+	// shift (read only by the FC_YAW_TRIM_P specialization).
+	float ytp_kappa;
 };
 
 // Mirror of WnnController::output_decode_target (controller.rs): map a per-motor
@@ -2664,6 +2687,11 @@ kernel void controller_train(
 								 P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
 								 P.memory_mode, P.output_decode};
 	F.yaw_integral_leak = P.yaw_integral_leak; // ARM 3
+	if (YTP) // L2y' (ABI 52): the cascade residual's last slot is cresid_z
+	{
+		F.ytp_kappa = P.ytp_kappa;
+		F.ytp_cres = P.num_features - 2u * P.abp_on - 1u;
+	}
 
 	uint E = ep_count[g];
 	for (uint ej = 0u; ej < E; ej++)
@@ -2887,6 +2915,11 @@ kernel void controller_record(
 								 P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
 								 P.memory_mode, P.output_decode};
 	F.yaw_integral_leak = P.yaw_integral_leak; // ARM 3
+	if (YTP) // L2y' (ABI 52): the cascade residual's last slot is cresid_z
+	{
+		F.ytp_kappa = P.ytp_kappa;
+		F.ytp_cres = P.num_features - 2u * P.abp_on - 1u;
+	}
 
 	uchar prev_state[MAX_STATE_NEURONS];
 	uchar new_state[MAX_STATE_NEURONS];

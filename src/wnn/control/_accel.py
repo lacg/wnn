@@ -161,7 +161,9 @@ import os
 # additive outputs: rival scorers +2 values (hold pos, hold |dz|), WNN rows 17 -> 19.
 # Same ABI 51 (round 2): WnnController / dagger_train_batch_inplace(obs_yaw_trim_err=bool)
 # — L2y; WNN hold rows average the episodes that REACHED the hold window (NaN if none).
-EXPECTED_ABI = 51
+# ABI 52 (15/11/2026, Luiz): WnnController / dagger_train_batch_inplace(obs_yaw_trim_err_p=bool)
+# — L2y' (proportional-only yaw trim shift, raw integral); default off = ABI 51.
+EXPECTED_ABI = 52
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "
