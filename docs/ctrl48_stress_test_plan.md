@@ -47,3 +47,22 @@ mean                            1.403   0.79   0.358
 - MPCOF is not fail-free at this sample size: its 0/3500 on the 35 units was an under-powered zero.
 - **Gap:** the equal-information (bias-compensated) MPCOF COMPARATOR was NOT scored on these 300 units, so
   there is no fail rate yet for the paper's comparator row.
+
+### Gap closed: the equal-information MPCOF comparator on the same 300 test units (15/11/2026; REPORT-ONLY, one shot)
+
+The paper's comparator, MPCOF>rate(h10) est-fed **with bias compensation**, scored on the SAME 300 test units × 100 episodes as above. Nothing was tuned on these units.
+- The episodes come from `scripts/ctrl_indi_val_fixture.py --units test` on the s1 stress log (its `--test-seeds` are exactly 99990101..99990400, the same in all 10 logs). The scorer is `rival_probe_tests::stress_units_bias_compensated_mpcof` (cargo `#[ignore]`, test-only).
+- **Sanity gate passed.** The no-bias-comp row reproduces the stress test: 5/30000 fails, err 1.395°, steady 0.697°, pos 0.340 m. All 300 per-unit rows (stable / err / steady / pos) are identical to the stress logs at their printed precision.
+
+```
+row (300 TEST units x 100 eps)              | fails/30000 | exact 95% CI (fail %) | stable %  | err °  | steady ° | pos m | pos_hold m | dz_hold m
+--------------------------------------------+-------------+-----------------------+-----------+--------+----------+-------+------------+----------
+MPCOF>rate(h10) est-fed, no bias comp       | 5           | 0.0054 - 0.039        | 99.983    | 1.395  | 0.697    | 0.340 | 0.281      | 0.196
+MPCOF>rate(h10) est + bias comp (COMPARATOR)| 0           | 0 - 0.0123            | 100.000   | 0.726  | 0.176    | 0.356 | 0.310      | 0.196
+WNN `both` pooled, 10 seeds (above)         | 19/300000   | 0.0038 - 0.0099       | 99.994    | 1.403  | 0.79     | 0.358 | -          | -
+```
+- **The comparator has 0 fails in 30,000 episodes.** Its exact 95 % upper bound is 0.0123 % (about 1 in 8,100).
+- WNN 19/300,000 against the comparator's 0/30,000, conditional binomial on exposure 10:1, two-sided: **p = 0.41**. No significant difference in fail rate. This sample cannot separate them.
+- Safe wording: "neither the WNN (19 in 300,000, ≈ 1 in 16,000) nor the equal-information comparator (0 in 30,000) shows a fail rate distinguishable at this sample size". Never "the comparator is fail-free" and never "the WNN fails more".
+- Bias compensation removes all 5 fails of the uncompensated row. It also takes err 1.395 → 0.726° and steady 0.697 → 0.176° (better on 300/300 units). Position is slightly worse: pos 0.340 → 0.356 m and pos_hold 0.281 → 0.310 m. dz_hold is unchanged at 0.196 m.
+- These are TEST numbers, scored once, report-grade. The pos_hold / dz_hold columns follow the aligned convention (episodes that reached the window).

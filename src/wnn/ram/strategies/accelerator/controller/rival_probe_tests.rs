@@ -464,6 +464,49 @@ fn test_confirmation_bias_compensated_mpcof()
 	print_table("N2 — bias-compensated MPCOF, TEST (35 units × 100 episodes), one shot", &units, &arms, 0);
 }
 
+/// docs/ctrl48_stress_test_plan.md, Result gap (Luiz 15/11/2026): the equal-information
+/// MPCOF comparator (est-fed + bias compensation) on the SAME 300 test units × 100
+/// episodes the stress test scored — REPORT-ONLY, one shot, nothing tuned. The fixture is
+/// scripts/ctrl_indi_val_fixture.py --units test on a stress-test log (its --test-seeds
+/// = 99990101..99990400). Arm 1 (no bias compensation) must reproduce the stress test's
+/// MPCOF row (5/30000 fails, err 1.396°, steady 0.697°, pos 0.340 m) before anything else
+/// is read.
+#[test]
+#[ignore = "REPORT-ONLY one-shot on the 300 stress-test units: needs WNN_STRESS_MPCOF_FIXTURE"]
+fn stress_units_bias_compensated_mpcof()
+{
+	let units = units_from("WNN_STRESS_MPCOF_FIXTURE", true);
+	let seeds: Vec<u64> = units.iter().map(|u| u.seed).collect();
+	assert_eq!(seeds, (99990101..=99990400).collect::<Vec<u64>>(), "exactly the 300 stress-test units");
+	assert!(units.iter().all(|u| u.episodes() == 100), "100 episodes per unit");
+	self_check(&units);
+	let shipped = Arm { name: "MPCOF>rate(h10) est-fed, no bias comp (stress-test row)".into(), per_unit: fly(&units, true, &RivalProbe::measure_only) };
+	let fails = |a: &Arm| -> usize { a.per_unit.iter().zip(&units).map(|((r, _), u)| ((1.0 - r.0) * u.episodes() as f64).round() as usize).sum() };
+	let m = |a: &Arm, f: &dyn Fn(&Row) -> f64| mean(a.per_unit.iter().map(|(r, _)| f(r)));
+	let (f0, err, steady, pos) = (fails(&shipped), m(&shipped, &|r| r.1), m(&shipped, &|r| r.2), m(&shipped, &|r| r.4));
+	println!("[sanity] no-bias-comp row: {f0}/30000 fails, err {err:.4}, steady {steady:.4}, pos {pos:.4} (stress test: 5/30000, 1.396, 0.697, 0.340)");
+	// The stress-test means average per-unit rows PRINTED at 0.01° / 0.001 m, so the
+	// aggregate gate allows that rounding; the per-unit rows ([unit] lines) are checked
+	// against the stress logs at their printed precision outside the test.
+	for ((r, _), u) in shipped.per_unit.iter().zip(&units)
+	{
+		println!("[unit] {} {:.1} {:.2} {:.2} {:.3}", u.seed, 100.0 * r.0, r.1, r.2, r.4);
+	}
+	assert!(
+		f0 == 5 && (err - 1.396).abs() < 0.003 && (steady - 0.697).abs() < 0.003 && (pos - 0.340).abs() < 0.001,
+		"the no-bias-comp row does not reproduce the stress test — the units or episodes differ: STOP"
+	);
+	let arms = vec![shipped, Arm { name: "MPCOF>rate(h10) est-fed + bias compensation (COMPARATOR)".into(), per_unit: fly(&units, true, &|| RivalProbe::measure_only().with_bias_comp()) }];
+	print_table("Stress gap — equal-information MPCOF on the 300 stress-test TEST units × 100 episodes, one shot", &units, &arms, 0);
+	print_position_table("Stress gap — position (hold = the last fifth, t >= 0.8·steps)", &units, &arms);
+	for a in &arms
+	{
+		println!("[result] {}: fails {}/{} stable {:.4} err {:.4} steady {:.4} pos {:.4} pos_hold {:.4} dz_hold {:.4}",
+			a.name, fails(a), units.len() * 100, 100.0 * m(a, &|r| r.0), m(a, &|r| r.1), m(a, &|r| r.2), m(a, &|r| r.4),
+			mean(a.per_unit.iter().map(|(_, p)| p.pos_fifths[4])), mean(a.per_unit.iter().map(|(_, p)| p.hold_abs_xyz[2])));
+	}
+}
+
 /// The cascade student's output law as flown in block 8/9 ("both": --ctbr-delta-law
 /// --delta-leak 0.7 --delta-max 0.6, ranges 0.25 / 4.2 / 4.2 / 2, γ 1 / 2 / 2 / 2).
 fn both_alphabet(levels: u32) -> StudentAlphabet
