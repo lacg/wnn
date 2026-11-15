@@ -441,3 +441,88 @@ L1+L2y+L3 s1             | NEURONS#1   | NEURONS#1  OK  | NEURONS#1  same   | NE
   - flags, refusals, `yawref=trim_p`, `posfloor=0.0031m` in the header and the calculator name;
   - floor arithmetic: four candidates at 0.3070-0.3130 m, pos term +0.545 → +0.308;
   - an end-to-end `phased_ga` smoke run with L1 + L2y′ + `--zrank-pos-floor auto` on the block-9 recipe (pop 4, non-report seeds 777001/777002, GPU scorer), exit 0. A wiring check, not a result.
+
+---
+
+## BLOCK 10b (15/11/2026): `--fit-pos-metric {pos,hold}` (Python only, controller ABI 52 unchanged, no wheel)
+
+Rulings (Luiz, 15/11/2026):
+- Fly L1+L2y′.
+- `--zrank-pos-floor auto` in every arm.
+- L3 as an A/B on the fitness POSITION column: whole-episode `pos` vs `pos_hold`, both with L3.
+
+**Flag.** `--fit-pos-metric {pos,hold}`, default `pos`, byte-identical.
+- With `hold`, the fitness pos column (same weight, `--fit-weight-pos`) ranks `Metrics.mean_position_hold_m`: the hold-window (t ≥ 0.8·steps) mean 3-D position error over the episodes that reached the window.
+- Every scorer path already fills that field (rows 17/18 since ABI 51). So this is Python only: ABI 52, no new wheel.
+
+**Sites changed (one calculator serves every ranking):**
+- `FitnessCalculatorControllerHarmonic(pos_metric=)`: the column read, the missing-value rule, and the name.
+- `FitnessCalculatorFactory.create(pos_metric=)`.
+- `GAConfig` / `TSConfig.fit_pos_metric` (`framework/configs.py`).
+- `ga_strategy` builder (`fit_pos_metric=`).
+- Grid ranking: `controller_grid_search.py`.
+- GA pool ranking: `phased_ga._build_ga_config`.
+- TS pool ranking: `phased_ga._build_ts_config`.
+- Stage-select: `phased_ga._select_headline_stage`'s calculator.
+- Checkpoint fitness dict: `"fit_pos_metric"`.
+- `--zrank-pos-floor auto` resolution (`pos_floor.py`).
+- Stage-select unit average: the hold columns skip NaN units.
+- CLI, provenance token `pos_metric=hold` (absent for `pos`), and the run header `pos_metric=hold`.
+
+**What the logs show.** Every line that names the calculator now says which column it ranks: `ZRank(…, posfloor=0.0058m, pos_hold=0.1818)`. That covers the grid winner line, each GA stage's "Fitness calculator:" and "Elitism … by" lines, and the stage-select footer. The `[provenance]` line carries `pos_metric=hold`.
+
+**The floor follows the column.** Same CTRL-21 estimator, same two block-10 s1 MEMORY populations (L1, L1+L3), same three CRN frames of 5 pools × 200 episodes. The probe was re-run with `mean_position_hold_m` added; its pos estimates reproduced round 3's six exactly.
+
+```
+column     | L1+L3 s1 pairs A-B / A-C / B-C | L1 s1 pairs A-B / A-C / B-C | median (floor)
+-----------+--------------------------------+-----------------------------+---------------
+pos        | 1.74 / 3.38 / 2.90 mm          | 2.19 / 6.43 / 5.00 mm       | 3.14 mm -> POS_SCALE_FLOOR_M = 0.0031 m
+pos_hold   | 2.49 / 5.08 / 4.02 mm          | 6.57 / 17.27 / 11.79 mm     | 5.83 mm -> POS_HOLD_SCALE_FLOOR_M = 0.0058 m
+```
+- pos_hold is about 2× noisier than pos: it is a mean over the last fifth of the episode only.
+- In the L1 population its comparison noise is about its whole spread (A-C: 17 mm against a 17 mm spread). Ranking on it is close to ranking on noise there, which is why the floor matters more for this column.
+
+**NaN rule (chosen: rank LAST on the column).**
+- pos_hold is NaN when none of a candidate's episodes reached the window, and None when absent.
+- The combine never sees a non-finite value. ram_core refuses one, so this rule is required, not optional.
+- Such a candidate is given (max finite value in the column + 1 m), which ranks it last on the column (zscore: +3 after the clamp).
+- Why not substitute its whole-episode `pos`: that number comes from a different column, and it would REWARD an early tumble near the start. Such a candidate also has stable_rate = 0, so the armed viability gate (0.70) already excludes it; the rule only keeps the combine finite and the order sane.
+- If every candidate is missing, the column is constant and changes no order. If the field is absent everywhere, the column is warned about and dropped, as for any unplumbed metric.
+- In stage-select, a val unit whose hold value is NaN is skipped in the 20-unit average (the "reached" convention).
+- No candidate of the 13 re-scored runs had a NaN hold value.
+
+**Offline check (VAL only, descriptive; `scripts/ctrl48_pos_metric_rescore.py`).** The candidates are the stage-select's own unrounded 20-val-unit means captured in round 3, whose gate reproduced every logged pick and fit. Each pick below is under the run's own weights, viability gate and select-tail rule.
+
+```
+run (VAL, 20 units) | logged    | pos+floor | hold      | hold+floor            | VAL err/steady/pos/pos_hold: logged -> hold+floor pick
+L1 s1               | NEURONS#0 | NEURONS#0 | NEURONS#0 | NEURONS#0             | 1.074/0.451/0.3388/0.2730
+L1 s2               | NEURONS#2 | MEMORY#0  | NEURONS#2 | MEMORY#0   CHANGED    | 1.220/0.559/0.3332/0.2608 -> 1.164/0.514/0.3354/0.2654
+L1 s3               | NEURONS#2 | NEURONS#2 | NEURONS#2 | NEURONS#2             | 1.034/0.484/0.3268/0.2533
+L1 s4               | GRID#0    | GRID#0    | GRID#0    | GRID#0                | 1.171/0.519/0.3301/0.2571
+L1 s5               | NEURONS#2 | NEURONS#2 | NEURONS#2 | NEURONS#2             | 1.049/0.500/0.3355/0.2665
+L1 s6               | NEURONS#2 | NEURONS#2 | NEURONS#2 | NEURONS#2             | 1.011/0.386/0.3375/0.2714
+L1 s7               | NEURONS#0 | NEURONS#0 | NEURONS#0 | NEURONS#0             | 1.083/0.475/0.3352/0.2635
+L1 s8               | NEURONS#0 | NEURONS#0 | NEURONS#0 | NEURONS#0             | 1.107/0.503/0.3325/0.2646
+L1 s9               | MEMORY#1  | MEMORY#1  | MEMORY#1  | MEMORY#1              | 1.040/0.442/0.3373/0.2637
+L1 s10              | NEURONS#0 | NEURONS#0 | NEURONS#0 | NEURONS#0             | 0.992/0.385/0.3339/0.2596
+L1+L3 s1            | GRID#2    | GRID#2    | GRID#2    | MEMORY#2   CHANGED    | 1.186/0.629/0.3074/0.2180 -> 1.137/0.443/0.3132/0.2238
+L1+L2y s1           | MEMORY#1  | MEMORY#1  | MEMORY#1  | MEMORY#1              | 1.211/0.617/0.3467/0.2887
+L1+L2y+L3 s1        | NEURONS#1 | NEURONS#1 | NEURONS#1 | NEURONS#1             | 1.253/0.676/0.3086/0.2191
+```
+- **Hold without the floor changes nothing.** The hold column's MAD across 9 candidates collapses just as pos's did.
+- **Hold with the floor changes 2 of 13 picks, both toward better VAL attitude:**
+  - L1 s2: the same change the pos floor alone made.
+  - **L1+L3 s1: GRID#2 → MEMORY#2.** VAL err 1.186 → 1.137°, steady 0.629 → 0.443°. The cost is +5.8 mm pos and +5.8 mm pos_hold, which is 1.0 × the measured pos_hold noise. Under the pos column + floor the same 5.8 mm was 1.9 × its (smaller) noise, and GRID#2 kept the pick. Measured against the hold column's own noise, the MEMORY candidates' pos deficit is inside noise, and their 0.19° better steady wins.
+  - TEST for MEMORY#2 was not scored (only each stage's pool[0] has a TEST row: MEMORY pool[0] = MEMORY#0, TEST 1.13 / 0.46).
+- Descriptive, VAL, n = 1 per arm. A flight question remains: whether ranking on `pos_hold` in the GA pools grows a different pool, which the stage-select re-rank cannot show.
+
+**Tests.** `tests/test_controller_fit_pos_metric.py` (7 tests):
+- the default ranks bit-identically, and ignores a poisoned hold column under `pos`;
+- `hold` = the pos column fed the hold values;
+- NaN or None ranks last and stays finite, and is not given its whole-episode pos;
+- all-missing changes no order;
+- absent everywhere is dropped with a warning;
+- `auto` follows the column;
+- CLI and provenance.
+
+With `tests/test_controller_fitness_aggregation.py`: 18 passed. `cargo test -p ram_controller --lib --no-default-features`: 404 passed, 0 failed, 27 ignored (no Rust change). An end-to-end smoke run with L1 + L2y′ + L3 + `--fit-pos-metric hold --zrank-pos-floor auto` (non-report seeds 777001/777002, installed ABI-52 wheel) exits 0, with the header, the calculator names and the provenance as above.

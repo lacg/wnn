@@ -32,6 +32,7 @@ Trade-off vs FitnessCalculatorController:
     against PID, which has stable=100%).
 """
 
+import math
 import warnings
 
 from wnn.ram.metrics import Metrics
@@ -102,6 +103,11 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		# measured comparison noise (POS_SCALE_FLOOR_M), so a pos spread far below
 		# noise cannot clamp at ±zrank_clamp. Every other column is untouched.
 		zrank_pos_floor: float = 0.0,
+		# Which metric the pos column ranks (CTRL-48 block 10b, Luiz 15/11/2026):
+		# "pos" = the whole-episode mean 3-D position error (legacy, byte-identical);
+		# "hold" = the hold-window (t >= 0.8·steps) mean 3-D position error,
+		# Metrics.mean_position_hold_m. Same weight (weight_pos), same floor slot.
+		pos_metric: str = "pos",
 		gate_stable_min: "float | None" = None,
 		gate_err_max:    "float | None" = None,
 		# The ONE fitted anchor in the controller table. 0.06 is "~2x the median of
@@ -167,6 +173,9 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		if not (float(zrank_pos_floor) >= 0.0):
 			raise ValueError(f"zrank_pos_floor must be >= 0 metres, got {zrank_pos_floor!r}")
 		self.zrank_pos_floor = float(zrank_pos_floor)
+		if pos_metric not in ("pos", "hold"):
+			raise ValueError(f"pos_metric must be 'pos' or 'hold', got {pos_metric!r}")
+		self.pos_metric = pos_metric
 		self.weight_err_sq = float(weight_err_sq)
 		self.weight_stable = float(weight_stable)
 		self.weight_jerk   = float(weight_jerk)
@@ -228,6 +237,28 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		("mean_position_error_m", "weight_pos", "_warned_pos",
 		 "the run is not a --translation run, or the scorer predates metric row 13."),
 	)
+
+	# --fit-pos-metric hold: a candidate with NO hold-window value — every one of its
+	# episodes diverged before t = 0.8·steps, so the scorer returns NaN (cpu_score::
+	# hold_mean) — ranks WORST on the column: it is given (max finite value + 1 m), which
+	# every combine maps to the column's last place (zscore: clamped at +zrank_clamp).
+	# NOT its whole-episode pos: that would rate an episode which tumbled early, near its
+	# start, by a number from a different column. Such a candidate has stable_rate 0, so
+	# the viability gate already excludes it when armed; this rule only keeps the
+	# combine finite (ram_core refuses non-finite values) and the order sane without it.
+	HOLD_MISSING_PENALTY_M = 1.0
+
+	def _hold_column(self, metrics_list) -> "list[float] | None":
+		"""The pos column under pos_metric="hold" (None ⇒ no metric carries it: the caller
+		warns and drops the column, exactly as for any unplumbed metric)."""
+		raw = [getattr(m, "mean_position_hold_m", None) for m in metrics_list]
+		finite = [float(v) for v in raw if v is not None and math.isfinite(float(v))]
+		if not finite:
+			if all(v is None for v in raw):
+				return None
+			return [self.HOLD_MISSING_PENALTY_M] * len(raw)
+		worst = max(finite) + self.HOLD_MISSING_PENALTY_M
+		return [float(v) if v is not None and math.isfinite(float(v)) else worst for v in raw]
 
 	# Per-column noise floors for the zscore robust scale, in each column's OWN
 	# units (ram_core::fitness::MetricColumn::scale_floor). A column absent from
@@ -309,6 +340,15 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 			weight = getattr(self, weight_attr)
 			if weight <= 0:
 				continue
+			if weight_attr == "weight_pos" and self.pos_metric == "hold":
+				vals = self._hold_column(metrics_list)
+				if vals is not None:
+					flat.extend(vals)
+					weights.append(weight)
+					higher.append(False)
+					floors.append(_floor(weight_attr))
+					continue
+				attr = "mean_position_hold_m"   # absent everywhere: the warn-and-drop below
 			vals = [getattr(m, attr, None) for m in metrics_list]
 			if any(v is None for v in vals):
 				if not getattr(self, warned_attr):
@@ -438,7 +478,7 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		# pos stays conditional while it is inert (every genome sits at the origin
 		# until --xy-offset > 0, so the rank is one big tie). Make it unconditional
 		# the day stage 2 arms, for the reason above.
-		if self.weight_pos > 0: parts.append(f"pos={self.weight_pos}")
+		if self.weight_pos > 0: parts.append(f"{'pos_hold' if self.pos_metric == 'hold' else 'pos'}={self.weight_pos}")
 		# The aggregation is printed when it is not the harmonic default: two runs
 		# with identical weights but different combine steps select DIFFERENT
 		# genomes (arm 9: MEMORY#0 vs CONNECTIONS#0), so a label that hid this

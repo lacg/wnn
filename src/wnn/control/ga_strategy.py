@@ -103,6 +103,8 @@ def default_controller_ga_config(
 	zrank_mad_floor: bool = False,
 	# CTRL-48 pos-only scale floor (metres; 0 = legacy) — forwarded like every knob.
 	zrank_pos_floor: float = 0.0,
+	# CTRL-48 block 10b: the pos column's metric ("pos" | "hold").
+	fit_pos_metric: str = "pos",
 	# Viability gate (21/08/2026): forwarded like every weight — same lesson.
 	# stable is a FRACTION, err in DEGREES; None/None = off.
 	gate_stable_min: "float | None" = None,
@@ -152,6 +154,7 @@ def default_controller_ga_config(
 		zrank_clamp=zrank_clamp,
 		zrank_mad_floor=zrank_mad_floor,
 		zrank_pos_floor=zrank_pos_floor,
+		fit_pos_metric=fit_pos_metric,
 	)
 
 

@@ -76,6 +76,8 @@ class OptimizationConfig:
 	zrank_mad_floor: bool = False
 	# CTRL-48 (15/11/2026): pos-only scale floor in metres (0 = legacy, byte-identical).
 	zrank_pos_floor: float = 0.0
+	# CTRL-48 block 10b: the metric the pos column ranks — "pos" (legacy) | "hold".
+	fit_pos_metric: str = "pos"
 	min_accuracy_floor: float = 0.0
 	# Early stopping
 	patience: int = 5
@@ -147,6 +149,7 @@ class OptimizationConfig:
 			zrank_clamp=self.zrank_clamp,
 			zrank_mad_floor=self.zrank_mad_floor,
 			zrank_pos_floor=self.zrank_pos_floor,
+			pos_metric=self.fit_pos_metric,
 			ce_anchor=self.ce_anchor,
 			f1_anchor=self.f1_anchor,
 			acc_anchor=self.acc_anchor,
