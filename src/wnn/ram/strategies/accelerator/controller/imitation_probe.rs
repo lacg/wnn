@@ -715,6 +715,7 @@ pub(crate) fn from_fixture(path: &str) -> (WnnController, RewardGatedConfigPacke
 		None, // obs_tilt_ref_err (ABI 51) — off in the probe fixtures
 		false, // obs_yaw_trim_err (ABI 51)
 		false, // obs_yaw_trim_err_p (ABI 52)
+		false, // obs_yaw_from_att_est (ABI 55)
 	)
 	.expect("fixture controller");
 	c.set_target_levels_core(kw.get("target_levels").map(|v| v.parse().unwrap()).unwrap_or(0)).unwrap();

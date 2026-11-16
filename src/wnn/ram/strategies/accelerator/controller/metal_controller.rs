@@ -397,6 +397,9 @@ struct RolloutParams
 	// + 1 (L2y' of block 10, ABI 52), appended in lockstep with the shader twin: κ of the
 	// proportional-only yaw shift; read only by the FC_YAW_TRIM_P(4) specialization.
 	ytp_kappa: f32,
+	// + 1 (lever 1, ABI 55), appended in lockstep with the shader twin: the anchored yaw
+	// heading follows the student's own Mahony quaternion (score: live; train/record: yh_rec).
+	yfe_on: u32,
 }
 
 /// CTRL-38: the cascade feature blocks as the score kernel needs them, read off the
@@ -1245,6 +1248,7 @@ impl ControllerRolloutEvaluator
 				yte_on: controllers[0].yaw_trim_kappa().is_some() as u32,
 				yte_kappa: controllers[0].yaw_trim_kappa().unwrap_or(0.0),
 				ytp_kappa: controllers[0].yaw_trim_p_kappa().unwrap_or(0.0),
+				yfe_on: controllers[0].yaw_from_att_est() as u32,
 			};
 
 			let b_q0 = self.buf(q0_chunk);
@@ -1687,10 +1691,10 @@ pub fn score_controllers_metal(
 	{
 		return Err(verr("score_controllers_metal: alt_integral needs translation=True".to_string()));
 	}
-	// ABI 54: the Mahony-heading swap has no Metal twin — refuse rather than fly the dead-reckon.
-	if controllers.iter().any(|c| c.yaw_from_att_est())
+	// ABI 55: one RolloutParams per launch ⇒ the population must agree on the heading source.
+	if controllers.iter().any(|c| c.yaw_from_att_est() != controllers[0].yaw_from_att_est())
 	{
-		return Err(verr("score_controllers_metal: yaw_from_att_est is CPU-only (score_controllers_cpu)".to_string()));
+		return Err(verr("score_controllers_metal: a batch mixes yaw_from_att_est on/off".to_string()));
 	}
 	let alt_int = crate::altitude_integrator::AltitudeIntegrator::from_plant(
 		alt_integral,
@@ -2183,6 +2187,9 @@ struct TrainParams
 	// + 1 (L2y' of block 10, ABI 52), appended in lockstep with the shader twin: κ of the
 	// proportional-only yaw shift; read only by the FC_YAW_TRIM_P(4) specialization.
 	ytp_kappa: f32,
+	// + 1 (lever 1, ABI 55), appended in lockstep with the shader twin: the anchored yaw
+	// heading follows the student's own Mahony quaternion (score: live; train/record: yh_rec).
+	yfe_on: u32,
 }
 
 /// Per-genome recorded trajectory batch, flat across genomes (matches the kernel's
@@ -2221,6 +2228,9 @@ pub struct TrainBatch<'a>
 	// CTRL-46 (ABI 46): per-step recorded Mahony-bias prediction (*2, ReplayObs.att_bias
 	// twin; zeros when obs_att_bias_pred is off).
 	pub abp_rec: &'a [f32],
+	// ABI 55: per-step recorded Mahony heading (*1, ReplayObs.yaw_heading twin; zeros when
+	// obs_yaw_from_att_est is off — never read then).
+	pub yh_rec: &'a [f32],
 	pub selective: bool,
 	pub target_rpy: [f32; 3],
 }
@@ -2267,6 +2277,13 @@ fn replay_obs_batch_guard(batch: &TrainBatch, site: &str)
 		"{site}: replay bias-prediction buffer misaligned (abp_rec {} floats for {} steps) — an \
 		 obs_att_bias_pred student would replay values deploy never produced (CTRL-46)",
 		batch.abp_rec.len(),
+		total_steps
+	);
+	assert!(
+		batch.yh_rec.len() == total_steps,
+		"{site}: replay heading buffer misaligned (yh_rec {} floats for {} steps) — an \
+		 obs_yaw_from_att_est student would replay a heading deploy never used (ABI 55)",
+		batch.yh_rec.len(),
 		total_steps
 	);
 }
@@ -2778,6 +2795,7 @@ impl ControllerTrainer
 			yte_on: controllers[0].yaw_trim_kappa().is_some() as u32,
 			yte_kappa: controllers[0].yaw_trim_kappa().unwrap_or(0.0),
 			ytp_kappa: controllers[0].yaw_trim_p_kappa().unwrap_or(0.0),
+				yfe_on: controllers[0].yaw_from_att_est() as u32,
 		};
 
 		let b_sc = self.buf(&state_conns);
@@ -2819,15 +2837,16 @@ impl ControllerTrainer
 		let b_dr = self.buf(batch.dhat_rec); // CTRL-40 motor d̂ (buffer 27)
 		let b_cr = self.buf(batch.cas_rec); // CTRL-40 cascade blocks (buffer 28)
 		let b_ab = self.buf(batch.abp_rec); // CTRL-46 bias prediction (buffer 29)
+		let b_yh = self.buf(batch.yh_rec); // ABI 55 Mahony heading (buffer 30)
 
 		let cmd = self.queue.new_command_buffer();
 		let enc = cmd.new_compute_command_encoder();
 		let ytp = self.ytp_for(controllers)?;
 		enc.set_compute_pipeline_state(ytp.as_ref().map_or(&self.pipeline, |p| &p.0));
-		let bufs: [&Buffer; 30] = [
+		let bufs: [&Buffer; 31] = [
 			&b_sc, &b_oc, &b_sk, &b_sv, &b_so, &b_scn, &b_th, &b_epb, &b_epc, &b_stb, &b_stc, &b_gy,
 			&b_ac, &b_tg, &b_pp, &b_mk, &b_ky, &b_vl, &b_soff, &b_scap, &b_par, &b_wr, &b_iy, &b_vo,
-			&b_ho, &b_pa, &b_au, &b_dr, &b_cr, &b_ab,
+			&b_ho, &b_pa, &b_au, &b_dr, &b_cr, &b_ab, &b_yh,
 		];
 		for (i, b) in bufs.iter().enumerate()
 		{
@@ -3006,6 +3025,7 @@ impl ControllerTrainer
 			yte_on: controllers[0].yaw_trim_kappa().is_some() as u32,
 			yte_kappa: controllers[0].yaw_trim_kappa().unwrap_or(0.0),
 			ytp_kappa: controllers[0].yaw_trim_p_kappa().unwrap_or(0.0),
+				yfe_on: controllers[0].yaw_from_att_est() as u32,
 		};
 
 		let rec_out = vec![0u32; total_records * out_words];
@@ -3047,14 +3067,15 @@ impl ControllerTrainer
 		let b_dr = self.buf(batch.dhat_rec); // CTRL-40 motor d̂ (buffer 24)
 		let b_cr = self.buf(batch.cas_rec); // CTRL-40 cascade blocks (buffer 25)
 		let b_ab = self.buf(batch.abp_rec); // CTRL-46 bias prediction (buffer 26)
+		let b_yh = self.buf(batch.yh_rec); // ABI 55 Mahony heading (buffer 27)
 
 		let cmd = self.queue.new_command_buffer();
 		let enc = cmd.new_compute_command_encoder();
 		let ytp = self.ytp_for(controllers)?;
 		enc.set_compute_pipeline_state(ytp.as_ref().map_or(&self.record_pipeline, |p| &p.1));
-		let bufs: [&Buffer; 27] = [
+		let bufs: [&Buffer; 28] = [
 			&b_sc, &b_sk, &b_sv, &b_so, &b_scn, &b_th, &b_epb, &b_epc, &b_stb, &b_stc, &b_gy, &b_ac,
-			&b_tg, &b_pp, &b_ro, &b_rs, &b_rp, &b_par, &b_iy, &b_rb, &b_vo, &b_ho, &b_pa, &b_au, &b_dr, &b_cr, &b_ab,
+			&b_tg, &b_pp, &b_ro, &b_rs, &b_rp, &b_par, &b_iy, &b_rb, &b_vo, &b_ho, &b_pa, &b_au, &b_dr, &b_cr, &b_ab, &b_yh,
 		];
 		for (i, b) in bufs.iter().enumerate()
 		{
@@ -4691,7 +4712,7 @@ fn build_parity_fixture_variant(
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		fixture_ctbr(variant),
-		false, None, None, false, false,
+		false, None, None, false, false, false,
 	)
 	.map_err(|e| format!("{e}"))?;
 	for _ in 0..(n_state * 4)
@@ -4749,7 +4770,7 @@ fn build_parity_fixture_variant(
 	let total_steps = gyros.len() / 3;
 	let cpu_obs: Vec<ReplayObs> = cpu_g
 		.iter()
-		.map(|g| ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![] })
+		.map(|g| ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![] })
 		.collect();
 	Ok(ParityFixture {
 		c,
@@ -4812,6 +4833,7 @@ fn controller_train_parity_once(selective: bool, memory_mode: u8) -> Result<(usi
 		dhat_rec: &vec![0.0f32; f.gyros.len()],
 		cas_rec: &vec![0.0f32; f.gyros.len() * 2],
 		abp_rec: &vec![0.0f32; f.gyros.len() / 3 * 2],
+		yh_rec: &vec![0.0f32; f.gyros.len() / 3],
 		selective,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -4922,6 +4944,7 @@ fn controller_train_seeded_parity_once(
 		dhat_rec: &vec![0.0f32; f.gyros.len()],
 		cas_rec: &vec![0.0f32; f.gyros.len() * 2],
 		abp_rec: &vec![0.0f32; f.gyros.len() / 3 * 2],
+		yh_rec: &vec![0.0f32; f.gyros.len() / 3],
 		selective,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -5825,6 +5848,7 @@ pub(crate) fn controller_split_train_loop_parity_variant(
 		dhat_rec: &vec![0.0f32; f_gpu.gyros.len()],
 		cas_rec: &vec![0.0f32; f_gpu.gyros.len() * 2],
 		abp_rec: &vec![0.0f32; f_gpu.gyros.len() / 3 * 2],
+		yh_rec: &vec![0.0f32; f_gpu.gyros.len() / 3],
 		selective,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -5957,6 +5981,7 @@ fn controller_record_parity_once() -> Result<(usize, usize, usize, usize), Strin
 		dhat_rec: &vec![0.0f32; f.gyros.len()],
 		cas_rec: &vec![0.0f32; f.gyros.len() * 2],
 		abp_rec: &vec![0.0f32; f.gyros.len() / 3 * 2],
+		yh_rec: &vec![0.0f32; f.gyros.len() / 3],
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -6568,7 +6593,7 @@ fn controller_plant_latch_parity_once(high_on: bool) -> Result<(usize, usize, us
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		None, // ctbr OFF (ABI 38: the motor-level controller)
-		false, None, None, false, false,
+		false, None, None, false, false, false,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -6762,7 +6787,7 @@ fn controller_plant_counter_parity_once() -> Result<(usize, usize, usize), Strin
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		None, // ctbr OFF (ABI 38: the motor-level controller)
-		false, None, None, false, false,
+		false, None, None, false, false, false,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -6944,7 +6969,7 @@ fn controller_plant_bidir_parity_once() -> Result<(usize, usize, usize), String>
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		None, // ctbr OFF (ABI 38: the motor-level controller)
-		false, None, None, false, false,
+		false, None, None, false, false, false,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7094,6 +7119,7 @@ fn controller_record_and_scan_parity_once() -> Result<(usize, usize, usize, usiz
 		dhat_rec: &vec![0.0f32; f.gyros.len()],
 		cas_rec: &vec![0.0f32; f.gyros.len() * 2],
 		abp_rec: &vec![0.0f32; f.gyros.len() / 3 * 2],
+		yh_rec: &vec![0.0f32; f.gyros.len() / 3],
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -7201,6 +7227,7 @@ fn controller_record_search_parity_once() -> Result<(usize, usize, usize), Strin
 		dhat_rec: &vec![0.0f32; f.gyros.len()],
 		cas_rec: &vec![0.0f32; f.gyros.len() * 2],
 		abp_rec: &vec![0.0f32; f.gyros.len() / 3 * 2],
+		yh_rec: &vec![0.0f32; f.gyros.len() / 3],
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -7623,7 +7650,7 @@ fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool)
 		false, false, false,
 		false, false,
 		false, 1, 1.0, false, false, 2.0, 0.1, None,
-		false, None, None, false, false,
+		false, None, None, false, false, false,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7646,7 +7673,7 @@ fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool)
 		{
 			pwm_flat.extend_from_slice(v);
 		}
-		cpu_obs.push(ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev, att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![] });
+		cpu_obs.push(ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev, att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![] });
 	}
 	let (tau, target_min) = (0.05f32, 2usize);
 	let trainer = ControllerTrainer::new()?;
@@ -7667,6 +7694,7 @@ fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool)
 		dhat_rec: &vec![0.0f32; f.gyros.len()],
 		cas_rec: &vec![0.0f32; f.gyros.len() * 2],
 		abp_rec: &vec![0.0f32; f.gyros.len() / 3 * 2],
+		yh_rec: &vec![0.0f32; f.gyros.len() / 3],
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -7704,7 +7732,7 @@ fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool)
 	let const_obs: Vec<ReplayObs> = f
 		.cpu_g
 		.iter()
-		.map(|g| ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![[0.0; 4]; g.len()], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![] })
+		.map(|g| ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![[0.0; 4]; g.len()], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![] })
 		.collect();
 	let mut c2 = c.clone();
 	let (rows_const, ..) = c2.split_record_pub(
@@ -7778,7 +7806,7 @@ fn controller_record_att_est_parity_once() -> Result<(usize, usize, usize, bool)
 		false, false,
 		false, 1, 1.0, false,
 		true, 2.0, 0.1, None, // obs_att_estimator ON; ctbr OFF
-		false, None, None, false, false,
+		false, None, None, false, false, false,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7816,6 +7844,7 @@ fn controller_record_att_est_parity_once() -> Result<(usize, usize, usize, bool)
 			cascade: vec![],
 			dhat: vec![],
 			att_bias: vec![],
+			yaw_heading: vec![],
 		});
 	}
 	let (tau, target_min) = (0.05f32, 2usize);
@@ -7837,6 +7866,7 @@ fn controller_record_att_est_parity_once() -> Result<(usize, usize, usize, bool)
 		dhat_rec: &vec![0.0f32; f.gyros.len()],
 		cas_rec: &vec![0.0f32; f.gyros.len() * 2],
 		abp_rec: &vec![0.0f32; f.gyros.len() / 3 * 2],
+		yh_rec: &vec![0.0f32; f.gyros.len() / 3],
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -7868,6 +7898,7 @@ fn controller_record_att_est_parity_once() -> Result<(usize, usize, usize, bool)
 			cascade: vec![],
 			dhat: vec![],
 			att_bias: vec![],
+			yaw_heading: vec![],
 		})
 		.collect();
 	let mut c2 = c.clone();
@@ -7922,7 +7953,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 		true, true, true, // stage-1 vertical channel ON
 		false, false,     // stage-2 horizontal OFF
 		false, 1, 1.0, false, false, 2.0, 0.1, None,
-		false, None, None, false, false,
+		false, None, None, false, false, false,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7943,7 +7974,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 		{
 			vert_flat.extend_from_slice(v);
 		}
-		cpu_obs.push(ReplayObs { vert, horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![] });
+		cpu_obs.push(ReplayObs { vert, horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![] });
 	}
 	let (tau, target_min) = (0.05f32, 2usize);
 	let trainer = ControllerTrainer::new()?;
@@ -7964,6 +7995,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 		dhat_rec: &vec![0.0f32; f.gyros.len()],
 		cas_rec: &vec![0.0f32; f.gyros.len() * 2],
 		abp_rec: &vec![0.0f32; f.gyros.len() / 3 * 2],
+		yh_rec: &vec![0.0f32; f.gyros.len() / 3],
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -8002,7 +8034,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 	let const_obs: Vec<ReplayObs> = f
 		.cpu_g
 		.iter()
-		.map(|g| ReplayObs { vert: vec![[0.7, 0.0, 0.0]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![] })
+		.map(|g| ReplayObs { vert: vec![[0.7, 0.0, 0.0]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![] })
 		.collect();
 	let mut c2 = c.clone();
 	let (rows_const, ..) = c2.split_record_pub(
@@ -8293,7 +8325,8 @@ mod tests
 		// + 5 (L1 of block 10, ABI 51): tre_on + tre_shape[4].
 		// + 2 (L2y of block 10, ABI 51): yte_on + yte_kappa.
 		// + 1 (L2y' of block 10, ABI 52): ytp_kappa.
-		assert_eq!(mem::size_of::<RolloutParams>(), 189 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
+		// + 1 (lever 1, ABI 55): yfe_on.
+		assert_eq!(mem::size_of::<RolloutParams>(), 190 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============
@@ -10364,6 +10397,7 @@ mod tests
 			dhat_rec: &vec![0.0f32; f.gyros.len()],
 			cas_rec: &vec![0.0f32; f.gyros.len() * 2],
 			abp_rec: &vec![0.0f32; f.gyros.len() / 3 * 2],
+			yh_rec: &vec![0.0f32; f.gyros.len() / 3],
 			selective: false,
 			target_rpy: [0.0, 0.0, 0.0],
 		};

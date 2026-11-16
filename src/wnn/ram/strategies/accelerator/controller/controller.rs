@@ -2280,6 +2280,7 @@ impl WnnController
 	fn replay_obs_required(&self) -> bool
 	{
 		self.vert_horiz_obs_required() || self.obs_pwm || self.att_est.is_some() || self.cascade_obs.is_some() || self.att_bias.is_some()
+			|| self.yaw_from_att_est
 	}
 
 	/// Fail-LOUD guard (Fix A shape): a controller whose vertical/horizontal
@@ -2332,6 +2333,15 @@ impl WnnController
 			 has no flown inner loop and no flown commands, so it would train on values deploy \
 			 never produces (CTRL-38)",
 			obs.map(|o| o.cascade.len()),
+			w
+		);
+		let yh_ok = !self.yaw_from_att_est || obs.map(|o| o.yaw_heading.len() == w).unwrap_or(false);
+		assert!(
+			yh_ok,
+			"{site}: obs_yaw_from_att_est is on but the replay heading stream is missing or misaligned \
+			 (got yaw_heading {:?}, need {} steps) — the replay has no live Mahony quaternion and \
+			 would dead-reckon a heading deploy never used (ABI 55)",
+			obs.map(|o| o.yaw_heading.len()),
 			w
 		);
 		let abp_ok = self.att_bias.is_none() || obs.map(|o| o.att_bias.len() == w).unwrap_or(false);
@@ -2413,6 +2423,14 @@ impl WnnController
 			if let (Some(p), Some(v)) = (self.att_bias.as_mut(), o.att_bias.get(t))
 			{
 				p.set_replay(*v);
+			}
+			// ABI 55: the recorded Mahony heading (only with the option on).
+			if self.yaw_from_att_est
+			{
+				if let Some(h) = o.yaw_heading.get(t)
+				{
+					self.yaw_heading_override = Some(*h);
+				}
 			}
 		}
 	}
@@ -2860,6 +2878,7 @@ impl WnnController
 			integral_acc: vec![0.0f32; num_integral],
 			yaw_heading: 0.0,
 			yaw_from_att_est: false,
+			yaw_heading_override: None,
 			pending_init_yaws: Vec::new(),
 			last_feature_vector: vec![0.0f32; num_features],
 			// Action-repeat: N<1 makes no sense; normalize to 1 (= no repeat).
@@ -3391,13 +3410,17 @@ pub struct ReplayObs
 	// step). The predictor's state lives in the rollout, so a replay applies it as an
 	// override. Empty on a trajectory without the block.
 	pub att_bias: Vec<[f32; 2]>,
+	// ABI 55 (obs_yaw_from_att_est): the anchored yaw heading compute_features used at
+	// rollout, per step (WnnController::yaw_heading_est, read right AFTER the step). The
+	// replay has no live Mahony quaternion, so it applies this verbatim. Empty otherwise.
+	pub yaw_heading: Vec<f32>,
 }
 
 #[pymethods]
 impl ReplayObs
 {
 	#[new]
-	#[pyo3(signature = (vert, horiz, pwm_dev = vec![], att_up = vec![], cascade = vec![], dhat = vec![], att_bias = vec![]))]
+	#[pyo3(signature = (vert, horiz, pwm_dev = vec![], att_up = vec![], cascade = vec![], dhat = vec![], att_bias = vec![], yaw_heading = vec![]))]
 	fn new(
 		vert: Vec<[f32; 3]>,
 		horiz: Vec<[f32; 4]>,
@@ -3406,9 +3429,10 @@ impl ReplayObs
 		cascade: Vec<[f32; 6]>,
 		dhat: Vec<[f32; 3]>,
 		att_bias: Vec<[f32; 2]>,
+		yaw_heading: Vec<f32>,
 	) -> Self
 	{
-		Self { vert, horiz, pwm_dev, att_up, cascade, dhat, att_bias }
+		Self { vert, horiz, pwm_dev, att_up, cascade, dhat, att_bias, yaw_heading }
 	}
 }
 
@@ -3439,6 +3463,7 @@ impl ReplayObs
 				cascade: Vec::new(),
 				dhat: Vec::new(),
 				att_bias: Vec::new(),
+				yaw_heading: Vec::new(),
 			})
 		}
 		else
@@ -3464,6 +3489,16 @@ impl ReplayObs
 		if att_bias.len() >= end
 		{
 			self.att_bias = att_bias[start..end].to_vec();
+		}
+		self
+	}
+
+	/// ABI 55: attach the window [start, end) of a trajectory's Mahony-heading stream.
+	pub fn with_yaw_heading(mut self, yaw_heading: &[f32], start: usize, end: usize) -> Self
+	{
+		if yaw_heading.len() >= end
+		{
+			self.yaw_heading = yaw_heading[start..end].to_vec();
 		}
 		self
 	}
@@ -3807,8 +3842,14 @@ pub struct WnnController
 	// anchored heading follows the Euler yaw of the student's OWN Mahony quaternion
 	// (att_est — gyro + accel only, seeded from q0 exactly like the dead-reckon's yaw
 	// anchor) instead of the body-rate sum gyro_z·dt, which is not the Euler yaw rate
-	// under tilt (ψ̇ = (q sinφ + r cosφ)/cosθ). CPU only: score_controllers_metal refuses it.
+	// under tilt (ψ̇ = (q sinφ + r cosφ)/cosθ). ABI 55: the Metal score / train / record
+	// kernels carry it too (RolloutParams / TrainParams.yfe_on, FwdParams.yfe_yaw).
 	yaw_from_att_est: bool,
+	// ABI 55: a replay's recorded heading for THIS step (ReplayObs.yaw_heading, applied by
+	// apply_replay_obs; consumed by the next compute_features). The replay has no live
+	// Mahony quaternion (att_est runs on the recorded "up" override), so it takes the
+	// heading deploy computed, verbatim.
+	yaw_heading_override: Option<f32>,
 	// Yaw-anchor: per-episode initial yaw (rad) for the CURRENT training batch, set by
 	// split_train_loop (and the dagger before bptt) so split_record/split_retrain_output
 	// re-seed yaw_heading to match score-time when they replay recorded traces. Empty ⇒
@@ -3935,6 +3976,7 @@ impl WnnController
 		obs_tilt_ref_err = None,
 		obs_yaw_trim_err = false,
 		obs_yaw_trim_err_p = false,
+		obs_yaw_from_att_est = false,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -3997,6 +4039,9 @@ impl WnnController
 		// L2y' of block 10 (ABI 52): shift only the proportional yaw inputs by the
 		// trim; the yaw integrals stay on the raw heading error. false ⇒ off.
 		obs_yaw_trim_err_p: bool,
+		// Lever 1 (ABI 55): the anchored yaw heading from the student's own Mahony
+		// quaternion (set_yaw_from_att_est). false ⇒ off, bit-identical.
+		obs_yaw_from_att_est: bool,
 	) -> PyResult<Self>
 	{
 		// CTRL-46: the bias-predictor rows are the VERY tail (after the cascade blocks).
@@ -4099,6 +4144,10 @@ impl WnnController
 		{
 			c.enable_yaw_trim_err_p().map_err(pyo3::exceptions::PyValueError::new_err)?;
 		}
+		if obs_yaw_from_att_est
+		{
+			c.set_yaw_from_att_est(true)?;
+		}
 		Ok(c)
 	}
 
@@ -4138,7 +4187,7 @@ impl WnnController
 
 	/// ABI 54 (lever 1): take the anchored yaw heading from the student's own Mahony
 	/// estimate (see the field). Needs obs_att_estimator and an anchored yaw input
-	/// (obs_yaw_err / obs_yaw_err_i). CPU scorer / step() only.
+	/// (obs_yaw_err / obs_yaw_err_i). ABI 55: every path (CPU, Metal score/train/record).
 	pub fn set_yaw_from_att_est(&mut self, on: bool) -> PyResult<()>
 	{
 		if on && (self.att_est.is_none() || !(self.obs_yaw_err || self.obs_yaw_err_i))
@@ -4422,6 +4471,7 @@ impl WnnController
 		{
 			0.0
 		};
+		self.yaw_heading_override = None; // ABI 55: a replay override never crosses an episode
 		// L1: the d̂ observer is per-episode state — a stale estimate carried across a
 		// reset would encode the PREVIOUS episode's disturbance draw.
 		self.dhat = [0.0; 3];
@@ -6246,14 +6296,12 @@ impl WnnController
 			// ABI 54: the Mahony yaw (the up() above already advanced it this step),
 			// unwrapped onto the running heading so it never jumps at ±π. A step with
 			// no fresh quaternion (replay override) keeps dead-reckoning.
-			match (self.yaw_from_att_est, self.att_est.as_ref().and_then(|e| e.last_quat()))
+			// ABI 55: a replay step takes the recorded heading verbatim (the override is
+			// only ever set with the option on).
+			match (self.yaw_heading_override.take(), self.yaw_from_att_est, self.att_est.as_ref().and_then(|e| e.last_quat()))
 			{
-				(true, Some(q)) =>
-				{
-					let (_, _, y) = quat_to_euler_f64(q);
-					let h = self.yaw_heading as f64;
-					self.yaw_heading = (h + wrap_angle_f64(y - h)) as f32;
-				}
+				(Some(h), _, _) => self.yaw_heading = h,
+				(None, true, Some(q)) => self.yaw_heading = mahony_heading(self.yaw_heading, q),
 				_ => self.yaw_heading += gyro[2] * self.dt,
 			}
 		}
@@ -7925,6 +7973,16 @@ pub(crate) fn clamp_f64(v: f64, lo: f64, hi: f64) -> f64
 }
 
 #[inline]
+/// ABI 54/55: the anchored heading from a Mahony quaternion — its Euler yaw unwrapped onto
+/// the running heading `h` (never jumps at ±π). f64 inside, like the rest of the estimator.
+/// The Metal score kernel's twin is mahony_heading() (f32): CPU/GPU agree to float tolerance.
+pub(crate) fn mahony_heading(h: f32, q: [f32; 4]) -> f32
+{
+	let (_, _, y) = quat_to_euler_f64(q);
+	let h = h as f64;
+	(h + wrap_angle_f64(y - h)) as f32
+}
+
 pub(crate) fn wrap_angle_f64(a: f64) -> f64
 {
 	let mut x = a;
@@ -8749,7 +8807,7 @@ mod sn0_tests
 			dep_feats.push(deploy.compute_features(g[t], a[t], tg[t]));
 			deploy.set_pwm_accumulator(pp[t]);
 		}
-		let ro = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev, att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![] };
+		let ro = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev, att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![] };
 		// REPLAY with the stream restored.
 		let mut replay = sn0_controller_obs_pwm();
 		replay.reset(0.0);
@@ -8793,7 +8851,7 @@ mod sn0_tests
 		);
 		// The guard is the fail-LOUD half: an obs_pwm controller must refuse a
 		// stream without the accumulator.
-		let short = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![] };
+		let short = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![] };
 		let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
 			sn0_controller_obs_pwm().replay_obs_guard(Some(&short), n, "test")
 		}));
@@ -10029,12 +10087,12 @@ mod sn0_tests
 	fn vertical_stream(n: usize) -> ReplayObs
 	{
 		let vert: Vec<[f32; 3]> = (0..n).map(|t| [0.7, -4.0 + 0.5 * t as f32, 4.0 - 0.5 * t as f32]).collect();
-		ReplayObs { vert, horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![] }
+		ReplayObs { vert, horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![] }
 	}
 
 	fn constant_stream(n: usize, v: [f32; 3]) -> ReplayObs
 	{
-		ReplayObs { vert: vec![v; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![] }
+		ReplayObs { vert: vec![v; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![] }
 	}
 
 	fn distinct_output_addresses_per_neuron(c: &WnnController) -> Vec<usize>

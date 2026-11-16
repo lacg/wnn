@@ -82,6 +82,8 @@ mod ctrl52_yaw_trim_p_tests; // L2y' (ABI 52): proportional-only yaw trim shift,
 #[cfg(test)]
 mod ctrl54_yaw_heading_tests; // lever 1 (ABI 54): yaw heading from the student's own Mahony estimate
 #[cfg(test)]
+mod ctrl55_yaw_heading_replay_tests; // lever 1 plumbing (ABI 55): replay stream, Metal score/train/record, CPU/GPU parity
+#[cfg(test)]
 mod ctrl51_alt_integral_tests; // L3 of block 10 (ABI 51): altitude integrator — law, anti-windup, droop, hosts, CPU/GPU score parity
 #[cfg(test)]
 mod ctrl46_tests; // CTRL-46 (ABI 46): vote write rule (CPU/GPU, order independence) + estimate-built labels
@@ -526,7 +528,15 @@ mod metal_controller;
 ///   * WnnController.set_yaw_from_att_est(bool) / .yaw_from_att_est / .yaw_heading_est: the
 ///     anchored yaw heading from the student's own Mahony quaternion instead of gyro_z·dt.
 ///     CPU only (score_controllers_metal refuses it). Pin: ctrl54_yaw_heading_tests.rs.
-pub const ABI_VERSION: u32 = 54;
+/// ABI 55 (16/11/2026, Luiz: lever 1 plumbing; additive, default = ABI 54 bit-identical):
+///   * WnnController(obs_yaw_from_att_est=False) / dagger_train_batch_inplace(obs_yaw_from_att_est=):
+///     the constructor / trainer twin of set_yaw_from_att_est.
+///   * TrajectoryRs / ReplayObs.yaw_heading (+ ReplayObs(yaw_heading=)): the heading the rollout
+///     used, applied verbatim by every replay (guarded). Metal: RolloutParams / TrainParams gain
+///     a trailing u32 yfe_on (190 words), FwdParams yfe_on + yfe_yaw; controller_train /
+///     controller_record buffer 30 / 27 = yh_rec. The ABI-54 Metal refusal is lifted.
+///     Pin: ctrl55_yaw_heading_replay_tests.rs.
+pub const ABI_VERSION: u32 = 55;
 
 /// ABI 44: how output neurogenesis lays out the output layer — "segment" = every
 /// bank / E-I half resizes at its own tail (pre-44 Python resized the flat tail).

@@ -167,7 +167,9 @@ import os
 # per-axis split of the rival's err/steady (classical_baseline.AXIS_FIELDS); None = ABI 52.
 # ABI 54 (16/11/2026, lever 1): WnnController.set_yaw_from_att_est(bool) — anchored yaw heading
 # from the student's own Mahony quaternion (CPU only; Metal refuses); default off = ABI 53.
-EXPECTED_ABI = 54
+# ABI 55 (16/11/2026, Luiz: lever 1 plumbing): WnnController / dagger_train_batch_inplace(
+# obs_yaw_from_att_est=bool), ReplayObs(yaw_heading=), Metal score/train/record twins; off = ABI 54.
+EXPECTED_ABI = 55
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

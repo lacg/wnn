@@ -322,6 +322,9 @@ struct Params
 	// L2y' of block 10 (ABI 52), appended in lockstep: κ of the proportional-only yaw
 	// shift (read only by the FC_YAW_TRIM_P specialization).
 	float ytp_kappa;
+	// Lever 1 (ABI 55), appended in lockstep: the anchored yaw heading follows the
+	// student's own Mahony quaternion (score: live filter; train/record: yh_rec). 0 ⇒ off.
+	uint yfe_on;
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -852,7 +855,19 @@ struct FwdParams
 	// after the initializer at every site under `if (YTP)`; read only when YTP.
 	float ytp_kappa;
 	uint ytp_cres;
+	// Lever 1 (ABI 55): with yfe_on the heading for THIS step is yfe_yaw verbatim (score:
+	// mahony_heading of the live filter; train/record: the recorded stream). Assigned after
+	// the positional initializer; 0 ⇒ the dead-reckon below, bit-identical.
+	uint yfe_on;
+	float yfe_yaw;
 };
+
+// Lever 1 (ABI 55): the Mahony quaternion's Euler yaw unwrapped onto the running heading
+// h — f32 twin of controller.rs mahony_heading (CPU computes the wrap in f64).
+inline float mahony_heading(float h, float4 mq)
+{
+	return h + pid_wrap(yaw_from_quat(mq) - h);
+}
 
 // Cell semantics (fire bit, nudge step, nudge distance, the TERNARY empty value
 // WNN_PLN_U_EXPECTED) come from common.metal wnn_* — twins of ram_core
@@ -902,7 +917,10 @@ inline void derive_features(
 		// seeded to init_yaw at episode reset) → absolute yaw. Else legacy gyro-z sum
 		// (constant dt absorbed). Mirrors controller.rs compute_features bit-for-bit.
 		bool yaw_anchored = (P.obs_yaw_err != 0u) || (P.obs_yaw_err_i != 0u);
-		yaw_heading += yaw_anchored ? (sensors[2] * P.dt) : sensors[2];
+		if (P.yfe_on != 0u)
+			yaw_heading = P.yfe_yaw; // Lever 1 (ABI 55): the Mahony heading
+		else
+			yaw_heading += yaw_anchored ? (sensors[2] * P.dt) : sensors[2];
 		float roll_err = P.target0 - roll_est;
 		float pitch_err = P.target1 - pitch_est;
 		float yaw_err = P.target2 - yaw_heading;
@@ -1775,6 +1793,13 @@ kernel void controller_rollout(
 			F.att_up_x = up.x;
 			F.att_up_y = up.y;
 			F.att_up_z = up.z;
+			// Lever 1 (ABI 55): this step's heading from the just-updated filter, unwrapped
+			// onto the running heading (twin of compute_features' mahony_heading).
+			if (P.yfe_on != 0u)
+			{
+				F.yfe_on = 1u;
+				F.yfe_yaw = mahony_heading(yaw_heading, mq);
+			}
 		}
 		// CTRL-46: the bias predictor ticks once per physical step (holds included),
 		// on this step's horizontal velocity obs and the quaternion just updated —
@@ -2544,6 +2569,9 @@ struct TrainParams
 	// L2y' of block 10 (ABI 52), appended in lockstep: κ of the proportional-only yaw
 	// shift (read only by the FC_YAW_TRIM_P specialization).
 	float ytp_kappa;
+	// Lever 1 (ABI 55), appended in lockstep: the anchored yaw heading follows the
+	// student's own Mahony quaternion (score: live filter; train/record: yh_rec). 0 ⇒ off.
+	uint yfe_on;
 };
 
 // Mirror of WnnController::output_decode_target (controller.rs): map a per-motor
@@ -2651,6 +2679,7 @@ kernel void controller_train(
 		device const float *dhat_rec [[buffer(27)]],    // CTRL-40: motor d̂ values [total_steps*3]
 		device const float *cas_rec [[buffer(28)]],     // CTRL-40: cascade blocks [total_steps*6]
 		device const float *abp_rec [[buffer(29)]],     // CTRL-46: bias prediction [total_steps*2]
+		device const float *yh_rec [[buffer(30)]],      // ABI 55: Mahony heading [total_steps]
 		uint gid [[thread_position_in_grid]])
 {
 	uint g = gid;
@@ -2760,6 +2789,12 @@ kernel void controller_train(
 					F.att_up_x = att_up_rec[s3 + 0];
 					F.att_up_y = att_up_rec[s3 + 1];
 					F.att_up_z = att_up_rec[s3 + 2];
+				}
+				// Lever 1 (ABI 55): the recorded Mahony heading (no live filter in a replay).
+				if (P.yfe_on != 0u)
+				{
+					F.yfe_on = 1u;
+					F.yfe_yaw = yh_rec[s3 / 3u];
 				}
 			}
 			if (P.dhat_on != 0u || P.cas_rate_i != 0u || P.cas_dhat != 0u || P.cas_resid != 0u)
@@ -2885,6 +2920,7 @@ kernel void controller_record(
 		device const float *dhat_rec [[buffer(24)]],    // CTRL-40: motor d̂ values [total_steps*3]
 		device const float *cas_rec [[buffer(25)]],     // CTRL-40: cascade blocks [total_steps*6]
 		device const float *abp_rec [[buffer(26)]],     // CTRL-46: bias prediction [total_steps*2]
+		device const float *yh_rec [[buffer(27)]],      // ABI 55: Mahony heading [total_steps]
 		uint2 tid [[thread_position_in_grid]])
 {
 	uint g = tid.x, ej = tid.y;
@@ -2989,6 +3025,12 @@ kernel void controller_record(
 				F.att_up_x = att_up_rec[s3 + 0];
 				F.att_up_y = att_up_rec[s3 + 1];
 				F.att_up_z = att_up_rec[s3 + 2];
+			}
+			// Lever 1 (ABI 55): the recorded Mahony heading (no live filter in a replay).
+			if (P.yfe_on != 0u)
+			{
+				F.yfe_on = 1u;
+				F.yfe_yaw = yh_rec[s3 / 3u];
 			}
 		}
 		if (P.dhat_on != 0u || P.cas_rate_i != 0u || P.cas_dhat != 0u || P.cas_resid != 0u)

@@ -835,6 +835,10 @@ pub struct TrajectoryRs
 	// produced at each step (WnnController::att_bias_last, read right AFTER
 	// controller_step_4). ReplayObs.att_bias. Empty when obs_att_bias_pred is off.
 	pub att_bias: Vec<[f32; 2]>,
+	// ABI 55 (obs_yaw_from_att_est): the anchored heading compute_features used at each
+	// step (WnnController::yaw_heading_est, read right AFTER controller_step_4).
+	// ReplayObs.yaw_heading. Empty when the option is off.
+	pub yaw_heading: Vec<f32>,
 	pub cumulative_reward: f64,
 	pub mean_attitude_error_rad: f64,
 	pub diverged: bool,
@@ -2030,6 +2034,11 @@ pub(crate) fn rollout_and_label_inner(
 		{
 			traj.att_bias.push(controller.att_bias_last());
 		}
+		// ABI 55: and the Mahony heading it used.
+		if controller.yaw_from_att_est()
+		{
+			traj.yaw_heading.push(controller.yaw_heading_est());
+		}
 		// H3: when outputs are decoupled, the output banks are CONTROLS, so the
 		// training TARGETS (teacher + student MOTOR pwms) must be un-mixed into
 		// control space [T,τr,τp,τy]. Single point ⇒ all downstream paths (split /
@@ -2213,6 +2222,7 @@ fn traj_windows(traj: &TrajectoryRs, cfg: &RewardGatedConfigPacked) -> Vec<TrajW
 					r.with_cascade(&traj.cascade_obs, start, end)
 						.with_dhat(&traj.dhat_obs, start, end)
 						.with_att_bias(&traj.att_bias, start, end)
+						.with_yaw_heading(&traj.yaw_heading, start, end)
 				}),
 			first: start == 0,
 		});
@@ -2499,6 +2509,7 @@ pub(crate) struct GatedFlat
 	pub(crate) dhat_rec: Vec<f32>, // CTRL-40: motor d̂ values per step [total_steps*3]
 	pub(crate) cas_rec: Vec<f32>,  // CTRL-40: cascade blocks per step [total_steps*6]
 	pub(crate) abp_rec: Vec<f32>,  // CTRL-46: Mahony-bias prediction per step [total_steps*2]
+	pub(crate) yh_rec: Vec<f32>,   // ABI 55: Mahony heading per step [total_steps]
 }
 
 /// Flatten the gated (episode-major) trajectories into `GatedFlat`. All episodes
@@ -2526,6 +2537,7 @@ pub(crate) fn flatten_gated(gated: &[&TrajectoryRs]) -> GatedFlat
 		dhat_rec: Vec::with_capacity(total_steps * 3),
 		cas_rec: Vec::with_capacity(total_steps * 6),
 		abp_rec: Vec::with_capacity(total_steps * 2),
+		yh_rec: Vec::with_capacity(total_steps),
 	};
 	let mut sbase = 0u32;
 	for t in gated
@@ -2549,6 +2561,7 @@ pub(crate) fn flatten_gated(gated: &[&TrajectoryRs]) -> GatedFlat
 			f.dhat_rec.extend_from_slice(&t.dhat_obs.get(s).copied().unwrap_or([0.0; 3]));
 			f.cas_rec.extend_from_slice(&t.cascade_obs.get(s).copied().unwrap_or([0.0; 6]));
 			f.abp_rec.extend_from_slice(&t.att_bias.get(s).copied().unwrap_or([0.0; 2]));
+			f.yh_rec.push(t.yaw_heading.get(s).copied().unwrap_or(0.0));
 		}
 		let (sn, cs) = (0.5 * t.init_yaw).sin_cos();
 		f.init_q.extend_from_slice(&[cs, 0.0, 0.0, sn]);
@@ -2604,6 +2617,11 @@ fn applied_streams_guard(controller: &WnnController, gated: &[&TrajectoryRs])
 			"try_gpu_split: obs_att_bias_pred is on but a trajectory carries {} bias records for {n} steps (CTRL-46)",
 			t.att_bias.len()
 		);
+		assert!(
+			!controller.yaw_from_att_est() || t.yaw_heading.len() == n,
+			"try_gpu_split: obs_yaw_from_att_est is on but a trajectory carries {} heading records for {n} steps (ABI 55)",
+			t.yaw_heading.len()
+		);
 	}
 }
 
@@ -2637,6 +2655,7 @@ pub(crate) fn try_gpu_split(
 		dhat_rec: &fb.dhat_rec,
 		cas_rec: &fb.cas_rec,
 		abp_rec: &fb.abp_rec,
+		yh_rec: &fb.yh_rec,
 		selective: cfg.split_selective_output,
 		target_rpy: target,
 	};
@@ -3034,6 +3053,7 @@ pub(crate) fn dagger_train_inplace_with(
 							cascade: t.cascade_obs.clone(),
 							dhat: t.dhat_obs.clone(),
 							att_bias: t.att_bias.clone(),
+							yaw_heading: t.yaw_heading.clone(),
 						})
 						.collect();
 					let (_r, _cf, planted, _pr, saturation, wishes) = controller.split_train_loop(
@@ -3250,6 +3270,9 @@ pub fn dagger_train_inplace(
 	obs_tilt_ref_err = None,
 	obs_yaw_trim_err = false,
 	obs_yaw_trim_err_p = false,
+	// Lever 1 (ABI 55): the anchored yaw heading from the student's own Mahony quaternion
+	// — same invariant: it changes the VALUE of the yaw inputs, not the layout. false ⇒ off.
+	obs_yaw_from_att_est = false,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn dagger_train_batch_inplace(
@@ -3334,6 +3357,7 @@ pub fn dagger_train_batch_inplace(
 	obs_tilt_ref_err: Option<(f32, f32, f32, f32)>,
 	obs_yaw_trim_err: bool,
 	obs_yaw_trim_err_p: bool,
+	obs_yaw_from_att_est: bool,
 ) -> PyResult<Vec<(Py<WnnController>, TrainStats)>>
 {
 	use rayon::prelude::*;
@@ -3442,7 +3466,7 @@ pub fn dagger_train_batch_inplace(
 					2.0, // est_kp — the rivals' Mahony default (TeacherFeed / est_kp)
 					0.1, // est_ki
 					ctbr.clone(),
-					obs_att_bias_pred, yaw_integral_leak, obs_tilt_ref_err, obs_yaw_trim_err, obs_yaw_trim_err_p,
+					obs_att_bias_pred, yaw_integral_leak, obs_tilt_ref_err, obs_yaw_trim_err, obs_yaw_trim_err_p, obs_yaw_from_att_est,
 				)?;
 				controller
 					.set_target_levels_core(target_levels)

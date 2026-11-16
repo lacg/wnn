@@ -495,6 +495,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                obs_tilt_ref_err: tuple | None = None,
                obs_yaw_trim_err: bool = False,
                obs_yaw_trim_err_p: bool = False,
+               obs_yaw_from_att_est: bool = False,
                dt: float = 0.001,
                decouple_outputs: bool = False, bits_per_feature: int = 8,
                feature_balance_ratio: float = 0.0,
@@ -553,6 +554,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		obs_tilt_ref_err=obs_tilt_ref_err,
 		obs_yaw_trim_err=obs_yaw_trim_err,
 		obs_yaw_trim_err_p=obs_yaw_trim_err_p,
+		obs_yaw_from_att_est=obs_yaw_from_att_est,
 		dt=dt,
 		decouple_outputs=decouple_outputs,
 		feature_balance_ratio=feature_balance_ratio,
@@ -3272,6 +3274,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "docs/ctrl48_block10_2x2_s1_diagnosis.md). Same kappa, same requirements, same L2y "
 	                     "dense ladder on the proportional input; mutually exclusive with --obs-yaw-trim-err. "
 	                     "Off (default) = byte-identical. A new lineage.")
+	ap.add_argument("--obs-yaw-from-att-est", action="store_true",
+	                help="Lever 1 (ABI 55, Luiz 16/11/2026): the anchored yaw heading the yaw inputs "
+	                     "(yaw_err / yaw_err_i) read is the Euler yaw of the student's OWN Mahony estimate "
+	                     "(gyro + accel only, seeded from q0 like the dead-reckon) instead of the body-rate "
+	                     "sum gyro_z*dt, which is not the Euler yaw rate under tilt (measured: 0.166 deg hold "
+	                     "drift on arm C VAL, 0.165 of it kinematic; logs/controller/ctrl48/yaw_floor). No input "
+	                     "added or moved; the rollout records the heading and every replay applies it. Needs "
+	                     "the attitude estimator (on by default under --translation) and --obs-yaw-err or "
+	                     "--obs-yaw-err-i. Off (default) = byte-identical. A new lineage.")
 	ap.add_argument("--alt-integral", choices=["off", "pi", "pole3"], default="off",
 	                help="Block 10 L3 (ABI 51): an integrator on the altitude error in the collective law, removing "
 	                     "the PD's droop under mass / thrust error. pi = PD poles kept, k_i = omega^3/4; pole3 = "
@@ -4229,6 +4240,15 @@ def resolve_block10_args(args) -> None:
 		if getattr(args, "yaw_centred_ladder", None) == "dense":
 			raise SystemExit("--obs-yaw-trim-err[-p] replaces block-10 L2 (--yaw-centred-ladder dense): the trim-"
 			                 "referenced yaw error takes its own dense ladder — drop `dense`.")
+	if getattr(args, "obs_yaw_from_att_est", False):
+		need = {"the attitude estimator (--obs-att-estimator; default on under --translation)":
+		        getattr(args, "obs_att_estimator", False),
+		        "an anchored yaw input (--obs-yaw-err / --obs-yaw-err-i)":
+		        getattr(args, "obs_yaw_err", False) or getattr(args, "obs_yaw_err_i", False)}
+		missing = [k for k, v in need.items() if not v]
+		if missing:
+			raise SystemExit(f"--obs-yaw-from-att-est needs {', '.join(missing)}: the heading is the student's "
+			                 "own Mahony yaw, read by its anchored yaw inputs.")
 	if getattr(args, "alt_integral", "off") != "off" and not getattr(args, "translation", False):
 		raise SystemExit("--alt-integral needs --translation (there is no altitude loop without it).")
 
@@ -4237,8 +4257,10 @@ def block10_tokens(args) -> dict:
 	"""Provenance alt= / yawref= values ("" when off, so the line is unchanged)."""
 	mode = getattr(args, "alt_integral", "off")
 	return dict(alt="" if mode == "off" else mode,
-	            yawref=("trim" if getattr(args, "obs_yaw_trim_err", False)
-	                    else "trim_p" if getattr(args, "obs_yaw_trim_err_p", False) else ""),
+	            yawref="+".join(t for t in (
+	                ("trim" if getattr(args, "obs_yaw_trim_err", False)
+	                 else "trim_p" if getattr(args, "obs_yaw_trim_err_p", False) else ""),
+	                "mahony" if getattr(args, "obs_yaw_from_att_est", False) else "") if t),
 	            pos_metric="hold" if fit_pos_metric_from_args(args) == "hold" else "")
 
 
