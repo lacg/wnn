@@ -80,6 +80,8 @@ mod ctrl51_yaw_trim_tests; // L2y of block 10 (ABI 51): trim-shifted yaw error �
 #[cfg(test)]
 mod ctrl52_yaw_trim_p_tests; // L2y' (ABI 52): proportional-only yaw trim shift, raw integral — definition, replay, CPU/GPU score/split/walk parity
 #[cfg(test)]
+mod ctrl54_yaw_heading_tests; // lever 1 (ABI 54): yaw heading from the student's own Mahony estimate
+#[cfg(test)]
 mod ctrl51_alt_integral_tests; // L3 of block 10 (ABI 51): altitude integrator — law, anti-windup, droop, hosts, CPU/GPU score parity
 #[cfg(test)]
 mod ctrl46_tests; // CTRL-46 (ABI 46): vote write rule (CPU/GPU, order independence) + estimate-built labels
@@ -520,7 +522,11 @@ mod metal_controller;
 ///     a measure-only RivalProbe and the per-axis split of its err / steady (rotation vector
 ///     of q_ref⁻¹·q_true, body frame; rival_probe::AxisSplit::flat, 14 values) is appended.
 ///     The returned 10-tuple is unchanged (rival_probe_tests pins probe-on == probe-off).
-pub const ABI_VERSION: u32 = 53;
+/// ABI 54 (16/11/2026, lever 1 heading estimate; additive, default = ABI 53 bit-identical):
+///   * WnnController.set_yaw_from_att_est(bool) / .yaw_from_att_est / .yaw_heading_est: the
+///     anchored yaw heading from the student's own Mahony quaternion instead of gyro_z·dt.
+///     CPU only (score_controllers_metal refuses it). Pin: ctrl54_yaw_heading_tests.rs.
+pub const ABI_VERSION: u32 = 54;
 
 /// ABI 44: how output neurogenesis lays out the output layer — "segment" = every
 /// bank / E-I half resizes at its own tail (pre-44 Python resized the flat tail).

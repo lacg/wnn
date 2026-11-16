@@ -165,7 +165,9 @@ import os
 # — L2y' (proportional-only yaw trim shift, raw integral); default off = ABI 51.
 # ABI 53 (16/11/2026, CTRL-48 yaw floor): score_classical_baseline(axis_out=list) — opt-in
 # per-axis split of the rival's err/steady (classical_baseline.AXIS_FIELDS); None = ABI 52.
-EXPECTED_ABI = 53
+# ABI 54 (16/11/2026, lever 1): WnnController.set_yaw_from_att_est(bool) — anchored yaw heading
+# from the student's own Mahony quaternion (CPU only; Metal refuses); default off = ABI 53.
+EXPECTED_ABI = 54
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

@@ -1687,6 +1687,11 @@ pub fn score_controllers_metal(
 	{
 		return Err(verr("score_controllers_metal: alt_integral needs translation=True".to_string()));
 	}
+	// ABI 54: the Mahony-heading swap has no Metal twin — refuse rather than fly the dead-reckon.
+	if controllers.iter().any(|c| c.yaw_from_att_est())
+	{
+		return Err(verr("score_controllers_metal: yaw_from_att_est is CPU-only (score_controllers_cpu)".to_string()));
+	}
 	let alt_int = crate::altitude_integrator::AltitudeIntegrator::from_plant(
 		alt_integral,
 		alt_pd_mass,

@@ -2859,6 +2859,7 @@ impl WnnController
 			num_features,
 			integral_acc: vec![0.0f32; num_integral],
 			yaw_heading: 0.0,
+			yaw_from_att_est: false,
 			pending_init_yaws: Vec::new(),
 			last_feature_vector: vec![0.0f32; num_features],
 			// Action-repeat: N<1 makes no sense; normalize to 1 (= no repeat).
@@ -3802,6 +3803,12 @@ pub struct WnnController
 	// Gyro-integrated yaw heading estimate (rad), for the yaw error feature. The
 	// IMU gives no absolute yaw, so we integrate gyro-z. Zeroed in reset().
 	yaw_heading: f32,
+	// ABI 54 (lever 1, heading estimate; OPT-IN, false = ABI 53 bit-identical): the
+	// anchored heading follows the Euler yaw of the student's OWN Mahony quaternion
+	// (att_est — gyro + accel only, seeded from q0 exactly like the dead-reckon's yaw
+	// anchor) instead of the body-rate sum gyro_z·dt, which is not the Euler yaw rate
+	// under tilt (ψ̇ = (q sinφ + r cosφ)/cosθ). CPU only: score_controllers_metal refuses it.
+	yaw_from_att_est: bool,
 	// Yaw-anchor: per-episode initial yaw (rad) for the CURRENT training batch, set by
 	// split_train_loop (and the dagger before bptt) so split_record/split_retrain_output
 	// re-seed yaw_heading to match score-time when they replay recorded traces. Empty ⇒
@@ -4127,6 +4134,35 @@ impl WnnController
 	pub fn yaw_integral_leak(&self) -> f32
 	{
 		self.yaw_integral_leak
+	}
+
+	/// ABI 54 (lever 1): take the anchored yaw heading from the student's own Mahony
+	/// estimate (see the field). Needs obs_att_estimator and an anchored yaw input
+	/// (obs_yaw_err / obs_yaw_err_i). CPU scorer / step() only.
+	pub fn set_yaw_from_att_est(&mut self, on: bool) -> PyResult<()>
+	{
+		if on && (self.att_est.is_none() || !(self.obs_yaw_err || self.obs_yaw_err_i))
+		{
+			return Err(pyo3::exceptions::PyValueError::new_err(
+				"set_yaw_from_att_est: needs obs_att_estimator and obs_yaw_err/obs_yaw_err_i",
+			));
+		}
+		self.yaw_from_att_est = on;
+		Ok(())
+	}
+
+	/// ABI 54: whether the heading follows the Mahony estimate.
+	#[getter]
+	pub fn yaw_from_att_est(&self) -> bool
+	{
+		self.yaw_from_att_est
+	}
+
+	/// ABI 54: the heading estimate (rad) the last compute_features used.
+	#[getter]
+	pub fn yaw_heading_est(&self) -> f32
+	{
+		self.yaw_heading
 	}
 
 	/// CTRL-46: whether the Mahony-bias predictor block (`--obs-att-bias-pred`) is on.
@@ -6207,7 +6243,19 @@ impl WnnController
 		// dead-reckoned peraxis yaw. Gated so the legacy feature stays bit-unchanged.
 		if self.obs_yaw_err || self.obs_yaw_err_i
 		{
-			self.yaw_heading += gyro[2] * self.dt;
+			// ABI 54: the Mahony yaw (the up() above already advanced it this step),
+			// unwrapped onto the running heading so it never jumps at ±π. A step with
+			// no fresh quaternion (replay override) keeps dead-reckoning.
+			match (self.yaw_from_att_est, self.att_est.as_ref().and_then(|e| e.last_quat()))
+			{
+				(true, Some(q)) =>
+				{
+					let (_, _, y) = quat_to_euler_f64(q);
+					let h = self.yaw_heading as f64;
+					self.yaw_heading = (h + wrap_angle_f64(y - h)) as f32;
+				}
+				_ => self.yaw_heading += gyro[2] * self.dt,
+			}
 		}
 		else
 		{
