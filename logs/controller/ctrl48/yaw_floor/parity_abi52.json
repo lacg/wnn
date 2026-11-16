@@ -1,0 +1,47 @@
+{
+ "MPCOF>rate[est]": {
+  "stable_rate": 1.0,
+  "mean_attitude_error_deg": 1.251840023686789,
+  "mean_steady_error_deg": 0.6052278505682339,
+  "mean_reward": null,
+  "mean_effort": null,
+  "mean_pwm_jerk": 0.0022794697332509965,
+  "mean_altitude_error_m": 0.15867746129774318,
+  "mean_position_error_m": 0.3406452224281831,
+  "mean_dx_m": 0.178824809622225,
+  "mean_dy_m": 0.1776928022428596,
+  "mean_position_hold_m": 0.28472493198786064,
+  "mean_dz_hold_m": 0.20219343848623247,
+  "label": "MPCOF>rate[est]"
+ },
+ "MPCOF>rate[oracle]": {
+  "stable_rate": 1.0,
+  "mean_attitude_error_deg": 0.6295997080215551,
+  "mean_steady_error_deg": 0.1293641182841013,
+  "mean_reward": null,
+  "mean_effort": null,
+  "mean_pwm_jerk": 0.002277509716798662,
+  "mean_altitude_error_m": 0.1587323039850752,
+  "mean_position_error_m": 0.35708756917470486,
+  "mean_dx_m": 0.19225312867175287,
+  "mean_dy_m": 0.19137455725248625,
+  "mean_position_hold_m": 0.3136809509624037,
+  "mean_dz_hold_m": 0.20227580637910275,
+  "label": "MPCOF>rate[oracle]"
+ },
+ "PID[est]": {
+  "stable_rate": 1.0,
+  "mean_attitude_error_deg": 2.5900607669397564,
+  "mean_steady_error_deg": 2.149017210657619,
+  "mean_reward": null,
+  "mean_effort": null,
+  "mean_pwm_jerk": 0.0016292511290399686,
+  "mean_altitude_error_m": 0.15837655604012707,
+  "mean_position_error_m": 0.3458697023296138,
+  "mean_dx_m": 0.18143477046682255,
+  "mean_dy_m": 0.18152916039593875,
+  "mean_position_hold_m": 0.28607278104641104,
+  "mean_dz_hold_m": 0.2017981960823779,
+  "label": "PID[est]"
+ }
+}

@@ -3792,7 +3792,12 @@ pub fn eval_ensemble_closed_loop(
 	ctbr_outer_hold = 0,
 	// L3 (ABI 51): the altitude integrator in front of the rival's altitude PD —
 	// 0 off (bit-identical), 1 pi, 2 pole3 (altitude_integrator.rs). Translation only.
-	alt_integral = 0))]
+	alt_integral = 0,
+	// ABI 53 (CTRL-48 yaw floor): OPT-IN per-axis split. A Python list ⇒ the row is flown
+	// with a measure-only RivalProbe (inert: rival_probe_tests pins the return bit-identical)
+	// and the 14 values of rival_probe::AxisSplit::flat are appended to it. None (the
+	// default) never builds a probe — the shipped call.
+	axis_out = None))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_classical_baseline(
 	teacher_id: u8,
@@ -3848,9 +3853,11 @@ pub fn score_classical_baseline(
 	att_err_tilt_ref: bool,
 	ctbr_outer_hold: usize,
 	alt_integral: u8,
+	axis_out: Option<&Bound<'_, pyo3::types::PyList>>,
 ) -> PyResult<(f64, f64, f64, f64, f64, f64, f64, f64, f64, f64)>
 {
-	score_classical_baseline_probed(
+	let mut probe = axis_out.map(|_| crate::rival_probe::RivalProbe::measure_only());
+	let row = score_classical_baseline_probed(
 		teacher_id,
 		init_qs,
 		init_omegas,
@@ -3904,8 +3911,16 @@ pub fn score_classical_baseline(
 		att_err_tilt_ref,
 		ctbr_outer_hold,
 		alt_integral,
-		None,
-	)
+		probe.as_mut(),
+	)?;
+	if let (Some(list), Some(p)) = (axis_out, probe.as_ref())
+	{
+		for v in p.report().axes.flat()
+		{
+			list.append(v)?;
+		}
+	}
+	Ok(row)
 }
 
 /// The eight pre-ABI-51 values of a `score_classical_baseline` row (the two hold-window
@@ -4833,7 +4848,7 @@ mod rival_plant_tests
 			0.0,
 			false,
 			0,
-			0, // alt_integral off
+			0, None, // alt_integral off
 		)
 		.map(rival_first8)
 		.expect("scorer must accept a well-formed plant")
@@ -5653,7 +5668,7 @@ mod motor_lag_axis_f_tests
 			false, 2.0, 0.1,
 			false, 0.0, vec![], vec![], vec![], vec![],
 			2.0, 1.0, 0.25, vec![], vec![], 1.0, 1.0, 0.5236,
-			motor_lag_s, false, 0.0, false, 0, 0,
+			motor_lag_s, false, 0.0, false, 0, 0, None,
 		)
 		.map(rival_first8)
 		.expect("baseline scores")

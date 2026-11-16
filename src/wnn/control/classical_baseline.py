@@ -27,6 +27,16 @@ from dataclasses import dataclass
 
 _NAMES = {0: "PID", 1: "LQR", 2: "MPC", 3: "LQI", 4: "MPCOF"}
 
+# ABI 53: the order score_classical_baseline(axis_out=) appends (rival_probe::AxisSplit::flat).
+# Angles in radians, BODY frame, v = Log(q_ref^-1 q_true) against the scorer's own reference:
+# err_* = whole-episode mean |v_axis| (decomposes err), hold_* = hold-window (t >= 0.8 steps)
+# mean |v_axis| (decomposes steady), signed_* = hold-window mean v_axis, fed_yaw_drift =
+# hold-window mean |yaw(q_fed) - yaw(q_true)| (0 oracle-fed).
+AXIS_FIELDS = ("err_roll", "err_pitch", "err_yaw", "err_norm",
+               "hold_roll", "hold_pitch", "hold_yaw", "hold_norm",
+               "signed_roll", "signed_pitch", "signed_yaw",
+               "fed_yaw_drift", "episodes_all", "episodes_hold")
+
 
 @dataclass(frozen=True)
 class TeacherFeed:
@@ -215,9 +225,13 @@ def cascade_rival_metrics(ec, draw: HoldoutDraw, feed: TeacherFeed, teacher_id: 
 
 
 def teacher_metrics(ec, draw: HoldoutDraw, feed: TeacherFeed, teacher_id: int,
-                    ctbr_outer_hold: int, name: str) -> dict:
+                    ctbr_outer_hold: int, name: str, axes: bool = False) -> dict:
 	"""One classical row (motor-level when ctbr_outer_hold == 0) in phased_ga's
-	metric-dict shape — the body pid_metrics always had."""
+	metric-dict shape — the body pid_metrics always had.
+
+	axes=True (ABI 53): the row also carries "axes", {AXIS_FIELDS name: value} — the
+	per-axis split of err / steady measured inside the Rust scorer on the same rollout.
+	The other keys are unchanged (the probe is inert; rival_probe_tests pins it)."""
 	from ._accel import score_classical_baseline
 	q0, w0, fields = _episode_fields(ec, draw)
 	s1 = _stage1_fields(ec, draw)
@@ -229,6 +243,9 @@ def teacher_metrics(ec, draw: HoldoutDraw, feed: TeacherFeed, teacher_id: int,
 	# 5-tuple wheel so this Python can land before the wheel does.
 	if ctbr_outer_hold:
 		fields["ctbr_outer_hold"] = int(ctbr_outer_hold)
+	axis_out = [] if axes else None
+	if axes:
+		fields["axis_out"] = axis_out
 	_r = score_classical_baseline(
 		int(teacher_id), list(q0), list(w0), draw.steps, draw.stable_deg, **fields)
 	st, err, steady, alt_m, pos3d_m = _r[:5]
@@ -259,4 +276,5 @@ def teacher_metrics(ec, draw: HoldoutDraw, feed: TeacherFeed, teacher_id: int,
 	        # and |dz| (9th/10th scorer values); None off translation or on an older wheel.
 	        "mean_position_hold_m": (float(_r[8]) if s1 and len(_r) > 9 else None),
 	        "mean_dz_hold_m": (float(_r[9]) if s1 and len(_r) > 9 else None),
-	        "label": feed.label_for(name)}
+	        "label": feed.label_for(name),
+	        **({"axes": dict(zip(AXIS_FIELDS, axis_out, strict=True))} if axes else {})}

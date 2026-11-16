@@ -217,7 +217,7 @@ fn rival_of(
 		c.alt_pd_omega as f64, c.alt_pd_zeta as f64, c.alt_pd_max_delta as f64,
 		xy.iter().map(|p| p.0).collect(), xy.iter().map(|p| p.1).collect(),
 		c.pos_omega as f64, c.pos_zeta as f64, c.pos_max_tilt_rad as f64,
-		0.0, false, 0.0, false, hold, mode,
+		0.0, false, 0.0, false, hold, mode, None,
 	)
 }
 
@@ -269,7 +269,7 @@ fn rival_droop_is_removed_on_the_translating_plant()
 		false, 2.0, 0.1,
 		false, 0.0, vec![], vec![], vec![], vec![],
 		2.0, 1.0, 0.25, vec![], vec![], 1.0, 1.0, 0.5236,
-		0.0, false, 0.0, false, 0, 1,
+		0.0, false, 0.0, false, 0, 1, None,
 	)
 	.is_err(), "alt_integral without translation must be refused");
 }

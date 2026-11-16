@@ -81,7 +81,7 @@ fn rival_first_eight_values_are_the_pinned_row()
 			true, 0.0, s1.init_z.clone(), s1.init_vz.clone(), s1.mass.clone(), s1.collective_frac.clone(),
 			2.0, 1.0, 0.25,
 			s1.init_x.clone(), s1.init_y.clone(), 1.0, 1.0, 0.5236,
-			0.20, false, 0.0, true, 0, 0,
+			0.20, false, 0.0, true, 0, 0, None,
 		)
 		.expect("rival must score");
 		assert_eq!(format!("{:?}", crate::dagger_train::rival_first8(now)), format!("{pinned:?}"), "teacher {teacher}");

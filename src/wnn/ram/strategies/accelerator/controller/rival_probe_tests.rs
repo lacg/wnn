@@ -635,3 +635,62 @@ fn val_alt_integral()
 	}
 	print_position_table("L3 — altitude integrator, VAL (20 units × 100 episodes); fifths are consecutive fifths of the episode", &units, &arms);
 }
+
+/// ABI 53 per-axis split: |v| of Log(q_ref⁻¹ q) reproduces the scorer's own err and steady
+/// (geodesic angle, f32 acos vs f64 atan2 ⇒ only rounding apart), the axes are consistent
+/// with the norm (each ≤ it, their root-sum-square ≥ it per sample ⇒ sum of means ≥ norm),
+/// and an oracle-fed row has zero fed-heading drift while an est-fed one does not.
+#[test]
+fn axis_split_decomposes_the_scorer()
+{
+	for teacher in [0u8, 4]
+	{
+		for use_est in [false, true]
+		{
+			let mut p = RivalProbe::measure_only();
+			let row = small(teacher, use_est, Some(&mut p)).unwrap();
+			let a = p.report().axes;
+			let (err, steady) = (row.1.to_radians(), row.2.to_radians());
+			// The scorer's 2·acos(|q·t|) is f32: near dot ≈ 1 one ulp (6e-8) moves the angle by
+			// 2·6e-8/sin(θ/2) ≈ 3e-5 rad at θ ≈ 0.5° — the scorer's own resolution, not a split error.
+			assert!((a.err_norm - err).abs() < 1e-4, "t{teacher} est{use_est}: |v| {} vs err {}", a.err_norm, err);
+			assert!((a.hold_norm - steady).abs() < 1e-4, "t{teacher} est{use_est}: hold |v| {} vs steady {}", a.hold_norm, steady);
+			for i in 0..3
+			{
+				assert!(a.err_abs[i] <= a.err_norm + 1e-12 && a.hold_abs[i] <= a.hold_norm + 1e-12, "{a:?}");
+				assert!(a.hold_signed[i].abs() <= a.hold_abs[i] + 1e-12, "{a:?}");
+			}
+			assert!(a.err_abs.iter().sum::<f64>() + 1e-12 >= a.err_norm, "{a:?}");
+			assert!(a.episodes_all > 0 && a.episodes_hold > 0 && a.episodes_hold <= a.episodes_all, "{a:?}");
+			if use_est
+			{
+				assert!(a.hold_fed_yaw_abs > 0.0, "est-fed: the Mahony heading must drift: {a:?}");
+			}
+			else
+			{
+				assert_eq!(a.hold_fed_yaw_abs, 0.0, "oracle-fed: the fed heading IS the truth");
+			}
+		}
+	}
+}
+
+/// rotvec_rel on known rotations: a pure yaw about body z, a roll about a tilted reference,
+/// and the w<0 double cover.
+#[test]
+fn rotvec_rel_known_rotations()
+{
+	use crate::rival_probe::rotvec_rel;
+	let half = |a: f64| ((a * 0.5).cos() as f32, (a * 0.5).sin() as f32);
+	let (c, s) = half(0.3);
+	let yaw = [c, 0.0, 0.0, s];
+	let v = rotvec_rel([1.0, 0.0, 0.0, 0.0], yaw);
+	assert!((v[0]).abs() < 1e-7 && (v[1]).abs() < 1e-7 && (v[2] - 0.3).abs() < 1e-6, "{v:?}");
+	let neg = yaw.map(|x| -x);
+	let w = rotvec_rel([1.0, 0.0, 0.0, 0.0], neg);
+	assert!((w[2] - 0.3).abs() < 1e-6, "double cover: {w:?}");
+	// reference rolled 0.2, body rolled 0.25 ⇒ +0.05 about body x.
+	let (c1, s1) = half(0.2);
+	let (c2, s2) = half(0.25);
+	let r = rotvec_rel([c1, s1, 0.0, 0.0], [c2, s2, 0.0, 0.0]);
+	assert!((r[0] - 0.05).abs() < 1e-6 && r[1].abs() < 1e-7 && r[2].abs() < 1e-7, "{r:?}");
+}

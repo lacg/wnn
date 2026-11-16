@@ -163,7 +163,9 @@ import os
 # — L2y; WNN hold rows average the episodes that REACHED the hold window (NaN if none).
 # ABI 52 (15/11/2026, Luiz): WnnController / dagger_train_batch_inplace(obs_yaw_trim_err_p=bool)
 # — L2y' (proportional-only yaw trim shift, raw integral); default off = ABI 51.
-EXPECTED_ABI = 52
+# ABI 53 (16/11/2026, CTRL-48 yaw floor): score_classical_baseline(axis_out=list) — opt-in
+# per-axis split of the rival's err/steady (classical_baseline.AXIS_FIELDS); None = ABI 52.
+EXPECTED_ABI = 53
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

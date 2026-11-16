@@ -515,7 +515,12 @@ mod metal_controller;
 ///     RolloutParams / TrainParams gain one trailing float (ytp_kappa).
 ///     Pin: ctrl52_yaw_trim_p_tests.rs.
 ///   * WNN hold rows (ABI 51 round 2): averaged over the episodes that reached the window.
-pub const ABI_VERSION: u32 = 52;
+/// ABI 53 (16/11/2026, CTRL-48 yaw floor; additive, default = ABI 52 bit-identical):
+///   * `score_classical_baseline(axis_out=None)`: a Python list ⇒ the rival row is flown with
+///     a measure-only RivalProbe and the per-axis split of its err / steady (rotation vector
+///     of q_ref⁻¹·q_true, body frame; rival_probe::AxisSplit::flat, 14 values) is appended.
+///     The returned 10-tuple is unchanged (rival_probe_tests pins probe-on == probe-off).
+pub const ABI_VERSION: u32 = 53;
 
 /// ABI 44: how output neurogenesis lays out the output layer — "segment" = every
 /// bank / E-I half resizes at its own tail (pre-44 Python resized the flat tail).
