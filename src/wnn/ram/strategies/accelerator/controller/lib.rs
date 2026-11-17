@@ -82,6 +82,8 @@ mod ctrl52_yaw_trim_p_tests; // L2y' (ABI 52): proportional-only yaw trim shift,
 #[cfg(test)]
 mod ctrl54_yaw_heading_tests; // lever 1 (ABI 54): yaw heading from the student's own Mahony estimate
 #[cfg(test)]
+mod ctrl57_delta_max_yaw_tests; // ABI 57: --delta-max-yaw — refusals, bit-identity, yaw-only decode, label round trip, CPU/GPU score + walk parity
+#[cfg(test)]
 mod ctrl56_axis_split_tests; // ABI 56: per-axis split on the WNN CPU scorer — row bit-identity, err/steady decomposition, L3 pole3
 #[cfg(test)]
 mod ctrl55_yaw_heading_replay_tests; // lever 1 plumbing (ABI 55): replay stream, Metal score/train/record, CPU/GPU parity
@@ -547,7 +549,13 @@ mod metal_controller;
 ///     unanchored). CPU only — score_controllers_metal has no such argument. The ABI-53
 ///     rival probe now shares the same accumulator (rival_probe::RivalProbe.axes).
 ///     Pin: ctrl56_axis_split_tests.rs.
-pub const ABI_VERSION: u32 = 56;
+/// ABI 57 (17/11/2026, Luiz; additive, default = ABI 56 bit-identical):
+///   * WnnController / dagger_train_batch_inplace(delta_max_yaw=None): the yaw bank's (m = 3)
+///     own delta_max under the delta law (CTBR r / decouple τ_yaw); read through
+///     delta_max_bank(m) by every encode (delta_label_target) and decode (decode_ctbr,
+///     decode_outputs). Metal: RolloutParams + delta_max_yaw (191 words); the train/record
+///     kernels read CPU-encoded labels. Pin: ctrl57_delta_max_yaw_tests.rs.
+pub const ABI_VERSION: u32 = 57;
 
 /// ABI 44: how output neurogenesis lays out the output layer — "segment" = every
 /// bank / E-I half resizes at its own tail (pre-44 Python resized the flat tail).

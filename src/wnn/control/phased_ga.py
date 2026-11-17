@@ -496,6 +496,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                obs_yaw_trim_err: bool = False,
                obs_yaw_trim_err_p: bool = False,
                obs_yaw_from_att_est: bool = False,
+               delta_max_yaw: float | None = None,
                dt: float = 0.001,
                decouple_outputs: bool = False, bits_per_feature: int = 8,
                feature_balance_ratio: float = 0.0,
@@ -555,6 +556,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		obs_yaw_trim_err=obs_yaw_trim_err,
 		obs_yaw_trim_err_p=obs_yaw_trim_err_p,
 		obs_yaw_from_att_est=obs_yaw_from_att_est,
+		delta_max_yaw=delta_max_yaw,
 		dt=dt,
 		decouple_outputs=decouple_outputs,
 		feature_balance_ratio=feature_balance_ratio,
@@ -2999,6 +3001,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	# L4 — magnitude-priority output writes (07/08/2026). BINARY is last-writer-
 	# wins; the legacy backward walk hands contested cells to the window's
 	# EARLIEST record, arbitrary w.r.t. error magnitude. Rust trainer, sn=0 only.
+	ap.add_argument("--delta-max-yaw", type=float, default=None,
+	                help="ABI 57 (Luiz 17/11/2026): delta_max for the YAW bank only (m = 3: r under "
+	                     "--output-mode ctbr, tau_yaw under --decouple-outputs); every other bank keeps "
+	                     "--delta-max. Changes the yaw bank's decode AND its DAgger label encoding (one "
+	                     "alphabet). Needs the delta law (--ctbr-delta-law under ctbr). Unset (default) = "
+	                     "--delta-max on every bank, byte-identical. A new lineage.")
 	ap.add_argument("--write-priority-err", action="store_true",
 	                help="L4 arm A: commit each BPTT window's records in ascending-|err| "
 	                     "order so the HIGHEST-attitude-error record writes last and owns "
@@ -4240,6 +4248,15 @@ def resolve_block10_args(args) -> None:
 		if getattr(args, "yaw_centred_ladder", None) == "dense":
 			raise SystemExit("--obs-yaw-trim-err[-p] replaces block-10 L2 (--yaw-centred-ladder dense): the trim-"
 			                 "referenced yaw error takes its own dense ladder — drop `dense`.")
+	if getattr(args, "delta_max_yaw", None) is not None:
+		v = float(args.delta_max_yaw)
+		if not (v > 0.0 and math.isfinite(v)):
+			raise SystemExit(f"--delta-max-yaw {v}: must be finite and > 0")
+		ctbr = getattr(args, "output_mode", "pwm") == "ctbr"
+		if not (getattr(args, "ctbr_delta_law", False) if ctbr else getattr(args, "delta_control", False)):
+			raise SystemExit("--delta-max-yaw needs the delta law (--ctbr-delta-law under --output-mode ctbr).")
+		if getattr(args, "output_mode", "pwm") != "ctbr" and not getattr(args, "decouple_outputs", False):
+			raise SystemExit("--delta-max-yaw needs a yaw bank: --output-mode ctbr or --decouple-outputs.")
 	if getattr(args, "obs_yaw_from_att_est", False):
 		need = {"the attitude estimator (--obs-att-estimator; default on under --translation)":
 		        getattr(args, "obs_att_estimator", False),
@@ -4261,6 +4278,7 @@ def block10_tokens(args) -> dict:
 	                ("trim" if getattr(args, "obs_yaw_trim_err", False)
 	                 else "trim_p" if getattr(args, "obs_yaw_trim_err_p", False) else ""),
 	                "mahony" if getattr(args, "obs_yaw_from_att_est", False) else "") if t),
+	            dmax_yaw=("" if getattr(args, "delta_max_yaw", None) is None else f"{float(args.delta_max_yaw):g}"),
 	            pos_metric="hold" if fit_pos_metric_from_args(args) == "hold" else "")
 
 

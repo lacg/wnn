@@ -268,6 +268,9 @@ class ControllerSpec:
 	# read is the Euler yaw of the student's OWN Mahony estimate (obs_att_estimator)
 	# instead of the body-rate sum gyro_z*dt. Layout unchanged. False = off.
 	obs_yaw_from_att_est: bool = False
+	# ABI 57 (--delta-max-yaw, Luiz 17/11/2026): the yaw bank's (m = 3) own delta_max under
+	# the delta law (CTBR r / decouple τ_yaw); None = delta_max on every bank.
+	delta_max_yaw: float | None = None
 	integral_scale: float = 1.0   # pre-threshold scale for integral features
 	dt: float = 0.001             # physics step (s); MUST match episode/plant dt (yaw integ.)
 	# H3 (18/06): the 4 output banks are CONTROLS [T, τ_roll, τ_pitch, τ_yaw] mixed to
@@ -680,6 +683,7 @@ def _feature_controller(spec: ControllerSpec) -> WnnController:
 		obs_yaw_trim_err=yaw_trim_err_kw(spec),  # block 10 L2y (ABI 51)
 		obs_yaw_trim_err_p=yaw_trim_err_p_kw(spec),  # block 10 L2y' (ABI 52)
 		obs_yaw_from_att_est=yaw_from_att_est_kw(spec),  # lever 1 (ABI 55)
+		delta_max_yaw=delta_max_yaw_kw(spec),  # ABI 57
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 		dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
@@ -706,6 +710,12 @@ def eval_mode_from_env() -> str:
 	if v in ("0", "false", "off", "no"):
 		return "cpu"
 	return "gpu"
+
+
+def delta_max_yaw_kw(spec) -> "float | None":
+	"""ABI 57: ControllerSpec.delta_max_yaw as the wheel's Option<f32> (None = delta_max)."""
+	v = getattr(spec, "delta_max_yaw", None)
+	return None if v is None else float(v)
 
 
 def yaw_from_att_est_kw(spec) -> bool:
@@ -1585,6 +1595,7 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		obs_yaw_trim_err=yaw_trim_err_kw(spec),  # block 10 L2y (ABI 51)
 		obs_yaw_trim_err_p=yaw_trim_err_p_kw(spec),  # block 10 L2y' (ABI 52)
 		obs_yaw_from_att_est=yaw_from_att_est_kw(spec),  # lever 1 (ABI 55)
+		delta_max_yaw=delta_max_yaw_kw(spec),  # ABI 57
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
@@ -2190,6 +2201,7 @@ class ControllerEvaluator:
 			obs_yaw_trim_err=yaw_trim_err_kw(first_spec),  # block 10 L2y (ABI 51)
 			obs_yaw_trim_err_p=yaw_trim_err_p_kw(first_spec),  # block 10 L2y' (ABI 52)
 			obs_yaw_from_att_est=yaw_from_att_est_kw(first_spec),  # lever 1 (ABI 55)
+			delta_max_yaw=delta_max_yaw_kw(first_spec),  # ABI 57
 			output_full_window=getattr(first_spec, 'output_full_window', False),
 			frame_stride=int(getattr(first_spec, 'frame_stride', 1)),
 			**_target_levels_kwarg(ra, first_spec),
@@ -2306,6 +2318,7 @@ class ControllerEvaluator:
 		obs_yaw_trim_err=yaw_trim_err_kw(spec),  # block 10 L2y (ABI 51)
 		obs_yaw_trim_err_p=yaw_trim_err_p_kw(spec),  # block 10 L2y' (ABI 52)
 		obs_yaw_from_att_est=yaw_from_att_est_kw(spec),  # lever 1 (ABI 55)
+		delta_max_yaw=delta_max_yaw_kw(spec),  # ABI 57
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,

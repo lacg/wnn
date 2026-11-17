@@ -207,6 +207,7 @@ class ControllerGridSearch(GenericGridSearch):
 			obs_yaw_trim_err=bool(getattr(args, "obs_yaw_trim_err", False)),  # block 10 L2y (ABI 51)
 			obs_yaw_trim_err_p=bool(getattr(args, "obs_yaw_trim_err_p", False)),  # block 10 L2y' (ABI 52)
 			obs_yaw_from_att_est=bool(getattr(args, "obs_yaw_from_att_est", False)),  # lever 1 (ABI 55)
+			delta_max_yaw=getattr(args, "delta_max_yaw", None),  # ABI 57
 			decouple_outputs=args.decouple_outputs,
 			bits_per_feature=args.bits_per_feature,
 			feature_balance_ratio=args.feature_balance_ratio,

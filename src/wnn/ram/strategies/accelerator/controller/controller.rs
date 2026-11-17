@@ -88,6 +88,9 @@ fn shape_gamma(t: f32, gamma: f32) -> f32
 	}
 }
 
+/// ABI 57: the yaw output bank (r under CTBR [T, p, q, r]; τ_yaw under decouple [T, τr, τp, τy]).
+pub(crate) const YAW_BANK: usize = 3;
+
 #[inline]
 pub(crate) fn decoded_to_delta(decoded: f32, delta_max: f32, n: f32, gamma: f32) -> f32
 {
@@ -1778,6 +1781,41 @@ impl WnnController
 	/// Delta-control mode params the GPU scorer needs so it matches step()'s
 	/// delta-mode decode (previously the kernel was absolute-only, scoring
 	/// delta controllers in the WRONG mode). Uniform across a population.
+	/// ABI 57: the delta_max of output bank `m` — the yaw bank's override when set, else
+	/// the shared delta_max (the SAME value, so flag-off arithmetic is unchanged).
+	#[inline]
+	pub(crate) fn delta_max_bank(&self, m: usize) -> f32
+	{
+		match (m, self.delta_max_yaw)
+		{
+			(YAW_BANK, Some(v)) => v,
+			_ => self.delta_max,
+		}
+	}
+
+	/// ABI 57: set the yaw bank's delta_max (None = the shared delta_max). Needs the delta
+	/// law and a yaw BANK (CTBR or decouple_outputs; the raw motor path has none).
+	pub(crate) fn set_delta_max_yaw(&mut self, v: Option<f32>) -> Result<(), String>
+	{
+		if let Some(x) = v
+		{
+			if !(x.is_finite() && x > 0.0)
+			{
+				return Err(format!("delta_max_yaw must be finite and > 0 (got {x})"));
+			}
+			if !self.delta_control
+			{
+				return Err("delta_max_yaw needs delta_control (the delta law)".into());
+			}
+			if self.ctbr.is_none() && !self.decouple_outputs
+			{
+				return Err("delta_max_yaw needs a yaw bank: output_mode ctbr or decouple_outputs".into());
+			}
+		}
+		self.delta_max_yaw = v;
+		Ok(())
+	}
+
 	pub(crate) fn delta_params(&self) -> (bool, f32, f32, f32)
 	{
 		(
@@ -2828,6 +2866,7 @@ impl WnnController
 			last_output_layer_input: Vec::new(),
 			delta_control,
 			delta_max,
+			delta_max_yaw: None,
 			delta_leak,
 			delta_gamma: if delta_gamma > 0.0 { delta_gamma } else { 1.0 },
 			delta_label_scale: 1.0,
@@ -3603,6 +3642,10 @@ pub struct WnnController
 	// doesn't tumble, which behavioral cloning of absolute PWM could not give.
 	delta_control: bool,
 	delta_max: f32,
+	// ABI 57 (Luiz 17/11/2026, --delta-max-yaw): the YAW bank's (m = 3: r under CTBR, τ_yaw
+	// under decouple) own delta_max; None ⇒ delta_max (bit-identical). Read only through
+	// delta_max_bank(m) — every encode/decode of the delta alphabet goes through it.
+	delta_max_yaw: Option<f32>,
 	// Leaky integrator: each step the accumulator's deviation from hover (0.5)
 	// decays by delta_leak before the delta is added (pwm = 0.5 + leak*(pwm-0.5)
 	// + delta). leak=1.0 = pure integrator (bias can run away to saturation);
@@ -3977,6 +4020,7 @@ impl WnnController
 		obs_yaw_trim_err = false,
 		obs_yaw_trim_err_p = false,
 		obs_yaw_from_att_est = false,
+		delta_max_yaw = None,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -4042,6 +4086,8 @@ impl WnnController
 		// Lever 1 (ABI 55): the anchored yaw heading from the student's own Mahony
 		// quaternion (set_yaw_from_att_est). false ⇒ off, bit-identical.
 		obs_yaw_from_att_est: bool,
+		// ABI 57 (--delta-max-yaw): the yaw bank's own delta_max; None ⇒ delta_max.
+		delta_max_yaw: Option<f32>,
 	) -> PyResult<Self>
 	{
 		// CTRL-46: the bias-predictor rows are the VERY tail (after the cascade blocks).
@@ -4148,6 +4194,8 @@ impl WnnController
 		{
 			c.set_yaw_from_att_est(true)?;
 		}
+		// ABI 57: after the cascade / decouple are set (the yaw bank must exist).
+		c.set_delta_max_yaw(delta_max_yaw).map_err(pyo3::exceptions::PyValueError::new_err)?;
 		Ok(c)
 	}
 
@@ -4205,6 +4253,13 @@ impl WnnController
 	pub fn yaw_from_att_est(&self) -> bool
 	{
 		self.yaw_from_att_est
+	}
+
+	/// ABI 57: the yaw bank's delta_max override (None = the shared delta_max).
+	#[getter]
+	pub fn delta_max_yaw(&self) -> Option<f32>
+	{
+		self.delta_max_yaw
 	}
 
 	/// ABI 56: whether the yaw heading is ANCHORED (an absolute angle: obs_yaw_err /
@@ -6742,9 +6797,22 @@ impl WnnController
 	{
 		match self.ctbr.as_ref()
 		{
-			Some(c) => c.spec.encode_delta(m, delta, self.neutral, self.delta_max),
-			None => delta_to_decoded(delta, self.delta_max, self.neutral, self.delta_gamma),
+			Some(c) => c.spec.encode_delta(m, delta, self.neutral, self.delta_max_bank(m)),
+			None => delta_to_decoded(delta, self.delta_max_bank(m), self.neutral, self.delta_gamma),
 		}
+	}
+
+	/// ABI 57 test hook: the label encoder (delta_label_target) and the decode neutral.
+	#[cfg(test)]
+	pub(crate) fn delta_label_target_pub(&self, m: usize, delta: f32) -> f32
+	{
+		self.delta_label_target(m, delta)
+	}
+
+	#[cfg(test)]
+	pub(crate) fn neutral_pub(&self) -> f32
+	{
+		self.neutral
 	}
 
 	/// The operating point output bank `m` leaks toward: torque banks 0 under
@@ -6820,7 +6888,7 @@ impl WnnController
 			let v = if self.delta_control
 			{
 				let r = spec.range[m];
-				let delta = spec.decode_delta(m, decoded, self.neutral, self.delta_max);
+				let delta = spec.decode_delta(m, decoded, self.neutral, self.delta_max_bank(m));
 				(self.leaked_baseline(m) + delta).clamp(-r, r)
 			}
 			else
@@ -6851,7 +6919,7 @@ impl WnnController
 				self.pwm[m] = if self.delta_control
 				{
 					// Bank anchor (T→collective, torques→0) lives in leaked_baseline.
-					let delta = decoded_to_delta(decoded, self.delta_max, self.neutral, self.delta_gamma);
+					let delta = decoded_to_delta(decoded, self.delta_max_bank(m), self.neutral, self.delta_gamma); // ABI 57: decouple banks
 					(self.leaked_baseline(m) + delta).clamp(lo, 1.0)
 				}
 				else if is_torque

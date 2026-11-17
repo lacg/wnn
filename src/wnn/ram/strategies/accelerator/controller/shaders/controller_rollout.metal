@@ -325,6 +325,9 @@ struct Params
 	// Lever 1 (ABI 55), appended in lockstep: the anchored yaw heading follows the
 	// student's own Mahony quaternion (score: live filter; train/record: yh_rec). 0 ⇒ off.
 	uint yfe_on;
+	// ABI 57 (--delta-max-yaw), appended in lockstep: the yaw bank's (m = 3) delta_max;
+	// equal to delta_max when the flag is unset.
+	float delta_max_yaw;
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -1939,7 +1942,7 @@ kernel void controller_rollout(
 					float r = P.ctbr_range[m];
 					if (P.delta_control != 0u)
 					{
-						float delta = decoded_to_delta(decoded, P.delta_max * r, P.residual_neutral, P.ctbr_gamma[m]);
+						float delta = decoded_to_delta(decoded, (m == 3u ? P.delta_max_yaw : P.delta_max) * r, P.residual_neutral, P.ctbr_gamma[m]); // ABI 57
 						pwm_acc[m] = clamp(P.delta_leak * pwm_acc[m] + delta, -r, r);
 					}
 					else
@@ -1958,7 +1961,7 @@ kernel void controller_rollout(
 					float lo = is_torque ? -1.0f : 0.0f;
 					if (P.delta_control != 0u)
 					{
-						float delta = decoded_to_delta(decoded, P.delta_max, P.residual_neutral, P.delta_gamma);
+						float delta = decoded_to_delta(decoded, (m == 3u ? P.delta_max_yaw : P.delta_max), P.residual_neutral, P.delta_gamma); // ABI 57
 						float nb = (m >= 1u) ? neutral : coll_anchor;
 						pwm_acc[m] = clamp(nb + P.delta_leak * (pwm_acc[m] - nb) + delta, lo, 1.0f);
 					}
