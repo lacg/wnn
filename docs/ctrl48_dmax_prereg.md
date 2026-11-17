@@ -56,3 +56,22 @@ stopping.
 - the per-axis split from `axis_out` (CPU) for both arms on VAL, as a descriptive check.
 
 Nothing above may change after the first DMX END line.
+
+## Amendment 1 (Luiz 17/11/2026 ~13:40 EST, after D s1-s2 were seen; disclosed)
+**The alt guard is DROPPED.** Luiz's reasons:
+- A guard on one coordinate is arbitrary.
+- `pos` already contains altitude: it is the 3-D error √(x² + y² + alt²) (position_score.rs:323). A z loss that is
+  offset by x/y is already judged correctly by pos.
+- The decision is on the WHOLE result vector (stable, err, steady, pos, fails), not on a single column.
+
+The adoption rule is now:
+- mean steady better by > 0.03°;
+- mean err not worse by > 0.03°;
+- mean pos not worse by > 0.010 m;
+- fails within the gate and not significantly worse;
+
+read together as a whole by Luiz, with the expectation-consistency rule. alt, pos_hold and dz_hold stay REPORTED,
+as descriptive columns.
+
+Seen before the amendment: s1 and s2, D − M: err −0.07 / −0.12, steady −0.05 / −0.15, pos +0.008 / +0.008,
+alt +0.012 / +0.014, fails 0 vs 1.
