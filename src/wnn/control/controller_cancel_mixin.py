@@ -20,6 +20,15 @@ from __future__ import annotations
 class ControllerCancelMixin:
 	"""Mixed into the controller GA strategies to share the cancel/crash-save core."""
 
+	def _on_generation_start(self, generation: int, **ctx) -> None:
+		"""Controller-only: the per-generation determinism digest (gen_digest.py) of the
+		population entering this generation, then the shared hook (checkpoint/cancel)."""
+		pop = ctx.get("population")
+		if pop:
+			from wnn.control.gen_digest import digest_line
+			self._log.info(digest_line(self.name, generation, pop))
+		super()._on_generation_start(generation, **ctx)
+
 	def _build_checkpoint(self, generation: int, genomes: list, ctx: dict,
 	                      complete: bool):
 		"""Controller GA state → PhaseCheckpoint via the historical payload shape,

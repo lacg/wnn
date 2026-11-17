@@ -82,6 +82,8 @@ mod ctrl52_yaw_trim_p_tests; // L2y' (ABI 52): proportional-only yaw trim shift,
 #[cfg(test)]
 mod ctrl54_yaw_heading_tests; // lever 1 (ABI 54): yaw heading from the student's own Mahony estimate
 #[cfg(test)]
+mod ctrl56_axis_split_tests; // ABI 56: per-axis split on the WNN CPU scorer — row bit-identity, err/steady decomposition, L3 pole3
+#[cfg(test)]
 mod ctrl55_yaw_heading_replay_tests; // lever 1 plumbing (ABI 55): replay stream, Metal score/train/record, CPU/GPU parity
 #[cfg(test)]
 mod ctrl51_alt_integral_tests; // L3 of block 10 (ABI 51): altitude integrator — law, anti-windup, droop, hosts, CPU/GPU score parity
@@ -102,6 +104,7 @@ mod abi34_tests; // ABI 34: lag-aware teachers, one pwm convention under motor l
 mod yaw_trim_err; // L2y (ABI 51): yaw error referenced to the trim the rate loop rides on (--obs-yaw-trim-err)
 mod tilt_ref_err; // L1 (ABI 51): roll/pitch error vs the tilt reference, bias-corrected (--obs-tilt-ref-err)
 mod att_bias_pred; // CTRL-46 (ABI 46): onboard predictor of the Mahony specific-force bias (--obs-att-bias-pred)
+mod axis_split; // ABI 53/56: per-axis split of a scorer's attitude error (rival + WNN scorers)
 mod rival_probe; // opt-in probe on the classical-rival scorer (INDI spec §10: observer gain, bias compensation)
 #[cfg(test)]
 mod rival_probe_tests; // probe-off bit-identity + the #[ignore] val-unit sweeps of the INDI spec §10
@@ -536,7 +539,15 @@ mod metal_controller;
 ///     a trailing u32 yfe_on (190 words), FwdParams yfe_on + yfe_yaw; controller_train /
 ///     controller_record buffer 30 / 27 = yh_rec. The ABI-54 Metal refusal is lifted.
 ///     Pin: ctrl55_yaw_heading_replay_tests.rs.
-pub const ABI_VERSION: u32 = 55;
+/// ABI 56 (17/11/2026, Luiz; additive, default = ABI 55 bit-identical):
+///   * score_controllers_cpu(axis_out=None): a Python list ⇒ every controller's rollout also
+///     accumulates the per-axis split (axis_split::AxisAcc, HoldPolicy::FallbackWhole = this
+///     scorer's steady) and its 14 AxisSplit::flat values are appended in controller order
+///     (classical_baseline.AXIS_FIELDS; slot 11 = the student's anchored heading drift, NaN
+///     unanchored). CPU only — score_controllers_metal has no such argument. The ABI-53
+///     rival probe now shares the same accumulator (rival_probe::RivalProbe.axes).
+///     Pin: ctrl56_axis_split_tests.rs.
+pub const ABI_VERSION: u32 = 56;
 
 /// ABI 44: how output neurogenesis lays out the output layer — "segment" = every
 /// bank / E-I half resizes at its own tail (pre-44 Python resized the flat tail).

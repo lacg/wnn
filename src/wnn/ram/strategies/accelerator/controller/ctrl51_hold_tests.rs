@@ -222,7 +222,7 @@ fn wnn_hold_rows_equal_direct_recomputation()
 	let mut cc = c.clone();
 	let off = crate::cpu_score::rollout_one(
 		&mut cc, &q0, &w0, EPS, 200, D, A, K, KDR, IN, GR, 0.0, [0.0; 3], false, [0.0; 3],
-		0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0, 0.0, 0, 0, 0.0, 4, 4, None, None, None, 1.0, 0.4, None, None,
+		0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0, 0.0, 0, 0, 0.0, 4, 4, None, None, None, 1.0, 0.4, None, None, None,
 	);
 	assert_eq!((off[17], off[18]), (0.0, 0.0));
 }
@@ -274,7 +274,7 @@ fn diverge_cpu(c: &crate::controller::WnnController, s1: &crate::stage1::Stage1C
 	crate::cpu_score::rollout_one(
 		&mut cc, &q0[..eps * 4], &w0[..eps * 3], eps, steps, D, A, K, KDR, IN, GR, 0.0, [0.0; 3],
 		true, [0.0; 3], 0.0, 0.1, DIVERGE_ASYM, 0.0, 0.0, 0.0, 5,
-		0.0, 0, 0, 0.0, c.levels_per_motor(), 4, None, None, None, 1.0, 0.4, None, Some(s1),
+		0.0, 0, 0, 0.0, c.levels_per_motor(), 4, None, None, None, 1.0, 0.4, None, Some(s1), None,
 	)
 }
 

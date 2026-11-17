@@ -696,6 +696,18 @@ def yaw_trim_err_p_kw(spec) -> bool:
 	return bool(getattr(spec, "obs_yaw_trim_err_p", False))
 
 
+def eval_mode_from_env() -> str:
+	"""The closed-loop scoring device from WNN_CONTROLLER_GPU_EVAL — the ONE parser
+	(ControllerEvaluator and the provenance header both read it): 0/false/off/no → "cpu",
+	2/hybrid/both → "hybrid", anything else (unset = 1) → "gpu"."""
+	v = os.environ.get("WNN_CONTROLLER_GPU_EVAL", "1").strip().lower()
+	if v in ("2", "hybrid", "both"):
+		return "hybrid"
+	if v in ("0", "false", "off", "no"):
+		return "cpu"
+	return "gpu"
+
+
 def yaw_from_att_est_kw(spec) -> bool:
 	"""Lever 1: ControllerSpec.obs_yaw_from_att_est as the bool the wheel takes."""
 	return bool(getattr(spec, "obs_yaw_from_att_est", False))
@@ -1804,13 +1816,7 @@ class ControllerEvaluator:
 		# concurrently over shape-groups (GPU worker + CPU rayon pull from a shared
 		# queue; if the GPU stalls on its last group the CPU steals it). Hybrid uses
 		# the GPU in the gaps between the worker's kernels and CPU the rest.
-		_gpu_eval_env = os.environ.get("WNN_CONTROLLER_GPU_EVAL", "1").strip().lower()
-		if _gpu_eval_env in ("2", "hybrid", "both"):
-			self.eval_mode = "hybrid"
-		elif _gpu_eval_env in ("0", "false", "off", "no"):
-			self.eval_mode = "cpu"
-		else:
-			self.eval_mode = "gpu"
+		self.eval_mode = eval_mode_from_env()
 		# Back-compat flag (score_population reads it): True for gpu OR hybrid.
 		self.max_eval_workers_gpu = max_eval_workers_gpu and self.eval_mode != "cpu"
 		# Multi-seed genome fitness (A): the inner loop is chaotic, so the SAME

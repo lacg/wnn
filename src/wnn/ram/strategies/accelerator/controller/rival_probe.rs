@@ -105,68 +105,8 @@ pub(crate) struct RivalProbeReport
 	pub(crate) axes: AxisSplit,
 }
 
-/// The scorer's attitude error split into body axes (rad): v = Log(q_ref⁻¹ ⊗ q_true).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(crate) struct AxisSplit
-{
-	/// Whole-episode mean |v_x|, |v_y|, |v_z| (roll, pitch, yaw) — the decomposition of err.
-	pub(crate) err_abs: [f64; 3],
-	/// Whole-episode mean |v| (≈ the scorer's err).
-	pub(crate) err_norm: f64,
-	/// Hold-window mean |v_x|, |v_y|, |v_z| — the decomposition of steady.
-	pub(crate) hold_abs: [f64; 3],
-	/// Hold-window mean |v| (≈ the scorer's steady).
-	pub(crate) hold_norm: f64,
-	/// Hold-window mean SIGNED v_x, v_y, v_z (a constant offset survives; noise cancels).
-	pub(crate) hold_signed: [f64; 3],
-	/// Hold-window mean |yaw(q_fed) − yaw(q_true)| — the fed heading's drift (0 oracle-fed).
-	pub(crate) hold_fed_yaw_abs: f64,
-	/// Episodes in the whole-episode / hold-window means.
-	pub(crate) episodes_all: usize,
-	pub(crate) episodes_hold: usize,
-}
-
-impl AxisSplit
-{
-	/// The flat order `score_classical_baseline(axis_out=)` appends (Python reads it by name
-	/// through classical_baseline.AXIS_FIELDS — keep the two in step).
-	pub(crate) fn flat(&self) -> [f64; 14]
-	{
-		[
-			self.err_abs[0], self.err_abs[1], self.err_abs[2], self.err_norm,
-			self.hold_abs[0], self.hold_abs[1], self.hold_abs[2], self.hold_norm,
-			self.hold_signed[0], self.hold_signed[1], self.hold_signed[2],
-			self.hold_fed_yaw_abs, self.episodes_all as f64, self.episodes_hold as f64,
-		]
-	}
-}
-
-/// Rotation vector (rad, body frame) of q relative to q_ref: Log(q_ref⁻¹ ⊗ q), shortest
-/// rotation (w ≥ 0). f64 throughout; measurement only.
-pub(crate) fn rotvec_rel(q_ref: [f32; 4], q: [f32; 4]) -> [f64; 3]
-{
-	let r = q_ref.map(|v| v as f64);
-	let b = q.map(|v| v as f64);
-	let (w1, x1, y1, z1) = (r[0], -r[1], -r[2], -r[3]);
-	let (w2, x2, y2, z2) = (b[0], b[1], b[2], b[3]);
-	let mut d = [
-		w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
-		w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
-		w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
-		w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
-	];
-	if d[0] < 0.0
-	{
-		d = d.map(|v| -v);
-	}
-	let n = (d[1] * d[1] + d[2] * d[2] + d[3] * d[3]).sqrt();
-	if n < 1e-12
-	{
-		return [0.0; 3];
-	}
-	let a = 2.0 * n.atan2(d[0]) / n;
-	[a * d[1], a * d[2], a * d[3]]
-}
+pub(crate) use crate::axis_split::{rotvec_rel, AxisSplit};
+use crate::axis_split::{AxisAcc, HoldPolicy};
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct RivalProbe
@@ -190,15 +130,8 @@ pub(crate) struct RivalProbe
 	pos_last: f64,
 	pos_sum: [f64; 14],
 	pos_eps: usize,
-	/// ABI 53 per-axis split. Per-episode accumulators: [whole |v| x3, whole |v|,
-	/// hold |v| x3, hold |v|, hold signed x3, hold |fed yaw bias|]; counts [whole, hold].
-	fed_yaw: f64,
-	ax_ep: [f64; 12],
-	ax_cnt: [usize; 2],
-	ax_sum_all: [f64; 4],
-	ax_sum_hold: [f64; 8],
-	ax_eps: [usize; 2],
-	ax_begun: usize,
+	/// ABI 53 per-axis split (axis_split::AxisAcc, hold policy ReachedOnly — this scorer's).
+	axes: AxisAcc,
 }
 
 // Built only by the cargo tests (the pyfunction passes no probe).
@@ -308,10 +241,7 @@ impl RivalProbe
 		self.pos_cnt = [0; 5];
 		self.pos_first = None;
 		self.pos_last = 0.0;
-		self.fed_yaw = 0.0;
-		self.ax_ep = [0.0; 12];
-		self.ax_cnt = [0; 2];
-		self.ax_begun += 1;
+		self.axes.begin_episode();
 	}
 
 	/// The attitude reference the teacher is handed this tick. Advances the predictor
@@ -337,32 +267,13 @@ impl RivalProbe
 		let (rf, pf, yf) = quat_to_euler_f64(q_fed);
 		let (r, p, y) = quat_to_euler_f64(q_true);
 		self.fed_bias = [wrap_angle_f64(rf - r), wrap_angle_f64(pf - p)];
-		self.fed_yaw = wrap_angle_f64(yf - y);
+		self.axes.set_fed_yaw(wrap_angle_f64(yf - y));
 	}
 
 	/// The per-axis split (module doc "PER-AXIS SPLIT"), every recorded step.
 	fn record_axes(&mut self, in_hold: bool, sim: &AttitudeSim, att_ref: &AttErrRef)
 	{
-		let q_ref = att_ref.ref_quat(sim).unwrap_or([1.0, 0.0, 0.0, 0.0]);
-		let v = rotvec_rel(q_ref, sim.quaternion());
-		let norm = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-		for i in 0..3
-		{
-			self.ax_ep[i] += v[i].abs();
-		}
-		self.ax_ep[3] += norm;
-		self.ax_cnt[0] += 1;
-		if in_hold
-		{
-			for i in 0..3
-			{
-				self.ax_ep[4 + i] += v[i].abs();
-				self.ax_ep[8 + i] += v[i];
-			}
-			self.ax_ep[7] += norm;
-			self.ax_ep[11] += self.fed_yaw.abs();
-			self.ax_cnt[1] += 1;
-		}
+		self.axes.record(in_hold, att_ref.ref_quat(sim), sim.quaternion());
 	}
 
 	/// After the plant stepped: accumulate the hold-window decomposition. Measurement only.
@@ -394,23 +305,8 @@ impl RivalProbe
 
 	pub(crate) fn end_episode(&mut self)
 	{
-		// Per-axis split: the scorer's accounting (err over every episode, a 0-step
-		// episode contributing 0; steady over the episodes that reached the hold window).
-		let c0 = self.ax_cnt[0].max(1) as f64;
-		for i in 0..4
-		{
-			self.ax_sum_all[i] += self.ax_ep[i] / c0;
-		}
-		if self.ax_cnt[1] > 0
-		{
-			let c1 = self.ax_cnt[1] as f64;
-			for i in 0..8
-			{
-				self.ax_sum_hold[i] += self.ax_ep[4 + i] / c1;
-			}
-			self.ax_eps[1] += 1;
-		}
-		self.ax_eps[0] = self.ax_begun;
+		// Per-axis split: the rival scorer's accounting (axis_split::HoldPolicy::ReachedOnly).
+		self.axes.end_episode(HoldPolicy::ReachedOnly);
 		// Position: only episodes that reached the last fifth (a diverged one has no hold).
 		if let (Some(first), true) = (self.pos_first, self.pos_cnt[4] > 0)
 		{
@@ -468,19 +364,6 @@ impl RivalProbe
 
 	fn axis_split(&self) -> AxisSplit
 	{
-		let na = self.ax_eps[0].max(1) as f64;
-		let nh = self.ax_eps[1].max(1) as f64;
-		let a = self.ax_sum_all.map(|v| v / na);
-		let h = self.ax_sum_hold.map(|v| v / nh);
-		AxisSplit {
-			err_abs: [a[0], a[1], a[2]],
-			err_norm: a[3],
-			hold_abs: [h[0], h[1], h[2]],
-			hold_norm: h[3],
-			hold_signed: [h[4], h[5], h[6]],
-			hold_fed_yaw_abs: h[7],
-			episodes_all: self.ax_eps[0],
-			episodes_hold: self.ax_eps[1],
-		}
+		self.axes.split(HoldPolicy::ReachedOnly)
 	}
 }

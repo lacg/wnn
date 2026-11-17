@@ -4207,6 +4207,13 @@ impl WnnController
 		self.yaw_from_att_est
 	}
 
+	/// ABI 56: whether the yaw heading is ANCHORED (an absolute angle: obs_yaw_err /
+	/// obs_yaw_err_i) — else yaw_heading is the legacy raw gyro-z sum.
+	pub(crate) fn yaw_anchored(&self) -> bool
+	{
+		self.obs_yaw_err || self.obs_yaw_err_i
+	}
+
 	/// ABI 54: the heading estimate (rad) the last compute_features used.
 	#[getter]
 	pub fn yaw_heading_est(&self) -> f32

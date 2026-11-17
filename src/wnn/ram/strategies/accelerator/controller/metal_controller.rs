@@ -9232,7 +9232,7 @@ mod tests
 			1.0,
 			0.4,
 			None,
-			None,
+			None, None,
 		);
 		for (i, name) in ["reward", "err", "stable", "jerk", "mono"]
 			.iter()
@@ -9443,7 +9443,7 @@ mod tests
 			1.0,
 			0.4,
 			None,
-			None,
+			None, None,
 		);
 		assert_rel_close(
 			cpu_row[1],
@@ -9681,7 +9681,7 @@ mod tests
 			[0.0, 0.0, 0.0],
 			false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0,
 			0.0, 0, 0, 0.0,
-			levels, num_motors, None, None, None, 1.0, 0.4, None, None,
+			levels, num_motors, None, None, None, 1.0, 0.4, None, None, None,
 		)
 	}
 
@@ -9829,7 +9829,7 @@ mod tests
 			1.0,
 			0.4,
 			None,
-			Some(&s1),
+			Some(&s1), None,
 		);
 		let ev = match ControllerRolloutEvaluator::new()
 		{
@@ -10003,7 +10003,7 @@ mod tests
 			1.0,
 			0.4,
 			None,
-			Some(&s2),
+			Some(&s2), None,
 		);
 		let ev = match ControllerRolloutEvaluator::new()
 		{
@@ -10291,7 +10291,7 @@ mod tests
 				1.0,
 				0.4,
 				None,
-				None,
+				None, None,
 			)
 		};
 
@@ -10722,7 +10722,7 @@ mod tests
 			1.0,
 			0.4,
 			None,
-			None,
+			None, None,
 		);
 		let ev = match ControllerRolloutEvaluator::new()
 		{
@@ -10796,7 +10796,7 @@ mod tests
 			1.0,
 			0.4,
 			None,
-			None,
+			None, None,
 		);
 		assert!(
 			(cpu[0] - cpu_folded[0]).abs() > 1e-9 || (cpu[1] - cpu_folded[1]).abs() > 1e-9,
@@ -11496,7 +11496,7 @@ mod tests
 			1.0,
 			0.4,
 			None,
-			None,
+			None, None,
 		);
 		// f32 kernel euler vs f64 CPU euler drifts ~0.006° over 2500 steps —
 		// the 3e-4 abs floor absorbs that; anything structural is far larger.
@@ -11603,7 +11603,7 @@ mod tests
 			0.5,
 			0.15,
 			None,
-			None,
+			None, None,
 		);
 		for (i, name) in ["reward", "err", "stable", "jerk", "mono"]
 			.iter()

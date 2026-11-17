@@ -128,7 +128,7 @@ pub(crate) fn cpu(c: &WnnController, s1: &Stage1Cfg, steps: usize) -> [f64; 19]
 	crate::cpu_score::rollout_one(
 		&mut c, &q0, &w0, EPS, steps, DT, ARM, KT, KD, INERTIA, G, 0.0, [0.0; 3], false, [0.0; 3],
 		0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0, 0.0, 0, 0, 0.0, 4, 4, None, None, None, 1.0, 0.4, None,
-		Some(s1),
+		Some(s1), None,
 	)
 }
 
@@ -489,7 +489,7 @@ fn prod_rows_lag(c: &WnnController, s1: &Stage1Cfg, steps: usize, dist: bool, la
 	let cr = crate::cpu_score::rollout_one(
 		&mut cc, &q0, &w0, EPS, steps, DT, ARM, KT, KD, INERTIA, G, lag, [0.0; 3],
 		en, dd.tau_bias, dd.gust_sigma, dd.gust_tau_c, dd.motor_asym, dd.gyro_sigma, dd.gyro_bias_walk, dd.accel_sigma, dd.seed,
-		0.0, 0, 0, 0.0, 4, 4, None, None, None, 1.0, 0.4, None, Some(s1),
+		0.0, 0, 0, 0.0, 4, 4, None, None, None, 1.0, 0.4, None, Some(s1), None,
 	);
 	let gr = ControllerRolloutEvaluator::new().ok().map(|ev| {
 		ev.score(&[c], &q0, &w0, EPS, steps, (DT, ARM, KT, INERTIA, G), KD, lag, [0.0; 3], d, None, None, None, Some(s1))

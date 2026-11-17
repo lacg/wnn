@@ -169,7 +169,9 @@ import os
 # from the student's own Mahony quaternion (CPU only; Metal refuses); default off = ABI 53.
 # ABI 55 (16/11/2026, Luiz: lever 1 plumbing): WnnController / dagger_train_batch_inplace(
 # obs_yaw_from_att_est=bool), ReplayObs(yaw_heading=), Metal score/train/record twins; off = ABI 54.
-EXPECTED_ABI = 55
+# ABI 56 (17/11/2026, Luiz): score_controllers_cpu(axis_out=list) — opt-in per-axis split of
+# every flown flag's err/steady (incl. --alt-integral); None = ABI 55 bit-identical.
+EXPECTED_ABI = 56
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

@@ -4626,6 +4626,9 @@ def main():
 	                         drop=drop_token(args), select=select_tail_token(args),
 	                         train_ic=train_ic_token(args), **ctrl46_tokens(args),
 	                         **block10_tokens(args)).line())
+	from wnn.control.provenance import env_header_line
+	from wnn.control.evaluator import eval_mode_from_env
+	print(env_header_line(eval_mode_from_env()), flush=True)
 	import shlex
 	print(f"[argv] {shlex.join(args.cli_argv)}", flush=True)
 

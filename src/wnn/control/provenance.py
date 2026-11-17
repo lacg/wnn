@@ -21,6 +21,11 @@ from dataclasses import dataclass
 
 
 PROVENANCE_PREFIX = "[provenance]"
+# 17/11/2026 (determinism audit): the process environment that can change a result
+# (WNN_* switches, RAYON_* thread pools) and the resolved scoring device, as a SECOND
+# header line so the `[provenance]` line's format (parsed by markers) stays unchanged.
+PROVENANCE_ENV_PREFIX = "[provenance-env]"
+ENV_PREFIXES = ("WNN_", "RAYON_")
 UNKNOWN = "unknown"
 _SHA_PREFIX_HEX = 16
 
@@ -253,3 +258,11 @@ def _git(cwd: str, *args: str) -> str:
 		["git", *args], cwd=cwd, capture_output=True, text=True, timeout=2.0, check=False,
 	)
 	return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def env_header_line(eval_mode: str) -> str:
+	"""`[provenance-env] eval=<gpu|cpu|hybrid> KEY=VALUE ...` — every WNN_* / RAYON_*
+	variable set in this process, sorted; `(none)` when none is set (the defaults)."""
+	keys = sorted(k for k in os.environ if k.startswith(ENV_PREFIXES))
+	env = " ".join(f"{k}={os.environ[k].replace(' ', '_')}" for k in keys) or "(none)"
+	return f"{PROVENANCE_ENV_PREFIX} eval={eval_mode} {env}"

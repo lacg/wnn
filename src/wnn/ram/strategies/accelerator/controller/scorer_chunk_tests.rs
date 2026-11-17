@@ -105,7 +105,7 @@ fn cpu_rows(c: &WnnController, s1: &Stage1Cfg) -> [f64; 19]
 		&mut cc, &q0, &w0, EPS, STEPS, DT, ARM, KT, KD, INERTIA, G, LAG, [0.0; 3],
 		true, d.tau_bias, d.gust_sigma, d.gust_tau_c, d.motor_asym, d.gyro_sigma, d.gyro_bias_walk,
 		d.accel_sigma, d.seed, 0.0, 0, 0, d.torque_scale_jitter, c.levels_per_motor(), 4,
-		None, None, None, 1.0, 0.4, None, Some(s1),
+		None, None, None, 1.0, 0.4, None, Some(s1), None,
 	)
 }
 

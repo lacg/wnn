@@ -499,7 +499,7 @@ fn alt_student(seed: u64) -> WnnController
 }
 
 /// `cells` random output cells per neuron (256 = every address of the 8-bit neurons).
-fn alt_student_cells(seed: u64, cells: usize) -> WnnController
+pub(crate) fn alt_student_cells(seed: u64, cells: usize) -> WnnController
 {
 	use rand::{Rng, SeedableRng};
 	let (levels, bpf, window, obpn, nf) = (4usize, 3usize, 2usize, 8usize, 18usize);

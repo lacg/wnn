@@ -191,7 +191,7 @@ pub(crate) fn cpu_rows(c: &WnnController, steps: usize, lag: f32) -> [f64; 19]
 	crate::cpu_score::rollout_one(
 		&mut cc, &q0, &w0, EPS, steps, DT, ARM, KT, KD, INERTIA, G, lag, [0.0; 3],
 		true, [0.0; 3], 0.0, 0.1, ASYM, 0.0107, 0.0, 0.0, 777,
-		0.0, 0, 0, 0.2, c.levels_per_motor(), 4, None, None, None, 1.0, 0.4, None, Some(&s1),
+		0.0, 0, 0, 0.2, c.levels_per_motor(), 4, None, None, None, 1.0, 0.4, None, Some(&s1), None,
 	)
 }
 

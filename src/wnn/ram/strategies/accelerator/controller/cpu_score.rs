@@ -102,6 +102,10 @@ pub(crate) fn rollout_one(
 	// rollout, bit-identical to every pre-13/08 result. Caller has validated it
 	// against num_eps before the rayon fan-out.
 	stage1: Option<&crate::stage1::Stage1Cfg>,
+	// ABI 56: OPT-IN per-axis split of this rollout's err / steady (axis_split.rs,
+	// HoldPolicy::FallbackWhole = this scorer's steady accounting). Measurement only —
+	// None on every scoring path that did not ask (score_controllers_cpu(axis_out=None)).
+	mut axes: Option<&mut crate::axis_split::AxisAcc>,
 ) -> [f64; 19]
 {
 	let mut sim = AttitudeSim::new(dt, arm, k_thrust, k_drag, inertia, gravity);
@@ -252,6 +256,10 @@ pub(crate) fn rollout_one(
 			);
 		}
 
+		if let Some(a) = axes.as_deref_mut()
+		{
+			a.begin_episode();
+		}
 		let mut ep_sum_err = 0.0f64;
 		let mut ep_sum_poserr = 0.0f64;
 		let mut ep_sum_alterr = 0.0f64;
@@ -309,7 +317,15 @@ pub(crate) fn rollout_one(
 				let [hvx, hvy] = sim.velocity_xy_rs();
 				c.set_horizontal_obs(-hx, -hy, hvx, hvy);
 			}
+			// ABI 56 (measurement only): the true heading at the IMU sample this step reads.
+			let yaw_true_feed = axes.as_ref().map(|_| crate::controller::quat_to_euler_f64(sim.quaternion()).2);
 			let mut pwm = c.step(gyro, accel, target);
+			if let (Some(a), Some(yt)) = (axes.as_deref_mut(), yaw_true_feed)
+			{
+				// The student's anchored heading drift (heading it steered on − truth); NaN
+				// without an anchored yaw input (its heading is then not an angle).
+				a.set_fed_yaw(if c.yaw_anchored() { crate::controller::wrap_angle_f64(c.yaw_heading_est() as f64 - yt) } else { f64::NAN });
+			}
 			// DIAGNOSTIC (WNN_CONTROLLER_MISS_DIAG=1, 13/09/2026): per-step address
 			// misses of the output layer and the accumulator, printed for the first
 			// episode of each controller — the obs_pwm death investigation.
@@ -429,6 +445,10 @@ pub(crate) fn rollout_one(
 				sim.step([pwm[0], pwm[1], pwm[2], pwm[3]]);
 			}
 			let err = att_ref.error(&sim);
+			if let Some(a) = axes.as_deref_mut()
+			{
+				a.record(_t >= tail_start, att_ref.ref_quat(&sim), sim.quaternion());
+			}
 			// STAGE 1 reward term — lambda_alt == 0 short-circuits to the exact
 			// attitude-only expression (compute_reward_stage1 guarantees it).
 			sum_reward += match stage1
@@ -595,6 +615,10 @@ pub(crate) fn rollout_one(
 		{
 			sink.push(std::mem::take(&mut ep_trace));
 		}
+		if let Some(a) = axes.as_deref_mut()
+		{
+			a.end_episode(crate::axis_split::HoldPolicy::FallbackWhole);
+		}
 	}
 
 	let n = num_eps.max(1) as f64;
@@ -707,6 +731,11 @@ pub(crate) fn rollout_one(
 	alt_pd_zeta = 1.0,
 	alt_pd_max_delta = 0.25,
 	alt_pd_mass = 0.0,
+	// ABI 56: OPT-IN per-axis split. A Python list ⇒ each controller's rollout also
+	// accumulates axis_split::AxisAcc (measurement only — the rows are unchanged, pinned by
+	// ctrl56_axis_split_tests) and its 14 AxisSplit::flat values are appended in controller
+	// order. None (the default) builds nothing — the shipped call.
+	axis_out = None,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_controllers_cpu(
@@ -769,6 +798,7 @@ pub fn score_controllers_cpu(
 	alt_pd_zeta: f64,
 	alt_pd_max_delta: f64,
 	alt_pd_mass: f64,
+	axis_out: Option<&Bound<'_, pyo3::types::PyList>>,
 ) -> PyResult<Vec<Vec<f64>>>
 {
 	if controllers.is_empty()
@@ -925,12 +955,14 @@ pub fn score_controllers_cpu(
 	let n_ctrl = controllers.len();
 	let chunk = (CLONE_BUDGET_BYTES / per_genome).clamp(1, n_ctrl.max(1));
 	let mut rows: Vec<Vec<f64>> = Vec::with_capacity(n_ctrl);
+	let want_axes = axis_out.is_some();
+	let mut splits: Vec<[f64; 14]> = Vec::new();
 	for chunk_ctrls in controllers.chunks(chunk)
 	{
 		// Clone THIS chunk under the GIL, roll it out GIL-free, drop the clones before
 		// the next chunk → peak clone memory = chunk × per-genome, not N × per-genome.
 		let mut owned: Vec<WnnController> = chunk_ctrls.iter().map(|c| (**c).clone()).collect();
-		let chunk_rows: Vec<Vec<f64>> = py.allow_threads(|| {
+		let chunk_rows: Vec<(Vec<f64>, [f64; 14])> = py.allow_threads(|| {
 			owned
 				.par_iter_mut()
 				.map(|c| {
@@ -938,9 +970,10 @@ pub fn score_controllers_cpu(
 					// whole rollout (13-wide zero row, discarded on the unwinding resume).
 					if ram_core::cancel::check_cancel()
 					{
-						return vec![0.0f64; 14];
+						return (vec![0.0f64; 14], [f64::NAN; 14]);
 					}
-					rollout_one(
+					let mut acc = want_axes.then(crate::axis_split::AxisAcc::default);
+					let row = rollout_one(
 						c,
 						&q0,
 						&omega0,
@@ -976,14 +1009,31 @@ pub fn score_controllers_cpu(
 						residual_clamp,
 						None,
 						stage1_cfg.as_ref(),
+						acc.as_mut(),
 					)
-					.to_vec()
+					.to_vec();
+					let flat = acc.map_or([f64::NAN; 14], |a| a.split(crate::axis_split::HoldPolicy::FallbackWhole).flat());
+					(row, flat)
 				})
 				.collect()
 		});
-		rows.extend(chunk_rows);
+		for (row, flat) in chunk_rows
+		{
+			rows.push(row);
+			if want_axes
+			{
+				splits.push(flat);
+			}
+		}
 	}
 	drop(controllers); // release the Python borrows
+	if let Some(list) = axis_out
+	{
+		for v in splits.iter().flatten()
+		{
+			list.append(*v)?;
+		}
+	}
 	Ok(rows)
 }
 
@@ -1093,6 +1143,7 @@ pub fn trace_controller_cpu(
 			0.4,
 			Some(&mut buf),
 			None, // tracing stays attitude-only (diagnostic path)
+			None, // ABI 56 axis split: off
 		);
 	});
 	Ok(buf)

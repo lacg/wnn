@@ -27,7 +27,9 @@ from dataclasses import dataclass
 
 _NAMES = {0: "PID", 1: "LQR", 2: "MPC", 3: "LQI", 4: "MPCOF"}
 
-# ABI 53: the order score_classical_baseline(axis_out=) appends (rival_probe::AxisSplit::flat).
+# ABI 53: the order score_classical_baseline(axis_out=) appends (axis_split::AxisSplit::flat);
+# ABI 56: score_controllers_cpu(axis_out=) appends the same 14 per controller (fed_yaw_drift =
+# the student's anchored heading drift there, NaN without an anchored yaw input).
 # Angles in radians, BODY frame, v = Log(q_ref^-1 q_true) against the scorer's own reference:
 # err_* = whole-episode mean |v_axis| (decomposes err), hold_* = hold-window (t >= 0.8 steps)
 # mean |v_axis| (decomposes steady), signed_* = hold-window mean v_axis, fed_yaw_drift =
