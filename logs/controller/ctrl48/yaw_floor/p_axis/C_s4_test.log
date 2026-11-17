@@ -1,0 +1,39 @@
+  [stage-ckpt] stage0_grid.yaml.gz: GRID population=1 (top-1 streamed)
+  [stage-ckpt] stage1_neurons.yaml.gz: NEURONS population=1 (top-1 streamed)
+  [stage-ckpt] stage4_memory.yaml.gz: MEMORY population=1 (top-1 streamed)
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990101: err 0.984 steady 0.465 | err r/p/y 0.469/0.382/0.577 steady r/p/y 0.171/0.106/0.372
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990102: err 1.167 steady 0.744 | err r/p/y 0.409/0.369/0.838 steady r/p/y 0.124/0.092/0.700
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990103: err 1.203 steady 0.738 | err r/p/y 0.471/0.464/0.805 steady r/p/y 0.181/0.167/0.637
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990104: err 0.999 steady 0.377 | err r/p/y 0.419/0.425/0.615 steady r/p/y 0.151/0.083/0.292
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990105: err 1.034 steady 0.525 | err r/p/y 0.337/0.588/0.580 steady r/p/y 0.098/0.198/0.427
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990106: err 0.968 steady 0.332 | err r/p/y 0.347/0.438/0.597 steady r/p/y 0.076/0.098/0.279
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990107: err 1.023 steady 0.412 | err r/p/y 0.395/0.411/0.672 steady r/p/y 0.111/0.103/0.349
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990108: err 0.971 steady 0.392 | err r/p/y 0.322/0.407/0.664 steady r/p/y 0.101/0.082/0.339
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990109: err 0.992 steady 0.354 | err r/p/y 0.313/0.493/0.622 steady r/p/y 0.077/0.136/0.277
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990110: err 0.934 steady 0.341 | err r/p/y 0.352/0.347/0.630 steady r/p/y 0.102/0.071/0.295
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990111: err 1.339 steady 0.640 | err r/p/y 0.589/0.646/0.720 steady r/p/y 0.152/0.228/0.500
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990112: err 1.276 steady 0.597 | err r/p/y 0.304/0.867/0.620 steady r/p/y 0.086/0.320/0.416
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990113: err 0.936 steady 0.344 | err r/p/y 0.359/0.414/0.590 steady r/p/y 0.116/0.098/0.276
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990114: err 0.921 steady 0.444 | err r/p/y 0.347/0.402/0.576 steady r/p/y 0.105/0.106/0.386
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990115: err 1.248 steady 0.527 | err r/p/y 0.547/0.365/0.892 steady r/p/y 0.266/0.083/0.395
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990116: err 0.902 steady 0.397 | err r/p/y 0.417/0.386/0.507 steady r/p/y 0.148/0.083/0.323
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990117: err 1.267 steady 0.796 | err r/p/y 0.505/0.415/0.854 steady r/p/y 0.167/0.117/0.726
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990118: err 1.417 steady 0.575 | err r/p/y 0.893/0.376/0.742 steady r/p/y 0.279/0.097/0.424
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990119: err 0.979 steady 0.363 | err r/p/y 0.383/0.474/0.554 steady r/p/y 0.105/0.133/0.280
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990120: err 0.971 steady 0.337 | err r/p/y 0.358/0.493/0.568 steady r/p/y 0.066/0.147/0.262
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990121: err 1.554 steady 0.809 | err r/p/y 0.883/0.444/0.880 steady r/p/y 0.253/0.139/0.691
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990122: err 1.130 steady 0.495 | err r/p/y 0.348/0.611/0.674 steady r/p/y 0.089/0.211/0.387
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990123: err 1.630 steady 0.680 | err r/p/y 1.044/0.399/0.863 steady r/p/y 0.365/0.149/0.459
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990124: err 0.950 steady 0.388 | err r/p/y 0.359/0.473/0.562 steady r/p/y 0.106/0.143/0.304
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990125: err 0.947 steady 0.385 | err r/p/y 0.364/0.377/0.615 steady r/p/y 0.074/0.112/0.332
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990126: err 1.104 steady 0.645 | err r/p/y 0.396/0.491/0.687 steady r/p/y 0.144/0.181/0.547
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990127: err 0.829 steady 0.365 | err r/p/y 0.334/0.325/0.524 steady r/p/y 0.079/0.085/0.323
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990128: err 0.988 steady 0.507 | err r/p/y 0.447/0.349/0.641 steady r/p/y 0.172/0.107/0.423
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990129: err 0.948 steady 0.374 | err r/p/y 0.348/0.355/0.647 steady r/p/y 0.118/0.075/0.316
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990130: err 1.079 steady 0.481 | err r/p/y 0.344/0.527/0.695 steady r/p/y 0.086/0.176/0.402
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990131: err 1.144 steady 0.457 | err r/p/y 0.363/0.375/0.839 steady r/p/y 0.094/0.096/0.408
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990132: err 1.127 steady 0.452 | err r/p/y 0.394/0.389/0.826 steady r/p/y 0.154/0.082/0.382
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990133: err 1.136 steady 0.458 | err r/p/y 0.370/0.697/0.581 steady r/p/y 0.089/0.219/0.335
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990134: err 1.310 steady 0.540 | err r/p/y 0.811/0.474/0.644 steady r/p/y 0.255/0.162/0.370
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s4 99990135: err 1.112 steady 0.519 | err r/p/y 0.515/0.416/0.688 steady r/p/y 0.223/0.085/0.403
+[axis-wnn] done -> /Users/lacg/wnn/logs/controller/ctrl48/yaw_floor/p_axis/C_s4_test.npz

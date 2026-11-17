@@ -1,0 +1,24 @@
+  [stage-ckpt] stage0_grid.yaml.gz: GRID population=3 (top-3 streamed)
+  [stage-ckpt] stage1_neurons.yaml.gz: NEURONS population=3 (top-3 streamed)
+  [stage-ckpt] stage4_memory.yaml.gz: MEMORY population=3 (top-3 streamed)
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s3 1445929998: err 0.823 steady 0.300 | err r/p/y 0.404/0.351/0.472 steady r/p/y 0.127/0.109/0.207
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s3 1445929999: err 0.906 steady 0.397 | err r/p/y 0.514/0.330/0.486 steady r/p/y 0.139/0.100/0.329
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s3 1445930000: err 1.186 steady 0.545 | err r/p/y 0.371/0.635/0.703 steady r/p/y 0.083/0.224/0.435
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s3 1445930001: err 0.990 steady 0.404 | err r/p/y 0.363/0.362/0.686 steady r/p/y 0.100/0.135/0.336
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s3 1445930002: err 0.912 steady 0.453 | err r/p/y 0.360/0.354/0.599 steady r/p/y 0.085/0.126/0.399
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s3 1445930003: err 1.055 steady 0.515 | err r/p/y 0.462/0.352/0.704 steady r/p/y 0.140/0.158/0.431
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s3 1445930004: err 0.848 steady 0.361 | err r/p/y 0.360/0.351/0.525 steady r/p/y 0.098/0.104/0.311
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s3 1445930005: err 0.925 steady 0.339 | err r/p/y 0.481/0.350/0.525 steady r/p/y 0.136/0.082/0.262
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s3 1445930006: err 1.257 steady 0.696 | err r/p/y 0.427/0.340/0.951 steady r/p/y 0.136/0.124/0.630
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s3 1445930007: err 1.224 steady 0.551 | err r/p/y 0.337/0.317/0.979 steady r/p/y 0.090/0.104/0.517
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s3 1445930008: err 1.574 steady 1.027 | err r/p/y 0.356/0.346/1.348 steady r/p/y 0.122/0.125/0.998
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s3 1445930009: err 0.783 steady 0.416 | err r/p/y 0.329/0.362/0.475 steady r/p/y 0.110/0.191/0.321
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s3 1445930010: err 1.497 steady 0.610 | err r/p/y 0.382/1.063/0.623 steady r/p/y 0.115/0.273/0.469
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s3 1445930011: err 0.828 steady 0.362 | err r/p/y 0.347/0.343/0.520 steady r/p/y 0.083/0.115/0.309
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s3 1445930012: err 1.075 steady 0.551 | err r/p/y 0.331/0.337/0.806 steady r/p/y 0.080/0.091/0.525
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s3 1445930013: err 0.822 steady 0.314 | err r/p/y 0.333/0.335/0.517 steady r/p/y 0.109/0.104/0.236
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s3 1445930014: err 1.030 steady 0.421 | err r/p/y 0.320/0.415/0.729 steady r/p/y 0.092/0.092/0.373
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s3 1445930015: err 0.929 steady 0.480 | err r/p/y 0.327/0.501/0.546 steady r/p/y 0.111/0.214/0.373
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s3 1445930016: err 0.994 steady 0.462 | err r/p/y 0.363/0.362/0.691 steady r/p/y 0.090/0.123/0.404
+[axis-wnn] C-S2-d_wposx2_a52_rf_c200_dc_biasin_ms01_P_both_L1_10bC_full_s3 1445930017: err 0.991 steady 0.429 | err r/p/y 0.479/0.513/0.510 steady r/p/y 0.140/0.201/0.304
+[axis-wnn] done -> /Users/lacg/wnn/logs/controller/ctrl48/yaw_floor/p_axis/C_s3_val.npz
