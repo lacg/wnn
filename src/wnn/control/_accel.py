@@ -171,7 +171,9 @@ import os
 # obs_yaw_from_att_est=bool), ReplayObs(yaw_heading=), Metal score/train/record twins; off = ABI 54.
 # ABI 56 (17/11/2026, Luiz): score_controllers_cpu(axis_out=list) — opt-in per-axis split of
 # every flown flag's err/steady (incl. --alt-integral); None = ABI 55 bit-identical.
-EXPECTED_ABI = 56
+# ABI 57 (17/11/2026, Luiz): WnnController / dagger_train_batch_inplace(delta_max_yaw=None) —
+# the yaw bank's own delta_max (--delta-max-yaw); None = ABI 56 bit-identical.
+EXPECTED_ABI = 57
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

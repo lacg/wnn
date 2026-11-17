@@ -91,6 +91,7 @@ class ControllerProvenance:
 	# CTRL-48 block 10b: "hold" when the fitness pos column ranks pos_hold
 	# (--fit-pos-metric hold); "" = the whole-episode pos and NOT printed.
 	pos_metric: str = ""
+	dmax_yaw: str = ""  # ABI 57 --delta-max-yaw ("" = unset: the line is unchanged)
 
 	def line(self) -> str:
 		"""The single greppable line the ladder copies into the marker."""
@@ -112,7 +113,8 @@ class ControllerProvenance:
 		        f"train_ic={self.train_ic} "
 		        + (f"alt={self.alt} " if self.alt else "")
 		        + (f"yawref={self.yawref} " if self.yawref else "")
-		        + (f"pos_metric={self.pos_metric} " if self.pos_metric else "") +
+		        + (f"pos_metric={self.pos_metric} " if self.pos_metric else "")
+		        + (f"dmax_yaw={self.dmax_yaw} " if self.dmax_yaw else "") +
 		        f"fitness_pools={self.fitness_pools}")
 
 
@@ -147,7 +149,8 @@ def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: st
                        rf: str = UNKNOWN, calib: str = UNKNOWN,
                        drop: str = UNKNOWN, write: str = UNKNOWN, label: str = UNKNOWN,
                        abp: str = UNKNOWN, select: str = UNKNOWN,
-                       train_ic: str = UNKNOWN, alt: str = "", yawref: str = "", pos_metric: str = "") -> ControllerProvenance:
+                       train_ic: str = UNKNOWN, alt: str = "", yawref: str = "", pos_metric: str = "",
+                       dmax_yaw: str = "") -> ControllerProvenance:
 	"""Gather every field, never raising: each accessor degrades to UNKNOWN / 0."""
 	wheel, abi, sha = _wheel_identity()
 	return ControllerProvenance(
@@ -173,6 +176,7 @@ def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: st
 		alt=alt.replace(" ", "_").replace('"', ""),
 		yawref=yawref.replace(" ", "_").replace('"', ""),
 		pos_metric=pos_metric.replace(" ", "_").replace('"', ""),
+		dmax_yaw=dmax_yaw.replace(" ", "_").replace('"', ""),
 	)
 
 

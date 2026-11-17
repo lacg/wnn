@@ -1,0 +1,5 @@
+  [stage-ckpt] stage0_grid.yaml.gz: GRID population=1 (top-1 streamed)
+  [stage-ckpt] stage1_neurons.yaml.gz: NEURONS population=1 (top-1 streamed)
+  [stage-ckpt] stage4_memory.yaml.gz: MEMORY population=1 (top-1 streamed)
+[dmy] C-S2-d_wposx2_a56_rf_c200_dc_biasin_ms01_P_both_L1_dmD_full_s1 NEURONS#0 flown           stable 100.00% err 0.954 steady 0.349 alt 0.1538 pos 0.3532 pos_hold 0.3058 dz_hold 0.1860
+[dmy] C-S2-d_wposx2_a56_rf_c200_dc_biasin_ms01_P_both_L1_dmD_full_s1 NEURONS#0 yaw05_others06  stable 100.00% err 0.950 steady 0.353 alt 0.1306 pos 0.3368 pos_hold 0.2721 dz_hold 0.1424
