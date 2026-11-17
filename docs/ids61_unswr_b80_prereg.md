@@ -1,6 +1,6 @@
 # IDS61: pre-registration of max_bits 80 on the unswr configuration C
 
-Written 16/11/2026 ~21:35 EST (ids-security) on Luiz's approval of 16/11 ~21:10 EST ("afterwards", gate first). Written
+Written 16/11/2026 ~21:20 EST (ids-security) on Luiz's approval of 16/11 ~21:10 EST ("afterwards", gate first). Written
 before any IDS61 flow exists. Plane story IDS-61. Queue script: `scripts/queue_ids61_unswr_b80.py`.
 
 ## 1. Question and hypothesis
@@ -14,7 +14,7 @@ before any IDS61 flow exists. Plane story IDS-61. Queue script: `scripts/queue_i
   random genomes, IDS-57's VAL ladder gave +0.24 for 80 over 64. Addresses above 64 bits are hashed, not identity
   (FPGA story, `project_bits_above_64_or_fold`).
 
-## 2. VAL gate (run 16/11 21:18-21:30 EST, rule fixed at 21:18 before results)
+## 2. VAL gate (run 16/11 ~21:18-21:20 EST, rule fixed at 21:18 before results)
 
 C's GA `best_f1` final genomes (7572, 7573, 7567, 7568, 7569) were retrained through the worker's construction path
 (Rust; report slot = VAL, TEST never scored). Each was scored as flown, then widened to 80 bits by appending uniform
