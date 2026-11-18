@@ -82,7 +82,7 @@ mod ctrl52_yaw_trim_p_tests; // L2y' (ABI 52): proportional-only yaw trim shift,
 #[cfg(test)]
 mod ctrl54_yaw_heading_tests; // lever 1 (ABI 54): yaw heading from the student's own Mahony estimate
 #[cfg(test)]
-mod ctrl59_tail_gate_tests; // ABI 59 (CTRL-58): tail sink inert + capped + CPU==GPU; gate tests in gate4.rs
+mod ctrl59_tail_gate_tests; // ABI 59 (CTRL-58): tail sink inert + capped + CPU==GPU; gate tests in ram_core::fitness
 #[cfg(test)]
 mod ctrl58_yaw_trim_ff_tests; // ABI 58: --yaw-trim-ff — cT, refusals, setpoint-only FF, label remainder, CPU/GPU score + walk parity
 #[cfg(test)]
@@ -111,7 +111,6 @@ mod yaw_trim_err; // L2y (ABI 51): yaw error referenced to the trim the rate loo
 mod tilt_ref_err; // L1 (ABI 51): roll/pitch error vs the tilt reference, bias-corrected (--obs-tilt-ref-err)
 mod att_bias_pred; // CTRL-46 (ABI 46): onboard predictor of the Mahony specific-force bias (--obs-att-bias-pred)
 mod episode_tail; // ABI 59 (CTRL-58): the GA's near-fail tail (p99 of per-episode err, inverted_cdf)
-mod gate4; // ABI 59 (CTRL-58): the native four-input viability gate on top of ram_core's combine
 mod axis_split; // ABI 53/56: per-axis split of a scorer's attitude error (rival + WNN scorers)
 mod rival_probe; // opt-in probe on the classical-rival scorer (INDI spec §10: observer gain, bias compensation)
 #[cfg(test)]
@@ -573,10 +572,10 @@ mod metal_controller;
 ///     opt-in per-episode tail export — each genome row followed by [n, e_1..e_n] (deg, diverged =
 ///     the gate err limit); Metal builds it host-side from the per-episode export.
 ///   * episode_tail_p99_deg(errs): the GA tail column, numpy inverted_cdf p99 (episode_tail.rs).
-///   * gated_fitness_combine(gate_steady=, gate_steady_max=, gate_pos=, gate_pos_max=): the native
-///     four-input gate (gate4.rs, controller crate, on ram_core's combine_flat); unset ⇒ the shared
-///     ram_core two-input gate verbatim. ram_core untouched (no worker wheel change).
-///     Pin: ctrl59_tail_gate_tests.rs + episode_tail / gate4 unit tests.
+///   * gated_fitness_combine(gate_steady=, gate_steady_max=, gate_pos=, gate_pos_max=): the four-input
+///     gate, forwarded to THE gate ram_core::fitness::gated_combine_flat_bounds (one implementation;
+///     gated_combine_flat is its no-extra-bound case, pinned by a golden over 2000 random pools).
+///     Pin: ctrl59_tail_gate_tests.rs + episode_tail unit tests; ram_core fitness gate tests.
 pub const ABI_VERSION: u32 = 59;
 
 /// ABI 44: how output neurogenesis lays out the output layer — "segment" = every
@@ -1506,8 +1505,9 @@ fn gated_fitness_combine(
 	gate_stable_min: f64,
 	gate_err_max: f64,
 	scale_floors: Option<Vec<f64>>,
-	// ABI 59 (CTRL-58): the native four-input gate's extra UPPER bounds (gate4.rs). Each is a
-	// (values, bound) pair — both or neither; all unset ⇒ the shared two-input gate, bit for bit.
+	// ABI 59 (CTRL-58): the four-input gate's extra UPPER bounds, forwarded to THE gate
+	// (ram_core::fitness::gated_combine_flat_bounds — one implementation, Luiz 18/11). Each is a
+	// (values, bound) pair — both or neither; all unset ⇒ the two-input gate, bit for bit.
 	gate_steady: Option<Vec<f64>>,
 	gate_steady_max: Option<f64>,
 	gate_pos: Option<Vec<f64>>,
@@ -1520,12 +1520,12 @@ fn gated_fitness_combine(
 	{
 		match (vals, max)
 		{
-			(Some(v), Some(m)) => extra.push(crate::gate4::UpperBound { values: v, max: m, name }),
+			(Some(v), Some(m)) => extra.push(ram_core::fitness::GateUpperBound { values: v, max: m, name }),
 			(None, None) => {}
 			_ => return Err(verr(format!("gated_fitness_combine: gate_{name} and gate_{name}_max go together"))),
 		}
 	}
-	crate::gate4::gated4_combine_flat(
+	ram_core::fitness::gated_combine_flat_bounds(
 		&values_flat, num_candidates, &weights, &higher_is_better, mode, clamp,
 		scale_floors.as_deref(),
 		&gate_stable, &gate_err, gate_stable_min, gate_err_max, &extra)

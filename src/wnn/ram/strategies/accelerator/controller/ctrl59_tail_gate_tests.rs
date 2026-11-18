@@ -5,7 +5,7 @@
 //! mean reproduces err when nothing diverged) and a diverged episode carries the cap (finite —
 //! the ZRank refuses inf); the Metal scorer's host-built list equals the CPU sink episode for
 //! episode (float tolerance, as every CPU/GPU row) and so does the p99. The gate's own tests
-//! live in gate4.rs (unset bounds ⇒ the shared ram_core gate bit for bit; Deb order).
+//! live with THE gate in ram_core::fitness (golden over random pools, four-bound Deb order).
 
 use crate::abi38_pins::{ics, stage2, ARM, ASYM, DT, EPS, G, INERTIA, KD, KT};
 use crate::controller::WnnController;

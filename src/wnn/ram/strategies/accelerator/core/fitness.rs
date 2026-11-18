@@ -342,6 +342,45 @@ pub fn gated_combine_flat(
 	gate_err_max: f64,
 ) -> Result<Vec<f64>, String>
 {
+	gated_combine_flat_bounds(
+		values_flat, num_candidates, weights, higher_is_better, mode, clamp, scale_floors,
+		gate_stable, gate_err, gate_stable_min, gate_err_max, &[])
+}
+
+/// One extra UPPER-bound gate input (CTRL-58, 18/11/2026): per-candidate values and the bound,
+/// same units (e.g. steady° <= 1.0, pos m <= 0.40).
+pub struct GateUpperBound<'a>
+{
+	pub values: &'a [f64],
+	pub max: f64,
+	pub name: &'static str,
+}
+
+/// THE viability gate — the ONE implementation (Luiz 18/11/2026: no duplicated gate code).
+/// `gated_combine_flat` is this with no extra bounds; the controller's four-input refinement
+/// gate (CTRL-58: stable, err, steady, pos) passes steady and pos as `extra`. Semantics as
+/// documented on gated_combine_flat, extended to N bounds:
+///   feasible  = stable >= S AND err <= E AND every extra value <= its bound (inclusive)
+///   violation = (S-stable)+/S + (err-E)+/E + Σ (value-bound)+/bound
+/// With `extra` empty every operand and every operation is the two-input gate's, in the same
+/// order (an empty conjunction / sum adds nothing) — pinned bit for bit by
+/// gate_two_input_golden_over_random_pools against the pre-refactor function's output.
+#[allow(clippy::too_many_arguments)]
+pub fn gated_combine_flat_bounds(
+	values_flat: &[f64],
+	num_candidates: usize,
+	weights: &[f64],
+	higher_is_better: &[bool],
+	mode: &str,
+	clamp: f64,
+	scale_floors: Option<&[f64]>,
+	gate_stable: &[f64],
+	gate_err: &[f64],
+	gate_stable_min: f64,
+	gate_err_max: f64,
+	extra: &[GateUpperBound],
+) -> Result<Vec<f64>, String>
+{
 	if !(gate_stable_min > 0.0) || !gate_stable_min.is_finite()
 		|| !(gate_err_max > 0.0) || !gate_err_max.is_finite()
 	{
@@ -359,12 +398,37 @@ pub fn gated_combine_flat(
 	{
 		return Err(format!("gated_combine_flat: non-finite gate value {}", bad));
 	}
+	for b in extra
+	{
+		if !(b.max > 0.0) || !b.max.is_finite()
+		{
+			return Err(format!("gated_combine_flat: {} bound must be positive finite (got {})", b.name, b.max));
+		}
+		if b.values.len() != num_candidates
+		{
+			return Err(format!(
+				"gated_combine_flat: {} gate vector has {} values for {} candidates", b.name, b.values.len(), num_candidates));
+		}
+		if let Some(bad) = b.values.iter().find(|v| !v.is_finite())
+		{
+			return Err(format!("gated_combine_flat: non-finite {} gate value {}", b.name, bad));
+		}
+	}
 	let feasible: Vec<bool> = (0..num_candidates)
-		.map(|i| gate_stable[i] >= gate_stable_min && gate_err[i] <= gate_err_max)
+		.map(|i| {
+			gate_stable[i] >= gate_stable_min
+				&& gate_err[i] <= gate_err_max
+				&& extra.iter().all(|b| b.values[i] <= b.max)
+		})
 		.collect();
 	let violation = |i: usize| -> f64 {
-		(gate_stable_min - gate_stable[i]).max(0.0) / gate_stable_min
-			+ (gate_err[i] - gate_err_max).max(0.0) / gate_err_max
+		let mut v = (gate_stable_min - gate_stable[i]).max(0.0) / gate_stable_min
+			+ (gate_err[i] - gate_err_max).max(0.0) / gate_err_max;
+		for b in extra
+		{
+			v += (b.values[i] - b.max).max(0.0) / b.max;
+		}
+		v
 	};
 	let n_feasible = feasible.iter().filter(|f| **f).count();
 	if n_feasible == num_candidates
@@ -1095,5 +1159,110 @@ mod tests
 		assert!(desirability_combine_flat(
 			&[0.5, 0.5], 1, &[1.0], &["exp"], &[8.0]).is_err()); // shape mismatch
 	}
-}
 
+	// ---- CTRL-58 (18/11/2026): the two-input gate's GOLDEN — its output bits over 2000
+	// deterministic random pools (mixed / all / none feasible, ties, boundary values, every
+	// mode, clamps, scale floors), FNV-1a over every f64's bits and every Err message. The
+	// digest below was captured from the PRE-refactor gated_combine_flat (commit 7e2aab23);
+	// the one-implementation gate must reproduce it exactly.
+	fn golden_pools_digest() -> u64
+	{
+		struct Lcg(u64);
+		impl Lcg
+		{
+			fn next(&mut self) -> u64 { self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407); self.0 >> 11 }
+			fn unit(&mut self) -> f64 { (self.next() as f64) / ((1u64 << 53) as f64) }
+			fn below(&mut self, n: u64) -> u64 { self.next() % n }
+		}
+		let mut r = Lcg(0xC7_58_6A7E);
+		let mut h: u64 = 0xcbf29ce484222325;
+		let eat = |h: &mut u64, x: u64| { for b in x.to_le_bytes() { *h ^= b as u64; *h = h.wrapping_mul(0x100000001b3); } };
+		let modes = ["zscore", "harmonic", "arithmetic"];
+		for _ in 0..2000
+		{
+			let n = 1 + r.below(24) as usize;
+			let cols = 1 + r.below(5) as usize;
+			let vals: Vec<f64> = (0..n * cols).map(|_| if r.below(7) == 0 { 0.5 } else { r.unit() * 4.0 - 1.0 }).collect();
+			let w: Vec<f64> = (0..cols).map(|_| r.unit()).collect();
+			let hib: Vec<bool> = (0..cols).map(|_| r.below(2) == 0).collect();
+			let mode = modes[r.below(3) as usize];
+			let clamp = [0.0, 1.5, 3.0][r.below(3) as usize];
+			let floors: Option<Vec<f64>> = if r.below(3) == 0 { Some((0..cols).map(|_| r.unit() * 0.2).collect()) } else { None };
+			let regime = r.below(4);
+			let (smin, emax) = (0.7, 8.0);
+			let st: Vec<f64> = (0..n).map(|_| match regime { 0 => 1.0, 1 => 0.3 * r.unit(), _ => [1.0, 0.7, 0.69, 0.95, 0.2][r.below(5) as usize] }).collect();
+			let er: Vec<f64> = (0..n).map(|_| match regime { 0 => 7.9 * r.unit(), 1 => 8.0 + 20.0 * r.unit(), _ => [1.0, 8.0, 8.0001, 12.0, 3.3][r.below(5) as usize] }).collect();
+			match gated_combine_flat(&vals, n, &w, &hib, mode, clamp, floors.as_deref(), &st, &er, smin, emax)
+			{
+				Ok(v) => for x in v { eat(&mut h, x.to_bits()) },
+				Err(e) => for b in e.bytes() { eat(&mut h, b as u64) },
+			}
+		}
+		// The error paths, explicitly.
+		for (st, er, smin, emax) in [(vec![1.0], vec![1.0], 0.0, 8.0), (vec![1.0], vec![1.0], 0.7, f64::NAN),
+		                             (vec![1.0, 1.0], vec![1.0], 0.7, 8.0), (vec![f64::NAN], vec![1.0], 0.7, 8.0)]
+		{
+			match gated_combine_flat(&[0.1], 1, &[1.0], &[false], "zscore", 3.0, None, &st, &er, smin, emax)
+			{
+				Ok(v) => for x in v { eat(&mut h, x.to_bits()) },
+				Err(e) => for b in e.bytes() { eat(&mut h, b as u64) },
+			}
+		}
+		h
+	}
+
+	#[test]
+	fn gate_two_input_golden_over_random_pools()
+	{
+		let d = golden_pools_digest();
+		eprintln!("[gate-golden] digest {d:#018x}");
+		assert_eq!(d, GATE_GOLDEN, "the two-input gate's output moved (golden from 7e2aab23)");
+	}
+
+	/// Captured from the PRE-refactor two-input gated_combine_flat (7e2aab23) — see golden_pools_digest.
+	const GATE_GOLDEN: u64 = 0xa1c77136cc3183e4;
+
+	/// CTRL-58 four-bound gate (steady, pos as extra bounds): a steady or pos violation makes a
+	/// candidate infeasible exactly like an err violation (inclusive), infeasibles score
+	/// worst-feasible + 1 + summed violation, the feasible subset is the base combine over it.
+	#[test]
+	fn gate_four_bounds_deb_order()
+	{
+		let n = 6;
+		let v: Vec<f64> = (0..3 * n).map(|k| ((k * 37 % 11) as f64) / 7.0).collect();
+		let w = [0.5, 0.3, 0.2];
+		let hib = [false, false, true];
+		let st = [1.0; 6];
+		let er = [1.0, 1.0, 1.0, 1.6, 1.0, 1.0];
+		let steady = [0.5, 1.0, 1.2, 0.5, 0.5, 2.0];
+		let pos = [0.3, 0.3, 0.3, 0.3, 0.41, 0.3];
+		let b = [GateUpperBound { values: &steady, max: 1.0, name: "steady" }, GateUpperBound { values: &pos, max: 0.40, name: "pos" }];
+		let out = gated_combine_flat_bounds(&v, n, &w, &hib, "zscore", 3.0, None, &st, &er, 0.99, 1.5, &b).unwrap();
+		let worst = out[0].max(out[1]);
+		let viol = |i: usize| (er[i] - 1.5f64).max(0.0) / 1.5 + (steady[i] - 1.0f64).max(0.0) / 1.0 + (pos[i] - 0.4f64).max(0.0) / 0.4;
+		for i in 2..n
+		{
+			assert!((out[i] - (worst + 1.0 + viol(i))).abs() < 1e-12, "candidate {i}: {} vs {}", out[i], worst + 1.0 + viol(i));
+		}
+		let sub: Vec<f64> = (0..3).flat_map(|c| [v[c * n], v[c * n + 1]]).collect();
+		let base = combine_flat(&sub, 2, &w, &hib, "zscore", 3.0, None).unwrap();
+		assert_eq!([out[0], out[1]], [base[0], base[1]]);
+		let none = gated_combine_flat_bounds(&v, n, &w, &hib, "zscore", 3.0, None, &[0.5; 6], &er, 0.99, 1.5, &b).unwrap();
+		assert!((none[0] - ((0.99 - 0.5) / 0.99)).abs() < 1e-12);
+		// No extra bound == the two-input entry point, bit for bit.
+		let two = gated_combine_flat(&v, n, &w, &hib, "zscore", 3.0, None, &st, &er, 0.99, 1.5).unwrap();
+		let zero = gated_combine_flat_bounds(&v, n, &w, &hib, "zscore", 3.0, None, &st, &er, 0.99, 1.5, &[]).unwrap();
+		assert_eq!(two.iter().map(|x| x.to_bits()).collect::<Vec<_>>(), zero.iter().map(|x| x.to_bits()).collect::<Vec<_>>());
+	}
+
+	#[test]
+	fn gate_four_bounds_refusals()
+	{
+		let v = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6];
+		let call = |b: &[GateUpperBound]| gated_combine_flat_bounds(&v, 2, &[0.5, 0.3, 0.2], &[false; 3], "zscore", 3.0, None, &[1.0, 1.0], &[1.0, 1.0], 0.99, 1.5, b);
+		let s = [0.5, 0.5];
+		assert!(call(&[GateUpperBound { values: &s, max: 0.0, name: "steady" }]).is_err());
+		assert!(call(&[GateUpperBound { values: &[0.5], max: 1.0, name: "pos" }]).is_err());
+		assert!(call(&[GateUpperBound { values: &[f64::NAN, 0.5], max: 1.0, name: "steady" }]).is_err());
+	}
+}

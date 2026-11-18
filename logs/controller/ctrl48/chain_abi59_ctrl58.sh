@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# CTRL-58 install chain (Luiz 18/11 ~09:25 EST): the n10 block's exact end line → box quiet →
-# merge main into ctrl58-staged-fitness + cargo test → determinism gate (flag-off ABI 59 ×2 vs
+# CTRL-58 install chain (Luiz 18/11 ~09:25 EST; re-armed 10:10 EST for the one-gate ram_core
+# refactor): the n10 block's exact end line → box quiet → merge main into ctrl58-staged-fitness +
+# cargo test (ram_core, ram_accelerator, ram_controller) → determinism gate (flag-off ABI 59 ×2 vs
 # ABI 58) → Python suites on the installed 59 → merge into main + push. NO flight is launched
 # (the A1/A2 flights wait for Luiz). Every step is a "CTRL58 CHAIN:" line in runs.log; every
 # failure REFUSES and restores the ABI-58 wheel if it had been replaced.
@@ -40,9 +41,14 @@ MAINBR=$(git -C "$R" rev-parse --abbrev-ref HEAD)
 PRE=$(git -C "$R" rev-parse HEAD)
 git -C "$WT" merge --no-edit "$MAINBR" >/dev/null 2>&1 || { git -C "$WT" merge --abort >/dev/null 2>&1; fail "merging $MAINBR ($PRE) into $BR conflicts"; }
 say "merged $MAINBR ($PRE) into $BR: $(git -C "$WT" log --oneline -1 | cut -c1-90)"
-( cd "$WT/src/wnn/ram/strategies/accelerator" && PYO3_PYTHON=$VENV/bin/python nice -n 5 cargo test -p ram_controller --lib --no-default-features ) > "$WT/chain_cargo_test.log" 2>&1 \
-	|| fail "cargo test failed on the merged $BR (see $WT/chain_cargo_test.log)"
-say "cargo test: $(grep 'test result' "$WT/chain_cargo_test.log" | tail -1)"
+# ram_core holds THE gate (one implementation, its two-input golden) and the controller crate;
+# both suites must pass on the merged branch. The worker crate's suite too (it links ram_core);
+# the WORKER WHEEL is never installed here (IDS62 is flying — Luiz decides the swap).
+for crate in ram_core ram_accelerator ram_controller; do
+	( cd "$WT/src/wnn/ram/strategies/accelerator" && PYO3_PYTHON=$VENV/bin/python nice -n 5 cargo test -p $crate --lib --no-default-features ) > "$WT/chain_cargo_test_$crate.log" 2>&1 \
+		|| fail "cargo test -p $crate failed on the merged $BR (see $WT/chain_cargo_test_$crate.log)"
+	say "cargo test $crate: $(grep 'test result' "$WT/chain_cargo_test_$crate.log" | tail -1)"
+done
 
 # --- determinism gate: OLD = main tree on the installed ABI 58, NEW1/NEW2 = merged branch on 59 ---
 rm -rf "$KEEP58" && mkdir -p "$KEEP58" && cp -a "$SITE"/ram_controller "$SITE"/ram_controller-*.dist-info "$KEEP58"/ || fail "cannot keep a copy of the ABI-58 wheel"
