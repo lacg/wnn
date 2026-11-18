@@ -222,6 +222,11 @@ class ControllerMetrics(Metrics):
 	mean_dy_m: Optional[float] = None  # ABI 32: mean |y error| (METRES), None unless the run translates
 	mean_position_hold_m: Optional[float] = None  # ABI 51: mean 3D position error over the HOLD window (last 20% of steps), METRES
 	mean_dz_hold_m: Optional[float] = None  # ABI 51: mean |altitude error| over the HOLD window, METRES
+	# CTRL-58 (18/11/2026): the per-genome near-fail TAIL on the TRAIN pool — p99 of the
+	# per-episode mean attitude error (deg) — ranked by the staged-refinement fitness.
+	# NO scorer produces it yet (needs a Rust scorer row; the Python side refuses a
+	# tail weight > 0 at launch until it lands). None = not measured.
+	episode_err_p99_deg: Optional[float] = None
 
 	@property
 	def acc(self) -> float:

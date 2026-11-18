@@ -254,6 +254,19 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	"controller_yaw_trim_ff",  # ABI 58: yaw-rate feed-forward cT*cresid_z on the CTBR yaw setpoint  # ABI 57: the yaw bank's own delta_max (None = --delta-max)  # lever 1 (ABI 55): yaw heading from the student's Mahony estimate
 	"controller_zrank_pos_floor",     # pos-only ZRank scale floor (m | auto)
 	"controller_alt_integral",        # L3: off | pi | pole3
+	# CTRL-58 (18/11/2026, wnn.control.refine_config): phased_ga --refine-* staged-refinement
+	# fitness. Phased_ga-only: REFUSED by _refuse_unbuilt_keys like the keys above.
+	"controller_refine_fitness",      # master switch (one-way latch → refinement fitness)
+	"controller_refine_select",       # stage-select on refinement score + p99 tail
+	"controller_refine_trigger_frac", "controller_refine_trigger_stable",
+	"controller_refine_trigger_err", "controller_refine_trigger_steady",
+	"controller_refine_trigger_pos", "controller_refine_trigger_gens",
+	"controller_refine_trigger_stage",
+	"controller_refine_gate_stable", "controller_refine_gate_err",
+	"controller_refine_gate_steady", "controller_refine_gate_pos",
+	"controller_refine_w_steady", "controller_refine_w_reward",
+	"controller_refine_w_tail", "controller_refine_w_pos",
+	"controller_refine_patience_steady_floor",
 })
 
 

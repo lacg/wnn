@@ -296,6 +296,10 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		the Metrics→columns mapping, and the warn-once policy above. Columns
 		carry an orientation flag and are NEVER pre-negated — a negation at one
 		call site and not another is the drift class the wheel API forbids.
+
+		Split into _columns / _gate_inputs / _combine (CTRL-58, 18/11/2026) so the
+		staged-refinement calculator (wnn.control.refine_fitness) can add a column
+		and widen the gate without a second copy of the mapping. Bit-identical.
 		"""
 		n = len(metrics_list)
 		if n == 0:
@@ -304,105 +308,109 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 			return self._desirability_fitness(metrics_list)
 		if n == 1:
 			return [1.0]
+		flat, weights, higher, floors = self._columns(metrics_list)
+		if not weights:
+			return [1.0] * n
+		return self._combine(metrics_list, flat, weights, higher, floors)
 
-		flat: list[float] = []
-		weights: list[float] = []
-		higher: list[bool] = []
-		# Parallel to `weights`: floors[i] is the noise floor of column i, in
-		# that column's units. Built in lockstep so the two can never misalign.
-		floors: list[float] = []
+	def _scale_floor(self, weight_attr: str) -> float:
+		"""The zscore noise floor of one column, in its own units (0 = legacy).
+		The pos-only floor (--zrank-pos-floor) applies on its own; the MAD floors
+		(--zrank-mad-floor) have no pos entry, so the two never overlap."""
+		if weight_attr == "weight_pos" and self.zrank_pos_floor > 0.0:
+			return self.zrank_pos_floor
+		if not self.zrank_mad_floor:
+			return 0.0
+		return float(self.MEASURED_SCALE_FLOORS.get(weight_attr, 0.0))
 
-		def _floor(weight_attr: str) -> float:
-			# The pos-only floor (--zrank-pos-floor) applies on its own; the MAD
-			# floors (--zrank-mad-floor) have no pos entry, so the two never overlap.
-			if weight_attr == "weight_pos" and self.zrank_pos_floor > 0.0:
-				return self.zrank_pos_floor
-			if not self.zrank_mad_floor:
-				return 0.0
-			return float(self.MEASURED_SCALE_FLOORS.get(weight_attr, 0.0))
-
+	def _columns(self, metrics_list) -> tuple:
+		"""(flat, weights, higher, floors): the weighted columns, in rank order.
+		`floors` is parallel to `weights` — floors[i] is column i's noise floor, in
+		that column's units — built in lockstep so the two can never misalign."""
+		cols = ([], [], [], [])
 		# err² → ranked on reward, higher reward = better (reward has its OWN
 		# field since 05/08/2026; the "-reward mirrored into ce" hack is gone).
 		if self.weight_err_sq > 0:
-			flat.extend(_controller_reward(m) for m in metrics_list)
-			weights.append(self.weight_err_sq)
-			higher.append(True)
-			floors.append(_floor("weight_err_sq"))
-
+			self._add_column(cols, [_controller_reward(m) for m in metrics_list],
+			                 self.weight_err_sq, True, "weight_err_sq")
 		# stable_rate → higher = better.
 		if self.weight_stable > 0:
-			flat.extend(float(m.stable_rate) for m in metrics_list)
-			weights.append(self.weight_stable)
-			higher.append(True)
-			floors.append(_floor("weight_stable"))
-
+			self._add_column(cols, [float(m.stable_rate) for m in metrics_list],
+			                 self.weight_stable, True, "weight_stable")
 		for attr, weight_attr, warned_attr, why in self._OPTIONAL_COLUMNS:
 			weight = getattr(self, weight_attr)
 			if weight <= 0:
 				continue
-			if weight_attr == "weight_pos" and self.pos_metric == "hold":
-				vals = self._hold_column(metrics_list)
-				if vals is not None:
-					flat.extend(vals)
-					weights.append(weight)
-					higher.append(False)
-					floors.append(_floor(weight_attr))
-					continue
-				attr = "mean_position_hold_m"   # absent everywhere: the warn-and-drop below
-			vals = [getattr(m, attr, None) for m in metrics_list]
-			if any(v is None for v in vals):
-				if not getattr(self, warned_attr):
-					warnings.warn(
-						f"FitnessCalculatorControllerHarmonic: {weight_attr} > 0 but "
-						f"Metrics.{attr} is None — {why} Weight ignored.",
-						RuntimeWarning, stacklevel=2)
-					setattr(self, warned_attr, True)
-				continue
-			flat.extend(float(v) for v in vals)
-			weights.append(weight)
-			higher.append(False)
-			floors.append(_floor(weight_attr))
+			vals = self._optional_column(metrics_list, attr, weight_attr, warned_attr, why)
+			if vals is not None:
+				self._add_column(cols, vals, weight, False, weight_attr)
+		return cols
 
-		if not weights:
-			return [1.0] * n
+	def _add_column(self, cols: tuple, vals: list, weight: float, higher: bool,
+	                weight_attr: str) -> None:
+		flat, weights, highers, floors = cols
+		flat.extend(float(v) for v in vals)
+		weights.append(weight)
+		highers.append(higher)
+		floors.append(self._scale_floor(weight_attr))
 
-		# Lazy import, deliberately: this module is imported by the WORKER too
-		# (the IDS calculators share the package), and the worker must not need
-		# ram_controller installed to import wnn.ram.fitness.
+	def _optional_column(self, metrics_list, attr: str, weight_attr: str,
+	                     warned_attr: str, why: str) -> "list[float] | None":
+		"""One optional COST column's values, or None (warned once) when a metric
+		lacks it — the column is then dropped, never ranked around a None."""
+		if weight_attr == "weight_pos" and self.pos_metric == "hold":
+			vals = self._hold_column(metrics_list)
+			if vals is not None:
+				return vals
+			attr = "mean_position_hold_m"   # absent everywhere: the warn-and-drop below
+		vals = [getattr(m, attr, None) for m in metrics_list]
+		if any(v is None for v in vals):
+			if not getattr(self, warned_attr):
+				warnings.warn(
+					f"FitnessCalculatorControllerHarmonic: {weight_attr} > 0 but "
+					f"Metrics.{attr} is None — {why} Weight ignored.",
+					RuntimeWarning, stacklevel=4)
+				setattr(self, warned_attr, True)
+			return None
+		return [float(v) for v in vals]
+
+	def _gate_inputs(self, metrics_list) -> tuple:
+		"""(gate_stable, gate_err) per candidate. Gate inputs are the PHYSICAL pair,
+		not the weighted columns: the fitness ranks reward (not err°), so "does it
+		fly" reads stable_rate + mean_attitude_error_deg directly off Metrics.
+		Refuse rather than skip on a missing err — an armed gate silently not
+		gating is the exact failure mode this class exists to end."""
+		gate_st = [float(m.stable_rate) for m in metrics_list]
+		gate_er = []
+		for m in metrics_list:
+			e = getattr(m, "mean_attitude_error_deg", None)
+			if e is None:
+				raise ValueError(
+					"viability gate armed but Metrics.mean_attitude_error_deg is "
+					"None — the scorer predates the err column, or these are not "
+					"controller metrics. Disarm the gate or fix the scorer.")
+			gate_er.append(float(e))
+		return gate_st, gate_er
+
+	def _combine(self, metrics_list, flat, weights, higher, floors) -> list[float]:
+		"""Hand the columns to the wheel (gated when the gate is armed). Lazy import,
+		deliberately: this module is imported by the WORKER too (the IDS calculators
+		share the package), and the worker must not need ram_controller installed to
+		import wnn.ram.fitness. The floors are passed ONLY when at least one is armed:
+		the default path then stays callable against a wheel that predates the kwarg,
+		so this file is safe to sit in the tree while an older ram_controller is
+		installed."""
+		n = len(metrics_list)
+		tail = (floors,) if any(f > 0.0 for f in floors) else ()
 		if self.gate_stable_min is not None:
-			# Gate inputs are the PHYSICAL pair, not the weighted columns: the
-			# fitness ranks reward (not err°), so "does it fly" reads
-			# stable_rate + mean_attitude_error_deg directly off Metrics.
-			# Refuse rather than skip on a missing err — an armed gate silently
-			# not gating is the exact failure mode this class exists to end.
-			gate_st = [float(m.stable_rate) for m in metrics_list]
-			gate_er = []
-			for m in metrics_list:
-				e = getattr(m, "mean_attitude_error_deg", None)
-				if e is None:
-					raise ValueError(
-						"viability gate armed but Metrics.mean_attitude_error_deg is "
-						"None — the scorer predates the err column, or these are not "
-						"controller metrics. Disarm the gate or fix the scorer.")
-				gate_er.append(float(e))
+			gate_st, gate_er = self._gate_inputs(metrics_list)
 			from wnn.control._accel import gated_fitness_combine
-			if any(f > 0.0 for f in floors):
-				return list(gated_fitness_combine(
-					flat, n, weights, higher, self.aggregation, self.zrank_clamp,
-					gate_st, gate_er, self.gate_stable_min, self.gate_err_max,
-					floors))
 			return list(gated_fitness_combine(
 				flat, n, weights, higher, self.aggregation, self.zrank_clamp,
-				gate_st, gate_er, self.gate_stable_min, self.gate_err_max))
+				gate_st, gate_er, self.gate_stable_min, self.gate_err_max, *tail))
 		from wnn.control._accel import fitness_combine
-		# Pass the floors ONLY when at least one is armed: the default path then
-		# stays callable against a wheel that predates the kwarg, so this file is
-		# safe to sit in the tree while an older ram_controller is installed.
-		if any(f > 0.0 for f in floors):
-			return list(fitness_combine(flat, n, weights, higher,
-			                            self.aggregation, self.zrank_clamp, floors))
 		return list(fitness_combine(flat, n, weights, higher,
-		                            self.aggregation, self.zrank_clamp))
+		                            self.aggregation, self.zrank_clamp, *tail))
 
 	# Desirability column map: weight field -> (Metrics attr, shape, half-anchor).
 	# Anchors are the SHAPES doc's measured table (wnn.ram.fitness.desirability

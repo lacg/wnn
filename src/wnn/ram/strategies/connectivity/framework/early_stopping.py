@@ -238,14 +238,24 @@ class EarlyStoppingTracker:
 
 		return False
 
-	def check_magnitude(self, iteration: int, best_err_deg: float, best_stable: float) -> bool:
+	def check_magnitude(self, iteration: int, best_err_deg: float, best_stable: float,
+	                    steady_deg: Optional[float] = None,
+	                    steady_floor: Optional[float] = None) -> bool:
 		"""Magnitude-aware early-stop check, CONTROLLER wrapper (redesign (a)).
 
 		Watches the controller's PHYSICAL metrics (err° down, stable% up)
 		instead of the magnitude-blind rank-WHM. Delegates to the shared
 		`check_magnitude_metrics` core — see there for the ρ mechanics.
+
+		CTRL-58: with steady_deg AND steady_floor given (the staged-refinement
+		fitness is active) steady° is watched too — lower-is-better with a hard
+		floor, like err — so a steady-only gain recovers patience. The gain gate
+		is the shared δ (mag_delta, 5%). Both None = the legacy err+stable pair.
 		"""
 		watched = list(zip(controller_magnitude_metrics(self._config), (best_err_deg, best_stable)))
+		if steady_deg is not None and steady_floor is not None:
+			watched.append((MagnitudeMetric("steady", higher_is_better=False, offset=steady_floor,
+			                                floor=True, fmt="{:.2f}°"), steady_deg))
 		return self.check_magnitude_metrics(iteration, watched)
 
 	def check_magnitude_ids(self, iteration: int, best_f1: float, best_fpr: float) -> bool:

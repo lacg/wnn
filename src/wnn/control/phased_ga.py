@@ -244,6 +244,27 @@ def _wire_cancel(strat, args, stage_num: int, stage_name: str) -> None:
 	_resume_ga_state_if_targeted(strat, args, stage_num)
 
 
+def _wire_refine(strat, refine_latch) -> None:
+	"""CTRL-58: hand the run's RefineLatch to a GA stage (None = off, nothing set, so
+	the strategy's refine hooks fall through to the base: bit-identical). Called right
+	after _wire_cancel, which sets the `_stage_name` the latch keys on."""
+	if refine_latch is None:
+		return
+	strat._refine_latch = refine_latch
+	strat._refine_active = False
+
+
+def build_refine_latch(args):
+	"""The run's one RefineLatch, or None without --refine-fitness (the default)."""
+	cfg = refine_config_from_args(args)
+	if cfg is None or not cfg.search:
+		return None
+	from wnn.control.refine_fitness import build_refine_calculator
+	from wnn.control.refine_latch import RefineLatch
+	return RefineLatch(cfg, lambda: build_refine_calculator(cfg, args, with_tail=True),
+	                   pos_metric=fit_pos_metric_from_args(args))
+
+
 def _stop_if_interrupted(res, strat) -> None:
 	"""Raise RunInterrupted when the stage's GA stopped on a shutdown request.
 
@@ -291,6 +312,8 @@ def _resume_ga_state_if_targeted(strat, args, stage_num: int) -> None:
 
 from wnn.control.provenance import arch_token, collect_provenance, obs_pwm_convention
 from wnn.control.pos_floor import fit_pos_metric_from_args, zrank_pos_floor_from_args
+from wnn.control.refine_config import (refine_config_from_args, refine_token,
+                                      refine_weights_record, validate_refine_args)
 from wnn.control.select_tail import (SELECT_TAIL_MODES, genome0_rows, new_episode_sink,
                                      select_tail_token, tail_cell, tail_footer, tail_rank_winner,
                                      tail_value, validate_select_tail)
@@ -1015,7 +1038,8 @@ def _apply_rg_gate(args, rg: RewardGatedConfig) -> None:
 def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
                     dimension: OptimizationDimension, gens: int, patience: int,
                     seed: int, initial_population=None,
-                    tracker=None, experiment_id=None, fixed_axes=None):
+                    tracker=None, experiment_id=None, fixed_axes=None,
+                    refine_latch=None):
 	"""Generic Stage 1-3 driver: build an ArchGAStrategy on the given dimension
 	and run optimize(). Returns (result, evaluator, wall_time).
 
@@ -1103,6 +1127,7 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	# optimize() so any SIGTERM during this stage trips the cooperative path.
 	# Stage identity derives from the dimension (NEURONS→1, BITS→2, CONNECTIONS→3).
 	_wire_cancel(strat, args, _STAGE_BY_DIM[dimension], dimension.name.lower())
+	_wire_refine(strat, refine_latch)
 	t = time.time()
 	# Lamarckian: route batch eval through write-back (carry cells across gens).
 	# Residual mode (Phase 2): NO DAGGER training — score_genomes only (EMPTY
@@ -1408,7 +1433,7 @@ def _run_adaptive_difficulty_curriculum(args, ec: EpisodeConfig, spec: Controlle
 def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
                       gens: int, patience: int, seed: int,
                       initial_population=None,
-                      tracker=None, experiment_id=None):
+                      tracker=None, experiment_id=None, refine_latch=None):
 	"""Stage 4: arch FROZEN at `spec`; evolve QSR cell VALUES over a recorded
 	universe. The strategy auto-records the universe on its own seed arch via
 	_ensure_universe (called inside _make_cell_genome).
@@ -1476,6 +1501,7 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	# Shared cooperative-cancel + crash-save core (mirrors arch_phase). MEMORY is
 	# always Stage 4.
 	_wire_cancel(strat, args, 4, "memory")
+	_wire_refine(strat, refine_latch)
 	t = time.time()
 	# MEMORY paradigm: cells ARE the genome → score_genomes (no training).
 	optimize_kwargs = dict(
@@ -1547,6 +1573,11 @@ def _save_winner(path: str, args, spec: ControllerSpec,
 			"argv":          getattr(args, "cli_argv", None),   # None = not launched from the CLI
 		},
 	}
+	# CTRL-58: the staged-refinement config is part of the fitness identity; recorded
+	# only when on, so every default payload is unchanged.
+	_refine = refine_weights_record(args)
+	if _refine is not None:
+		payload["fitness_weights"]["refine"] = _refine
 	if stage_num is not None:
 		# The completion marker the resume picker and --resume-mode next require
 		# (wnn.control.stage_completion). Only stage FINALS reach here with a
@@ -2208,7 +2239,6 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 	import statistics
 	from types import SimpleNamespace
 	from wnn.control.controller_orchestrator import ControllerOrchestrator
-	from wnn.ram.fitness import FitnessCalculatorControllerHarmonic
 	# --val-units N (default 5 = the pre-flag list): unit i = seeds.val + i, checked
 	# disjoint from the test units and the train/test seeds (wnn.control.val_units).
 	VAL_SEEDS = checked_val_unit_seeds(args, seeds)
@@ -2305,20 +2335,7 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 		# one cell; the weights read as trade-offs, so the selector must honour all
 		# of them). When --fit-aggregation is set, the run is coherent under that
 		# one mode end-to-end — the fitness A/B's contract.
-		calc = FitnessCalculatorControllerHarmonic(
-			weight_err_sq=args.fit_weight_err_sq, weight_stable=args.fit_weight_stable,
-			weight_jerk=args.fit_weight_jerk, weight_mono=args.fit_weight_mono,
-			weight_steady=getattr(args, "fit_weight_steady", 0.0),
-			weight_effort=getattr(args, "fit_weight_effort", 0.0),
-			weight_alt=getattr(args, "fit_weight_alt", 0.0),
-			weight_pos=getattr(args, "fit_weight_pos", 0.0),
-			aggregation=_select_aggregation(args),
-			zrank_clamp=getattr(args, "zrank_clamp", 3.0),
-		zrank_mad_floor=getattr(args, "zrank_mad_floor", False),
-		zrank_pos_floor=zrank_pos_floor_from_args(args),  # CTRL-48: stage-select too
-			pos_metric=fit_pos_metric_from_args(args),         # CTRL-48 block 10b: stage-select too
-			gate_stable_min=_gate_args(args)[0],
-			gate_err_max=_gate_args(args)[1])
+		calc = _stage_select_calculator(args)
 		# No fallback (13/10/2026). A failing calculator used to fall back to "lowest
 		# val steady" — a DIFFERENT selection rule whose headline then banked exactly
 		# like a ranked one (only the .out said otherwise). It never fired in any log;
@@ -2430,6 +2447,31 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 		      f"err={wh.mean_attitude_error_deg:.2f}°{_heldout_row_str(wh)}")
 	headline.report = wh     # the published row of the PICKED genome (--recalc-headline reads it)
 	return headline
+
+
+def _stage_select_calculator(args):
+	"""The stage-select union-ranking calculator. Default: the run's own weights under
+	_select_aggregation. --refine-select (CTRL-58): the refinement calculator WITHOUT
+	its tail column — the tail enters once, as rank(p99) through --select-tail p99."""
+	cfg = refine_config_from_args(args)
+	if cfg is not None and cfg.select:
+		from wnn.control.refine_fitness import build_refine_calculator
+		return build_refine_calculator(cfg, args, with_tail=False)
+	from wnn.ram.fitness import FitnessCalculatorControllerHarmonic
+	return FitnessCalculatorControllerHarmonic(
+		weight_err_sq=args.fit_weight_err_sq, weight_stable=args.fit_weight_stable,
+		weight_jerk=args.fit_weight_jerk, weight_mono=args.fit_weight_mono,
+		weight_steady=getattr(args, "fit_weight_steady", 0.0),
+		weight_effort=getattr(args, "fit_weight_effort", 0.0),
+		weight_alt=getattr(args, "fit_weight_alt", 0.0),
+		weight_pos=getattr(args, "fit_weight_pos", 0.0),
+		aggregation=_select_aggregation(args),
+		zrank_clamp=getattr(args, "zrank_clamp", 3.0),
+		zrank_mad_floor=getattr(args, "zrank_mad_floor", False),
+		zrank_pos_floor=zrank_pos_floor_from_args(args),  # CTRL-48: stage-select too
+		pos_metric=fit_pos_metric_from_args(args),         # CTRL-48 block 10b: stage-select too
+		gate_stable_min=_gate_args(args)[0],
+		gate_err_max=_gate_args(args)[1])
 
 
 def _headline_pick(stage_entries, winner: str, cand_meta: dict):
@@ -4001,6 +4043,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                help="Winsorization bound for --fit-aggregation zscore: per-metric robust "
 	                     "z is clamped to ±this, so no single dimension can capture the score "
 	                     "however extreme the outlier (the λ_alt lesson). Default 3.0.")
+	_add_refine_args(ap)
 	# Parallelism — the ControllerEvaluator's per-genome ThreadPool. Defaults to
 	# 1 inside ControllerEvaluator (no concurrency), which leaves 15/16 cores
 	# idle when the GA evaluates 200+ genome populations. 4-8 is the sweet spot
@@ -4130,6 +4173,40 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--train-seed", type=int, default=None)
 	ap.add_argument("--val-seed", type=int, default=None)
 	return ap
+
+
+def _add_refine_args(ap) -> None:
+	"""CTRL-58 staged-refinement flags (wnn.control.refine_config). All default OFF:
+	without --refine-fitness / --refine-select nothing is built (bit-identical)."""
+	f = lambda name, default, text: ap.add_argument(name, type=float, default=default, help=text)
+	ap.add_argument("--refine-fitness", action="store_true",
+	                help="CTRL-58: switch the GA, one-way, to the refinement fitness (ZRank over "
+	                     "steady/reward/tail/pos behind a tightened stable/err/steady/pos gate) when "
+	                     "the TRAIN-pool trigger holds or --refine-trigger-stage starts. Default OFF.")
+	f("--refine-trigger-frac", 0.80, "Trigger: fraction of the TRAIN pool that must meet all four bounds.")
+	f("--refine-trigger-stable", 1.00, "Trigger: stable_rate FRACTION >= this.")
+	f("--refine-trigger-err", 1.5, "Trigger: mean attitude err (deg) <= this.")
+	f("--refine-trigger-steady", 1.0, "Trigger: steady err (deg) <= this.")
+	f("--refine-trigger-pos", 0.40, "Trigger: pos (m, the --fit-pos-metric column) <= this.")
+	ap.add_argument("--refine-trigger-gens", type=int, default=2,
+	                help="Trigger: consecutive generations the condition must hold (K).")
+	ap.add_argument("--refine-trigger-stage", default="memory",
+	                choices=["neurons", "bits", "connections", "memory", "none"],
+	                help="Trigger: also fire at the start of this stage (none = population only).")
+	f("--refine-gate-stable", 0.99, "Refinement gate: stable_rate FRACTION >= this.")
+	f("--refine-gate-err", 1.5, "Refinement gate: err (deg) <= this.")
+	f("--refine-gate-steady", 1.0, "Refinement gate: steady (deg) <= this.")
+	f("--refine-gate-pos", 0.40, "Refinement gate: pos (m) <= this.")
+	f("--refine-w-steady", 0.50, "Refinement weight: steady.")
+	f("--refine-w-reward", 0.25, "Refinement weight: reward (err²).")
+	f("--refine-w-tail", 0.15, "Refinement weight: per-episode err p99 tail (needs a scorer row; "
+	                           "refused > 0 until it lands — pass 0).")
+	f("--refine-w-pos", 0.10, "Refinement weight: pos (with --zrank-pos-floor).")
+	f("--refine-patience-steady-floor", 0.15,
+	  "After the switch magnitude patience also watches steady, floored at this (deg).")
+	ap.add_argument("--refine-select", action="store_true",
+	                help="CTRL-58: stage-select ranks on the refinement score + the p99 tail "
+	                     "(needs --select-tail p99). Independent of --refine-fitness. Default OFF.")
 
 
 def _validate_rank_weights(args) -> None:
@@ -4643,6 +4720,7 @@ def main():
 	# Ideas #3/#4 of docs/ctrl_dres_failures.md: refuse bad bounds before any work.
 	validate_train_ics(args, ec)
 	validate_select_tail(args)
+	validate_refine_args(args)   # CTRL-58 (after select-tail: --refine-select needs p99)
 	validate_val_units(args)
 	# CTRL-17 G4: one greppable line with the λ the DAgger gate + checkpoint rank on.
 	print(_gate_lambda_header(args, ec), flush=True)
@@ -4774,7 +4852,7 @@ def main():
 	                         rf=rf_token(args), calib=calibration_from_args(args).token(),
 	                         drop=drop_token(args), select=select_tail_token(args),
 	                         train_ic=train_ic_token(args), **ctrl46_tokens(args),
-	                         **block10_tokens(args)).line())
+	                         **block10_tokens(args), refine=refine_token(args)).line())
 	from wnn.control.provenance import env_header_line
 	from wnn.control.evaluator import eval_mode_from_env
 	print(env_header_line(eval_mode_from_env()), flush=True)

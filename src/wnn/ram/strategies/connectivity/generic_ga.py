@@ -229,6 +229,31 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		"""
 		self._checkpoint_and_maybe_stop(generation, ctx)
 
+	# ---- CTRL-58 staged-refinement hooks (controller: wnn.control.refine_mixin) ----
+
+	def _refine_switch(self, generation: int, population: list) -> Optional[Any]:
+		"""A NEW fitness calculator to rank by from this generation on, or None. The
+		base never switches, so every non-controller GA is untouched."""
+		return None
+
+	def _refine_steady_floor(self) -> Optional[float]:
+		"""Magnitude-patience floor (deg) for watching steady too; None = legacy."""
+		return None
+
+	def _rerank(self, population: list, fitness_calculator: Any) -> tuple[list, list]:
+		"""(population, scores) re-sorted under `fitness_calculator` (lower = better)."""
+		scores = fitness_calculator.fitness([t[1] for t in population])
+		order = sorted(range(len(population)), key=lambda i: scores[i])
+		return [population[i] for i in order], [scores[i] for i in order]
+
+	def _incumbent_of(self, entry: tuple, score: float) -> tuple:
+		"""The loop's incumbent block for one (genome, Metrics) entry: (genome clone,
+		fitness, acc, err, steady, alt, f1, fpr) — the same fields 'Update best' sets."""
+		m = entry[1]
+		return (self.clone_genome(entry[0]), score, m.acc,
+		        getattr(m, "mean_attitude_error_deg", None), getattr(m, "mean_steady_error_deg", None),
+		        getattr(m, "mean_altitude_error_m", None), getattr(m, "f1", None), getattr(m, "fpr", None))
+
 	# ---- shared cooperative-cancel + adaptive crash-save --------------------
 	# The ONE implementation of the per-generation checkpoint/shutdown logic both
 	# strands used to duplicate (IDS inline in ArchitectureGAStrategy; the
@@ -639,6 +664,18 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 				best_f1_val = getattr(population[gen_best_idx][1], "f1", None)
 				best_fpr_val = getattr(population[gen_best_idx][1], "fpr", None)
 
+			# CTRL-58 staged refinement: a subclass latch may swap the fitness HERE, on
+			# the generation it fires (base hook: never → this block is inert). Re-rank
+			# only — population and cells carry over unchanged; the frozen-best mark and
+			# the patience counter restart in the new fitness frame.
+			_refined = self._refine_switch(generation, population)
+			if _refined is not None:
+				fitness_calculator = _refined
+				population, combined_scores = self._rerank(population, fitness_calculator)
+				(best, best_fitness, best_accuracy_val, best_err_deg, best_steady_deg,
+				 best_alt_m, best_f1_val, best_fpr_val) = self._incumbent_of(population[0], combined_scores[0])
+				early_stopper.reset(best_fitness)
+
 			history.append((generation + 1, best_fitness))
 
 			# Track elite survival: how many old elites survived into new population?
@@ -898,7 +935,11 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			_watch_err = _line_err if _track0 else best_err_deg
 			_watch_acc = _line_acc if _track0 else best_accuracy_val
 			if _mag_on and best_err_deg is not None:
-				_stop = early_stopper.check_magnitude(generation, _watch_err, _watch_acc)
+				# CTRL-58: once refining, steady is watched too (None = legacy err+stable).
+				_steady_floor = self._refine_steady_floor()
+				_watch_steady = None if _steady_floor is None else (_line_steady if _track0 else best_steady_deg)
+				_stop = early_stopper.check_magnitude(generation, _watch_err, _watch_acc,
+				                                      steady_deg=_watch_steady, steady_floor=_steady_floor)
 			elif _mag_on and best_f1_val is not None and best_fpr_val is not None:
 				_stop = early_stopper.check_magnitude_ids(generation, best_f1_val, best_fpr_val)
 			else:

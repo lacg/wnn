@@ -33,6 +33,7 @@ from wnn.ram.strategies.optimization_dimension import OptimizationDimension
 from wnn.ram.fitness import FitnessCalculatorType
 
 from .controller_cancel_mixin import ControllerCancelMixin
+from .refine_mixin import RefineFitnessMixin
 from .evaluator import ControllerSpec, arch_shape_from_spec
 from .ga_strategy import default_controller_ga_config
 from .recurrent_genome import RecurrentArchGenome, RecurrentArchShape, RecurrentArchConfig
@@ -250,8 +251,11 @@ def _filter_inherited_cells(child: "RecurrentArchGenome", parent: "RecurrentArch
 		sorted(changed_output or ()))
 
 
-class ControllerArchGAStrategy(ControllerCancelMixin, GenericGAStrategy):
+class ControllerArchGAStrategy(RefineFitnessMixin, ControllerCancelMixin, GenericGAStrategy):
 	"""Single-dimension architecture GA over RecurrentArchGenome, ranked by reward.
+
+	RefineFitnessMixin (CTRL-58) implements the staged-refinement hooks; inert unless
+	`_wire_refine` (phased_ga) hands it the run's RefineLatch.
 
 	The ControllerCancelMixin supplies the per-generation `_on_generation_start`
 	hook on the SHARED cooperative-cancel core (GenericGAStrategy). Its subclasses

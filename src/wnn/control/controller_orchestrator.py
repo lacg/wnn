@@ -72,6 +72,10 @@ class ControllerOrchestrator(PhasedOrchestrator):
 		# assembles its ordered 5-row result from this; resume-sliced-out stages it
 		# fills itself. row_for_stage(sn) reads it back.
 		self._row_by_stage: dict = {}
+		# CTRL-58: ONE staged-refinement latch for the whole run (None = off), so a
+		# switch in an early stage carries into every later one.
+		from wnn.control.phased_ga import build_refine_latch
+		self.refine_latch = build_refine_latch(args)
 
 	# ---- phase specs ------------------------------------------------------
 	def phase_specs(self) -> list[PhaseSpec]:
@@ -130,11 +134,11 @@ class ControllerOrchestrator(PhasedOrchestrator):
 		elif kind == "arch":
 			res, ev, dt = _run_arch_phase(args, ec, cur_spec, p["dimension"],
 				p["gens"], p["patience"], seed, initial_population=init_pop,
-				tracker=tr, experiment_id=eid)
+				tracker=tr, experiment_id=eid, refine_latch=self.refine_latch)
 		else:  # memory
 			res, ev, dt = _run_memory_phase(args, ec, cur_spec, p["gens"],
 				p["patience"], seed, initial_population=self._filter_cells(init_pop),
-				tracker=tr, experiment_id=eid)
+				tracker=tr, experiment_id=eid, refine_latch=self.refine_latch)
 
 		# The stage functions raise RunInterrupted on a cooperative stop
 		# (_stop_if_interrupted); this re-check is the gate for the "done" line, the
@@ -183,7 +187,8 @@ class ControllerOrchestrator(PhasedOrchestrator):
 			               tracker=tr, experiment_id=eid)
 		return arch_fn(args, ec, spec, OptimizationDimension.NEURONS,
 		               args.neurons_gens, args.neurons_patience, seed,
-		               initial_population=init_pop, tracker=tr, experiment_id=eid)
+		               initial_population=init_pop, tracker=tr, experiment_id=eid,
+		               refine_latch=self.refine_latch)
 
 	def _filter_cells(self, carried_pop):
 		"""MEMORY mutation needs cells: keep only genomes that carry them; if none
