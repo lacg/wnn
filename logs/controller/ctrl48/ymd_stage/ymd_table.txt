@@ -1,0 +1,118 @@
+
+=== 1. every candidate, VAL (TUNING) — VAL fit / p99 from the run; * = rule-P headline ===
+ s1 M  G0 0.457/0.353  G1 0.565/0.487  G2 0.412/0.317  N0*0.387/0.269  N1 0.387/0.269  N2 0.425/0.310  M0 0.306/0.179  M1 0.307/0.178  M2 0.309/0.181   (steady/yaw)
+ s1 Y  G0 0.429/0.337  G1 0.494/0.415  G2*0.393/0.303  N0 0.310/0.210  N1 0.505/0.424  N2 0.408/0.324  M0 0.310/0.210  M1 0.397/0.298  M2 0.280/0.152   (steady/yaw)
+ s1 D  G0 0.443/0.370  G1 0.493/0.419  G2 0.509/0.432  N0*0.349/0.245  N1 0.382/0.257  N2 0.347/0.235  M0 0.349/0.245  M1 0.298/0.176  M2 0.293/0.166   (steady/yaw)
+ s2 M  G0 0.498/0.389  G1 0.605/0.496  G2 0.632/0.567  N0*0.468/0.378  N1 0.463/0.372  N2 0.499/0.401  M0 0.468/0.378  M1 0.489/0.400  M2 0.463/0.372   (steady/yaw)
+ s2 Y  G0*0.432/0.325  G1 0.565/0.460  G2 0.561/0.473  N0 0.426/0.336  N1 0.484/0.404  N2 0.493/0.433  M0 0.484/0.404  M1 0.493/0.433  M2 0.420/0.348   (steady/yaw)
+ s2 D  G0 0.382/0.289  G1 0.446/0.354  G2 0.525/0.456  N0 0.378/0.273  N1*0.335/0.252  N2 0.398/0.305  M0 0.378/0.273  M1 0.335/0.252  M2 0.364/0.260   (steady/yaw)
+ s3 M  G0 0.339/0.250  G1 0.468/0.397  G2 0.436/0.331  N0*0.344/0.263  N1 0.351/0.236  N2 0.357/0.258  M0 0.344/0.263  M1 0.312/0.221  M2 0.306/0.215   (steady/yaw)
+ s3 Y  G0 0.382/0.297  G1 0.364/0.273  G2 0.365/0.273  N0*0.327/0.240  N1 0.390/0.302  N2 0.422/0.325  M0 0.285/0.172  M1 0.292/0.176  M2 0.314/0.214   (steady/yaw)
+ s3 D  G0 0.373/0.284  G1 0.346/0.244  G2 0.365/0.258  N0 0.317/0.224  N1*0.347/0.226  N2 0.355/0.267  M0 0.317/0.224  M1 0.356/0.258  M2 0.340/0.220   (steady/yaw)
+ s4 M  G0 0.466/0.392  G1*0.419/0.313  G2 0.470/0.370  N0 0.378/0.265  N1 0.362/0.248  N2 0.418/0.311  M0 0.362/0.248  M1 0.312/0.197  M2 0.342/0.239   (steady/yaw)
+ s4 Y  G0 0.368/0.248  G1 0.387/0.248  G2 0.394/0.280  N0 0.356/0.243  N1 0.356/0.243  N2 0.355/0.250  M0 0.284/0.158  M1 0.296/0.171  M2*0.288/0.161   (steady/yaw)
+ s4 D  G0 0.395/0.291  G1 0.424/0.331  G2 0.425/0.352  N0 0.370/0.258  N1 0.365/0.268  N2 0.375/0.263  M0 0.370/0.258  M1*0.300/0.192  M2 0.365/0.268   (steady/yaw)
+ s5 M  G0*0.413/0.294  G1 0.716/0.637  G2 0.433/0.348  N0 0.562/0.475  N1 0.550/0.467  N2 0.509/0.393  M0 0.417/0.311  M1 0.415/0.312  M2 0.436/0.335   (steady/yaw)
+ s5 Y  G0 0.485/0.400  G1 0.617/0.529  G2 0.422/0.342  N0 0.479/0.384  N1*0.471/0.380  N2 0.459/0.374  M0 0.479/0.384  M1 0.446/0.328  M2 0.360/0.209   (steady/yaw)
+ s5 D  G0 0.457/0.362  G1 0.492/0.424  G2 0.474/0.403  N0 0.503/0.436  N1 0.477/0.389  N2 0.477/0.389  M0 0.477/0.389  M1*0.378/0.298  M2 0.461/0.379   (steady/yaw)
+
+=== 1. every candidate, TEST (REPORT) — VAL fit / p99 from the run; * = rule-P headline ===
+ s1 M  G0 0.491/0.392  G1 0.585/0.510  G2 0.487/0.400  N0*0.407/0.307  N1 0.407/0.307  N2 0.429/0.317  M0 0.321/0.201  M1 0.327/0.206  M2 0.325/0.201   (steady/yaw)
+ s1 Y  G0 0.467/0.375  G1 0.494/0.419  G2*0.424/0.336  N0 0.308/0.214  N1 0.475/0.395  N2 0.473/0.392  M0 0.308/0.214  M1 0.358/0.252  M2 0.278/0.154   (steady/yaw)
+ s1 D  G0 0.461/0.388  G1 0.458/0.385  G2 0.451/0.371  N0*0.353/0.253  N1 0.421/0.303  N2 0.366/0.262  M0 0.353/0.253  M1 0.291/0.169  M2 0.289/0.164   (steady/yaw)
+ s2 M  G0 0.516/0.417  G1 0.724/0.648  G2 0.660/0.595  N0*0.525/0.447  N1 0.468/0.384  N2 0.526/0.440  M0 0.525/0.447  M1 0.580/0.494  M2 0.468/0.384   (steady/yaw)
+ s2 Y  G0*0.492/0.402  G1 0.600/0.508  G2 0.649/0.579  N0 0.503/0.426  N1 0.565/0.495  N2 0.583/0.531  M0 0.565/0.495  M1 0.583/0.531  M2 0.476/0.412   (steady/yaw)
+ s2 D  G0 0.428/0.347  G1 0.504/0.428  G2 0.574/0.509  N0 0.395/0.300  N1*0.375/0.300  N2 0.440/0.352  M0 0.395/0.300  M1 0.375/0.300  M2 0.418/0.330   (steady/yaw)
+ s3 M  G0 0.412/0.325  G1 0.464/0.391  G2 0.505/0.393  N0*0.384/0.295  N1 0.397/0.284  N2 0.453/0.355  M0 0.384/0.295  M1 0.334/0.230  M2 0.342/0.240   (steady/yaw)
+ s3 Y  G0 0.436/0.349  G1 0.363/0.262  G2 0.423/0.328  N0*0.413/0.322  N1 0.465/0.372  N2 0.378/0.264  M0 0.283/0.161  M1 0.286/0.162  M2 0.326/0.213   (steady/yaw)
+ s3 D  G0 0.434/0.339  G1 0.395/0.295  G2 0.416/0.309  N0 0.364/0.246  N1*0.346/0.219  N2 0.358/0.256  M0 0.364/0.246  M1 0.349/0.234  M2 0.350/0.212   (steady/yaw)
+ s4 M  G0 0.499/0.432  G1*0.416/0.326  G2 0.486/0.409  N0 0.421/0.327  N1 0.388/0.294  N2 0.448/0.358  M0 0.388/0.294  M1 0.344/0.253  M2 0.352/0.260   (steady/yaw)
+ s4 Y  G0 0.368/0.276  G1 0.417/0.297  G2 0.412/0.320  N0 0.423/0.324  N1 0.423/0.324  N2 0.377/0.288  M0 0.292/0.184  M1 0.306/0.196  M2*0.292/0.182   (steady/yaw)
+ s4 D  G0 0.441/0.357  G1 0.483/0.403  G2 0.434/0.359  N0 0.366/0.270  N1 0.369/0.292  N2 0.417/0.316  M0 0.366/0.270  M1*0.305/0.215  M2 0.369/0.292   (steady/yaw)
+ s5 M  G0*0.373/0.246  G1 0.786/0.716  G2 0.383/0.290  N0 0.561/0.474  N1 0.607/0.520  N2 0.496/0.388  M0 0.445/0.338  M1 0.440/0.329  M2 0.460/0.355   (steady/yaw)
+ s5 Y  G0 0.486/0.392  G1 0.640/0.560  G2 0.391/0.309  N0 0.480/0.382  N1*0.521/0.439  N2 0.472/0.391  M0 0.480/0.382  M1 0.470/0.353  M2 0.352/0.198   (steady/yaw)
+ s5 D  G0 0.463/0.364  G1 0.586/0.527  G2 0.512/0.442  N0 0.557/0.493  N1 0.479/0.384  N2 0.479/0.384  M0 0.479/0.384  M1*0.355/0.267  M2 0.443/0.355   (steady/yaw)
+
+=== 2. stage for stage, VAL (TUNING): differences per seed and pooled ===
+  best  GRID    Y-M: pooled st -0.020 err -0.047 pos +0.0008 fails  +0 yaw -0.014 | steady per seed -0.018 -0.066 +0.025 -0.051 +0.009
+  best  GRID    D-M: pooled st +0.002 err +0.000 pos +0.0089 fails  +0 yaw +0.023 | steady per seed +0.031 -0.116 +0.007 +0.007 +0.079
+  best  GRID    D-Y: pooled st +0.022 err +0.048 pos +0.0081 fails  +0 yaw +0.038 | steady per seed +0.050 -0.050 -0.018 +0.057 +0.070
+  best  NEURONS Y-M: pooled st -0.039 err -0.054 pos +0.0002 fails  +0 yaw -0.032 | steady per seed -0.078 -0.042 -0.017 -0.022 -0.038
+  best  NEURONS D-M: pooled st -0.043 err -0.048 pos +0.0083 fails  +0 yaw -0.029 | steady per seed -0.038 -0.133 -0.027 -0.013 -0.005
+  best  NEURONS D-Y: pooled st -0.004 err +0.007 pos +0.0081 fails  +0 yaw +0.003 | steady per seed +0.039 -0.091 -0.010 +0.009 +0.033
+  best  MEMORY  Y-M: pooled st -0.024 err -0.025 pos -0.0011 fails  +0 yaw -0.024 | steady per seed +0.003 -0.048 -0.030 -0.074 +0.031
+  best  MEMORY  D-M: pooled st -0.043 err -0.035 pos +0.0035 fails  +0 yaw -0.033 | steady per seed +0.042 -0.133 -0.027 -0.062 -0.037
+  best  MEMORY  D-Y: pooled st -0.020 err -0.011 pos +0.0047 fails  +0 yaw -0.010 | steady per seed +0.039 -0.085 +0.003 +0.012 -0.068
+  mean3 GRID    Y-M: pooled st -0.045 err -0.054 pos +0.0002 fails  +1 yaw -0.049 | steady per seed -0.039 -0.059 -0.044 -0.069 -0.013
+  mean3 GRID    D-M: pooled st -0.052 err -0.023 pos +0.0079 fails  +0 yaw -0.045 | steady per seed +0.004 -0.127 -0.053 -0.037 -0.047
+  mean3 GRID    D-Y: pooled st -0.007 err +0.030 pos +0.0077 fails  -1 yaw +0.004 | steady per seed +0.043 -0.068 -0.009 +0.031 -0.034
+  mean3 NEURONS Y-M: pooled st -0.015 err -0.034 pos +0.0009 fails  -2 yaw -0.003 | steady per seed +0.007 -0.009 +0.029 -0.031 -0.071
+  mean3 NEURONS D-M: pooled st -0.046 err -0.049 pos +0.0101 fails  -3 yaw -0.042 | steady per seed -0.041 -0.106 -0.011 -0.016 -0.055
+  mean3 NEURONS D-Y: pooled st -0.031 err -0.015 pos +0.0091 fails  -1 yaw -0.039 | steady per seed -0.048 -0.097 -0.040 +0.014 +0.016
+  mean3 MEMORY  Y-M: pooled st -0.011 err -0.014 pos -0.0016 fails  +3 yaw -0.014 | steady per seed +0.022 -0.008 -0.024 -0.049 +0.006
+  mean3 MEMORY  D-M: pooled st -0.014 err -0.023 pos +0.0029 fails  +1 yaw -0.011 | steady per seed +0.006 -0.114 +0.017 +0.006 +0.016
+  mean3 MEMORY  D-Y: pooled st -0.003 err -0.010 pos +0.0045 fails  -2 yaw +0.003 | steady per seed -0.016 -0.107 +0.041 +0.055 +0.010
+
+=== 2. stage for stage, TEST (REPORT): differences per seed and pooled ===
+  best  GRID    Y-M: pooled st -0.033 err -0.063 pos +0.0003 fails  +0 yaw -0.026 | steady per seed -0.063 -0.024 -0.049 -0.048 +0.017
+  best  GRID    D-M: pooled st +0.020 err +0.003 pos +0.0093 fails  +0 yaw +0.040 | steady per seed -0.026 -0.087 -0.017 +0.017 +0.213
+  best  GRID    D-Y: pooled st +0.053 err +0.066 pos +0.0090 fails  +0 yaw +0.066 | steady per seed +0.037 -0.064 +0.032 +0.065 +0.196
+  best  NEURONS Y-M: pooled st -0.013 err -0.055 pos +0.0011 fails  -2 yaw -0.008 | steady per seed -0.099 -0.022 +0.028 +0.002 +0.025
+  best  NEURONS D-M: pooled st -0.043 err -0.057 pos +0.0084 fails  -4 yaw -0.036 | steady per seed -0.054 -0.150 -0.020 -0.052 +0.061
+  best  NEURONS D-Y: pooled st -0.030 err -0.002 pos +0.0074 fails  -2 yaw -0.028 | steady per seed +0.045 -0.128 -0.048 -0.054 +0.036
+  best  MEMORY  Y-M: pooled st -0.038 err -0.058 pos +0.0013 fails  +1 yaw -0.039 | steady per seed -0.018 -0.049 -0.058 -0.096 +0.030
+  best  MEMORY  D-M: pooled st -0.062 err -0.059 pos +0.0047 fails  -2 yaw -0.057 | steady per seed +0.026 -0.150 -0.020 -0.083 -0.085
+  best  MEMORY  D-Y: pooled st -0.024 err -0.001 pos +0.0035 fails  -3 yaw -0.019 | steady per seed +0.045 -0.101 +0.038 +0.012 -0.115
+  mean3 GRID    Y-M: pooled st -0.048 err -0.066 pos +0.0002 fails -10 yaw -0.052 | steady per seed -0.059 -0.053 -0.053 -0.068 -0.009
+  mean3 GRID    D-M: pooled st -0.050 err -0.030 pos +0.0084 fails  -2 yaw -0.045 | steady per seed -0.064 -0.131 -0.045 -0.014 +0.006
+  mean3 GRID    D-Y: pooled st -0.001 err +0.036 pos +0.0082 fails  +8 yaw +0.007 | steady per seed -0.005 -0.078 +0.008 +0.054 +0.015
+  mean3 NEURONS Y-M: pooled st -0.004 err -0.042 pos +0.0013 fails  -3 yaw +0.004 | steady per seed +0.005 +0.044 +0.007 -0.012 -0.064
+  mean3 NEURONS D-M: pooled st -0.055 err -0.066 pos +0.0095 fails  -9 yaw -0.058 | steady per seed -0.034 -0.103 -0.055 -0.035 -0.049
+  mean3 NEURONS D-Y: pooled st -0.051 err -0.025 pos +0.0083 fails  -6 yaw -0.062 | steady per seed -0.039 -0.147 -0.062 -0.023 +0.014
+  mean3 MEMORY  Y-M: pooled st -0.025 err -0.042 pos +0.0002 fails  -2 yaw -0.029 | steady per seed -0.010 +0.017 -0.055 -0.065 -0.014
+  mean3 MEMORY  D-M: pooled st -0.035 err -0.038 pos +0.0034 fails -13 yaw -0.035 | steady per seed -0.013 -0.128 +0.001 -0.015 -0.022
+  mean3 MEMORY  D-Y: pooled st -0.010 err +0.004 pos +0.0032 fails -11 yaw -0.006 | steady per seed -0.004 -0.145 +0.056 +0.050 -0.008
+
+=== 3. headline rules applied retrospectively — TEST (REPORT) of the picked genome; picks chosen on VAL only ===
+ rule P (as flown)
+   M: st 0.421 err 1.067 pos 0.340 fails  2 yaw 0.324 alt 0.130  picks NEURONS#0 NEURONS#0 NEURONS#0 GRID#1 GRID#0
+   Y: st 0.428 err 1.024 pos 0.344 fails  1 yaw 0.336 alt 0.136  picks GRID#2 GRID#0 NEURONS#0 MEMORY#2 NEURONS#1
+   D: st 0.347 err 0.995 pos 0.352 fails  0 yaw 0.251 alt 0.146  picks NEURONS#0 NEURONS#1 NEURONS#1 MEMORY#1 MEMORY#1
+   Y-M: st +0.007 err -0.043 pos +0.0043 fails  -1 yaw +0.012 | steady per seed +0.017 -0.033 +0.028 -0.124 +0.148
+   D-M: st -0.074 err -0.072 pos +0.0115 fails  -2 yaw -0.073 | steady per seed -0.054 -0.150 -0.038 -0.112 -0.018
+   D-Y: st -0.081 err -0.029 pos +0.0072 fails  -1 yaw -0.085 | steady per seed -0.071 -0.116 -0.066 +0.012 -0.166
+ rule fitness-only
+   M: st 0.422 err 1.074 pos 0.340 fails  4 yaw 0.324 alt 0.129  picks NEURONS#0 NEURONS#0 NEURONS#0 NEURONS#0 GRID#0
+   Y: st 0.405 err 1.010 pos 0.342 fails  2 yaw 0.314 alt 0.133  picks NEURONS#0 GRID#0 NEURONS#0 NEURONS#0 GRID#2
+   D: st 0.351 err 1.010 pos 0.350 fails  0 yaw 0.256 alt 0.144  picks NEURONS#0 NEURONS#1 NEURONS#0 MEMORY#1 MEMORY#1
+   Y-M: st -0.017 err -0.063 pos +0.0023 fails  -2 yaw -0.010 | steady per seed -0.099 -0.033 +0.028 +0.002 +0.017
+   D-M: st -0.072 err -0.064 pos +0.0106 fails  -4 yaw -0.068 | steady per seed -0.054 -0.150 -0.020 -0.116 -0.018
+   D-Y: st -0.055 err -0.000 pos +0.0082 fails  -2 yaw -0.058 | steady per seed +0.045 -0.116 -0.048 -0.118 -0.035
+ rule best-of-MEMORY
+   M: st 0.413 err 1.068 pos 0.345 fails  2 yaw 0.314 alt 0.137  picks MEMORY#1 MEMORY#0 MEMORY#0 MEMORY#0 MEMORY#1
+   Y: st 0.375 err 1.010 pos 0.347 fails  3 yaw 0.275 alt 0.139  picks MEMORY#0 MEMORY#2 MEMORY#2 MEMORY#2 MEMORY#1
+   D: st 0.351 err 1.010 pos 0.350 fails  0 yaw 0.256 alt 0.144  picks MEMORY#0 MEMORY#1 MEMORY#0 MEMORY#1 MEMORY#1
+   Y-M: st -0.038 err -0.058 pos +0.0013 fails  +1 yaw -0.039 | steady per seed -0.018 -0.049 -0.058 -0.096 +0.030
+   D-M: st -0.062 err -0.059 pos +0.0047 fails  -2 yaw -0.057 | steady per seed +0.026 -0.150 -0.020 -0.083 -0.085
+   D-Y: st -0.024 err -0.001 pos +0.0035 fails  -3 yaw -0.019 | steady per seed +0.045 -0.101 +0.038 +0.012 -0.115
+
+=== 4. stage-select noise — TEST steady across the 9 candidates (duplicates included, e.g. NEURONS#0 = MEMORY#0) vs between-arm differences ===
+  M s1: SD 0.090  range 0.263  (min 0.321 max 0.585)
+  M s2: SD 0.086  range 0.256  (min 0.468 max 0.724)
+  M s3: SD 0.057  range 0.172  (min 0.334 max 0.505)
+  M s4: SD 0.054  range 0.155  (min 0.344 max 0.499)
+  M s5: SD 0.130  range 0.413  (min 0.373 max 0.786)
+  Y s1: SD 0.085  range 0.216  (min 0.278 max 0.494)
+  Y s2: SD 0.056  range 0.173  (min 0.476 max 0.649)
+  Y s3: SD 0.066  range 0.182  (min 0.283 max 0.465)
+  Y s4: SD 0.057  range 0.131  (min 0.292 max 0.423)
+  Y s5: SD 0.080  range 0.288  (min 0.352 max 0.640)
+  D s1: SD 0.068  range 0.172  (min 0.289 max 0.461)
+  D s2: SD 0.066  range 0.199  (min 0.375 max 0.574)
+  D s3: SD 0.032  range 0.087  (min 0.346 max 0.434)
+  D s4: SD 0.054  range 0.178  (min 0.305 max 0.483)
+  D s5: SD 0.066  range 0.231  (min 0.355 max 0.586)
+  mean within-run candidate SD 0.070, mean range 0.208
+  D-Y steady under rule P (as flown)   : mean -0.081 SD(seed) 0.066 -> seeds for 80% power at the observed diff ~6, at a 0.03 deg diff ~39
+  D-Y steady under rule fitness-only   : mean -0.055 SD(seed) 0.067 -> seeds for 80% power at the observed diff ~12, at a 0.03 deg diff ~40
+  D-Y steady under rule best-of-MEMORY : mean -0.024 SD(seed) 0.077 -> seeds for 80% power at the observed diff ~82, at a 0.03 deg diff ~53

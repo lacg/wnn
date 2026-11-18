@@ -1,0 +1,17 @@
+[progress] dagger-batch: 1/1 (100%) done
+[CTBR] output_mode=ctbr: WNN outer loop at 100 Hz (action_repeat 10) over the firmware rate PID at 500 Hz; banks [T, p, q, r] range=[0.25, 4.2, 4.2, 2.0] gamma=[1.0, 2.0, 2.0, 2.0]; teacher=mpcof; delta_control=on (ablation)
+  [stage-ckpt] stage0_grid.yaml.gz: GRID population=1 (top-1 streamed)
+[ctrl56] verify ckpt_C-S2-d_wposx2_a57_rf_c200_dc_biasin_ms01_P_both_L1_dmyY_full_s5: GRID#0 retrained from its architecture MATCHES the saved cells
+[progress] dagger-batch: 8/8 (100%) done
+[progress] dagger-batch: 8/8 (100%) done
+[progress] dagger-batch: 8/8 (100%) done
+[progress] dagger-batch: 8/8 (100%) done
+[progress] dagger-batch: 8/8 (100%) done
+[progress] dagger-batch: 2/2 (100%) done
+  [stage-ckpt] stage0_grid.yaml.gz: GRID population=50
+  [stage-ckpt] stage0_grid.yaml.gz: ARCH-ONLY entries (no cells) ['GRID#2', 'GRID#3', 'GRID#4', 'GRID#5', 'GRID#6', 'GRID#7', 'GRID#8', 'GRID#9', 'GRID#12', 'GRID#13', 'GRID#14', 'GRID#15'] — the held-out path retrains them on the train seed (CTRL-56: never score them score-only)
+[ckpt-cells] GRID checkpoint: trained 42 arch-only entries on the train seed for the checkpoint only (365s; live population unchanged; CTRL-56)
+
+[save-winner] wrote /Users/lacg/wnn/logs/controller/ctrl48/ckpt_C-S2-d_wposx2_a57_rf_c200_dc_biasin_ms01_P_both_L1_dmyY_full_s5/ctrl56_stage0_grid.yaml.gz  (spec sn=0 sb=24 ob=24, population=50 genomes)
+[ctrl56] repaired copy: /Users/lacg/wnn/logs/controller/ctrl48/ckpt_C-S2-d_wposx2_a57_rf_c200_dc_biasin_ms01_P_both_L1_dmyY_full_s5/ctrl56_stage0_grid.yaml.gz (42 entries materialized)
+rc=0

@@ -1,0 +1,5 @@
+  [stage-ckpt] stage0_grid.yaml.gz: GRID population=3 (top-3 streamed)
+  [stage-ckpt] stage0_grid.yaml.gz: ARCH-ONLY entries (no cells) ['GRID#2'] — the held-out path retrains them on the train seed (CTRL-56: never score them score-only)
+  [stage-ckpt] stage1_neurons.yaml.gz: NEURONS population=3 (top-3 streamed)
+  [stage-ckpt] stage4_memory.yaml.gz: MEMORY population=3 (top-3 streamed)
+[dmy-axis] dmyY_full_s4 val MEMORY#2 dmy=asflown: err 1.016 steady 0.288 alt 0.1300 pos 0.3382 dz_hold 0.1402 | steady r/p/y 0.120/0.144/0.161 err r/p/y 0.479/0.531/0.483 drift 0.018

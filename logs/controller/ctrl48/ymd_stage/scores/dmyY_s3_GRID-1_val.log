@@ -1,0 +1,2 @@
+  [stage-ckpt] ctrl56_stage0_grid.yaml.gz: GRID population=2 (top-2 streamed)
+[dmy-axis] dmyY_full_s3 val GRID#1(ctrl56-repaired) dmy=asflown: err 0.949 steady 0.364 alt 0.1255 pos 0.3317 dz_hold 0.1370 | steady r/p/y 0.118/0.119/0.273 err r/p/y 0.404/0.406/0.562 drift 0.018

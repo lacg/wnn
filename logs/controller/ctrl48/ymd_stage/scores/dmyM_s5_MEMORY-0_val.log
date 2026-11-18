@@ -1,0 +1,4 @@
+  [stage-ckpt] stage0_grid.yaml.gz: GRID population=1 (top-1 streamed)
+  [stage-ckpt] stage1_neurons.yaml.gz: NEURONS population=1 (top-1 streamed)
+  [stage-ckpt] stage4_memory.yaml.gz: MEMORY population=1 (top-1 streamed)
+[dmy-axis] dmyM_full_s5 val MEMORY#0 dmy=asflown: err 1.106 steady 0.417 alt 0.1479 pos 0.3520 dz_hold 0.1755 | steady r/p/y 0.139/0.145/0.311 err r/p/y 0.516/0.435/0.657 drift 0.018

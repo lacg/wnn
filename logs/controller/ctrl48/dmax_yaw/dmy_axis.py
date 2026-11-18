@@ -39,7 +39,16 @@ def main():
 	else:
 		g = head if o.genome == "HEADLINE" else o.genome
 		lab, idx = g.split("#")
-		_, spec, genome = _load_stage_genome(T.D + "ckpt_" + o.tag, T.STAGE[lab], int(idx))
+		rep = os.path.join(T.D + "ckpt_" + o.tag, "ctrl56_stage0_grid.yaml.gz")
+		if lab == "GRID" and os.path.exists(rep):
+			# CTRL-56 repaired copy (arch-only entries retrained on the train seed after a verified
+			# MATCH of GRID#0's retrain) — the controllers stage-select scored in flight.
+			from wnn.control.phased_ga import _stage_entry_from_checkpoint
+			e = _stage_entry_from_checkpoint(rep, top_k=int(idx) + 1)
+			spec, genome = e[1], list(getattr(e[2], "final_population", None) or [e[2].best_genome])[int(idx)]
+			g += "(ctrl56-repaired)"
+		else:
+			_, spec, genome = _load_stage_genome(T.D + "ckpt_" + o.tag, T.STAGE[lab], int(idx))
 		assert getattr(genome, "cells", None) is not None, f"{g}: the stage checkpoint holds no cells for this genome (use --genome WINNER)"
 	if o.dmy != "asflown":
 		spec = dataclasses.replace(spec, delta_max_yaw=None if o.dmy == "none" else float(o.dmy))
