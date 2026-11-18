@@ -14,10 +14,14 @@ SITE=$VENV/lib/python3.13/site-packages
 KEEP57=/Users/lacg/wnn-abi57-wheel-keep
 G=$R/logs/controller/detgate
 VERDICT=$L/l2yp_investigation/ff_precheck_verdict.txt
-CTRL56_PID=${CTRL56_PID:-71647}
+CTRL56_PID=${CTRL56_PID:-93711}  # the CTRL-56 watcher (relaunched 17/11 23:04 EST after a false trigger)
+# The dmy driver's end line, EXACTLY ("<ISO timestamp> DMY DONE"). Never a bare substring: the 17/11 23:03
+# first arming matched its OWN "waiting for ..." line and false-triggered the CTRL-56 watcher.
+DMY_END_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z DMY DONE$'
 CTRL56_LOG=$R/logs/controller/ctrl56_gate/merge.log
 PREREG=docs/ctrl48_yawff_prereg.md
-say() { echo "$(date -u +%FT%TZ) FF CHAIN: $*" >> "$RUNS"; echo "[ff-chain] $(TZ=America/New_York date '+%d/%m %H:%M %Z') $*"; }
+# Every line this chain writes is sanitised: it can never contain another watcher's trigger text.
+say() { local m="$*"; m=${m//DMY DONE/DMY-END}; m=${m//FF DONE/FF-END}; echo "$(date -u +%FT%TZ) FF CHAIN: $m" >> "$RUNS"; echo "[ff-chain] $(TZ=America/New_York date '+%d/%m %H:%M %Z') $m"; }
 fail() { say "REFUSED: $*"; exit 1; }
 abi() { "$VENV/bin/python" -c "import ram_controller as c; print(c.ABI_VERSION)" 2>/dev/null; }
 restore57() {
@@ -28,9 +32,9 @@ restore57() {
 	fi
 }
 
-say "armed (pid $$): waiting for DMY DONE, then the CTRL-56 watcher (pid $CTRL56_PID)"
-until grep -q "DMY DONE" "$RUNS"; do sleep 120; done
-say "DMY DONE seen"
+say "armed (pid $$): waiting for the dmy block's end line, then the CTRL-56 watcher (pid $CTRL56_PID)"
+until grep -qE "$DMY_END_RE" "$RUNS"; do sleep 120; done
+say "dmy block end line seen"
 while kill -0 "$CTRL56_PID" 2>/dev/null; do sleep 30; done
 say "CTRL-56 watcher finished: $(grep '\[ctrl56-merge\]' "$CTRL56_LOG" | tail -1 | cut -c1-200)"
 [ -f "$R/.git/MERGE_HEAD" ] && fail "the main tree is mid-merge (CTRL-56 left a conflict) — not touching it"
