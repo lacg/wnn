@@ -1,0 +1,4 @@
+  [stage-ckpt] stage0_grid.yaml.gz: GRID population=1 (top-1 streamed)
+  [stage-ckpt] stage1_neurons.yaml.gz: NEURONS population=1 (top-1 streamed)
+  [stage-ckpt] stage4_memory.yaml.gz: MEMORY population=1 (top-1 streamed)
+[dmy-axis] dmyM_full_s1 test NEURONS#0 dmy=0.5: err 0.959 steady 0.338 alt 0.1377 pos 0.3452 dz_hold 0.1516 | steady r/p/y 0.129/0.120/0.226 err r/p/y 0.446/0.418/0.517 drift 0.017

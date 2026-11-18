@@ -1,0 +1,1 @@
+[dmy-axis] dmyY_full_s1 test WINNER=GRID#2 dmy=none: err 1.138 steady 0.614 alt 0.1356 pos 0.3465 dz_hold 0.1500 | steady r/p/y 0.142/0.105/0.546 err r/p/y 0.445/0.416/0.736 drift 0.017
