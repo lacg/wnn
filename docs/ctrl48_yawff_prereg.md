@@ -68,3 +68,17 @@ not-adopt candidate at any point. Luiz decides on stopping.
 - B's re-fly next to the same base's previous-ABI run on the same seed, as a determinism check.
 
 Nothing above may change after the first FF END line.
+
+## Launch addendum (written by chain_abi58_to_ff.sh, 18/11/2026 04:06 EST, before the first FF START)
+- Base: **Y** (from the verdict file's BASE line; absent ⇒ M).
+- Determinism gate: PASS (flag-off ABI 58 ×2 vs ABI 57; logs/controller/detgate/ff_abi5*).
+- Expectation, frozen verbatim from /Users/lacg/wnn/logs/controller/ctrl48/l2yp_investigation/ff_precheck_verdict.txt:
+```
+PREDICTED_HOLD_YAW_OFFSET_DEG (calibrated model, M s1-s5 genomes, 6 VAL units x 100 eps each, mean): base_M_G2 0.288 | Y_G1.67 0.235 (measured) | FF_G2 0.206 | FF+Y_G1.67 0.206
+FF+Y_VS_BEST_NONFF_PER_SEED: -16% +11% -9% -34% -21%  (mean -12%, 4/5 better)
+FF_G2_VS_BEST_NONFF_PER_SEED: -35% +3% +4% -15% -20%  (mean -12%, 3/5 better)
+EMULATION_UNCALIBRATED (block-9 traces, heading=true yaw, M s1-s3 wiring, vote-0.1): FF cuts the predicted offset 60-74% vs no-FF at the same G (relative only; absolute level over-reads 3-5x)
+WHAT_THE_BANK_MUST_DELIVER_AT_HOLD: |sp_need| 0.139-0.172 rad/s -> with FF |sp_need - cT*cz| 0.015-0.021 rad/s (-88%)
+VALIDATION: decode identity sp = G*B exact (fitted 1.97-2.01 at G2, 1.66-1.67 at G1.67); offset ~ need-part R2 0.35-0.69 (slope k 0.10-0.32, used as per-seed calibration); same-genome G 2->1.67: mean predicted -0.049 vs measured -0.054 deg, sign right 3/5 seeds (s3, s4 not predicted)
+NOT_PREDICTED_WORSE: err (FF delivers the teacher's own trim term exactly; no transient model); pos (yaw-only lever); clamp margin max |ff| 0.51 vs range 2.0 rad/s; ff noise at hold 0.025 rad/s sd vs held-sp sd 0.09-0.13
+```
