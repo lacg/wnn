@@ -437,7 +437,7 @@ def _crowned_genome(ckpt_dir, stage, key):
 	for p in sorted(Path(ckpt_dir).glob("stage*_*.yaml.gz")):
 		if p.name.startswith("emergency") or p.name.split("_", 1)[1].split(".")[0].upper() != stage:
 			continue
-		e = _stage_entry_from_checkpoint(p, top_k=idx + 1)
+		e = _stage_entry_from_checkpoint(p, top_k=idx + 1, allow_arch_only=True)  # skips arch-only below
 		if e is None or e[0] != stage:
 			continue
 		pop = e[2].final_population
