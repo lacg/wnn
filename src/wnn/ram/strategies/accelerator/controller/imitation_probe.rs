@@ -468,7 +468,7 @@ pub(crate) fn closed_loop_scorer(cfg: &RewardGatedConfigPacked, c: &WnnControlle
 		cfg.dist_gust_tau_c, asym, cfg.dist_gyro_sigma, cfg.dist_gyro_bias_walk, cfg.dist_accel_sigma,
 		seed ^ 0xD157, cfg.dist_dropout_prob, cfg.dist_dropout_len_steps, cfg.dist_obs_delay_steps,
 		cfg.dist_torque_scale_jitter, c.levels_per_motor(), c.num_motors(), None, None, None, 0.0, 0.0, None,
-		if cfg.translation { Some(&s1) } else { None }, None,
+		if cfg.translation { Some(&s1) } else { None }, None, None,
 	);
 	(row[2] * 100.0, row[1].to_degrees(), row[5].to_degrees())
 }

@@ -1605,6 +1605,12 @@ impl ControllerRolloutEvaluator
 	alt_pd_zeta = 1.0,
 	alt_pd_max_delta = 0.25,
 	alt_pd_mass = 0.0,
+	// ABI 59 (CTRL-58): OPT-IN per-episode tail export — each genome's row is followed by
+	// [n, e_1 .. e_n] (per-episode mean err, degrees, episode order; diverged = tail_diverged_
+	// err_deg). Built HOST-side from the per-episode export (no kernel change); twin of
+	// score_controllers_cpu(episode_errs=). False (default) ⇒ rows unchanged.
+	episode_errs = false,
+	tail_diverged_err_deg = 8.0,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_controllers_metal(
@@ -1679,6 +1685,8 @@ pub fn score_controllers_metal(
 	alt_pd_zeta: f64,
 	alt_pd_max_delta: f64,
 	alt_pd_mass: f64,
+	episode_errs: bool,
+	tail_diverged_err_deg: f64,
 ) -> PyResult<Vec<Vec<f64>>>
 {
 	let verr = pyo3::exceptions::PyValueError::new_err;
@@ -1871,7 +1879,12 @@ pub fn score_controllers_metal(
 		None
 	};
 	let refs: Vec<&WnnController> = controllers.iter().map(|c| &**c).collect();
-	if per_episode
+	if episode_errs && !(tail_diverged_err_deg.is_finite() && tail_diverged_err_deg > 0.0)
+	{
+		return Err(pyo3::exceptions::PyValueError::new_err(format!(
+			"score_controllers_metal: tail_diverged_err_deg must be finite and > 0 (got {tail_diverged_err_deg})")));
+	}
+	if per_episode || episode_errs
 	{
 		let (mut agg, episodes) = evaluator
 			.score_with_episodes(
@@ -1891,7 +1904,19 @@ pub fn score_controllers_metal(
 				stage1_cfg.as_ref(),
 			)
 			.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
-		agg.extend(episodes);
+		if episode_errs
+		{
+			let per_g = crate::episode_tail::per_genome_from_episode_rows(&episodes, agg.len(), tail_diverged_err_deg);
+			for (row, eps) in agg.iter_mut().zip(per_g)
+			{
+				row.push(eps.len() as f64);
+				row.extend(eps);
+			}
+		}
+		if per_episode
+		{
+			agg.extend(episodes);
+		}
 		return Ok(agg);
 	}
 	evaluator
@@ -9255,7 +9280,7 @@ mod tests
 			1.0,
 			0.4,
 			None,
-			None, None,
+			None, None, None,
 		);
 		for (i, name) in ["reward", "err", "stable", "jerk", "mono"]
 			.iter()
@@ -9466,7 +9491,7 @@ mod tests
 			1.0,
 			0.4,
 			None,
-			None, None,
+			None, None, None,
 		);
 		assert_rel_close(
 			cpu_row[1],
@@ -9704,7 +9729,7 @@ mod tests
 			[0.0, 0.0, 0.0],
 			false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0,
 			0.0, 0, 0, 0.0,
-			levels, num_motors, None, None, None, 1.0, 0.4, None, None, None,
+			levels, num_motors, None, None, None, 1.0, 0.4, None, None, None, None,
 		)
 	}
 
@@ -9852,7 +9877,7 @@ mod tests
 			1.0,
 			0.4,
 			None,
-			Some(&s1), None,
+			Some(&s1), None, None,
 		);
 		let ev = match ControllerRolloutEvaluator::new()
 		{
@@ -10026,7 +10051,7 @@ mod tests
 			1.0,
 			0.4,
 			None,
-			Some(&s2), None,
+			Some(&s2), None, None,
 		);
 		let ev = match ControllerRolloutEvaluator::new()
 		{
@@ -10314,7 +10339,7 @@ mod tests
 				1.0,
 				0.4,
 				None,
-				None, None,
+				None, None, None,
 			)
 		};
 
@@ -10745,7 +10770,7 @@ mod tests
 			1.0,
 			0.4,
 			None,
-			None, None,
+			None, None, None,
 		);
 		let ev = match ControllerRolloutEvaluator::new()
 		{
@@ -10819,7 +10844,7 @@ mod tests
 			1.0,
 			0.4,
 			None,
-			None, None,
+			None, None, None,
 		);
 		assert!(
 			(cpu[0] - cpu_folded[0]).abs() > 1e-9 || (cpu[1] - cpu_folded[1]).abs() > 1e-9,
@@ -11519,7 +11544,7 @@ mod tests
 			1.0,
 			0.4,
 			None,
-			None, None,
+			None, None, None,
 		);
 		// f32 kernel euler vs f64 CPU euler drifts ~0.006° over 2500 steps —
 		// the 3e-4 abs floor absorbs that; anything structural is far larger.
@@ -11626,7 +11651,7 @@ mod tests
 			0.5,
 			0.15,
 			None,
-			None, None,
+			None, None, None,
 		);
 		for (i, name) in ["reward", "err", "stable", "jerk", "mono"]
 			.iter()

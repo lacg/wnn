@@ -191,14 +191,22 @@ def test_latch_never_reverts_and_carries_into_later_stages():
 	assert len(lines) == 1
 
 
-def test_stage_start_trigger_and_streak_restart():
+def test_stage_start_trigger_and_streak_carries_across_stages():
+	"""Luiz 18/11: the population streak CARRIES ACROSS stages (no reset at stage start)."""
 	latch, lines = _latch(replace(CFG, trigger_gens=2))
 	assert not latch.stage_start("neurons")
 	assert not latch.observe("neurons", 0, _pool(10, 0))     # streak 1 ...
-	assert not latch.stage_start("connections")              # ... restarts at a new stage
-	assert not latch.observe("connections", 0, _pool(10, 0))
-	assert latch.stage_start("memory")                       # default trigger stage
-	assert lines == ["[refine] trigger fired gen 0 stage MEMORY reason stage start (MEMORY)"]
+	assert not latch.stage_start("connections")              # ... carried into the next stage
+	assert latch.observe("connections", 0, _pool(10, 0))     # streak 2 -> fires here
+	assert latch.fired_stage == "connections" and latch.fired_gen == 1
+	assert latch.stage_start("memory")                       # already fired: refine from gen 0
+	assert len(lines) == 1 and "stage CONNECTIONS" in lines[0]
+	# The default stage trigger still fires on its own when the streak never completes.
+	latch2, lines2 = _latch(replace(CFG, trigger_gens=2))
+	assert not latch2.stage_start("neurons") and not latch2.observe("neurons", 0, _pool(10, 0))
+	assert not latch2.observe("neurons", 1, _pool(5, 5))     # streak broken by the population
+	assert latch2.stage_start("memory")
+	assert lines2 == ["[refine] trigger fired gen 0 stage MEMORY reason stage start (MEMORY)"]
 
 
 # ---- 3. tightened gate + 4. weights ---------------------------------------------------
@@ -313,9 +321,7 @@ def test_refine_select_uses_the_refine_calculator_without_tail():
 
 
 @pytest.mark.parametrize("argv, why", [
-	(["--refine-fitness"], "refine-w-tail"),
-	(["--refine-fitness", "--refine-w-tail", "0", "--strategy", "ts"], "ts"),
-	(["--refine-fitness", "--refine-w-tail", "0", "--resume-from-emergency", "x"], "resume"),
+	(["--refine-fitness", "--strategy", "ts"], "ts"),
 	(["--refine-select"], "p99"),
 	(["--refine-fitness", "--refine-w-tail", "0", "--refine-trigger-frac", "0"], "frac"),
 	(["--refine-fitness", "--refine-w-tail", "0", "--refine-gate-stable", "99"], "FRACTION"),
@@ -337,3 +343,84 @@ def test_provenance_and_params_registry():
 		assert k in KNOWN_PARAMS
 	with pytest.raises(ValueError):
 		_refuse_unbuilt_keys({"controller_refine_fitness": True})
+
+
+# ---- ABI 59: tail column, native gate, latch persistence ---------------------------------
+
+def test_abi59_lifted_refusals():
+	"""ABI 59: the default tail weight (0.15) and --resume-from-emergency are accepted;
+	TS and the curricula stay refused."""
+	validate_refine_args(_args("--refine-fitness"))
+	validate_refine_args(_args("--refine-fitness", "--resume-from-emergency", "x"))
+	with pytest.raises(SystemExit, match="ts"):
+		validate_refine_args(_args("--refine-fitness", "--strategy", "ts"))
+
+
+def test_latch_state_round_trip():
+	latch, _ = _latch(replace(CFG, trigger_gens=3))
+	latch.stage_start("neurons")
+	latch.observe("neurons", 0, _pool(10, 0))
+	latch.observe("neurons", 1, _pool(10, 0))
+	st = latch.state()
+	assert st == {"fired": False, "stage": None, "generation": None, "reason": None, "streak": 2}
+	fresh, _ = _latch(replace(CFG, trigger_gens=3))
+	fresh.restore(st)
+	assert fresh.observe("neurons", 2, _pool(10, 0)), "a restored streak continues"
+	fired = fresh.state()
+	assert fired["fired"] and fired["stage"] == "neurons" and fired["generation"] == 3 and "TRAIN pool" in fired["reason"]
+	back, _ = _latch(CFG)
+	back.restore(fired)
+	assert back.fired and back.stage_start("bits"), "a restored fired latch refines every later stage"
+
+
+def test_checkpoint_meta_carries_the_latch():
+	from wnn.control.controller_cancel_mixin import ControllerCancelMixin
+	latch, _ = _latch(CFG)
+	latch.stage_start("memory")
+	strat = ControllerCancelMixin()
+	strat._config, strat._spec, strat._refine_latch = SimpleNamespace(), None, latch
+	ck = strat._build_checkpoint(5, [], {}, complete=False)
+	assert ck.extra["refine_latch"] == latch.state()
+	plain = ControllerCancelMixin()
+	plain._config, plain._spec = SimpleNamespace(), None
+	assert "refine_latch" not in plain._build_checkpoint(5, [], {}, complete=False).extra
+
+
+def test_native_gate_scores_infeasibles_at_worst_plus_one_plus_violation():
+	feas = [_m(1.0, 1.0, 0.5, 0.30, -1.0), _m(1.0, 1.2, 0.6, 0.31, -1.2), _m(1.0, 0.9, 0.7, 0.29, -0.9)]
+	infeas = [_m(1.0, 1.0, 1.3, 0.30), _m(1.0, 1.0, 0.5, 0.60), _m(0.98, 1.6, 0.5, 0.30)]
+	f = _refine().fitness(feas + infeas)
+	worst = max(f[:3])
+	for k, m in enumerate(infeas):
+		assert abs(f[3 + k] - (worst + 1.0 + _violation(m))) < 1e-12
+
+
+def test_tail_p99_is_numpy_inverted_cdf():
+	import numpy as np
+	from wnn.control._accel import episode_tail_p99_deg
+	rng = random.Random(59)
+	for n in list(range(1, 60)) + [99, 100, 101, 199, 200, 201, 500, 999, 1000, 1001, 2000]:
+		v = [rng.uniform(0.1, 8.0) for _ in range(n)]
+		assert episode_tail_p99_deg(v) == float(np.percentile(v, 99, method="inverted_cdf")), n
+	with pytest.raises(ValueError):
+		episode_tail_p99_deg([])
+	with pytest.raises(ValueError):
+		episode_tail_p99_deg([1.0, float("inf")])
+
+
+def test_crn_pools_the_episodes_then_takes_one_percentile():
+	"""The tail is the p99 over ALL of a genome's evaluation episodes, not a mean of
+	per-pool p99s: combine_pool_scores concatenates the per-pool lists."""
+	import numpy as np
+	from wnn.control.evaluator import combine_pool_scores, with_episode_tail
+	rng = random.Random(7)
+	pools = [[(-1.0, {"stable_rate": 1.0, "episode_errs_deg": [rng.uniform(0, 3) for _ in range(100)]})]
+	         for _ in range(5)]
+	pools[2][0][1]["episode_errs_deg"][17] = 8.0          # one capped (diverged) episode
+	(r, m), = with_episode_tail(combine_pool_scores(pools))
+	union = [x for p in pools for x in p[0][1]["episode_errs_deg"]]
+	assert "episode_errs_deg" not in m and m["stable_rate"] == 1.0
+	assert m["episode_err_p99_deg"] == float(np.percentile(union, 99, method="inverted_cdf"))
+	per_pool_mean = float(np.mean([np.percentile(p[0][1]["episode_errs_deg"], 99, method="inverted_cdf") for p in pools]))
+	assert m["episode_err_p99_deg"] != per_pool_mean
+	assert with_episode_tail([(-1.0, {"stable_rate": 1.0})]) == [(-1.0, {"stable_rate": 1.0})], "off: untouched"

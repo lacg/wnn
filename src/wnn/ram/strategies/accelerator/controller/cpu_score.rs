@@ -106,6 +106,9 @@ pub(crate) fn rollout_one(
 	// HoldPolicy::FallbackWhole = this scorer's steady accounting). Measurement only —
 	// None on every scoring path that did not ask (score_controllers_cpu(axis_out=None)).
 	mut axes: Option<&mut crate::axis_split::AxisAcc>,
+	// ABI 59 (CTRL-58): OPT-IN per-episode tail sink — each episode's mean err (deg, diverged
+	// → the gate's err limit). Measurement only; None on every call that did not ask.
+	mut ep_errs: Option<&mut crate::episode_tail::EpisodeErrSink>,
 ) -> [f64; 19]
 {
 	let mut sim = AttitudeSim::new(dt, arm, k_thrust, k_drag, inertia, gravity);
@@ -530,6 +533,10 @@ pub(crate) fn rollout_one(
 		}
 		let mean_err = ep_sum_err / ep_steps.max(1) as f64;
 		sum_err += mean_err;
+		if let Some(t) = ep_errs.as_deref_mut()
+		{
+			t.push(mean_err, diverged);
+		}
 		sum_jerk += if ep_jerk_count > 0
 		{
 			ep_jerk / ep_jerk_count as f64
@@ -736,6 +743,11 @@ pub(crate) fn rollout_one(
 	// ctrl56_axis_split_tests) and its 14 AxisSplit::flat values are appended in controller
 	// order. None (the default) builds nothing — the shipped call.
 	axis_out = None,
+	// ABI 59 (CTRL-58): OPT-IN per-episode tail export. True ⇒ each genome's row is followed
+	// by [n, e_1 .. e_n] (per-episode mean err, degrees; a diverged episode = tail_diverged_
+	// err_deg, the run's --gate-err). False (default) ⇒ rows unchanged.
+	episode_errs = false,
+	tail_diverged_err_deg = 8.0,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_controllers_cpu(
@@ -799,6 +811,8 @@ pub fn score_controllers_cpu(
 	alt_pd_max_delta: f64,
 	alt_pd_mass: f64,
 	axis_out: Option<&Bound<'_, pyo3::types::PyList>>,
+	episode_errs: bool,
+	tail_diverged_err_deg: f64,
 ) -> PyResult<Vec<Vec<f64>>>
 {
 	if controllers.is_empty()
@@ -806,6 +820,10 @@ pub fn score_controllers_cpu(
 		return Ok(vec![]);
 	}
 	let verr = pyo3::exceptions::PyValueError::new_err;
+	if episode_errs && !(tail_diverged_err_deg.is_finite() && tail_diverged_err_deg > 0.0)
+	{
+		return Err(verr(format!("score_controllers_cpu: tail_diverged_err_deg must be finite and > 0 (got {tail_diverged_err_deg})")));
+	}
 	let (plant, att_ref) = crate::stage1::stage1_extras(
 		imu_specific_force,
 		rotor_drag,
@@ -972,7 +990,9 @@ pub fn score_controllers_cpu(
 					{
 						return (vec![0.0f64; 14], [f64::NAN; 14]);
 					}
+
 					let mut acc = want_axes.then(crate::axis_split::AxisAcc::default);
+					let mut tail = episode_errs.then(|| crate::episode_tail::EpisodeErrSink::new(tail_diverged_err_deg));
 					let row = rollout_one(
 						c,
 						&q0,
@@ -1010,8 +1030,14 @@ pub fn score_controllers_cpu(
 						None,
 						stage1_cfg.as_ref(),
 						acc.as_mut(),
+						tail.as_mut(),
 					)
 					.to_vec();
+					let row = match tail
+					{
+						Some(t) => row.into_iter().chain(t.row_tail()).collect(),
+						None => row,
+					};
 					let flat = acc.map_or([f64::NAN; 14], |a| a.split(crate::axis_split::HoldPolicy::FallbackWhole).flat());
 					(row, flat)
 				})
@@ -1144,6 +1170,7 @@ pub fn trace_controller_cpu(
 			Some(&mut buf),
 			None, // tracing stays attitude-only (diagnostic path)
 			None, // ABI 56 axis split: off
+			None, // ABI 59 episode tail: off
 		);
 	});
 	Ok(buf)

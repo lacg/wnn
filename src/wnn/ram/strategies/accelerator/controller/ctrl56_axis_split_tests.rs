@@ -22,7 +22,7 @@ fn rows(c: &WnnController, steps: usize, s1: Option<&Stage1Cfg>, axes: Option<&m
 	crate::cpu_score::rollout_one(
 		&mut cc, &q0, &w0, EPS, steps, DT, ARM, KT, KD, INERTIA, G, 0.2, [0.0; 3],
 		true, [0.0; 3], 0.0, 0.1, ASYM, 0.0107, 0.0, 0.0, 777,
-		0.0, 0, 0, 0.2, c.levels_per_motor(), 4, None, None, None, 1.0, 0.4, None, s1, axes,
+		0.0, 0, 0, 0.2, c.levels_per_motor(), 4, None, None, None, 1.0, 0.4, None, s1, axes, None,
 	)
 }
 

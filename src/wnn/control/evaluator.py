@@ -554,6 +554,28 @@ def fold_pool_seed(seed: int, fold_index: int) -> int:
 	return (seed * 0x9E3779B97F4A7C15 + fold_index * 0xBF58476D1CE4E5B9) & 0xFFFFFFFF
 
 
+# CTRL-58: the scorer row's metric slots before the opt-in tail export (ABI 51: 19).
+_SCORER_ROW_METRICS = 19
+
+
+def with_episode_tail(scored: list) -> list:
+	"""CTRL-58 (ABI 59): reduce each genome's pooled per-episode errors to the tail column
+	(episode_err_p99_deg) with the wheel's own inverted_cdf p99 — ONE call per genome on the
+	union of its evaluation episodes, never a mean of per-pool percentiles. A no-op when the
+	export is off (no `episode_errs_deg` key)."""
+	if not any("episode_errs_deg" in m for _, m in scored):
+		return scored
+	from wnn.control._accel import episode_tail_p99_deg
+	out = []
+	for r, m in scored:
+		m = dict(m)
+		errs = m.pop("episode_errs_deg", None)
+		if errs is not None:
+			m["episode_err_p99_deg"] = float(episode_tail_p99_deg(list(errs)))
+		out.append((r, m))
+	return out
+
+
 def combine_pool_scores(per_pool: list) -> list:
 	"""Fold K pools' scores into one per genome: `per_pool[k][gi] = (reward, m)`
 	→ `[(reward, m)]` with reward and every numeric field of `m` averaged over
@@ -574,6 +596,10 @@ def combine_pool_scores(per_pool: list) -> list:
 					keys.append(k)
 		merged = {}
 		for k in keys:
+			if any(isinstance(d.get(k), list) for d in dicts):
+				# CTRL-58: per-episode lists POOL (concatenate), never average.
+				merged[k] = [x for d in dicts for x in (d.get(k) or [])]
+				continue
 			vals = [float(d[k]) for d in dicts if d.get(k) is not None]
 			merged[k] = (sum(vals) / len(vals)) if vals else None
 		out.append((sum(rewards) / len(rewards), merged))
@@ -1795,6 +1821,10 @@ class ControllerEvaluator:
 		# — the sink only stops the per-episode buffer being discarded. GPU
 		# scorer only; the CPU scorer does not take the kwarg.
 		self.per_episode_sink = None
+		# CTRL-58 (ABI 59): the GA tail column. None (default) = off, the scorer calls are
+		# byte-for-byte the old ones; a float = the cap (deg, the run's --gate-err) a diverged
+		# episode counts as. Armed by phased_ga._wire_refine when --refine-w-tail > 0.
+		self.episode_tail_cap_deg = None
 		self.episode_config = episode_config or EpisodeConfig(
 			dt=0.001, steps_per_episode=2000,
 			max_initial_tilt_rad=math.radians(30.0),
@@ -2529,6 +2559,10 @@ class ControllerEvaluator:
 		from wnn.control._accel import score_controllers_metal as _metal
 		if sink is not None and scorer is _metal:
 			stage1_kwargs = dict(stage1_kwargs, per_episode=True)
+		# CTRL-58 (ABI 59): the per-episode tail export (both scorers), only when armed.
+		tail_cap = self.episode_tail_cap_deg
+		if tail_cap is not None:
+			stage1_kwargs = dict(stage1_kwargs, episode_errs=True, tail_diverged_err_deg=float(tail_cap))
 		try:
 			if dist is None:
 				agg = scorer(
@@ -2583,6 +2617,14 @@ class ControllerEvaluator:
 		# (rise/settle/ITAE) are computed in the SAME Rust rollout — see
 		# controller_rollout.metal. `effort` = mean per-step Σ pwm² (Σu², Phase 3).
 		for row in agg:
+			# CTRL-58 (ABI 59): the tail export rides AFTER the 19 metric slots as [n, e_1..e_n].
+			ep_errs = None
+			if tail_cap is not None:
+				n_ep = int(row[_SCORER_ROW_METRICS])
+				ep_errs = [float(x) for x in row[_SCORER_ROW_METRICS + 1:]]
+				if len(ep_errs) != n_ep:
+					raise ValueError(f"tail export: row carries {len(ep_errs)} episode errors, header says {n_ep}")
+				row = row[:_SCORER_ROW_METRICS]
 			(mean_reward, mean_err_rad, stable_rate, jerk, mono, steady_rad,
 			 rise_s, settle_abs_s, settle_rel_s, itae, iae, ise) = row[:12]
 			# 13th metric (effort, ABI 9) — tolerate an older 12-row wheel so a
@@ -2638,6 +2680,9 @@ class ControllerEvaluator:
 				"mean_ise": float(ise),
 				# Allocation-effort proxy (Σu², Phase 3): the Σu² fitness input.
 				"mean_effort": (float(effort) if effort is not None else None),
+				# CTRL-58: the per-episode errors (deg) — pooled across CRN pools, then reduced
+				# to episode_err_p99_deg by the Rust tail (_with_tail). Absent unless armed.
+				**({"episode_errs_deg": ep_errs} if ep_errs is not None else {}),
 			}))
 		return out
 
@@ -2686,7 +2731,7 @@ class ControllerEvaluator:
 		"""During-search scoring: one pool (legacy rotation) or ALL K pools combined
 		(CRN). Returns [(reward, metrics_dict)] in input order either way."""
 		if not self.score_crn or self.num_eval_folds <= 1:
-			return self._score_grouped(controllers, shape_keys)
+			return with_episode_tail(self._score_grouped(controllers, shape_keys))
 		if not self._crn_logged:
 			print(f"[ControllerEvaluator] CRN fitness: every genome scored on all "
 			      f"{self.num_eval_folds} pools {self._fold_seeds} every generation "
@@ -2698,7 +2743,7 @@ class ControllerEvaluator:
 			self._active_score_seed = pool_seed
 			per_pool.append(self._score_grouped(controllers, shape_keys))
 		self._active_score_seed = self._fold_seeds[0]
-		return combine_pool_scores(per_pool)
+		return with_episode_tail(combine_pool_scores(per_pool))
 
 	def _split_cell_floor(self, genomes: list) -> int:
 		"""Cell-count floor for the state-splitting trainer (WNN_STATE_SPLIT=1).
@@ -3095,6 +3140,7 @@ class ControllerEvaluator:
 				mean_dy_m=(float(_dy) if _dy is not None else None),
 				mean_position_hold_m=m.get("mean_position_hold_m"),
 				mean_dz_hold_m=m.get("mean_dz_hold_m"),
+				episode_err_p99_deg=m.get("episode_err_p99_deg"),  # CTRL-58 (None unless armed)
 			)
 			if write_back or return_stats:
 				# Fill counts straight from Rust; the old _cell_stats ALSO called
@@ -3222,7 +3268,8 @@ class ControllerEvaluator:
 		                mean_dx_m=(float(m["mean_dx_m"]) if m.get("mean_dx_m") is not None else None),
 		                mean_dy_m=(float(m["mean_dy_m"]) if m.get("mean_dy_m") is not None else None),
 		                mean_position_hold_m=m.get("mean_position_hold_m"),
-		                mean_dz_hold_m=m.get("mean_dz_hold_m"))
+		                mean_dz_hold_m=m.get("mean_dz_hold_m"),
+		                episode_err_p99_deg=m.get("episode_err_p99_deg"))  # CTRL-58 (None unless armed)
 		        for (r, m) in scored]
 
 	def _score_grouped(self, controllers: list, shape_keys: list) -> list:

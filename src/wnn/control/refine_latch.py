@@ -6,8 +6,8 @@ comes first:
 
   * POPULATION — after a generation's selection, >= trigger_frac of the TRAIN pool has
     stable >= S, err <= E, steady <= D and pos <= P, for trigger_gens consecutive
-    generations of the same stage (the streak restarts at each stage start: a new stage
-    re-scores its seeded population on its own evaluator);
+    generations (Luiz 18/11: the streak CARRIES ACROSS stages — consecutive GA
+    generations of the run, not of one stage);
   * STAGE — trigger_stage starts (default MEMORY).
 
 It reads ONLY the metrics the GA ranks (the train folds). It never sees a val or test
@@ -53,8 +53,8 @@ class RefineLatch:
 
 	def stage_start(self, stage: str) -> bool:
 		"""Called as a GA stage sets up its fitness. True ⇒ the stage runs under the
-		refinement fitness from generation 0 (already fired, or this IS trigger_stage)."""
-		self._streak = 0
+		refinement fitness from generation 0 (already fired, or this IS trigger_stage).
+		The population streak is NOT reset here (it carries across stages)."""
 		if self.fired:
 			return True
 		if stage == self.config.trigger_stage:
@@ -95,6 +95,21 @@ class RefineLatch:
 		return (f"{frac:.0%} of TRAIN pool >= {c.trigger_frac:.0%} with stable>={c.trigger_stable:g} "
 		        f"err<={c.trigger_err:g}° steady<={c.trigger_steady:g}° pos<={c.trigger_pos:g}m "
 		        f"for {c.trigger_gens} consecutive gen(s)")
+
+	def state(self) -> dict:
+		"""The latch as plain data — checkpoint meta / winner marker (fired, stage, generation,
+		reason) plus the running streak, so an emergency resume continues it exactly."""
+		return {"fired": self.fired, "stage": self.fired_stage, "generation": self.fired_gen,
+		        "reason": self.reason, "streak": self._streak}
+
+	def restore(self, state: dict) -> None:
+		"""Inverse of state() (emergency resume)."""
+		self.fired = bool(state.get("fired", False))
+		self.fired_stage = state.get("stage")
+		self.fired_gen = state.get("generation")
+		self.reason = state.get("reason")
+		self._streak = int(state.get("streak", 0) or 0)
+		self._log(f"[refine] latch restored from the emergency dump: {self.state()}")
 
 	def _fire(self, stage: str, gen: int, reason: str) -> None:
 		self.fired, self.fired_stage, self.fired_gen, self.reason = True, stage, gen, reason

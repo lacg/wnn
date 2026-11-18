@@ -244,14 +244,18 @@ def _wire_cancel(strat, args, stage_num: int, stage_name: str) -> None:
 	_resume_ga_state_if_targeted(strat, args, stage_num)
 
 
-def _wire_refine(strat, refine_latch) -> None:
+def _wire_refine(strat, refine_latch, ev=None) -> None:
 	"""CTRL-58: hand the run's RefineLatch to a GA stage (None = off, nothing set, so
 	the strategy's refine hooks fall through to the base: bit-identical). Called right
-	after _wire_cancel, which sets the `_stage_name` the latch keys on."""
+	after _wire_cancel, which sets the `_stage_name` the latch keys on. ABI 59: with a
+	tail weight > 0 the stage's evaluator exports the per-episode tail from generation 0
+	(capped at the run's --gate-err), so the column exists the moment the latch fires."""
 	if refine_latch is None:
 		return
 	strat._refine_latch = refine_latch
 	strat._refine_active = False
+	if ev is not None and refine_latch.config.w_tail > 0.0:
+		ev.episode_tail_cap_deg = refine_latch.tail_cap_deg
 
 
 def build_refine_latch(args):
@@ -261,8 +265,31 @@ def build_refine_latch(args):
 		return None
 	from wnn.control.refine_fitness import build_refine_calculator
 	from wnn.control.refine_latch import RefineLatch
-	return RefineLatch(cfg, lambda: build_refine_calculator(cfg, args, with_tail=True),
-	                   pos_metric=fit_pos_metric_from_args(args))
+	latch = RefineLatch(cfg, lambda: build_refine_calculator(cfg, args, with_tail=True),
+	                    pos_metric=fit_pos_metric_from_args(args))
+	# ABI 59: a diverged episode counts as the run's viability err limit in the tail column.
+	latch.tail_cap_deg = float(getattr(args, "gate_err", 8.0) or 8.0)
+	_restore_refine_latch(latch, args)
+	# The winner marker and the stage checkpoints record the latch (_save_winner reads it).
+	args._refine_latch = latch
+	return latch
+
+
+def _restore_refine_latch(latch, args) -> None:
+	"""--resume-from-emergency: continue the dumped run's latch (fired / stage / generation
+	/ reason / streak) from the dump's meta, in either resume mode — a latch that fired
+	before the dump governs every later stage. A dump without the record (a run that had
+	refinement off) leaves the latch fresh, and says so."""
+	path = getattr(args, "resume_from_emergency", None)
+	if not path:
+		return
+	from wnn.ram.strategies.phased import load_checkpoint, ControllerGenomeCodec
+	ckpt = load_checkpoint(Path(path), ControllerGenomeCodec(), skip_population=True)
+	state = ((getattr(ckpt, "extra", None) or {}).get("refine_latch")) if ckpt is not None else None
+	if state is None:
+		print("[refine] resume: the dump carries no latch record — the latch starts fresh", flush=True)
+		return
+	latch.restore(state)
 
 
 def _stop_if_interrupted(res, strat) -> None:
@@ -1127,7 +1154,7 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	# optimize() so any SIGTERM during this stage trips the cooperative path.
 	# Stage identity derives from the dimension (NEURONS→1, BITS→2, CONNECTIONS→3).
 	_wire_cancel(strat, args, _STAGE_BY_DIM[dimension], dimension.name.lower())
-	_wire_refine(strat, refine_latch)
+	_wire_refine(strat, refine_latch, ev)
 	t = time.time()
 	# Lamarckian: route batch eval through write-back (carry cells across gens).
 	# Residual mode (Phase 2): NO DAGGER training — score_genomes only (EMPTY
@@ -1501,7 +1528,7 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	# Shared cooperative-cancel + crash-save core (mirrors arch_phase). MEMORY is
 	# always Stage 4.
 	_wire_cancel(strat, args, 4, "memory")
-	_wire_refine(strat, refine_latch)
+	_wire_refine(strat, refine_latch, ev)
 	t = time.time()
 	# MEMORY paradigm: cells ARE the genome → score_genomes (no training).
 	optimize_kwargs = dict(
@@ -1578,6 +1605,10 @@ def _save_winner(path: str, args, spec: ControllerSpec,
 	_refine = refine_weights_record(args)
 	if _refine is not None:
 		payload["fitness_weights"]["refine"] = _refine
+	# ABI 59: the latch record (fired / stage / generation / reason / streak) in the marker.
+	_latch = getattr(args, "_refine_latch", None)
+	if _latch is not None:
+		payload.setdefault("meta", {})["refine_latch"] = _latch.state()
 	if stage_num is not None:
 		# The completion marker the resume picker and --resume-mode next require
 		# (wnn.control.stage_completion). Only stage FINALS reach here with a

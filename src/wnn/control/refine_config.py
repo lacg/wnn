@@ -110,21 +110,14 @@ def _validate_weights(cfg: RefineConfig) -> None:
 
 
 def _refuse_search_combos(args, cfg: RefineConfig) -> None:
-	"""--refine-fitness paths that are NOT wired (refused, never silently ignored)."""
-	if cfg.w_tail > 0.0:
-		raise SystemExit(
-			f"--refine-w-tail {cfg.w_tail:g}: the GA ranks the TRAIN pool, and no scorer yet "
-			"reports a per-genome per-episode tail there (ControllerMetrics.episode_err_p99_deg "
-			"needs a Rust scorer row — the val-only per_episode_sink is GPU-only and Python-side). "
-			"Pass --refine-w-tail 0 to fly without the tail term until that row lands.")
+	"""--refine-fitness paths that are NOT wired (refused, never silently ignored). ABI 59
+	removed two refusals: --refine-w-tail > 0 (the scorers now export the train-pool tail)
+	and --resume-from-emergency (the latch state is checkpointed and restored)."""
 	if getattr(args, "strategy", "ga") == "ts":
 		raise SystemExit("--refine-fitness is wired into the GA loop only; --strategy ts is refused.")
 	for flag in ("axis_curriculum", "difficulty_curriculum", "difficulty_adaptive"):
 		if getattr(args, flag, False):
 			raise SystemExit(f"--refine-fitness is not wired into --{flag.replace('_', '-')} (refused).")
-	if getattr(args, "resume_from_emergency", None):
-		raise SystemExit("--refine-fitness + --resume-from-emergency: the latch state is not "
-		                 "checkpointed, so a resumed run could not continue it exactly (refused).")
 
 
 def refine_token(args) -> str:

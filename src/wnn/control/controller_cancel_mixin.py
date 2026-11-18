@@ -50,6 +50,9 @@ class ControllerCancelMixin:
 				"steady": getattr(cfg, "fitness_weight_steady", 0.0),
 			},
 			"meta": {**getattr(self, "_checkpoint_meta", {}),
-			         "emergency_dump": not complete},
+			         "emergency_dump": not complete,
+			         # CTRL-58 (ABI 59): the latch record, so an emergency resume continues it.
+			         **({"refine_latch": self._refine_latch.state()}
+			            if getattr(self, "_refine_latch", None) is not None else {})},
 		}
 		return payload_to_checkpoint(payload)

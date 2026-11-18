@@ -175,7 +175,10 @@ import os
 # the yaw bank's own delta_max (--delta-max-yaw); None = ABI 56 bit-identical.
 # ABI 58 (17/11/2026, Luiz): WnnController / dagger_train_batch_inplace(yaw_trim_ff=False) — the
 # yaw-rate feed-forward (--yaw-trim-ff); False = ABI 57 bit-identical.
-EXPECTED_ABI = 58
+# ABI 59 (18/11/2026, Luiz: CTRL-58 Rust part): score_controllers_cpu|metal(episode_errs=,
+# tail_diverged_err_deg=) tail export + episode_tail_p99_deg; gated_fitness_combine(gate_steady=,
+# gate_steady_max=, gate_pos=, gate_pos_max=) native four-input gate. Defaults = ABI 58.
+EXPECTED_ABI = 59
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

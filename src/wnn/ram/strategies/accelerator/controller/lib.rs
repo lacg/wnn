@@ -82,6 +82,8 @@ mod ctrl52_yaw_trim_p_tests; // L2y' (ABI 52): proportional-only yaw trim shift,
 #[cfg(test)]
 mod ctrl54_yaw_heading_tests; // lever 1 (ABI 54): yaw heading from the student's own Mahony estimate
 #[cfg(test)]
+mod ctrl59_tail_gate_tests; // ABI 59 (CTRL-58): tail sink inert + capped + CPU==GPU; gate tests in gate4.rs
+#[cfg(test)]
 mod ctrl58_yaw_trim_ff_tests; // ABI 58: --yaw-trim-ff — cT, refusals, setpoint-only FF, label remainder, CPU/GPU score + walk parity
 #[cfg(test)]
 mod ctrl57_delta_max_yaw_tests; // ABI 57: --delta-max-yaw — refusals, bit-identity, yaw-only decode, label round trip, CPU/GPU score + walk parity
@@ -108,6 +110,8 @@ mod abi34_tests; // ABI 34: lag-aware teachers, one pwm convention under motor l
 mod yaw_trim_err; // L2y (ABI 51): yaw error referenced to the trim the rate loop rides on (--obs-yaw-trim-err)
 mod tilt_ref_err; // L1 (ABI 51): roll/pitch error vs the tilt reference, bias-corrected (--obs-tilt-ref-err)
 mod att_bias_pred; // CTRL-46 (ABI 46): onboard predictor of the Mahony specific-force bias (--obs-att-bias-pred)
+mod episode_tail; // ABI 59 (CTRL-58): the GA's near-fail tail (p99 of per-episode err, inverted_cdf)
+mod gate4; // ABI 59 (CTRL-58): the native four-input viability gate on top of ram_core's combine
 mod axis_split; // ABI 53/56: per-axis split of a scorer's attitude error (rival + WNN scorers)
 mod rival_probe; // opt-in probe on the classical-rival scorer (INDI spec §10: observer gain, bias compensation)
 #[cfg(test)]
@@ -564,7 +568,16 @@ mod metal_controller;
 ///     recorded as sp_T − FF (one site: every split / bptt / GPU label path reads it). Metal:
 ///     RolloutParams + yff_on, yff_ct (193 words). Refused with L2y / L2y'.
 ///     Pin: ctrl58_yaw_trim_ff_tests.rs.
-pub const ABI_VERSION: u32 = 58;
+/// ABI 59 (18/11/2026, Luiz: CTRL-58 Rust part; additive, default = ABI 58 bit-identical):
+///   * score_controllers_cpu / score_controllers_metal(episode_errs=False, tail_diverged_err_deg=8.0):
+///     opt-in per-episode tail export — each genome row followed by [n, e_1..e_n] (deg, diverged =
+///     the gate err limit); Metal builds it host-side from the per-episode export.
+///   * episode_tail_p99_deg(errs): the GA tail column, numpy inverted_cdf p99 (episode_tail.rs).
+///   * gated_fitness_combine(gate_steady=, gate_steady_max=, gate_pos=, gate_pos_max=): the native
+///     four-input gate (gate4.rs, controller crate, on ram_core's combine_flat); unset ⇒ the shared
+///     ram_core two-input gate verbatim. ram_core untouched (no worker wheel change).
+///     Pin: ctrl59_tail_gate_tests.rs + episode_tail / gate4 unit tests.
+pub const ABI_VERSION: u32 = 59;
 
 /// ABI 44: how output neurogenesis lays out the output layer — "segment" = every
 /// bank / E-I half resizes at its own tail (pre-44 Python resized the flat tail).
@@ -1479,7 +1492,8 @@ fn fitness_combine(
 /// so every banked recipe stays bit-identical.
 #[pyfunction]
 #[pyo3(signature = (values_flat, num_candidates, weights, higher_is_better, mode, clamp,
-                    gate_stable, gate_err, gate_stable_min, gate_err_max, scale_floors=None))]
+                    gate_stable, gate_err, gate_stable_min, gate_err_max, scale_floors=None,
+                    gate_steady=None, gate_steady_max=None, gate_pos=None, gate_pos_max=None))]
 fn gated_fitness_combine(
 	values_flat: Vec<f64>,
 	num_candidates: usize,
@@ -1492,13 +1506,30 @@ fn gated_fitness_combine(
 	gate_stable_min: f64,
 	gate_err_max: f64,
 	scale_floors: Option<Vec<f64>>,
+	// ABI 59 (CTRL-58): the native four-input gate's extra UPPER bounds (gate4.rs). Each is a
+	// (values, bound) pair — both or neither; all unset ⇒ the shared two-input gate, bit for bit.
+	gate_steady: Option<Vec<f64>>,
+	gate_steady_max: Option<f64>,
+	gate_pos: Option<Vec<f64>>,
+	gate_pos_max: Option<f64>,
 ) -> PyResult<Vec<f64>>
 {
-	ram_core::fitness::gated_combine_flat(
+	let verr = pyo3::exceptions::PyValueError::new_err;
+	let mut extra = Vec::new();
+	for (name, vals, max) in [("steady", &gate_steady, gate_steady_max), ("pos", &gate_pos, gate_pos_max)]
+	{
+		match (vals, max)
+		{
+			(Some(v), Some(m)) => extra.push(crate::gate4::UpperBound { values: v, max: m, name }),
+			(None, None) => {}
+			_ => return Err(verr(format!("gated_fitness_combine: gate_{name} and gate_{name}_max go together"))),
+		}
+	}
+	crate::gate4::gated4_combine_flat(
 		&values_flat, num_candidates, &weights, &higher_is_better, mode, clamp,
 		scale_floors.as_deref(),
-		&gate_stable, &gate_err, gate_stable_min, gate_err_max)
-		.map_err(pyo3::exceptions::PyValueError::new_err)
+		&gate_stable, &gate_err, gate_stable_min, gate_err_max, &extra)
+		.map_err(verr)
 }
 
 /// Desirability combine — ABI 25 (26/08/2026, Luiz's redesign;
@@ -1535,6 +1566,7 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()>
 	m.add("BPTT_DEVICE_DEFAULT", BPTT_DEVICE_DEFAULT)?;
 	m.add_function(wrap_pyfunction!(fitness_combine, m)?)?;
 	m.add_function(wrap_pyfunction!(gated_fitness_combine, m)?)?;
+	m.add_function(wrap_pyfunction!(crate::episode_tail::episode_tail_p99_deg, m)?)?; // ABI 59
 	m.add_function(wrap_pyfunction!(desirability_fitness_combine, m)?)?;
 	m.add_function(wrap_pyfunction!(counter_rng_draw_u64, m)?)?;
 	m.add_function(wrap_pyfunction!(counter_rng_uniform, m)?)?;
