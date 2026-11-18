@@ -141,7 +141,7 @@ def _cells_carrying(ckpt_dir: str) -> set:
 	from wnn.control.controller_orchestrator import ControllerOrchestrator
 	k = int(ControllerOrchestrator.STAGE_SELECT_TOP_K)
 	have = set()
-	for label, _spec, res in _stage_entries_from_checkpoints(ckpt_dir, top_k=k):
+	for label, _spec, res in _stage_entries_from_checkpoints(ckpt_dir, top_k=k, allow_arch_only=True):
 		pop = list(getattr(res, "final_population", None) or [res.best_genome])
 		for i, g in enumerate(pop[:k]):
 			if getattr(g, "cells", None) is not None:

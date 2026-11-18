@@ -1491,7 +1491,8 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 def _save_winner(path: str, args, spec: ControllerSpec,
                  best_genome, final_population, metrics,
                  stage_num=None, stage_name=None, async_save: bool = False,
-                 headline_key: str | None = None) -> None:
+                 headline_key: str | None = None,
+                 cells_materialized_idx: list | None = None) -> None:
 	"""Persist the WINNER + the entire FINAL POPULATION + spec + provenance to
 	PATH (schema-2 yaml.gz, cells packed; no pickle).
 
@@ -1555,6 +1556,10 @@ def _save_winner(path: str, args, spec: ControllerSpec,
 	if headline_key is not None:
 		# Which published row this file IS (e.g. "NEURONS#2"): best_genome = pop[0] = it.
 		payload["meta"]["headline"] = headline_key
+	if cells_materialized_idx:
+		# CTRL-56: these entries were arch-only in the live run and were trained for the
+		# checkpoint only — a resume strips them again (ckpt_cells.strip_materialized_cells).
+		payload["meta"]["cells_materialized_idx"] = [int(i) for i in cells_materialized_idx]
 	pop_n = len(payload["population"])
 	if async_save:
 		p, t = _ctl_save_async(path, payload)
@@ -1908,9 +1913,14 @@ def _student_refit_samples(args, ec, seeds, grid, winner, eps: int) -> list:
 		                   "--threshold-refit-from-student and cannot honour it") from e
 
 
-def _stage_entry_from_checkpoint(path, top_k: int | None = None):
+def _stage_entry_from_checkpoint(path, top_k: int | None = None, allow_arch_only: bool = False):
 	"""(LABEL, spec, res-like, iterations_run) for ONE stage checkpoint, or None
 	when the file is not a usable stage checkpoint (no spec / no genome).
+
+	CTRL-56: REFUSES (ArchOnlyEntryError) when a loaded entry carries no trained cells,
+	unless `allow_arch_only` — set only by callers that retrain such an entry on the
+	train seed (the held-out path: --recalc-headline, resume reload) or merely inspect.
+	Every pre-CTRL-56 GRID checkpoint holds them (GRID#2 always, see ckpt_cells).
 
 	The label comes from the checkpoint's own `phase_name` (GRID, NEURONS, ...),
 	the res-like carries `final_population` (fitness-sorted, so pop[0] is the
@@ -1942,12 +1952,20 @@ def _stage_entry_from_checkpoint(path, top_k: int | None = None):
 	label = str(cp.phase_name or name).upper()
 	print(f"  [stage-ckpt] {name}: {label} population={len(pop)}"
 	      f"{'' if top_k is None else f' (top-{top_k} streamed)'}")
+	from wnn.control.ckpt_cells import arch_only_indices, refuse_arch_only
+	if not allow_arch_only:
+		refuse_arch_only(pop, f"stage checkpoint {path}", [f"{label}#{i}" for i in range(len(pop))])
+	elif arch_only_indices(pop):
+		print(f"  [stage-ckpt] {name}: ARCH-ONLY entries (no cells) "
+		      f"{[f'{label}#{i}' for i in arch_only_indices(pop)][:12]} — the held-out path retrains "
+		      f"them on the train seed (CTRL-56: never score them score-only)")
 	return (label, ControllerSpec(**spec_d),
 	        SimpleNamespace(final_population=pop, best_genome=cp.best_genome),
 	        int(cp.iterations_run or 0))
 
 
-def _stage_entries_from_checkpoints(ckpt_dir, top_k: int | None = None) -> list:
+def _stage_entries_from_checkpoints(ckpt_dir, top_k: int | None = None,
+                                    allow_arch_only: bool = False) -> list:
 	"""Rebuild `stage_entries` from a run's saved stage checkpoints.
 
 	Reads `stageN_<name>.yaml.gz` (emergency dumps ignored — they are mid-stage
@@ -1964,7 +1982,7 @@ def _stage_entries_from_checkpoints(ckpt_dir, top_k: int | None = None) -> list:
 		m = re.match(r"stage(\d+)_", p.name)
 		if m is None:
 			continue
-		e = _stage_entry_from_checkpoint(p, top_k)
+		e = _stage_entry_from_checkpoint(p, top_k, allow_arch_only=allow_arch_only)
 		if e is not None:
 			found.append((int(m.group(1)), e[:3]))
 	found.sort(key=lambda t: t[0])
@@ -2081,7 +2099,8 @@ def _reload_completed_stages(args, ec: EpisodeConfig, seeds, resume_state: dict,
 			label, iters = name.upper(), resume_state.get("generation")
 			src = "the emergency snapshot" if path is None else str(path)
 		else:
-			e = _stage_entry_from_checkpoint(path, top_k=k)
+			# allow_arch_only: _maybe_holdout / stage-select retrain them (CTRL-56).
+			e = _stage_entry_from_checkpoint(path, top_k=k, allow_arch_only=True)
 			if e is None:
 				raise SystemExit(f"[resume] stage checkpoint {path} is unusable (no spec/genome) — "
 				                 f"refusing to resume with a shrunken stage-select pool")
@@ -2103,8 +2122,11 @@ def _recalc_headline(args, ec: EpisodeConfig) -> None:
 	the episodes and the scoring all derive from them, so a mismatched flag would
 	silently produce a number that is not comparable with the original."""
 	_refuse_refit_without_grid(args, "--recalc-headline (nothing is re-collected)")
+	# allow_arch_only: every candidate is scored through _holdout_report, which retrains
+	# an arch-only one on the train seed exactly as the live stage-select did (CTRL-56:
+	# verified byte-identical VAL rows, a50 s1-s3 GRID#2, live vs 300-unit stress recalc).
 	entries = _stage_entries_from_checkpoints(args.recalc_headline,
-	                                          top_k=_stage_select_top_k(args))
+	                                          top_k=_stage_select_top_k(args), allow_arch_only=True)
 	if not entries:
 		raise SystemExit(f"--recalc-headline: no usable stage checkpoints in {args.recalc_headline}")
 	base = args.base_seed if args.base_seed is not None else args.seed
@@ -2427,6 +2449,69 @@ def _headline_pick(stage_entries, winner: str, cand_meta: dict):
 	return SimpleNamespace(label=label, key=winner, spec=spec, genome=genome, population=population)
 
 
+def _train_arch_only(args, ec: EpisodeConfig, spec, genomes: list, train_seed: int, thresholds,
+                     solo_seeds: bool = False) -> None:
+	"""Train `genomes` IN PLACE on the TRAIN seed the way the held-out trains an arch-only
+	winner: --test-episodes per fold, K=num_eval_folds accumulate, write-back, under the
+	train-seed thresholds the scorer then reads with.
+
+	solo_seeds=False is `_holdout_report`'s batch: genome i trains on the legacy
+	positional seeds (train*100 + i*K). solo_seeds=True gives EVERY genome the seeds of
+	a one-genome batch (train*100 + k) — what stage-select / --recalc-headline produce
+	when they retrain ONE arch-only candidate — so a checkpoint-materialized entry holds
+	the cells those paths would compute for it (CTRL-56)."""
+	rep_eps = getattr(args, "test_episodes", None) or args.eval_episodes
+	train_ev = ControllerEvaluator(spec, num_eval_episodes=rep_eps, seed=train_seed,
+	                               episode_config=ec, thresholds=thresholds,
+	                               rg_config=_rg_config(args, ec, train_seed),
+	                               max_train_workers=args.train_workers,
+	                               num_eval_folds=getattr(args, "num_eval_folds", 5))
+	train_ev._evaluate_core(genomes, write_back=True,
+	                        _global_idx=[0] * len(genomes) if solo_seeds else None)
+
+
+def _scoreable_population(pop: list, ec: EpisodeConfig, stage_label: str) -> list:
+	"""pop[0] plus every later member that carries cells. Residual mode (ec.geometry)
+	scores empty memories by design (empty = neutral), so it keeps everyone."""
+	if getattr(ec, "geometry", None) is not None:
+		return pop
+	keep = pop[:1] + [g for g in pop[1:] if getattr(g, "cells", None) is not None]
+	if len(keep) < len(pop):
+		print(f"  [held-out] {stage_label}: {len(pop) - len(keep)} arch-only member(s) of the "
+		      f"descriptive sample left out (no trained cells — scoring them would score an "
+		      f"EMPTY controller; CTRL-56)")
+	return keep
+
+
+def _materialize_arch_only_cells(args, ec: EpisodeConfig, spec, population: list,
+                                 train_seed: int) -> tuple:
+	"""(population', idx): population' = `population` with every arch-only entry replaced
+	by a TRAINED COPY (solo seeds, see _train_arch_only); idx = the replaced indices.
+
+	For the stage-0 checkpoint (CTRL-56). The live genomes are NOT touched: the NEURONS
+	stage seeds from them, and which of them carry cells is part of the run as flown.
+	Trains in chunks of --holdout-pop-sample (the batch the held-out already trains).
+	Thresholds: the train-seed fit (_test_thresholds use_score=True ignores the test seed)."""
+	import copy
+	from wnn.control.ckpt_cells import arch_only_indices
+	idx = arch_only_indices(population)
+	if not idx:
+		return list(population), []
+	thresholds = _test_thresholds(args, ec, spec, train_seed, train_seed, use_score=True)
+	copies = {i: copy.copy(population[i]) for i in idx}
+	chunk = max(1, int(getattr(args, "holdout_pop_sample", 8) or 8))
+	t0 = time.time()
+	for s in range(0, len(idx), chunk):
+		_train_arch_only(args, ec, spec, [copies[i] for i in idx[s:s + chunk]], train_seed,
+		                 thresholds, solo_seeds=True)
+	from wnn.control.cancel_state import raise_if_interrupted
+	raise_if_interrupted("stage-0 checkpoint cell materialization")
+	print(f"[ckpt-cells] GRID checkpoint: trained {len(idx)} arch-only entr"
+	      f"{'y' if len(idx) == 1 else 'ies'} on the train seed for the checkpoint only "
+	      f"({time.time() - t0:.0f}s; live population unchanged; CTRL-56)", flush=True)
+	return [copies.get(i, g) for i, g in enumerate(population)], idx
+
+
 def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population,
                     test_seed: int, train_seed: int, stage_label: str = "final",
                     episode_sink: list | None = None):
@@ -2489,6 +2574,10 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 	use_score = (getattr(best_genome, "cells", None) is not None
 	             or getattr(ec, "geometry", None) is not None)
 	if use_score:
+		# CTRL-56: the GRID's 2nd..Nth test seed lands here with a NEW descriptive sample,
+		# whose members the first seed never trained — they used to be scored as EMPTY
+		# controllers (Y s1 GRID line: 37.5±48.4% vs 100.0±0.0% on the first seed).
+		pop = _scoreable_population(pop, ec, stage_label)
 		metrics = ev.score_genomes(pop)
 	else:
 		# Arch-only winner (e.g. a raw grid winner — no cells). Do NOT retrain on the
@@ -2499,14 +2588,9 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 		# THEN score those cells on the fresh test seed → train-on-A → score-on-B.
 		# Same fit as `thresholds` above (train seed, same calibration ec) — ONE threshold
 		# set for the write and the read, which is the whole point.
-		train_ev = ControllerEvaluator(spec, num_eval_episodes=rep_eps, seed=train_seed,
-		                               episode_config=ec, thresholds=thresholds,
-		                               rg_config=_rg_config(args, ec, train_seed),
-		                               max_train_workers=args.train_workers,
-		                               num_eval_folds=getattr(args, "num_eval_folds", 5))
 		for _g in pop:
 			_g.cells = None
-		train_ev._evaluate_core(pop, write_back=True)   # stamp train-seed cells (K-fold accumulate)
+		_train_arch_only(args, ec, spec, pop, train_seed, thresholds)  # stamp train-seed cells
 		metrics = ev.score_genomes(pop)                 # held-out: score on test seed, no retrain
 	# A score taken after a SIGTERM is a cancelled evaluation (zeros / sentinels),
 	# never a measurement: do not print it, return it, or let stage-select rank it.
@@ -2542,7 +2626,8 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 # -----------------------------------------------------------------------------
 
 def _save_stage_checkpoint(args, stage_num: int, stage_name: str,
-                            spec: ControllerSpec, res, metrics) -> None:
+                            spec: ControllerSpec, res, metrics,
+                            cells_materialized_idx: list | None = None) -> None:
 	"""Per-stage checkpoint: pickle the stage's winner + final population if
 	--save-stage-checkpoints DIR is set. Lets a future reboot resume from the
 	last finished stage instead of restarting from scratch (added 30/05/2026
@@ -2583,8 +2668,18 @@ def _save_stage_checkpoint(args, stage_num: int, stage_name: str,
 	# boundary. (The in-stage crash manager went sync too, later the same day —
 	# the sampler MEASURED its eager encode spiking +14 GB at a gen boundary; see
 	# `_wire_cancel`.)
+	from wnn.control.ckpt_cells import arch_only_indices
+	_arch = arch_only_indices(res.final_population or [res.best_genome])
+	if _arch:
+		# Never silent (CTRL-56): loaders refuse these entries. The GRID path trains them
+		# first (_materialize_arch_only_cells), so this fires only for a residual-mode run
+		# (empty = neutral by design) or a GA stage that kept a cell-less child.
+		print(f"[ckpt-cells] WARNING stage{stage_num}_{stage_name.lower()}: {len(_arch)} arch-only "
+		      f"entr{'y' if len(_arch) == 1 else 'ies'} saved without cells {_arch[:12]} — "
+		      f"score-only loaders will refuse them", flush=True)
 	_save_winner(str(path), args, spec, res.best_genome, res.final_population, metrics,
-	             stage_num=stage_num, stage_name=stage_name, async_save=False)
+	             stage_num=stage_num, stage_name=stage_name, async_save=False,
+	             cells_materialized_idx=cells_materialized_idx)
 
 
 def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
@@ -2734,15 +2829,25 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 		# DELIBERATELY AFTER _maybe_holdout, not before. A raw grid winner is
 		# arch-only (cells=None) and an arch-only checkpoint cannot be scored — it is
 		# resume-fodder, not a committee member. _holdout_report's arch-only branch
-		# stamps train-seed cells INTO these same genome objects (K-fold accumulate,
-		# exactly as the search trains) before scoring them on the test seeds, so
-		# saving afterwards captures a trained, directly-scoreable controller.
+		# stamps train-seed cells INTO these same genome objects (K-fold accumulate)
+		# before scoring them on the test seeds — but ONLY the ones it scores: pop[0]
+		# plus the --holdout-pop-sample draw of the FIRST test seed (8 of 50). Until
+		# CTRL-56 (17/11/2026) the other 42, GRID#2 among them in every run, were saved
+		# arch-only and reloaded as EMPTY controllers in score-only tools. Now COPIES of
+		# them are trained for the checkpoint (solo seeds = what stage-select computes
+		# for a lone arch-only candidate); the live genomes stay as flown, because the
+		# NEURONS stage seeds from them. Same with no test seed set (then all 50).
 		# Caveat for anyone comparing it: those cells were trained with
 		# --test-episodes, not --eval-episodes, so this is the grid winner as the
 		# HELD-OUT measured it, not as the search saw it mid-selection.
-		# With no test seed set the holdout is skipped and this falls back to the
-		# arch-only dump (still useful: --resume, and the top-K pool for warm-start).
-		_save_stage_checkpoint(args, 0, "grid", winner_spec, grid_res, m0)
+		if getattr(args, "save_stage_checkpoints", None) and grid_res.final_population:
+			_ck_pop, _ck_idx = _materialize_arch_only_cells(args, ec, winner_spec,
+			                                                grid_res.final_population, seeds.train)
+			_save_stage_checkpoint(args, 0, "grid", winner_spec,
+			                       _SNS(best_genome=_ck_pop[0], final_population=_ck_pop), m0,
+			                       cells_materialized_idx=_ck_idx)
+		else:
+			_save_stage_checkpoint(args, 0, "grid", winner_spec, grid_res, m0)
 	else:
 		seed_pop0 = None
 		_grid_stage_entry = None   # resume skips the grid — nothing to score or publish
@@ -4410,6 +4515,13 @@ def main():
 		if not resume_path.exists():
 			raise FileNotFoundError(f"--resume-from-emergency {resume_path} does not exist")
 		resume_state = _ctl_load(resume_path)
+		# CTRL-56: entries trained for the checkpoint only go back to arch-only, so the
+		# resumed run continues from the population the live run actually had.
+		from wnn.control.ckpt_cells import strip_materialized_cells
+		_stripped = strip_materialized_cells(resume_state)
+		if _stripped:
+			print(f"[resume] {len(_stripped)} checkpoint-materialized entr"
+			      f"{'y' if len(_stripped) == 1 else 'ies'} restored to arch-only (as flown; CTRL-56)")
 		resume_state["resume_mode"] = args.resume_mode
 		resume_state["source_path"] = str(resume_path)
 		# --resume-mode next from a stage FINAL claims that stage finished. Refuse a

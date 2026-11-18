@@ -20,7 +20,7 @@ stage, idx = head.split("#")[0], int(head.split("#")[1])
 a = P.build_arg_parser().parse_args(argv)
 ec = P.episode_config_from_args(a); P._resolve_ctbr(a, ec); a._dhat_b = None
 a._conn_policy, a._conn_policy_min = P.conn_policy_from_name(getattr(a, "conn_policy", "spread"))
-label, spec, res = P._stage_entry_from_checkpoint(Path(D + f"ckpt_{tag}/{STAGE[stage]}.yaml.gz"), top_k=idx + 1)[:3]
+label, spec, res = P._stage_entry_from_checkpoint(Path(D + f"ckpt_{tag}/{STAGE[stage]}.yaml.gz"), top_k=idx + 1, allow_arch_only=True)[:3]  # arch-only retrained below
 g = res.final_population[idx]
 s = resolve_seed_set(base=a.base_seed, run_index=0, train=a.train_seed, test=a.test_seed, val=a.val_seed)
 KEYS = ("acc", "mean_attitude_error_deg", "mean_steady_error_deg", "mean_position_error_m")
