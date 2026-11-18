@@ -13,7 +13,13 @@ What must be identical across runs (timing and memory-budget figures are strippe
   * every GA gen line, GRID WINNER / expand line, stage-select HEADLINE and held-out line;
   * every `[gen-digest]` line (only runs that print them — ABI >= 56 Python);
   * fingerprints.json: per stage, sha256 over (genome.fingerprint()) of the saved population.
+    `arch_sha` hashes the same genomes with cells ignored. A difference in `sha` alone on a
+    label listed in GATE_EXPECT_CELLS_ONLY (e.g. GRID) is reported, not failed: CTRL-56
+    (17/11/2026) made the stage-0 checkpoint carry trained cells for its 42 arch-only entries,
+    so a pre-CTRL-56 leg and a post-CTRL-56 leg differ there by design.
 """
+import copy
+import os
 import hashlib
 import json
 import re
@@ -60,16 +66,50 @@ def build_argv(base_out: str, run_dir: str) -> list:
 	              "--save-winner", f"{run_dir}/winner.yaml.gz"]
 
 
-def fingerprints(run_dir: str) -> dict:
+def _entries(run_dir: str) -> list:
 	from wnn.control.phased_ga import _stage_entries_from_checkpoints
+	try:   # hashes only, never scores: arch-only entries are fine here
+		return _stage_entries_from_checkpoints(f"{run_dir}/ckpt", top_k=10_000, allow_arch_only=True)
+	except TypeError:   # a pre-CTRL-56 tree (the old leg) has no allow_arch_only and never refuses
+		return _stage_entries_from_checkpoints(f"{run_dir}/ckpt", top_k=10_000)
+
+
+def _arch_fp(g):
+	a = copy.copy(g)
+	a.cells = None
+	return a.fingerprint()
+
+
+def fingerprints(run_dir: str) -> dict:
 	out = {}
-	for label, _spec, res in _stage_entries_from_checkpoints(f"{run_dir}/ckpt", top_k=10_000):
+	for label, _spec, res in _entries(run_dir):
 		pop = list(getattr(res, "final_population", None) or [res.best_genome])
-		h = hashlib.sha256()
+		h, ha = hashlib.sha256(), hashlib.sha256()
 		for g in pop:
 			h.update(repr(g.fingerprint()).encode() + b"\n")
-		out[label] = {"n": len(pop), "sha": h.hexdigest()[:16]}
+			ha.update(repr(_arch_fp(g)).encode() + b"\n")
+		out[label] = {"n": len(pop), "sha": h.hexdigest()[:16], "arch_sha": ha.hexdigest()[:16]}
 	return out
+
+
+def _fp_mismatches(ref_fp: dict, fp: dict) -> int:
+	"""Count fingerprint mismatches; a cells-only difference on an expected label is reported only."""
+	expect = {x for x in os.environ.get("GATE_EXPECT_CELLS_ONLY", "").split(",") if x}
+	bad = 0
+	for label in sorted(set(ref_fp) | set(fp)):
+		a, b = ref_fp.get(label), fp.get(label)
+		if a == b:
+			continue
+		cells_only = (a and b and a["n"] == b["n"] and a["sha"] != b["sha"]
+		              and a.get("arch_sha") and a.get("arch_sha") == b.get("arch_sha"))
+		if cells_only and label in expect:
+			print(f"[gate] {label}: CELLS-ONLY fingerprint difference (architecture identical) — expected "
+			      f"(GATE_EXPECT_CELLS_ONLY)")
+			continue
+		print(f"[gate] {label}: checkpoint fingerprints differ{' (cells only)' if cells_only else ''}:\n"
+		      f"  A: {a}\n  B: {b}")
+		bad += 1
+	return bad
 
 
 def norm_lines(run_dir: str) -> list:
@@ -100,9 +140,9 @@ def compare(dirs: list) -> int:
 		if len(a) != len(b):
 			print(f"[gate] line count differs: {len(a)} vs {len(b)}")
 			bad += 1
-		if fp != ref_fp:
-			print(f"[gate] checkpoint fingerprints differ:\n  A: {ref_fp}\n  B: {fp}")
-			bad += 1
+		nfp = _fp_mismatches(ref_fp, fp)
+		if nfp:
+			bad += nfp
 		else:
 			print(f"[gate] checkpoint fingerprints identical: {fp}")
 	print("[gate] PASS" if bad == 0 else f"[gate] FAIL ({bad})")

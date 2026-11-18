@@ -64,13 +64,17 @@ def _load_stage_genome(ckpt_dir: str, stage: str, index: int):
 	"""The stage's (spec, genome) exactly as stage-select saw it — via the same
 	loader `--recalc-headline` uses."""
 	from wnn.control.phased_ga import _stage_entries_from_checkpoints
-	entries = _stage_entries_from_checkpoints(ckpt_dir, top_k=index + 1)
+	# allow_arch_only: other ranks may be arch-only in a pre-CTRL-56 GRID checkpoint;
+	# only the REQUESTED genome must carry cells (refused below, never scored empty).
+	from wnn.control.ckpt_cells import refuse_arch_only
+	entries = _stage_entries_from_checkpoints(ckpt_dir, top_k=index + 1, allow_arch_only=True)
 	want = stage.split("_", 1)[1].upper() if "_" in stage else stage.upper()
 	for label, spec, res in entries:
 		if label.upper() == want:
 			pop = list(getattr(res, "final_population", None) or [res.best_genome])
 			if index >= len(pop):
 				raise SystemExit(f"{stage}: population has {len(pop)} genomes, index {index} out of range")
+			refuse_arch_only([pop[index]], f"{ckpt_dir} {stage}", [f"{label}#{index}"])
 			return label, spec, pop[index]
 	raise SystemExit(f"{stage}: not among {[l for l, _, _ in entries]} in {ckpt_dir}")
 
