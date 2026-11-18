@@ -173,7 +173,9 @@ import os
 # every flown flag's err/steady (incl. --alt-integral); None = ABI 55 bit-identical.
 # ABI 57 (17/11/2026, Luiz): WnnController / dagger_train_batch_inplace(delta_max_yaw=None) —
 # the yaw bank's own delta_max (--delta-max-yaw); None = ABI 56 bit-identical.
-EXPECTED_ABI = 57
+# ABI 58 (17/11/2026, Luiz): WnnController / dagger_train_batch_inplace(yaw_trim_ff=False) — the
+# yaw-rate feed-forward (--yaw-trim-ff); False = ABI 57 bit-identical.
+EXPECTED_ABI = 58
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

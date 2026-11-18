@@ -2024,6 +2024,10 @@ impl WnnController
 		{
 			return Err("obs_yaw_trim_err (L2y) and obs_yaw_trim_err_p (L2y') are alternatives — pick one".into());
 		}
+		if self.yaw_trim_ff.is_some()
+		{
+			return Err("yaw_trim_ff and obs_yaw_trim_err[_p] (L2y / L2y') are alternatives — pick one".into());
+		}
 		self.yaw_trim_err = Some(crate::yaw_trim_err::YawTrimErr::from_spec(&spec, self.dt, self.action_repeat)?);
 		Ok(())
 	}
@@ -2056,8 +2060,67 @@ impl WnnController
 		{
 			return Err("obs_yaw_trim_err (L2y) and obs_yaw_trim_err_p (L2y') are alternatives — pick one".into());
 		}
+		if self.yaw_trim_ff.is_some()
+		{
+			return Err("yaw_trim_ff and obs_yaw_trim_err[_p] (L2y / L2y') are alternatives — pick one".into());
+		}
 		self.yaw_trim_p = Some(crate::yaw_trim_err::YawTrimErr::from_spec(&spec, self.dt, self.action_repeat)?);
 		Ok(())
+	}
+
+	/// ABI 58 (--yaw-trim-ff, Luiz 17/11/2026): feed the yaw rate loop's unabsorbed trim FORWARD
+	/// into the yaw-rate setpoint: sp_r = clamp(bank_r + cT·cresid_z, ±range_r), cT = K_I·L
+	/// (YawTrimErr::ff_gain). The bank's own value (the delta-law accumulator) stays in pwm[3],
+	/// so the leak never bleeds the FF; the DAgger label of bank 3 is recorded as sp_T − FF
+	/// (dagger_train), so the bank learns only the remainder. Needs the cascade + its residual
+	/// block + a yaw rate integrator; refused together with L2y / L2y' (they feed the same trim
+	/// through the yaw-error INPUT).
+	pub(crate) fn enable_yaw_trim_ff(&mut self) -> Result<(), String>
+	{
+		let spec = self
+			.ctbr
+			.as_ref()
+			.map(|c| c.spec.clone())
+			.ok_or("yaw_trim_ff needs the cascade (output_mode=ctbr): the trim is the CTBR rate loop's")?;
+		if self.cascade_obs.as_ref().and_then(|o| o.residual()).is_none()
+		{
+			return Err("yaw_trim_ff needs the cascade residual block (obs_dhat_residual_plant): cresid_z is the trim it feeds forward".into());
+		}
+		if self.yaw_trim_ff.is_some()
+		{
+			return Err("yaw_trim_ff is already on".into());
+		}
+		if self.yaw_trim_err.is_some() || self.yaw_trim_p.is_some()
+		{
+			return Err("yaw_trim_ff and obs_yaw_trim_err[_p] (L2y / L2y') are alternatives — pick one".into());
+		}
+		self.yaw_trim_ff = Some(crate::yaw_trim_err::YawTrimErr::ff_gain(&spec, self.dt, self.action_repeat)?);
+		Ok(())
+	}
+
+	/// ABI 58 test hook: bank m's own value (the delta-law accumulator; what the leak reads).
+	#[cfg(test)]
+	pub(crate) fn bank_value(&self, m: usize) -> f32
+	{
+		self.pwm[m]
+	}
+
+	/// ABI 58: cT (rad/s per unit of cresid_z) for the GPU hosts and Python (None ⇒ off).
+	pub(crate) fn yaw_trim_ff_gain(&self) -> Option<f32>
+	{
+		self.yaw_trim_ff
+	}
+
+	/// ABI 58: this tick's yaw-rate feed-forward cT·cresid_z (rad/s) from the cascade values the
+	/// LAST compute_features produced — the value decode_ctbr adds and the recorder subtracts
+	/// from the label. 0 when off. ONE formula (CasResidual::of), the kernels' twin.
+	pub(crate) fn yaw_ff_value(&self) -> f32
+	{
+		match (self.yaw_trim_ff, self.cascade_obs.as_ref())
+		{
+			(Some(ct), Some(o)) => o.residual().map_or(0.0, |r| ct * r.of(&o.last())[2]),
+			_ => 0.0,
+		}
 	}
 
 	/// L2y': κ for the GPU hosts (None ⇒ off).
@@ -2991,6 +3054,7 @@ impl WnnController
 			tilt_ref_err: None,
 			yaw_trim_err: None,
 			yaw_trim_p: None,
+			yaw_trim_ff: None,
 			collective_anchor: 0.5,
 		})
 	}
@@ -3834,6 +3898,8 @@ pub struct WnnController
 	// L2y' of block 10 (ABI 52, --obs-yaw-trim-err-p): shift ONLY the proportional yaw
 	// inputs by the trim; the integrals keep the raw heading error. None ⇒ off.
 	yaw_trim_p: Option<crate::yaw_trim_err::YawTrimErr>,
+	// ABI 58 (--yaw-trim-ff): cT of the yaw-rate feed-forward (None ⇒ off, bit-identical).
+	yaw_trim_ff: Option<f32>,
 	// L1 (06/08/2026) — d̂ disturbance observer, the mpcof teacher's instrument moved
 	// into the student. Some(b) ⇒ 3 extra features (roll/pitch/yaw estimated external
 	// angular acceleration). The screen's D2 decomposition showed the student's error
@@ -4021,6 +4087,7 @@ impl WnnController
 		obs_yaw_trim_err_p = false,
 		obs_yaw_from_att_est = false,
 		delta_max_yaw = None,
+		yaw_trim_ff = false,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -4088,6 +4155,8 @@ impl WnnController
 		obs_yaw_from_att_est: bool,
 		// ABI 57 (--delta-max-yaw): the yaw bank's own delta_max; None ⇒ delta_max.
 		delta_max_yaw: Option<f32>,
+		// ABI 58 (--yaw-trim-ff): the yaw-rate feed-forward cT·cresid_z. false ⇒ off.
+		yaw_trim_ff: bool,
 	) -> PyResult<Self>
 	{
 		// CTRL-46: the bias-predictor rows are the VERY tail (after the cascade blocks).
@@ -4196,6 +4265,10 @@ impl WnnController
 		}
 		// ABI 57: after the cascade / decouple are set (the yaw bank must exist).
 		c.set_delta_max_yaw(delta_max_yaw).map_err(pyo3::exceptions::PyValueError::new_err)?;
+		if yaw_trim_ff
+		{
+			c.enable_yaw_trim_ff().map_err(pyo3::exceptions::PyValueError::new_err)?;
+		}
 		Ok(c)
 	}
 
@@ -4253,6 +4326,13 @@ impl WnnController
 	pub fn yaw_from_att_est(&self) -> bool
 	{
 		self.yaw_from_att_est
+	}
+
+	/// ABI 58: cT of the yaw-rate feed-forward (None ⇒ off).
+	#[getter]
+	pub fn yaw_trim_ff(&self) -> Option<f32>
+	{
+		self.yaw_trim_ff
 	}
 
 	/// ABI 57: the yaw bank's delta_max override (None = the shared delta_max).
@@ -6897,6 +6977,14 @@ impl WnnController
 			};
 			self.pwm[m] = v;
 			*slot = v;
+		}
+		// ABI 58: the yaw-rate feed-forward rides on the SETPOINT only (pwm[3] keeps the bank's
+		// value, so the delta law's leak never bleeds it). Off ⇒ untouched.
+		if self.yaw_trim_ff.is_some()
+		{
+			let r = self.ctbr.as_ref().expect("checked").spec.range[crate::controller::YAW_BANK];
+			let m = crate::controller::YAW_BANK;
+			sp[m] = (sp[m] + self.yaw_ff_value()).clamp(-r, r);
 		}
 		sp
 	}

@@ -82,6 +82,8 @@ mod ctrl52_yaw_trim_p_tests; // L2y' (ABI 52): proportional-only yaw trim shift,
 #[cfg(test)]
 mod ctrl54_yaw_heading_tests; // lever 1 (ABI 54): yaw heading from the student's own Mahony estimate
 #[cfg(test)]
+mod ctrl58_yaw_trim_ff_tests; // ABI 58: --yaw-trim-ff — cT, refusals, setpoint-only FF, label remainder, CPU/GPU score + walk parity
+#[cfg(test)]
 mod ctrl57_delta_max_yaw_tests; // ABI 57: --delta-max-yaw — refusals, bit-identity, yaw-only decode, label round trip, CPU/GPU score + walk parity
 #[cfg(test)]
 mod ctrl56_axis_split_tests; // ABI 56: per-axis split on the WNN CPU scorer — row bit-identity, err/steady decomposition, L3 pole3
@@ -555,7 +557,14 @@ mod metal_controller;
 ///     delta_max_bank(m) by every encode (delta_label_target) and decode (decode_ctbr,
 ///     decode_outputs). Metal: RolloutParams + delta_max_yaw (191 words); the train/record
 ///     kernels read CPU-encoded labels. Pin: ctrl57_delta_max_yaw_tests.rs.
-pub const ABI_VERSION: u32 = 57;
+/// ABI 58 (17/11/2026, Luiz; additive, default = ABI 57 bit-identical):
+///   * WnnController / dagger_train_batch_inplace(yaw_trim_ff=False): the yaw-rate FEED-FORWARD
+///     sp_r = clamp(bank_r + cT·cresid_z, ±range_r) on the held setpoint (pwm[3] keeps the bank
+///     value), cT = K_I·L (YawTrimErr::ff_gain; cf21 n_o 10: −0.39927); bank 3's DAgger label
+///     recorded as sp_T − FF (one site: every split / bptt / GPU label path reads it). Metal:
+///     RolloutParams + yff_on, yff_ct (193 words). Refused with L2y / L2y'.
+///     Pin: ctrl58_yaw_trim_ff_tests.rs.
+pub const ABI_VERSION: u32 = 58;
 
 /// ABI 44: how output neurogenesis lays out the output layer — "segment" = every
 /// bank / E-I half resizes at its own tail (pre-44 Python resized the flat tail).

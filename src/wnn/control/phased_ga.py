@@ -497,6 +497,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                obs_yaw_trim_err_p: bool = False,
                obs_yaw_from_att_est: bool = False,
                delta_max_yaw: float | None = None,
+               yaw_trim_ff: bool = False,
                dt: float = 0.001,
                decouple_outputs: bool = False, bits_per_feature: int = 8,
                feature_balance_ratio: float = 0.0,
@@ -557,6 +558,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		obs_yaw_trim_err_p=obs_yaw_trim_err_p,
 		obs_yaw_from_att_est=obs_yaw_from_att_est,
 		delta_max_yaw=delta_max_yaw,
+		yaw_trim_ff=yaw_trim_ff,
 		dt=dt,
 		decouple_outputs=decouple_outputs,
 		feature_balance_ratio=feature_balance_ratio,
@@ -3001,6 +3003,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	# L4 — magnitude-priority output writes (07/08/2026). BINARY is last-writer-
 	# wins; the legacy backward walk hands contested cells to the window's
 	# EARLIEST record, arbitrary w.r.t. error magnitude. Rust trainer, sn=0 only.
+	ap.add_argument("--yaw-trim-ff", action="store_true",
+	                help="ABI 58 (Luiz 17/11/2026): yaw-rate FEED-FORWARD of the rate loop's unabsorbed trim: "
+	                     "the CTBR yaw setpoint becomes clamp(bank + cT*cresid_z, +/-range_r), cT = K_I*L derived "
+	                     "from the teacher's own gain row (cf21 n_o 10: -0.399 rad/s per unit cresid_z); the "
+	                     "bank keeps its own value (the delta law's leak never bleeds the FF) and its DAgger "
+	                     "label is recorded as sp_T - FF (it learns the remainder). Needs --output-mode ctbr "
+	                     "and --obs-cascade-dhat-residual; refused with --obs-yaw-trim-err[-p]. Stacks on "
+	                     "--delta-max-yaw. Off (default) = byte-identical. A new lineage.")
 	ap.add_argument("--delta-max-yaw", type=float, default=None,
 	                help="ABI 57 (Luiz 17/11/2026): delta_max for the YAW bank only (m = 3: r under "
 	                     "--output-mode ctbr, tau_yaw under --decouple-outputs); every other bank keeps "
@@ -4248,6 +4258,14 @@ def resolve_block10_args(args) -> None:
 		if getattr(args, "yaw_centred_ladder", None) == "dense":
 			raise SystemExit("--obs-yaw-trim-err[-p] replaces block-10 L2 (--yaw-centred-ladder dense): the trim-"
 			                 "referenced yaw error takes its own dense ladder — drop `dense`.")
+	if getattr(args, "yaw_trim_ff", False):
+		need = {"--output-mode ctbr": getattr(args, "output_mode", "pwm") == "ctbr",
+		        "--obs-cascade-dhat-residual": getattr(args, "obs_cascade_dhat_residual", False)}
+		missing = [k for k, v in need.items() if not v]
+		if missing:
+			raise SystemExit(f"--yaw-trim-ff needs {', '.join(missing)}: the FF is cT*cresid_z on the CTBR yaw setpoint.")
+		if getattr(args, "obs_yaw_trim_err", False) or getattr(args, "obs_yaw_trim_err_p", False):
+			raise SystemExit("--yaw-trim-ff and --obs-yaw-trim-err[-p] are alternatives (the same trim on the output vs the input) — pick one.")
 	if getattr(args, "delta_max_yaw", None) is not None:
 		v = float(args.delta_max_yaw)
 		if not (v > 0.0 and math.isfinite(v)):
@@ -4277,7 +4295,8 @@ def block10_tokens(args) -> dict:
 	            yawref="+".join(t for t in (
 	                ("trim" if getattr(args, "obs_yaw_trim_err", False)
 	                 else "trim_p" if getattr(args, "obs_yaw_trim_err_p", False) else ""),
-	                "mahony" if getattr(args, "obs_yaw_from_att_est", False) else "") if t),
+	                "mahony" if getattr(args, "obs_yaw_from_att_est", False) else "",
+	                "ff" if getattr(args, "yaw_trim_ff", False) else "") if t),
 	            dmax_yaw=("" if getattr(args, "delta_max_yaw", None) is None else f"{float(args.delta_max_yaw):g}"),
 	            pos_metric="hold" if fit_pos_metric_from_args(args) == "hold" else "")
 

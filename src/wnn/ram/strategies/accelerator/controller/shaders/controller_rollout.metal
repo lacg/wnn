@@ -328,6 +328,10 @@ struct Params
 	// ABI 57 (--delta-max-yaw), appended in lockstep: the yaw bank's (m = 3) delta_max;
 	// equal to delta_max when the flag is unset.
 	float delta_max_yaw;
+	// ABI 58 (--yaw-trim-ff), appended in lockstep: the yaw-rate feed-forward cT·cresid_z on the
+	// HELD setpoint of bank 3 (pwm_acc keeps the bank's value). 0 ⇒ off.
+	uint yff_on;
+	float yff_ct;
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -1949,7 +1953,12 @@ kernel void controller_rollout(
 					{
 						pwm_acc[m] = decoded_to_delta(decoded, r, P.residual_neutral, P.ctbr_gamma[m]);
 					}
-					ctbr_held[m] = pwm_acc[m];
+					// ABI 58: the yaw-rate FF on the setpoint only (twin of decode_ctbr); cresid_z is
+					// the residual block's last slot (the L2y' index).
+					if (P.yff_on != 0u && m == 3u)
+						ctbr_held[m] = clamp(pwm_acc[m] + P.yff_ct * sensors[P.num_features - 2u * P.abp_on - 1u], -r, r);
+					else
+						ctbr_held[m] = pwm_acc[m];
 					pwm[m] = 0.0f;
 				}
 				else if (P.decouple_outputs != 0u)

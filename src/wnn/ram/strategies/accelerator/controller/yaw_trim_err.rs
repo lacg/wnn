@@ -67,6 +67,34 @@ impl YawTrimErr
 		Ok(YawTrimErr { kappa: (k_i * l / k_theta) as f32 })
 	}
 
+	/// ABI 58 (--yaw-trim-ff): the yaw-rate FEED-FORWARD gain cT = K_I·L (rad/s per unit
+	/// of cresid_z) from the SAME gain row κ is derived from (same requirements, same plan:
+	/// the student's own rate loop and airframe, its decision hold, phase 0, lag-free).
+	/// cf21_brushless at n_o = 10: cT = −0.39927. The teacher's plan carries K_I·(I − I_ss) =
+	/// K_I·L·cresid_z; the FF adds exactly that to the yaw-rate setpoint so the bank learns
+	/// only the remainder (docs/ctrl48_yawff_prereg.md).
+	pub(crate) fn ff_gain(spec: &crate::ctbr::CtbrSpec, dt: f32, hold: usize) -> Result<f32, String>
+	{
+		let p = spec
+			.obs_dhat_residual_plant
+			.ok_or("yaw_trim_ff needs the cascade residual block (--obs-cascade-dhat-residual): cresid_z is the trim it feeds forward")?;
+		let c = crate::cascade_dhat::torque_gains(p[0] as f32, p[1] as f32, [p[2] as f32, p[3] as f32, p[4] as f32])[YAW];
+		let rate = spec.rate_stage();
+		let g = rate.axis_gains(YAW);
+		if !(g.ki > 0.0)
+		{
+			return Err(format!("yaw_trim_ff: the yaw rate loop has no integrator (ki = {}) — there is no unabsorbed trim to feed forward", g.ki));
+		}
+		let l = if g.i_limit > 0.0 { g.i_limit } else { 1.0 };
+		let row = CtbrAxisMpc::gain_row(&axis_plant(&rate, c, dt, 1.0, YAW), hold.max(1), 0, CTBR_MPC_WEIGHTS, CTBR_MPC_HORIZON, CTBR_MPC_RATE_MAX[YAW]);
+		let ct = row[IN] * l;
+		if !ct.is_finite()
+		{
+			return Err(format!("yaw_trim_ff: degenerate yaw law (K_I = {})", row[IN]));
+		}
+		Ok(ct as f32)
+	}
+
 	/// κ (rad per unit of cresid_z) — the Metal uniform and the Python getter.
 	pub(crate) fn kappa(&self) -> f32
 	{

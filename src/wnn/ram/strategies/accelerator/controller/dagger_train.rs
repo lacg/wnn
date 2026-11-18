@@ -2050,7 +2050,16 @@ pub(crate) fn rollout_and_label_inner(
 		}
 		else
 		{
-			traj.pid_pwms.push(expert_pwm_f32);
+			// ABI 58 (--yaw-trim-ff): bank 3's LABEL is the remainder sp_T − FF_t, FF_t = the
+			// cT·cresid_z this tick's compute_features fed the student's decode. Recorded once
+			// HERE, so every downstream label path (CPU split, bptt windows, GPU record/train,
+			// both walks) reads the same value. The flown command (`applied`) is untouched.
+			let mut label = expert_pwm_f32;
+			if controller.yaw_trim_ff_gain().is_some()
+			{
+				label[crate::controller::YAW_BANK] -= controller.yaw_ff_value();
+			}
+			traj.pid_pwms.push(label);
 			traj.student_pwms.push(applied);
 		}
 		traj.pid_integrals.push(integ_norm);
@@ -3276,6 +3285,9 @@ pub fn dagger_train_inplace(
 	// ABI 57 (--delta-max-yaw): the yaw bank's own delta_max; None ⇒ delta_max. Changes the
 	// yaw bank's label encoding (delta_label_target) and decode, not the layout.
 	delta_max_yaw = None,
+	// ABI 58 (--yaw-trim-ff): the yaw-rate feed-forward; the recorder stores bank 3's label as
+	// sp_T − cT·cresid_z (the remainder the bank must learn). false ⇒ off.
+	yaw_trim_ff = false,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn dagger_train_batch_inplace(
@@ -3362,6 +3374,7 @@ pub fn dagger_train_batch_inplace(
 	obs_yaw_trim_err_p: bool,
 	obs_yaw_from_att_est: bool,
 	delta_max_yaw: Option<f32>,
+	yaw_trim_ff: bool,
 ) -> PyResult<Vec<(Py<WnnController>, TrainStats)>>
 {
 	use rayon::prelude::*;
@@ -3470,7 +3483,7 @@ pub fn dagger_train_batch_inplace(
 					2.0, // est_kp — the rivals' Mahony default (TeacherFeed / est_kp)
 					0.1, // est_ki
 					ctbr.clone(),
-					obs_att_bias_pred, yaw_integral_leak, obs_tilt_ref_err, obs_yaw_trim_err, obs_yaw_trim_err_p, obs_yaw_from_att_est, delta_max_yaw,
+					obs_att_bias_pred, yaw_integral_leak, obs_tilt_ref_err, obs_yaw_trim_err, obs_yaw_trim_err_p, obs_yaw_from_att_est, delta_max_yaw, yaw_trim_ff,
 				)?;
 				controller
 					.set_target_levels_core(target_levels)

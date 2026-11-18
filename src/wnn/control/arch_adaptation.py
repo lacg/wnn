@@ -29,7 +29,7 @@ from typing import Any, Callable, Optional
 
 import numpy as np
 
-from .evaluator import ControllerSpec, arch_shape_from_spec, tilt_ref_err_kw, yaw_trim_err_kw, yaw_trim_err_p_kw, yaw_from_att_est_kw, delta_max_yaw_kw
+from .evaluator import ControllerSpec, arch_shape_from_spec, tilt_ref_err_kw, yaw_trim_err_kw, yaw_trim_err_p_kw, yaw_from_att_est_kw, delta_max_yaw_kw, yaw_trim_ff_kw
 from .arch_strategy import default_controller_arch_config, _random_arch_genome
 from .recurrent_genome import RecurrentArchGenome, RecurrentArchShape, RecurrentArchConfig
 
@@ -83,6 +83,7 @@ def record_input_entropy(spec: ControllerSpec, thresholds: list, state_connectio
 		obs_yaw_trim_err_p=yaw_trim_err_p_kw(spec),  # block 10 L2y' (ABI 52)
 		obs_yaw_from_att_est=yaw_from_att_est_kw(spec),  # lever 1 (ABI 55)
 		delta_max_yaw=delta_max_yaw_kw(spec),  # ABI 57
+		yaw_trim_ff=yaw_trim_ff_kw(spec),  # ABI 58
 	)
 	# axonogenesis getters (last_state_layer_input / last_output_layer_input) are live
 	# in the compiled accelerator (controller.rs:626/632) — verified 05/06/2026.
