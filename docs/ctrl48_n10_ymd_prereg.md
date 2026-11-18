@@ -59,3 +59,12 @@ re-pick below.
 - the rule-P headlines as flown, for transparency.
 
 Nothing above may change after the first N10 END line.
+
+## Amendment 1 (Luiz 18/11/2026 ~07:25 EST, BEFORE the first N10 END line)
+Two descriptive companion re-picks are added, applied to all three arms on the same scored candidates over the pooled
+n=10. They come from the fitness audit (logs/controller/ctrl48/fitness_audit/, Plane CTRL-48):
+- **steady-only:** the min-VAL-steady candidate.
+- **rank(steady) + rank(p99):** ties go to the lower steady.
+
+Both are chosen on VAL and read once on TEST, and both report the whole vector including fails. They are DESCRIPTIVE
+only: the decision rule stays the fitness-only re-pick plus the stage table.
