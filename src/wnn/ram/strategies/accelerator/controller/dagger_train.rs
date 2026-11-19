@@ -2050,10 +2050,11 @@ pub(crate) fn rollout_and_label_inner(
 		}
 		else
 		{
-			// ABI 58 (--yaw-trim-ff): bank 3's LABEL is the remainder sp_T − FF_t, FF_t = the
-			// cT·cresid_z this tick's compute_features fed the student's decode. Recorded once
-			// HERE, so every downstream label path (CPU split, bptt windows, GPU record/train,
-			// both walks) reads the same value. The flown command (`applied`) is untouched.
+			// THE REMAINDER RULE (ABI 58 --yaw-trim-ff, ABI 60 --yaw-p-ff): bank 3's label = sp_T −
+			// the FF this tick's decode added (yaw_ff_value: cT·cresid_z, + K_P·e_yaw with the
+			// P-term on — one formula, read by decode and by this recorder). Recorded once HERE,
+			// so every downstream label path (CPU split, bptt windows, GPU record/train, both
+			// walks) reads the same value. The flown command (`applied`) is untouched.
 			let mut label = expert_pwm_f32;
 			if controller.yaw_trim_ff_gain().is_some()
 			{
@@ -3288,6 +3289,10 @@ pub fn dagger_train_inplace(
 	// ABI 58 (--yaw-trim-ff): the yaw-rate feed-forward; the recorder stores bank 3's label as
 	// sp_T − cT·cresid_z (the remainder the bank must learn). false ⇒ off.
 	yaw_trim_ff = false,
+	// ABI 60 (--yaw-p-ff [SCALE]): the proportional yaw-rate feed-forward on top of the trim FF;
+	// the recorder's remainder rule (bank 3's label = sp_T − the FF this tick's decode added)
+	// then subtracts both terms. None ⇒ off.
+	yaw_p_ff = None,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn dagger_train_batch_inplace(
@@ -3375,6 +3380,7 @@ pub fn dagger_train_batch_inplace(
 	obs_yaw_from_att_est: bool,
 	delta_max_yaw: Option<f32>,
 	yaw_trim_ff: bool,
+	yaw_p_ff: Option<f32>,
 ) -> PyResult<Vec<(Py<WnnController>, TrainStats)>>
 {
 	use rayon::prelude::*;
@@ -3483,7 +3489,7 @@ pub fn dagger_train_batch_inplace(
 					2.0, // est_kp — the rivals' Mahony default (TeacherFeed / est_kp)
 					0.1, // est_ki
 					ctbr.clone(),
-					obs_att_bias_pred, yaw_integral_leak, obs_tilt_ref_err, obs_yaw_trim_err, obs_yaw_trim_err_p, obs_yaw_from_att_est, delta_max_yaw, yaw_trim_ff,
+					obs_att_bias_pred, yaw_integral_leak, obs_tilt_ref_err, obs_yaw_trim_err, obs_yaw_trim_err_p, obs_yaw_from_att_est, delta_max_yaw, yaw_trim_ff, yaw_p_ff,
 				)?;
 				controller
 					.set_target_levels_core(target_levels)
@@ -4208,6 +4214,14 @@ pub(crate) fn score_classical_baseline_probed(
 				"score_classical_baseline: teacher {teacher_id} has no CTBR outer decision (pid / mpcof only)"
 			)));
 		}
+		// Probe only (CTRL-59 stage 0): derive the float yaw law for this rate loop. A probe
+		// that did not ask for it — and no probe — leave everything untouched.
+		if let Some(p) = probe.as_deref_mut()
+		{
+			let c = crate::cascade_dhat::torque_gains(af_arm_length, af_k_drag, af_inertia);
+			p.arm_yaw_float_law(&pid.rate_stage(), c, teacher.i_clamps().map(|v| v as f64), af_dt, ctbr_outer_hold)
+				.map_err(pyo3::exceptions::PyValueError::new_err)?;
+		}
 		Some(crate::ctbr::CtbrOverRate::new(pid.rate_stage(), ctbr_outer_hold))
 	}
 	else
@@ -4408,6 +4422,12 @@ pub(crate) fn score_classical_baseline_probed(
 				let label = match probe.as_deref_mut()
 				{
 					Some(p) => p.flown_label(t, ctbr_outer_hold, label),
+					None => label,
+				};
+				// Probe only (CTRL-59 stage 0): the yaw setpoint from the float yaw law.
+				let label = match probe.as_deref_mut()
+				{
+					Some(p) => p.yaw_float_label(t, ctbr_outer_hold, label, o.rate(), teacher.integrals(), q, tgt[2]),
 					None => label,
 				};
 				o.fly(label, gyro)

@@ -33,13 +33,29 @@ class FitnessCalculatorControllerRefine(FitnessCalculatorControllerHarmonic):
 		# Stage-select passes with_tail=False: there the tail enters as rank(p99) via
 		# the existing --select-tail rank sum, never twice.
 		self.weight_tail = cfg.w_tail if with_tail else 0.0
+		# Amendment 19/11 (ABI 60): the mid-window err column. A SEARCH column only — like the
+		# tail it is left out of the stage-select calculator (with_tail=False; rule P unchanged).
+		self.weight_mid = cfg.w_mid if with_tail else 0.0
 
 	def _columns(self, metrics_list) -> tuple:
 		cols = super()._columns(metrics_list)
 		if self.weight_tail > 0.0:
 			self._add_column(cols, self._tail_column(metrics_list), self.weight_tail,
 			                 False, "weight_tail")
+		if self.weight_mid > 0.0:
+			self._add_column(cols, self._mid_column(metrics_list), self.weight_mid,
+			                 False, "weight_mid")
 		return cols
+
+	def _mid_column(self, metrics_list) -> list:
+		"""ControllerMetrics.mean_mid_error_deg (a cost, lower is better), refused (never
+		dropped) when absent or non-finite — the tail column's rule."""
+		vals = [getattr(m, "mean_mid_error_deg", None) for m in metrics_list]
+		if any(v is None or not math.isfinite(float(v)) for v in vals):
+			raise ValueError(
+				"refinement mid weight > 0 but a candidate has no finite mean_mid_error_deg — "
+				"the scorer row (ABI 60) did not reach it (set --refine-w-mid 0).")
+		return [float(v) for v in vals]
 
 	def _tail_column(self, metrics_list) -> list:
 		"""ControllerMetrics.episode_err_p99_deg, refused (never dropped) when absent or
@@ -93,7 +109,8 @@ class FitnessCalculatorControllerRefine(FitnessCalculatorControllerHarmonic):
 		gate = (f"st>={c.gate_stable:g},err<={c.gate_err:g}°,steady<={c.gate_steady:g}°,"
 		        f"pos<={c.gate_pos:g}m")
 		tail = f", tail_p99={self.weight_tail:g}" if self.weight_tail > 0.0 else ""
-		return f"Refine[gate=({gate})]{super().name}{tail}"
+		mid = f", mid={self.weight_mid:g}" if self.weight_mid > 0.0 else ""
+		return f"Refine[gate=({gate})]{super().name}{tail}{mid}"
 
 
 def build_refine_calculator(cfg: RefineConfig, args, with_tail: bool) -> FitnessCalculatorControllerRefine:

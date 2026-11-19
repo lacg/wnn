@@ -251,6 +251,7 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	"controller_obs_yaw_trim_err_p",  # L2y' (ABI 52): proportional-only trim shift, raw integral
 	"controller_obs_yaw_from_att_est",
 	"controller_delta_max_yaw",
+	"controller_yaw_p_ff",  # ABI 60: proportional yaw-rate feed-forward scale (None = off)
 	"controller_yaw_trim_ff",  # ABI 58: yaw-rate feed-forward cT*cresid_z on the CTBR yaw setpoint  # ABI 57: the yaw bank's own delta_max (None = --delta-max)  # lever 1 (ABI 55): yaw heading from the student's Mahony estimate
 	"controller_zrank_pos_floor",     # pos-only ZRank scale floor (m | auto)
 	"controller_alt_integral",        # L3: off | pi | pole3
@@ -266,6 +267,7 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	"controller_refine_gate_steady", "controller_refine_gate_pos",
 	"controller_refine_w_steady", "controller_refine_w_reward",
 	"controller_refine_w_tail", "controller_refine_w_pos",
+	"controller_refine_w_mid",        # ABI 60: mid-window err column weight (0 = absent)
 	"controller_refine_patience_steady_floor",
 })
 

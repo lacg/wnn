@@ -13,7 +13,7 @@ use crate::ctrl51_yaw_trim_tests::{yaw_student, YawOpt};
 use crate::episode_tail::{percentile_inverted_cdf, EpisodeErrSink, TAIL_P};
 use ram_core::neuron_memory::BINARY;
 
-fn cpu(c: &WnnController, steps: usize, sink: Option<&mut EpisodeErrSink>) -> [f64; 19]
+fn cpu(c: &WnnController, steps: usize, sink: Option<&mut EpisodeErrSink>) -> [f64; crate::cpu_score::ROW_METRICS]
 {
 	let (q0, w0) = ics();
 	let s1 = stage2();

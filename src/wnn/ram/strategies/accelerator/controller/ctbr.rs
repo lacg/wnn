@@ -377,11 +377,7 @@ impl CtbrInner
 	/// (∈ [−1, 1]); an unclamped axis (i_limit = 0) reports I itself.
 	pub(crate) fn rate_integral_norm(&self) -> [f32; 3]
 	{
-		std::array::from_fn(|i| {
-			let lim = self.rate.axis_gains(i).i_limit;
-			let integ = self.rate.axis_state(i).integ;
-			(if lim > 0.0 { integ / lim } else { integ }) as f32
-		})
+		rate_integral_norm_of(&self.rate)
 	}
 
 	/// CTRL-38: adopt the state of the rate loop that is ACTUALLY flying (a teacher's
@@ -402,6 +398,18 @@ impl CtbrInner
 		let p = self.rate.step([h[1], h[2], h[3]], [gyro[0] as f64, gyro[1] as f64, gyro[2] as f64], self.transport + h[0]);
 		[p[0] as f32, p[1] as f32, p[2] as f32, p[3] as f32]
 	}
+}
+
+/// CTRL-38 a1 on any rate loop: the integrator I per axis over the firmware's own clamp
+/// i_limit (∈ [−1, 1]); an unclamped axis (i_limit = 0) reports I itself. ONE definition —
+/// the student's cascade input (CtbrInner::rate_integral_norm) and the CTRL-59 stage-0 probe.
+pub(crate) fn rate_integral_norm_of(rate: &RateStageFw) -> [f32; 3]
+{
+	std::array::from_fn(|i| {
+		let lim = rate.axis_gains(i).i_limit;
+		let integ = rate.axis_state(i).integ;
+		(if lim > 0.0 { integ / lim } else { integ }) as f32
+	})
 }
 
 /// A classical outer law flown over the cascade's inner stage: the C2 rival

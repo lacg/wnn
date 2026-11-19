@@ -274,6 +274,10 @@ class ControllerSpec:
 	# ABI 58 (--yaw-trim-ff, Luiz 17/11/2026): yaw-rate feed-forward cT·cresid_z on the CTBR yaw
 	# setpoint (cT derived in Rust); bank 3 learns the remainder. False = off.
 	yaw_trim_ff: bool = False
+	# ABI 60 (--yaw-p-ff [SCALE], Luiz 19/11/2026): the PROPORTIONAL yaw-rate feed-forward
+	# K_P·e_yaw on the same setpoint, K_P = −K_θ·scale derived in Rust from the row cT reads;
+	# bank 3 learns the remainder. Needs yaw_trim_ff and obs_yaw_err. None = off.
+	yaw_p_ff: float | None = None
 	integral_scale: float = 1.0   # pre-threshold scale for integral features
 	dt: float = 0.001             # physics step (s); MUST match episode/plant dt (yaw integ.)
 	# H3 (18/06): the 4 output banks are CONTROLS [T, τ_roll, τ_pitch, τ_yaw] mixed to
@@ -554,8 +558,10 @@ def fold_pool_seed(seed: int, fold_index: int) -> int:
 	return (seed * 0x9E3779B97F4A7C15 + fold_index * 0xBF58476D1CE4E5B9) & 0xFFFFFFFF
 
 
-# CTRL-58: the scorer row's metric slots before the opt-in tail export (ABI 51: 19).
-_SCORER_ROW_METRICS = 19
+# CTRL-58: the scorer row's metric slots before the opt-in tail export (ABI 51: 19;
+# ABI 60: 20 — slot 19 = the mid-window mean err, rad).
+_SCORER_ROW_METRICS = 20
+_MID_ROW = 19
 
 
 def with_episode_tail(scored: list) -> list:
@@ -714,6 +720,7 @@ def _feature_controller(spec: ControllerSpec) -> WnnController:
 		obs_yaw_from_att_est=yaw_from_att_est_kw(spec),  # lever 1 (ABI 55)
 		delta_max_yaw=delta_max_yaw_kw(spec),  # ABI 57
 		yaw_trim_ff=yaw_trim_ff_kw(spec),  # ABI 58
+		yaw_p_ff=yaw_p_ff_kw(spec),  # ABI 60
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 		dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
@@ -745,6 +752,13 @@ def eval_mode_from_env() -> str:
 def yaw_trim_ff_kw(spec) -> bool:
 	"""ABI 58: ControllerSpec.yaw_trim_ff as the bool the wheel takes."""
 	return bool(getattr(spec, "yaw_trim_ff", False))
+
+
+def yaw_p_ff_kw(spec) -> "float | None":
+	"""ABI 60: ControllerSpec.yaw_p_ff as the Optional[float] scale the wheel takes (None =
+	off; a spec pickled before ABI 60 has no such field and loads as None)."""
+	v = getattr(spec, "yaw_p_ff", None)
+	return None if v is None else float(v)
 
 
 def delta_max_yaw_kw(spec) -> "float | None":
@@ -1632,6 +1646,7 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		obs_yaw_from_att_est=yaw_from_att_est_kw(spec),  # lever 1 (ABI 55)
 		delta_max_yaw=delta_max_yaw_kw(spec),  # ABI 57
 		yaw_trim_ff=yaw_trim_ff_kw(spec),  # ABI 58
+		yaw_p_ff=yaw_p_ff_kw(spec),  # ABI 60
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
@@ -1825,6 +1840,10 @@ class ControllerEvaluator:
 		# byte-for-byte the old ones; a float = the cap (deg, the run's --gate-err) a diverged
 		# episode counts as. Armed by phased_ga._wire_refine when --refine-w-tail > 0.
 		self.episode_tail_cap_deg = None
+		# CTRL-58 A2 amendment (ABI 60): the mid-window column. False (default) = the metrics
+		# carry no mean_mid_error_deg (None), so every flag-off run — its gen lines, digests
+		# and reports — is unchanged. Armed by phased_ga when --refine-w-mid > 0.
+		self.score_mid_window = False
 		self.episode_config = episode_config or EpisodeConfig(
 			dt=0.001, steps_per_episode=2000,
 			max_initial_tilt_rad=math.radians(30.0),
@@ -2243,6 +2262,7 @@ class ControllerEvaluator:
 			obs_yaw_from_att_est=yaw_from_att_est_kw(first_spec),  # lever 1 (ABI 55)
 			delta_max_yaw=delta_max_yaw_kw(first_spec),  # ABI 57
 			yaw_trim_ff=yaw_trim_ff_kw(first_spec),  # ABI 58
+			yaw_p_ff=yaw_p_ff_kw(first_spec),  # ABI 60
 			output_full_window=getattr(first_spec, 'output_full_window', False),
 			frame_stride=int(getattr(first_spec, 'frame_stride', 1)),
 			**_target_levels_kwarg(ra, first_spec),
@@ -2361,6 +2381,7 @@ class ControllerEvaluator:
 		obs_yaw_from_att_est=yaw_from_att_est_kw(spec),  # lever 1 (ABI 55)
 		delta_max_yaw=delta_max_yaw_kw(spec),  # ABI 57
 		yaw_trim_ff=yaw_trim_ff_kw(spec),  # ABI 58
+		yaw_p_ff=yaw_p_ff_kw(spec),  # ABI 60
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
@@ -2650,6 +2671,9 @@ class ControllerEvaluator:
 			# the run translates or on an older wheel.
 			pos_hold_m = row[17] if (s1_on and len(row) > 18) else None
 			dz_hold_m = row[18] if (s1_on and len(row) > 18) else None
+			# 20th (ABI 60): the MID-window mean attitude err (rad), 15%..80% of the steps
+			# (0.3-1.6 s at 2000 steps of 1 ms). Read only when armed (--refine-w-mid > 0).
+			mid_rad = row[_MID_ROW] if (self.score_mid_window and len(row) > _MID_ROW) else None
 			out.append((float(mean_reward), {
 				"mean_reward": float(mean_reward),
 				"mean_attitude_error_rad": float(mean_err_rad),
@@ -2677,6 +2701,7 @@ class ControllerEvaluator:
 				"mean_dy_m": (float(dy_m) if dy_m is not None else None),
 				"mean_position_hold_m": (float(pos_hold_m) if pos_hold_m is not None else None),
 				"mean_dz_hold_m": (float(dz_hold_m) if dz_hold_m is not None else None),
+				"mean_mid_error_deg": (math.degrees(mid_rad) if mid_rad is not None else None),
 				"mean_ise": float(ise),
 				# Allocation-effort proxy (Σu², Phase 3): the Σu² fitness input.
 				"mean_effort": (float(effort) if effort is not None else None),
@@ -3140,6 +3165,7 @@ class ControllerEvaluator:
 				mean_dy_m=(float(_dy) if _dy is not None else None),
 				mean_position_hold_m=m.get("mean_position_hold_m"),
 				mean_dz_hold_m=m.get("mean_dz_hold_m"),
+				mean_mid_error_deg=m.get("mean_mid_error_deg"),  # ABI 60 (None unless armed)
 				episode_err_p99_deg=m.get("episode_err_p99_deg"),  # CTRL-58 (None unless armed)
 			)
 			if write_back or return_stats:
@@ -3269,6 +3295,7 @@ class ControllerEvaluator:
 		                mean_dy_m=(float(m["mean_dy_m"]) if m.get("mean_dy_m") is not None else None),
 		                mean_position_hold_m=m.get("mean_position_hold_m"),
 		                mean_dz_hold_m=m.get("mean_dz_hold_m"),
+		                mean_mid_error_deg=m.get("mean_mid_error_deg"),  # ABI 60 (None unless armed)
 		                episode_err_p99_deg=m.get("episode_err_p99_deg"))  # CTRL-58 (None unless armed)
 		        for (r, m) in scored]
 

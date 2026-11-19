@@ -31,6 +31,39 @@ use rayon::prelude::*;
 #[cfg(test)]
 pub(crate) const PRE_ABI51_ROW_METRICS: usize = 17;
 
+/// Metrics in a scorer row (ABI 60: 19 → 20, row 19 = the mid-window mean err).
+pub(crate) const ROW_METRICS: usize = 20;
+
+/// ABI 60 (docs/ctrl58_a2_prereg.md, Amendment 19/11): the MID window of the `mid` scorer row
+/// is `mid_window_start(steps) <= t < tail_start` — after the plant-bound first 15% of the
+/// episode, before the hold window (the last 20%, `steady`). THE one definition in Rust:
+/// ceil(0.15·steps) in exact integer arithmetic (the kernel twin is `(3u * P.steps + 19u) /
+/// 20u`), so the CPU and the kernel can never disagree on a boundary step.
+pub(crate) const MID_START_FRAC: (usize, usize) = (3, 20); // 0.15
+pub(crate) fn mid_window_start(steps: usize) -> usize
+{
+	(MID_START_FRAC.0 * steps + MID_START_FRAC.1 - 1) / MID_START_FRAC.1
+}
+
+/// One episode's `mid` value (rad): the mean err over the mid window when the episode
+/// reached the hold window (so the mid window is complete); an episode that ended before it
+/// contributes its whole-episode mean — the fallback `steady` uses (HoldPolicy::FallbackWhole).
+pub(crate) fn mid_episode_mean(mid_sum: f64, mid_cnt: usize, tail_cnt: usize, ep_sum: f64, ep_steps: usize) -> f64
+{
+	if tail_cnt > 0 && mid_cnt > 0
+	{
+		mid_sum / mid_cnt as f64
+	}
+	else if ep_steps > 0
+	{
+		ep_sum / ep_steps as f64
+	}
+	else
+	{
+		0.0
+	}
+}
+
 /// The Metal kernel's per-episode hold-window value for an episode that never reached
 /// the window (out_effort slots 5-6): −1, impossible for a mean of magnitudes.
 pub(crate) const HOLD_NOT_REACHED: f32 = -1.0;
@@ -109,7 +142,7 @@ pub(crate) fn rollout_one(
 	// ABI 59 (CTRL-58): OPT-IN per-episode tail sink — each episode's mean err (deg, diverged
 	// → the gate's err limit). Measurement only; None on every call that did not ask.
 	mut ep_errs: Option<&mut crate::episode_tail::EpisodeErrSink>,
-) -> [f64; 19]
+) -> [f64; ROW_METRICS]
 {
 	let mut sim = AttitudeSim::new(dt, arm, k_thrust, k_drag, inertia, gravity);
 	if motor_lag_s > 0.0
@@ -186,6 +219,7 @@ pub(crate) fn rollout_one(
 	// relative settle bands via LAST excursion, dt-weighted ITAE/IAE/ISE, and the
 	// diverged→full-duration sentinels) so CPU and GPU rows stay comparable.
 	let mut sum_steady = 0.0f64;
+	let mut sum_mid = 0.0f64; // ABI 60: the mid-window mean err (row 19)
 	let mut sum_rise = 0.0f64;
 	let mut sum_settleab = 0.0f64;
 	let mut sum_settlere = 0.0f64;
@@ -194,6 +228,7 @@ pub(crate) fn rollout_one(
 	let mut sum_ise = 0.0f64;
 	// Metal: tail_start = ceil(steps * 0.80); band_abs = radians(2.0).
 	let tail_start = ((steps as f64) * 0.80).ceil() as usize;
+	let mid_start = mid_window_start(steps);
 	let dt_f = dt as f64; // dt is f32 on this path; transient math is f64
 	let full_dur = steps as f64 * dt_f;
 	const BAND_ABS: f64 = 0.034_906_585_0; // radians(2.0), the kernel's literal
@@ -290,6 +325,7 @@ pub(crate) fn rollout_one(
 		// Per-episode transient state (kernel twins).
 		let mut tail_sum_err = 0.0f64;
 		let mut tail_cnt = 0usize;
+		let (mut mid_sum_err, mut mid_cnt) = (0.0f64, 0usize); // ABI 60
 		let mut init_err = -1.0f64; // <0 ⇒ not yet captured (kernel sentinel)
 		let mut band_rel = 0.0f64;
 		let mut rise_s = full_dur;
@@ -507,6 +543,11 @@ pub(crate) fn rollout_one(
 				tail_sum_err += errd;
 				tail_cnt += 1;
 			}
+			else if _t >= mid_start
+			{
+				mid_sum_err += errd;
+				mid_cnt += 1;
+			}
 			let t_s = _t as f64 * dt_f;
 			if init_err < 0.0
 			{
@@ -597,6 +638,7 @@ pub(crate) fn rollout_one(
 		{
 			0.0
 		};
+		sum_mid += mid_episode_mean(mid_sum_err, mid_cnt, tail_cnt, ep_sum_err, ep_steps);
 		// Transient times: a diverged episode never settles → worst-case sentinels,
 		// so its late error blow-up can't fool last-excursion into a "fast" settle.
 		if diverged
@@ -660,6 +702,9 @@ pub(crate) fn rollout_one(
 		// error and mean |dz| (m) over t >= ceil(0.8·steps). 0.0 with translation off.
 		crate::cpu_score::hold_mean(sum_hold_pos, hold_eps),
 		crate::cpu_score::hold_mean(sum_hold_dz, hold_eps),
+		// ABI 60: appended — row 19 = the mid-window mean attitude err (rad),
+		// mid_window_start <= t < tail_start (mid_episode_mean per episode).
+		sum_mid / n,
 	]
 }
 

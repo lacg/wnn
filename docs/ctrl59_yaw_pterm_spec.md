@@ -77,6 +77,28 @@ known from disk. So:
   be kept.
 - The A/B flies ONE scale. A second scale is a follow-up arm only if the first shows the expected sign.
 
+### Stage 0 — measured 19/11/2026 (VAL, 20 units 163226054..163226073 × 100 episodes; not a test number)
+`rival_probe_tests::val_yaw_float_law` (cargo `#[ignore]`, fixture from the Y+F s1 run log
+`C-S2-d_wposx2_a59_rf_c200_dc_biasin_ms01_P_both_L1_ffF_full_s1.out`; the unprobed est-fed row reproduces the
+installed ABI 59 wheel). The float yaw law is flown with NO table: yaw setpoint =
+`clamp(cT·cresid_z + scale·(−K_θ)·e_yaw, ±2.0)`, e_yaw from the Mahony yaw; roll, pitch and collective are the
+label law's (est + bias compensation).
+
+```
+arm                                  | stable | fails | err °  | steady ° | pos m | yaw whole ° | yaw hold ° | yaw / label law | sp at clamp
+-------------------------------------+--------+-------+--------+----------+-------+-------------+------------+-----------------+------------
+label law, est + bias comp           | 100%   | 0     | 0.693  | 0.171    | 0.355 | 0.289       | 0.075      | 1.00            | —
+yaw = float law only, scale 1.0      | 100%   | 0     | 0.888  | 0.234    | 0.355 | 0.540       | 0.150      | 1.87            | 0.00%
+yaw = float law only, scale 0.5      | 100%   | 0     | 0.796  | 0.213    | 0.355 | 0.447       | 0.134      | 1.55            | 0.00%
+```
+Roll / pitch are unchanged (whole 0.381-0.386° / hold 0.095-0.099° in all three arms).
+
+- **Rule outcome:** scale 1.0 is fail-free but its whole-episode yaw error is 1.87× the label law's (bound
+  1.3×) ⇒ **the A/B flies 0.5**, and the 1.0 row is the reason.
+- Scale 0.5 is itself 1.55× the label law's, and both float-only rows are above the current Y+F student's
+  0.395° (TEST). The float law alone does not reach the label law at either scale: what the bank must add
+  (the rate / actuator-state terms of section 8) is not small. Luiz's call whether that changes the plan.
+
 ## 4. Where it goes
 
 ### 4.1 Rust, CPU (one implementation; no second copy of the formula)

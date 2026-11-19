@@ -65,6 +65,8 @@ def _with_defaults(fields: dict, scorer) -> dict:
 	for name, p in inspect.signature(scorer).parameters.items():
 		if name in out or name == "teacher_id":
 			continue
+		if p.default is None:
+			continue  # an opt-in output sink (axis_out, ABI 56) — not an argument of the row
 		if p.default is inspect.Parameter.empty or p.default is Ellipsis:
 			raise SystemExit(f"argument {name} is neither supplied by the row nor a plain default")
 		out[name] = p.default

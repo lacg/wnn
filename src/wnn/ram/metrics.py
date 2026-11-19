@@ -222,6 +222,10 @@ class ControllerMetrics(Metrics):
 	mean_dy_m: Optional[float] = None  # ABI 32: mean |y error| (METRES), None unless the run translates
 	mean_position_hold_m: Optional[float] = None  # ABI 51: mean 3D position error over the HOLD window (last 20% of steps), METRES
 	mean_dz_hold_m: Optional[float] = None  # ABI 51: mean |altitude error| over the HOLD window, METRES
+	# ABI 60 (CTRL-58 A2 amendment): mean attitude error (deg) over the MID window, 15%..80% of
+	# the steps (0.3-1.6 s at 2000 steps of 1 ms) — after the plant-bound first transient, before
+	# the hold window `steady` covers. None unless armed (--refine-w-mid > 0).
+	mean_mid_error_deg: Optional[float] = None
 	# CTRL-58 (18/11/2026): the per-genome near-fail TAIL on the TRAIN pool — p99 of the
 	# per-episode mean attitude error (deg) — ranked by the staged-refinement fitness.
 	# NO scorer produces it yet (needs a Rust scorer row; the Python side refuses a

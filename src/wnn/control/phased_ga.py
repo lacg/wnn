@@ -256,6 +256,9 @@ def _wire_refine(strat, refine_latch, ev=None) -> None:
 	strat._refine_active = False
 	if ev is not None and refine_latch.config.w_tail > 0.0:
 		ev.episode_tail_cap_deg = refine_latch.tail_cap_deg
+	# ABI 60: likewise the mid-window column, from generation 0.
+	if ev is not None and refine_latch.config.w_mid > 0.0:
+		ev.score_mid_window = True
 
 
 def build_refine_latch(args):
@@ -339,7 +342,7 @@ def _resume_ga_state_if_targeted(strat, args, stage_num: int) -> None:
 
 from wnn.control.provenance import arch_token, collect_provenance, obs_pwm_convention
 from wnn.control.pos_floor import fit_pos_metric_from_args, zrank_pos_floor_from_args
-from wnn.control.refine_config import (refine_config_from_args, refine_token,
+from wnn.control.refine_config import (mid_armed_from_args, refine_config_from_args, refine_token,
                                       refine_weights_record, validate_refine_args)
 from wnn.control.select_tail import (SELECT_TAIL_MODES, genome0_rows, new_episode_sink,
                                      select_tail_token, tail_cell, tail_footer, tail_rank_winner,
@@ -548,6 +551,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                obs_yaw_from_att_est: bool = False,
                delta_max_yaw: float | None = None,
                yaw_trim_ff: bool = False,
+               yaw_p_ff: float | None = None,
                dt: float = 0.001,
                decouple_outputs: bool = False, bits_per_feature: int = 8,
                feature_balance_ratio: float = 0.0,
@@ -609,6 +613,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		obs_yaw_from_att_est=obs_yaw_from_att_est,
 		delta_max_yaw=delta_max_yaw,
 		yaw_trim_ff=yaw_trim_ff,
+		yaw_p_ff=yaw_p_ff,
 		dt=dt,
 		decouple_outputs=decouple_outputs,
 		feature_balance_ratio=feature_balance_ratio,
@@ -1375,6 +1380,7 @@ def _shell_holdout_compact(args, ec_eval: EpisodeConfig, spec: ControllerSpec,
 		                         episode_config=ec_eval, thresholds=thresholds,
 		                         rg_config=_rg_config(args, ec_eval, rs),
 		                         max_train_workers=args.train_workers)
+		ev.score_mid_window = mid_armed_from_args(args)  # ABI 60: the mid column on the report row
 		m = (ev.score_genomes([best_genome]) if use_score else ev.evaluate_batch([best_genome]))[0]
 		stbs.append(m.acc * 100.0); errs.append(m.mean_attitude_error_deg)
 	if not stbs:
@@ -1772,6 +1778,9 @@ def _print_baseline_rows(rows: list) -> None:
 # one an experiment was just designed around.
 _HELDOUT_ROW = (
 	("mean_steady_error_deg",  "steady",    "°", 2),
+	# ABI 60 (CTRL-58 A2 amendment): the mid-window err. None unless --refine-w-mid > 0 armed
+	# it ⇒ omitted, so every other run's lines are unchanged.
+	("mean_mid_error_deg",     "mid",       "°", 2),
 	("motor_jerk_mean",        "jerk",      "",  4),
 	("mono_violations_total",  "mono_viol", "",  0),
 	("mean_altitude_error_m",  "alt",       "m", 3),
@@ -2301,7 +2310,8 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 			mean_altitude_error_m=avg("mean_altitude_error_m"),
 			mean_position_error_m=avg("mean_position_error_m"),
 			mean_dx_m=avg("mean_dx_m"), mean_dy_m=avg("mean_dy_m"),
-			mean_position_hold_m=avg("mean_position_hold_m"), mean_dz_hold_m=avg("mean_dz_hold_m"))
+			mean_position_hold_m=avg("mean_position_hold_m"), mean_dz_hold_m=avg("mean_dz_hold_m"),
+			mean_mid_error_deg=avg("mean_mid_error_deg"))  # ABI 60 (None unless armed)
 
 	# CANDIDATES = the top-K genomes of EVERY stage, ranked together in one population.
 	# `final_population` survives the orchestrator's release trimmed to K
@@ -2632,6 +2642,7 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 	                         max_train_workers=args.train_workers,
 	                         num_eval_folds=getattr(args, "num_eval_folds", 5))  # K=1 is NEVER an option
 	ev.per_episode_sink = episode_sink
+	ev.score_mid_window = mid_armed_from_args(args)  # ABI 60: the mid column on the report row
 	pop = list(final_population) if final_population else [best_genome]
 	# A (13/06): the held-out RESULT is pop[0] (the during-search winner); the
 	# rest are scored ONLY for a descriptive population stat that is explicitly
@@ -3189,6 +3200,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "label is recorded as sp_T - FF (it learns the remainder). Needs --output-mode ctbr "
 	                     "and --obs-cascade-dhat-residual; refused with --obs-yaw-trim-err[-p]. Stacks on "
 	                     "--delta-max-yaw. Off (default) = byte-identical. A new lineage.")
+	ap.add_argument("--yaw-p-ff", type=float, nargs="?", const=1.0, default=None, metavar="SCALE",
+	                help="ABI 60 (Luiz 19/11/2026, docs/ctrl59_yaw_pterm_spec.md): float PROPORTIONAL yaw-rate "
+	                     "feed-forward on top of --yaw-trim-ff: the CTBR yaw setpoint becomes clamp(bank + "
+	                     "cT*cresid_z + K_P*e_yaw, +/-range_r), K_P = -K_theta*SCALE derived from the teacher's "
+	                     "own gain row (cf21 n_o 10: 9.59 rad/s per rad at SCALE 1), e_yaw = the float behind "
+	                     "the yaw_err input; the bank keeps its own value and its DAgger label is the remainder "
+	                     "sp_T - (FF_trim + FF_p). SCALE (default 1.0 when the flag is bare) must be finite and "
+	                     "in (0, 2]. Needs --yaw-trim-ff and --obs-yaw-err. Off (default) = byte-identical. "
+	                     "A new lineage.")
 	ap.add_argument("--delta-max-yaw", type=float, default=None,
 	                help="ABI 57 (Luiz 17/11/2026): delta_max for the YAW bank only (m = 3: r under "
 	                     "--output-mode ctbr, tau_yaw under --decouple-outputs); every other bank keeps "
@@ -4233,6 +4253,9 @@ def _add_refine_args(ap) -> None:
 	f("--refine-w-tail", 0.15, "Refinement weight: per-episode err p99 tail (needs a scorer row; "
 	                           "refused > 0 until it lands — pass 0).")
 	f("--refine-w-pos", 0.10, "Refinement weight: pos (with --zrank-pos-floor).")
+	f("--refine-w-mid", 0.0, "Refinement weight: mid-window mean err, 15%%..80%% of the steps (0.3-1.6 s; "
+	                         "ABI 60 scorer row 19, docs/ctrl58_a2_prereg.md Amendment 19/11). "
+	                         "0 (default) = column absent, bit-identical.")
 	f("--refine-patience-steady-floor", 0.15,
 	  "After the switch magnitude patience also watches steady, floored at this (deg).")
 	ap.add_argument("--refine-select", action="store_true",
@@ -4479,6 +4502,16 @@ def resolve_block10_args(args) -> None:
 			raise SystemExit(f"--yaw-trim-ff needs {', '.join(missing)}: the FF is cT*cresid_z on the CTBR yaw setpoint.")
 		if getattr(args, "obs_yaw_trim_err", False) or getattr(args, "obs_yaw_trim_err_p", False):
 			raise SystemExit("--yaw-trim-ff and --obs-yaw-trim-err[-p] are alternatives (the same trim on the output vs the input) — pick one.")
+	if getattr(args, "yaw_p_ff", None) is not None:
+		scale = float(args.yaw_p_ff)
+		if not (math.isfinite(scale) and 0.0 < scale <= 2.0):
+			raise SystemExit(f"--yaw-p-ff {scale}: SCALE must be finite and in (0, 2]")
+		need = {"--yaw-trim-ff": getattr(args, "yaw_trim_ff", False),
+		        "--obs-yaw-err": getattr(args, "obs_yaw_err", False)}
+		missing = [k for k, v in need.items() if not v]
+		if missing:
+			raise SystemExit(f"--yaw-p-ff needs {', '.join(missing)}: the P-term K_P*e_yaw rides on the trim "
+			                 "feed-forward and reads the float behind the yaw_err input.")
 	if getattr(args, "delta_max_yaw", None) is not None:
 		v = float(args.delta_max_yaw)
 		if not (v > 0.0 and math.isfinite(v)):
@@ -4509,7 +4542,8 @@ def block10_tokens(args) -> dict:
 	                ("trim" if getattr(args, "obs_yaw_trim_err", False)
 	                 else "trim_p" if getattr(args, "obs_yaw_trim_err_p", False) else ""),
 	                "mahony" if getattr(args, "obs_yaw_from_att_est", False) else "",
-	                "ff" if getattr(args, "yaw_trim_ff", False) else "") if t),
+	                "ff" if getattr(args, "yaw_trim_ff", False) else "",
+	                ("" if getattr(args, "yaw_p_ff", None) is None else f"pff{float(args.yaw_p_ff):g}")) if t),
 	            dmax_yaw=("" if getattr(args, "delta_max_yaw", None) is None else f"{float(args.delta_max_yaw):g}"),
 	            pos_metric="hold" if fit_pos_metric_from_args(args) == "hold" else "")
 

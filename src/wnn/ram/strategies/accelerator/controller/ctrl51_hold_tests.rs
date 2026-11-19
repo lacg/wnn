@@ -249,7 +249,7 @@ fn wnn_hold_rows_cpu_match_gpu()
 	let (agg, eps) = ev
 		.score_with_episodes(&[&c], &q0, &w0, EPS, 400, (D, A, K, IN, GR), KDR, 0.0, [0.0; 3], None, None, None, None, Some(&s1))
 		.expect("gpu score");
-	assert_eq!(agg[0].len(), 19);
+	assert_eq!(agg[0].len(), crate::cpu_score::ROW_METRICS);
 	assert_eq!(eps.len(), EPS);
 	for (row, col) in [(17usize, 13usize), (18, 14)]
 	{
@@ -264,9 +264,9 @@ fn wnn_hold_rows_cpu_match_gpu()
 /// episode 3 with its collective raised 60 %, roll past 50 rad/s at steps ~255 / ~267,
 /// before the hold window opens at step 320 (far enough that f32 differences cannot
 /// move an episode across the window edge).
-const DIVERGE_ASYM: [f32; 4] = [1.0, 0.8, 1.0, 1.2];
+pub(crate) const DIVERGE_ASYM: [f32; 4] = [1.0, 0.8, 1.0, 1.2];
 
-fn diverge_cpu(c: &crate::controller::WnnController, s1: &crate::stage1::Stage1Cfg, eps: usize, steps: usize) -> [f64; 19]
+fn diverge_cpu(c: &crate::controller::WnnController, s1: &crate::stage1::Stage1Cfg, eps: usize, steps: usize) -> [f64; crate::cpu_score::ROW_METRICS]
 {
 	use crate::abi32_tests::{ics, ARM as A, DT as D, G as GR, INERTIA as IN, KD as KDR, KT as K};
 	let (q0, w0) = ics();

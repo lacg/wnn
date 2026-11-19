@@ -41,24 +41,68 @@ pub(crate) struct YawTrimErr
 	kappa: f32,
 }
 
+/// Why `YawTrimErr::yaw_row` could not build the yaw gain row (each option words its own refusal).
+enum YawRowErr
+{
+	NoResidual,
+	NoIntegrator(f64),
+}
+
 impl YawTrimErr
 {
 	/// From the cascade student's own contract: the inner loop's rate gains and the
 	/// residual block's airframe, the physics step and the decision hold.
-	pub(crate) fn from_spec(spec: &crate::ctbr::CtbrSpec, dt: f32, hold: usize) -> Result<Self, String>
+	/// THE yaw gain row every yaw option reads (κ, cT, K_P): the teacher's unconstrained law on
+	/// the yaw axis of the student's own rate loop and airframe, at its decision hold, phase 0,
+	/// lag-free. Returns (row, L = the yaw rate loop's i_limit). One call site of gain_row.
+	fn yaw_row(spec: &crate::ctbr::CtbrSpec, dt: f32, hold: usize) -> Result<([f64; crate::ctbr_axis_mpc::NS], f64), YawRowErr>
 	{
-		let p = spec
-			.obs_dhat_residual_plant
-			.ok_or("obs_yaw_trim_err needs the cascade residual block (--obs-cascade-dhat-residual): cresid_z is the trim it reads")?;
+		let p = spec.obs_dhat_residual_plant.ok_or(YawRowErr::NoResidual)?;
 		let c = crate::cascade_dhat::torque_gains(p[0] as f32, p[1] as f32, [p[2] as f32, p[3] as f32, p[4] as f32])[YAW];
-		let rate = spec.rate_stage();
+		Self::yaw_row_of(&spec.rate_stage(), c, dt, hold)
+	}
+
+	/// `yaw_row` on an explicit rate loop and yaw torque gain `c` (the spec's own pair, or the
+	/// classical scorer's — the CTRL-59 stage-0 probe has no CtbrSpec).
+	fn yaw_row_of(rate: &crate::pid_firmware::RateStageFw, c: f64, dt: f32, hold: usize) -> Result<([f64; crate::ctbr_axis_mpc::NS], f64), YawRowErr>
+	{
 		let g = rate.axis_gains(YAW);
 		if !(g.ki > 0.0)
 		{
-			return Err(format!("obs_yaw_trim_err: the yaw rate loop has no integrator (ki = {}) — there is no unabsorbed trim to reference", g.ki));
+			return Err(YawRowErr::NoIntegrator(g.ki));
 		}
 		let l = if g.i_limit > 0.0 { g.i_limit } else { 1.0 };
-		let row = CtbrAxisMpc::gain_row(&axis_plant(&rate, c, dt, 1.0, YAW), hold.max(1), 0, CTBR_MPC_WEIGHTS, CTBR_MPC_HORIZON, CTBR_MPC_RATE_MAX[YAW]);
+		let row = CtbrAxisMpc::gain_row(&axis_plant(rate, c, dt, 1.0, YAW), hold.max(1), 0, CTBR_MPC_WEIGHTS, CTBR_MPC_HORIZON, CTBR_MPC_RATE_MAX[YAW]);
+		Ok((row, l))
+	}
+
+	/// CTRL-59 stage 0 (rival_probe): (cT, K_P) of the float yaw law on an explicit rate loop
+	/// and yaw torque gain — the same row, the same two definitions as `ff_gain` / `p_gain`.
+	#[cfg_attr(not(test), allow(dead_code))]
+	pub(crate) fn float_law_gains(rate: &crate::pid_firmware::RateStageFw, c: f64, dt: f32, hold: usize, scale: f32) -> Result<(f32, f32), String>
+	{
+		if !(scale.is_finite() && scale > 0.0 && scale <= 2.0)
+		{
+			return Err(format!("yaw float law: scale must be finite and in (0, 2] (got {scale})"));
+		}
+		let (row, l) = Self::yaw_row_of(rate, c, dt, hold).map_err(|_| "yaw float law: the yaw rate loop has no integrator".to_string())?;
+		let (k_theta, ct) = (row[TH], row[IN] * l);
+		if !(k_theta.is_finite() && k_theta < 0.0 && ct.is_finite())
+		{
+			return Err(format!("yaw float law: degenerate yaw law (K_theta = {k_theta}, cT = {ct})"));
+		}
+		Ok((ct as f32, (-k_theta * scale as f64) as f32))
+	}
+
+	/// From the cascade student's own contract: the inner loop's rate gains and the
+	/// residual block's airframe, the physics step and the decision hold.
+	pub(crate) fn from_spec(spec: &crate::ctbr::CtbrSpec, dt: f32, hold: usize) -> Result<Self, String>
+	{
+		let (row, l) = Self::yaw_row(spec, dt, hold).map_err(|e| match e
+		{
+			YawRowErr::NoResidual => "obs_yaw_trim_err needs the cascade residual block (--obs-cascade-dhat-residual): cresid_z is the trim it reads".to_string(),
+			YawRowErr::NoIntegrator(ki) => format!("obs_yaw_trim_err: the yaw rate loop has no integrator (ki = {ki}) — there is no unabsorbed trim to reference"),
+		})?;
 		let (k_theta, k_i) = (row[TH], row[IN]);
 		if !(k_theta.is_finite() && k_theta < 0.0 && k_i.is_finite())
 		{
@@ -75,24 +119,40 @@ impl YawTrimErr
 	/// only the remainder (docs/ctrl48_yawff_prereg.md).
 	pub(crate) fn ff_gain(spec: &crate::ctbr::CtbrSpec, dt: f32, hold: usize) -> Result<f32, String>
 	{
-		let p = spec
-			.obs_dhat_residual_plant
-			.ok_or("yaw_trim_ff needs the cascade residual block (--obs-cascade-dhat-residual): cresid_z is the trim it feeds forward")?;
-		let c = crate::cascade_dhat::torque_gains(p[0] as f32, p[1] as f32, [p[2] as f32, p[3] as f32, p[4] as f32])[YAW];
-		let rate = spec.rate_stage();
-		let g = rate.axis_gains(YAW);
-		if !(g.ki > 0.0)
+		let (row, l) = Self::yaw_row(spec, dt, hold).map_err(|e| match e
 		{
-			return Err(format!("yaw_trim_ff: the yaw rate loop has no integrator (ki = {}) — there is no unabsorbed trim to feed forward", g.ki));
-		}
-		let l = if g.i_limit > 0.0 { g.i_limit } else { 1.0 };
-		let row = CtbrAxisMpc::gain_row(&axis_plant(&rate, c, dt, 1.0, YAW), hold.max(1), 0, CTBR_MPC_WEIGHTS, CTBR_MPC_HORIZON, CTBR_MPC_RATE_MAX[YAW]);
+			YawRowErr::NoResidual => "yaw_trim_ff needs the cascade residual block (--obs-cascade-dhat-residual): cresid_z is the trim it feeds forward".to_string(),
+			YawRowErr::NoIntegrator(ki) => format!("yaw_trim_ff: the yaw rate loop has no integrator (ki = {ki}) — there is no unabsorbed trim to feed forward"),
+		})?;
 		let ct = row[IN] * l;
 		if !ct.is_finite()
 		{
 			return Err(format!("yaw_trim_ff: degenerate yaw law (K_I = {})", row[IN]));
 		}
 		Ok(ct as f32)
+	}
+
+	/// ABI 60 (--yaw-p-ff [SCALE], docs/ctrl59_yaw_pterm_spec.md): the PROPORTIONAL yaw-rate
+	/// feed-forward gain K_P = −K_θ·scale > 0 (rad/s per rad of e_yaw = target − heading), K_θ
+	/// from the SAME gain row κ and cT read (`yaw_row`). cf21_brushless at n_o = 10, scale 1:
+	/// K_P ≈ 9.59. `scale` is dimensionless, finite and in (0, 2]; the gain is never a literal.
+	pub(crate) fn p_gain(spec: &crate::ctbr::CtbrSpec, dt: f32, hold: usize, scale: f32) -> Result<f32, String>
+	{
+		if !(scale.is_finite() && scale > 0.0 && scale <= 2.0)
+		{
+			return Err(format!("yaw_p_ff: scale must be finite and in (0, 2] (got {scale})"));
+		}
+		let (row, _) = Self::yaw_row(spec, dt, hold).map_err(|e| match e
+		{
+			YawRowErr::NoResidual => "yaw_p_ff needs the cascade residual block (--obs-cascade-dhat-residual): it rides on the trim feed-forward".to_string(),
+			YawRowErr::NoIntegrator(ki) => format!("yaw_p_ff: the yaw rate loop has no integrator (ki = {ki}) — the trim feed-forward it rides on does not exist"),
+		})?;
+		let k_theta = row[TH];
+		if !(k_theta.is_finite() && k_theta < 0.0)
+		{
+			return Err(format!("yaw_p_ff: degenerate yaw law (K_theta = {k_theta})"));
+		}
+		Ok((-k_theta * scale as f64) as f32)
 	}
 
 	/// κ (rad per unit of cresid_z) — the Metal uniform and the Python getter.

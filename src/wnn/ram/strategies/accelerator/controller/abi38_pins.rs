@@ -183,7 +183,7 @@ pub(crate) fn stage2() -> Stage1Cfg
 
 pub(crate) const ASYM: [f32; 4] = [1.12, 0.9, 1.05, 0.95];
 
-pub(crate) fn cpu_rows(c: &WnnController, steps: usize, lag: f32) -> [f64; 19]
+pub(crate) fn cpu_rows(c: &WnnController, steps: usize, lag: f32) -> [f64; crate::cpu_score::ROW_METRICS]
 {
 	let (q0, w0) = ics();
 	let s1 = stage2();

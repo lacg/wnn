@@ -332,6 +332,12 @@ struct Params
 	// HELD setpoint of bank 3 (pwm_acc keeps the bank's value). 0 ⇒ off.
 	uint yff_on;
 	float yff_ct;
+	// ABI 60 (--yaw-p-ff), appended in lockstep: the PROPORTIONAL yaw-rate feed-forward
+	// ypf_kp·e_yaw added to the same held setpoint; e_yaw = sensors[ypf_idx], the yaw_err input
+	// (index computed host-side from the Rust feature layout). 0 ⇒ off.
+	uint ypf_on;
+	float ypf_kp;
+	uint ypf_idx;
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -1415,6 +1421,11 @@ kernel void controller_rollout(
 	uint tail_start = (uint)ceil((float)P.steps * 0.80f);
 	float tail_sum_err = 0.0f;
 	uint tail_cnt = 0u;
+	// ABI 60: the MID window mid_start <= t < tail_start (cpu_score::mid_window_start twin:
+	// ceil(0.15·steps) in exact integer arithmetic) — the `mid` scorer row.
+	uint mid_start = (3u * P.steps + 19u) / 20u;
+	float mid_sum_err = 0.0f;
+	uint mid_cnt = 0u;
 	// Jerk: mean over steps of |Δpwm| (matches run_episode mean_pwm_jerk = mean
 	// of sqrt(Σ_m (Δpwm_m)²)). Mono: thermometer-monotonicity violations on the
 	// LAST emitted output thermometer (matches get_last_output_cells semantics).
@@ -1955,7 +1966,15 @@ kernel void controller_rollout(
 					}
 					// ABI 58: the yaw-rate FF on the setpoint only (twin of decode_ctbr); cresid_z is
 					// the residual block's last slot (the L2y' index).
-					if (P.yff_on != 0u && m == 3u)
+					// ABI 60: + the proportional term (twin of yaw_ff_value: trim, then + p, then
+					// bank + ff). ypf_on == 0 ⇒ the ABI 59 expression.
+					if (P.yff_on != 0u && m == 3u && P.ypf_on != 0u)
+					{
+						float ff = P.yff_ct * sensors[P.num_features - 2u * P.abp_on - 1u];
+						ff += P.ypf_kp * sensors[P.ypf_idx];
+						ctbr_held[m] = clamp(pwm_acc[m] + ff, -r, r);
+					}
+					else if (P.yff_on != 0u && m == 3u)
 						ctbr_held[m] = clamp(pwm_acc[m] + P.yff_ct * sensors[P.num_features - 2u * P.abp_on - 1u], -r, r);
 					else
 						ctbr_held[m] = pwm_acc[m];
@@ -2397,6 +2416,11 @@ kernel void controller_rollout(
 			tail_sum_err += err;
 			tail_cnt += 1u;
 		}
+		else if (t >= mid_start)
+		{
+			mid_sum_err += err;
+			mid_cnt += 1u;
+		}
 
 		// --- Transient-speed metrics (single pass) ---
 		float t_s = (float)t * P.dt;
@@ -2436,13 +2460,18 @@ kernel void controller_rollout(
 	// window writes HOLD_NOT_REACHED (−1, impossible for a mean of magnitudes) and the
 	// host leaves it out — the rival scorers' convention ("episodes that reached the
 	// window"); the fails are counted in their own column.
-	out_effort[idx * 7u] = steps > 0u ? (sum_effort / (float)steps) : 0.0f;
-	out_effort[idx * 7u + 1u] = steps > 0u ? (sum_poserr / (float)steps) : 0.0f;
-	out_effort[idx * 7u + 2u] = steps > 0u ? (sum_alterr / (float)steps) : 0.0f;
-	out_effort[idx * 7u + 3u] = steps > 0u ? (sum_dx / (float)steps) : 0.0f;
-	out_effort[idx * 7u + 4u] = steps > 0u ? (sum_dy / (float)steps) : 0.0f;
-	out_effort[idx * 7u + 5u] = tail_cnt > 0u ? (tail_pos / (float)tail_cnt) : -1.0f;
-	out_effort[idx * 7u + 6u] = tail_cnt > 0u ? (tail_dz / (float)tail_cnt) : -1.0f;
+	out_effort[idx * 8u] = steps > 0u ? (sum_effort / (float)steps) : 0.0f;
+	out_effort[idx * 8u + 1u] = steps > 0u ? (sum_poserr / (float)steps) : 0.0f;
+	out_effort[idx * 8u + 2u] = steps > 0u ? (sum_alterr / (float)steps) : 0.0f;
+	out_effort[idx * 8u + 3u] = steps > 0u ? (sum_dx / (float)steps) : 0.0f;
+	out_effort[idx * 8u + 4u] = steps > 0u ? (sum_dy / (float)steps) : 0.0f;
+	out_effort[idx * 8u + 5u] = tail_cnt > 0u ? (tail_pos / (float)tail_cnt) : -1.0f;
+	out_effort[idx * 8u + 6u] = tail_cnt > 0u ? (tail_dz / (float)tail_cnt) : -1.0f;
+	// Widened again 19/11/2026 (ABI 60): slot 7 = the mid-window mean err (rad); an episode
+	// that ended before the hold window falls back to its whole-episode mean
+	// (cpu_score::mid_episode_mean twin).
+	out_effort[idx * 8u + 7u] = (tail_cnt > 0u && mid_cnt > 0u) ? (mid_sum_err / (float)mid_cnt)
+																															: (steps > 0u ? sum_err / (float)steps : 0.0f);
 	out_mono[idx] = mono_last;
 	// Diverged before reaching the tail window → no settled samples; fall back to
 	// the whole-episode mean (already a failing episode, just keep it finite).

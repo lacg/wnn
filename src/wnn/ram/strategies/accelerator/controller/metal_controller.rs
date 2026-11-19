@@ -76,8 +76,9 @@ pub struct PidFwCfg
 /// controller_rollout.metal (octo-X is the widest preset).
 const MAX_ROTORS_GPU: usize = 8;
 /// Floats per (genome, episode) in the rollout kernel's out_effort buffer:
-/// [effort, pos_err, alt_err, |dx|, |dy|, hold pos_err, hold |dz|] (ABI 51: 5 → 7).
-const EFFORT_SLOTS: usize = 7;
+/// [effort, pos_err, alt_err, |dx|, |dy|, hold pos_err, hold |dz|, mid err]
+/// (ABI 51: 5 → 7; ABI 60: 7 → 8, slot 7 = the mid-window mean err, rad).
+const EFFORT_SLOTS: usize = 8;
 
 /// One rotor of the geometry buffer(27) — 48 B, all-f32, field-for-field
 /// lockstep with the Metal `RotorGpu` struct. `k_thrust` is the EFFECTIVE
@@ -408,6 +409,12 @@ struct RolloutParams
 	// setpoint of bank 3 (cT; read only when yff_on).
 	yff_on: u32,
 	yff_ct: f32,
+	// + 3 (ABI 60, --yaw-p-ff), appended in lockstep: the proportional yaw-rate feed-forward
+	// (K_P; read only when ypf_on) and the index of the yaw_err input it multiplies
+	// (WnnController::yaw_err_feature_index — never a literal).
+	ypf_on: u32,
+	ypf_kp: f32,
+	ypf_idx: u32,
 }
 
 /// CTRL-38: the cascade feature blocks as the score kernel needs them, read off the
@@ -1057,6 +1064,7 @@ impl ControllerRolloutEvaluator
 		// ABI 51: the hold-window position column (pos, |dz|), summed per genome.
 		let mut sum_hold_pos_per_g = vec![0.0f64; g];
 		let mut sum_hold_dz_per_g = vec![0.0f64; g];
+		let mut sum_mid_per_g = vec![0.0f64; g]; // ABI 60: mid-window mean err (row 19)
 		// … over the episodes that reached the window (cpu_score::hold_mean).
 		let mut hold_eps_per_g = vec![0usize; g];
 		let stable_thresh = (5.0_f64).to_radians();
@@ -1260,6 +1268,9 @@ impl ControllerRolloutEvaluator
 				delta_max_yaw: controllers[0].delta_max_bank(crate::controller::YAW_BANK),
 				yff_on: controllers[0].yaw_trim_ff_gain().is_some() as u32,
 				yff_ct: controllers[0].yaw_trim_ff_gain().unwrap_or(0.0),
+				ypf_on: controllers[0].yaw_p_ff_gain().is_some() as u32,
+				ypf_kp: controllers[0].yaw_p_ff_gain().unwrap_or(0.0),
+				ypf_idx: controllers[0].yaw_err_feature_index().unwrap_or(0) as u32,
 			};
 
 			let b_q0 = self.buf(q0_chunk);
@@ -1299,6 +1310,7 @@ impl ControllerRolloutEvaluator
 			// rides in this buffer instead of a new binding.
 			// ABI 32: 5 floats/idx — [effort, pos_err, alt_err, |dx|, |dy|].
 			// ABI 51: 7 — + [hold-window pos_err, hold-window |dz|] (EFFORT_SLOTS).
+			// ABI 60: 8 — + [mid-window mean err].
 			let b_effort = mk_out(n_out_chunk * EFFORT_SLOTS * mem::size_of::<f32>());
 
 			let cmd = self.queue.new_command_buffer();
@@ -1417,6 +1429,7 @@ impl ControllerRolloutEvaluator
 					sum_alterr_per_g[gi] += effortv[idx * EFFORT_SLOTS + 2] as f64;
 					sum_dx_per_g[gi] += effortv[idx * EFFORT_SLOTS + 3] as f64;
 					sum_dy_per_g[gi] += effortv[idx * EFFORT_SLOTS + 4] as f64;
+					sum_mid_per_g[gi] += effortv[idx * EFFORT_SLOTS + 7] as f64; // ABI 60 (fallback applied in-kernel)
 					// ABI 51 hold window: an episode that never reached it carries the
 					// kernel's HOLD_NOT_REACHED and is left out (rival convention).
 					let hold_reached = effortv[idx * EFFORT_SLOTS + 5] != crate::cpu_score::HOLD_NOT_REACHED;
@@ -1475,7 +1488,7 @@ impl ControllerRolloutEvaluator
 		{
 			for _ in 0..g
 			{
-				out.push(vec![0.0_f64; 19]);
+				out.push(vec![0.0_f64; crate::cpu_score::ROW_METRICS]);
 			}
 		}
 		else
@@ -1505,6 +1518,8 @@ impl ControllerRolloutEvaluator
 					// ABI 51: appended — the hold-window position column (m).
 					crate::cpu_score::hold_mean(sum_hold_pos_per_g[gi], hold_eps_per_g[gi]),
 					crate::cpu_score::hold_mean(sum_hold_dz_per_g[gi], hold_eps_per_g[gi]),
+					// ABI 60: appended — row 19 = the mid-window mean attitude err (rad).
+					sum_mid_per_g[gi] / n,
 				]);
 			}
 		}
@@ -1714,6 +1729,11 @@ pub fn score_controllers_metal(
 	if controllers.iter().any(|c| c.yaw_trim_ff_gain() != controllers[0].yaw_trim_ff_gain())
 	{
 		return Err(verr("score_controllers_metal: a batch mixes yaw_trim_ff on/off".to_string()));
+	}
+	// ABI 60: likewise the proportional FF (its gain carries the scale).
+	if controllers.iter().any(|c| c.yaw_p_ff_gain() != controllers[0].yaw_p_ff_gain())
+	{
+		return Err(verr("score_controllers_metal: a batch mixes yaw_p_ff values".to_string()));
 	}
 	// ABI 57: one RolloutParams per launch ⇒ the population must agree on the yaw delta_max.
 	if controllers.iter().any(|c| c.delta_max_yaw() != controllers[0].delta_max_yaw())
@@ -4758,7 +4778,7 @@ fn build_parity_fixture_variant(
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		fixture_ctbr(variant),
-		false, None, None, false, false, false, None, false,
+		false, None, None, false, false, false, None, false, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 	for _ in 0..(n_state * 4)
@@ -6639,7 +6659,7 @@ fn controller_plant_latch_parity_once(high_on: bool) -> Result<(usize, usize, us
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		None, // ctbr OFF (ABI 38: the motor-level controller)
-		false, None, None, false, false, false, None, false,
+		false, None, None, false, false, false, None, false, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -6833,7 +6853,7 @@ fn controller_plant_counter_parity_once() -> Result<(usize, usize, usize), Strin
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		None, // ctbr OFF (ABI 38: the motor-level controller)
-		false, None, None, false, false, false, None, false,
+		false, None, None, false, false, false, None, false, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7015,7 +7035,7 @@ fn controller_plant_bidir_parity_once() -> Result<(usize, usize, usize), String>
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		None, // ctbr OFF (ABI 38: the motor-level controller)
-		false, None, None, false, false, false, None, false,
+		false, None, None, false, false, false, None, false, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7696,7 +7716,7 @@ fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool)
 		false, false, false,
 		false, false,
 		false, 1, 1.0, false, false, 2.0, 0.1, None,
-		false, None, None, false, false, false, None, false,
+		false, None, None, false, false, false, None, false, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7852,7 +7872,7 @@ fn controller_record_att_est_parity_once() -> Result<(usize, usize, usize, bool)
 		false, false,
 		false, 1, 1.0, false,
 		true, 2.0, 0.1, None, // obs_att_estimator ON; ctbr OFF
-		false, None, None, false, false, false, None, false,
+		false, None, None, false, false, false, None, false, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7999,7 +8019,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 		true, true, true, // stage-1 vertical channel ON
 		false, false,     // stage-2 horizontal OFF
 		false, 1, 1.0, false, false, 2.0, 0.1, None,
-		false, None, None, false, false, false, None, false,
+		false, None, None, false, false, false, None, false, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -8374,7 +8394,8 @@ mod tests
 		// + 1 (lever 1, ABI 55): yfe_on.
 		// + 1 (ABI 57): delta_max_yaw.
 		// + 2 (ABI 58): yff_on + yff_ct.
-		assert_eq!(mem::size_of::<RolloutParams>(), 193 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
+		// + 3 (ABI 60): ypf_on + ypf_kp + ypf_idx.
+		assert_eq!(mem::size_of::<RolloutParams>(), 196 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============
@@ -9719,7 +9740,7 @@ mod tests
 	/// this pins the PLUMBING at the two values the axis flies:
 	/// T = 0.15 (nominal, τ = 37.5 ms) and T = 0.0375 (a 4x faster actuator, the
 	/// value a τ/T confusion would pass), against the SAME kernel argument.
-	fn cpu_scorer_row(c: &mut WnnController, q0: &[f32], w0: &[f32], eps: usize, steps: usize, lag: f32) -> [f64; 19]
+	fn cpu_scorer_row(c: &mut WnnController, q0: &[f32], w0: &[f32], eps: usize, steps: usize, lag: f32) -> [f64; crate::cpu_score::ROW_METRICS]
 	{
 		let (num_motors, levels, ..) = c.gpu_dims();
 		crate::cpu_score::rollout_one(

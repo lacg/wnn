@@ -694,3 +694,87 @@ fn rotvec_rel_known_rotations()
 	let r = rotvec_rel([c1, s1, 0.0, 0.0], [c2, s2, 0.0, 0.0]);
 	assert!((r[0] - 0.05).abs() < 1e-6 && r[1].abs() < 1e-7 && r[2].abs() < 1e-7, "{r:?}");
 }
+
+/// CTRL-59 stage 0 (docs/ctrl59_yaw_pterm_spec.md §3): the float yaw law is opt-in, derives
+/// the student's own gains, changes only what it says (the yaw setpoint), and is refused at
+/// a bad scale.
+#[test]
+fn yaw_float_law_is_opt_in_and_uses_the_students_gains()
+{
+	let shipped = small(4, true, None).unwrap();
+	let mut comp = RivalProbe::measure_only().with_bias_comp();
+	let base = small(4, true, Some(&mut comp)).unwrap();
+	assert!(comp.yaw_float_gains().is_none() && comp.report().yaw_clamp_share == 0.0);
+	let mut p = RivalProbe::measure_only().with_bias_comp().with_yaw_float_law(1.0);
+	let flown = small(4, true, Some(&mut p)).unwrap();
+	assert_ne!(bits(base), bits(flown), "the float yaw law changed nothing");
+	assert_ne!(bits(shipped), bits(flown));
+	// The gains are the student's: cT and K_P of the cf21 spec at the same hold (n_o = 10).
+	let spec = crate::ctrl38_tests::obs_spec3(false, false, true);
+	let (ct, kp) = p.yaw_float_gains().expect("armed");
+	let want_ct = crate::yaw_trim_err::YawTrimErr::ff_gain(&spec, crate::abi38_pins::DT, 10).unwrap();
+	let want_kp = crate::yaw_trim_err::YawTrimErr::p_gain(&spec, crate::abi38_pins::DT, 10, 1.0).unwrap();
+	assert!((ct - want_ct).abs() < 1e-5 * want_ct.abs() && (kp - want_kp).abs() < 1e-5 * want_kp, "probe ({ct}, {kp}) vs student ({want_ct}, {want_kp})");
+	let mut half = RivalProbe::measure_only().with_bias_comp().with_yaw_float_law(0.5);
+	small(4, true, Some(&mut half)).unwrap();
+	let (ct_h, kp_h) = half.yaw_float_gains().unwrap();
+	assert!(ct_h == ct && (kp_h - 0.5 * kp).abs() < 1e-5 * kp, "the scale multiplies K_P only");
+	let r = p.report();
+	assert!(r.episodes > 0 && r.axes.err_abs[2].is_finite() && (0.0..=1.0).contains(&r.yaw_clamp_share), "{r:?}");
+	for bad in [0.0f32, 2.5, f32::NAN]
+	{
+		let mut b = RivalProbe::measure_only().with_yaw_float_law(bad);
+		assert!(small(4, true, Some(&mut b)).is_err(), "scale {bad} must be refused");
+	}
+}
+
+/// CTRL-59 STAGE 0 — VAL units only (docs/ctrl59_yaw_pterm_spec.md §3). The label law (est +
+/// bias compensation) with ONLY its yaw setpoint replaced by the float yaw law
+/// clamp(cT·cresid_z + scale·(−K_θ)·e_yaw, ±2.0), at scale 1.0 and 0.5, against the unmodified
+/// law. Prints the scorer row, the per-axis whole-episode / hold split, and the spec's
+/// default-scale rule (fail-free and whole-episode yaw within 1.3× the label law's).
+#[test]
+#[ignore = "val-unit sweep: needs WNN_INDI_PROBE_FIXTURE; minutes of CPU"]
+fn val_yaw_float_law()
+{
+	let units = units();
+	self_check(&units);
+	let comp = || RivalProbe::measure_only().with_bias_comp();
+	let mut arms = vec![Arm { name: "label law, est + bias comp (unmodified)".into(), per_unit: fly(&units, true, &comp) }];
+	for scale in [1.0f32, 0.5]
+	{
+		arms.push(Arm {
+			name: format!("  yaw setpoint = float law only, scale {scale}"),
+			per_unit: fly(&units, true, &move || RivalProbe::measure_only().with_bias_comp().with_yaw_float_law(scale)),
+		});
+	}
+	print_table("CTRL-59 STAGE 0 — float yaw law with no table, MPCOF>rate(h10), VAL (20 units × 100 episodes)", &units, &arms, 0);
+	println!("\nCTRL-59 STAGE 0 — per-axis split (mean |v| per BODY axis of Log(q_ref⁻¹ q_true), degrees)");
+	println!("| arm | fails | whole roll ° | whole pitch ° | whole yaw ° | hold roll ° | hold pitch ° | hold yaw ° | yaw sp at clamp % | whole yaw / label law |");
+	println!("|---|---|---|---|---|---|---|---|---|---|");
+	let deg = |a: &Arm, f: &dyn Fn(&RivalProbeReport) -> f64| mean(a.per_unit.iter().map(|(_, p)| f(p))).to_degrees();
+	let fails = |a: &Arm| -> usize { a.per_unit.iter().zip(&units).map(|((r, _), u)| ((1.0 - r.0) * u.episodes() as f64).round() as usize).sum() };
+	let base_yaw = deg(&arms[0], &|p| p.axes.err_abs[2]);
+	for a in &arms
+	{
+		let yaw = deg(a, &|p| p.axes.err_abs[2]);
+		println!(
+			"| {} | {} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.2} | {:.3} |",
+			a.name,
+			fails(a),
+			deg(a, &|p| p.axes.err_abs[0]),
+			deg(a, &|p| p.axes.err_abs[1]),
+			yaw,
+			deg(a, &|p| p.axes.hold_abs[0]),
+			deg(a, &|p| p.axes.hold_abs[1]),
+			deg(a, &|p| p.axes.hold_abs[2]),
+			100.0 * mean(a.per_unit.iter().map(|(_, p)| p.yaw_clamp_share)),
+			yaw / base_yaw,
+		);
+	}
+	let (fails1, ratio1) = (fails(&arms[1]), deg(&arms[1], &|p| p.axes.err_abs[2]) / base_yaw);
+	println!(
+		"\n[stage-0 rule] scale 1.0: fails {fails1}, whole-episode yaw {ratio1:.3}x the label law's (bound 1.3x) => default scale {}",
+		if fails1 == 0 && ratio1 <= 1.3 { "1.0" } else { "0.5 (the 1.0 row is the reason)" }
+	);
+}

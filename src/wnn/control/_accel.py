@@ -178,7 +178,11 @@ import os
 # ABI 59 (18/11/2026, Luiz: CTRL-58 Rust part): score_controllers_cpu|metal(episode_errs=,
 # tail_diverged_err_deg=) tail export + episode_tail_p99_deg; gated_fitness_combine(gate_steady=,
 # gate_steady_max=, gate_pos=, gate_pos_max=) native four-input gate. Defaults = ABI 58.
-EXPECTED_ABI = 59
+# ABI 60 (19/11/2026, Luiz: CTRL-59 + the CTRL-58 A2 mid-window amendment): WnnController /
+# dagger_train_batch_inplace(yaw_p_ff=None) — the proportional yaw-rate feed-forward (--yaw-p-ff
+# [SCALE]); scorer rows 19 -> 20 metrics, row 19 = `mid` (mean err over 15%..80% of the steps),
+# the opt-in tail export follows the 20 slots. Defaults = ABI 59 on every pre-existing row.
+EXPECTED_ABI = 60
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

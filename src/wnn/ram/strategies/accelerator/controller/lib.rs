@@ -82,6 +82,10 @@ mod ctrl52_yaw_trim_p_tests; // L2y' (ABI 52): proportional-only yaw trim shift,
 #[cfg(test)]
 mod ctrl54_yaw_heading_tests; // lever 1 (ABI 54): yaw heading from the student's own Mahony estimate
 #[cfg(test)]
+mod ctrl60_yaw_p_ff_tests; // ABI 60: --yaw-p-ff — K_P, refusals, setpoint-only FF, label remainder, feature-index pin, CPU/GPU score + walk parity
+#[cfg(test)]
+mod ctrl60_mid_window_tests; // ABI 60: the `mid` scorer row — window definition, err decomposition, diverged fallback, CPU/GPU parity
+#[cfg(test)]
 mod ctrl59_tail_gate_tests; // ABI 59 (CTRL-58): tail sink inert + capped + CPU==GPU; gate tests in ram_core::fitness
 #[cfg(test)]
 mod ctrl58_yaw_trim_ff_tests; // ABI 58: --yaw-trim-ff — cT, refusals, setpoint-only FF, label remainder, CPU/GPU score + walk parity
@@ -576,7 +580,22 @@ mod metal_controller;
 ///     gate, forwarded to THE gate ram_core::fitness::gated_combine_flat_bounds (one implementation;
 ///     gated_combine_flat is its no-extra-bound case, pinned by a golden over 2000 random pools).
 ///     Pin: ctrl59_tail_gate_tests.rs + episode_tail unit tests; ram_core fitness gate tests.
-pub const ABI_VERSION: u32 = 59;
+/// ABI 60 (19/11/2026, Luiz: CTRL-59 + the CTRL-58 A2 mid-window amendment; additive, default =
+/// ABI 59 bit-identical on every pre-existing row):
+///   * WnnController / dagger_train_batch_inplace(yaw_p_ff=None): the PROPORTIONAL yaw-rate
+///     feed-forward on top of the trim FF — sp_r = clamp(bank_r + cT·cresid_z + K_P·e_yaw,
+///     ±range_r), K_P = −K_θ·scale from the row cT reads (YawTrimErr::p_gain; cf21 n_o 10,
+///     scale 1: ≈ 9.59), e_yaw = the float behind the yaw_err input. Needs yaw_trim_ff and
+///     obs_yaw_err; bank 3's label = sp_T − the FF this tick's decode added (yaw_ff_value, one
+///     formula). Metal: RolloutParams + ypf_on, ypf_kp, ypf_idx (196 words). Getter yaw_p_ff.
+///     Pin: ctrl60_yaw_p_ff_tests.rs. Spec: docs/ctrl59_yaw_pterm_spec.md.
+///   * score_controllers_cpu / score_controllers_metal rows: 19 → 20 metrics. Row 19 = `mid`,
+///     the mean attitude err (rad) over ceil(0.15·steps) <= t < ceil(0.80·steps), per episode,
+///     an episode that ended before the hold window contributing its whole-episode mean
+///     (cpu_score::mid_window_start / mid_episode_mean; kernel out_effort slot 7, 8 slots).
+///     The opt-in tail export still FOLLOWS the metric slots (now 20).
+///     Pin: ctrl60_mid_window_tests.rs. Prereg: docs/ctrl58_a2_prereg.md (Amendment 19/11).
+pub const ABI_VERSION: u32 = 60;
 
 /// ABI 44: how output neurogenesis lays out the output layer — "segment" = every
 /// bank / E-I half resizes at its own tail (pre-44 Python resized the flat tail).

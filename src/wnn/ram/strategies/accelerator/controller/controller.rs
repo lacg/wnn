@@ -2098,6 +2098,69 @@ impl WnnController
 		Ok(())
 	}
 
+	/// ABI 60 (--yaw-p-ff [SCALE], docs/ctrl59_yaw_pterm_spec.md): add the PROPORTIONAL part of
+	/// the teacher's yaw law to the same feed-forward: sp_r = clamp(bank_r + cT·cresid_z +
+	/// K_P·e_yaw, ±range_r), K_P = −K_θ·scale (YawTrimErr::p_gain, the row cT reads), e_yaw = the
+	/// float the yaw_err input is built from (target − anchored heading, `yaw_err_last`). Rides on
+	/// the trim FF (one FF path, one label-remainder rule: `yaw_ff_value`), so it needs
+	/// yaw_trim_ff ON first, and obs_yaw_err (the kernels read e_yaw from the feature array).
+	pub(crate) fn enable_yaw_p_ff(&mut self, scale: f32) -> Result<(), String>
+	{
+		if self.yaw_trim_ff.is_none()
+		{
+			return Err("yaw_p_ff needs yaw_trim_ff (enable it first): the P-term rides on the trim feed-forward".into());
+		}
+		if !self.obs_yaw_err
+		{
+			return Err("yaw_p_ff needs obs_yaw_err: e_yaw is the float that input is built from".into());
+		}
+		if self.yaw_p_ff.is_some()
+		{
+			return Err("yaw_p_ff is already on".into());
+		}
+		if self.yaw_trim_err.is_some() || self.yaw_trim_p.is_some()
+		{
+			return Err("yaw_p_ff and obs_yaw_trim_err[_p] (L2y / L2y') are alternatives — pick one".into());
+		}
+		let spec = self.ctbr.as_ref().map(|c| c.spec.clone()).ok_or("yaw_p_ff needs the cascade (output_mode=ctbr)")?;
+		self.yaw_p_ff = Some(crate::yaw_trim_err::YawTrimErr::p_gain(&spec, self.dt, self.action_repeat, scale)?);
+		Ok(())
+	}
+
+	/// ABI 60: K_P (rad/s per rad of e_yaw) for the GPU hosts and Python (None ⇒ off).
+	pub(crate) fn yaw_p_ff_gain(&self) -> Option<f32>
+	{
+		self.yaw_p_ff
+	}
+
+	/// ABI 60: the index of the `yaw_err` input in the feature vector compute_features builds
+	/// (None without obs_yaw_err) — the kernels' `ypf_idx`. Mirrors the canonical order of
+	/// compute_features up to the yaw-anchor channel; pinned against the live vector by
+	/// ctrl60_yaw_p_ff_tests::ypf_feature_index_is_the_yaw_err_input.
+	pub(crate) fn yaw_err_feature_index(&self) -> Option<usize>
+	{
+		if !self.obs_yaw_err
+		{
+			return None;
+		}
+		let peraxis = 2 + self.obs_peraxis_yaw as usize;
+		Some(
+			NUM_FEATURES
+				+ self.obs_tilt_p as usize
+				+ self.obs_tilt_i as usize
+				+ if self.obs_peraxis_p { peraxis } else { 0 }
+				+ if self.obs_peraxis_i { peraxis } else { 0 }
+				+ if self.obs_pwm { self.num_motors } else { 0 },
+		)
+	}
+
+	/// ABI 60 test hook: e_yaw as the last compute_features computed it.
+	#[cfg(test)]
+	pub(crate) fn yaw_err_last(&self) -> f32
+	{
+		self.yaw_err_last
+	}
+
 	/// ABI 58 test hook: bank m's own value (the delta-law accumulator; what the leak reads).
 	#[cfg(test)]
 	pub(crate) fn bank_value(&self, m: usize) -> f32
@@ -2114,12 +2177,20 @@ impl WnnController
 	/// ABI 58: this tick's yaw-rate feed-forward cT·cresid_z (rad/s) from the cascade values the
 	/// LAST compute_features produced — the value decode_ctbr adds and the recorder subtracts
 	/// from the label. 0 when off. ONE formula (CasResidual::of), the kernels' twin.
+	/// ABI 60: the TOTAL feed-forward — with yaw_p_ff on, + K_P·e_yaw of the same tick (trim
+	/// first, then + p: the kernels' association order). yaw_p_ff off takes the ABI 58 branch
+	/// unchanged.
 	pub(crate) fn yaw_ff_value(&self) -> f32
 	{
-		match (self.yaw_trim_ff, self.cascade_obs.as_ref())
+		let trim = match (self.yaw_trim_ff, self.cascade_obs.as_ref())
 		{
 			(Some(ct), Some(o)) => o.residual().map_or(0.0, |r| ct * r.of(&o.last())[2]),
 			_ => 0.0,
+		};
+		match self.yaw_p_ff
+		{
+			Some(kp) => trim + kp * self.yaw_err_last,
+			None => trim,
 		}
 	}
 
@@ -3055,6 +3126,8 @@ impl WnnController
 			yaw_trim_err: None,
 			yaw_trim_p: None,
 			yaw_trim_ff: None,
+			yaw_p_ff: None,
+			yaw_err_last: 0.0,
 			collective_anchor: 0.5,
 		})
 	}
@@ -3900,6 +3973,11 @@ pub struct WnnController
 	yaw_trim_p: Option<crate::yaw_trim_err::YawTrimErr>,
 	// ABI 58 (--yaw-trim-ff): cT of the yaw-rate feed-forward (None ⇒ off, bit-identical).
 	yaw_trim_ff: Option<f32>,
+	/// ABI 60 (--yaw-p-ff): K_P = −K_θ·scale of the proportional yaw-rate feed-forward (None ⇒ off).
+	yaw_p_ff: Option<f32>,
+	/// ABI 60: e_yaw = target_yaw − yaw_heading as the last compute_features computed it (the
+	/// float behind the yaw_err input). Read only by yaw_ff_value with yaw_p_ff on.
+	yaw_err_last: f32,
 	// L1 (06/08/2026) — d̂ disturbance observer, the mpcof teacher's instrument moved
 	// into the student. Some(b) ⇒ 3 extra features (roll/pitch/yaw estimated external
 	// angular acceleration). The screen's D2 decomposition showed the student's error
@@ -4088,6 +4166,7 @@ impl WnnController
 		obs_yaw_from_att_est = false,
 		delta_max_yaw = None,
 		yaw_trim_ff = false,
+		yaw_p_ff = None,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -4157,6 +4236,9 @@ impl WnnController
 		delta_max_yaw: Option<f32>,
 		// ABI 58 (--yaw-trim-ff): the yaw-rate feed-forward cT·cresid_z. false ⇒ off.
 		yaw_trim_ff: bool,
+		// ABI 60 (--yaw-p-ff [SCALE]): the proportional yaw-rate feed-forward, K_P = −K_θ·scale.
+		// None ⇒ off. Needs yaw_trim_ff and obs_yaw_err.
+		yaw_p_ff: Option<f32>,
 	) -> PyResult<Self>
 	{
 		// CTRL-46: the bias-predictor rows are the VERY tail (after the cascade blocks).
@@ -4269,6 +4351,10 @@ impl WnnController
 		{
 			c.enable_yaw_trim_ff().map_err(pyo3::exceptions::PyValueError::new_err)?;
 		}
+		if let Some(scale) = yaw_p_ff
+		{
+			c.enable_yaw_p_ff(scale).map_err(pyo3::exceptions::PyValueError::new_err)?;
+		}
 		Ok(c)
 	}
 
@@ -4333,6 +4419,13 @@ impl WnnController
 	pub fn yaw_trim_ff(&self) -> Option<f32>
 	{
 		self.yaw_trim_ff
+	}
+
+	/// ABI 60: K_P of the proportional yaw-rate feed-forward (None ⇒ off).
+	#[getter]
+	pub fn yaw_p_ff(&self) -> Option<f32>
+	{
+		self.yaw_p_ff
 	}
 
 	/// ABI 57: the yaw bank's delta_max override (None = the shared delta_max).
@@ -4614,6 +4707,7 @@ impl WnnController
 			0.0
 		};
 		self.yaw_heading_override = None; // ABI 55: a replay override never crosses an episode
+		self.yaw_err_last = 0.0; // ABI 60: e_yaw is per-episode (re-written by the first compute_features)
 		// L1: the d̂ observer is per-episode state — a stale estimate carried across a
 		// reset would encode the PREVIOUS episode's disturbance draw.
 		self.dhat = [0.0; 3];
@@ -6481,6 +6575,7 @@ impl WnnController
 			_ => target[2],
 		};
 		let yaw_err = target_y - self.yaw_heading;
+		self.yaw_err_last = yaw_err;
 		// L2y' (ABI 52): the value the PROPORTIONAL yaw inputs carry — yaw_err − κ·cresid_z
 		// (the kernels' `yaw_err - F.ytp_kappa * cresid_z`); the integrals below keep
 		// yaw_err. Off: yaw_err itself.

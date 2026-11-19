@@ -718,6 +718,7 @@ pub(crate) fn from_fixture(path: &str) -> (WnnController, RewardGatedConfigPacke
 		false, // obs_yaw_from_att_est (ABI 55)
 		None, // delta_max_yaw (ABI 57)
 		false, // yaw_trim_ff (ABI 58)
+		None, // yaw_p_ff (ABI 60)
 	)
 	.expect("fixture controller");
 	c.set_target_levels_core(kw.get("target_levels").map(|v| v.parse().unwrap()).unwrap_or(0)).unwrap();

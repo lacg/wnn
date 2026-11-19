@@ -78,6 +78,25 @@ impl StudentAlphabet
 	}
 }
 
+/// CTRL-59 STAGE 0 (docs/ctrl59_yaw_pterm_spec.md §3): the float yaw law with NO table — the
+/// yaw-rate setpoint the label law hands the inner loop is replaced, on decision ticks, by
+///     sp_r = clamp(cT·cresid_z + K_P·e_yaw, ±range_r),
+/// the two feed-forward terms of `--yaw-trim-ff` + `--yaw-p-ff` and nothing else (the bank's
+/// contribution is zero). Roll, pitch and collective stay the label law's. Every input is one
+/// the student reads: cresid_z from the flown rate loop's integrator and the teacher's d̂
+/// observer through the student's own formula (CasResidual::of on rate_integral_norm_of),
+/// e_yaw = target yaw − the Euler yaw of the FED quaternion (the Mahony estimate on an est-fed
+/// row — the student's `--obs-yaw-from-att-est` heading). Gains from
+/// YawTrimErr::float_law_gains: the same row and definitions as the student's options.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct YawFloatLaw
+{
+	ct: f32,
+	kp: f32,
+	resid: crate::cascade_obs::CasResidual,
+	range: f32,
+}
+
 /// What the probe measured, averaged over episodes (radians, metres).
 // Built only by the cargo tests (the pyfunction passes no probe).
 #[cfg_attr(not(test), allow(dead_code))]
@@ -103,6 +122,9 @@ pub(crate) struct RivalProbeReport
 	pub(crate) hold_speed: f64,
 	/// ABI 53 per-axis split (rad), see the module doc "PER-AXIS SPLIT".
 	pub(crate) axes: AxisSplit,
+	/// CTRL-59 stage 0: share of decision ticks with the float yaw setpoint AT the clamp
+	/// (0 without the float law).
+	pub(crate) yaw_clamp_share: f64,
 }
 
 pub(crate) use crate::axis_split::{rotvec_rel, AxisSplit};
@@ -132,6 +154,12 @@ pub(crate) struct RivalProbe
 	pos_eps: usize,
 	/// ABI 53 per-axis split (axis_split::AxisAcc, hold policy ReachedOnly — this scorer's).
 	axes: AxisAcc,
+	/// CTRL-59 stage 0: the requested scale, the armed law, its held setpoint, and
+	/// (decision ticks, decision ticks at the clamp).
+	yaw_float_scale: Option<f32>,
+	yaw_float: Option<YawFloatLaw>,
+	yaw_held: f32,
+	yaw_ticks: [usize; 2],
 }
 
 // Built only by the cargo tests (the pyfunction passes no probe).
@@ -161,6 +189,65 @@ impl RivalProbe
 	{
 		self.alphabet = Some(a);
 		self
+	}
+
+	/// CTRL-59 stage 0: fly the float yaw law (see YawFloatLaw) at `scale`·(−K_θ).
+	pub(crate) fn with_yaw_float_law(mut self, scale: f32) -> Self
+	{
+		self.yaw_float_scale = Some(scale);
+		self
+	}
+
+	/// Once, after the cascade's inner rate loop is built: derive the float yaw law for THIS
+	/// rate loop and airframe at the scorer's decision hold. No-op unless requested.
+	/// `c` = cascade_dhat::torque_gains of the airframe, `clamp` = the d̂ observer's.
+	pub(crate) fn arm_yaw_float_law(&mut self, rate: &crate::pid_firmware::RateStageFw, c: [f64; 3], clamp: [f64; 3], dt: f32, hold: usize) -> Result<(), String>
+	{
+		let Some(scale) = self.yaw_float_scale
+		else
+		{
+			return Ok(());
+		};
+		let (ct, kp) = crate::yaw_trim_err::YawTrimErr::float_law_gains(rate, c[2], dt, hold, scale)?;
+		let ki_lim = std::array::from_fn(|i| (rate.axis_gains(i).ki, rate.axis_gains(i).i_limit));
+		self.yaw_float = Some(YawFloatLaw {
+			ct,
+			kp,
+			resid: crate::cascade_obs::CasResidual::new(c, ki_lim, clamp),
+			range: crate::ctbr_mpcof::CTBR_MPC_RATE_MAX[2] as f32,
+		});
+		Ok(())
+	}
+
+	/// CTRL-59 stage 0: (cT, K_P) of the armed float yaw law.
+	pub(crate) fn yaw_float_gains(&self) -> Option<(f32, f32)>
+	{
+		self.yaw_float.map(|l| (l.ct, l.kp))
+	}
+
+	/// The CTBR label with its yaw-rate setpoint (slot 3) replaced by the float yaw law's,
+	/// refreshed on decision ticks and held between (the student's cadence). Identity unless
+	/// the law is armed. `rate` = the flown rate loop BEFORE this tick, `dhat` = the teacher's
+	/// observer after this tick's observe, `q_fed` = the attitude the teacher is fed.
+	pub(crate) fn yaw_float_label(&mut self, t: usize, hold: usize, label: [f64; 4], rate: &crate::pid_firmware::RateStageFw, dhat: [f32; 3], q_fed: [f32; 4], target_yaw: f32) -> [f64; 4]
+	{
+		let Some(law) = self.yaw_float
+		else
+		{
+			return label;
+		};
+		if t % hold.max(1) == 0
+		{
+			let ri = crate::ctbr::rate_integral_norm_of(rate);
+			let cresid_z = law.resid.of(&[ri[0], ri[1], ri[2], dhat[0], dhat[1], dhat[2]])[2];
+			let e_yaw = target_yaw - quat_to_euler_f64(q_fed).2 as f32;
+			// The student's association order (yaw_ff_value): trim, then + p; bank = 0.
+			let ff = law.ct * cresid_z + law.kp * e_yaw;
+			self.yaw_held = ff.clamp(-law.range, law.range);
+			self.yaw_ticks[0] += 1;
+			self.yaw_ticks[1] += (self.yaw_held.abs() >= law.range) as usize;
+		}
+		[label[0], label[1], label[2], self.yaw_held as f64]
 	}
 
 	/// The CTBR label the inner loop is handed. Identity unless an alphabet is set; then,
@@ -237,6 +324,7 @@ impl RivalProbe
 		self.ep = [0.0; 7];
 		self.ep_cnt = 0;
 		self.held = [0.0; 4];
+		self.yaw_held = 0.0;
 		self.pos_ep = [0.0; 12];
 		self.pos_cnt = [0; 5];
 		self.pos_first = None;
@@ -359,6 +447,7 @@ impl RivalProbe
 			hold_abs_xyz: self.pos_mean::<3>(8),
 			hold_speed: self.pos_mean::<1>(11)[0],
 			axes: self.axis_split(),
+			yaw_clamp_share: self.yaw_ticks[1] as f64 / self.yaw_ticks[0].max(1) as f64,
 		}
 	}
 
