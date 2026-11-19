@@ -31,6 +31,8 @@ and never estimate a cell the script left blank.
 |---|---|---|
 | dfa1l 2×2×2×5 study table | `python3 scripts/build_dfa_1layer_table.py --markdir experiments/dfa1l_markers` | any dfa1l progress question, and ALWAYS on a cell completion |
 | IDS cohort 5-table | see the `cohort-report` skill | IDS progress/paper questions |
+| Controller per-seed table (B \| F pair with Δ, or M \| Y \| D box, MPCOF eq-info ref row, stable floored from fails) | see the `ctrl-seed-table` skill (`scripts/ctrl_seed_table.py`) | every controller A/B readout and every tick |
+| unswr IDS width table (classical rows from Plane IDS-10, C \| 80 \| 96) | `python3 logs/ids/ids_width_tick_table.py` | every tick, IDS width questions |
 
 **Reading the dfa1l table:**
 - `n` is completed SEEDS for that cell, so `n=1` cannot rank anything — say so rather
@@ -52,7 +54,7 @@ and never estimate a cell the script left blank.
 
 1. **Read-only, absolutely.** No kill, no SIGTERM, no restarts, no file writes, no DB writes, no flow PATCHes. If something is wrong, REPORT it loudly and stop.
 2. **Show real data:** actual values from logs/DB — never compute, estimate, or extrapolate results. ETAs are arithmetic on measured pace and labeled as such.
-3. **Formats:** dates DD/MM/YYYY, 24-hour times, UTC + ET for ETAs. IDS full reports follow Rule 7 (5 tables, 7 threshold modes, Grid|GA side-by-side, plain-text pipe tables in code blocks). Controller results report the err°/stable°/steady° triple from HELD-OUT blocks only.
+3. **Formats:** dates DD/MM/YYYY, 24-hour times, UTC + ET for ETAs. IDS full reports follow Rule 7 (5 tables, 7 threshold modes, Grid|GA side-by-side, plain-text pipe tables in code blocks). Controller results report the whole vector — stable / err / steady / pos / fails — on TEST (35 CF2.1 units), via the `ctrl-seed-table` skill.
 4. **Escalation classes:** CRITICAL = IDS worker dead, double-run, avail <6GB sustained, swap thrash, jetsam kill of the worker. WARN = pace collapse, patience near exhaustion, μ-cells near cap, disk pressure. INFO = cell/flow completions.
 5. Distinguish "silent" from "healthy": a quiet log + alive PID + stable RSS = probably grinding a long batch; verify with elapsed-time deltas before declaring progress.
 
