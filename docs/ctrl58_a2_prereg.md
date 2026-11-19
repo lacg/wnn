@@ -58,7 +58,7 @@ else stands. Source: the Y+F gap investigation, `logs/controller/ctrl48/yf_gap/`
 - It is NOT added to the gate, to the trigger, or to stage-select (rule P unchanged). Magnitude patience is
   unchanged: it already watches mean err, which moves with `mid`.
 
-### Weights (proposal — needs Luiz's confirmation, because the 19/11 morning ruling was "keep the defaults")
+### Weights (CONFIRMED by Luiz 19/11 ~17:50 EST; exact 0.3–1.6 s window on ABI 60 also agreed)
 ```
 column             | A2 as drafted | A2 amended
 -------------------+---------------+-----------
@@ -138,4 +138,4 @@ in the CPU/GPU parity pins.
 ## To fill at launch
 - Base (D+F or Y+F — Luiz leaning Y+F) and its B rows; driver path; tags `..._a<ABI>_..._a2_full_sN`
   (a60 with the Rust `mid` row, a59 with the `pre` fallback).
-- Luiz's confirmation of the amended weights.
+- (Amended weights confirmed by Luiz 19/11.)

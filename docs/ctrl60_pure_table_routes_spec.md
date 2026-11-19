@@ -255,3 +255,118 @@ It carries two things: the dropped `--yaw-p-ff` and the mid-window scorer row A2
 3. The branch: strip the P-term, merge as is, or use the fallback.
 4. Does the claim need F inside the network (the learned trim bank), or is one sentence plus the ablation row
    final?
+
+---
+
+## C2 pre-check result (19/11/2026 evening; Luiz's go 19/11 ~17:50 EST)
+
+**Verdict: NO-GO for a longer yaw-bank leak. The pre-check also showed that the premise of section 4 C2 was
+wrong.** VAL only (the 20 stage-select val units 163226054..163226073 × 100 episodes). No flight, no training,
+no install; the installed ABI 59 wheel and the main checkout's `src/` were not touched.
+
+### Correction to section 4 C2
+I wrote that the yaw bank "must emit δ = 0.3·s on every decision" to hold a setpoint s. That is the true-delta
+label (`--dagger-label-delta`), which this recipe does NOT use. As flown, the bank is trained on the teacher's
+ABSOLUTE yaw-rate setpoint and the delta law integrates what it says:
+`setpoint ← leak·setpoint + delta_max·B`, so at rest the held setpoint is **G·B, with G = delta_max / (1 − leak)**
+(`l2yp_investigation/yaw_g_aware.py`, decode identity fitted at 1.97–2.01 for G 2). With `--delta-max-yaw 0.5` and
+leak 0.7, G = 1.67: a table that says exactly the teacher's label holds 1.67 times the trim, and the yaw error
+settles where the proportional response removes the excess. A longer leak RAISES G (4 at 0.875, 8 at 0.9375),
+so it makes the trim-proportional error larger, not smaller.
+
+### What was run
+1. **Rival probe (the spec's item i).** The label law (MPCOF>rate(h10), est + bias compensation) flown through the
+   Y base's output law: leak 0.7, delta_max 0.6, yaw delta_max 0.5, 64 cells per bank, ranges 0.25 / 4.2 / 4.2 / 2,
+   γ 1 / 2 / 2 / 2, with the YAW bank's leak changed. Two blocks:
+   - *ideal delta*: the existing what-if (the setpoint the alphabet can reach) — the alphabet cost;
+   - *absolute yaw label*: the yaw bank driven as the flown students are (a perfect table that says the absolute
+     label; the other three banks stay ideal). Added because of the correction above.
+   - Temporary Rust, **scratch branch `ctrl60-c2-precheck`, worktree `/Users/lacg/wnn-c2-precheck`, local commit
+     9cf689c6, not pushed, NOT for merge**: per-bank yaw leak / delta_max and the absolute-label mode in
+     `rival_probe.rs::StudentAlphabet`, a yaw-setpoint step RMS, and the `#[ignore]` test
+     `rival_probe_tests::val_c2_yaw_leak`. Built with `CARGO_TARGET_DIR=logs/controller/ctrl48/yf_gap/target-c2`,
+     `nice -n 15`, `-j 6`. Fixture: `yf_gap/c2_fixture` (VAL, written from the Y+F s1 run log). Self-check passed
+     (the probe build reproduces the installed wheel's est-fed row on unit 163226054). Log: `yf_gap/c2_probe.log`.
+2. **Calibrated hold-offset model (the spec's item ii).** `yf_gap/c2_model.py` = `yaw_ff_calibrated.py` with G
+   changed, on the VAL replays already on disk (6 units × 100 episodes per seed): the M genomes re-scored at
+   G 1.67 (s1-s5) and the flown Y genomes (s1, s2).
+
+### Rival probe (VAL, 20 units × 100 episodes; no student in this table)
+```
+arm                                        | stable % | fails | err °  | steady ° | pos m | yaw whole ° | yaw hold ° | yaw sp step RMS all / hold rad/s | per-unit hold yaw vs trim: slope °/unit, R²
+-------------------------------------------+----------+-------+--------+----------+-------+-------------+------------+----------------------------------+--------------------------------------------
+label law, no alphabet                     | 100.00   | 0     | 0.693  | 0.171    | 0.355 | 0.289       | 0.075      | 0.071 / 0.067                    | −0.001, 0.00
+IDEAL DELTA (alphabet cost)                |          |       |        |          |       |             |            |                                  |
+  leak 0.70,   dmax 0.5  (G 1.67) control  | 100.00   | 0     | 0.693  | 0.172    | 0.355 | 0.289       | 0.075      | 0.071 / 0.067                    | −0.002, 0.00
+  leak 0.875,  dmax 0.5  (G 4)             | 100.00   | 0     | 0.693  | 0.172    | 0.355 | 0.289       | 0.075      | 0.071 / 0.067                    | −0.001, 0.00
+  leak 0.9375, dmax 0.5  (G 8)             | 100.00   | 0     | 0.693  | 0.172    | 0.355 | 0.289       | 0.075      | 0.071 / 0.067                    | −0.001, 0.00
+ABSOLUTE YAW LABEL (as flown, perfect table)|         |       |        |          |       |             |            |                                  |
+  leak 0.70,   dmax 0.5  (G 1.67) control  | 100.00   | 0     | 0.993  | 0.579    | 0.355 | 0.645       | 0.532      | 0.032 / 0.026                    | −1.25, 1.00
+  leak 0.875,  dmax 0.5  (G 4)             | 100.00   | 0     | 1.379  | 1.035    | 0.356 | 1.053       | 1.000      | 0.048 / 0.027                    | −2.34, 1.00
+  leak 0.9375, dmax 0.5  (G 8)             | 100.00   | 0     | 1.612  | 1.309    | 0.356 | 1.276       | 1.257      | 0.089 / 0.064                    | −2.72, 1.00
+  leak 0.70,   dmax 0.3    (G 1) [extra]   | 100.00   | 0     | 0.727  | 0.173    | 0.355 | 0.342       | 0.077      | 0.020 / 0.016                    | −0.003, 0.00
+  leak 0.875,  dmax 0.125  (G 1) [extra]   | 100.00   | 0     | 0.779  | 0.174    | 0.355 | 0.419       | 0.078      | 0.013 / 0.006                    | −0.002, 0.00
+  leak 0.9375, dmax 0.0625 (G 1) [extra]   | 100.00   | 0     | 0.915  | 0.182    | 0.355 | 0.595       | 0.088      | 0.009 / 0.003                    | −0.015, 0.03
+```
+- "yaw sp step RMS" is the RMS decision-to-decision change of the flown yaw-rate setpoint (the noise measure).
+- The last column regresses each unit's signed hold yaw on its mean trim (`cresid_z`, from `trim_YF_s1_val.npz`).
+- **Alphabet cost of a longer leak: 0.000–0.001°.** Not the limit.
+- **As flown, the trim-proportional error is built into the decode.** Even a perfect table holds 0.53° of yaw at
+  G 1.67, entirely explained by the trim (R² 1.00). The real Y student holds 0.30° with slope −0.57°/unit
+  (section 1.4): its table has learned to say LESS than the teacher's label and so cancels about half of the
+  excess. That is the R² 0.60 dependence.
+- **A longer leak at the same delta_max doubles it** (1.00° at 0.875, 1.26° at 0.9375), with a noisier setpoint.
+- **G = 1 removes it**: hold yaw 0.077° against the label law's 0.075°, trim R² 0.00, and the smoothest setpoint.
+  The cost is in the transient: whole-episode yaw 0.342° against 0.289° (err +0.034°) at leak 0.7, and much more
+  with a longer leak at G 1 (0.42° / 0.60°), because the accumulator then low-passes the label.
+
+### Calibrated model (VAL replays of real genomes; predicted per-episode hold |yaw|, mean over seeds)
+```
+arm                                        | M genomes at G 1.67, s1-s5 | trim R² | flown Y genomes, s1-s2 | trim R²
+-------------------------------------------+----------------------------+---------+------------------------+--------
+leak 0.70 (control, G 1.67), measured      | 0.235°                     | 0.49    | 0.259°                 | 0.50
+leak 0.875 (G 4)                           | 0.395°                     | 0.77    | 0.482°                 | 0.77
+leak 0.9375 (G 8)                          | 0.463°                     | 0.82    | 0.563°                 | 0.82
+F at leak 0.70 (reference)                 | 0.206°                     | 0.00    | 0.146°                 | 0.00
+[extra] G 1 = delta-max-yaw 0.3, leak 0.70 | 0.209°                     | 0.00    | 0.153°                 | 0.00
+```
+The dependence on the trim does not shrink under a longer leak; it grows (R² 0.49 → 0.77 → 0.82).
+
+### Go / no-go against the written criterion
+> "GO only if the predicted hold yaw offset is within 0.03° of F's and the alphabet cost is under 0.01°."
+
+- Alphabet cost: 0.000–0.001°. **Passes.**
+- Predicted hold yaw offset against F: +0.19° / +0.26° (M genomes) and +0.34° / +0.42° (Y genomes) at leak
+  0.875 / 0.9375. **Fails by an order of magnitude, in the wrong direction.**
+- **NO-GO.** No per-bank leak is to be built. Section 4 C2 and item 3 of section 6 are withdrawn.
+
+### What the pre-check can and cannot show
+- The probe rows are the TEACHER's law pushed through the student's output law. They show what that law costs a
+  table that says exactly the label. They are not a student and say nothing about what a table would learn.
+- The model rows re-predict the hold offset of genomes trained at leak 0.7. A changed leak was NOT flown through
+  a frozen table: the cells were written for G 1.67 or 2, and a different G changes what they should hold, so
+  such a replay would not be a controller anyone would train. A retrained student can adapt (the Y student
+  already cancels about half of the built-in excess), so the real numbers would differ from both tables.
+- The model was validated for one step only (G 2 → 1.67: predicted −0.049°, measured −0.054° in the mean, the
+  sign right on 3 of 5 seeds). G 4, G 8 and G 1 are extrapolations.
+- VAL, s1-s5 / s1-s2, 6 units per seed for the model. Directions, not results.
+
+### A by-product that Luiz should see (not asked for; nothing was flown)
+The same two tools point at the pure-table route this spec was looking for: **make the yaw decode gain 1**, i.e.
+`--delta-max-yaw 0.3` with the leak left at 0.7. The flag exists (ABI 57); no code, no wheel.
+- Probe: hold yaw 0.077° (label law 0.075°), no dependence on the trim, at +0.034° of err in the transient.
+- Model: within 0.003–0.007° of F on real genomes.
+- It is the continuation of a step already flown: Y is delta_max_yaw 0.6 → 0.5 (G 2 → 1.67), which gave about
+  −0.04° of steady. G 1 is the end of that line, where a table that says the label holds exactly the label.
+- If Luiz wants it tested: arm = base + `--delta-max-yaw 0.3`, WITHOUT F, s1-s5, against Y and against Y+F of the
+  same seed (the design of section 2). Expected from the model: steady close to Y+F's; err is the open question
+  (the transient cost above, against F's gain). It would answer whether F is needed at all.
+- Caveats: an extrapolation of a model checked on one step; the probe's transient cost is for a perfect table;
+  the yaw bank's largest step per decision falls from 1.0 to 0.6 rad/s, which may slow the first 0.3 s.
+
+### Files
+- `logs/controller/ctrl48/yf_gap/c2_probe.log`, `c2_model.py`, `c2_fixture/`, `c2_val_fixture.py` (the fixture
+  writer as it stands on commit 5ba2af06, copied so the main checkout's script was not edited), `target-c2/`
+  (178 MB build directory; safe to delete).
+- Scratch branch `ctrl60-c2-precheck` (local commit 9cf689c6) in `/Users/lacg/wnn-c2-precheck`; delete both when
+  this section is accepted.
