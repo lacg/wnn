@@ -2,8 +2,8 @@
 """unswr width table for the hourly tick (Luiz 18/11/2026): C (64b) | 80 (IDS62) | 96 (IDS63), per seed.
 
 Cell = GA ga_neurons, best_f1, test_point final, margin_val_cal, TEST (test_summaries.threshold_metadata).
-Classical rows on top = Luiz's target rows (same random_3way TEST). Acc only where a recorded value matches
-(XGBoost rows = docs/ids_results.md IDS-56 classical table); RF rows are multi-seed means without a recorded acc -> "—".
+Classical rows on top = Luiz's target rows (same random_3way TEST): untuned RF/XGB defaults, VAL-calibrated threshold,
+mean±SD over 5 seeds r20419-23, from logs/ids/unsw_headroom_1611/bl_random_3way_{thermo64,raw}.jsonl (Plane IDS-58).
 """
 import json
 import sqlite3
@@ -15,10 +15,10 @@ CONTROLS = {20421: 7567, 20422: 7568, 20423: 7569}
 ARMS = ("C", "80", "96")
 ARM_NAME = {"80": "IDS62-unswr-%-fixb80-encoff-r{seed}", "96": "IDS63-unswr-%-fixb96-encoff-r{seed}"}
 CLASSICAL = (
-	("XGB 64b", "95.53", "0.417", "99.33", "6K nodes"),
-	("RF 64b", "95.32±0.07", "0.380±0.064", "—", "1.78M nodes"),
-	("XGB raw top-20", "95.60", "0.427", "99.34", "6K nodes"),
-	("RF raw top-20", "95.81±0.07", "0.288±0.027", "—", "1.16M nodes"),
+	("XGB 64b", "95.53±0.00", "0.417±0.000", "99.33±0.00", "6K nodes"),
+	("RF 64b", "95.32±0.07", "0.380±0.064", "99.31±0.00", "1.78M nodes"),
+	("XGB raw top-20", "95.60±0.00", "0.427±0.000", "99.34±0.00", "6K nodes"),
+	("RF raw top-20", "95.81±0.07", "0.288±0.027", "99.39±0.01", "1.16M nodes"),
 )
 HEADER = ("seed", "F1 % (C | 80 | 96)", "FPR % (C | 80 | 96)", "acc % (C | 80 | 96)",
 	"cells/neurons (C | 80 | 96)", "bits (C | 80 | 96)", "hours (C | 80 | 96)")
