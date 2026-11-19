@@ -14,11 +14,23 @@ VERBATIM in a fenced block — never retype numbers, never compute a cell by han
 - **stable % is FLOORED from fails** (19/11): 1 fail in 3500 prints 99.9, never 100.0; means floor to 0.01.
 - Mean row is PAIRED: only seeds where every arm finished; fails are pooled with the denominator shown.
 - Columns: stable / err / steady / pos / fails. Never add alt, pos_hold or dz_hold (Luiz 18/11).
-- Pair style adds Δ (last arm − first arm) for err / steady / pos.
+- Pair style adds Δ (last arm − first arm) for err / steady / pos; `--delta X:Y` adds any pair instead.
+- Name arms by recipe (D, D+F, Y, Y+F) — never a generic "B".
 
 ## Standard invocations
 
-FF block on base D (B = D rows, F = D + `--yaw-trim-ff`), pair style:
+**FF comparison D | D+F | Y | Y+F (the tick's FF table since 19/11)** — arms named by recipe, never a bare "B"
+(Luiz 19/11: "B" meant D in one table and Y in the other). Δ columns: each F against ITS OWN base:
+```bash
+python3 scripts/ctrl_seed_table.py --style pair --seeds 1-10 \
+  --arm 'D=_dmD_full_s{s}$|_n10D_full_s{s}$' --arm 'D+F=_a59_.*_ffD_F_full_s{s}$' \
+  --arm 'Y=_dmyY_full_s{s}$|_n10Y_full_s{s}$' --arm 'Y+F=_a59_.*_ffF_full_s{s}$' \
+  --delta 'D+F:D' --delta 'Y+F:Y' --ref 'MPCOF eq-info=100.00,0.691,0.165,0.357,0'
+```
+The mean row pairs over the seeds where every arm WITH RESULTS has finished, so while Y+F is flying its n drops to
+Y+F's finished seeds (a fair paired mean); an arm with no results yet shows "–".
+
+Single FF block (pair style, Δ = last − first):
 ```bash
 python3 scripts/ctrl_seed_table.py --style pair --seeds 1-10 \
   --arm 'B=_dmD_full_s{s}$|_n10D_full_s{s}$' --arm 'F=_a59_.*_ffD_F_full_s{s}$' \

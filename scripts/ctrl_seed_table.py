@@ -10,7 +10,9 @@ Usage:
   ctrl_seed_table.py --arm 'M=...' --arm 'Y=...' --arm 'D=...' --seeds 1-10 --style box \
       --ref 'MPCOF eq-info=100.00,0.691,0.165,0.357,0'
 Arm patterns are regexes on the run TAG with {s} = the seed number; the LAST matching END wins.
---style pair adds Δ columns (last arm − first arm) for err / steady / pos.
+--style pair adds Δ columns (last arm − first arm) for err / steady / pos. --delta 'X:Y' (repeatable) instead adds one
+column per pair, "ΔX−Y err/steady/pos", for any two arms (e.g. --delta 'D+F:D' --delta 'Y+F:Y'); works with either style.
+Label arms by their recipe (D, D+F, Y, Y+F), never a bare "B" that means different bases in different tables.
 """
 import argparse
 import math
@@ -73,13 +75,19 @@ def seed_values(arms, seed, ends, starts):
 
 
 def mean_values(per_seed):
-	"""Means over the seeds where EVERY arm finished (paired); stable floored from pooled fails."""
-	common = [cells for cells in per_seed.values() if all("raw" in c for c in cells)]
+	"""PAIRED means over the seeds where every arm WITH RESULTS finished (arms with none show '–');
+	stable floored from pooled fails."""
+	cols = list(zip(*per_seed.values()))
+	active = [a for a, col in enumerate(cols) if any("raw" in c for c in col)]
+	common = [cells for cells in per_seed.values() if all("raw" in cells[a] for a in active)]
 	if not common:
 		return None, 0
 	n = len(common)
 	out = []
-	for a in range(len(common[0])):
+	for a in range(len(cols)):
+		if a not in active:
+			out.append({"state": "–"})
+			continue
 		rows = [cells[a]["raw"] for cells in common]
 		fails = sum(r[3] for r in rows)
 		out.append({"raw": tuple(statistics.mean(r[i] for r in rows) for i in range(3)) + (fails,),
@@ -101,24 +109,40 @@ def deltas(cells):
 	return ["%+.3f" % (b["raw"][i] - a["raw"][i]) for i in range(3)]
 
 
-def build_rows(arms, seeds, ends, starts, style):
+def pair_deltas(cells, pairs):
+	"""One "err/steady/pos" Δ cell per (x, y) arm-index pair; blank until both arms finished."""
+	out = []
+	for x, y in pairs:
+		a, b = cells[y], cells[x]
+		out.append("/".join("%+.3f" % (b["raw"][i] - a["raw"][i]) for i in range(3)) if "raw" in a and "raw" in b else "")
+	return out
+
+
+def extra(cells, style, pairs):
+	if pairs:
+		return pair_deltas(cells, pairs)
+	return deltas(cells) if style == "pair" else []
+
+
+def build_rows(arms, seeds, ends, starts, style, pairs=()):
 	per_seed = {s: seed_values(arms, s, ends, starts) for s in seeds}
 	rows = []
 	for s, cells in per_seed.items():
-		row = ["s%d" % s] + [joined(cells, k) for k in METRICS]
-		rows.append(row + (deltas(cells) if style == "pair" else []))
+		rows.append(["s%d" % s] + [joined(cells, k) for k in METRICS] + extra(cells, style, pairs))
 	mean, n = mean_values(per_seed)
 	if mean:
 		row = ["mean (n=%d)" % n] + [joined(mean, k) for k in METRICS]
 		row[-1] += "  (/%d)" % (UNITS_EPS * n)
-		rows.append(row + (deltas(mean) if style == "pair" else []))
+		rows.append(row + extra(mean, style, pairs))
 	return rows
 
 
-def header(labels, style):
+def header(labels, style, pairs=()):
 	lab = " | ".join(labels)
 	h = ["seed"] + [f"{k} {UNIT[k]} ({lab})" for k in METRICS]
-	if style == "pair":
+	if pairs:
+		h += [f"Δ{labels[x]}−{labels[y]} err/steady/pos" for x, y in pairs]
+	elif style == "pair":
 		h += [f"Δ{labels[-1]}−{labels[0]} err", "steady", "pos"]
 	return h
 
@@ -160,13 +184,17 @@ def main():
 	ap.add_argument("--seeds", required=True, help="e.g. 1-10 or 1,3,5")
 	ap.add_argument("--style", choices=("box", "pair"), default="box")
 	ap.add_argument("--ref", action="append", default=[], help="LABEL=stable,err,steady,pos,fails (one value, all arms)")
+	ap.add_argument("--delta", action="append", default=[], help="X:Y arm labels -> a ΔX−Y err/steady/pos column")
 	ap.add_argument("--log", default=str(RUNS_LOG))
 	a = ap.parse_args()
 	arms = [tuple(x.split("=", 1)) for x in a.arm]
 	ends, starts = parse_log(Path(a.log).read_text(errors="replace").splitlines())
-	h = header([lab for lab, _ in arms], a.style)
-	rows = build_rows(arms, parse_seeds(a.seeds), ends, starts, a.style)
-	refs = [[lab] + v.split(",") + ([""] * 3 if a.style == "pair" else []) for lab, v in (r.split("=", 1) for r in a.ref)]
+	labels = [lab for lab, _ in arms]
+	pairs = [tuple(labels.index(x) for x in d.split(":")) for d in a.delta]
+	h = header(labels, a.style, pairs)
+	rows = build_rows(arms, parse_seeds(a.seeds), ends, starts, a.style, pairs)
+	pad = len(h) - 6
+	refs = [[lab] + v.split(",") + [""] * pad for lab, v in (r.split("=", 1) for r in a.ref)]
 	print((render_pair if a.style == "pair" else render_box)(h, rows, refs))
 
 
