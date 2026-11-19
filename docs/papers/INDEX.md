@@ -51,3 +51,16 @@ agent (.claude/agents/paper-scout.md) and by hand.
 - [Shi 2019 — Neural Lander (ICRA'19)](shi2019_neural_lander.md) — SN-DNN residual force in position loop; z err 0.13 m → 0.
 - [Koch 2019 — Neuroflight (arXiv 1901.06553)](koch2019_neuroflight.md) — 1344-weight NN rate loop on STM32F722 at 2 kHz; argues RPM input hurts transfer (Δe input: −45.07% error in sim).
 - [Kresse 2026 — Differentiable Weightless Controllers (ICML'26)](kresse2026_differentiable_weightless_controllers.md) — LUT/thermometer policies, MuJoCo only, 2–3 cycles, ~2 nJ/action on Artix-7.
+
+### NN drone-controller landscape survey — added 19/11/2026
+- [SURVEY — how NN quadrotor controllers treat the classical stack](nn_drone_controller_survey.md) — 20-row table + 4 positioning answers; hybrid is the norm; nobody claims multiplier-free flight control.
+- [Song 2023 — RL vs optimal control racing (Sci. Robotics)](song2023_optimal_control_vs_rl_racing.md) — "neural network controller" = 2×256 MLP → CTBR → unnamed low-level loop, Vicon+EKF; 100% vs 20% success (realistic sim).
+- [Tagliabue 2022 — tube-MPC imitation (arXiv 2109.09910)](tagliabue2022_tube_mpc_imitation.md) — DAgger/BC of RTMPC, 2×32 MLP → thrust+tilt → classical attitude loop; 1.66 ms on TX2 vs 55.3 ms MPC.
+- [Stroobants 2025 — Neuromorphic attitude estimation and control (RA-L)](stroobants2025_neuromorphic_attitude_estimation_control.md) — SNN on Teensy 4.0 at 500 Hz, 3.03° vs PID 2.67°; 7,500 additions vs PID 28 add + 52 mult.
+- [TinyMPC (arXiv 2310.16985)](alavilli2024_tinympc.md) — non-NN comparator: MPC at 500 Hz, N=15 on STM32F405 within 2 ms.
+- [Paredes-Vallés 2024 — Fully neuromorphic vision and control (Sci. Robotics)](paredesvalles2024_fully_neuromorphic_flight.md) — Loihi 200 Hz, 27 µJ/inference, outputs thrust+attitude to PX4.
+- [Ferede 2025 — One Net to Rule Them All (ICRA'25)](ferede2025_one_net_to_rule_them_all.md) — 3×64 MLP → motor commands at 1000 Hz on STM32H743; EKF+mocap.
+- [Ferede 2023 — G&CNet end-to-end optimal control (arXiv 2304.13460)](ferede2023_e2e_nn_quadcopter_control_gcnet.md) — "end-to-end" = no inner loop; 3×120 MLP → rpm; onboard moment estimate fed as INPUT.
+- [Eschmann 2024 — RLtools (JMLR)](eschmann2024_rltools.md) — 13→64→64→4 MLP: 293 µs (optimized) / 743 µs (generic) on Crazyflie STM32F405.
+- [Mysore 2021 — How to Train your Quadrotor / RE+AL](mysore2021_how_to_train_your_quadrotor.md) — real rate-loop MAE 4.20 deg/s vs PID 5.01; 5.86 A vs 8.07 A.
+- [Cobo-Briesewitz 2026 — Learned INDI (L4DC'26)](cobobriesewitz2026_learned_indi.md) — 19→24→24→6 MLP = 203 µs on Crazyflie 2.1; hybrid NN+INDI.

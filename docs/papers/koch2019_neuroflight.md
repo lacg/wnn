@@ -24,3 +24,13 @@ but as an INNER (rate) loop: pilot/autopilot supplies rate setpoint and throttle
 ## Absent
 - No outer-loop learning; no head-to-head real tracking-error table vs PID in the extracted text checked;
   no motor time-constant value.
+
+## Addendum 19/11/2026 — timing, power, tracking tables (for the NN-controller survey)
+- Table III control ALGORITHM, WCET / BCET µs / variability window: armed NF (NN) 210 / 195 / 7.1 %; BF (PID) 15 / 9 / 40.0 %;
+  disarmed NF 204 / 194 / 4.9 %, BF 14 / 9 / 35.7 %.
+- Table IV flight-control TASK: armed NF 423 / 263 / 37.8 %; BF 238 / 78 / 67.2 %. "WCET of 423 µs which would allow for a
+  max execution rate of 2.4kHz"; PID task faster "only by a factor of 1.78 when armed".
+- Table V power: armed NF 16.78 V 0.67 A 11.24 W vs BF 0.6 A 10.07 W ("70mA (approximately 11%) increase").
+- Graph size: optimized frozen graph "12KB".
+- Table VI real flight (NN only): MAE roll 15 / pitch 21 / yaw 11 / avg 15 (deg/s; wind gusts "exceeded 30mph").
+- Table VII SIM: NN MAE avg 2.83 vs PID 4.20. **No real-flight PID comparison in this paper** (see Mysore 2021).
