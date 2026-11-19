@@ -13,6 +13,8 @@ VERBATIM in a fenced block — never retype numbers, never compute a cell by han
 - Cells are `A | B (| C)` raw values; the reference row (MPCOF eq-info = THE comparator) sits on top.
 - **stable % is FLOORED from fails** (19/11): 1 fail in 3500 prints 99.9, never 100.0; means floor to 0.01.
 - Mean row is PAIRED: only seeds where every arm with results finished; fails are pooled with the denominator shown.
+- While arms have different seed counts, an `all done (n=…)` row follows: each arm over ALL its own finished seeds,
+  fails as count/denominator per arm (Luiz 19/11: the paired mean hid fails on seeds other arms had not reached).
 - Columns: stable / err / steady / pos / fails. Never add alt, pos_hold or dz_hold (Luiz 18/11).
 - Pair style adds Δ (last arm − first arm) for err / steady / pos; `--delta X:Y` adds any pair instead.
 - Name arms by recipe (D, D+F, Y, Y+F) — never a generic "B".

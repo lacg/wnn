@@ -97,6 +97,22 @@ def mean_values(per_seed):
 	return out, n
 
 
+def total_values(per_seed):
+	"""UNPAIRED totals: each arm over ALL its own finished seeds (Luiz 19/11: the paired mean hid fails on seeds
+	another arm has not reached yet). fails = count/denominator per arm; err/steady/pos = that arm's own mean."""
+	out = []
+	for col in zip(*per_seed.values()):
+		rows = [c["raw"] for c in col if "raw" in c]
+		if not rows:
+			out.append({"state": "–"})
+			continue
+		n, fails = len(rows), sum(r[3] for r in rows)
+		out.append({"stable": "%.2f" % stable_pct(fails, UNITS_EPS * n, 2), "err": "%.3f" % statistics.mean(r[0] for r in rows),
+			"steady": "%.3f" % statistics.mean(r[1] for r in rows), "pos": "%.3f" % statistics.mean(r[2] for r in rows),
+			"fails": "%d/%d" % (fails, UNITS_EPS * n), "n": n})
+	return out
+
+
 def joined(cells, key):
 	return " | ".join(c.get(key, c.get("state", "–")) for c in cells)
 
@@ -134,6 +150,10 @@ def build_rows(arms, seeds, ends, starts, style, pairs=()):
 		row = ["mean (n=%d)" % n] + [joined(mean, k) for k in METRICS]
 		row[-1] += "  (/%d)" % (UNITS_EPS * n)
 		rows.append(row + extra(mean, style, pairs))
+	total = total_values(per_seed)
+	if any("n" in t for t in total) and any("n" in t and t["n"] != n for t in total):
+		nn = "/".join(str(t.get("n", 0)) for t in total)
+		rows.append(["all done (n=%s)" % nn] + [joined(total, k) for k in METRICS] + [""] * len(extra(total, style, pairs)))
 	return rows
 
 
@@ -162,10 +182,11 @@ def render_box(h, rows, refs):
 	out = [rule("┌", "┬", "┐"), line(h), rule("├", "┼", "┤")]
 	if refs:
 		out += [line(r) for r in refs] + [rule("╞", "╪", "╡", "═")]
-	body, mean = (rows[:-1], rows[-1:]) if rows and rows[-1][0].startswith("mean") else (rows, [])
+	foot = [r for r in rows if r[0].startswith(("mean", "all done"))]
+	body = [r for r in rows if r not in foot]
 	out += [line(r) for r in body]
-	if mean:
-		out += [rule("├", "┼", "┤"), line(mean[0])]
+	if foot:
+		out += [rule("├", "┼", "┤")] + [line(r) for r in foot]
 	out.append(rule("└", "┴", "┘"))
 	return "\n".join(out)
 
