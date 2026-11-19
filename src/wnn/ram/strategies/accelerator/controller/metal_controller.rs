@@ -76,8 +76,9 @@ pub struct PidFwCfg
 /// controller_rollout.metal (octo-X is the widest preset).
 const MAX_ROTORS_GPU: usize = 8;
 /// Floats per (genome, episode) in the rollout kernel's out_effort buffer:
-/// [effort, pos_err, alt_err, |dx|, |dy|, hold pos_err, hold |dz|] (ABI 51: 5 → 7).
-const EFFORT_SLOTS: usize = 7;
+/// [effort, pos_err, alt_err, |dx|, |dy|, hold pos_err, hold |dz|, mid err]
+/// (ABI 51: 5 → 7; ABI 60: 7 → 8, slot 7 = the mid-window mean err, rad).
+const EFFORT_SLOTS: usize = 8;
 
 /// One rotor of the geometry buffer(27) — 48 B, all-f32, field-for-field
 /// lockstep with the Metal `RotorGpu` struct. `k_thrust` is the EFFECTIVE
@@ -1057,6 +1058,7 @@ impl ControllerRolloutEvaluator
 		// ABI 51: the hold-window position column (pos, |dz|), summed per genome.
 		let mut sum_hold_pos_per_g = vec![0.0f64; g];
 		let mut sum_hold_dz_per_g = vec![0.0f64; g];
+		let mut sum_mid_per_g = vec![0.0f64; g]; // ABI 60: mid-window mean err (row 19)
 		// … over the episodes that reached the window (cpu_score::hold_mean).
 		let mut hold_eps_per_g = vec![0usize; g];
 		let stable_thresh = (5.0_f64).to_radians();
@@ -1299,6 +1301,7 @@ impl ControllerRolloutEvaluator
 			// rides in this buffer instead of a new binding.
 			// ABI 32: 5 floats/idx — [effort, pos_err, alt_err, |dx|, |dy|].
 			// ABI 51: 7 — + [hold-window pos_err, hold-window |dz|] (EFFORT_SLOTS).
+			// ABI 60: 8 — + [mid-window mean err].
 			let b_effort = mk_out(n_out_chunk * EFFORT_SLOTS * mem::size_of::<f32>());
 
 			let cmd = self.queue.new_command_buffer();
@@ -1417,6 +1420,7 @@ impl ControllerRolloutEvaluator
 					sum_alterr_per_g[gi] += effortv[idx * EFFORT_SLOTS + 2] as f64;
 					sum_dx_per_g[gi] += effortv[idx * EFFORT_SLOTS + 3] as f64;
 					sum_dy_per_g[gi] += effortv[idx * EFFORT_SLOTS + 4] as f64;
+					sum_mid_per_g[gi] += effortv[idx * EFFORT_SLOTS + 7] as f64; // ABI 60 (fallback applied in-kernel)
 					// ABI 51 hold window: an episode that never reached it carries the
 					// kernel's HOLD_NOT_REACHED and is left out (rival convention).
 					let hold_reached = effortv[idx * EFFORT_SLOTS + 5] != crate::cpu_score::HOLD_NOT_REACHED;
@@ -1475,7 +1479,7 @@ impl ControllerRolloutEvaluator
 		{
 			for _ in 0..g
 			{
-				out.push(vec![0.0_f64; 19]);
+				out.push(vec![0.0_f64; crate::cpu_score::ROW_METRICS]);
 			}
 		}
 		else
@@ -1505,6 +1509,8 @@ impl ControllerRolloutEvaluator
 					// ABI 51: appended — the hold-window position column (m).
 					crate::cpu_score::hold_mean(sum_hold_pos_per_g[gi], hold_eps_per_g[gi]),
 					crate::cpu_score::hold_mean(sum_hold_dz_per_g[gi], hold_eps_per_g[gi]),
+					// ABI 60: appended — row 19 = the mid-window mean attitude err (rad).
+					sum_mid_per_g[gi] / n,
 				]);
 			}
 		}
@@ -9719,7 +9725,7 @@ mod tests
 	/// this pins the PLUMBING at the two values the axis flies:
 	/// T = 0.15 (nominal, τ = 37.5 ms) and T = 0.0375 (a 4x faster actuator, the
 	/// value a τ/T confusion would pass), against the SAME kernel argument.
-	fn cpu_scorer_row(c: &mut WnnController, q0: &[f32], w0: &[f32], eps: usize, steps: usize, lag: f32) -> [f64; 19]
+	fn cpu_scorer_row(c: &mut WnnController, q0: &[f32], w0: &[f32], eps: usize, steps: usize, lag: f32) -> [f64; crate::cpu_score::ROW_METRICS]
 	{
 		let (num_motors, levels, ..) = c.gpu_dims();
 		crate::cpu_score::rollout_one(

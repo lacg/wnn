@@ -1415,6 +1415,11 @@ kernel void controller_rollout(
 	uint tail_start = (uint)ceil((float)P.steps * 0.80f);
 	float tail_sum_err = 0.0f;
 	uint tail_cnt = 0u;
+	// ABI 60: the MID window mid_start <= t < tail_start (cpu_score::mid_window_start twin:
+	// ceil(0.15·steps) in exact integer arithmetic) — the `mid` scorer row.
+	uint mid_start = (3u * P.steps + 19u) / 20u;
+	float mid_sum_err = 0.0f;
+	uint mid_cnt = 0u;
 	// Jerk: mean over steps of |Δpwm| (matches run_episode mean_pwm_jerk = mean
 	// of sqrt(Σ_m (Δpwm_m)²)). Mono: thermometer-monotonicity violations on the
 	// LAST emitted output thermometer (matches get_last_output_cells semantics).
@@ -2397,6 +2402,11 @@ kernel void controller_rollout(
 			tail_sum_err += err;
 			tail_cnt += 1u;
 		}
+		else if (t >= mid_start)
+		{
+			mid_sum_err += err;
+			mid_cnt += 1u;
+		}
 
 		// --- Transient-speed metrics (single pass) ---
 		float t_s = (float)t * P.dt;
@@ -2436,13 +2446,18 @@ kernel void controller_rollout(
 	// window writes HOLD_NOT_REACHED (−1, impossible for a mean of magnitudes) and the
 	// host leaves it out — the rival scorers' convention ("episodes that reached the
 	// window"); the fails are counted in their own column.
-	out_effort[idx * 7u] = steps > 0u ? (sum_effort / (float)steps) : 0.0f;
-	out_effort[idx * 7u + 1u] = steps > 0u ? (sum_poserr / (float)steps) : 0.0f;
-	out_effort[idx * 7u + 2u] = steps > 0u ? (sum_alterr / (float)steps) : 0.0f;
-	out_effort[idx * 7u + 3u] = steps > 0u ? (sum_dx / (float)steps) : 0.0f;
-	out_effort[idx * 7u + 4u] = steps > 0u ? (sum_dy / (float)steps) : 0.0f;
-	out_effort[idx * 7u + 5u] = tail_cnt > 0u ? (tail_pos / (float)tail_cnt) : -1.0f;
-	out_effort[idx * 7u + 6u] = tail_cnt > 0u ? (tail_dz / (float)tail_cnt) : -1.0f;
+	out_effort[idx * 8u] = steps > 0u ? (sum_effort / (float)steps) : 0.0f;
+	out_effort[idx * 8u + 1u] = steps > 0u ? (sum_poserr / (float)steps) : 0.0f;
+	out_effort[idx * 8u + 2u] = steps > 0u ? (sum_alterr / (float)steps) : 0.0f;
+	out_effort[idx * 8u + 3u] = steps > 0u ? (sum_dx / (float)steps) : 0.0f;
+	out_effort[idx * 8u + 4u] = steps > 0u ? (sum_dy / (float)steps) : 0.0f;
+	out_effort[idx * 8u + 5u] = tail_cnt > 0u ? (tail_pos / (float)tail_cnt) : -1.0f;
+	out_effort[idx * 8u + 6u] = tail_cnt > 0u ? (tail_dz / (float)tail_cnt) : -1.0f;
+	// Widened again 19/11/2026 (ABI 60): slot 7 = the mid-window mean err (rad); an episode
+	// that ended before the hold window falls back to its whole-episode mean
+	// (cpu_score::mid_episode_mean twin).
+	out_effort[idx * 8u + 7u] = (tail_cnt > 0u && mid_cnt > 0u) ? (mid_sum_err / (float)mid_cnt)
+																															: (steps > 0u ? sum_err / (float)steps : 0.0f);
 	out_mono[idx] = mono_last;
 	// Diverged before reaching the tail window → no settled samples; fall back to
 	// the whole-episode mean (already a failing episode, just keep it finite).

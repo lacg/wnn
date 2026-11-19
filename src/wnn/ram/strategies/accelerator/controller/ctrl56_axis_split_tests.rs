@@ -15,7 +15,7 @@ use crate::ctrl51_yaw_trim_tests::{yaw_student, YawOpt};
 use crate::stage1::Stage1Cfg;
 use ram_core::neuron_memory::BINARY;
 
-fn rows(c: &WnnController, steps: usize, s1: Option<&Stage1Cfg>, axes: Option<&mut AxisAcc>) -> [f64; 19]
+fn rows(c: &WnnController, steps: usize, s1: Option<&Stage1Cfg>, axes: Option<&mut AxisAcc>) -> [f64; crate::cpu_score::ROW_METRICS]
 {
 	let (q0, w0) = ics();
 	let mut cc = c.clone();
@@ -43,14 +43,14 @@ fn trained_student() -> WnnController
 	c
 }
 
-fn split(c: &WnnController, steps: usize, s1: Option<&Stage1Cfg>) -> ([f64; 19], AxisSplit)
+fn split(c: &WnnController, steps: usize, s1: Option<&Stage1Cfg>) -> ([f64; crate::cpu_score::ROW_METRICS], AxisSplit)
 {
 	let mut acc = AxisAcc::default();
 	let r = rows(c, steps, s1, Some(&mut acc));
 	(r, acc.split(HoldPolicy::FallbackWhole))
 }
 
-fn bits(r: &[f64; 19]) -> Vec<u64>
+fn bits(r: &[f64; crate::cpu_score::ROW_METRICS]) -> Vec<u64>
 {
 	r.iter().map(|v| v.to_bits()).collect()
 }

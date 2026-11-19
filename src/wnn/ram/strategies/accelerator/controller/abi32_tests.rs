@@ -121,7 +121,7 @@ pub(crate) fn tilt_ref() -> AttErrRef
 	AttErrRef::tilt(G as f64, 1.0, 1.0, 0.5236).unwrap()
 }
 
-pub(crate) fn cpu(c: &WnnController, s1: &Stage1Cfg, steps: usize) -> [f64; 19]
+pub(crate) fn cpu(c: &WnnController, s1: &Stage1Cfg, steps: usize) -> [f64; crate::cpu_score::ROW_METRICS]
 {
 	let (q0, w0) = ics();
 	let mut c = c.clone();
@@ -149,17 +149,17 @@ fn close(gpu: f64, cpu: f64, rel: f64, floor: f64, what: &str)
 }
 
 /// CPU == GPU on err, reward, pos_err, alt, dx, dy (rows 1, 0, 13, 14, 15, 16).
-fn assert_parity(c: &WnnController, s1: &Stage1Cfg, what: &str) -> [f64; 19]
+fn assert_parity(c: &WnnController, s1: &Stage1Cfg, what: &str) -> [f64; crate::cpu_score::ROW_METRICS]
 {
 	assert_parity_steps(c, s1, STEPS, what)
 }
 
-pub(crate) fn assert_parity_steps(c: &WnnController, s1: &Stage1Cfg, steps: usize, what: &str) -> [f64; 19]
+pub(crate) fn assert_parity_steps(c: &WnnController, s1: &Stage1Cfg, steps: usize, what: &str) -> [f64; crate::cpu_score::ROW_METRICS]
 {
 	let cr = cpu(c, s1, steps);
 	if let Some(gr) = gpu(c, s1, steps)
 	{
-		assert_eq!(gr.len(), 19, "{what}: GPU row must carry dx/dy + the hold column (19 metrics)");
+		assert_eq!(gr.len(), crate::cpu_score::ROW_METRICS, "{what}: GPU row must carry dx/dy + the hold column + mid (20 metrics)");
 		close(gr[1], cr[1], 2e-2, 1e-4, &format!("{what} err"));
 		close(gr[0], cr[0], 5e-2, 1e-3, &format!("{what} reward"));
 		for (i, name) in [(13, "pos"), (14, "alt"), (15, "dx"), (16, "dy")]
@@ -170,6 +170,8 @@ pub(crate) fn assert_parity_steps(c: &WnnController, s1: &Stage1Cfg, steps: usiz
 		{
 			close_hold_row(gr[i], cr[i], &format!("{what} {name}"));
 		}
+		// ABI 60: row 19 = the mid-window mean err (same tolerance as err).
+		close(gr[19], cr[19], 2e-2, 1e-4, &format!("{what} mid"));
 	}
 	cr
 }
@@ -187,7 +189,7 @@ fn close_hold_row(gpu: f64, cpu: f64, what: &str)
 	close(gpu, cpu, 5e-2, 1e-3, what);
 }
 
-pub(crate) fn differs(a: &[f64; 19], b: &[f64; 19], idx: &[usize], what: &str)
+pub(crate) fn differs(a: &[f64; crate::cpu_score::ROW_METRICS], b: &[f64; crate::cpu_score::ROW_METRICS], idx: &[usize], what: &str)
 {
 	assert!(
 		idx.iter().any(|&i| (a[i] - b[i]).abs() > 1e-9),
@@ -475,12 +477,12 @@ fn prod_dist(on: bool) -> Option<crate::controller::Disturbance>
 	})
 }
 
-fn prod_rows(c: &WnnController, s1: &Stage1Cfg, steps: usize, dist: bool) -> ([f64; 19], Option<Vec<f64>>)
+fn prod_rows(c: &WnnController, s1: &Stage1Cfg, steps: usize, dist: bool) -> ([f64; crate::cpu_score::ROW_METRICS], Option<Vec<f64>>)
 {
 	prod_rows_lag(c, s1, steps, dist, 0.0)
 }
 
-fn prod_rows_lag(c: &WnnController, s1: &Stage1Cfg, steps: usize, dist: bool, lag: f32) -> ([f64; 19], Option<Vec<f64>>)
+fn prod_rows_lag(c: &WnnController, s1: &Stage1Cfg, steps: usize, dist: bool, lag: f32) -> ([f64; crate::cpu_score::ROW_METRICS], Option<Vec<f64>>)
 {
 	let (q0, w0) = ics();
 	let d = prod_dist(dist);

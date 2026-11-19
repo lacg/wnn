@@ -96,7 +96,7 @@ fn dist() -> Disturbance
 	}
 }
 
-fn cpu_rows(c: &WnnController, s1: &Stage1Cfg) -> [f64; 19]
+fn cpu_rows(c: &WnnController, s1: &Stage1Cfg) -> [f64; crate::cpu_score::ROW_METRICS]
 {
 	let (q0, w0) = ics();
 	let d = dist();

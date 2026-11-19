@@ -256,6 +256,9 @@ def _wire_refine(strat, refine_latch, ev=None) -> None:
 	strat._refine_active = False
 	if ev is not None and refine_latch.config.w_tail > 0.0:
 		ev.episode_tail_cap_deg = refine_latch.tail_cap_deg
+	# ABI 60: likewise the mid-window column, from generation 0.
+	if ev is not None and refine_latch.config.w_mid > 0.0:
+		ev.score_mid_window = True
 
 
 def build_refine_latch(args):
@@ -339,7 +342,7 @@ def _resume_ga_state_if_targeted(strat, args, stage_num: int) -> None:
 
 from wnn.control.provenance import arch_token, collect_provenance, obs_pwm_convention
 from wnn.control.pos_floor import fit_pos_metric_from_args, zrank_pos_floor_from_args
-from wnn.control.refine_config import (refine_config_from_args, refine_token,
+from wnn.control.refine_config import (mid_armed_from_args, refine_config_from_args, refine_token,
                                       refine_weights_record, validate_refine_args)
 from wnn.control.select_tail import (SELECT_TAIL_MODES, genome0_rows, new_episode_sink,
                                      select_tail_token, tail_cell, tail_footer, tail_rank_winner,
@@ -1375,6 +1378,7 @@ def _shell_holdout_compact(args, ec_eval: EpisodeConfig, spec: ControllerSpec,
 		                         episode_config=ec_eval, thresholds=thresholds,
 		                         rg_config=_rg_config(args, ec_eval, rs),
 		                         max_train_workers=args.train_workers)
+		ev.score_mid_window = mid_armed_from_args(args)  # ABI 60: the mid column on the report row
 		m = (ev.score_genomes([best_genome]) if use_score else ev.evaluate_batch([best_genome]))[0]
 		stbs.append(m.acc * 100.0); errs.append(m.mean_attitude_error_deg)
 	if not stbs:
@@ -1772,6 +1776,9 @@ def _print_baseline_rows(rows: list) -> None:
 # one an experiment was just designed around.
 _HELDOUT_ROW = (
 	("mean_steady_error_deg",  "steady",    "°", 2),
+	# ABI 60 (CTRL-58 A2 amendment): the mid-window err. None unless --refine-w-mid > 0 armed
+	# it ⇒ omitted, so every other run's lines are unchanged.
+	("mean_mid_error_deg",     "mid",       "°", 2),
 	("motor_jerk_mean",        "jerk",      "",  4),
 	("mono_violations_total",  "mono_viol", "",  0),
 	("mean_altitude_error_m",  "alt",       "m", 3),
@@ -2301,7 +2308,8 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 			mean_altitude_error_m=avg("mean_altitude_error_m"),
 			mean_position_error_m=avg("mean_position_error_m"),
 			mean_dx_m=avg("mean_dx_m"), mean_dy_m=avg("mean_dy_m"),
-			mean_position_hold_m=avg("mean_position_hold_m"), mean_dz_hold_m=avg("mean_dz_hold_m"))
+			mean_position_hold_m=avg("mean_position_hold_m"), mean_dz_hold_m=avg("mean_dz_hold_m"),
+			mean_mid_error_deg=avg("mean_mid_error_deg"))  # ABI 60 (None unless armed)
 
 	# CANDIDATES = the top-K genomes of EVERY stage, ranked together in one population.
 	# `final_population` survives the orchestrator's release trimmed to K
@@ -2632,6 +2640,7 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 	                         max_train_workers=args.train_workers,
 	                         num_eval_folds=getattr(args, "num_eval_folds", 5))  # K=1 is NEVER an option
 	ev.per_episode_sink = episode_sink
+	ev.score_mid_window = mid_armed_from_args(args)  # ABI 60: the mid column on the report row
 	pop = list(final_population) if final_population else [best_genome]
 	# A (13/06): the held-out RESULT is pop[0] (the during-search winner); the
 	# rest are scored ONLY for a descriptive population stat that is explicitly
@@ -4233,6 +4242,9 @@ def _add_refine_args(ap) -> None:
 	f("--refine-w-tail", 0.15, "Refinement weight: per-episode err p99 tail (needs a scorer row; "
 	                           "refused > 0 until it lands — pass 0).")
 	f("--refine-w-pos", 0.10, "Refinement weight: pos (with --zrank-pos-floor).")
+	f("--refine-w-mid", 0.0, "Refinement weight: mid-window mean err, 15%%..80%% of the steps (0.3-1.6 s; "
+	                         "ABI 60 scorer row 19, docs/ctrl58_a2_prereg.md Amendment 19/11). "
+	                         "0 (default) = column absent, bit-identical.")
 	f("--refine-patience-steady-floor", 0.15,
 	  "After the switch magnitude patience also watches steady, floored at this (deg).")
 	ap.add_argument("--refine-select", action="store_true",

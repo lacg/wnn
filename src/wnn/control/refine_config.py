@@ -45,6 +45,9 @@ class RefineConfig:
 	w_reward: float = 0.25
 	w_tail: float = 0.15
 	w_pos: float = 0.10
+	# Amendment 19/11 (ABI 60): the mid-window err column (0.3-1.6 s). 0 = column absent =
+	# the pre-amendment calculator, bit-identical.
+	w_mid: float = 0.0
 	# Magnitude patience after the switch also watches steady (floor, degrees).
 	patience_steady_floor: float = 0.15
 	# The two master switches (independent).
@@ -67,6 +70,7 @@ def refine_config_from_args(args) -> Optional[RefineConfig]:
 		gate_steady=float(args.refine_gate_steady), gate_pos=float(args.refine_gate_pos),
 		w_steady=float(args.refine_w_steady), w_reward=float(args.refine_w_reward),
 		w_tail=float(args.refine_w_tail), w_pos=float(args.refine_w_pos),
+		w_mid=float(getattr(args, "refine_w_mid", 0.0)),
 		patience_steady_floor=float(args.refine_patience_steady_floor),
 		search=search, select=select)
 
@@ -104,7 +108,7 @@ def _validate_bounds(cfg: RefineConfig) -> None:
 
 
 def _validate_weights(cfg: RefineConfig) -> None:
-	ws = (cfg.w_steady, cfg.w_reward, cfg.w_tail, cfg.w_pos)
+	ws = (cfg.w_steady, cfg.w_reward, cfg.w_tail, cfg.w_pos, cfg.w_mid)
 	if any(w < 0.0 for w in ws) or sum(ws) <= 0.0:
 		raise SystemExit(f"--refine-w-* must be >= 0 with a positive sum, got {ws}")
 
@@ -126,10 +130,11 @@ def refine_token(args) -> str:
 	if cfg is None:
 		return ""
 	mode = "+".join(m for m, on in (("search", cfg.search), ("select", cfg.select)) if on)
+	mid = f",mid{cfg.w_mid:g}" if cfg.w_mid > 0.0 else ""  # absent at 0: the pre-amendment token
 	return (f"{mode}:trig={cfg.trigger_frac:g},s{cfg.trigger_stable:g},e{cfg.trigger_err:g},"
 	        f"d{cfg.trigger_steady:g},p{cfg.trigger_pos:g},k{cfg.trigger_gens},{cfg.trigger_stage}"
 	        f":gate={cfg.gate_stable:g},{cfg.gate_err:g},{cfg.gate_steady:g},{cfg.gate_pos:g}"
-	        f":w=steady{cfg.w_steady:g},rw{cfg.w_reward:g},tail{cfg.w_tail:g},pos{cfg.w_pos:g}"
+	        f":w=steady{cfg.w_steady:g},rw{cfg.w_reward:g},tail{cfg.w_tail:g},pos{cfg.w_pos:g}{mid}"
 	        f":pfloor={cfg.patience_steady_floor:g}")
 
 
@@ -139,4 +144,14 @@ def refine_weights_record(args) -> Optional[dict]:
 	if cfg is None:
 		return None
 	from dataclasses import asdict
-	return asdict(cfg)
+	rec = asdict(cfg)
+	if cfg.w_mid == 0.0:
+		rec.pop("w_mid")  # absent at 0: the pre-amendment payload, byte for byte
+	return rec
+
+
+def mid_armed_from_args(args) -> bool:
+	"""ABI 60: whether the run's evaluators report the mid-window column — only when the
+	refinement SEARCH fitness weights it (--refine-fitness with --refine-w-mid > 0)."""
+	cfg = refine_config_from_args(args)
+	return cfg is not None and cfg.search and cfg.w_mid > 0.0

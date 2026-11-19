@@ -266,6 +266,7 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	"controller_refine_gate_steady", "controller_refine_gate_pos",
 	"controller_refine_w_steady", "controller_refine_w_reward",
 	"controller_refine_w_tail", "controller_refine_w_pos",
+	"controller_refine_w_mid",        # ABI 60: mid-window err column weight (0 = absent)
 	"controller_refine_patience_steady_floor",
 })
 
