@@ -19,13 +19,17 @@ DIGEST_TAG = "[gen-digest]"
 
 
 def _metric_items(m) -> list:
+	"""(name, canonical value) for every metric that HAS a value. None-valued fields are
+	skipped (19/11/2026): a new optional field that a flag-off run never fills (e.g. ABI 59's
+	episode_err_p99_deg) must not change the digest, or the cross-ABI determinism gate fails on
+	identical populations. Still exact: a field going None -> value adds a token and changes it."""
 	if m is None:
 		return [("metrics", "None")]
 	if dataclasses.is_dataclass(m):
 		items = [(f.name, getattr(m, f.name)) for f in dataclasses.fields(m)]
 	else:
 		items = sorted(vars(m).items())
-	return [(k, v.hex() if isinstance(v, float) else repr(v)) for k, v in items]
+	return [(k, v.hex() if isinstance(v, float) else repr(v)) for k, v in items if v is not None]
 
 
 def candidate_token(genome, metrics) -> str:
