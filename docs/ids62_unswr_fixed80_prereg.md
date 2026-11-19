@@ -1,7 +1,7 @@
 # IDS62: fixed 80-bit width on unswr configuration C (redo of the VOID IDS61)
 
 Written 17/11/2026 ~15:30 EST (ids-security) on Luiz's instruction of 17/11 ~14:40 EST, before any IDS62 flow exists.
-Plane: IDS-61 (updated with this redo). Queue script: `scripts/queue_ids62_unswr_fixed80.py`. Supersedes
+Plane: IDS-61 (updated with this redo). Queue script: `scripts/queue_ids_unswr_fixed_width.py --ids 62 --width 80` (was `queue_ids62_unswr_fixed80.py`). Supersedes
 `docs/ids61_unswr_b80_prereg.md`; its decision rule is kept, and a hard validity check is added.
 
 ## 1. Why IDS61 is VOID: a search property, not a clamp
