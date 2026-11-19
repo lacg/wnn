@@ -3,7 +3,7 @@
 
 Cell = GA ga_neurons, best_f1, test_point final, margin_val_cal, TEST (test_summaries.threshold_metadata).
 Classical rows on top = Luiz's target rows (same random_3way TEST): untuned RF/XGB defaults, VAL-calibrated threshold,
-mean±SD over 5 seeds r20419-23, from logs/ids/unsw_headroom_1611/bl_random_3way_{thermo64,raw}.jsonl (Plane IDS-58).
+mean±SD over 5 seeds r20419-23, from logs/ids/unsw_headroom_1611/bl_random_3way_{thermo64,raw}.jsonl. Classical source story = Plane IDS-10 (rs=42 single fit + this 5-seed update, 18/11).
 """
 import json
 import sqlite3
