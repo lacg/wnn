@@ -3,17 +3,24 @@ GRID / NEURONS / MEMORY; GRID arch-only entries from the CTRL-56 repaired copy) 
 scorer with axis_out, on the run's 20 VAL units (tuning) and 35 TEST units (report). Rule inputs (VAL fit,
 p99 tail, union rank R) are the runs' own stage-select tables (.out). deg / m; fails = TEST episodes (35x100)."""
 import re
+import sys
 import numpy as np
 D = "/Users/lacg/wnn/logs/controller/ctrl48/"
 S = D + "ymd_stage/scores/"
 ARMS = {"M": ("dmyM", "a57"), "Y": ("dmyY", "a57"), "D": ("dmD", "a56")}
 CANDS = [f"{st}#{i}" for st in ("GRID", "NEURONS", "MEMORY") for i in range(3)]
-SEEDS = (1, 2, 3, 4, 5)
+# s1-s5: the dm/dmy blocks (ABI 56/57); s6-s10: the n=10 extension (ABI 58, tags n10{M,Y,D}). Usage: ymd_table.py [seeds...]
+N10 = {"M": ("n10M", "a58"), "Y": ("n10Y", "a58"), "D": ("n10D", "a58")}
+SEEDS = tuple(int(x) for x in sys.argv[1:]) or (1, 2, 3, 4, 5)
+
+
+def arm_id(arm, s):
+	return N10[arm] if s >= 6 else ARMS[arm]
 dg = np.degrees
 
 
 def tag(arm, s):
-	a, abi = ARMS[arm]
+	a, abi = arm_id(arm, s)
 	return f"C-S2-d_wposx2_{abi}_rf_c200_dc_biasin_ms01_P_both_L1_{a}_full_s{s}"
 
 
@@ -28,7 +35,7 @@ def stage_table(arm, s):
 
 
 def vec(arm, s, cand, part):
-	z = np.load(f"{S}{ARMS[arm][0]}_s{s}_{cand.replace('#', '-')}_{part}.npz")["rows"]
+	z = np.load(f"{S}{arm_id(arm, s)[0]}_s{s}_{cand.replace('#', '-')}_{part}.npz")["rows"]
 	m = z.mean(0)
 	n_eps = 100 * len(z)
 	return dict(stable=100 * m[1], err=m[2], steady=m[3], alt=m[4], pos=m[5], dzh=m[6],
@@ -125,3 +132,17 @@ for rule in ("P (as flown)", "fitness-only", "best-of-MEMORY"):
 	n80 = int(np.ceil(((1.96 + 0.84) * sd / max(abs(mu), 1e-9)) ** 2)) if abs(mu) > 0 else 999
 	n30 = int(np.ceil(((1.96 + 0.84) * sd / 0.03) ** 2))
 	print(f"  D-Y steady under rule {rule:<15}: mean {mu:+.3f} SD(seed) {sd:.3f} -> seeds for 80% power at the observed diff ~{n80}, at a 0.03 deg diff ~{n30}")
+
+# ---------------------------------------------------------------- 5. prereg verdict (docs/ctrl48_n10_ymd_prereg.md)
+def verdict(x, y, rule="fitness-only"):
+	"""x vs y under the prereg whole-vector thresholds, on the re-picked TEST headlines."""
+	d = mean_v([dif(p, q) for p, q in zip(summary[(rule, x)][1], summary[(rule, y)][1])])
+	ok = {"steady < -0.03": d["steady"] < -0.03, "err <= +0.03": d["err"] <= 0.03,
+	      "pos <= +0.010": d["pos"] <= 0.010}
+	return d, ok
+
+
+print(f"\n=== 5. PREREG VERDICT, fitness-only re-pick, TEST, n={len(SEEDS)} (fails: pooled counts, judged by Luiz vs the gate) ===")
+for x, y in (("Y", "M"), ("D", "M"), ("D", "Y")):
+	d, ok = verdict(x, y)
+	print(f"  {x}-{y}: {dfmt(d)}  " + "  ".join(f"{k} {'PASS' if v else 'FAIL'}" for k, v in ok.items()))
