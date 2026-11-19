@@ -90,7 +90,7 @@ NOT_PREDICTED_WORSE: err (FF delivers the teacher's own trim term exactly; no tr
 - **Only arm F flies** (`--yaw-trim-ff` on base D), seeds **s1-s10**, seed-major. **B is not re-flown:** the rebuilt
   base-D argv is identical (except checkpoint paths) to the flown D runs — verified for s6 against n10 D s6 — and every
   ABI step since 56 passed the flag-off determinism gate (58 vs 57, 59 vs 58 tonight). So B = the existing D rows:
-  dm D s1-s5 (ABI 56) and n10 D s6-s10 (ABI 58). If tonight's ABI 59 gate does NOT pass, F flies on ABI 58 instead.
+  dm D s1-s5 (ABI 56) and n10 D s6-s10 (ABI 58). F flies on ABI 59 (Luiz 18/11 ~21:15 EST): if the chain does not leave ABI 59 installed, the block HOLDS, Claude fixes ABI 59 and F flies on 59; it falls back to ABI 58 only if the fix needs Luiz's answer.
 - Tags: `C-S2-d_wposx2_a<ABI>_rf_c200_dc_biasin_ms01_P_both_L1_ffD_F_full_sN`. The killed base-Y F s1 is not a result.
 - **Rule unchanged** (F − B, paired by seed, TEST, 35 units): steady better by > 0.03°, err not worse by > 0.03°, pos not
   worse by > 0.010 m, fails ≤ 16/35000 pooled (the n=5 bound 8/17500 scaled) and not significantly worse than B.
