@@ -82,3 +82,17 @@ WHAT_THE_BANK_MUST_DELIVER_AT_HOLD: |sp_need| 0.139-0.172 rad/s -> with FF |sp_n
 VALIDATION: decode identity sp = G*B exact (fitted 1.97-2.01 at G2, 1.66-1.67 at G1.67); offset ~ need-part R2 0.35-0.69 (slope k 0.10-0.32, used as per-seed calibration); same-genome G 2->1.67: mean predicted -0.049 vs measured -0.054 deg, sign right 3/5 seeds (s3, s4 not predicted)
 NOT_PREDICTED_WORSE: err (FF delivers the teacher's own trim term exactly; no transient model); pos (yaw-only lever); clamp margin max |ff| 0.51 vs range 2.0 rad/s; ff noise at hold 0.025 rad/s sd vs held-sp sd 0.09-0.13
 ```
+
+## Addendum 2 — re-launch on base D (Luiz 18/11/2026 ~21:00 EST, before any ffD run)
+- **Base = D** (both_L1 + floor + `--obs-yaw-from-att-est`, `--delta-max 0.5` on all banks). Luiz PRE-APPROVED D as the
+  Y/D winner for tonight; the n=10 fitness-only verdict (docs/ctrl48_n10_ymd_prereg.md) is computed overnight and Luiz
+  reviews both in the morning. He may stop this block then; runs already flown are kept.
+- **Only arm F flies** (`--yaw-trim-ff` on base D), seeds **s1-s10**, seed-major. **B is not re-flown:** the rebuilt
+  base-D argv is identical (except checkpoint paths) to the flown D runs — verified for s6 against n10 D s6 — and every
+  ABI step since 56 passed the flag-off determinism gate (58 vs 57, 59 vs 58 tonight). So B = the existing D rows:
+  dm D s1-s5 (ABI 56) and n10 D s6-s10 (ABI 58). If tonight's ABI 59 gate does NOT pass, F flies on ABI 58 instead.
+- Tags: `C-S2-d_wposx2_a<ABI>_rf_c200_dc_biasin_ms01_P_both_L1_ffD_F_full_sN`. The killed base-Y F s1 is not a result.
+- **Rule unchanged** (F − B, paired by seed, TEST, 35 units): steady better by > 0.03°, err not worse by > 0.03°, pos not
+  worse by > 0.010 m, fails ≤ 16/35000 pooled (the n=5 bound 8/17500 scaled) and not significantly worse than B.
+  Read at n=10; the morning read at ~n=5-7 is a direction only. Expectation-consistency (Luiz 16/11) applies.
+- Launched automatically by `logs/controller/ctrl48/overnight_d_ff.sh` after the CTRL-58 chain ends.

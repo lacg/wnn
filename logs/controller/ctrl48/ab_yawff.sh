@@ -1,7 +1,9 @@
 #!/bin/bash
 # CTRL-48 yaw trim feed-forward block (Luiz 17/11 ~23:10 EST): arms B (base re-flown on ABI 58) vs F (base +
 # --yaw-trim-ff), s1-s5 SEED-MAJOR. Prereg docs/ctrl48_yawff_prereg.md. Launched by chain_abi58_to_ff.sh.
-# FF_BASE = M (both_L1 + floor + --obs-yaw-from-att-est) | Y (M + --delta-max-yaw 0.5), from the verdict file.
+# FF_BASE = M (both_L1 + floor + --obs-yaw-from-att-est) | Y (M + --delta-max-yaw 0.5) | D (M with --delta-max 0.5, all banks;
+# Luiz pre-approved 18/11 ~21:00 EST). FF_ARMS (default "B F") and FF_SEEDS (default "1 2 3 4 5") select the runs; with base D
+# the tag carries the base (ffD_B / ffD_F) so it never collides with the base-Y ffB/ffF s1 runs.
 # ABI checked before EVERY run (FF ABORT); END lines in runs.log; ends FF DONE.
 cd /Users/lacg/wnn
 L=logs/controller/ctrl48
@@ -22,7 +24,8 @@ base_flags()
 	case $BASE in
 		M) echo "--zrank-pos-floor auto --obs-yaw-from-att-est" ;;
 		Y) echo "--zrank-pos-floor auto --obs-yaw-from-att-est --delta-max-yaw 0.5" ;;
-		*) abort "FF_BASE must be M or Y (got '$BASE')" ;;
+		D) echo "--zrank-pos-floor auto --obs-yaw-from-att-est" ;;
+		*) abort "FF_BASE must be M, Y or D (got '$BASE')" ;;
 	esac
 }
 flags()
@@ -32,18 +35,22 @@ flags()
 		F) echo "$(base_flags) --yaw-trim-ff" ;;
 	esac
 }
-echo "$(date -u +%FT%TZ) FF START yaw trim FF block arms B F (base $BASE), s1-s5 seed-major = 10 runs, ABI $ABI, rule P, floor on (prereg docs/ctrl48_yawff_prereg.md)" >> $L/runs.log
-for s in 1 2 3 4 5; do
+ARMS=${FF_ARMS:-B F}
+SEEDS=${FF_SEEDS:-1 2 3 4 5}
+TAGARM() { [ "$BASE" = D ] && echo "ffD_$1" || echo "ff$1"; }
+echo "$(date -u +%FT%TZ) FF START yaw trim FF block arms $ARMS (base $BASE), seeds $SEEDS seed-major, ABI $ABI, rule P, floor on (prereg docs/ctrl48_yawff_prereg.md)" >> $L/runs.log
+for s in $SEEDS; do
 	src=C-S2-d_wposx2_a51_rf_c200_dc_biasin_ms01_P_both_L1_full_s$s
 	[ -f $L/$src.out ] || abort "missing source .out $src"
-	for arm in B F; do
-		tag=C-S2-d_wposx2_a${ABI}_rf_c200_dc_biasin_ms01_P_both_L1_ff${arm}_full_s$s
+	for arm in $ARMS; do
+		tag=C-S2-d_wposx2_a${ABI}_rf_c200_dc_biasin_ms01_P_both_L1_$(TAGARM $arm)_full_s$s
 		[ -f $L/$tag.done ] && continue
 		argv=$($VENV/bin/python $L/rebuild_argv.py $L/$src.out fly $L/ckpt_$tag $L/${tag}_winner.yaml.gz $(flags $arm)) \
 			|| abort "argv rebuild failed for $tag"
 		echo "$argv" | grep -q -- "--delta-max 0.6 " || abort "$tag: base argv lacks --delta-max 0.6"
 		[ "$arm" = B ] && { echo "$argv" | grep -q -- "--yaw-trim-ff" && abort "$tag: B must not carry --yaw-trim-ff"; }
-		[ "$BASE" = M ] && { echo "$argv" | grep -q -- "--delta-max-yaw" && abort "$tag: base M must not carry --delta-max-yaw"; }
+		[ "$BASE" != Y ] && { echo "$argv" | grep -q -- "--delta-max-yaw" && abort "$tag: base $BASE must not carry --delta-max-yaw"; }
+		if [ "$BASE" = D ]; then argv=${argv/--delta-max 0.6 /--delta-max 0.5 }; echo "$argv" | grep -q -- "--delta-max 0.5 " || abort "$tag: --delta-max 0.5 not applied"; fi
 		echo "$argv" | grep -q -- "--base-seed $((31337000 + s)) " || abort "$tag: wrong base seed"
 		echo "$argv" | grep -q -- "--select-tail p99" || abort "$tag: rule P missing"
 		echo "$argv" | grep -q -- "--obs-tilt-ref-err" || abort "$tag: L1 missing"
