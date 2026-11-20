@@ -214,10 +214,22 @@ def run_argv(meta: dict, argv_file) -> list:
 	if argv_file is None:
 		if "argv" not in meta:
 			raise SystemExit("the checkpoint carries no argv: pass --run-argv <run .out log>")
-		return [str(a) for a in meta["argv"]]
+		return renamed_flags([str(a) for a in meta["argv"]])
 	text = Path(argv_file).read_text(errors="replace")
 	m = re.search(r"^\[argv\] (.*)$", text, re.MULTILINE)
-	return (m.group(1) if m else text).split()
+	return renamed_flags((m.group(1) if m else text).split())
+
+
+# 12/11/2026 terminology cut-over (CLAUDE.md "Train / validation / test"): runs flown
+# before it carry the old report-partition flag names, which phased_ga now rejects.
+# Same values, same meaning — the same map as logs/controller/ctrl48/rebuild_argv.py.
+FLAG_RENAMES = {"--report-seeds": "--test-seeds", "--report-seed": "--test-seed",
+                "--report-episodes": "--test-episodes"}
+
+
+def renamed_flags(argv: list) -> list:
+	"""argv with the pre-12/11 report-partition flags renamed to their test names."""
+	return [FLAG_RENAMES.get(t, t) for t in argv]
 
 
 def threshold_refusals(args) -> list:

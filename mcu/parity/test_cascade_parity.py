@@ -335,7 +335,7 @@ def load_winner(path: Path) -> tuple:
 	ckpt = load_controller_checkpoint(str(path), skip_population=True)
 	model = exp.model_from_ckpt(ckpt, str(path), None)
 	genome = controller_genome_from_arch(ckpt["best_genome"], ckpt["spec"], model.thresholds)
-	return model, genome, [str(a) for a in ckpt["meta"]["argv"]]
+	return model, genome, exp.renamed_flags([str(a) for a in ckpt["meta"]["argv"]])
 
 
 def run_ec(argv: list):
