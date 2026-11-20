@@ -68,6 +68,12 @@ volatile uint32_t sink;   /* keeps the optimiser from deleting the workload */
 /* Membership in a sorted ON-set: the deployed representation. `end` is kept
  * separately because the loop clobbers hi, and the final bounds check must be
  * against the neuron's real upper bound, not the collapsed one. */
+#ifdef WNN_KEY_FORMAT_PEF64
+/* pef64 header (export_controller_c.py --key-format pef64): same test, PEF store. */
+#include "wnn_pef.h"
+static const wnn_pef_t wnn_pef_model = WNN_PEF_MODEL;
+#define NEURON_HAS(n, addr) wnn_pef_contains(&wnn_pef_model, (uint32_t)(n), (addr))
+#else
 static inline int key_present(uint32_t addr, uint32_t lo, uint32_t end) {
 	uint32_t hi = end;
 	while (lo < hi) {
@@ -76,6 +82,8 @@ static inline int key_present(uint32_t addr, uint32_t lo, uint32_t end) {
 	}
 	return (lo < end) && (wnn_keys[lo] == addr);
 }
+#define NEURON_HAS(n, addr) key_present((addr), wnn_off[(n)], wnn_off[(n) + 1])
+#endif
 
 #ifdef BENCH_WNN_FAST
 /* LEVEL-INDEXED GATHER, done properly.
@@ -118,7 +126,7 @@ static uint32_t wnn_step_fast(void) {
 		const uint32_t *t = lvltab[n];
 		uint32_t addr = 0;
 		for (int f = 0; f < NFEAT; f++) addr |= t[lidx[f]];
-		fired[n] = (uint8_t)key_present(addr, wnn_off[n], wnn_off[n + 1]);
+		fired[n] = (uint8_t)NEURON_HAS(n, addr);
 	}
 	uint32_t acc = 0;
 	for (int m = 0; m < WNN_MOTORS; m++) {
@@ -140,7 +148,7 @@ static uint32_t wnn_step(void) {
 #ifdef BENCH_WNN_ADDR
 		fired[n] = (uint8_t)(addr & 1u);          /* skip the search */
 #else
-		fired[n] = (uint8_t)key_present(addr, wnn_off[n], wnn_off[n + 1]);
+		fired[n] = (uint8_t)NEURON_HAS(n, addr);
 #endif
 	}
 	uint32_t acc = 0;

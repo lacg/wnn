@@ -253,6 +253,12 @@ static void encode_frame(wnn_ctrl_t *c)
 		}
 }
 
+#ifdef WNN_KEY_FORMAT_PEF64
+/* pef64 header: the same membership test over the partitioned Elias-Fano store. */
+#include "wnn_pef.h"
+static const wnn_pef_t wnn_pef_model = WNN_PEF_MODEL;
+#define NEURON_HAS(n, addr) wnn_pef_contains(&wnn_pef_model, (uint32_t)(n), (addr))
+#else
 /* Membership in neuron n's sorted TRUE on-set. */
 static int key_present(uint32_t addr, uint32_t lo, uint32_t end)
 {
@@ -264,6 +270,8 @@ static int key_present(uint32_t addr, uint32_t lo, uint32_t end)
 	}
 	return (lo < end) && (wnn_keys[lo] == addr);
 }
+#define NEURON_HAS(n, addr) key_present((addr), wnn_off[(n)], wnn_off[(n) + 1])
+#endif
 
 /* neuron_memory.rs address_over: MSB first, a negative connection reads 0. */
 static uint32_t neuron_address(const uint8_t *frame, int n)
@@ -283,7 +291,7 @@ static void forward_output(wnn_ctrl_t *c)
 	for (int n = 0; n < WNN_NEURONS; n++)
 	{
 		c->addr[n] = neuron_address(c->frame, n);
-		c->fired[n] = (uint8_t)key_present(c->addr[n], wnn_off[n], wnn_off[n + 1]);
+		c->fired[n] = (uint8_t)NEURON_HAS(n, c->addr[n]);
 	}
 }
 

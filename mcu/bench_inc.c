@@ -24,6 +24,9 @@
  * of input activity rather than a single number.
  *
  * Build: -DBENCH_BASE (full gather + binsearch) | -DBENCH_INC (opt1+opt2)
+ *        | -DBENCH_GATHER (BASE without the lookup, to price one lookup)
+ * A pef64 model header (WNN_KEY_FORMAT_PEF64) swaps every lookup for
+ * mcu/wnn_pef.h and implies -DINC_LOOKUP_BINSEARCH (no wnn_keys to hash).
  *
  * TWO KNOBS ADDED 02/09/2026, both OFF by default so the banked 820 instr/step
  * number reproduces byte-identically:
@@ -145,6 +148,20 @@ static void input_step(void) {
 		for (int b = 0; b < FBITS; b++) inbits[f * FBITS + b] = (b < level[f]);
 }
 
+#ifdef WNN_KEY_FORMAT_PEF64
+/* ---- pef64 header: partitioned Elias-Fano membership (mcu/wnn_pef.h) ------- */
+/* Same question as key_present below, over the compressed store. There is no
+ * wnn_keys[] to hash, so the PEF build always looks up in place (like
+ * INC_LOOKUP_BINSEARCH), and PROBE_STATS counts its table reads. */
+#define WNN_PEF_PROBE() PROBE_MEM()
+#include "wnn_pef.h"
+static const wnn_pef_t wnn_pef_model = WNN_PEF_MODEL;
+#define KEY_PRESENT(n, a) wnn_pef_contains(&wnn_pef_model, (uint32_t)(n), (a))
+#ifndef INC_LOOKUP_BINSEARCH
+#define INC_LOOKUP_BINSEARCH 1
+#endif
+#else
+#define KEY_PRESENT(n, a) key_present((a), wnn_off[(n)], wnn_off[(n) + 1])
 /* ---- sorted-ON-set membership (the b=30 deployed representation) ---------- */
 static inline int key_present(uint32_t addr, uint32_t lo, uint32_t end) {
 	uint32_t hi = end;
@@ -156,6 +173,7 @@ static inline int key_present(uint32_t addr, uint32_t lo, uint32_t end) {
 	if (lo < end) { PROBE_MEM(); return wnn_keys[lo] == addr; }
 	return 0;
 }
+#endif
 
 /* ---- OPT 2: open-addressed hash over (neuron, addr) ----------------------- */
 #define HBITS 18
@@ -197,7 +215,7 @@ static inline int hash_present(int n, uint32_t addr) {
  * banked 820 instr/step reproduces; binary search is the deployable path for a
  * model too large to hash in SRAM. */
 #ifdef INC_LOOKUP_BINSEARCH
-#define INC_PRESENT(n, a) key_present((a), wnn_off[(n)], wnn_off[(n) + 1])
+#define INC_PRESENT(n, a) KEY_PRESENT((n), (a))
 #else
 #define INC_PRESENT(n, a) hash_present((n), (a))
 #endif
@@ -262,11 +280,26 @@ static uint32_t step(void) {
 		const __typeof__(wnn_conn[0]) *c = &wnn_conn[n * WNN_BITS];
 		uint32_t a = 0;
 		for (int b = 0; b < WNN_BITS; b++) a = (a << 1) | inbits[c[b]];
-		fired[n] = (uint8_t)key_present(a, wnn_off[n], wnn_off[n + 1]);
+		fired[n] = (uint8_t)KEY_PRESENT(n, a);
 	}
 	return decode();
 }
 #define NAME "BASE full-gather+binsearch"
+#endif
+
+#ifdef BENCH_GATHER
+/* BASE minus the lookup: the full gather alone, so (BASE - GATHER) / WNN_NEURONS
+ * is the cost of one lookup (pef64 vs uint32 is then a like-for-like pair). */
+static uint32_t step(void) {
+	for (int n = 0; n < WNN_NEURONS; n++) {
+		const __typeof__(wnn_conn[0]) *c = &wnn_conn[n * WNN_BITS];
+		uint32_t a = 0;
+		for (int b = 0; b < WNN_BITS; b++) a = (a << 1) | inbits[c[b]];
+		fired[n] = (uint8_t)(a & 1u);
+	}
+	return decode();
+}
+#define NAME "GATHER full-gather, no lookup"
 #endif
 
 #ifdef BENCH_INC
@@ -342,7 +375,7 @@ int main(void) {
 				a = (a << 1) | inbits[wnn_conn[n * WNN_BITS + b]];
 			if (a != addr_of[n]) bad_addr++;
 #ifndef INC_LOOKUP_BINSEARCH
-			if (hash_present(n, a) != key_present(a, wnn_off[n], wnn_off[n + 1]))
+			if (hash_present(n, a) != KEY_PRESENT(n, a))
 				bad_look++;
 #endif
 		}
