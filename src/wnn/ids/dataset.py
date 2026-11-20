@@ -124,6 +124,10 @@ def encode_features(
 	encoded_storage: str = "memory",
 	storage_dir: "Path | str | None" = None,
 	encoding_dedupe: bool = False,
+	cut_method: str = "quantile",
+	cut_seed: int = 0,
+	y_train_binary: np.ndarray | None = None,
+	y_train_multi: np.ndarray | None = None,
 ) -> tuple[LazyEncodedArray, LazyEncodedArray, ThermometerEncoder, list[str], LazyEncodedArray | None]:
 	"""Shared thermometer encoding logic for all IDS datasets.
 
@@ -146,6 +150,9 @@ def encode_features(
 			feature columns and keep only train-informative thermometer bits —
 			both decided on df_train ONLY (duplicate_columns.py,
 			thermometer_dedupe.py). False = the original encoding, bit-identical.
+		cut_method, cut_seed: IDS-70 (ids_cut_method). "quantile" = the original
+			encoding, bit-identical. A supervised method fits the cuts on df_train
+			and y_train_binary / y_train_multi ONLY (never df_val / df_test).
 
 	Returns:
 		(X_train, X_test, encoder, used_features, X_val) — X_val is None if df_val not provided
@@ -154,13 +161,16 @@ def encode_features(
 		raise ValueError(f"feature_selection must be one of {VALID_FEATURE_SELECTIONS}, got '{feature_selection}'")
 
 	X_val = None
+	_check_cut_method(cut_method, feature_selection)
+	labels = dict(y_binary=y_train_binary, y_multi=y_train_multi)
 
 	if feature_selection == "all":
 		if encoding_dedupe:
 			common_features, _ = distinct_columns(df_train, common_features)
 		encoder = ThermometerEncoder(n_bits=n_bits, method=method, auto_max_bits=auto_max_bits,
-									 invalid_encoding=invalid_encoding, dedupe=encoding_dedupe)
-		encoder.fit(df_train[common_features])
+									 invalid_encoding=invalid_encoding, dedupe=encoding_dedupe,
+									 cut_method=cut_method, cut_seed=cut_seed)
+		encoder.fit(df_train[common_features], **labels)
 		if encoded_storage == "memmap":
 			# Chunked encode straight to disk — the one-shot transform() would
 			# materialize ~n_rows × total_bits bool intermediates in RAM
@@ -181,7 +191,8 @@ def encode_features(
 				X_val_raw = None
 		used_features = encoder.feature_names_ if encoding_dedupe else common_features
 		print(f"  Encoder: {encoder.total_bits} total bits "
-			  f"({method.value}, {n_bits} bits/feature, feature_selection=all, {len(common_features)} features)")
+			  f"({method.value}, {n_bits} bits/feature, feature_selection=all, {len(common_features)} features"
+			  f"{_cut_note(cut_method)})")
 
 	elif feature_selection in ("top15", "top20", "top25", "top20_mi8b", "top20_mi96b"):
 		top_n = {"top15": 15, "top20": 20, "top25": 25,
@@ -195,8 +206,9 @@ def encode_features(
 		if encoding_dedupe:
 			selected, _ = distinct_columns(df_train, selected)
 		encoder = ThermometerEncoder(n_bits=n_bits, method=method, auto_max_bits=auto_max_bits,
-									 invalid_encoding=invalid_encoding, dedupe=encoding_dedupe)
-		encoder.fit(df_train[selected])
+									 invalid_encoding=invalid_encoding, dedupe=encoding_dedupe,
+									 cut_method=cut_method, cut_seed=cut_seed)
+		encoder.fit(df_train[selected], **labels)
 		if encoded_storage == "memmap":
 			# Chunked encode straight to disk (see feature_selection="all" note).
 			X_train = encode_df_to_memmap(encoder, df_train[selected], storage_dir)
@@ -214,7 +226,8 @@ def encode_features(
 				X_val_raw = None
 		used_features = encoder.feature_names_ if encoding_dedupe else selected
 		print(f"  Encoder: {encoder.total_bits} total bits "
-			  f"({method.value}, {n_bits} bits/feature, feature_selection={feature_selection}, {len(selected)} features)")
+			  f"({method.value}, {n_bits} bits/feature, feature_selection={feature_selection}, {len(selected)} features"
+			  f"{_cut_note(cut_method)})")
 
 	elif feature_selection == "top20_split":
 		rb = rest_bits if rest_bits is not None else n_bits
@@ -299,6 +312,18 @@ def encode_features(
 	return X_train, X_test, encoder, used_features, X_val
 
 
+def _check_cut_method(cut_method: str, feature_selection: str) -> None:
+	"""IDS-70: a supervised cut method runs on the single-encoder paths only."""
+	if cut_method != "quantile" and feature_selection == "top20_split":
+		raise NotImplementedError(f"ids_cut_method={cut_method!r} is not supported with "
+			"feature_selection='top20_split' (two encoders, fixed 16-bit top block)")
+
+
+def _cut_note(cut_method: str) -> str:
+	"""Encoder log suffix: empty for the default, so pre-IDS-70 log lines are unchanged."""
+	return "" if cut_method == "quantile" else f", cut_method={cut_method}"
+
+
 def map_multiclass_labels(series: pd.Series, class_to_idx: dict, split_name: str) -> np.ndarray:
 	"""Map a string label column to category indices, warning LOUDLY on misses.
 
@@ -342,6 +367,8 @@ def encode_and_build_dataset(
 	encoded_storage: str = "memory",
 	storage_dir: "Path | str | None" = None,
 	encoding_dedupe: bool = False,
+	cut_method: str = "quantile",
+	cut_seed: int = 0,
 ) -> IDSDataset:
 	"""Build an IDSDataset from DataFrames in one call, releasing them inline.
 
@@ -373,7 +400,8 @@ def encode_and_build_dataset(
 	    label_multi_col: column name for multi-class string label (default
 	        "attack_class"); if None, multi_class labels mirror binary
 	    n_bits, method, feature_selection, rest_bits, invalid_encoding,
-	    auto_max_bits, encoding_dedupe: passed through to encode_features().
+	    auto_max_bits, encoding_dedupe, cut_method, cut_seed: passed through to
+	    encode_features() (a supervised cut_method gets the TRAIN labels).
 
 	Returns:
 	    IDSDataset with LazyEncodedArray-wrapped X matrices and int64 labels.
@@ -406,6 +434,10 @@ def encode_and_build_dataset(
 		encoded_storage=encoded_storage,
 		storage_dir=storage_dir,
 		encoding_dedupe=encoding_dedupe,
+		cut_method=cut_method,
+		cut_seed=cut_seed,
+		y_train_binary=y_train_binary,
+		y_train_multi=y_train_multi,
 	)
 
 	# 3. Release source DataFrames. This is the load-bearing memory drop —

@@ -133,6 +133,15 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	# informative bit, and drops exact-duplicate feature columns (train only).
 	# Pinned in the test-cache key. Refused with ids_streaming.
 	"ids_encoding_dedupe",
+	# ids_cut_method (20/11/2026, IDS-70): "quantile" (default — the thermometer's
+	# own quantile cuts, bit-identical) | "info_gain_mc" (IDS-63 variant E:
+	# best-first information-gain cuts vs the attack classes, same total bit
+	# budget, categoricals as a thermometer over train attack-rate rank) |
+	# "xgb_splits" (variant B: every split threshold of a train-fit XGBoost on the
+	# numeric features). Fitted on the TRAIN partition only, seeded by the flow
+	# seed. Pinned in the test-cache key ("cut="). Refused with ids_streaming,
+	# ids_encoding_dedupe="on" and feature_selection top20_split.
+	"ids_cut_method",
 	# ids_feature_ranking (08/11/2026, IDS-53): "legacy" (default — the
 	# TOP20_RF_FEATURES constants, byte-identical) | "train_only" (the top-N
 	# re-derived on the flow's OWN train split; wnn/ids/feature_ranking.py,

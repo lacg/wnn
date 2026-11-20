@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 from enum import Enum
 
+from wnn.representations.cut_method import CutMethod
 from wnn.representations.thermometer_dedupe import column_digests, has_invalid, informative_thresholds, is_constant
 
 
@@ -54,7 +55,9 @@ class ThermometerEncoder:
 	def __init__(self, n_bits: int | str = 8, method: ThermometerType = ThermometerType.DISTRIBUTIVE,
 				 auto_max_bits: int = 32,
 				 invalid_encoding: InvalidEncoding | str = InvalidEncoding.NONE,
-				 dedupe: bool = False):
+				 dedupe: bool = False,
+				 cut_method: CutMethod | str = CutMethod.QUANTILE,
+				 cut_seed: int = 0):
 		"""
 		Args:
 			n_bits: int for uniform width, or "auto" for per-feature adaptive width.
@@ -69,6 +72,10 @@ class ThermometerEncoder:
 				TRAIN data (thermometer_dedupe.py): constant / duplicate threshold
 				columns and uninformative features are dropped, and the is_invalid
 				flag is kept only for features with invalid train rows.
+			cut_method: IDS-70 (flow param ids_cut_method). QUANTILE (default) = the
+				`method` placement, bit-identical. INFO_GAIN_MC / XGB_SPLITS = supervised
+				cuts (cut_method.py), fitted in fit() on the TRAIN rows and labels only.
+			cut_seed: the flow seed handed to a supervised fitter (XGB random_state).
 		"""
 		self.n_bits = n_bits
 		self.method = method
@@ -83,14 +90,28 @@ class ThermometerEncoder:
 		self.dedupe = dedupe
 		self.dropped_features_: list[str] = []  # dedupe: features with no informative bit
 		self.flagged_features_: set[str] | None = None  # dedupe: features that keep the flag (None = all)
+		self.cut_method = cut_method if isinstance(cut_method, CutMethod) else CutMethod(cut_method)
+		self.cut_seed = cut_seed
+		self.rank_maps_: dict = {}  # INFO_GAIN_MC: categorical -> CategoryRankMap ("ranked" features)
+		if dedupe and self.supervised:
+			raise ValueError(f"cut_method={self.cut_method.value} is incompatible with dedupe=True "
+				"(ids_encoding_dedupe='on' + a supervised ids_cut_method is refused)")
 
-	def fit(self, df, feature_config: dict[str, str] | None = None):
+	@property
+	def supervised(self) -> bool:
+		"""Cuts come from the train labels (any cut_method but QUANTILE)."""
+		return self.cut_method != CutMethod.QUANTILE
+
+	def fit(self, df, feature_config: dict[str, str] | None = None,
+			y_binary: np.ndarray | None = None, y_multi: np.ndarray | None = None):
 		"""Learn thresholds from training data.
 
 		Args:
 			df: pandas DataFrame with training data
 			feature_config: optional dict mapping feature_name → type override
 				("numeric", "binary", "categorical"). If None, auto-detected.
+			y_binary, y_multi: the TRAIN labels of df's rows (0/1 and class index).
+				Required by a supervised cut_method, ignored by QUANTILE.
 		"""
 		self.feature_names_ = []
 		self.thresholds_ = {}
@@ -98,6 +119,7 @@ class ThermometerEncoder:
 		self.feature_types_ = {}
 		self.dropped_features_ = []
 		self.flagged_features_ = set() if self.dedupe else None
+		self.rank_maps_ = {}
 
 		for col in df.columns:
 			if col in ("id", "label", "Label", "attack_cat", "Attack_cat"):
@@ -108,6 +130,8 @@ class ThermometerEncoder:
 				self.feature_types_[col] = ftype
 			else:
 				self.dropped_features_.append(col)
+		if self.supervised:
+			self._apply_supervised_cuts(df, y_binary, y_multi)
 		if self.dedupe:
 			self._drop_cross_feature_duplicates(df)
 		if self.dropped_features_:
@@ -124,6 +148,29 @@ class ThermometerEncoder:
 				print(f"    {col:<22s}: {nb:>3} bits  ({lossless})")
 
 		return self
+
+	def _apply_supervised_cuts(self, df, y_binary, y_multi) -> None:
+		"""Replace the quantile cuts with label-fitted ones (TRAIN rows only)."""
+		from wnn.representations.supervised_cut_fitter import SupervisedCutFitter
+		if y_binary is None or y_multi is None or len(y_binary) != len(df) or len(y_multi) != len(df):
+			raise ValueError(f"cut_method={self.cut_method.value} needs the train labels (y_binary, y_multi) "
+				f"aligned with the {len(df):,} train rows")
+		fitter = SupervisedCutFitter(self.cut_method, self.cut_seed)
+		cuts = fitter.fit(df, self.feature_types_, self._own_widths(), y_binary, y_multi)
+		for col, thresholds in cuts.thresholds.items():
+			self.thresholds_[col] = thresholds
+			self.per_feature_bits_[col] = len(thresholds)
+		for col, rank_map in cuts.rank_maps.items():
+			self.feature_types_[col] = "ranked"
+			self.rank_maps_[col] = rank_map
+			self.categories_.pop(col, None)
+		print(f"  [CUTS] cut_method={self.cut_method.value} seed={self.cut_seed} fitted on TRAIN "
+			f"({len(df):,} rows): {self.total_bits} total bits {cuts.bits()}")
+
+	def _own_widths(self) -> dict[str, int]:
+		"""Each feature's value-bit width (no is_invalid flag) under the current fit."""
+		ranges = self.feature_bit_ranges()
+		return {col: end - start - (1 if self._has_flag(col) else 0) for col, (start, end) in ranges.items()}
 
 	def _fit_column(self, col: str, series, ftype: str) -> bool:
 		"""Fit one feature; False = dedupe found no informative bit (drop it)."""
@@ -239,6 +286,9 @@ class ThermometerEncoder:
 			values = np.where(invalid_mask, 0.0, raw)
 			return values[:, np.newaxis] >= self.thresholds_[col][np.newaxis, :], invalid_mask
 		invalid_mask = series.isna().values  # binary & categorical: only NaN is invalid
+		if ftype == "ranked":  # INFO_GAIN_MC categorical: thermometer over its train attack-rate rank
+			values = self.rank_maps_[col].transform(series)
+			return values[:, np.newaxis] >= self.thresholds_[col][np.newaxis, :], invalid_mask
 		if ftype == "binary":
 			return series.fillna(0).values.astype(bool).reshape(-1, 1), invalid_mask
 		return self._categorical_bits(col, series), invalid_mask
@@ -391,6 +441,10 @@ class ThermometerEncoder:
 		    feature_types: explicit type assignment for every feature
 		        the encoder will see. Must be consistent across chunks.
 		"""
+		if self.supervised:
+			raise NotImplementedError(
+				f"ThermometerEncoder(cut_method={self.cut_method.value}) fits cuts on the full train rows + "
+				"labels; the streaming t-digest fit cannot (a supervised ids_cut_method + ids_streaming is refused)")
 		if self.dedupe:
 			raise NotImplementedError(
 				"ThermometerEncoder(dedupe=True) needs exact train counts; the streaming "
