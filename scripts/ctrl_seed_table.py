@@ -99,7 +99,7 @@ def mean_values(per_seed):
 
 def total_values(per_seed):
 	"""UNPAIRED totals: each arm over ALL its own finished seeds (Luiz 19/11: the paired mean hid fails on seeds
-	another arm has not reached yet). fails = count/denominator per arm; err/steady/pos = that arm's own mean."""
+	another arm has not reached yet). fails = count per arm (denominator = n_arm x 3500, n in the row label); err/steady/pos = that arm's own mean."""
 	out = []
 	for col in zip(*per_seed.values()):
 		rows = [c["raw"] for c in col if "raw" in c]
@@ -109,7 +109,7 @@ def total_values(per_seed):
 		n, fails = len(rows), sum(r[3] for r in rows)
 		out.append({"stable": "%.2f" % stable_pct(fails, UNITS_EPS * n, 2), "err": "%.3f" % statistics.mean(r[0] for r in rows),
 			"steady": "%.3f" % statistics.mean(r[1] for r in rows), "pos": "%.3f" % statistics.mean(r[2] for r in rows),
-			"fails": "%d/%d" % (fails, UNITS_EPS * n), "n": n})
+			"fails": "%d" % fails, "n": n})
 	return out
 
 
@@ -148,18 +148,16 @@ def build_rows(arms, seeds, ends, starts, style, pairs=()):
 	mean, n = mean_values(per_seed)
 	if mean:
 		row = ["mean (n=%d)" % n] + [joined(mean, k) for k in METRICS]
-		row[-1] += "  (/%d)" % (UNITS_EPS * n)
 		rows.append(row + extra(mean, style, pairs))
 	total = total_values(per_seed)
 	if any("n" in t for t in total) and any("n" in t and t["n"] != n for t in total):
 		nn = "/".join(str(t.get("n", 0)) for t in total)
-		rows.append(["all done (n=%s)" % nn] + [joined(total, k) for k in METRICS] + [""] * len(extra(total, style, pairs)))
+		rows.append(["all (n=%s)" % nn] + [joined(total, k) for k in METRICS] + [""] * len(extra(total, style, pairs)))
 	return rows
 
 
 def header(labels, style, pairs=()):
-	lab = " | ".join(labels)
-	h = ["seed"] + [f"{k} {UNIT[k]} ({lab})" for k in METRICS]
+	h = ["seed"] + [f"{k} {UNIT[k]}" for k in METRICS]  # arm order printed ONCE in the legend line (Luiz 20/11: width)
 	if pairs:
 		h += [f"Δ{labels[x]}−{labels[y]} err/steady/pos" for x, y in pairs]
 	elif style == "pair":
@@ -182,7 +180,7 @@ def render_box(h, rows, refs):
 	out = [rule("┌", "┬", "┐"), line(h), rule("├", "┼", "┤")]
 	if refs:
 		out += [line(r) for r in refs] + [rule("╞", "╪", "╡", "═")]
-	foot = [r for r in rows if r[0].startswith(("mean", "all done"))]
+	foot = [r for r in rows if r[0].startswith(("mean", "all ("))]
 	body = [r for r in rows if r not in foot]
 	out += [line(r) for r in body]
 	if foot:
@@ -216,6 +214,7 @@ def main():
 	rows = build_rows(arms, parse_seeds(a.seeds), ends, starts, a.style, pairs)
 	pad = len(h) - 6
 	refs = [[lab] + v.split(",") + [""] * pad for lab, v in (r.split("=", 1) for r in a.ref)]
+	print("arms: " + " | ".join(labels) + "   (every cell lists the arms in this order; fails = count, /3500 per seed)")
 	print((render_pair if a.style == "pair" else render_box)(h, rows, refs))
 
 
