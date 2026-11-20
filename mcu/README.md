@@ -326,3 +326,83 @@ it exported dres winners as runnable with those three features left at 0, so
 re-export any such header.
 
 Results and caveats are in `docs/ctrl51_onboard_cost.md`.
+
+
+## pef64: compressed TRUE-key storage (20/11/2026)
+
+**What.** An alternative backend for the SAME lookup ("is address A in neuron n's
+TRUE set?"): partitioned Elias-Fano, blocks of B=64 keys. Per neuron, a block
+index (`wnn_pef_first[]` = each block's smallest key, `wnn_pef_meta[]` = bit
+offset << 6 | low width l, `wnn_pef_blk[]` = the neuron's block range); per block,
+the other <= 63 keys as Elias-Fano (l-bit lows, then the high parts in unary) in
+one LSB-first bitstream `wnn_pef_data[]`. Lossless; chosen by the compression
+probe (`logs/compression_probe/`: Rice 3x and FOR 2x slower at the same size).
+
+Lookup (`mcu/wnn_pef.h`, header-only C99, no malloc, const tables only): binary
+search on the neuron's block first-keys, then inside ONE block find the
+(x >> l)-th zero of the high part from whichever end is nearer, 32 bits at a time
+(popcount by a 256-byte LUT — the Cortex-M7 has no popcount instruction), and
+binary-search that bucket's lows.
+
+**Build.**
+
+    PYTHONPATH=src/wnn python scripts/export_controller_c.py --winner <winner> \
+        --out mcu/wnn_model.h [--tables-only] --key-format pef64
+
+The header then has no `wnn_keys[]` and defines `WNN_KEY_FORMAT_PEF64`;
+`wnn_cascade.c`, `bench.c`, `bench_inc.c` switch their lookup on it (no other
+flag). The default `--key-format uint32` output is byte-identical to before
+(checked on a winner), and `wnn_cascade.c` against a uint32 header compiles to a
+byte-identical object, as do the `bench.c` and `bench_inc.c` firmware images (every
+variant). `bench_inc.c` under pef64 always looks up in place (there
+is no `wnn_keys` to hash), i.e. it implies `-DINC_LOOKUP_BINSEARCH`.
+`scripts/count_true_keys.py` records `bytes_pef64` next to `bytes_uint32` (the
+flash rule still reads `bytes_uint32`).
+
+**Exactness** — `mcu/parity/test_pef64_exactness.py --c` (pytest: synthetic sets
++ a corrupted-bitstream mutant that must be caught). Y+F+L s1-s5 and Y3 s1-s2:
+every stored key, every key+-1, every distinct (neuron, address) of the recorded
+VAL traces (s1, s5, Y3 s2 have traces) and 1M random addresses, Python reference
+decoder AND the host-compiled C (`pef_host_check`, uint32 C binary search vs
+`wnn_pef.h`): **0 mismatches on all 7 winners** (2.2M-5.9M queries each).
+
+**Flash bytes** (uint32 = keys + `wnn_off` + conn; pef64 = every PEF array incl.
+`wnn_off` + conn; H743 internal flash = 2048 KB):
+
+    winner        keys   uint32 KB  pef64 KB   ratio
+    Y+F+L s1    662,535     2,595     1,005    0.387
+    Y+F+L s2    703,938     2,764     1,121    0.406
+    Y+F+L s3    420,562     1,650       644    0.390
+    Y+F+L s4    385,470     1,513       605    0.400
+    Y+F+L s5    756,032     2,967     1,199    0.404
+    Y3    s1    687,060     2,695     1,073    0.398
+    Y3    s2    789,923     3,099     1,232    0.398
+
+**Cost — MEASURED retired instructions** (`mcu/run_bench_pef.sh`, QEMU
+mps2-an500 Cortex-M7, `-O2`; the M4 board gives the same within 3%).
+Real VAL addresses, 200 decision ticks, marker overhead subtracted; the address
+gather is NOT included (it is the same for both):
+
+    Y+F+L s1 (264 n)        uint32 mean / p99 / max     pef64 mean / p99 / max
+    one lookup                  96 /    149 /    149       273 /    467 /    543
+    decision, every neuron  27,778 / 27,949 / 27,971    75,781 / 77,798 / 77,868
+    decision, incremental   21,949 / 28,729 / 28,785    58,345 / 77,506 / 78,007
+    Y3 s2 (480 n)
+    one lookup                  88 /    140 /    149       249 /    455 /    536
+    decision, every neuron  46,535 / 46,704 / 46,714   125,824 /130,230 /133,435
+    decision, incremental   36,431 / 46,848 / 47,951    95,350 /125,132 /127,437
+
+Both formats report identical hit counts on target. Synthetic walk (`bench_inc.c`,
+jitter 2, input generation subtracted): BASE 67,702 vs 118,923 (s1),
+119,362 vs 198,671 (Y3 s2); INC 6,666 vs 15,011 and 11,164 vs 24,177.
+On real traces ~70% of neurons change address every decision, so incremental
+addressing saves only ~20% of the lookups there.
+
+**pef64 costs ~2.8x the INSTRUCTIONS of the binary search** (mean; max 3.6x).
+The probe's "worst case ~ today's binary search" was a CYCLE ESTIMATE dominated
+by flash line misses, and that part holds: distinct 32-byte lines touched per
+lookup on the same traces (Python count, ESTIMATE of flash traffic) are
+uint32 7.2 / pef64 7.7 (s1), 6.5 / 7.3 (Y3 s2). With 1 cycle/instruction and
+every line a 15-cycle miss (the probe's model, an ESTIMATE, not silicon) one
+lookup is ~190-205 vs ~360-390 cycles, i.e. ~1.9x; a full 480-neuron decision ~0.36 ms
+of a 1 ms tick at 480 MHz. Silicon DWT numbers remain task #6.
