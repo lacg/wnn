@@ -139,3 +139,6 @@ in the CPU/GPU parity pins.
 - Base (D+F or Y+F — Luiz leaning Y+F) and its B rows; driver path; tags `..._a<ABI>_..._a2_full_sN`
   (a60 with the Rust `mid` row, a59 with the `pre` fallback).
 - (Amended weights confirmed by Luiz 19/11.)
+
+## Base fixed (Luiz 20/11/2026 ~06:30 EST)
+Base = **Y+F+L** (Y + `--yaw-trim-ff` + `--yaw-centred-ladder dense`); B rows = the dense-ladder block `..._a59_..._ffF_yld_full_s1..s5` (A2 flies on ABI 60 after the flag-off determinism gate). Adoption reading per Luiz: consistently better in the expected metrics and not worse on the rest of the vector — no magnitude bar.
