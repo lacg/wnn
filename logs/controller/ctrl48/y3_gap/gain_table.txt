@@ -1,0 +1,26 @@
+(A) MEASURED frozen-table re-decode, VAL (20 units x 100 eps per seed), mean over s1-s5
+dmy   G     | stable %  fails | err    steady  pos    | yaw err  yaw hold  unit|signed| | hold yaw vs trim: slope deg/unit, R2 | per-seed steady
+0.30  1.00  | 100.00      0 | 0.908  0.245   0.3345 | 0.494    0.137     0.079        | +0.058, 0.16                       | 0.230 0.250 0.248 0.268 0.232
+0.33  1.10  | 100.00      0 | 0.903  0.255   0.3346 | 0.486    0.150     0.106        | -0.105, 0.19                       | 0.239 0.278 0.241 0.276 0.240
+0.36  1.20  | 100.00      0 | 0.923  0.281   0.3346 | 0.510    0.184     0.149        | -0.220, 0.38                       | 0.256 0.325 0.263 0.302 0.260
+0.40  1.33  | 100.00      0 | 0.968  0.318   0.3346 | 0.561    0.229     0.204        | -0.346, 0.53                       | 0.286 0.376 0.301 0.328 0.298
+Y+F (ref)   | 100.00      0 | 0.839  0.203   0.3347 | 0.397    0.094     0.043        | -0.017, 0.04                       | 0.199 0.207 0.212 0.212 0.184
+
+per-seed delta vs 0.30 (err / steady / yaw hold), deg:
+  0.33: err -0.010 +0.011 -0.013 -0.005 -0.008 (mean -0.005) | steady +0.009 +0.028 -0.007 +0.008 +0.009 (mean +0.010) | yaw hold +0.011 +0.037 -0.007 +0.013 +0.013 | pos +0.0000
+  0.36: err +0.003 +0.045 +0.005 +0.013 +0.008 (mean +0.015) | steady +0.026 +0.075 +0.016 +0.034 +0.028 (mean +0.036) | yaw hold +0.034 +0.090 +0.022 +0.045 +0.044 | pos +0.0001
+  0.40: err +0.042 +0.104 +0.049 +0.053 +0.052 (mean +0.060) | steady +0.056 +0.126 +0.053 +0.060 +0.066 (mean +0.072) | yaw hold +0.070 +0.152 +0.070 +0.076 +0.094 | pos +0.0001
+
+(B) G-aware linear model on the as-flown replays (G = 1): per-episode hold, predicted at G'
+seed | decode slope sp/B | a_B (label/rad) | measured |yaw| hold | predicted at G 1.1 / 1.2 / 1.33 | ep R2 on trim (0.30 -> 1.33) | unit R2 (0.30 -> 1.33)
+ s1 | 1.003 | -4.75 | 0.108 | 0.205 / 0.345 / 0.508 | 0.01 -> 0.95 | 0.06 -> 0.99
+ s2 | 1.003 | -3.48 | 0.122 | 0.298 / 0.488 / 0.702 | 0.05 -> 0.96 | 0.11 -> 0.98
+ s3 | 1.003 | -3.19 | 0.135 | 0.247 / 0.448 / 0.686 | 0.13 -> 0.96 | 0.35 -> 0.98
+ s4 | 1.003 | -4.16 | 0.128 | 0.221 / 0.375 / 0.562 | 0.06 -> 0.91 | 0.15 -> 0.96
+ s5 | 1.003 | -5.90 | 0.111 | 0.203 / 0.343 / 0.507 | 0.06 -> 0.93 | 0.13 -> 0.97
+ mean | predicted per-episode hold |yaw| (deg): 0.30: 0.121 / 0.33: 0.235 / 0.36: 0.400 / 0.40: 0.593
+
+model vs measured (frozen tables), change in mean hold |yaw| vs 0.30, deg:
+  0.33: model +0.114 | measured re-decode (per-axis hold yaw) +0.013
+  0.36: model +0.279 | measured re-decode (per-axis hold yaw) +0.047
+  0.40: model +0.472 | measured re-decode (per-axis hold yaw) +0.092
