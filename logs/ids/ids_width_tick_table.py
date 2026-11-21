@@ -12,16 +12,17 @@ from datetime import datetime, timezone
 DB = "file:/Volumes/20260401-WDBlack-SN850X-2TB/wnn/db/wnn.db?mode=ro"
 SEEDS = (20421, 20422, 20423)
 CONTROLS = {20421: 7567, 20422: 7568, 20423: 7569}
-ARMS = ("C", "80", "96")
-ARM_NAME = {"80": "IDS62-unswr-%-fixb80-encoff-r{seed}", "96": "IDS63-unswr-%-fixb96-encoff-r{seed}"}
+ARMS = ("C", "80", "E", "B")  # 21/11: 96 (Plane IDS-69) closed; E/B = Plane IDS-70 cut methods on the 80b recipe
+ARM_NAME = {"80": "IDS62-unswr-%-fixb80-encoff-r{seed}", "96": "IDS63-unswr-%-fixb96-encoff-r{seed}",
+	"E": "IDS70-unswr-%-fixb80-encoff-cutE-r{seed}", "B": "IDS70-unswr-%-fixb80-encoff-cutB-r{seed}"}
 CLASSICAL = (
 	("XGB 64b", "95.53±0.00", "0.417±0.000", "99.33±0.00", "6K nodes"),
 	("RF 64b", "95.32±0.07", "0.380±0.064", "99.31±0.00", "1.78M nodes"),
 	("XGB raw top-20", "95.60±0.00", "0.427±0.000", "99.34±0.00", "6K nodes"),
 	("RF raw top-20", "95.81±0.07", "0.288±0.027", "99.39±0.01", "1.16M nodes"),
 )
-HEADER = ("seed", "F1 % (C | 80 | 96)", "FPR % (C | 80 | 96)", "acc % (C | 80 | 96)",
-	"cells/neurons (C | 80 | 96)", "bits (C | 80 | 96)", "hours (C | 80 | 96)")
+HEADER = ("seed", "F1 % (C | 80 | E | B)", "FPR % (C | 80 | E | B)", "acc % (C | 80 | E | B)",
+	"cells/neurons (C | 80 | E | B)", "bits (C | 80 | E | B)", "hours (C | 80 | E | B)")
 
 
 def flow_for(db, arm: str, seed: int):
