@@ -1,14 +1,14 @@
 #!/bin/bash
 # CTRL-58 A2 block (Luiz 20/11 ~19:20 EST: "close Y3+L at n=5 and go to A2"): arm A2 = base Y+F+L +
 # --refine-fitness --refine-w-steady 0.40 --refine-w-mid 0.25 --refine-w-reward 0.10 (tail 0.15 / pos 0.10 = defaults),
-# s1-s5 seed-major, ABI 60. B rows = the Y+F+L runs ..._a59_..._ffF_yld_full_sN (not re-flown: argv-identical apart from
+# s1-s10 seed-major (Luiz 20/11: s6-s10 straight after s5), ABI 60. B rows = the Y+F+L runs ..._a59_..._ffF_yld_full_sN (not re-flown: argv-identical apart from
 # the refine flags; valid because the flag-off determinism gate ABI 60 vs 59 PASSED before this driver may start).
 # Prereg docs/ctrl58_a2_prereg.md (must exist). END lines in runs.log; ends A2 DONE (abort 'A2 ABORT').
 cd /Users/lacg/wnn
 L=logs/controller/ctrl48
 VENV=/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv
 ABI=${ABI:-60}
-SEEDS=${A2_SEEDS:-1 2 3 4 5}
+SEEDS=${A2_SEEDS:-1 2 3 4 5 6 7 8 9 10}
 DRY=${A2_DRY:-0}
 EXTRA="--refine-fitness --refine-w-steady 0.40 --refine-w-mid 0.25 --refine-w-reward 0.10"
 abort() { echo "$(date -u +%FT%TZ) A2 ABORT: $1" >> $L/runs.log; echo "A2 ABORT: $1" >&2; exit 1; }
