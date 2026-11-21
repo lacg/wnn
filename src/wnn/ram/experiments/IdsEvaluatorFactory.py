@@ -65,7 +65,8 @@ class IdsEvaluatorFactory:
 		streaming = " (streaming)" if s.streaming else ""
 		self._log(f"Loading {s.dataset_name}{raw}{streaming} dataset (classification={s.classification}, split={s.split}, "
 			f"feature_selection={s.feature_selection}, invalid_encoding={s.invalid_encoding}, encoded_storage={s.encoded_storage}, "
-			f"encoding_dedupe={'on' if s.encoding_dedupe else 'off'}, feature_ranking={s.feature_ranking})...")
+			f"encoding_dedupe={'on' if s.encoding_dedupe else 'off'}, feature_ranking={s.feature_ranking}, "
+			f"cut_method={s.cut_method})...")
 		from wnn.ids import load_ids_dataset
 		dataset = load_ids_dataset(
 			s.dataset_name, n_bits=s.n_bits, split=s.split, feature_selection=s.feature_selection,
@@ -73,7 +74,7 @@ class IdsEvaluatorFactory:
 			auto_max_bits=s.auto_max_bits, encoded_storage=s.encoded_storage,
 			storage_dir=s.encoded_storage_dir, streaming=s.streaming,
 			streaming_chunk_size=s.streaming_chunk_size, encoding_dedupe=s.encoding_dedupe,
-			feature_ranking=s.feature_ranking,
+			feature_ranking=s.feature_ranking, cut_method=s.cut_method, cut_seed=s.seed,
 		)
 		self._attach_prefetch(dataset, s)
 		return dataset
@@ -95,6 +96,10 @@ class IdsEvaluatorFactory:
 			raise NotImplementedError(
 				"ids_streaming=True is incompatible with ids_encoding_dedupe='on' (the deduped encoder "
 				"needs exact train counts; the streaming encoder fits by t-digest).")
+		if s.cut_method != "quantile":
+			raise NotImplementedError(
+				f"ids_streaming=True is incompatible with ids_cut_method={s.cut_method!r} (supervised cuts "
+				"are fitted on the full train rows + labels; the streaming encoder fits by t-digest).")
 
 	@staticmethod
 	def _attach_prefetch(dataset, s: IdsEvaluatorSettings) -> None:

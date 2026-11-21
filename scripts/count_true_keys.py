@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from export_controller_c import true_onset, true_onset_genome  # noqa: E402
+from pef_encoder import PefEncoder  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_CACHE = os.path.join(ROOT, 'experiments', 'h743_keys.json')
@@ -73,6 +74,10 @@ def entry_from_onset(m: dict, source: str) -> dict:
 		bytes_uint32=keys * 4 + conn,
 		# Tight packing at exactly `bits` per key — the floor for a plain sorted array.
 		bytes_packed=(keys * m['bits'] + 7) // 8 + conn,
+		# What `export_controller_c.py --key-format pef64` ships: EVERY PEF array
+		# (off, block index, EF bitstream) + connectivity. Reported only — the
+		# flash rule still reads bytes_uint32 (20/11/2026: not decided).
+		bytes_pef64=PefEncoder().encode(m['keys'], m['off']).nbytes() + conn,
 		source=os.path.relpath(source, ROOT),
 		counted=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
 	)
@@ -153,7 +158,7 @@ def record(cache: dict, path: str, key: str, e: dict) -> None:
 	save_cache(path, cache)  # after EVERY entry: a crash mid-list loses nothing
 	print(f"{key}: TRUE keys={e['true_keys']} (populated {e['populated']}, "
 	      f"{e['neurons']}n x {e['bits']}b)  uint32 {e['bytes_uint32'] / 1024:.0f} KB  "
-	      f"packed {e['bytes_packed'] / 1024:.0f} KB")
+	      f"packed {e['bytes_packed'] / 1024:.0f} KB  pef64 {e['bytes_pef64'] / 1024:.0f} KB")
 
 
 def main():

@@ -118,3 +118,6 @@ bands re-cut at the new edges (0–0.10, 0.10–0.25, 0.25–0.39°), and `yaw_p
 - A variant that keeps a 0 edge (e.g. ±0.13°, ±0.39°, ±1.17°, ±2.5° on `yaw_err`) needs a change to
   `evaluator.DENSE_YAW_INNER_RAD` / `_dense_thresholds`. It is the follow-up if L improves err but costs steady.
 - The float yaw P-term (`docs/ctrl59_yaw_pterm_spec.md`) is built in parallel and tested in its own block.
+
+## Verdict (Luiz 20/11/2026 ~06:30 EST): ADOPTED
+n=5 paired vs Y+F (TEST, 35 CF2.1 units): err −0.016°, steady −0.004°, pos 0.000 m, fails 0 vs 0 of 17,500; err better on s1 (−0.02), s2 (−0.02), s3 (−0.05), equal on s4, +0.01 on s5. The magnitude rule above (≥ 0.03°, ≥ 4/5) was NOT met; Luiz adopts on direction + consistency + no harm ("it is consistently better and not getting worse"). New base = Y+F+L.

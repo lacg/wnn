@@ -1,0 +1,14 @@
+Y3 yaw-gain pre-check (20/11/2026, flight-dynamics; VAL only, 20 stage-select val units x 100 eps per seed, s1-s5; Y3 = --delta-max-yaw 0.3, no F)
+VERDICT: NO-GO for a flown gain arm (no value of --delta-max-yaw above 0.30 is worth flying).
+
+Hypothesis tested: "the trained Y3 table says a bit less than the label, so a yaw decode gain G slightly above 1 removes its standing yaw offset".
+Falsified on two counts:
+ 1. At G 1 the Y3 standing offset is NOT trim-proportional: per-unit signed hold yaw vs the unit's trim (hold-mean cresid_z) slope +0.058 deg/unit, R2 0.16
+    (Y at G 1.67: -0.57 deg/unit, R2 0.60). There is almost nothing for a gain to cancel. Best case (interpolated slope zero at G ~1.035, dmy ~0.31): ~0.01 deg.
+ 2. Raising G creates the trim-proportional error instead of removing one: slope +0.058 -> -0.105 -> -0.220 -> -0.346 deg/unit, R2 0.16 -> 0.19 -> 0.38 -> 0.53
+    (0.30 -> 0.33 -> 0.36 -> 0.40), and steady rises on 4/5, 5/5, 5/5 seeds.
+
+Tables: gain_table.txt (A = measured frozen-table re-decode, B = G-aware linear model). Scripts: run_gain.sh, gain_replay.py, run_replay.sh, gain_table.py.
+Caveats: a frozen-table re-decode is NOT a retrained controller (the cells were written for G 1; a retrained table can adapt, as the Y table at G 1.67 cancels about half its built-in excess).
+The linear model was validated on one step only (G 2 -> 1.67) and here over-predicts the frozen-table change 5-9x (direction right on every seed and value): use it for direction only.
+Expected TEST effect of a flown 0.33 arm: steady 0 to +0.01, err -0.01 to +0.01, pos 0 — it cannot close the Y3 gap to Y+F (err +0.052 / steady +0.044).

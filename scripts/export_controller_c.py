@@ -41,10 +41,16 @@ Emits (both kinds):
   wnn_keys[]      all neurons' sorted ON-set addresses, concatenated
   wnn_off[N+1]    start offset per neuron into wnn_keys
 
+KEY FORMAT (20/11/2026). --key-format uint32 (default) is the above, byte for
+byte. --key-format pef64 replaces wnn_keys with a partitioned Elias-Fano store
+(blocks of 64 keys + a block index; scripts/pef_encoder.py, decoded by
+mcu/wnn_pef.h): wnn_pef_blk/first/meta/data, wnn_off kept, and the header
+defines WNN_KEY_FORMAT_PEF64 so the C lookup switches. Lossless, ~0.4x the bytes.
+
 Usage:
   PYTHONPATH=src/wnn python scripts/export_controller_c.py \
       --winner <winner.yaml.gz | stageN.yaml.gz> --out mcu/wnn_model.h \
-      [--run-argv <run.out | argv.txt>] [--tables-only]
+      [--run-argv <run.out | argv.txt>] [--tables-only] [--key-format {uint32,pef64}]
 """
 
 import argparse
@@ -55,10 +61,13 @@ from pathlib import Path
 
 import numpy as np
 
+from pef_encoder import PefEncoder
+
 # neuron_memory.rs: FALSE=0, TRUE=1, EMPTY=2. BINARY weighs TRUE 1.0, all else 0.0.
 TRUE_CELL = 1
 # The C keys are uint32 and the address is built in a uint32.
 MAX_C_BITS = 32
+KEY_FORMATS = ("uint32", "pef64")
 
 
 @dataclass
@@ -83,6 +92,9 @@ def parse_args():
 	                     ".out log (its '[argv]' line) or a file holding the argv")
 	ap.add_argument("--tables-only", action="store_true",
 	                help="lookup tables only, for the instruction-count benches (NOT runnable)")
+	ap.add_argument("--key-format", choices=KEY_FORMATS, default="uint32",
+	                help="TRUE-key storage: uint32 sorted arrays (default) or pef64 "
+	                     "(partitioned Elias-Fano, B=64; mcu/wnn_pef.h)")
 	return ap.parse_args()
 
 
@@ -214,10 +226,22 @@ def run_argv(meta: dict, argv_file) -> list:
 	if argv_file is None:
 		if "argv" not in meta:
 			raise SystemExit("the checkpoint carries no argv: pass --run-argv <run .out log>")
-		return [str(a) for a in meta["argv"]]
+		return renamed_flags([str(a) for a in meta["argv"]])
 	text = Path(argv_file).read_text(errors="replace")
 	m = re.search(r"^\[argv\] (.*)$", text, re.MULTILINE)
-	return (m.group(1) if m else text).split()
+	return renamed_flags((m.group(1) if m else text).split())
+
+
+# 12/11/2026 terminology cut-over (CLAUDE.md "Train / validation / test"): runs flown
+# before it carry the old report-partition flag names, which phased_ga now rejects.
+# Same values, same meaning — the same map as logs/controller/ctrl48/rebuild_argv.py.
+FLAG_RENAMES = {"--report-seeds": "--test-seeds", "--report-seed": "--test-seed",
+                "--report-episodes": "--test-episodes"}
+
+
+def renamed_flags(argv: list) -> list:
+	"""argv with the pre-12/11 report-partition flags renamed to their test names."""
+	return [FLAG_RENAMES.get(t, t) for t in argv]
 
 
 def threshold_refusals(args) -> list:
@@ -398,21 +422,40 @@ def render_cascade_macros(m: ExportModel) -> list:
 	        + render_feature_flags(m.spec) + render_controller_consts(m) + render_ctbr_consts(m))
 
 
-def render_tables(o: dict, thresholds) -> list:
-	out = [
-		emit_array("wnn_conn", "wnn_conn_t", o["conn"], 24),
-		emit_array("wnn_keys", "uint32_t", o["keys"], 12),
-		emit_array("wnn_off", "uint32_t", o["off"], 16),
+def render_key_tables(o: dict, pef) -> list:
+	"""uint32: the sorted keys + offsets. pef64: offsets + the PEF arrays."""
+	if pef is None:
+		return [emit_array("wnn_keys", "uint32_t", o["keys"], 12),
+		        emit_array("wnn_off", "uint32_t", o["off"], 16)]
+	return [
+		emit_array("wnn_off", "uint32_t", pef.off, 16),
+		emit_array("wnn_pef_blk", "uint32_t", pef.blk, 16),
+		emit_array("wnn_pef_first", "uint32_t", pef.first, 12),
+		emit_array("wnn_pef_meta", "uint32_t", pef.meta, 12),
+		emit_array("wnn_pef_data", "uint32_t", [f"0x{w:08x}u" for w in pef.data], 8),
 	]
+
+
+def render_pef_macros(pef) -> list:
+	if pef is None:
+		return []
+	return ["#define WNN_KEY_FORMAT_PEF64 1  /* keys: mcu/wnn_pef.h, not wnn_keys */",
+	        f"#define WNN_PEF_BLOCK {pef.block}u",
+	        f"#define WNN_PEF_NUM_BLOCKS {pef.num_blocks()}u"]
+
+
+def render_tables(o: dict, thresholds, pef=None) -> list:
+	out = [emit_array("wnn_conn", "wnn_conn_t", o["conn"], 24)] + render_key_tables(o, pef)
 	if thresholds is not None:
 		out.append(emit_array("wnn_thresholds", "float", [f32_lit(t) for t in thresholds], 4))
 	return out
 
 
-def render_header(onset: dict, source: str, model) -> str:
+def render_header(onset: dict, source: str, model, pef=None) -> str:
 	"""`model` None => tables only. Two guarded sections: macros (wnn_cascade.h
-	includes those alone) and the tables (one translation unit owns them)."""
-	macros = render_geometry(onset) + (render_cascade_macros(model) if model else [])
+	includes those alone) and the tables (one translation unit owns them).
+	`pef` None => uint32 keys (the historical header, byte for byte)."""
+	macros = render_geometry(onset) + render_pef_macros(pef) + (render_cascade_macros(model) if model else [])
 	return "\n".join([
 		"/* GENERATED by scripts/export_controller_c.py -- do not edit. */",
 		f"/* source: {source} */",
@@ -420,7 +463,7 @@ def render_header(onset: dict, source: str, model) -> str:
 		*macros, "#endif /* WNN_MODEL_H_MACROS */", "",
 		"#if !defined(WNN_MODEL_MACROS_ONLY) && !defined(WNN_MODEL_H_TABLES)",
 		"#define WNN_MODEL_H_TABLES",
-		*render_tables(onset, model.thresholds if model else None),
+		*render_tables(onset, model.thresholds if model else None, pef),
 		"#endif /* WNN_MODEL_H_TABLES */",
 	]) + "\n"
 
@@ -437,11 +480,20 @@ def write_header(out: str, text: str):
 	p.write_text(text)
 
 
-def report(out: str, o: dict, model):
+def encode_keys(o: dict, key_format: str):
+	"""The PefTables for pef64, None for uint32."""
+	return PefEncoder().encode(o["keys"], o["off"]) if key_format == "pef64" else None
+
+
+def report(out: str, o: dict, model, pef=None):
 	kb = (len(o["keys"]) * 4 + len(o["conn"])) / 1024
 	kind = "CASCADE (runnable)" if model else "TABLES ONLY (bench)"
 	print(f"wrote {out}  [{kind}] neurons={o['neurons']} bits={o['bits']} in_bits={o['in_bits']} "
 	      f"features={o['features']}x{o['bits_per_feature']} keys={len(o['keys'])}  (~{kb:.0f} KB of .rodata)")
+	if pef is not None:
+		pkb = (pef.nbytes() + len(o["conn"])) / 1024
+		print(f"  key format pef64 (B={pef.block}, {pef.num_blocks()} blocks): ~{pkb:.0f} KB of .rodata "
+		      f"({pkb / kb:.3f}x the uint32 keys+conn)")
 	print(f"  on-set filter: TRUE={o['n_true']} dropped FALSE/other={o['n_false']} "
 	      f"({o['n_false'] / max(1, o['n_true'] + o['n_false']):.1%} of populated cells)")
 	if model:
@@ -461,8 +513,9 @@ def main():
 		model = model_from_checkpoint(args.winner, args.run_argv)
 		check_threshold_count(model)
 		onset = model.onset
-	write_header(args.out, render_header(onset, args.winner, model))
-	report(args.out, onset, model)
+	pef = encode_keys(onset, args.key_format)
+	write_header(args.out, render_header(onset, args.winner, model, pef))
+	report(args.out, onset, model, pef)
 
 
 if __name__ == "__main__":

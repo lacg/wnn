@@ -15,6 +15,8 @@ INCLUDED (changes the trained memory or the reported score of a fixed genome):
                     (resolved incl. its dataset-dependent default), ids_streaming
                     (+ chunk size: the streaming encoder fits by t-digest),
                     ids_encoding_dedupe (encoder version, only when "on"),
+                    ids_cut_method (method + version, only when not "quantile";
+                    a supervised fit is seeded by `seed`, already in the key),
                     ids_feature_ranking (list version, only when "train_only"),
                     ids_receptive_fields (family-map version + ids_rf_cross, only
                     when "family" — strictly it steers the search, which
@@ -49,6 +51,7 @@ import json
 
 from wnn.ram.experiments.ids_param_resolution import (
 	DEFAULT_WRITE_RULE,
+	resolve_cut_method,
 	resolve_encoding_dedupe,
 	resolve_feature_ranking,
 	resolve_invalid_encoding,
@@ -98,7 +101,16 @@ def _dataset_parts(params: dict) -> list:
 		("raw", bool(params.get("ids_raw", False))),
 		("inv", resolve_invalid_encoding(params)),
 		("strm", params.get("ids_streaming_chunk_size", 1_000_000) if streaming else None),
-	] + _encoder_version_parts(params) + _feature_ranking_parts(params) + _receptive_field_parts(params)
+	] + _encoder_version_parts(params) + _cut_method_parts(params) + _feature_ranking_parts(params) \
+		+ _receptive_field_parts(params)
+
+
+def _cut_method_parts(params: dict) -> list:
+	"""IDS-70 cut method: emitted ONLY for a supervised ids_cut_method (a different
+	bit layout), so every quantile key stays byte-identical."""
+	from wnn.representations.cut_method import CUT_METHOD_VERSION
+	method = resolve_cut_method(params)
+	return [] if method == "quantile" else [("cut", f"{method}:{CUT_METHOD_VERSION}")]
 
 
 def _receptive_field_parts(params: dict) -> list:

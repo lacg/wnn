@@ -252,6 +252,18 @@ def resolve_encoding_dedupe(params: dict) -> bool:
 	return value == "on"
 
 
+def resolve_cut_method(params: dict) -> str:
+	"""ids_cut_method (IDS-70): "quantile" (default, bit-identical encoding) |
+	"info_gain_mc" | "xgb_splits" (supervised cuts fitted on TRAIN only;
+	wnn/representations/cut_method.py). Anything else is refused."""
+	from wnn.representations.cut_method import CutMethod
+	value = params.get("ids_cut_method", CutMethod.QUANTILE.value)
+	allowed = tuple(m.value for m in CutMethod)
+	if value not in allowed:
+		raise ValueError(f"ids_cut_method={value!r}: expected one of {allowed}")
+	return value
+
+
 # The IDS flow default for max_bits (worker._apply_ids_config reads the same).
 IDS_DEFAULT_MAX_BITS = 24
 
