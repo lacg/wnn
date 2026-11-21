@@ -28,3 +28,15 @@ episodes, not more generations. Runs will be longer, roughly +0.5 to +1.5 h each
 
 ## After
 If A2 and A1 both have merit, discuss A1+A2 with Luiz (CTRL-58 prereg: "A1 and A1+A2 follow as their own block").
+
+## Addendum 21/11/2026 ~07:40 EST — A1+A2 queued after A1 (Luiz)
+Luiz agreed A2 is not adopted on its own at n=9: err −0.009° and steady −0.002° moved in the right direction but not
+consistently, while pos rose +0.003 m (worse on 6/9 seeds) and fails were 6 vs 1. He asked for **A1+A2** to test
+whether each lever covers the other's weakness. A2's refine ranking may need a longer search to turn into gains,
+which A1's looser stopper provides; A1 alone was expected to be weak.
+- **Arm A1+A2** = Y+F+L + `--neurons-patience 6 --memory-patience 10` + `--refine-fitness --refine-w-steady 0.40
+  --refine-w-mid 0.25 --refine-w-reward 0.10`, s1–s5, ABI 60. Tags `..._ffF_yld_a1a2_full_sN`; driver
+  `logs/controller/ctrl48/ab_a1a2.sh`; waiter `a1a2_after_a1.sh` (fires on `A1 DONE`). Ends `A1A2 DONE`.
+- **Read** paired vs Y+F+L (primary), and vs A1 and A2 on the same seed: does the combination keep A2's err/steady
+  direction while closing its pos and fails gap?
+- **Rule:** the same adoption reading as above.
