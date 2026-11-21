@@ -1,0 +1,172 @@
+diff --git a/src/wnn/representations/thermometer.py b/src/wnn/representations/thermometer.py
+index 76f35f25..cc39fe86 100644
+--- a/src/wnn/representations/thermometer.py
++++ b/src/wnn/representations/thermometer.py
+@@ -75,6 +75,8 @@ class ThermometerEncoder:
+ 			cut_method: IDS-70 (flow param ids_cut_method). QUANTILE (default) = the
+ 				`method` placement, bit-identical. INFO_GAIN_MC / XGB_SPLITS = supervised
+ 				cuts (cut_method.py), fitted in fit() on the TRAIN rows and labels only.
++				With dedupe=True the supervised cuts are fitted FIRST at the full width
++				budget, then dedupe runs on those final cuts (IDS-73, 21/11/2026).
+ 			cut_seed: the flow seed handed to a supervised fitter (XGB random_state).
+ 		"""
+ 		self.n_bits = n_bits
+@@ -93,15 +95,18 @@ class ThermometerEncoder:
+ 		self.cut_method = cut_method if isinstance(cut_method, CutMethod) else CutMethod(cut_method)
+ 		self.cut_seed = cut_seed
+ 		self.rank_maps_: dict = {}  # INFO_GAIN_MC: categorical -> CategoryRankMap ("ranked" features)
+-		if dedupe and self.supervised:
+-			raise ValueError(f"cut_method={self.cut_method.value} is incompatible with dedupe=True "
+-				"(ids_encoding_dedupe='on' + a supervised ids_cut_method is refused)")
+ 
+ 	@property
+ 	def supervised(self) -> bool:
+ 		"""Cuts come from the train labels (any cut_method but QUANTILE)."""
+ 		return self.cut_method != CutMethod.QUANTILE
+ 
++	@property
++	def _dedupe_while_fitting(self) -> bool:
++		"""dedupe prunes the QUANTILE cuts as each column is fitted. Supervised cuts
++		must see the full width budget, so their dedupe runs after the cuts exist."""
++		return self.dedupe and not self.supervised
++
+ 	def fit(self, df, feature_config: dict[str, str] | None = None,
+ 			y_binary: np.ndarray | None = None, y_multi: np.ndarray | None = None):
+ 		"""Learn thresholds from training data.
+@@ -132,6 +137,8 @@ class ThermometerEncoder:
+ 				self.dropped_features_.append(col)
+ 		if self.supervised:
+ 			self._apply_supervised_cuts(df, y_binary, y_multi)
++			if self.dedupe:
++				self._dedupe_supervised_cuts(df)
+ 		if self.dedupe:
+ 			self._drop_cross_feature_duplicates(df)
+ 		if self.dropped_features_:
+@@ -167,6 +174,41 @@ class ThermometerEncoder:
+ 		print(f"  [CUTS] cut_method={self.cut_method.value} seed={self.cut_seed} fitted on TRAIN "
+ 			f"({len(df):,} rows): {self.total_bits} total bits {cuts.bits()}")
+ 
++	def _dedupe_supervised_cuts(self, df) -> None:
++		"""dedupe on the final supervised cuts: the same per-feature rules as the
++		quantile path (thermometer_dedupe.py), applied to the bits transform emits."""
++		for col in list(self.feature_names_):
++			if not self._dedupe_fitted_column(col, df[col]):
++				self.feature_names_.remove(col)
++				self.dropped_features_.append(col)
++		print(f"  [CUTS] dedupe after cut_method={self.cut_method.value}: {self.total_bits} total bits")
++
++	def _dedupe_fitted_column(self, col: str, series) -> bool:
++		"""Prune one fitted feature; False = no informative value bit and no flag."""
++		ftype = self.feature_types_[col]
++		raw = series.values.astype(np.float64) if ftype == "numeric" else np.where(series.isna().values, np.nan, 0.0)
++		flag_informative = self.invalid_encoding == InvalidEncoding.SINGLE_BIT and has_invalid(raw)
++		if flag_informative:
++			self.flagged_features_.add(col)
++		if ftype not in ("numeric", "ranked"):
++			return not is_constant(series) or flag_informative
++		self._keep_informative_cuts(col, series)
++		return len(self.thresholds_[col]) > 0 or flag_informative
++
++	def _keep_informative_cuts(self, col: str, series) -> None:
++		"""Keep the cuts whose TRAIN bit column (as transform emits it) is
++		non-constant and distinct. Columns are nested, so equal count = equal column."""
++		value_bits, invalid = self._value_bits(col, series)
++		if self.invalid_encoding == InvalidEncoding.SINGLE_BIT:
++			value_bits = value_bits & ~invalid[:, np.newaxis]
++		keep, seen = [], set()
++		for j, ones in enumerate(value_bits.sum(axis=0).tolist()):
++			if 0 < ones < len(series) and ones not in seen:
++				seen.add(ones)
++				keep.append(j)
++		self.thresholds_[col] = self.thresholds_[col][keep]
++		self.per_feature_bits_[col] = len(keep)
++
+ 	def _own_widths(self) -> dict[str, int]:
+ 		"""Each feature's value-bit width (no is_invalid flag) under the current fit."""
+ 		ranges = self.feature_bit_ranges()
+@@ -178,7 +220,7 @@ class ThermometerEncoder:
+ 			self.categories_[col] = sorted(series.dropna().unique())
+ 		elif ftype == "numeric":
+ 			self._fit_numeric(col, series)
+-		if not self.dedupe:
++		if not self._dedupe_while_fitting:
+ 			return True
+ 		raw = series.values.astype(np.float64) if ftype == "numeric" else np.where(series.isna().values, np.nan, 0.0)
+ 		flag_informative = self.invalid_encoding == InvalidEncoding.SINGLE_BIT and has_invalid(raw)
+@@ -197,10 +239,10 @@ class ThermometerEncoder:
+ 		else:
+ 			feat_bits = self.n_bits
+ 		thresholds = self._compute_thresholds(values, feat_bits)
+-		if self.dedupe:
++		if self._dedupe_while_fitting:
+ 			flagged = self.invalid_encoding == InvalidEncoding.SINGLE_BIT
+ 			thresholds = informative_thresholds(series.values.astype(np.float64), thresholds, flagged)
+-		self.per_feature_bits_[col] = len(thresholds) if self.dedupe else feat_bits
++		self.per_feature_bits_[col] = len(thresholds) if self._dedupe_while_fitting else feat_bits
+ 		self.thresholds_[col] = thresholds
+ 
+ 	def _drop_cross_feature_duplicates(self, df) -> None:
+@@ -213,7 +255,7 @@ class ThermometerEncoder:
+ 				value_bits = value_bits & ~invalid[:, np.newaxis]
+ 			digests = column_digests(value_bits)
+ 			fresh = [d not in seen for d in digests]
+-			if self.feature_types_[col] == "numeric":
++			if self.feature_types_[col] in ("numeric", "ranked"):
+ 				self.thresholds_[col] = self.thresholds_[col][np.asarray(fresh, dtype=bool)]
+ 				self.per_feature_bits_[col] = len(self.thresholds_[col])
+ 			seen.update(digests)
+diff --git a/tests/test_ids_cut_method.py b/tests/test_ids_cut_method.py
+index fceaeac1..2ae0881f 100644
+--- a/tests/test_ids_cut_method.py
++++ b/tests/test_ids_cut_method.py
+@@ -128,11 +128,48 @@ def test_fit_never_touches_val_or_test(method, monkeypatch):
+ 		assert np.array_equal(enc_a.thresholds_[col], enc_b.thresholds_[col]), f"{col}: val/test moved a cut"
+ 
+ 
++# ---- dedupe after supervised cuts (IDS-73, 21/11/2026) ------------------------------------------
++
++def _dedupe_frame(n: int, seed: int):
++	"""_frame + a cross-feature copy, a constant column and a NaN-bearing numeric."""
++	df, yb, ym = _frame(n, seed)
++	rng = np.random.default_rng(seed + 100)
++	df["a_copy"] = df["a"]
++	df["const"] = 3.0
++	df["c"] = np.where(rng.random(n) < 0.05, np.nan, rng.normal(size=n) + (ym == 1))
++	return df, yb, ym
++
++
++@pytest.mark.parametrize("method", ["info_gain_mc", "xgb_splits"])
++def test_dedupe_runs_on_the_full_width_supervised_cuts(method):
++	df, yb, ym = _dedupe_frame(6000, 8)
++	kw = dict(n_bits=16, cut_method=method, invalid_encoding="single_bit")
++	off = ThermometerEncoder(**kw).fit(df, y_binary=yb, y_multi=ym)
++	on = ThermometerEncoder(dedupe=True, **kw).fit(df, y_binary=yb, y_multi=ym)
++	for col in on.feature_names_:
++		if on.feature_types_[col] in ("numeric", "ranked"):
++			assert set(on.thresholds_[col].tolist()) <= set(off.thresholds_[col].tolist()), col
++	assert "a_copy" in on.dropped_features_ and "const" in on.dropped_features_
++	assert on.total_bits < off.total_bits
++	bits = _bits(on, df)
++	assert bits.shape[1] == on.total_bits
++	assert (bits.any(axis=0) & ~bits.all(axis=0)).all(), "a kept train column is constant"
++	assert len({bits[:, j].tobytes() for j in range(bits.shape[1])}) == bits.shape[1], "duplicate column"
++	assert on._has_flag("c") and not on._has_flag("a")
++
++
++def test_dedupe_after_cuts_keeps_the_cuts_that_were_already_informative():
++	"""Supervised cuts are fitted on the same budget with and without dedupe."""
++	df, yb, ym = _frame(6000, 9)
++	off = ThermometerEncoder(n_bits=16, cut_method="info_gain_mc").fit(df, y_binary=yb, y_multi=ym)
++	on = ThermometerEncoder(n_bits=16, cut_method="info_gain_mc", dedupe=True).fit(df, y_binary=yb, y_multi=ym)
++	for col in ("a", "b"):
++		assert np.array_equal(on.thresholds_[col], off.thresholds_[col]), col
++
++
+ # ---- refusals / registry / cache key -----------------------------------------------------------
+ 
+ def test_refusals():
+-	with pytest.raises(ValueError, match="dedupe"):
+-		ThermometerEncoder(n_bits=8, dedupe=True, cut_method="info_gain_mc")
+ 	with pytest.raises(NotImplementedError, match="streaming"):
+ 		ThermometerEncoder(n_bits=8, cut_method="xgb_splits").begin_streaming_fit({"x": "numeric"})
+ 	with pytest.raises(ValueError):
