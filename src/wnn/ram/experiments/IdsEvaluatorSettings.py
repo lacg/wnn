@@ -19,6 +19,7 @@ from wnn.ram.experiments.ids_param_resolution import (
 	resolve_feature_ranking,
 	resolve_invalid_encoding,
 	resolve_calib_sample,
+	resolve_cut_method,
 	resolve_kfold_per_gen,
 	resolve_memory_mode,
 	IDS_DEFAULT_MAX_BITS,
@@ -71,6 +72,7 @@ class IdsEvaluatorSettings:
 	memmap_prefetch: str
 	invalid_encoding: str
 	encoding_dedupe: bool
+	cut_method: str
 	feature_ranking: str
 	receptive_fields: str
 	rf_cross: float
@@ -118,6 +120,7 @@ class IdsEvaluatorSettings:
 			memmap_prefetch=params.get("ids_memmap_prefetch", "touch"),
 			invalid_encoding=resolve_invalid_encoding(params),
 			encoding_dedupe=resolve_encoding_dedupe(params),
+			cut_method=resolve_cut_method(params),
 			feature_ranking=resolve_feature_ranking(params),
 			receptive_fields=resolve_receptive_fields(params),
 			rf_cross=resolve_rf_cross(params),

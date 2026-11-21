@@ -198,6 +198,32 @@
    },
    "oi_enabled": true,
    "key": "v2|ds=unsw-nb15|nb=8|sp=random_3way|fs=all|rest=-|amb=32|raw=0|inv=none|strm=-|cls=binary|sc=1|mm=BINARY|seed=20401|nsr=0.25|cov=0|negs=0|wr=vote|vs=0.1|bal=0|us=0|flip=0|cwm=1.0|hvf=-|thw=-|oi=1"
+  },
+  {
+   "name": "cut_method_info_gain_mc",
+   "params": {
+    "ids_dataset": "unsw-nb15",
+    "ids_n_bits": 64,
+    "ids_split": "random_3way",
+    "seed": 20421,
+    "ids_single_cluster": false,
+    "ids_cut_method": "info_gain_mc"
+   },
+   "oi_enabled": true,
+   "key": "v2|ds=unsw-nb15|nb=64|sp=random_3way|fs=all|rest=-|amb=32|raw=0|inv=none|strm=-|cut=info_gain_mc:v1|cls=binary|sc=0|mm=QUAD_WEIGHTED|seed=20421|nsr=0.25|cov=0|negs=0|bal=0|us=0|flip=0|cwm=1.0|hvf=-|thw=-|oi=1"
+  },
+  {
+   "name": "cut_method_xgb_splits",
+   "params": {
+    "ids_dataset": "unsw-nb15",
+    "ids_n_bits": 64,
+    "ids_split": "random_3way",
+    "seed": 20421,
+    "ids_single_cluster": false,
+    "ids_cut_method": "xgb_splits"
+   },
+   "oi_enabled": true,
+   "key": "v2|ds=unsw-nb15|nb=64|sp=random_3way|fs=all|rest=-|amb=32|raw=0|inv=none|strm=-|cut=xgb_splits:v1|cls=binary|sc=0|mm=QUAD_WEIGHTED|seed=20421|nsr=0.25|cov=0|negs=0|bal=0|us=0|flip=0|cwm=1.0|hvf=-|thw=-|oi=1"
   }
  ]
 }

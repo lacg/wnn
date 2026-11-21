@@ -45,6 +45,8 @@ class LoadSpec:
 	raw: bool = False
 	encoding_dedupe: bool = False      # IDS-52 (ids_encoding_dedupe="on"); in-memory loads only
 	feature_ranking: str = "legacy"    # IDS-53 (ids_feature_ranking): "legacy" | "train_only"
+	cut_method: str = "quantile"       # IDS-70 (ids_cut_method); supervised = in-memory/memmap loads only
+	cut_seed: int = 0                  # the flow seed (a supervised fitter's random_state)
 
 
 class BaseIDSLoader(ABC):
@@ -113,6 +115,7 @@ class BaseIDSLoader(ABC):
 				auto_max_bits=spec.auto_max_bits,
 				encoded_storage=spec.encoded_storage, storage_dir=spec.storage_dir,
 				encoding_dedupe=spec.encoding_dedupe,
+				cut_method=spec.cut_method, cut_seed=spec.cut_seed,
 			)
 
 		return _build(*self._fetch(spec))
@@ -228,6 +231,11 @@ class CICIoTLoader(BaseIDSLoader):
 				"streaming=True is incompatible with encoding_dedupe (ids_encoding_dedupe='on' needs "
 				"exact train counts; the streaming encoder fits by t-digest)."
 			)
+		if spec.cut_method != "quantile":
+			raise NotImplementedError(
+				f"streaming=True is incompatible with cut_method={spec.cut_method!r} (ids_cut_method fits "
+				"supervised cuts on the full train rows + labels; the streaming encoder fits by t-digest)."
+			)
 		feats = self._ranked_features(spec)
 		inv = self._resolve_invalid(spec)
 		(train_f, test_f, val_f, n_tr, n_te, n_va, common) = _load_from_huggingface_streaming(
@@ -263,7 +271,8 @@ def get_loader(dataset: str) -> BaseIDSLoader:
 def load_ids_dataset(dataset: str, **kwargs) -> IDSDataset:
 	"""Unified entry point. `dataset` is a registry key; `kwargs` map to LoadSpec
 	(split, n_bits, method, feature_selection, rest_bits, auto_max_bits,
-	invalid_encoding, encoded_storage, storage_dir, raw, encoding_dedupe, feature_ranking). Streaming kwargs
+	invalid_encoding, encoded_storage, storage_dir, raw, encoding_dedupe, feature_ranking, cut_method,
+	cut_seed). Streaming kwargs
 	(streaming, streaming_chunk_size) are accepted and forwarded to CIC-IoT."""
 	# streaming is CIC-IoT-only and not a LoadSpec field; stash it on the spec.
 	streaming = kwargs.pop("streaming", False)
