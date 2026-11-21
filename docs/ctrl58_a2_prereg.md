@@ -142,3 +142,15 @@ in the CPU/GPU parity pins.
 
 ## Base fixed (Luiz 20/11/2026 ~06:30 EST)
 Base = **Y+F+L** (Y + `--yaw-trim-ff` + `--yaw-centred-ladder dense`); B rows = the dense-ladder block `..._a59_..._ffF_yld_full_s1..s5` (A2 flies on ABI 60 after the flag-off determinism gate). Adoption reading per Luiz: consistently better in the expected metrics and not worse on the rest of the vector — no magnitude bar.
+
+## Launch (20/11/2026 ~19:30 EST, Luiz: "close Y3+L at n=5 and go to A2")
+- **Arm A2** = base Y+F+L + `--refine-fitness --refine-w-steady 0.40 --refine-w-mid 0.25 --refine-w-reward 0.10`
+  (tail 0.15, pos 0.10 = defaults), s1-s5 seed-major, **ABI 60** (the `mid` scorer row, branch `ctrl60-mid-window`).
+- **B rows** = Y+F+L `..._a59_..._ffF_yld_full_s1..s5` (not re-flown). Valid only because the flag-off determinism
+  gate ABI 60 ×2 vs ABI 59 must PASS first, on a Y+F+L base argv (`scripts/ctrl_determinism_gate.sh`).
+- **Tags** `C-S2-d_wposx2_a60_rf_c200_dc_biasin_ms01_P_both_L1_ffF_yld_a2_full_sN`; driver
+  `logs/controller/ctrl48/ab_a2.sh`; chain `logs/controller/ctrl48/chain_abi60_a2.sh` (waits for the Y3+L block's
+  `Y3L DONE`, merges + tests + installs ABI 60, gate, refine smoke, then flies). Ends `A2 DONE`.
+- **Rule** = the amended rule above, read per Luiz 20/11 (adopt = consistently better in the expected direction —
+  steady and/or err down — and not worse on the rest of the vector; no magnitude bar). Report each END as a pair
+  vs Y+F+L same seed (stable / err / steady / pos / fails) plus the headline `mid`.
