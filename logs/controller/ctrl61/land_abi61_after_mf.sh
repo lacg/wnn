@@ -7,7 +7,7 @@ set -u
 ROOT=/Users/lacg/wnn
 RUNS=$ROOT/logs/controller/ctrl48/runs.log
 PY=/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/bin/python
-WHEEL=$ROOT/logs/controller/ctrl61/ram_controller-2026.212.37-cp311-abi3-macosx_11_0_arm64.whl
+WHEEL=$ROOT/logs/controller/ctrl61/sym/ram_controller-2026.212.37-cp311-abi3-macosx_11_0_arm64.whl
 START_LINE=${START_LINE:?set START_LINE = runs.log line count at arm time}
 log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) F32: $*" >> "$RUNS"; }
 
