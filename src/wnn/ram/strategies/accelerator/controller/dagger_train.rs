@@ -4217,18 +4217,8 @@ pub(crate) fn score_classical_baseline_probed(
 	// Estimator-fed teachers (13/08 rule): comparison rows fly on a Mahony
 	// estimate of the same noisy IMU the WNN reads — the true quaternion never
 	// enters the rival's chain. false ⇒ the byte-identical oracle path.
-	let mut est = if use_estimator
-	{
-		Some(crate::estimator::MahonyFilter::new(
-			af_dt as f64,
-			est_kp,
-			est_ki,
-		))
-	}
-	else
-	{
-		None
-	};
+	// Symmetric ABI 61: it is the WNN's own on-board f32 filter (mahony_f32.rs).
+	let mut est = crate::mahony_f32::rival_estimator(use_estimator, af_dt, est_kp, est_ki);
 
 	let mut n_stable = 0_usize;
 	let mut sum_mean_err = 0.0_f64;
@@ -4287,7 +4277,7 @@ pub(crate) fn score_classical_baseline_probed(
 		// assumption; the same yaw anchor the WNN gets at reset).
 		if let Some(e) = est.as_mut()
 		{
-			e.reset(Some(init_q));
+			e.reset(init_q);
 		}
 		if dist_enabled
 		{
@@ -4679,18 +4669,8 @@ pub fn trace_classical_baseline(
 	// Estimator-fed teachers (13/08 rule): comparison rows fly on a Mahony
 	// estimate of the same noisy IMU the WNN reads — the true quaternion never
 	// enters the rival's chain. false ⇒ the byte-identical oracle path.
-	let mut est = if use_estimator
-	{
-		Some(crate::estimator::MahonyFilter::new(
-			af_dt as f64,
-			est_kp,
-			est_ki,
-		))
-	}
-	else
-	{
-		None
-	};
+	// Symmetric ABI 61: it is the WNN's own on-board f32 filter (mahony_f32.rs).
+	let mut est = crate::mahony_f32::rival_estimator(use_estimator, af_dt, est_kp, est_ki);
 
 	let mut n_stable = 0_usize;
 	let mut sum_mean_err = 0.0_f64;
@@ -4717,7 +4697,7 @@ pub fn trace_classical_baseline(
 		// assumption; the same yaw anchor the WNN gets at reset).
 		if let Some(e) = est.as_mut()
 		{
-			e.reset(Some(init_q));
+			e.reset(init_q);
 		}
 		if dist_enabled
 		{

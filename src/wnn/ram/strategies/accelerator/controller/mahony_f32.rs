@@ -21,8 +21,12 @@
 // tan(π/8) reduction and an odd Taylor series to t^15 (truncation < 1.8e-8 rad for
 // |t| <= tan(π/8)), built from the IEEE basic ops only.
 //
-// The classical rivals keep the f64 MahonyFilter (estimator.rs, twin of the Python
-// reference): only the WNN's own estimate changed.
+// EVERY on-board estimate is this filter (symmetric ABI 61, 22/11/2026): the classical
+// rivals' estimator-fed rows (dagger_train score/trace_classical_baseline,
+// position_score — and through them the MPCOF eq-info row's bias predictor) fly on
+// `rival_estimator`, the SAME MahonyF32 the WNN reads, so WNN and rivals see bit-identical
+// attitude information (pinned: ctrl61_f32_estimator_tests rival_* tests). The f64
+// MahonyFilter (estimator.rs) survives only as the test-only twin of the Python reference.
 
 /// f32 π, π/2, π/4 and 2π (the values Metal's M_PI_F family round to).
 const PI_F: f32 = 3.1415927;
@@ -112,6 +116,15 @@ impl MahonyF32
 		self.q = [w / n, x / n, y / n, z / n];
 		self.q
 	}
+}
+
+/// The on-board estimate a classical rival flies on when its row is estimator-fed
+/// (`use_estimator`, the 13/08 rule): the WNN's own filter, built from the same
+/// f64 scorer arguments the WNN's (kp, ki) defaults come from. None = an oracle row.
+/// The caller warm-starts it per episode with `reset(init_q)` — the WNN's `seed(q0)`.
+pub fn rival_estimator(use_estimator: bool, dt: f32, kp: f64, ki: f64) -> Option<MahonyF32>
+{
+	use_estimator.then(|| MahonyF32::new(dt, kp as f32, ki as f32))
 }
 
 /// atan on [0, 1] (see the file header): Taylor to t^15 in Horner form, after one

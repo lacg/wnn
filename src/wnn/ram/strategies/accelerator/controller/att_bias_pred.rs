@@ -146,7 +146,7 @@ mod tests
 	use crate::att_estimator::up_from_quat;
 	use crate::dagger_train::AirframeRs;
 	use crate::episode_regime::OuterLoops;
-	use crate::estimator::MahonyFilter;
+	use crate::mahony_f32::MahonyF32;
 
 	fn rp(up: [f32; 3]) -> [f32; 2]
 	{
@@ -233,8 +233,8 @@ mod tests
 			let s = if ep % 2 == 0 { 0.5 } else { -0.5 };
 			sim.set_horizontal_state(s, -0.6 * s + 0.1 * ep as f32 - 0.2, 0.0, 0.0);
 			crate::dagger_train::arm_cfg_disturbance(&mut sim, &cfg, 4600 + ep);
-			let mut mahony = MahonyFilter::new(cfg.dt, 2.0, 0.1);
-			mahony.reset(Some(q0));
+			let mut mahony = MahonyF32::new(cfg.dt as f32, 2.0, 0.1);
+			mahony.reset(q0);
 			let mut pred = AttBiasPredictor::new(2.0, 0.1, cfg.dt as f32);
 			for t in 0..2000
 			{

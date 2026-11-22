@@ -184,6 +184,10 @@ import os
 # ABI 61 (22/11/2026, Luiz plan "A + B"; NOT bit-identical, a NEW LINEAGE for every run with
 # --obs-att-estimator): the WNN's Mahony estimator + the ABI-55 heading are f32 (mahony_f32.rs),
 # CPU == Metal bit for bit; ATT_EST_PRECISION = "f32" (the MCU exporter emits WNN_EST_F32).
+# SYMMETRIC: the classical rivals' estimator-fed rows (score/trace_classical_baseline,
+# score_position_teacher; hence the MPCOF eq-info bias predictor) and MahonyEstimatorRs run
+# the SAME f32 filter, so WNN and rivals read bit-identical estimates (rival [est] rows are a
+# new lineage too; [oracle] rows and the oracle-fed DAgger labels are unchanged).
 EXPECTED_ABI = 61
 
 BUILD_HINT = (

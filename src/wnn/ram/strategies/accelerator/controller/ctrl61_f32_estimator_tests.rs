@@ -15,10 +15,15 @@
 //! WHAT IS NOT COVERED (and stays a CTRL-54 difference): the roll / pitch / tilt features
 //! are atan2 of the up vector through libm (CPU) vs Metal's atan2 — features, not the
 //! estimator; and the yaw-anchor's initial heading (yaw_from_quat), a host-side seed.
+//!
+//! SYMMETRIC ABI 61: the classical rivals' estimator-fed rows build their filter through
+//! mahony_f32::rival_estimator from the scorers' f64 (est_kp, est_ki). The rival_* tests pin
+//! that this is the WNN's estimate bit for bit (CPU) and the kernel's (Metal), so WNN and
+//! rivals read identical attitude information on every side.
 
 use crate::att_estimator::{up_from_quat, AttEstimator};
 use crate::controller::{mahony_heading, AttitudeSim};
-use crate::mahony_f32::atan2_det;
+use crate::mahony_f32::{atan2_det, rival_estimator};
 use crate::metal_controller::ControllerRolloutEvaluator;
 use metal::*;
 use rand::{Rng, SeedableRng};
@@ -219,5 +224,53 @@ fn atan2_det_cpu_gpu_bit_identical()
 	{
 		let want = atan2_det(p[0], p[1]);
 		assert_eq!(want.to_bits(), got[i].to_bits(), "atan2_det({:e}, {:e}): cpu {want:e} gpu {:e}", p[0], p[1], got[i]);
+	}
+}
+
+/// The rival's estimate stream for one Stream: rival_estimator from the scorers' f64 gain
+/// arguments (the est_kp / est_ki defaults), warm-started like score_classical_baseline.
+fn rival_run(s: &Stream) -> Vec<[f32; 4]>
+{
+	let mut e = rival_estimator(true, DT, KP as f64, KI as f64).expect("estimator-fed row");
+	e.reset(s.q0);
+	s.imu.iter().map(|(g, a)| e.update(*g, *a)).collect()
+}
+
+/// Rival == WNN on the CPU: the estimator-fed rival's quaternion equals the WNN's
+/// AttEstimator quaternion bit for bit, every step of every stream; an oracle row has none.
+#[test]
+fn rival_estimate_is_the_wnn_estimate()
+{
+	assert!(rival_estimator(false, DT, KP as f64, KI as f64).is_none(), "oracle row built a filter");
+	for (si, s) in streams().iter().enumerate()
+	{
+		let wnn = cpu_run(s);
+		for (t, q) in rival_run(s).iter().enumerate()
+		{
+			for k in 0..4
+			{
+				assert_eq!(q[k].to_bits(), wnn[t][k].to_bits(), "stream {si} step {t} {}: rival {:e} wnn {:e}", FIELDS[k], q[k], wnn[t][k]);
+			}
+		}
+	}
+}
+
+/// Rival == Metal: the rival's CPU estimate equals the kernel's mahony_update bit for bit.
+#[test]
+fn rival_estimate_cpu_gpu_bit_identical()
+{
+	let ev = ControllerRolloutEvaluator::new().expect("Metal device");
+	let ss = streams();
+	let gpu = gpu_run(&ev, &ss);
+	for (si, s) in ss.iter().enumerate()
+	{
+		for (t, q) in rival_run(s).iter().enumerate()
+		{
+			let g = &gpu[(si * STEPS + t) * 8..(si * STEPS + t) * 8 + 4];
+			for k in 0..4
+			{
+				assert_eq!(q[k].to_bits(), g[k].to_bits(), "stream {si} step {t} {}: rival {:e} gpu {:e}", FIELDS[k], q[k], g[k]);
+			}
+		}
 	}
 }

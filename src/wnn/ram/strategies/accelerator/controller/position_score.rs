@@ -213,18 +213,8 @@ pub fn score_position_teacher(
 		hover_pwm,
 		motor_lag_s,
 	);
-	let mut est = if use_estimator
-	{
-		Some(crate::estimator::MahonyFilter::new(
-			af_dt as f64,
-			est_kp,
-			est_ki,
-		))
-	}
-	else
-	{
-		None
-	};
+	// Symmetric ABI 61: the on-board f32 Mahony the WNN reads (mahony_f32.rs).
+	let mut est = crate::mahony_f32::rival_estimator(use_estimator, af_dt, est_kp, est_ki);
 
 	let stable_thresh_rad = stable_deg.to_radians();
 	let tail_start = ((steps as f64) * 0.80).ceil() as usize;
@@ -256,7 +246,7 @@ pub fn score_position_teacher(
 		sim.set_horizontal_state(px, py, 0.0, 0.0);
 		if let Some(e) = est.as_mut()
 		{
-			e.reset(Some(init_q));
+			e.reset(init_q);
 		}
 		if dist_enabled
 		{

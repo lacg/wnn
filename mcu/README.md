@@ -15,7 +15,7 @@ Two things live here:
 | Part | Rust reference (ABI 41) | C |
 |---|---|---|
 | features: 9 raw, tilt p/i, per-axis p/i (yaw dropped or not), integral leak/scale, yaw err/err_i (dt-integrated heading), collective / alt err / vz, pos err xy / vel xy | `controller.rs compute_features` | `compute_features` |
-| Mahony attitude estimator (f64, kp/ki from the wheel's defaults) + body "up" | `estimator.rs`, `att_estimator.rs` | `mahony_*`, `up_from_quat` |
+| Mahony attitude estimator (f32 from ABI 61 via `WNN_EST_F32`, f64 before; kp/ki from the wheel's defaults) + body "up" | `mahony_f32.rs`, `att_estimator.rs` | `mahony_*`, `up_from_quat` |
 | CTRL-38 rate-I: I / i_limit per axis (raw I when i_limit = 0) | `ctbr.rs rate_integral_norm`, `cascade_obs.rs` | `cascade_block` |
 | CTRL-38 d-hat: MPCOF offset-free observer on the APPLIED command, modelled motor lag, prime/seed protocol, clamp at c*out_limit, per-flight reset | `cascade_dhat.rs` | `dhat_*` |
 | thermometer, output-layer addresses (MSB first), TRUE on-set binary search | `step`, `neuron_memory.rs address_over` | `encode_frame`, `forward_output` |
@@ -480,7 +480,9 @@ equal-cost under pef64 (worst/mean 1.02-1.03 vs 1.006 for uint32).
 * **Estimator.** `wnn_cascade.c` carries both estimators, chosen by `WNN_EST_F32`
   (see "Build flags"). The f32 one mirrors `mahony_f32.rs` op for op; the Metal kernel
   runs the same ops under a strict-FP scope, so the estimator is CPU == GPU == C bit for
-  bit (cargo pin `ctrl61_f32_estimator_tests.rs`).
+  bit (cargo pin `ctrl61_f32_estimator_tests.rs`). The host's classical rivals
+  (estimator-fed rows) run the same f32 filter, so the on-board estimate is the same
+  for every controller; `mpcof_cascade.c` takes q as an input (no estimator inside).
 * **Bench regions.** `bench_ctrl51.c` now splits the attitude cost: MPCOF per tick
   [observe][decide][shadow][quat->Euler twin on decision ticks], WNN per tick
   [wnn_tick][d-hat twin][Mahony twin][heading twin][roll/pitch twin].

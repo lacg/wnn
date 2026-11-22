@@ -343,8 +343,8 @@ struct RolloutParams
 	att_ref_omega: f32,
 	att_ref_zeta: f32,
 	att_ref_max_tilt: f32,
-	// WNN attitude features from a per-thread Mahony estimator (twin of
-	// estimator.rs MahonyFilter; warm-started from q0 like the rivals).
+	// WNN attitude features from a per-thread Mahony estimator (bit-identical twin
+	// of mahony_f32.rs MahonyF32 — the rivals' filter too; warm-started from q0 like the rivals).
 	att_est_on: u32,
 	est_kp: f32,
 	est_ki: f32,
@@ -1535,8 +1535,8 @@ impl ControllerRolloutEvaluator
 /// rollout physics matches the CPU sim.
 ///
 /// CTRL-54 (22/11/2026): same semantics as score_controllers_cpu, NOT bit-identical. The
-/// kernel is f32 throughout (Metal has no double: its Mahony twin is f32 where the CPU's
-/// estimator.rs MahonyFilter is f64), uses Metal transcendentals (Box-Muller gyro noise,
+/// kernel is f32 throughout (since ABI 61 its Mahony estimator + heading are bit-identical to
+/// the CPU's mahony_f32.rs MahonyF32 — no longer a difference), uses Metal transcendentals (Box-Muller gyro noise,
 /// atan2/asin/acos) where the CPU uses libm, is compiled fast-math, and sums episode metrics
 /// in f32. An episode agrees to ~1e-6 relative until an ulp lands on a threshold and it
 /// forks (~1e-3); a production batch differs by ~1e-3 relative. Fast-math off does not

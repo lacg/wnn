@@ -5,7 +5,7 @@
 // ACCEL-ONLY attitude features (roll_est = atan2(ay, az), …) would be blind.
 // A real flight controller gets tilt from gyro integration corrected by the
 // accelerometer on average — an attitude estimator. This wraps the same Mahony
-// algorithm the classical rivals are fed by (estimator.rs MahonyFilter, kp/ki
+// filter the classical rivals are fed by (mahony_f32.rs MahonyF32, kp/ki
 // defaults 2.0/0.1 = TeacherFeed / the scorers' est_kp/est_ki), warm-started
 // from the episode's initial attitude exactly like the rivals (the
 // converged-filter assumption, disclosed).
@@ -25,7 +25,8 @@
 //
 // PRECISION (ABI 61, 22/11/2026). The filter is MahonyF32 (mahony_f32.rs): f32, op for
 // op the Metal kernel's, so CPU and GPU estimates agree bit for bit. Up to ABI 60 it
-// was the rivals' f64 MahonyFilter (estimator.rs), which the rivals keep.
+// was the f64 MahonyFilter (estimator.rs); the rivals' estimator-fed rows switched with it
+// (mahony_f32::rival_estimator), so WNN and rivals read the identical f32 estimate.
 
 use crate::mahony_f32::MahonyF32;
 

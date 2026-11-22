@@ -7,8 +7,8 @@
 //!     SCORER (the CPU DAgger trainer runs in both modes; the GPU sn>0 trainer is the separate
 //!     WNN_CONTROLLER_GPU_BPTT knob). The divergence is entirely in SCORING.
 //!   * Both scorers fly the same f32 plant and controller, but not the same f32 OPERATIONS:
-//!     the CPU Mahony estimator is f64 (estimator.rs MahonyFilter) vs f32 in the kernel (Metal
-//!     has no double); Rust/libm vs Metal transcendentals (Box-Muller gyro noise, atan2/asin/acos
+//!     the CPU Mahony estimator was f64 vs f32 in the kernel up to ABI 60 (since ABI 61 both
+//!     run mahony_f32.rs MahonyF32 bit for bit); Rust/libm vs Metal transcendentals (Box-Muller gyro noise, atan2/asin/acos
 //!     in features + plant); the rollout library is compiled fast-math (approximate
 //!     transcendentals, FMA contraction); the kernel accumulates per-episode sums in f32, the
 //!     CPU in f64. Per step that is an ulp-level floor (≤ ~3e-6 relative on an episode's mean

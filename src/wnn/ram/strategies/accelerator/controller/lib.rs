@@ -599,7 +599,12 @@ mod metal_controller;
 ///     mahony_update / mahony_up / mahony_heading run in a strict-FP scope (safe math, contract
 ///     off) inside the fast-math rollout library, so the estimator's quaternion, up vector and
 ///     heading are CPU == GPU bit for bit (they were f64 vs f32 before: a CTRL-54 difference).
-///     The classical rivals keep the f64 MahonyFilter (estimator.rs). New module constant
+///     SYMMETRIC: every other simulated on-board estimate is the same MahonyF32 — the classical
+///     rivals' estimator-fed rows (score/trace_classical_baseline, score_position_teacher via
+///     mahony_f32::rival_estimator; hence the MPCOF eq-info bias predictor's q input) and the
+///     Python-facing MahonyEstimatorRs — so WNN and rivals read bit-identical estimates (the
+///     f64 MahonyFilter is test-only, the Python reference twin). Oracle-fed DAgger labels are
+///     unchanged (they never read an estimate). New module constant
 ///     ATT_EST_PRECISION = "f32" (a wheel without it is f64); the MCU C port reads it through
 ///     the exporter (WNN_EST_F32). Pin: ctrl61_f32_estimator_tests.rs + mahony_f32 unit tests.
 pub const ABI_VERSION: u32 = 61;
