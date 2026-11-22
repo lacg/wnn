@@ -1522,6 +1522,14 @@ impl ControllerRolloutEvaluator
 /// (mean_reward, mean_attitude_error_rad, stable_rate, mean_jerk, mean_mono,
 /// mean_steady_error_rad). Sim params default to AttitudeSim's defaults so the
 /// rollout physics matches the CPU sim.
+///
+/// CTRL-54 (22/11/2026): same semantics as score_controllers_cpu, NOT bit-identical. The
+/// kernel is f32 throughout (Metal has no double: its Mahony twin is f32 where the CPU's
+/// estimator.rs MahonyFilter is f64), uses Metal transcendentals (Box-Muller gyro noise,
+/// atan2/asin/acos) where the CPU uses libm, is compiled fast-math, and sums episode metrics
+/// in f32. An episode agrees to ~1e-6 relative until an ulp lands on a threshold and it
+/// forks (~1e-3); a production batch differs by ~1e-3 relative. Fast-math off does not
+/// remove the forks. Tolerance pinned in ctrl54_e2e_parity_tests.rs.
 #[pyfunction]
 #[pyo3(signature = (
 	controllers, q0, omega0, num_episodes, steps,

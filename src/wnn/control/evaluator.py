@@ -1873,6 +1873,9 @@ class ControllerEvaluator:
 		# concurrently over shape-groups (GPU worker + CPU rayon pull from a shared
 		# queue; if the GPU stalls on its last group the CPU steals it). Hybrid uses
 		# the GPU in the gaps between the worker's kernels and CPU the rest.
+		# CTRL-54: the two scorers differ by ~1e-3 relative (not bit-identical), so
+		# "cpu"/"hybrid" and any mid-run CPU fallback change scores vs "gpu" and can
+		# fork a GA run — never mix devices inside one run you will compare.
 		self.eval_mode = eval_mode_from_env()
 		# Back-compat flag (score_population reads it): True for gpu OR hybrid.
 		self.max_eval_workers_gpu = max_eval_workers_gpu and self.eval_mode != "cpu"
@@ -2408,8 +2411,9 @@ class ControllerEvaluator:
 		return controller, stats
 
 	def _retry_on_rust_cpu(self, controllers: list, cpu_scorer):
-		"""Metal failed: re-score on the rayon-CPU Rust scorer (CPU/GPU parity-tested, flies
-		every plant the GPU does) and say why, instead of dropping to the Python loop."""
+		"""Metal failed: re-score on the rayon-CPU Rust scorer (flies every plant the GPU
+		does, same metrics to ~1e-3 relative but NOT bit-identical — CTRL-54, see
+		score_population) and say why, instead of dropping to the Python loop."""
 		import sys
 		print(f"[ControllerEvaluator] ⚠️ Metal scorer failed ({getattr(self, '_rust_score_error', None)!r}) "
 		      "— re-scoring this batch on the Rust CPU scorer", file=sys.stderr, flush=True)
@@ -2434,9 +2438,19 @@ class ControllerEvaluator:
 		they differ only in connectivity + cells), so the GPU path steps all
 		(controllers × episodes) rollouts in ONE uniform Metal kernel. The
 		closed-loop eval (forward rollout, no solver) is GPU-friendly; the inner
-		training (branchy QSR beam-search) stays on CPU. GPU↔CPU parity is
-		verified (tests/test_controller_gpu_parity.py) — the GA fitness is the
-		same whichever path runs. Falls back to CPU if Metal is unavailable.
+		training (branchy QSR beam-search) stays on CPU. Falls back to CPU if Metal
+		is unavailable.
+
+		GPU↔CPU are NOT bit-identical (CTRL-54, measured 22/11/2026): same metric
+		semantics, but different f32 operations (f64 CPU Mahony vs f32 kernel,
+		libm vs Metal transcendentals, fast-math, f32 kernel sums). Per episode
+		they agree to ~1e-6 relative until an ulp lands on a threshold and that
+		episode forks (~1e-3); at production scale a batch's err/steady/reward
+		differ by ~1e-3 relative (17/11: err −0.0010..−0.0014°, steady
+		−0.0013..−0.0019°). Enough to reorder near-tied genomes, so a CPU
+		fallback, WNN_CONTROLLER_GPU_EVAL=0 or the hybrid (=2) steal mid-run can
+		fork a GA run. Each device is deterministic on its own; the tolerance is
+		enforced in Rust (ctrl54_e2e_parity_tests.rs).
 		"""
 		if controllers:
 			# Pick the Rust scorer: GPU (score_controllers_metal) when enabled, else the
@@ -2483,7 +2497,8 @@ class ControllerEvaluator:
 		"""Batched closed-loop scoring via a Rust scorer (`scorer` = score_controllers_metal
 		for GPU or score_controllers_cpu for rayon-CPU — same signature + 12-metric row
 		contract). Samples the SAME per-episode ICs as the CPU eval_closed_loop_reset plan,
-		so results are interchangeable. Returns list[(mean_reward, metrics)] or None on
+		so results are comparable — within the CTRL-54 tolerance (~1e-3 relative at
+		production scale), not bit-identical (see score_population). Returns list[(mean_reward, metrics)] or None on
 		failure. The CPU scorer is a rayon batch (5.6× faster than the GPU under contention,
 		no waitUntilCompleted); it fills the 5 GA-fitness metrics (reward/err/stable/jerk/mono
 		— jerk formula matched to the GPU kernel), leaving the transient/display metrics 0
