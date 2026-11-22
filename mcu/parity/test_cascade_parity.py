@@ -35,6 +35,12 @@ THE CASES.
               motor command bit for bit (uint32 == Rust == pef64 on the same ticks).
   dhat/f32    informational only: the same d-hat model built -DWNN_DHAT_F32 (the
               Metal kernel's f32 observer). Reported, never asserted.
+  flags_off/mutant-*
+              (22/11/2026, only when the winner carries the block) one block-10 / lever
+              constant broken in the C header ONLY — the yaw-trim FF gain, the tilt-
+              reference bandwidth, the yaw-bank delta_max, the yaw-integral leak, the
+              Mahony heading switched to dead reckoning. Each MUST be caught, so a
+              pass on the trained winner is evidence that the block is exercised.
 
 THE INPUT STREAM. The Rust flags-off winner flies the run's own plant (airframe,
 specific-force IMU, rotor drag, motor lag, translation, the L4C weather incl. the
@@ -297,7 +303,7 @@ class Telemetry:
 		if self.n_cas:
 			v = np.array(self.cas_vals)
 			rng = " ".join(f"[{v[:, i].min():+.3g},{v[:, i].max():+.3g}]" for i in range(self.n_cas))
-			s += f"\n      cascade columns range {rng}; distinct cascade frame patterns={len(self.cas_frames)}"
+			s += f"\n      tail (cascade + bias-pred) columns range {rng}; distinct cascade frame patterns={len(self.cas_frames)}"
 		return s
 
 
@@ -309,7 +315,7 @@ def replay(case: Case, flights: list, workdir: Path, check_recorded: bool) -> tu
 	exp.write_header(str(header), exp.render_header(case.model.onset, case.model.source, case.model, pef))
 	shim = CShim(header, case, workdir, case.name.replace("/", "_"))
 	rctl, cmp = rust_controller(case.genome, case.model.motor_lag_s), Comparator(case.strict)
-	tel = Telemetry(_n_cas(case.model.spec), case.model.onset["bits_per_feature"])
+	tel = Telemetry(_n_tail(case.model.spec), case.model.onset["bits_per_feature"])
 	for e, f in enumerate(flights):
 		replay_flight(case, f, e, shim, rctl, cmp, tel, check_recorded)
 	return tel, cmp
@@ -318,6 +324,12 @@ def replay(case: Case, flights: list, workdir: Path, check_recorded: bool) -> tu
 def _n_cas(spec) -> int:
 	from wnn.control.evaluator import ctbr_cascade_feature_count
 	return ctbr_cascade_feature_count(spec.ctbr)
+
+
+def _n_tail(spec) -> int:
+	"""The trailing columns: the cascade blocks, then (CTRL-46) the 2 bias-predictor
+	features — the layout's tail in that order."""
+	return _n_cas(spec) + (2 if bool(getattr(spec, "obs_att_bias_pred", False)) else 0)
 
 
 def replay_flight(case, f: Flight, e: int, shim, rctl, cmp, tel, check_recorded: bool):
@@ -389,14 +401,15 @@ def synthetic_case(name: str, base_spec, argv: list, ec, rate_i: bool, dhat: boo
 	thr, lag = exp.train_seed_thresholds(argv + flags, spec)
 	nf, bpf = exp._feature_geometry(spec)
 	n_neur, bits = 4 * spec.levels_per_motor, spec.output_bits_per_neuron
-	conn = synthetic_conn(n_neur, bits, nf * bpf, _n_cas(spec) * bpf, rng)
+	conn = synthetic_conn(n_neur, bits, nf * bpf, _n_tail(spec) * bpf, rng)
 	keys, off, triples = synthetic_cells(n_neur, bits, rng)
 	onset = dict(neurons=n_neur, bits=bits, motors=4, levels=spec.levels_per_motor, features=nf,
 	             bits_per_feature=bpf, in_bits=nf * bpf, conn=conn, keys=keys, off=off,
 	             n_true=len(keys), n_false=0)
 	est, lgain = exp.wheel_constants(spec)
+	blocks = exp.wheel_block_constants(spec, thr, conn)
 	model = exp.ExportModel(source=f"synthetic:{name}", spec=spec, onset=onset, thresholds=thr,
-	                        motor_lag_s=lag, est_gains=est, dhat_l_gain=lgain)
+	                        motor_lag_s=lag, est_gains=est, dhat_l_gain=lgain, blocks=blocks)
 	assert not exp.cascade_refusals(spec, onset), exp.cascade_refusals(spec, onset)
 	genome = ControllerGenome(spec=spec, thresholds=thr, state_connections=[],
 	                          output_connections=conn, output_cells=triples)
@@ -408,7 +421,7 @@ def build_cases(model, genome, argv: list, ec) -> list:
 	cases = [Case(name="flags_off", model=model, genome=genome)]
 	for i, (name, ri, dh) in enumerate((("rate_i", True, False), ("dhat", False, True), ("both", True, True))):
 		cases.append(synthetic_case(name, base, argv, ec, ri, dh, seed=1000 + i))
-	return cases + pef_cases(cases) + control_cases(cases)
+	return cases + pef_cases(cases) + control_cases(cases) + block_mutants(cases[0])
 
 
 def pef_cases(cases: list) -> list:
@@ -429,6 +442,37 @@ def control_cases(cases: list) -> list:
 		dataclasses.replace(off, name="flags_off/fp-contract", cflags=("-ffp-contract=fast",), strict=False),
 		dataclasses.replace(dhat, name="dhat/mutant-lgain", model=bad, expect_fail=True),
 	]
+
+
+def _block_mutation(blocks: dict, key: str, value) -> dict:
+	return {**blocks, key: value}
+
+
+def block_mutants(off: Case) -> list:
+	"""22/11/2026: one block-10 / lever constant broken in the C header only, for each
+	block the trained winner carries. Each is expect_fail: a comparator that let one
+	through would make the winner's PASS vacuous for that block."""
+	b = off.model.blocks or {}
+	muts = []
+	if b.get("yaw_trim_ff_ct") is not None:
+		muts.append(("mutant-yawff", _block_mutation(b, "yaw_trim_ff_ct", b["yaw_trim_ff_ct"] * 1.5)))
+	if b.get("tilt_ref_shape") is not None:
+		shape = list(b["tilt_ref_shape"])
+		shape[1] *= 1.01
+		muts.append(("mutant-tiltref", _block_mutation(b, "tilt_ref_shape", shape)))
+	if b.get("delta_max_yaw") is not None:
+		muts.append(("mutant-dmaxyaw", _block_mutation(b, "delta_max_yaw", b["delta_max_yaw"] * 1.01)))
+	if b.get("yaw_integral_leak") is not None and b["yaw_integral_leak"] != float(np.float32(off.model.spec.integral_leak)):
+		muts.append(("mutant-yawleak", _block_mutation(b, "yaw_integral_leak", float(off.model.spec.integral_leak))))
+	if b.get("yaw_from_att_est"):
+		muts.append(("mutant-heading", _block_mutation(b, "yaw_from_att_est", False)))
+	out = [dataclasses.replace(off, name=f"{off.name}/{n}", model=dataclasses.replace(off.model, blocks=m),
+	                           expect_fail=True) for n, m in muts]
+	if b.get("att_bias_pred"):
+		# The predictor's g is a C source constant: break it with a define instead.
+		out.append(dataclasses.replace(off, name=f"{off.name}/mutant-abp", defines=("WNN_ABP_GRAVITY=9.80f",),
+		                               expect_fail=True))
+	return out
 
 
 # --------------------------------------------------------------------- main --

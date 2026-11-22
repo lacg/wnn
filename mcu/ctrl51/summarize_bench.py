@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 
 CPI = 1.5                     # cycles / instruction: an ESTIMATE (M4 loads ~2, branches 2-3, flash waits)
-CLOCKS_MHZ = (16, 48, 168)
+CLOCKS_MHZ = (16, 48, 168, 480)
 # STM32F405xx/407xx datasheet DS8626, "Typical and maximum current consumption in Run
 # mode, code with data processing running from Flash memory (ART accelerator enabled)":
 # 168 MHz, VDD 3.3 V, typ 25 C: ~40 mA all peripherals disabled, ~87 mA all enabled.
@@ -77,7 +77,7 @@ def row(name: str, win: np.ndarray, dec_tick: np.ndarray):
 	m, w = win.mean(), win.max()
 	clocks = " ".join(f"{pct(m, f, 0.01):6.2f}/{pct(w, f, 0.01):6.2f}" for f in CLOCKS_MHZ)
 	d1 = " ".join(f"{pct(dec_tick.max(), f, 0.001):6.1f}" for f in CLOCKS_MHZ)
-	print(f"  {name:34s} win {m:9.0f} / {w:9.0f}  %10ms(mean/worst)@16/48/168: {clocks}"
+	print(f"  {name:34s} win {m:9.0f} / {w:9.0f}  %10ms(mean/worst)@{'/'.join(map(str, CLOCKS_MHZ))}: {clocks}"
 	      f"  | worst decision tick %1ms: {d1} | {nj(m) / 1e3:6.1f} uJ/window ({nj(m, MW_PER_MHZ_PERIPH) / 1e3:.1f} periph-on)")
 
 

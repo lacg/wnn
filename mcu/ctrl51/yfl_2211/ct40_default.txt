@@ -1,0 +1,28 @@
+recorded 3 episodes, 6000 ticks (motor lag 0.2s, airframe cf21_brushless, run weather)
+  PASS (bit-identical) flags_off [/Users/lacg/wnn/logs/controller/ct40/full/C-S2-d_full_s2_winner.yaml.gz]
+      ticks=6000 decisions=600 fire_rate=0.117 setpoint!=0 per bank [T,p,q,r]=[100%, 100%, 100%, 100%]
+  PASS (bit-identical) rate_i [synthetic:rate_i]
+      ticks=6000 decisions=600 fire_rate=0.512 setpoint!=0 per bank [T,p,q,r]=[100%, 100%, 100%, 100%]
+      tail (cascade + bias-pred) columns range [-0.911,+0.333] [-0.438,+0.478] [-0.112,+0.0243]; distinct cascade frame patterns=68
+  PASS (bit-identical) dhat [synthetic:dhat]
+      ticks=6000 decisions=600 fire_rate=0.504 setpoint!=0 per bank [T,p,q,r]=[100%, 100%, 100%, 100%]
+      tail (cascade + bias-pred) columns range [-34.3,+161] [-55.8,+134] [-4.96,+3.62]; distinct cascade frame patterns=133
+  PASS (bit-identical) both [synthetic:both]
+      ticks=6000 decisions=600 fire_rate=0.498 setpoint!=0 per bank [T,p,q,r]=[100%, 100%, 100%, 100%]
+      tail (cascade + bias-pred) columns range [-0.846,+0.464] [-0.68,+0.859] [-0.093,+0.0315] [-64.9,+133] [-134,+123] [-3.77,+3.89]; distinct cascade frame patterns=258
+  PASS (bit-identical) flags_off/pef64 [/Users/lacg/wnn/logs/controller/ct40/full/C-S2-d_full_s2_winner.yaml.gz]
+      ticks=6000 decisions=600 fire_rate=0.117 setpoint!=0 per bank [T,p,q,r]=[100%, 100%, 100%, 100%]
+  PASS (bit-identical) both/pef64 [synthetic:both]
+      ticks=6000 decisions=600 fire_rate=0.498 setpoint!=0 per bank [T,p,q,r]=[100%, 100%, 100%, 100%]
+      tail (cascade + bias-pred) columns range [-0.846,+0.464] [-0.68,+0.859] [-0.093,+0.0315] [-64.9,+133] [-134,+123] [-3.77,+3.89]; distinct cascade frame patterns=258
+  INFO (not asserted) dhat/f32 [synthetic:dhat]
+      ticks=6000 decisions=600 fire_rate=0.504 setpoint!=0 per bank [T,p,q,r]=[100%, 100%, 100%, 100%]
+      tail (cascade + bias-pred) columns range [-34.3,+161] [-55.8,+134] [-4.96,+3.62]; distinct cascade frame patterns=133
+      feature: 5997 tick(s) differ; first: [dhat/f32] episode 0 step 1: feature[22] rust=np.float32(0.2325768) c=np.float32(0.23257644) (2 of 25 differ)
+  INFO (not asserted) flags_off/fp-contract [/Users/lacg/wnn/logs/controller/ct40/full/C-S2-d_full_s2_winner.yaml.gz]
+      ticks=6000 decisions=600 fire_rate=0.117 setpoint!=0 per bank [T,p,q,r]=[100%, 100%, 100%, 100%]
+      feature: 5988 tick(s) differ; first: [flags_off/fp-contract] episode 0 step 1: feature[9] rust=np.float32(-0.021437904) c=np.float32(-0.021437902) (1 of 22 differ)
+      setpoint: 5210 tick(s) differ; first: [flags_off/fp-contract] episode 0 step 10: setpoint[1] rust=np.float64(-0.014347134158015251) c=np.float32(-0.014347135) (1 of 4 differ)
+      pwm: 406 tick(s) differ; first: [flags_off/fp-contract] episode 0 step 62: pwm[1] rust=np.float32(0.74500686) c=np.float32(0.7450068) (1 of 4 differ)
+  PASS (mutant caught) dhat/mutant-lgain: [dhat/mutant-lgain] episode 0 step 1: feature[22] rust=np.float32(0.2325768) c=np.float32(0.3488652) (3 of 25 differ)
+PARITY PASSED (0 strict case(s) failed)

@@ -241,31 +241,38 @@ running from Flash memory (ART accelerator enabled)" (st.com).
 This re-run adds that base where it can be measured, three seeds of the closest
 exportable WNN, an observer-free arm, and per-output parity.
 
-## Y+F+L cannot be exported to the on-board C (yet)
+**Update (same day, later): Y+F+L now runs on the M4 and is MEASURED.** The six
+blocks below were ported to `wnn_cascade.c`, and the estimate rows were replaced by
+measured ones (section "Y+F+L measured on the M4").
 
-`wnn_cascade.c` computes none of six blocks the base uses. Before this re-run the
-exporter refused only `obs_att_bias_pred`. A winner carrying any of the other
-five without it would have been exported as "runnable" with the wrong features
-or decode.
+## Y+F+L on board: the six blocks, ported (22/11/2026)
 
-**Fixed:** `scripts/export_controller_c.py` now refuses all six. The a49 dc
-header it writes is byte-identical to before.
+At first `wnn_cascade.c` computed none of the six blocks the base uses. Before this
+re-run the exporter refused only `obs_att_bias_pred`, so a winner carrying any of the
+other five would have been exported as "runnable" with the wrong features or decode.
+That refusal gap was closed first. Then all six were ported, each mirroring its Rust
+source in op order and precision:
 
-| block | what the C must add | runtime cost (op count, NOT measured) |
-|---|---|---|
-| `obs_att_bias_pred` (CTRL-46, +2 features) | f32 Mahony-bias predictor (`att_bias_pred.rs`) | ~40 VFP flops/tick |
-| `obs_tilt_ref_err` (block 10 L1) | roll/pitch err vs the position loop's tilt reference, bias-corrected | ~15 flops + 2 clamps/tick |
-| `obs_yaw_from_att_est` (ABI 55) | heading = Euler yaw of the Mahony quaternion | 1 `atan2f`/tick |
-| `yaw_trim_ff` (ABI 58) | yaw setpoint += cT·cresid_z (cT exported) | 1 FMA/decision |
-| `delta_max_yaw` (ABI 57) | the yaw bank's own delta_max | a constant |
-| `yaw_integral_leak` (ARM 3) | the yaw integrals' own leak | a constant |
+| block | C (`mcu/wnn_cascade.c`) | Rust source | constant(s) in the header, read off the wheel |
+|---|---|---|---|
+| `obs_att_bias_pred` (CTRL-46, +2 features at the tail) | `abp_step`, `rot_t_xy` (f32) | `att_bias_pred.rs` | none new: kp, ki, dt are the estimator's; g = 9.81 is a Rust source constant |
+| `obs_tilt_ref_err` (block 10 L1) | `tilt_ref_target` (f32) | `tilt_ref_err.rs` | `WNN_TILT_REF_SHAPE_INIT` = the controller's `obs_tilt_ref_err` getter (b_xy, ω_n, ζ, max tilt) |
+| `obs_yaw_from_att_est` (ABI 55) | `mahony_heading`, `wrap_angle` (f64, like Rust) | `controller.rs mahony_heading`, `quat_to_euler_f64` | none |
+| `yaw_trim_ff` (ABI 58) | held yaw setpoint += cT·cresid_z, clamped; the bank value is untouched | `controller.rs decode_ctbr`, `yaw_ff_value` | `WNN_YAW_TRIM_FF_CT` = the `yaw_trim_ff` getter (cT = −0.3993 rad/s per unit) |
+| `delta_max_yaw` (ABI 57) | `delta_max_bank` | `controller.rs delta_max_bank` | `WNN_DELTA_MAX_YAW` |
+| `yaw_integral_leak` (ARM 3) | `push_integral(..., leak)` | `compute_features` | `WNN_YAW_INTEGRAL_LEAK` |
 
-- **Upper bound for all six together:** ≤ 4,000 instructions per 10 ms window,
-  under 2 % of a WNN window.
-- **Porting them** with Rust↔C bit parity is a separate job.
-- **No new parity inputs needed:** velocity, quaternion and cresid are already
-  in the recorded stream.
+- **Exporter** (`scripts/export_controller_c.py`): the six refusals are lifted; L2y /
+  L2y' (`obs_yaw_trim_err[_p]`) are still refused. `wheel_block_constants()` builds
+  a cell-less `WnnController` from the winner's spec and reads every constant from
+  its getters, never from a hand copy. Each macro is emitted only when its block is
+  on, so headers of winners without these blocks are unchanged.
+- **The dense yaw ladder** (`--yaw-centred-ladder dense`) and the dense tilt ladder
+  are thermometer thresholds only. The exporter refits them with the scorer's own
+  `_test_thresholds` (Y+F+L s1: yaw and yaw-I rows symmetric about 0). No C change
+  and no seventh item.
 
+## Method changes vs 10/11
 ## Method changes vs 10/11
 
 - **Toolchain:** Arm GNU Toolchain **15.2.rel1**, under `/tmp/ctrl51/tc`.
@@ -298,34 +305,98 @@ DS8626 typical figures, peripherals off / on.
 | **WNN a49 dc s2** (480 n): f64 obs / f32 obs / f32 q-given | 312,721 / 260,631 / 148,087 | 314,370 / 262,218 / 148,494 | 293 / 97.7 / 27.9 % (f64); 139 / 46.3 / 13.2 % (q-given) | | **127 %** (f64) | 2,180 soft; 3,510 VFP (f64) | 369 / 307 / 175 µJ | 3,901 KB | 3,088 + 396 B |
 | WNN **observer-free** a45 s1 (256 n, no dres) | 181,110 | 182,832 | 170 / 56.6 / 16.2 % | 171 / 57.1 / 16.3 % | 68 % | 1,280 soft; 2,583 VFP | 214 / 464 µJ | 922 KB | 1,936 + 344 B |
 | WNN observer-free a45 s1, q given | 68,611 | 68,897 | 64.3 / 21.4 / 6.13 % | | 58 % | | 80.9 / 176 µJ | | |
-| *Y+F+L 264 n (s1/s3/s4), **ESTIMATE*** | ≈ 265k (f64 obs) / ≈ 213k (f32 obs) / ≈ 101k (f32, q given) | | ≈ 248 / 83 / 23.7 % (f64) | | ≈ 80 % | | ≈ 312 / 251 / 119 µJ | 2,595 KB uint32, **1,005 KB pef64** | ≈ 2 KB |
-| *Y+F+L 504 n (s2/s5), **ESTIMATE*** | ≈ 323k / ≈ 271k / ≈ 158k | | ≈ 303 / 101 / 28.8 % (f64) | | ≈ 133 % | | ≈ 381 / 320 / 186 µJ | 2,764–2,967 KB uint32, 1,121–1,199 KB pef64 | ≈ 3 KB |
+| **Y+F+L**, all five seeds | MEASURED, see the next section | | | | | | | | |
 
-**How the Y+F+L estimate is built.** Three parts, the first two measured:
+## Y+F+L measured on the M4 (replaces the 22/11 estimate rows)
 
-- **264 n rows:** the measured a49 dc s3 row.
-- **504 n rows:** a49 dc s2's decision part scaled by 504/480.
-- **Lookup delta:** the measured Y+F+L lookup below minus an assumed
-  ~25k-instruction a49 lookup (≈ 96 instructions × neurons).
-- **Unported blocks:** the ≤ 4k bound above.
+**Setup.** Same harness as above: QEMU mps2-an386 Cortex-M4F, `-O2 -ffp-contract=off`,
+newlib-nano. Each winner flies 5 × 2000 = 10,000 recorded ticks (1,000 decisions)
+from `record_wnn_flights.py`: the installed wheel (ABI 60) on the run's own plant.
+Observer is f64 (the bit-exact build). All counts are retired instructions.
+**Cycles = 1.5 × instructions: an estimate, not measured.**
 
-**Y+F+L lookup on the M4 — the part of the base that runs on the C today.**
-Real VAL addresses, 200 decisions, `run_bench_pef.sh CPU=m4`.
-Instructions per decision, every neuron looked up:
+**Columns.**
 
-| winner | uint32 mean / p99 / max | pef64 mean / p99 / max |
+- **hold / decision tick:** mean / max.
+- **window:** 10 ticks = 10 ms = one decision; mean / worst.
+- **% of 10 ms:** mean window.
+- **worst decision tick:** its 1 ms tick.
+- **flash:** `.text` of the whole M4 image. It includes ~12 KB libm, 3.2 KB libgcc,
+  2.2 KB of firmware rate loop and the bench driver.
+
+| winner (n, TRUE keys) | keys | hold tick | decision tick | window | % of 10 ms @16 / 48 / 168 / 480 MHz | worst decision tick, % of 1 ms @16 / 48 / 168 / 480 | flash B | window, q given |
+|---|---|---|---|---|---|---|---|---|
+| s1 (264 n, 662,535) | uint32 | 22,123 / 22,439 | 92,295 / 92,839 | 291,400 / 293,290 | 273 / 91.1 / 26.0 / 9.1 | 870 / 290 / 82.9 / 29.0 | 2,681,848 | 178,931 |
+| | pef64 | same | 146,578 / 150,832 | 345,683 / 351,283 | 324 / 108 / 30.9 / 10.8 | 1414 / 471 / 135 / 47.1 | 1,055,000 | 233,214 |
+| s2 (504 n, 703,938) | uint32 | 22,131 / 22,431 | 146,550 / 147,191 | 345,731 / 347,694 | 324 / 108 / 30.9 / 10.8 | 1380 / 460 / 131 / 46.0 | 2,854,184 | 233,199 |
+| | pef64 | same | 238,964 / 244,171 | 438,145 / 443,463 | 411 / 137 / 39.1 / 13.7 | 2289 / 763 / 218 / 76.3 | 1,173,616 | 325,613 |
+| s3 (256 n, 420,562) | uint32 | 22,134 / 22,442 | 86,172 / 86,642 | 285,380 / 287,142 | 268 / 89.2 / 25.5 / 8.9 | 812 / 271 / 77.4 / 27.1 | 1,713,736 | 172,848 |
+| | pef64 | same | 131,393 / 135,345 | 330,602 / 335,519 | 310 / 103 / 29.5 / 10.3 | 1269 / 423 / 121 / 42.3 | 685,056 | 218,069 |
+| s4 (264 n, 385,470) | uint32 | 22,120 / 22,489 | 87,845 / 88,325 | 286,928 / 289,056 | 269 / 89.7 / 25.6 / 9.0 | 828 / 276 / 78.9 / 27.6 | 1,573,592 | 174,476 |
+| | pef64 | same | 134,320 / 137,893 | 333,403 / 337,940 | 313 / 104 / 29.8 / 10.4 | 1293 / 431 / 123 / 43.1 | 645,816 | 220,951 |
+| s5 (504 n, 756,032) | uint32 | 22,126 / 22,439 | 148,389 / 149,054 | 347,525 / 349,642 | 326 / 109 / 31.0 / 10.9 | 1397 / 466 / 133 / 46.6 | 3,062,560 | 235,041 |
+| | pef64 | same | 243,015 / 248,557 | 442,151 / 448,056 | 415 / 138 / 39.5 / 13.8 | 2330 / 777 / 222 / 77.7 | 1,253,600 | 329,667 |
+
+**Float ops per window** (f64 observer): 2,700 soft-double calls (270 per tick,
+flat). VFP instructions: 3,624–3,650 (256–264 n) and 4,368–4,372 (504 n). These are
+the same for uint32 and pef64.
+
+**RAM.**
+
+- Controller state (`sizeof(wnn_ctrl_t)`, incl. the per-tick telemetry arrays):
+  2,048 B (256 n), 2,088 B (264 n), 3,288 B (504 n).
+- Stack peak: 436 B (uint32), 484 B (pef64).
+- Image `.data + .bss`: 84 + 2,840–4,080 B.
+
+**f32 observer** (`-DWNN_DHAT_F32`), cost only. Windows: s1 239,359 / 293,643,
+s2 293,677 / 386,091, s3 233,300 / 278,522, s4 234,887 / 281,362, s5 295,460 /
+390,085 (uint32 / pef64). This build is **no longer command-identical**: 8,172–8,888
+of 10,000 ticks differ. On a49 dc it was 0 of 10,000. The cause is the yaw-trim FF.
+It writes cT·cresid_z, a continuous function of d̂, straight into the held yaw
+setpoint, so any f32 rounding of d̂ reaches the motors. Before, d̂ only moved a
+thermometer bit. The f32 rows are a cost figure for a DIFFERENT controller.
+
+**What the six blocks cost** (difference of two measurements on the same harness:
+Y+F+L s1 vs a49 dc s1, f64 observer):
+
+- **hold tick:** 22,123 vs 19,072 instructions, +3.05k per tick ≈ +30k per window;
+- **soft-double calls:** 270 vs 218 per tick.
+
+Most of this is the ABI-55 heading. It is f64 like Rust (`quat_to_euler_f64` →
+`atan2`), and every f64 op is a libgcc call on the M4F. The 22/11 bound of ≤ 4k
+per window assumed an `atan2f`, and it was wrong. The other five blocks are a few
+dozen f32 ops per tick or per decision.
+
+**Measured vs the 22/11 estimate** (window mean, f64 observer, uint32):
+
+| | estimate | measured |
 |---|---|---|
-| s1, 264 n | 27,778 / 27,949 / 27,971 | 74,287 / 76,204 / 76,267 |
-| s5, 504 n | 47,442 / 47,771 / 47,903 | 127,388 / 136,753 / 136,811 |
+| 264 n | ≈ 265k | 286.9–291.4k |
+| 504 n | ≈ 323k | 345.7–347.5k |
 
-**Flash fit.**
+**Flash fit** (image `.text`):
 
-- **STM32H743 (2 MB internal flash):** Y+F+L fits only as pef64, which costs
-  +46.5k (264 n) to +80k (504 n) instructions per window on top of the
-  estimate rows.
-- **STM32F405 (1 MB flash):** only the observer-free a45 s1 (922 KB) fits; no
-  dres or Y+F+L winner does. MPCOF f32 needs 24 KB.
+- **STM32H743, 2 MB internal (2,097,152 B):**
+  - every pef64 image fits;
+  - uint32 fits for s3 (1.71 MB) and s4 (1.57 MB) only;
+  - s1, s2 and s5 need pef64. That costs +54k (264 n) to +95k (504 n)
+    instructions per window.
+- **STM32F405, 1 MB (1,048,576 B):**
+  - only s3 and s4 fit, as pef64 (685 KB, 646 KB);
+  - s1 pef64 misses by 6.4 KB.
 
+**Timing at the 1 ms decision tick** (worst decision tick, mean-cost windows):
+
+- **168 MHz:**
+  - 256–264 n uint32 fits (77–83 %);
+  - 504 n uint32 overruns (131–133 %);
+  - every pef64 build overruns (121–222 %).
+- **480 MHz (H743):** every build fits, at most 78 % (s5 pef64).
+- **16 MHz:** nothing fits, even on average (≥ 268 % of the 10 ms window).
+- **48 MHz:** only 256–264 n uint32 fits on average (89–91 % of the window), and
+  its decision tick still overruns its own 1 ms tick (271–290 %).
+
+## Parity (step for step, same inputs → same outputs)
 ## Parity (step for step, same inputs → same outputs)
 
 **MPCOF, C vs the Rust teacher, host.** 100k ticks / 10k decisions, 97 of them
@@ -352,6 +423,10 @@ on the box-QP path (up to 6 Cholesky solves). Max |C − Rust| per output:
 | host, `test_cascade_parity.py`, 3 × 2000 ticks per winner | a49 dc s1 / s2 / s3 and a45 s1 **bit-identical**: features, addresses, fire bits, setpoint, pwm. Max abs diff 0 on every output |
 | on the M4, 10,000 ticks per winner | **0 motor-command mismatches**, f64 and f32 observer |
 | mutant (1.5 × d̂ gain) | caught every time |
+| **Y+F+L s1–s5**, host, 3 × 2000 ticks each | **bit-identical**, uint32 AND pef64: features (27 incl. both abp columns), frame, addresses, fire bits, held setpoint, pwm. The synthetic rate_i / dhat / both cases built on the Y+F+L spec also pass |
+| Y+F+L block mutants, C header only (s1–s5) | all caught: cT × 1.5, tilt ω_n × 1.01, delta_max_yaw × 1.01, yaw leak = integral_leak, heading by dead reckoning, abp g = 9.80 |
+| Y+F+L s1–s5 on the M4, 10,000 ticks each | **PWM_MISMATCH_TICKS 0**, uint32 and pef64 (f64 observer). The f32-observer build is NOT command-identical (see above) |
+| regression after the port | ct40 C-S2-d default, a49 dc s1 and a45 s1 still pass host parity |
 
 ## How much of MPCOF's model the WNN still carries
 
@@ -405,10 +480,14 @@ That is a direction only. Significance belongs to experiment-design.
    - At 168 MHz, MPCOF's worst decision tick under upset overruns its 1 ms tick
      (109 %).
 3. **The bigger WNNs overrun too.** At 480–504 neurons the WNN decision tick
-   also overruns 1 ms at 168 MHz (127 %, f64 observer). It needs the decision
-   spread over the hold ticks, or a faster core (H743).
-4. **Flash is the WNN's binding constraint.** It needs 1–4 MB of tables vs 24 KB
-   for MPCOF f32.
-   - No dres or Y+F+L winner fits an F405.
-   - Y+F+L fits the H743 only as pef64, at about +50–80k instructions per
-     window.
+   also overruns 1 ms at 168 MHz (127 % a49 dc s2; Y+F+L 504 n 131–133 %, f64
+   observer). It needs the decision spread over the hold ticks, or a faster core
+   (H743: every Y+F+L build ≤ 78 % at 480 MHz, measured instructions × 1.5).
+4. **Flash is the WNN's binding constraint.** It needs 0.6–3 MB of tables vs
+   24 KB for MPCOF f32.
+   - Y+F+L s3 and s4 fit an F405 as pef64; no other dres or Y+F+L winner does.
+   - On the H743, s3 and s4 fit uint32; s1, s2 and s5 fit only as pef64,
+     at +54–95k instructions per window (measured).
+5. **Y+F+L measured.** At 285–348k instructions per window (f64 observer,
+   uint32), it costs 7–11 % more than the a49 dc winners. The ABI-55 f64 heading
+   is most of that.

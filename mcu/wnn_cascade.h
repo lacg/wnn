@@ -51,6 +51,49 @@
 #endif
 #define WNN_OBS_OBSERVER (WNN_OBS_DHAT || WNN_OBS_DRES)
 
+/* CTRL-48 block 10 / levers (ABI 46-58), ported 22/11/2026 so the Y+F+L base runs on
+ * board. The exporter emits each macro ONLY when the winner uses it, so every older
+ * header stays byte-identical and takes these defaults (= the block off):
+ *   WNN_OBS_ATT_BIAS_PRED   CTRL-46 Mahony-bias predictor, 2 features at the tail
+ *                           (att_bias_pred.rs; kp/ki/dt = the estimator's)
+ *   WNN_OBS_TILT_REF_ERR    block 10 L1: roll/pitch error vs (target + the position
+ *                           loop's tilt reference + predicted bias) (tilt_ref_err.rs);
+ *                           WNN_TILT_REF_SHAPE_INIT = {b_xy, omega_n, zeta, max_tilt}
+ *   WNN_OBS_YAW_FROM_ATT_EST ABI 55: anchored yaw heading = the Mahony estimate's yaw,
+ *                           unwrapped onto the running heading (controller.rs mahony_heading)
+ *   WNN_YAW_TRIM_FF_CT      ABI 58: the held yaw setpoint += cT * cresid_z (clamped);
+ *                           the bank value (what the delta law leaks) is untouched
+ *   WNN_DELTA_MAX_YAW       ABI 57: the yaw bank's own delta_max
+ *   WNN_YAW_INTEGRAL_LEAK   ARM 3: the yaw integrals' own leak
+ * A refusal in scripts/export_controller_c.py is lifted only for what is ported here. */
+#ifndef WNN_OBS_ATT_BIAS_PRED
+#define WNN_OBS_ATT_BIAS_PRED 0
+#endif
+#ifndef WNN_OBS_TILT_REF_ERR
+#define WNN_OBS_TILT_REF_ERR 0
+#endif
+#ifndef WNN_OBS_YAW_FROM_ATT_EST
+#define WNN_OBS_YAW_FROM_ATT_EST 0
+#endif
+#ifndef WNN_YAW_TRIM_FF
+#define WNN_YAW_TRIM_FF 0
+#endif
+#ifndef WNN_DELTA_MAX_YAW
+#define WNN_DELTA_MAX_YAW WNN_DELTA_MAX
+#endif
+#ifndef WNN_YAW_INTEGRAL_LEAK
+#define WNN_YAW_INTEGRAL_LEAK WNN_INTEGRAL_LEAK
+#endif
+#if WNN_OBS_TILT_REF_ERR && !WNN_OBS_ATT_BIAS_PRED
+#error "wnn_cascade: obs_tilt_ref_err needs obs_att_bias_pred (Rust refuses it too)"
+#endif
+#if (WNN_OBS_ATT_BIAS_PRED || WNN_OBS_YAW_FROM_ATT_EST) && !WNN_OBS_ATT_EST
+#error "wnn_cascade: the bias predictor / Mahony heading need obs_att_estimator"
+#endif
+#if WNN_YAW_TRIM_FF && !WNN_OBS_DRES
+#error "wnn_cascade: yaw_trim_ff needs the CTRL-48 residual block (cresid_z)"
+#endif
+
 /* d-hat observer (mcu/cascade_dhat.[ch], shared with the MPCOF port). Precision:
  * default f64 = the CPU reference (cascade_dhat.rs), bit exact. -DWNN_DHAT_F32 = the
  * Metal kernel's f32 twin (cheaper on an M4F, which has no double-precision FPU; NOT
@@ -79,16 +122,28 @@ typedef struct
 
 #define WNN_MAX_INTEGRALS 5
 
+/* att_bias_pred.rs AttBiasPredictor (f32): eps/j = the linearised Mahony error
+ * dynamics (body x, y), v_prev = last horizontal velocity. */
+typedef struct
+{
+	float eps[2], j[2], v_prev[2];
+	int have_prev;
+} wnn_abp_t;
+
 typedef struct
 {
 	wnn_mahony_t est;
 	wnn_dhat_t dhat;
+	wnn_abp_t abp;
+	float abp_last[2];       /* [abp_r, abp_p] of this tick (rad) */
+	float cresid_z;          /* this tick's yaw residual (the yaw-trim FF input) */
 	float integ[WNN_MAX_INTEGRALS];
 	float yaw_heading;
 	float range[4], gamma[4];
 	float resid_inv_a[3], resid_w[3]; /* CTRL-48 a3 scale (unused unless WNN_OBS_DRES) */
-	float setpoint[4];       /* held CTBR setpoint = Rust's self.pwm (bank deviations) */
+	float setpoint[4];       /* bank values = Rust's self.pwm (bank deviations) */
 	float setpoint_prev[4];  /* Rust's self.pwm_prev (delta law only) */
+	float held[4];           /* the HELD setpoint flown = setpoint + the yaw-trim FF */
 	uint32_t step_counter;
 	/* Telemetry of the last tick (the parity test reads these). */
 	float features[WNN_FEATURES];

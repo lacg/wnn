@@ -1,5 +1,6 @@
 /* On-board cascade WNN controller. Every function names the Rust it mirrors
- * (ram_controller @ ABI 41; the CTRL-48 residual @ ABI 45); keep the operation ORDER when editing — the parity
+ * (ram_controller @ ABI 41; the CTRL-48 residual @ ABI 45; the block-10 / lever
+ * set of the Y+F+L base @ ABI 60); keep the operation ORDER when editing — the parity
  * test (mcu/parity/) asserts bit equality, and a reassociated sum is a different
  * function. See wnn_cascade.h for the firmware contract. */
 #include "wnn_cascade.h"
@@ -13,6 +14,15 @@ static const float wnn_ctbr_gamma[4] = WNN_CTBR_GAMMA_INIT;
 static const double wnn_rate_gains[12] = WNN_RATE_GAINS_INIT;
 #if WNN_OBS_OBSERVER
 static const double wnn_dhat_plant[5] = WNN_DHAT_PLANT_INIT;
+#endif
+#if WNN_OBS_TILT_REF_ERR
+static const float wnn_tilt_ref_shape[4] = WNN_TILT_REF_SHAPE_INIT;
+#endif
+
+/* att_bias_pred.rs ABP_GRAVITY: the nominal g the predictor scales the velocity
+ * difference by (a Rust source constant, not a run parameter). */
+#ifndef WNN_ABP_GRAVITY
+#define WNN_ABP_GRAVITY 9.81f
 #endif
 
 /* ------------------------------------------------------------ helpers ---- */
@@ -132,6 +142,87 @@ static void resid_init(wnn_ctrl_t *ctl)
 #endif
 }
 
+/* ---------------------- Mahony heading (controller.rs mahony_heading) -- */
+#if WNN_OBS_YAW_FROM_ATT_EST
+
+/* wrap_angle_f64: into (-pi, pi]. */
+static double wrap_angle(double a)
+{
+	const double pi = 3.14159265358979311600;
+	double x = a;
+	while (x > pi) x -= 2.0 * pi;
+	while (x <= -pi) x += 2.0 * pi;
+	return x;
+}
+
+/* ABI 55: the yaw of quat_to_euler_f64(q), unwrapped onto the running heading h. */
+static float mahony_heading(float h, const float q[4])
+{
+	double w = q[0], x = q[1], y = q[2], z = q[3];
+	double siny_cosp = 2.0 * (w * z + x * y);
+	double cosy_cosp = 1.0 - 2.0 * (y * y + z * z);
+	double yaw = atan2(siny_cosp, cosy_cosp);
+	double hd = h;
+	return (float)(hd + wrap_angle(yaw - hd));
+}
+#endif
+
+/* ------------------ Mahony-bias predictor (att_bias_pred.rs, CTRL-46) ---- */
+#if WNN_OBS_ATT_BIAS_PRED
+
+/* rot_t_xy: body x, y of R^T (wx, wy, 0), q = (w, x, y, z), f32. */
+static void rot_t_xy(const float q[4], float wx, float wy, float out[2])
+{
+	float w = q[0], x = q[1], y = q[2], z = q[3];
+	float r00 = 1.0f - 2.0f * (y * y + z * z);
+	float r01 = 2.0f * (x * y - w * z);
+	float r10 = 2.0f * (x * y + w * z);
+	float r11 = 1.0f - 2.0f * (x * x + z * z);
+	out[0] = r00 * wx + r10 * wy;
+	out[1] = r01 * wx + r11 * wy;
+}
+
+/* AttBiasPredictor::step(v_world, q_est) -> [abp_r, abp_p] (f32; kp, ki, dt are the
+ * estimator's own: enable_att_bias_pred). */
+static void abp_step(wnn_abp_t *p, float vx, float vy, const float q[4], float out[2])
+{
+	float ux = 0.0f, uy = 0.0f, d[2];
+	if (p->have_prev)
+	{
+		ux = (vx - p->v_prev[0]) / WNN_ABP_GRAVITY;
+		uy = (vy - p->v_prev[1]) / WNN_ABP_GRAVITY;
+	}
+	p->v_prev[0] = vx;
+	p->v_prev[1] = vy;
+	p->have_prev = 1;
+	rot_t_xy(q, ux, uy, d);
+	for (int a = 0; a < 2; a++)
+	{
+		float innov = d[a] - WNN_DT * p->eps[a];
+		p->eps[a] += WNN_EST_KP * innov + WNN_DT * p->j[a];
+		p->j[a] += WNN_EST_KI * innov;
+	}
+	out[0] = p->eps[1];
+	out[1] = -p->eps[0];
+}
+#endif
+
+/* -------------------- tilt-reference error (tilt_ref_err.rs, block 10 L1) */
+
+#if WNN_OBS_TILT_REF_ERR
+/* TiltRefErr::effective_target: (target + tilt_ref(horiz)) + abp, roll and pitch. */
+static void tilt_ref_target(const float target[3], const float h[4], const float abp[2], float out[2])
+{
+	const float *s = wnn_tilt_ref_shape; /* b_xy, omega_n, zeta, max_tilt */
+	float w2 = s[1] * s[1];
+	float c2 = 2.0f * s[2] * s[1];
+	float pitch = clampf_rs((w2 * h[0] - c2 * h[2]) / s[0], -s[3], s[3]);
+	float roll = clampf_rs(-(w2 * h[1] - c2 * h[3]) / s[0], -s[3], s[3]);
+	out[0] = (target[0] + roll) + abp[0];
+	out[1] = (target[1] + pitch) + abp[1];
+}
+#endif
+
 /* --------------------------- features (controller.rs compute_features) -- */
 
 typedef struct
@@ -139,30 +230,67 @@ typedef struct
 	float tilt, roll_err, pitch_err, yaw_err;
 } wnn_att_t;
 
+/* Yaw heading: anchored = the Mahony yaw (ABI 55) or dt-integrated gyro-z; else the
+ * legacy raw gyro-z sum. q = this tick's estimate (read only under ABI 55). */
+static void advance_heading(wnn_ctrl_t *c, const wnn_tick_in_t *in, const float q[4])
+{
+	(void)q;
+	if (WNN_OBS_YAW_ERR || WNN_OBS_YAW_ERR_I)
+	{
+#if WNN_OBS_YAW_FROM_ATT_EST
+		c->yaw_heading = mahony_heading(c->yaw_heading, q);
+#else
+		c->yaw_heading += in->gyro[2] * WNN_DT;
+#endif
+	}
+	else
+		c->yaw_heading += in->gyro[2];
+}
+
+/* The roll / pitch targets the errors are measured against: the target, or (L1) the
+ * tilt-reference target. The bias predictor ticks here once per physical tick; its
+ * value does not depend on WHERE in compute_features Rust ticks it (same inputs). */
+static void attitude_targets(wnn_ctrl_t *c, const wnn_tick_in_t *in, const float q[4], float tgt[2])
+{
+	tgt[0] = in->target[0];
+	tgt[1] = in->target[1];
+#if WNN_OBS_ATT_BIAS_PRED
+	abp_step(&c->abp, in->horiz[2], in->horiz[3], q, c->abp_last);
+#if WNN_OBS_TILT_REF_ERR
+	tilt_ref_target(in->target, in->horiz, c->abp_last, tgt);
+#endif
+#else
+	(void)c; (void)q;
+#endif
+}
+
 /* Derived attitude errors: the estimator's (or the accel's) "up", atan2 forms. */
 static wnn_att_t attitude_errors(wnn_ctrl_t *c, const wnn_tick_in_t *in)
 {
 	float src[3] = {in->accel[0], in->accel[1], in->accel[2]};
+	float q[4] = {1.0f, 0.0f, 0.0f, 0.0f};
 #if WNN_OBS_ATT_EST
-	float q[4];
 	mahony_update(&c->est, in->gyro, in->accel, q);
 	up_from_quat(q, src);
 #endif
 	float ax = src[0], ay = src[1], az = src[2];
 	float roll_est = atan2f(ay, az), pitch_est = atan2f(-ax, sqrtf(ay * ay + az * az));
-	c->yaw_heading += (WNN_OBS_YAW_ERR || WNN_OBS_YAW_ERR_I) ? in->gyro[2] * WNN_DT : in->gyro[2];
+	advance_heading(c, in, q);
+	float tgt[2];
+	attitude_targets(c, in, q, tgt);
 	wnn_att_t a;
 	a.tilt = atan2f(sqrtf(ax * ax + ay * ay), az);
-	a.roll_err = in->target[0] - roll_est;
-	a.pitch_err = in->target[1] - pitch_est;
+	a.roll_err = tgt[0] - roll_est;
+	a.pitch_err = tgt[1] - pitch_est;
 	a.yaw_err = in->target[2] - c->yaw_heading;
 	return a;
 }
 
-/* integral_acc[k] = leak * integral_acc[k] + e; push integral * scale. */
-static int push_integral(wnn_ctrl_t *c, int fi, int *k, float e)
+/* integral_acc[k] = leak * integral_acc[k] + e; push integral * scale. The yaw
+ * integrals take WNN_YAW_INTEGRAL_LEAK (ARM 3; == WNN_INTEGRAL_LEAK unless set). */
+static int push_integral(wnn_ctrl_t *c, int fi, int *k, float e, float leak)
 {
-	c->integ[*k] = WNN_INTEGRAL_LEAK * c->integ[*k] + e;
+	c->integ[*k] = leak * c->integ[*k] + e;
 	c->features[fi] = c->integ[*k] * WNN_INTEGRAL_SCALE;
 	(*k)++;
 	return fi + 1;
@@ -176,11 +304,12 @@ static int attitude_block(wnn_ctrl_t *c, int fi, const wnn_att_t *a)
 	float errs[3] = {a->roll_err, a->pitch_err, a->yaw_err};
 	int n_axes = WNN_OBS_PERAXIS_YAW ? 3 : 2;
 	if (WNN_OBS_TILT_P) c->features[fi++] = a->tilt;
-	if (WNN_OBS_TILT_I) fi = push_integral(c, fi, &k, a->tilt);
+	const float leaks[3] = {WNN_INTEGRAL_LEAK, WNN_INTEGRAL_LEAK, WNN_YAW_INTEGRAL_LEAK};
+	if (WNN_OBS_TILT_I) fi = push_integral(c, fi, &k, a->tilt, WNN_INTEGRAL_LEAK);
 	for (int i = 0; WNN_OBS_PERAXIS_P && i < n_axes; i++) c->features[fi++] = errs[i];
-	for (int i = 0; WNN_OBS_PERAXIS_I && i < n_axes; i++) fi = push_integral(c, fi, &k, errs[i]);
+	for (int i = 0; WNN_OBS_PERAXIS_I && i < n_axes; i++) fi = push_integral(c, fi, &k, errs[i], leaks[i]);
 	if (WNN_OBS_YAW_ERR) c->features[fi++] = a->yaw_err;
-	if (WNN_OBS_YAW_ERR_I) fi = push_integral(c, fi, &k, a->yaw_err);
+	if (WNN_OBS_YAW_ERR_I) fi = push_integral(c, fi, &k, a->yaw_err, WNN_YAW_INTEGRAL_LEAK);
 	return fi;
 }
 
@@ -222,7 +351,18 @@ static int cascade_block(wnn_ctrl_t *c, int fi, const wnn_tick_in_t *in)
 	for (int i = 0; WNN_OBS_RATE_I && i < 3; i++) c->features[fi++] = v[i];
 	for (int a = 0; WNN_OBS_DHAT && a < 3; a++) c->features[fi++] = v[3 + a];
 	for (int a = 0; WNN_OBS_DRES && a < 3; a++)
-		c->features[fi++] = v[3 + a] * c->resid_inv_a[a] + c->resid_w[a] * v[a];
+	{
+		float r = v[3 + a] * c->resid_inv_a[a] + c->resid_w[a] * v[a];
+		c->features[fi++] = r;
+		if (a == 2) c->cresid_z = r;
+	}
+	return fi;
+}
+
+/* CTRL-46 (canonical order LAST, after the cascade blocks): [abp_r, abp_p]. */
+static int att_bias_block(wnn_ctrl_t *c, int fi)
+{
+	for (int i = 0; WNN_OBS_ATT_BIAS_PRED && i < 2; i++) c->features[fi++] = c->abp_last[i];
 	return fi;
 }
 
@@ -237,7 +377,8 @@ static void compute_features(wnn_ctrl_t *c, const wnn_tick_in_t *in)
 	wnn_att_t a = attitude_errors(c, in);
 	fi = attitude_block(c, fi, &a);
 	fi = translation_block(c, fi, in);
-	(void)cascade_block(c, fi, in);
+	fi = cascade_block(c, fi, in);
+	(void)att_bias_block(c, fi);
 }
 
 /* ------------------------------------------ encode + output layer -------- */
@@ -315,7 +456,14 @@ static float decoded_to_delta(float decoded, float delta_max, float n, float gam
 	return t * delta_max;
 }
 
-/* controller.rs decode_ctbr (absolute, or the leaky delta law). */
+/* controller.rs delta_max_bank: the yaw bank (3) may carry its own (ABI 57). */
+static float delta_max_bank(int m)
+{
+	return (m == 3) ? WNN_DELTA_MAX_YAW : WNN_DELTA_MAX;
+}
+
+/* controller.rs decode_ctbr (absolute, or the leaky delta law), then (ABI 58) the
+ * yaw-rate feed-forward on the HELD setpoint only. */
 static void decode_ctbr(wnn_ctrl_t *c)
 {
 	if (WNN_DELTA_CONTROL) memcpy(c->setpoint_prev, c->setpoint, sizeof c->setpoint);
@@ -325,14 +473,19 @@ static void decode_ctbr(wnn_ctrl_t *c)
 		c->decoded[m] = d;
 		if (WNN_DELTA_CONTROL)
 		{
-			float delta = decoded_to_delta(d, WNN_DELTA_MAX * r, WNN_NEUTRAL, c->gamma[m]);
+			float delta = decoded_to_delta(d, delta_max_bank(m) * r, WNN_NEUTRAL, c->gamma[m]);
 			float leaked = 0.0f + WNN_DELTA_LEAK * (c->setpoint_prev[m] - 0.0f);
 			v = clampf_rs(leaked + delta, -r, r);
 		}
 		else
 			v = decoded_to_delta(d, r, WNN_NEUTRAL, c->gamma[m]);
 		c->setpoint[m] = v;
+		c->held[m] = v;
 	}
+#if WNN_YAW_TRIM_FF
+	float r3 = c->range[3];
+	c->held[3] = clampf_rs(c->held[3] + WNN_YAW_TRIM_FF_CT * c->cresid_z, -r3, r3);
+#endif
 }
 
 /* --------------------------------------------------------- public ------ */
@@ -357,8 +510,12 @@ void wnn_reset(wnn_ctrl_t *c, float init_yaw, const float q0[4])
 {
 	mahony_reset(&c->est, q0);
 	cdhat_reset(&c->dhat);
+	memset(&c->abp, 0, sizeof c->abp);
+	memset(c->abp_last, 0, sizeof c->abp_last);
+	c->cresid_z = 0.0f;
 	memset(c->integ, 0, sizeof c->integ);
 	memset(c->setpoint, 0, sizeof c->setpoint);
+	memset(c->held, 0, sizeof c->held);
 	memset(c->setpoint_prev, 0, sizeof c->setpoint_prev);
 	c->yaw_heading = (WNN_OBS_YAW_ERR || WNN_OBS_YAW_ERR_I) ? init_yaw : 0.0f;
 	c->step_counter = 0;
@@ -380,6 +537,6 @@ int wnn_tick(wnn_ctrl_t *c, const wnn_tick_in_t *in, float sp[4])
 		forward_output(c);
 		decode_ctbr(c);
 	}
-	memcpy(sp, c->setpoint, sizeof c->setpoint);
+	memcpy(sp, c->held, sizeof c->held);
 	return decide;
 }

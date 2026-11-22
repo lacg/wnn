@@ -330,8 +330,31 @@ Results and caveats are in `docs/ctrl51_onboard_cost.md`.
 Re-run 22/11/2026: three a49 dc winners (256/264/480 n), an observer-free arm, and
 per-output parity. Several winners in one run with
 `WNN_SET="tag:header ..." bash mcu/run_bench_ctrl51.sh`, then
-`summarize_bench.py --wnn-tags tag ...`. The current Y+F+L base is NOT exportable:
-six blocks are unported, and the exporter now refuses all of them.
+`summarize_bench.py --wnn-tags tag ...`.
+
+**Y+F+L on board (22/11/2026, later the same day).** `wnn_cascade.c` now ports the
+six blocks the base needs:
+
+- the Mahony-bias predictor;
+- the L1 tilt-reference error;
+- the ABI-55 Mahony heading;
+- the ABI-58 yaw-trim FF;
+- the yaw delta_max;
+- the yaw-integral leak.
+
+Each new `WNN_*` macro is emitted only when its block is on, and the exporter reads
+its constants off the wheel (`wheel_block_constants`). L2y / L2y' are still refused.
+
+**Parity.**
+
+- Host, s1–s5: bit-identical, uint32 and pef64.
+- One C-only mutant per block: every one caught.
+- M4, 10k ticks per winner: 0 motor mismatches with the f64 observer.
+- The f32 observer is no longer command-identical under the yaw-trim FF.
+
+Measured cost (cycles = 1.5 × instructions, an estimate) is in
+`docs/ctrl51_onboard_cost.md`, "Y+F+L measured on the M4". Raw summary:
+`mcu/ctrl51/yfl_2211/`. The summary now also prints 480 MHz.
 
 
 ## pef64: compressed TRUE-key storage (20/11/2026)

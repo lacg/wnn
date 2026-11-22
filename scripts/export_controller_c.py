@@ -81,6 +81,7 @@ class ExportModel:
 	motor_lag_s: float      # the plant lag the scorer arms the observer with
 	est_gains: tuple        # (kp, ki) of the attitude estimator (wheel defaults)
 	dhat_l_gain: float      # CTBR_MPC_L_GAIN read from the wheel (0 when d-hat off)
+	blocks: dict = None     # wheel_block_constants(): the block-10 / lever set (None = all off)
 
 
 def parse_args():
@@ -204,33 +205,22 @@ def _feature_refusals(spec) -> list:
 			why.append(f"{flag}: not ported (CTBR refuses it in Rust as well)")
 	if spec.dhat_b is not None:
 		why.append("dhat_b (the motor-level d-hat observer): not ported")
-	if bool(getattr(spec, "obs_att_bias_pred", False)):
-		why.append("obs_att_bias_pred (CTRL-46 Mahony-bias predictor): not ported to the on-board C yet")
 	return why + _yaw_block_refusals(spec)
 
 
-# CTRL-48 block 10 / levers (ABI 50-58): wnn_cascade.c computes NONE of these. Before
-# CTRL-51 (22/11/2026) only obs_att_bias_pred was refused, so a winner carrying any of
-# the others without it would have exported as "runnable" with the wrong features/decode.
+# CTRL-48 block 10 / levers (ABI 50-58). PORTED 22/11/2026 (Y+F+L on board, host + M4
+# parity): obs_att_bias_pred, obs_tilt_ref_err, obs_yaw_from_att_est, yaw_trim_ff,
+# delta_max_yaw, yaw_integral_leak — wnn_cascade.c computes them from the constants
+# wheel_block_constants() reads off the wheel. Still NOT ported (refused):
 _UNPORTED_BOOL = (
 	("obs_yaw_trim_err", "L2y trim-referenced yaw error (yaw_trim_err.rs)"),
 	("obs_yaw_trim_err_p", "L2y' trim-referenced proportional yaw error (yaw_trim_err.rs)"),
-	("obs_yaw_from_att_est", "yaw heading from the Mahony estimate (ABI 55)"),
-	("yaw_trim_ff", "yaw-rate feed-forward cT*cresid_z on the CTBR yaw setpoint (ABI 58)"),
 )
 
 
 def _yaw_block_refusals(spec) -> list:
-	why = [f"{flag} ({what}): not ported to the on-board C yet"
-	       for flag, what in _UNPORTED_BOOL if bool(getattr(spec, flag, False))]
-	if getattr(spec, "obs_tilt_ref_err", None):
-		why.append("obs_tilt_ref_err (block 10 L1 tilt-reference error, tilt_ref_err.rs): not ported to the on-board C yet")
-	if getattr(spec, "delta_max_yaw", None) is not None:
-		why.append("delta_max_yaw (ABI 57 yaw-bank delta_max): not ported to the on-board C yet")
-	leak = getattr(spec, "yaw_integral_leak", None)
-	if leak is not None and float(leak) != float(spec.integral_leak):
-		why.append(f"yaw_integral_leak={leak} (ARM 3, != integral_leak): not ported to the on-board C yet")
-	return why
+	return [f"{flag} ({what}): not ported to the on-board C yet"
+	        for flag, what in _UNPORTED_BOOL if bool(getattr(spec, flag, False))]
 
 
 def cascade_refusals(spec, onset) -> list:
@@ -316,6 +306,24 @@ def wheel_constants(spec) -> tuple:
 	return (float(kp.group(1)), float(ki.group(1))), lgain
 
 
+def wheel_block_constants(spec, thresholds, conn) -> dict:
+	"""The block-10 / lever constants exactly as the INSTALLED wheel's WnnController
+	holds them (f32), read off a cell-less controller built from this spec — never a
+	hand copy (the tilt-reference shape goes through PositionLoop's own f64
+	validation, cT through YawTrimErr::ff_gain on the cascade contract)."""
+	from wnn.control.evaluator import ControllerGenome, build_controller
+	g = ControllerGenome(spec=spec, thresholds=[float(t) for t in thresholds], state_connections=[],
+	                     output_connections=[int(v) for v in conn], output_cells=[])
+	c = build_controller(g)
+	tilt = c.obs_tilt_ref_err
+	return dict(att_bias_pred=bool(c.obs_att_bias_pred),
+	            tilt_ref_shape=None if tilt is None else [float(v) for v in tilt],
+	            yaw_from_att_est=bool(c.yaw_from_att_est),
+	            yaw_trim_ff_ct=None if c.yaw_trim_ff is None else float(c.yaw_trim_ff),
+	            delta_max_yaw=None if c.delta_max_yaw is None else float(c.delta_max_yaw),
+	            yaw_integral_leak=float(c.yaw_integral_leak))
+
+
 def model_from_checkpoint(path: str, argv_file) -> ExportModel:
 	from wnn.control.checkpoint_io import load_controller_checkpoint
 	return model_from_ckpt(load_controller_checkpoint(path, skip_population=True), path, argv_file)
@@ -330,8 +338,9 @@ def model_from_ckpt(ckpt: dict, path: str, argv_file) -> ExportModel:
 		refuse(why, path)
 	thr, lag = train_seed_thresholds(run_argv(ckpt.get("meta", {}), argv_file), spec)
 	est, lgain = wheel_constants(spec)
+	blocks = wheel_block_constants(spec, thr, onset["conn"])
 	return ExportModel(source=path, spec=spec, onset=onset, thresholds=thr,
-	                   motor_lag_s=lag, est_gains=est, dhat_l_gain=lgain)
+	                   motor_lag_s=lag, est_gains=est, dhat_l_gain=lgain, blocks=blocks)
 
 
 # --------------------------------------------------------------- rendering --
@@ -441,9 +450,37 @@ def render_ctbr_consts(m: ExportModel) -> list:
 	]
 
 
+def _f32_bits(x: float) -> int:
+	return int(np.float32(x).view(np.uint32))
+
+
+def render_block_macros(m: ExportModel) -> list:
+	"""The block-10 / lever set (wnn_cascade.h), each macro ONLY when its block is
+	on, so a header without them is byte-identical to the pre-22/11 export."""
+	b = m.blocks or {}
+	out = []
+	if b.get("att_bias_pred"):
+		out.append("#define WNN_OBS_ATT_BIAS_PRED 1  /* CTRL-46 Mahony-bias predictor */")
+	if b.get("tilt_ref_shape") is not None:
+		out += ["#define WNN_OBS_TILT_REF_ERR 1  /* block 10 L1 */",
+		        f"#define WNN_TILT_REF_SHAPE_INIT {init_list(b['tilt_ref_shape'], f32_lit)}  /* b_xy, omega_n, zeta, max_tilt (rad) */"]
+	if b.get("yaw_from_att_est"):
+		out.append("#define WNN_OBS_YAW_FROM_ATT_EST 1  /* ABI 55 Mahony heading */")
+	if b.get("yaw_trim_ff_ct") is not None:
+		out += ["#define WNN_YAW_TRIM_FF 1  /* ABI 58 */",
+		        f"#define WNN_YAW_TRIM_FF_CT {f32_lit(b['yaw_trim_ff_ct'])}  /* rad/s per unit of cresid_z */"]
+	if b.get("delta_max_yaw") is not None:
+		out.append(f"#define WNN_DELTA_MAX_YAW {f32_lit(b['delta_max_yaw'])}  /* ABI 57 */")
+	leak = b.get("yaw_integral_leak")
+	if leak is not None and _f32_bits(leak) != _f32_bits(m.spec.integral_leak):
+		out.append(f"#define WNN_YAW_INTEGRAL_LEAK {f32_lit(leak)}  /* ARM 3 */")
+	return out
+
+
 def render_cascade_macros(m: ExportModel) -> list:
 	return (["", "/* ---- cascade controller (mcu/wnn_cascade.c) ---- */", "#define WNN_EXPORT_CASCADE 1"]
-	        + render_feature_flags(m.spec) + render_controller_consts(m) + render_ctbr_consts(m))
+	        + render_feature_flags(m.spec) + render_controller_consts(m) + render_ctbr_consts(m)
+	        + render_block_macros(m))
 
 
 def render_key_tables(o: dict, pef) -> list:
@@ -525,6 +562,8 @@ def report(out: str, o: dict, model, pef=None):
 		print(f"  blocks: rate_i={bool(c.get('obs_rate_i'))} dhat={c.get('obs_dhat_plant') is not None} "
 		      f"dres={c.get('obs_dhat_residual_plant') is not None} "
 		      f"motor_lag={model.motor_lag_s}s action_repeat={model.spec.action_repeat}")
+		on = [k for k, v in (model.blocks or {}).items() if v not in (None, False) and k != "yaw_integral_leak"]
+		print(f"  block-10 / levers: {', '.join(on) or 'none'} yaw_integral_leak={(model.blocks or {}).get('yaw_integral_leak')}")
 
 
 def main():
