@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 DB = "file:/Volumes/20260401-WDBlack-SN850X-2TB/wnn/db/wnn.db?mode=ro"
 SEEDS = (20421, 20422, 20423)
 CONTROLS = {20421: 7567, 20422: 7568, 20423: 7569}
-ARMS = ("C", "80", "E", "B")  # 21/11: 96 (Plane IDS-69) closed; E/B = Plane IDS-70 cut methods on the 80b recipe; E ADOPTED as unswr standard 22/11
+ARMS = ("C", "80", "E", "B")  # 21/11: 96 (Plane IDS-69) closed; E/B = Plane IDS-70 cut methods on the 80b recipe
 ARM_NAME = {"80": "IDS62-unswr-%-fixb80-encoff-r{seed}", "96": "IDS63-unswr-%-fixb96-encoff-r{seed}",
 	"E": "IDS70-unswr-%-fixb80-encoff-cutE-r{seed}", "B": "IDS70-unswr-%-fixb80-encoff-cutB-r{seed}"}
 CLASSICAL = (
