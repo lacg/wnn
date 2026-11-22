@@ -1,0 +1,301 @@
+diff --git a/src/wnn/ram/strategies/accelerator/controller/calib_sampler.rs b/src/wnn/ram/strategies/accelerator/controller/calib_sampler.rs
+index 4ba6206b..dff959a8 100644
+--- a/src/wnn/ram/strategies/accelerator/controller/calib_sampler.rs
++++ b/src/wnn/ram/strategies/accelerator/controller/calib_sampler.rs
+@@ -112,6 +112,42 @@ pub fn sample_student_features_rs(
+ 	per_feature(&cap.feats, controller.num_features())
+ }
+ 
++/// CTRL-69 DIAGNOSTIC (scratch, not shipped): the DAgger rollout exactly as `cfg`
++/// says (expert_drives decides who flies), returning per decision record the
++/// feature vector, the recorded label and its delta baseline, and per PHYSICAL step
++/// the flown rate loop's [err ×3, I/i_limit ×3, decision, phase, episode].
++pub fn trace_dagger_cascade_rs(
++	controller: &mut WnnController,
++	cfg: &RewardGatedConfigPacked,
++	num_episodes: usize,
++	seed: u64,
++	shadow_resid_plant: Option<[f64; 5]>,
++) -> (Vec<Vec<f32>>, Vec<[f32; 4]>, Vec<[f32; 4]>, Vec<[f32; 9]>, Vec<[f32; 3]>)
++{
++	let mut rng = SmallRng::seed_from_u64(seed);
++	let af = AirframeRs::from_cfg(cfg);
++	let mut bank = TeacherBank::new(af);
++	let mut sim = af.sim();
++	controller.set_observer_motor_lag_core(sim.motor_lag());
++	let tilt = cfg.full_tilt_deg.to_radians();
++	let mut cap = ImitCapture::new(false, false);
++	if let Some(p) = shadow_resid_plant
++	{
++		let mut spec = controller.ctbr_ref().expect("shadow residual needs a CTBR controller").spec.clone();
++		spec.obs_rate_i = false;
++		spec.obs_dhat_plant = None;
++		spec.obs_dhat_residual_plant = Some(p);
++		cap.shadow = spec.cascade_obs(controller.dt_core());
++		cap.shadow_lag_s = sim.motor_lag();
++	}
++	for ep in 0..num_episodes
++	{
++		let teacher = bank.get_mut(cfg.teacher_id_for(0, ep));
++		let _ = rollout_and_label_inner(controller, teacher, &mut sim, cfg, tilt, &mut rng, [0.0; 3], Some(&mut cap));
++	}
++	(cap.feats, cap.label, cap.label_base, cap.phys, cap.shadow_resid)
++}
++
+ /// The reference config with the STUDENT driving: no expert, no exploration noise.
+ pub(crate) fn student_flies(cfg: &RewardGatedConfigPacked) -> RewardGatedConfigPacked
+ {
+diff --git a/src/wnn/ram/strategies/accelerator/controller/controller.rs b/src/wnn/ram/strategies/accelerator/controller/controller.rs
+index 222cf215..eb3be129 100644
+--- a/src/wnn/ram/strategies/accelerator/controller/controller.rs
++++ b/src/wnn/ram/strategies/accelerator/controller/controller.rs
+@@ -2239,6 +2239,18 @@ impl WnnController
+ 		self.ctbr.as_ref()
+ 	}
+ 
++	/// CTRL-69 diagnostic: the applied-command stream the cascade observer reads.
++	pub(crate) fn pwm_applied_ref(&self) -> &[f32]
++	{
++		&self.pwm_applied
++	}
++
++	/// CTRL-69 diagnostic: the controller's physical dt.
++	pub(crate) fn dt_core(&self) -> f32
++	{
++		self.dt
++	}
++
+ 	/// CTRL-38: the cascade feature block, None when both halves are off.
+ 	pub(crate) fn cascade_obs_ref(&self) -> Option<&crate::cascade_obs::CascadeObs>
+ 	{
+diff --git a/src/wnn/ram/strategies/accelerator/controller/dagger_train.rs b/src/wnn/ram/strategies/accelerator/controller/dagger_train.rs
+index 74e2d850..d6b29f6d 100644
+--- a/src/wnn/ram/strategies/accelerator/controller/dagger_train.rs
++++ b/src/wnn/ram/strategies/accelerator/controller/dagger_train.rs
+@@ -1938,6 +1938,15 @@ pub(crate) fn rollout_and_label_inner(
+ 		{
+ 			pilot.lend_flown_rate_stage(controller);
+ 		}
++		// CTRL-69 diagnostic: the flown rate loop as this step's features can read it.
++		let ctrl69_row = cap.as_deref().map(|c| {
++			let flown = if cfg.expert_drives { pilot.flown_rate() } else { controller.ctbr_rate_stage() };
++			crate::imitation_probe::ImitCapture::flown_row(flown, c.episode)
++		});
++		if let (Some(c), Some(row)) = (cap.as_deref_mut(), ctrl69_row.as_ref())
++		{
++			c.tick_shadow([row[3], row[4], row[5]], gyro, controller.pwm_applied_ref());
++		}
+ 		// Student forward + teacher label at student-visited state.
+ 		let student_pwm = controller_step_4(controller, gyro, accel, target_64);
+ 		if let Some(r) = inner_pre.as_ref()
+@@ -2075,8 +2084,15 @@ pub(crate) fn rollout_and_label_inner(
+ 		{
+ 			// CTBR: only DECISION steps are training records (the sn=0 replay skips
+ 			// action-repeat holds), so the probe measures the same set.
++			if let Some(mut row) = ctrl69_row
++			{
++				row[6] = c.keeps(controller) as u8 as f32;
++				c.phys.push(row);
++			}
+ 			if c.keeps(controller)
+ 			{
++				c.label_base.push(traj.label_base[traj.label_base.len() - 1]);
++				c.push_shadow();
+ 				c.record_teacher_inputs(q, gyro, teacher.integrals(), controller.vert_obs());
+ 				c.record_ctbr_hidden(teacher.diag_ctbr_hidden(), controller.diag_ctbr_inner_state());
+ 				c.record(controller, traj.pid_pwms[traj.pid_pwms.len() - 1], applied);
+diff --git a/src/wnn/ram/strategies/accelerator/controller/episode_regime.rs b/src/wnn/ram/strategies/accelerator/controller/episode_regime.rs
+index ca660f82..8b433eee 100644
+--- a/src/wnn/ram/strategies/accelerator/controller/episode_regime.rs
++++ b/src/wnn/ram/strategies/accelerator/controller/episode_regime.rs
+@@ -299,6 +299,12 @@ impl ExpertPilot
+ 		}
+ 	}
+ 
++	/// CTRL-69 diagnostic: a copy of the rate loop that is flying (None on the motor path).
++	pub(crate) fn flown_rate(&self) -> Option<crate::pid_firmware::RateStageFw>
++	{
++		self.ctbr.as_ref().map(|(p, _)| *p.rate())
++	}
++
+ 	/// Episode start (the inner stage forgets its integrals, filters and clocks).
+ 	pub(crate) fn reset(&mut self)
+ 	{
+diff --git a/src/wnn/ram/strategies/accelerator/controller/imitation_probe.rs b/src/wnn/ram/strategies/accelerator/controller/imitation_probe.rs
+index 1c0ab5c5..70a43b36 100644
+--- a/src/wnn/ram/strategies/accelerator/controller/imitation_probe.rs
++++ b/src/wnn/ram/strategies/accelerator/controller/imitation_probe.rs
+@@ -57,6 +57,20 @@ pub(crate) struct ImitCapture
+ 	pub hidden: Vec<[f64; 12]>,
+ 	/// CTBR: the student's REAL inner rate loop per record (integrator ×3, held force ×3).
+ 	pub inner: Vec<[f64; 6]>,
++	/// CTRL-69 diagnostic: EVERY physical step, the FLOWN rate loop before the
++	/// student's step: [err ×3 (sp − measured at the last rate update), I/i_limit ×3,
++	/// decision (0/1), rate-loop phase, episode index].
++	pub phys: Vec<[f32; 9]>,
++	/// CTRL-69: the label's delta baseline per record (traj.label_base).
++	pub label_base: Vec<[f32; 4]>,
++	pub episode: u32,
++	/// CTRL-69: a SHADOW residual block (production CascadeObs, residual on) ticked with
++	/// the student's own inputs — the residual for layouts that do not emit it.
++	pub shadow: Option<crate::cascade_obs::CascadeObs>,
++	pub shadow_lag_s: f32,
++	/// per decision record: the shadow's residual ×3
++	pub shadow_resid: Vec<[f32; 3]>,
++	shadow_last: [f32; 3],
+ 	act: crate::actuator_lag::ActuatorLag,
+ }
+ 
+@@ -78,6 +92,13 @@ impl ImitCapture
+ 			label: Vec::new(),
+ 			hidden: Vec::new(),
+ 			inner: Vec::new(),
++			phys: Vec::new(),
++			label_base: Vec::new(),
++			episode: 0,
++			shadow: None,
++			shadow_lag_s: 0.0,
++			shadow_resid: Vec::new(),
++			shadow_last: [0.0; 3],
+ 			act: crate::actuator_lag::ActuatorLag::new(0.0, 0.001),
+ 		}
+ 	}
+@@ -95,6 +116,50 @@ impl ImitCapture
+ 	{
+ 		self.act = crate::actuator_lag::ActuatorLag::new(motor_lag_s, dt);
+ 		self.act.reset();
++		self.episode += 1;
++		if let Some(o) = self.shadow.as_mut()
++		{
++			o.reset();
++			o.set_motor_lag(self.shadow_lag_s, dt);
++		}
++	}
++
++	/// CTRL-69: tick the shadow with this step's (flown I/L, gyro, applied) — the
++	/// inputs compute_features hands the real block (controller.rs tick_cascade).
++	pub(crate) fn tick_shadow(&mut self, rate_i_norm: [f32; 3], gyro: [f32; 3], applied: &[f32])
++	{
++		if let Some(o) = self.shadow.as_mut()
++		{
++			let v = o.tick(rate_i_norm, gyro, applied);
++			self.shadow_last = o.residual().expect("shadow has the residual").of(&v);
++		}
++	}
++
++	pub(crate) fn push_shadow(&mut self)
++	{
++		if self.shadow.is_some()
++		{
++			self.shadow_resid.push(self.shadow_last);
++		}
++	}
++
++	/// CTRL-69: the flown rate loop's row (decision flag filled after the step).
++	pub(crate) fn flown_row(rs: Option<crate::pid_firmware::RateStageFw>, ep: u32) -> [f32; 9]
++	{
++		let mut r = [0.0f32; 9];
++		if let Some(rs) = rs
++		{
++			for a in 0..3
++			{
++				let st = rs.axis_state(a);
++				let lim = rs.axis_gains(a).i_limit;
++				r[a] = st.err as f32;
++				r[3 + a] = (if lim > 0.0 { st.integ / lim } else { st.integ }) as f32;
++			}
++			r[7] = rs.phase() as f32;
++		}
++		r[8] = ep as f32;
++		r
+ 	}
+ 
+ 	/// Mirror of teacher.observe(gyro, last_applied) — called where the rollout calls it.
+diff --git a/src/wnn/ram/strategies/accelerator/controller/lib.rs b/src/wnn/ram/strategies/accelerator/controller/lib.rs
+index a5f1ec77..97f0d636 100644
+--- a/src/wnn/ram/strategies/accelerator/controller/lib.rs
++++ b/src/wnn/ram/strategies/accelerator/controller/lib.rs
+@@ -1449,6 +1449,23 @@ fn sample_student_features(
+ 	Ok(calib_sampler::sample_student_features_rs(&mut controller, &cfg, num_episodes, seed))
+ }
+ 
++/// CTRL-69 DIAGNOSTIC (scratch wheel only): calib_sampler::trace_dagger_cascade_rs.
++#[pyfunction]
++#[pyo3(signature = (controller, cfg, num_episodes, seed, shadow_resid_plant = None))]
++fn trace_dagger_cascade(
++	mut controller: PyRefMut<'_, controller::WnnController>,
++	cfg: dagger_train::RewardGatedConfigPacked,
++	num_episodes: usize,
++	seed: u64,
++	shadow_resid_plant: Option<[f64; 5]>,
++) -> PyResult<(Vec<Vec<f32>>, Vec<[f32; 4]>, Vec<[f32; 4]>, Vec<[f32; 9]>, Vec<[f32; 3]>)>
++{
++	dagger_train::validate_train_regime(&controller, &cfg).map_err(|e| {
++		pyo3::exceptions::PyValueError::new_err(format!("trace_dagger_cascade: {e}"))
++	})?;
++	Ok(calib_sampler::trace_dagger_cascade_rs(&mut controller, &cfg, num_episodes, seed, shadow_resid_plant))
++}
++
+ #[pyfunction]
+ #[allow(clippy::too_many_arguments)]
+ fn record_input_entropy(
+@@ -1609,6 +1626,7 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()>
+ 	m.add_function(wrap_pyfunction!(record_input_entropy, m)?)?;
+ 	m.add_function(wrap_pyfunction!(sample_calibration_features, m)?)?;
+ 	m.add_function(wrap_pyfunction!(sample_student_features, m)?)?;
++	m.add_function(wrap_pyfunction!(trace_dagger_cascade, m)?)?; // CTRL-69 scratch
+ 	m.add("LAYER_STATE", memory_ops::LAYER_STATE)?;
+ 	m.add("LAYER_OUTPUT", memory_ops::LAYER_OUTPUT)?;
+ 	// Untrained-cell decode anchor (delta-control + residual neutral point),
+diff --git a/src/wnn/ram/strategies/accelerator/controller/pid_firmware.rs b/src/wnn/ram/strategies/accelerator/controller/pid_firmware.rs
+index 52843f89..fe839f54 100644
+--- a/src/wnn/ram/strategies/accelerator/controller/pid_firmware.rs
++++ b/src/wnn/ram/strategies/accelerator/controller/pid_firmware.rs
+@@ -115,6 +115,8 @@ struct PidCh
+ 	integ: f64,
+ 	prev_measured: f64,
+ 	first: bool,
++	/// CTRL-69 diagnostic: setpoint − measured at the last update (0 after reset).
++	last_err: f64,
+ }
+ 
+ impl PidCh
+@@ -129,11 +131,13 @@ impl PidCh
+ 			integ: 0.0,
+ 			prev_measured: 0.0,
+ 			first: true,
++			last_err: 0.0,
+ 		}
+ 	}
+ 
+ 	fn reset(&mut self)
+ 	{
++		self.last_err = 0.0;
+ 		self.integ = 0.0;
+ 		self.prev_measured = 0.0;
+ 		self.first = true;
+@@ -152,6 +156,7 @@ impl PidCh
+ 		{
+ 			error = wrap_pi(error);
+ 		}
++		self.last_err = error;
+ 		self.integ += error * self.dt;
+ 		if self.g.i_limit != 0.0
+ 		{
+@@ -257,6 +262,8 @@ pub(crate) struct RateAxisState
+ 	pub first: bool,
+ 	/// The axis force (N) held since the last update.
+ 	pub held: f64,
++	/// CTRL-69 diagnostic: setpoint − measured at the last update.
++	pub err: f64,
+ }
+ 
+ /// The RATE stage of the firmware cascade: body-rate setpoint (rad/s) -> per-axis
+@@ -341,6 +348,7 @@ impl RateStageFw
+ 			prev_measured: c.prev_measured,
+ 			first: c.first,
+ 			held: self.held[i],
++			err: c.last_err,
+ 		}
+ 	}
+ 

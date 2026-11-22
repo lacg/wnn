@@ -1,0 +1,10 @@
+ABI 60 features 30 records 20000 phys 200000 action_repeat 10 tilt 5.0
+ABI 60 features 30 records 20000 phys 200000 action_repeat 10 tilt 5.0
+[student yfl_s1] ABI 60 features 27 records 20000 phys 200000 action_repeat 10 tilt 5.0
+[student yfl_s1] ABI 60 features 27 records 20000 phys 200000 action_repeat 10 tilt 5.0
+[student n0_s1] ABI 60 features 24 records 20000 phys 200000 action_repeat 10 tilt 5.0
+[student n0_s1] ABI 60 features 24 records 20000 phys 200000 action_repeat 10 tilt 5.0
+[teacher final wheel] ABI 60 features 30 records 20000 phys 200000 action_repeat 10 tilt 5.0
+[teacher final wheel] PARITY shadow residual vs cresid feature: max|diff| = 0.0
+[teacher final wheel] ABI 60 features 30 records 20000 phys 200000 action_repeat 10 tilt 5.0
+[teacher final wheel] PARITY shadow residual vs cresid feature: max|diff| = 0.0
