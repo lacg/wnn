@@ -513,6 +513,10 @@ use pyapi::*;
 /// IDSCacheWrapper.export_neuron_outputs (IDS-57 arm E, adaptive/neuron_outputs.rs)
 /// — per-row per-neuron effective cells + the production scores of every cluster
 /// for the train / val / test partition. No existing path changes.
+/// Same ABI (not deployed in between): additive READ-ONLY
+/// IDSCacheWrapper.score_multiclass_sets (IDS-62 seed ensemble) — the flat K-vector
+/// test/train/val scores evaluate_multiclass_at_thresholds decodes, plus pyfunctions
+/// multiclass_margin_predictions / multiclass_metrics_from_predictions. No existing path changes.
 pub const ABI_VERSION: u32 = 29;
 
 #[pymodule]
@@ -610,6 +614,9 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()>
 	m.add_class::<IDSGenomeStreamerWrapper>()?;
 	// Streaming multiclass Protocol-v2 decode modes (from take_scores buffers)
 	m.add_function(wrap_pyfunction!(multiclass_modes_from_scores, m)?)?;
+	// IDS-62 seed ensemble: margin decode at τ + metrics for fixed predictions (read-only)
+	m.add_function(wrap_pyfunction!(multiclass_margin_predictions, m)?)?;
+	m.add_function(wrap_pyfunction!(multiclass_metrics_from_predictions, m)?)?;
 	// RAM-based gating (weightless per-cluster gating with majority voting)
 	m.add_class::<RAMGatingWrapper>()?;
 	m.add_function(wrap_pyfunction!(compute_target_gates, m)?)?;

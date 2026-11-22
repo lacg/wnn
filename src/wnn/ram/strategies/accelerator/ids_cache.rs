@@ -1412,6 +1412,47 @@ pub fn evaluate_multiclass_at_thresholds_ids_cached(
 	(num_classes, modes, footprint)
 }
 
+/// READ-ONLY flat K-vector scores of ONE genome for test (eval) + train (+ val),
+/// from ONE training pass — the exact buffers
+/// `evaluate_multiclass_at_thresholds_ids_cached` hands to
+/// `multiclass_metrics::modes_from_scores` (IDS-62 seed-ensemble; additive,
+/// worker ABI 29). Feeding them back through `multiclass_modes_from_scores`
+/// reproduces `evaluate_multiclass_at_thresholds` bit-exactly.
+pub fn score_multiclass_sets_ids_cached(
+	cache: &IDSCache,
+	bits_flat: &[usize],
+	neurons_flat: &[usize],
+	connections_flat: &[i64],
+	empty_value: f32,
+	neuron_sample_rate: f32,
+	rng_seed: u64,
+) -> crate::adaptive::ScoredSets
+{
+	let train = cache.full_train();
+	let eval = cache.full_eval();
+	let val = cache.full_val();
+	crate::adaptive::train_and_score_sets_flat(
+		bits_flat,
+		neurons_flat,
+		connections_flat,
+		cache.num_genome_clusters(),
+		&train.input_bits,
+		&train.targets,
+		&train.negatives,
+		train.num_examples,
+		cache.num_negatives(),
+		&eval.input_bits,
+		eval.num_examples,
+		val.map(|v| &v.input_bits),
+		val.map_or(0, |v| v.num_examples),
+		cache.total_features(),
+		cache.eval_settings(empty_value),
+		neuron_sample_rate,
+		rng_seed,
+		cache.class_weights.as_deref(),
+	)
+}
+
 /// Score TRAINING examples (for calibration fitting on training data).
 /// Trains on full_train, returns scores for full_train (same data).
 pub fn score_train_examples_ids_cached(

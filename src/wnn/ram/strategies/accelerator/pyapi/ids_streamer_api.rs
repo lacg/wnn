@@ -277,3 +277,54 @@ pub(crate) fn multiclass_modes_from_scores(
 		Ok((num_classes, multiclass_modes_to_py(modes)))
 	})
 }
+
+/// READ-ONLY benign-margin decode at a given τ (IDS-62 seed ensemble; additive,
+/// worker ABI 29): the exact `margin_decode(benign_margins(scores), τ)` the
+/// margin_* modes of `multiclass_modes_from_scores` apply. `scores_flat[ex*K+c]`.
+#[pyfunction]
+#[pyo3(signature = (scores_flat, num_classes, tau, normal_class=0))]
+pub(crate) fn multiclass_margin_predictions(
+	scores_flat: Vec<f64>,
+	num_classes: usize,
+	tau: f64,
+	normal_class: usize,
+) -> PyResult<Vec<u32>>
+{
+	if num_classes < 2 || scores_flat.len() % num_classes != 0
+	{
+		return Err(pyo3::exceptions::PyValueError::new_err(format!(
+			"multiclass_margin_predictions: {} scores not a multiple of K={num_classes} (K>=2)",
+			scores_flat.len(),
+		)));
+	}
+	let (margins, attack) = multiclass_metrics::benign_margins(&scores_flat, num_classes, normal_class);
+	Ok(multiclass_metrics::margin_decode(&margins, &attack, tau, normal_class))
+}
+
+/// READ-ONLY full multiclass metric set for FIXED predictions (IDS-62 vote
+/// ensemble; additive, worker ABI 29) — `metrics_from_predictions`, returned as
+/// one mode tuple named `mode` (τ = NaN). `scores_flat` only feeds the CE.
+#[pyfunction]
+#[pyo3(signature = (scores_flat, predictions, labels, num_classes, normal_class=0, mode="predictions".to_string()))]
+pub(crate) fn multiclass_metrics_from_predictions(
+	scores_flat: Vec<f64>,
+	predictions: Vec<u32>,
+	labels: Vec<i64>,
+	num_classes: usize,
+	normal_class: usize,
+	mode: String,
+) -> PyResult<MulticlassModeTuple>
+{
+	if predictions.len() != labels.len() || scores_flat.len() != labels.len() * num_classes
+	{
+		return Err(pyo3::exceptions::PyValueError::new_err(format!(
+			"multiclass_metrics_from_predictions: {} predictions / {} labels / {} scores (K={num_classes})",
+			predictions.len(),
+			labels.len(),
+			scores_flat.len(),
+		)));
+	}
+	let metrics = multiclass_metrics::metrics_from_predictions(&scores_flat, &predictions, &labels, num_classes, normal_class);
+	let result = multiclass_metrics::MulticlassModeResult { mode, tau: f64::NAN, metrics };
+	Ok(multiclass_modes_to_py(vec![result]).remove(0))
+}

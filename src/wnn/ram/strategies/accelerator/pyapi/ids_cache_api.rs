@@ -921,6 +921,55 @@ impl IDSCacheWrapper
 		))
 	}
 
+	/// READ-ONLY K-vector scores of ONE genome (IDS-62; additive, worker ABI 29).
+	/// Trains ONCE exactly as `evaluate_multiclass_at_thresholds` and returns
+	/// `(test_scores [n_test, K], train_scores [n_train, K], val_scores [n_val, K] | None,
+	/// test_labels, train_labels, val_labels | None)`. Feeding these to
+	/// `multiclass_modes_from_scores` reproduces `evaluate_multiclass_at_thresholds`.
+	#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+	fn score_multiclass_sets<'py>(
+		&self,
+		py: Python<'py>,
+		bits_flat: Vec<usize>,
+		neurons_flat: Vec<usize>,
+		connections_flat: Vec<i64>,
+		empty_value: f32,
+		neuron_sample_rate: f32,
+		rng_seed: u64,
+	) -> PyResult<(
+		Bound<'py, numpy::PyArray2<f64>>,
+		Bound<'py, numpy::PyArray2<f64>>,
+		Option<Bound<'py, numpy::PyArray2<f64>>>,
+		Bound<'py, numpy::PyArray1<i64>>,
+		Bound<'py, numpy::PyArray1<i64>>,
+		Option<Bound<'py, numpy::PyArray1<i64>>>,
+	)>
+	{
+		use numpy::{IntoPyArray, PyArrayMethods};
+		let k = self.inner.num_genome_clusters();
+		validate_flat_genomes_py(&bits_flat, &neurons_flat, &connections_flat, 1, k)?;
+		let (eval_s, train_s, val_s, _fp) = py.allow_threads(|| {
+			ids_cache::score_multiclass_sets_ids_cached(
+				&self.inner, &bits_flat, &neurons_flat, &connections_flat, empty_value, neuron_sample_rate, rng_seed,
+			)
+		});
+		let rows = |v: &Vec<f64>| v.len() / k;
+		let (ne, nt) = (rows(&eval_s), rows(&train_s));
+		let val_arr = match val_s
+		{
+			Some(v) => { let n = rows(&v); Some(v.into_pyarray(py).reshape([n, k])?) }
+			None => None,
+		};
+		Ok((
+			eval_s.into_pyarray(py).reshape([ne, k])?,
+			train_s.into_pyarray(py).reshape([nt, k])?,
+			val_arr,
+			self.inner.full_eval().targets.clone().into_pyarray(py),
+			self.inner.full_train().targets.clone().into_pyarray(py),
+			self.inner.full_val().map(|v| v.targets.clone().into_pyarray(py)),
+		))
+	}
+
 	/// Multiclass (K-cluster) analogue of `evaluate_at_thresholds`.
 	///
 	/// Trains a single genome ONCE, scores eval + train (+ val when the cache

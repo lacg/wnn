@@ -876,6 +876,22 @@ class IDSEvaluator(BaseEvaluator):
 			partition, None if rows is None else [int(r) for r in rows], packed,
 		))
 
+	def score_multiclass_sets(self, genome) -> tuple:
+		"""READ-ONLY (IDS-62 seed ensemble): train ONCE exactly as
+		evaluate_multiclass_at_thresholds does and return the K-vector scores it
+		decodes: (test [n,K], train [n,K], val [n,K] | None, test_labels,
+		train_labels, val_labels | None). Computed in Rust; in-memory datasets only."""
+		from wnn.accel import BUILD_HINT
+		if self._streaming_mode:
+			raise NotImplementedError("score_multiclass_sets: streaming datasets are not supported")
+		if not hasattr(self._cache, "score_multiclass_sets"):
+			raise RuntimeError(f"score_multiclass_sets needs a worker ABI-29 wheel with the IDS-62 score export. {BUILD_HINT}")
+		bits_flat, neurons_flat, connections_flat = self._flatten_genomes([genome])
+		return self._cache.score_multiclass_sets(
+			bits_flat, neurons_flat, connections_flat,
+			self._empty_value, self._neuron_sample_rate, 0,
+		)
+
 	def evaluate_multiclass_at_thresholds(self, genome) -> dict:
 		"""Train ONCE, score eval/train(/val) as K-vectors, return per-mode
 		multiclass metrics computed on the EVAL set.
