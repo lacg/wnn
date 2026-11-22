@@ -75,9 +75,15 @@ indices >= 256 (any cascade with 32+ features x 8 bits) and -1 slots.
 * **`-ffp-contract=off` is mandatory.** Rust never fuses `a*b+c`; GCC targeting
   the M4F does by default (VFMA). Measured on the parity run: with
   `-ffp-contract=fast` 5,210 of 6,000 held setpoints differ from the simulator.
-* Estimator, rate-I and d-hat are f64 like the CPU reference. On an M4F (single
+* Rate-I and d-hat are f64 like the CPU reference. On an M4F (single
   precision FPU) that means libgcc soft-double (`__aeabi_dadd`, ...): link libgcc
-  and a libm (`atan2f`, `powf`, `sqrtf`, `sqrt`). `-DWNN_DHAT_F32` selects the
+  and a libm (`atan2f`, `powf`, `sqrtf`, `sqrt`).
+* The Mahony estimator + ABI-55 heading follow the header's `WNN_EST_F32`
+  (ram_controller ABI 61, 22/11/2026): the exporter emits `#define WNN_EST_F32 1`
+  when the wheel's `ATT_EST_PRECISION` is `"f32"`; then the filter is f32 and the
+  heading uses `atan2_det` (IEEE +, -, *, /, sqrt only, no libm), bit-identical to
+  Rust and to the Metal kernel. A header without the macro (any export from an
+  ABI <= 60 wheel) keeps the f64 estimator + f64 heading of that lineage. `-DWNN_DHAT_F32` selects the
   Metal kernel's f32 observer instead: cheaper, and NOT bit-identical (every tick's
   d-hat differs in the last bits; over the 6,000-tick parity run no thermometer
   bit flipped, which is evidence, not a guarantee).
@@ -468,3 +474,18 @@ raw: `logs/controller/ctrl60/`). Firmware = `.text` of the whole M4 image.
 pef64 adds ~51k instructions per decision at 256-264 n and ~97k at 480 n (1.6-1.7x
 the decision tick, 1.2-1.3x the window); hold ticks are unchanged. Hit and miss are not
 equal-cost under pef64 (worst/mean 1.02-1.03 vs 1.006 for uint32).
+
+### ABI 61 (22/11/2026): f32 Mahony estimator + heading, and the attitude split
+
+* **Estimator.** `wnn_cascade.c` carries both estimators, chosen by `WNN_EST_F32`
+  (see "Build flags"). The f32 one mirrors `mahony_f32.rs` op for op; the Metal kernel
+  runs the same ops under a strict-FP scope, so the estimator is CPU == GPU == C bit for
+  bit (cargo pin `ctrl61_f32_estimator_tests.rs`).
+* **Bench regions.** `bench_ctrl51.c` now splits the attitude cost: MPCOF per tick
+  [observe][decide][shadow][quat->Euler twin on decision ticks], WNN per tick
+  [wnn_tick][d-hat twin][Mahony twin][heading twin][roll/pitch twin].
+  `summarize_bench.py` reads the region count from the run log (old 3-region benches
+  still summarize) and prints the "ATTITUDE EXCLUDED" rows: both controllers handed the
+  firmware's attitude (q and roll / pitch / yaw).
+* Results: `docs/ctrl51_onboard_cost.md`, "Attitude excluded (fair)".
+

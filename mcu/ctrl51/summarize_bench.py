@@ -4,8 +4,15 @@ table (WNN cascade vs MPCOF cascade teacher). Reads only measured files; the ONL
 assumptions are the stated cycles/instruction and the datasheet power figure.
 
 Region layout (bench_ctrl51.c): line 0 = the empty marker region (overhead, subtracted);
-then per tick MPCOF [observe, decide-if-due, shadow], WNN [wnn_tick, observer twin,
-Mahony twin]. Each line "insns soft libm vfp".
+then per tick MPCOF [observe, decide-if-due, shadow, quat->Euler twin (decision ticks)],
+WNN [wnn_tick, observer twin, Mahony twin, heading twin, roll/pitch twin]. Each line
+"insns soft libm vfp". Pre-22/11 benches had 3 regions per tick (no attitude split); the
+count is read from the run's .log (REGIONS = 1 + TICKS x per_tick).
+
+"Attitude excluded (fair)": every flight controller already runs an attitude estimator,
+so both controllers are handed the firmware's attitude (q AND roll / pitch / yaw):
+  MPCOF  minus its decision's quat->Euler conversion;
+  WNN    minus its Mahony update, its ABI-55 heading and its roll / pitch extraction.
 Usage: python mcu/ctrl51/summarize_bench.py [--bench /tmp/ctrl51/bench] [--ref /tmp/ctrl51/ref]
        [--wnn-tags a49dc_s1 a49dc_s2 ...]   (run_bench_ctrl51.sh WNN_SET tags; default a49)
        [--wnn-only]                         (an ONLY=wnn bench: skip the MPCOF rows)
@@ -28,8 +35,15 @@ MW_PER_MHZ_PERIPH = 87.0 * 3.3 / 168.0
 WINDOW_TICKS, N_O = 10, 10
 
 
-def regions(path: Path, per_tick: int) -> np.ndarray:
+def per_tick_regions(log: Path) -> int:
+	"""Regions per tick, from the bench's own TICKS / REGIONS report."""
+	kv = dict(re.findall(r"([A-Z_]+)\t(\d+)", log.read_text()))
+	return (int(kv["REGIONS"]) - 1) // int(kv["TICKS"])
+
+
+def regions(path: Path) -> np.ndarray:
 	"""(ticks, per_tick, 4) counts with the empty-region overhead subtracted from insns."""
+	per_tick = per_tick_regions(path.with_suffix(".log"))
 	a = np.loadtxt(path, dtype=np.int64).reshape(-1, 4)
 	a[1:, 0] -= a[0, 0]
 	return a[1:].reshape(-1, per_tick, 4)
@@ -92,7 +106,7 @@ def float_ops(cols: np.ndarray, steps: list) -> str:
 def mpcof(bench: Path, ref: Path, prec: str):
 	print(f"\n=== MPCOF ({prec}) — per call: mean / p99 / max instructions")
 	for regime in ("nominal", "stress", "upset"):
-		r = regions(bench / f"mpcof_{prec}_{regime}.regions", 3)
+		r = regions(bench / f"mpcof_{prec}_{regime}.regions")
 		steps = episode_steps(ref / f"traj_{regime}.bin", False)
 		dec = decision_mask(steps)
 		obs, decide, shadow = r[:, 0, 0], r[:, 1, 0], r[:, 2, 0]
@@ -109,16 +123,21 @@ def mpcof(bench: Path, ref: Path, prec: str):
 		print(f"   {float_ops(r, steps)}")
 		core = obs + decide
 		row("core (shadow = firmware loop)", windows(core, steps), core[dec])
+		if r.shape[1] >= 4:
+			eul = np.where(dec, r[:, 3, 0], 0)
+			print(f"   quat->Euler (decision ticks) {stat(r[dec, 3, 0])}  per window {windows(eul, steps).mean():.0f}")
+			row("ATTITUDE EXCLUDED full", windows(tick - eul, steps), (tick - eul)[dec])
+			row("ATTITUDE EXCLUDED core", windows(core - eul, steps), (core - eul)[dec])
 
 
 def wnn(bench: Path, ref: Path, name: str, tag: str):
-	r = regions(bench / f"{name}.regions", 3)
+	r = regions(bench / f"{name}.regions")
 	steps = episode_steps(ref / f"wnn_{tag}_flights.bin", True)
 	dec = decision_mask(steps)
 	tick, obs, est = r[:, 0, 0], r[:, 1, 0], r[:, 2, 0]
 	print(f"\n=== WNN {name} — {len(tick)} ticks, {dec.sum()} decisions; mean / p99 / max")
 	print(f"   wnn_tick hold        {stat(tick[~dec])}   decision {stat(tick[dec])}")
-	print(f"   of which: d-hat observer (twin) {stat(obs)}   Mahony f64 (twin) {stat(est)}")
+	print(f"   of which: d-hat observer (twin) {stat(obs)}   Mahony (twin) {stat(est)}")
 	lookup = tick[dec].mean() - tick[~dec].mean()
 	print(f"   lookup+encode+decode (decision - hold, means) {lookup:.0f}; other features "
 	      f"{tick[~dec].mean() - obs.mean() - est.mean():.0f}")
@@ -128,6 +147,16 @@ def wnn(bench: Path, ref: Path, name: str, tag: str):
 	print(f"   {float_ops(r[:, :1], steps)}  (wnn_tick only; the twins are copies)")
 	no_est = tick - est
 	row("without its Mahony (q given)", windows(no_est, steps), no_est[dec])
+	if r.shape[1] >= 5:
+		head, eul = r[:, 3, 0], r[:, 4, 0]
+		att = est + head + eul
+		print(f"   attitude parts per tick (mean / p99 / max): Mahony {stat(est)} | heading {stat(head)} | roll/pitch {stat(eul)}")
+		print(f"   attitude per window: Mahony {windows(est, steps).mean():.0f}  heading {windows(head, steps).mean():.0f}  "
+		      f"roll/pitch {windows(eul, steps).mean():.0f}  total {windows(att, steps).mean():.0f}; "
+		      f"soft-double calls/tick Mahony {r[:, 2, 1].mean():.0f} heading {r[:, 3, 1].mean():.0f} roll/pitch {r[:, 4, 1].mean():.0f}")
+		fair = tick - att
+		row("ATTITUDE EXCLUDED (fair)", windows(fair, steps), fair[dec])
+		print(f"   fair: hold tick {stat(fair[~dec])}  decision tick {stat(fair[dec])}")
 
 
 SECTION = re.compile(r"^ (\.(?:text|rodata|data|bss)\S*)\s+0x([0-9a-f]+)\s+0x([0-9a-f]+)\s+(\S+)")

@@ -39,7 +39,8 @@ THE CASES.
               (22/11/2026, only when the winner carries the block) one block-10 / lever
               constant broken in the C header ONLY — the yaw-trim FF gain, the tilt-
               reference bandwidth, the yaw-bank delta_max, the yaw-integral leak, the
-              Mahony heading switched to dead reckoning. Each MUST be caught, so a
+              Mahony heading switched to dead reckoning, and (ABI 61) the Mahony
+              estimator precision flipped (WNN_EST_F32). Each MUST be caught, so a
               pass on the trained winner is evidence that the block is exercised.
 
 THE INPUT STREAM. The Rust flags-off winner flies the run's own plant (airframe,
@@ -466,6 +467,11 @@ def block_mutants(off: Case) -> list:
 		muts.append(("mutant-yawleak", _block_mutation(b, "yaw_integral_leak", float(off.model.spec.integral_leak))))
 	if b.get("yaw_from_att_est"):
 		muts.append(("mutant-heading", _block_mutation(b, "yaw_from_att_est", False)))
+	if "est_f32" in b and getattr(off.model.spec, "obs_att_estimator", False):
+		# ABI 61: the OTHER estimator precision in the C (f64 vs the wheel's f32, or the
+		# reverse). Motor commands can survive an ulp-level estimate change (the M4 bench
+		# only compares pwm); the per-tick feature comparison here must not.
+		muts.append(("mutant-estprec", _block_mutation(b, "est_f32", not b["est_f32"])))
 	out = [dataclasses.replace(off, name=f"{off.name}/{n}", model=dataclasses.replace(off.model, blocks=m),
 	                           expect_fail=True) for n, m in muts]
 	if b.get("att_bias_pred"):

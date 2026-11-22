@@ -491,3 +491,110 @@ That is a direction only. Significance belongs to experiment-design.
 5. **Y+F+L measured.** At 285–348k instructions per window (f64 observer,
    uint32), it costs 7–11 % more than the a49 dc winners. The ABI-55 f64 heading
    is most of that.
+
+
+---
+
+# Attitude excluded (fair), and the f32 estimator (22/11/2026, Luiz plan "A + B")
+
+**Why.** Every flight controller already runs an attitude estimator, whatever the
+controller. The fair on-board cost charges the CONTROLLER only: both MPCOF and the WNN
+are handed the firmware's attitude estimate (q AND roll / pitch / yaw).
+
+**What is excluded** (each measured on a twin fed the same inputs, `bench_ctrl51.c`):
+
+- **MPCOF:** its decision's quat→Euler conversion (it was already handed q).
+- **WNN:** its Mahony update, its ABI-55 heading (the yaw it reads), and its roll /
+  pitch extraction from the estimate. Tilt and everything after stay charged.
+- The d-hat observer is a CONTROLLER cost for both (MPCOF's own model; the WNN's dres
+  input), so it stays in.
+
+**Setup.** As "Y+F+L measured on the M4" above: QEMU mps2-an386 Cortex-M4F,
+`-O2 -ffp-contract=off`, newlib-nano. 10,000 recorded ticks (1,000 decisions) per WNN
+winner; MPCOF on its three regimes. All counts are retired instructions; cycles =
+1.5 × instructions is an estimate. Window = 10 ticks = 10 ms = one decision. Raw:
+`mcu/ctrl51/abi61_2211/`.
+
+## Table A — attitude excluded, both controllers (ABI-60 lineage, bit-exact builds)
+
+WNN rows: f64 d-hat observer (the command-identical build), the ABI-60 f64 estimator
+in the C (it is subtracted anyway). MPCOF rows: nominal / upset regime.
+
+| controller | window mean | window worst | decision tick mean / max | worst decision tick, % of 1 ms @168 / 480 MHz |
+|---|---|---|---|---|
+| **MPCOF f64 full**, nominal / upset | 153,733 / 168,654 | 1,165,990 / 2,274,178 | — | 977 % / 342 % (nominal); 1,966 % / 688 % (upset) |
+| MPCOF f64 core (shadow = firmware rate loop), nominal / upset | 121,567 / 136,432 | 1,138,244 / 2,246,428 | — | 974 % / 341 % (nominal) |
+| **MPCOF f32 full**, nominal / upset | 41,587 / 42,434 | 92,018 / 149,010 | — | 58 % / 20 % (nominal); 109 % / 38 % (upset) |
+| MPCOF f32 core, nominal / upset | 9,051 / 9,842 | 63,902 / 120,890 | — | 55 % / 19 % (nominal); 106 % / 37 % (upset) |
+| **WNN Y+F+L s1** (264 n), uint32 / pef64 | 146,768 / 201,054 | 147,532 / 205,237 | 77,835 / 78,269 ; 132,122 / 136,209 | 70 / 24 % ; 122 / 43 % |
+| WNN s2 (504 n), uint32 / pef64 | 201,020 / 293,437 | 201,916 / 298,561 | 132,075 / 132,633 ; 224,492 / 229,658 | 118 / 41 % ; 205 / 72 % |
+| WNN s3 (256 n), uint32 / pef64 | 140,667 / 185,891 | 141,322 / 190,052 | 71,699 / 72,024 ; 116,924 / 120,848 | 64 / 22 % ; 108 / 38 % |
+| WNN s4 (264 n), uint32 / pef64 | 142,318 / 188,795 | 143,045 / 192,534 | 73,383 / 73,727 ; 119,861 / 123,331 | 66 / 23 % ; 110 / 38 % |
+| WNN s5 (504 n), uint32 / pef64 | 202,881 / 297,510 | 203,619 / 302,998 | 133,925 / 134,453 ; 228,554 / 234,113 | 120 / 42 % ; 209 / 73 % |
+
+- **WNN hold tick, attitude excluded:** 7,659–7,663 mean (≤ 7,796 max); 5,413 of it
+  is the f64 d-hat observer.
+- **f32 d-hat observer** (cost only; NOT command-identical under the yaw-trim FF,
+  8,172–8,888 of 10,000 ticks differ): windows s1 94,728 / 149,014, s2 148,966 /
+  241,383, s3 88,587 / 133,811, s4 90,277 / 136,755, s5 150,815 / 245,444
+  (uint32 / pef64); hold tick 2,453. This is the like-for-like row against MPCOF f32.
+- **The CTRL-51 "q given" view** (Mahony only removed; heading and roll / pitch still
+  charged) reproduces: s1 uint32 179,001 (178,931 on 22/11 morning).
+
+## The estimator's own cost (reported separately)
+
+Per tick, measured on the twins (mean; p99 and max within 2 %), same for every seed
+and key format:
+
+| part | f64 (ABI ≤ 60) | f32 (ABI 61) |
+|---|---|---|
+| Mahony update | 11,245 instr (128 soft-double calls) | **184** (0 soft-double) |
+| ABI-55 heading (yaw of q, unwrapped) | 2,988 (52 soft-double calls, f64 `atan2`) | **96** (`atan2_det`, no libm) |
+| roll / pitch from the estimate (`atan2f`, f32 both) | 236 | 235 |
+| **per 10 ms window** | **144.7k** | **5.2k** |
+
+MPCOF's quat→Euler, for comparison: 7,636 per decision in f64 (soft-double `atan2`,
+`asin`), 293 in f32.
+
+**What the f32 estimator does to the WNN's whole window** (ABI 61, f64 d-hat observer,
+measured): s1 151,852 / 206,138, s2 206,103 / 298,520, s3 145,744 / 190,968,
+s4 147,408 / 193,886, s5 207,963 / 302,592 (uint32 / pef64), vs 285–442k before.
+Soft-double calls per window: 2,700 → 900 (all of them now the d-hat observer).
+With the f32 observer too: 93.7–155.9k (uint32). The decision tick barely moves
+(the estimator runs on every tick): s1 uint32 at 168 MHz 82.9 % → 70.3 % of 1 ms.
+
+## Reading
+
+1. **Handed the attitude, MPCOF f32 is still far cheaper on average:** 41.6k (full) or
+   9.1k (core) vs the WNN's 88.6–150.8k (f32 observer, uint32) or 140.7–202.9k (f64
+   observer). Against MPCOF f64 (153.7k full), the 256–264 n WNNs are slightly cheaper
+   on average (140.7–146.8k uint32) and the 504 n ones are not (201–203k).
+2. **The worst case is still the WNN's argument:** WNN worst/mean ≤ 1.021; MPCOF's worst
+   window is 2.2–3.6× its mean in f32 and 7–14× in f64 (the box QP).
+3. **The estimator was most of the "WNN is expensive" gap:** 144.7k of a 291k window
+   (s1 uint32) was the f64 Mahony + heading. In f32 it is 5.2k.
+
+## Parity of the f32 estimator (ABI 61)
+
+| check | result |
+|---|---|
+| CPU == Metal, estimator (cargo `ctrl61_f32_estimator_tests`) | **bit-identical** every step: quaternion, up vector, heading. 6 streams × 2000 steps (AttitudeSim specific-force IMU, noisy random IMU, accel dropouts, yaw spins wrapping ±π). The fast-math rollout library runs the estimator under `#pragma METAL fp math_mode(safe)` + `contract(off)` with explicit `precise::sqrt/divide`; the pragma alone left `sqrt` 1 ulp off at step 4 (measured) |
+| CPU == Metal, `atan2_det` | bit-identical on 200,013 (y, x) pairs incl. axes, octant edges, the tan(π/8) boundary ± 1 ulp, 2^±20 magnitudes |
+| host C vs Rust ABI 61 (`test_cascade_parity.py`, 3 × 2000 ticks) | Y+F+L s1–s5 **PASS**, uint32 and pef64; regressions ct40 C-S2-d, a49 dc s1, a45 s1 **PASS**; every block mutant still caught |
+| precision mutant (C estimator f64 vs the wheel's f32) | **caught** at step 0 (heading feature) |
+| M4, 10,000 ticks per winner (ABI-61 headers + flights) | **PWM_MISMATCH_TICKS 0**, s1–s5 uint32 and pef64 (f64 observer) |
+
+The M4 bench compares motor commands only. The precision mutant on the M4 (ABI-60 f64
+header on the ABI-61 flights) also gave 0 mismatching ticks: an ulp-level estimate
+change rarely moves a thermometer bit. The host parity compares every feature, and it
+catches the mutant.
+
+**Not made bit-identical (still a CTRL-54 CPU/GPU difference).** The roll / pitch /
+tilt features are atan2 of the up vector: libm on the CPU, Metal's `atan2` on the GPU.
+The yaw-anchor's initial heading (`yaw_from_quat`) is also still a libm seed. These are
+features, not the estimator.
+
+**Flight quality.** No model has been trained on the f32 estimator. The parity above
+uses the Y+F+L winners' tables with the f32 estimator on both sides; it proves the
+implementations match, not that they fly as well. The new control is a re-fly of
+Y+F+L s1–s5 on ABI 61.

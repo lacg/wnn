@@ -455,21 +455,28 @@ inline float4 tilt_ref_quat(float xp, float yp, float vxp, float vyp, constant P
 	return float4(cr * cp, sr * cp, cr * sp, -sr * sp);
 }
 
-// Mahony complementary filter — f32 twin of estimator.rs MahonyFilter::update
-// (same operation order). State: q (w,x,y,z) in .xyzw + the integral term.
+// Mahony complementary filter — BIT-IDENTICAL twin of mahony_f32.rs MahonyF32::update
+// (ABI 61; same operation order). State: q (w,x,y,z) in .xyzw + the integral term.
 // Returns nothing; the caller reads the predicted body "up" via mahony_up.
+// STRICT FP in this scope only: the rollout library is compiled fast-math, which would
+// approximate the divides / sqrt and fuse mul-adds. safe math + contract(off) + explicit
+// precise::sqrt / precise::divide make every op the IEEE f32 op the CPU and the MCU
+// perform (measured: the pragma alone still left sqrt approximate — 1 ulp at step 4;
+// pin: ctrl61_f32_estimator_tests.rs).
 inline void mahony_update(thread float4 &mq, thread float *mint, float3 gyro, float3 acc,
                           float kp, float ki, float dt)
 {
+#pragma METAL fp math_mode(safe)
+#pragma METAL fp contract(off)
 	float w = mq.x, x = mq.y, y = mq.z, z = mq.w;
 	float gx = gyro.x, gy = gyro.y, gz = gyro.z;
 	float ax = acc.x, ay = acc.y, az = acc.z;
-	float nrm = sqrt(ax * ax + ay * ay + az * az);
+	float nrm = precise::sqrt(ax * ax + ay * ay + az * az);
 	if (nrm > 1e-9f)
 	{
-		ax /= nrm;
-		ay /= nrm;
-		az /= nrm;
+		ax = precise::divide(ax, nrm);
+		ay = precise::divide(ay, nrm);
+		az = precise::divide(az, nrm);
 		float vx = 2.0f * (x * z - w * y);
 		float vy = 2.0f * (w * x + y * z);
 		float vz = w * w - x * x - y * y + z * z;
@@ -495,16 +502,18 @@ inline void mahony_update(thread float4 &mq, thread float *mint, float3 gyro, fl
 	x += dx;
 	y += dy;
 	z += dz;
-	float n = sqrt(w * w + x * x + y * y + z * z);
+	float n = precise::sqrt(w * w + x * x + y * y + z * z);
 	n = (n > 0.0f) ? n : 1.0f;
-	mq = float4(w / n, x / n, y / n, z / n);
+	mq = float4(precise::divide(w, n), precise::divide(x, n), precise::divide(y, n), precise::divide(z, n));
 }
 
 // The estimate's predicted body-frame "up" (world +z in the body frame) — the
 // vector the WNN's attitude features read in place of the accelerometer when
-// the estimator is on (twin of WnnController::att_up_from_quat).
+// the estimator is on (twin of att_estimator.rs up_from_quat; ABI 61: strict FP, bit-identical).
 inline float3 mahony_up(float4 mq)
 {
+#pragma METAL fp math_mode(safe)
+#pragma METAL fp contract(off)
 	float w = mq.x, x = mq.y, y = mq.z, z = mq.w;
 	return float3(2.0f * (x * z - w * y), 2.0f * (w * x + y * z), w * w - x * x - y * y + z * z);
 }
@@ -869,11 +878,60 @@ struct FwdParams
 	float yfe_yaw;
 };
 
+// ABI 61: deterministic f32 atan2 from IEEE basic ops — BIT-IDENTICAL twin of
+// mahony_f32.rs atan01_det / atan2_det (Metal's atan2 rounds differently from libm, so
+// the heading cannot use it and stay CPU == GPU). Strict FP scope as mahony_update.
+inline float atan01_det(float a)
+{
+#pragma METAL fp math_mode(safe)
+#pragma METAL fp contract(off)
+	float base = 0.0f, t = a;
+	if (a > 0.41421357f)
+	{
+		base = 0.7853982f;
+		t = precise::divide(a - 1.0f, a + 1.0f);
+	}
+	float s = t * t;
+	float p = ((((((-0.06666667f * s + 0.07692308f) * s + -0.09090909f) * s + 0.11111111f) * s + -0.14285715f) * s + 0.2f) * s)
+		+ -0.33333334f;
+	return base + (t + (t * s) * p);
+}
+
+inline float atan2_det(float y, float x)
+{
+#pragma METAL fp math_mode(safe)
+#pragma METAL fp contract(off)
+	float ax = fabs(x), ay = fabs(y);
+	if (ax == 0.0f && ay == 0.0f)
+		return 0.0f;
+	bool swap = ay > ax;
+	float a = swap ? precise::divide(ax, ay) : precise::divide(ay, ax);
+	float r = atan01_det(a);
+	if (swap)
+		r = 1.5707964f - r;
+	if (x < 0.0f)
+		r = 3.1415927f - r;
+	if (y < 0.0f)
+		r = -r;
+	return r;
+}
+
 // Lever 1 (ABI 55): the Mahony quaternion's Euler yaw unwrapped onto the running heading
-// h — f32 twin of controller.rs mahony_heading (CPU computes the wrap in f64).
+// h. ABI 61: BIT-IDENTICAL twin of mahony_f32.rs mahony_heading_f32 (yaw through
+// atan2_det, wrap in f32 with the f32 π / 2π the CPU uses).
 inline float mahony_heading(float h, float4 mq)
 {
-	return h + pid_wrap(yaw_from_quat(mq) - h);
+#pragma METAL fp math_mode(safe)
+#pragma METAL fp contract(off)
+	float w = mq.x, x = mq.y, y = mq.z, z = mq.w;
+	float siny_cosp = 2.0f * (w * z + x * y);
+	float cosy_cosp = 1.0f - 2.0f * (y * y + z * z);
+	float d = atan2_det(siny_cosp, cosy_cosp) - h;
+	while (d > 3.1415927f)
+		d -= 6.2831855f;
+	while (d <= -3.1415927f)
+		d += 6.2831855f;
+	return h + d;
 }
 
 // Cell semantics (fire bit, nudge step, nudge distance, the TERNARY empty value
@@ -3789,3 +3847,52 @@ kernel void controller_candidate_rank_probe(
 // were RETIRED in ABI 35: the whole sn>0 walk now runs in controller_bptt.metal, which
 // reuses ctrl_candidate_rank from this file and wnn_nudge_distance / wnn_fire_bit
 // from common.metal.
+
+// ABI 61 parity probe: the WNN's f32 Mahony estimator + heading on recorded IMU streams,
+// through the SAME inline functions the score kernel calls (mahony_update / mahony_up /
+// mahony_heading). Thread = one stream. Per stream: seed = [q0 w,x,y,z, h0];
+// imu = [steps][gyro xyz, accel xyz]; out = [steps][q wxyz, up xyz, heading].
+// P = (num_streams, steps); G = (kp, ki, dt, 0). Pin: ctrl61_f32_estimator_tests.rs.
+kernel void controller_att_est_probe(
+		device const float *imu [[buffer(0)]],
+		device const float *seed [[buffer(1)]],
+		device float *out [[buffer(2)]],
+		constant uint2 &P [[buffer(3)]],
+		constant float4 &G [[buffer(4)]],
+		uint s [[thread_position_in_grid]])
+{
+	if (s >= P.x)
+		return;
+	device const float *sd = seed + s * 5u;
+	float4 mq = float4(sd[0], sd[1], sd[2], sd[3]);
+	float mint[3] = {0.0f, 0.0f, 0.0f};
+	float h = sd[4];
+	for (uint t = 0u; t < P.y; ++t)
+	{
+		device const float *r = imu + (s * P.y + t) * 6u;
+		mahony_update(mq, mint, float3(r[0], r[1], r[2]), float3(r[3], r[4], r[5]), G.x, G.y, G.z);
+		float3 up = mahony_up(mq);
+		h = mahony_heading(h, mq);
+		device float *o = out + (s * P.y + t) * 8u;
+		o[0] = mq.x;
+		o[1] = mq.y;
+		o[2] = mq.z;
+		o[3] = mq.w;
+		o[4] = up.x;
+		o[5] = up.y;
+		o[6] = up.z;
+		o[7] = h;
+	}
+}
+
+// ABI 61 parity probe: atan2_det on (y, x) pairs. Thread = one pair.
+kernel void controller_atan2_det_probe(
+		device const float2 *yx [[buffer(0)]],
+		device float *out [[buffer(1)]],
+		constant uint &n [[buffer(2)]],
+		uint i [[thread_position_in_grid]])
+{
+	if (i >= n)
+		return;
+	out[i] = atan2_det(yx[i].x, yx[i].y);
+}

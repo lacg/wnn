@@ -525,6 +525,17 @@ pub(crate) fn kernel_feature_dims_ok(site: &str, num_features: usize, window: us
 }
 
 
+#[cfg(test)]
+impl ControllerRolloutEvaluator
+{
+	/// TEST-ONLY (ABI 61 estimator probe): the rollout library exactly as compiled for
+	/// scoring (fast-math options), with its device and queue.
+	pub(crate) fn test_parts(&self) -> (&Device, &CommandQueue, &Library)
+	{
+		(&self.device, &self.queue, &self.library)
+	}
+}
+
 pub struct ControllerRolloutEvaluator
 {
 	device: Device,

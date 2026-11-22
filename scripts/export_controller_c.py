@@ -314,9 +314,13 @@ def wheel_block_constants(spec, thresholds, conn) -> dict:
 	from wnn.control.evaluator import ControllerGenome, build_controller
 	g = ControllerGenome(spec=spec, thresholds=[float(t) for t in thresholds], state_connections=[],
 	                     output_connections=[int(v) for v in conn], output_cells=[])
+	from wnn.control import _accel as ra
 	c = build_controller(g)
 	tilt = c.obs_tilt_ref_err
-	return dict(att_bias_pred=bool(c.obs_att_bias_pred),
+	# ABI 61: the wheel's estimator precision (a wheel without the constant is f64).
+	est_f32 = getattr(ra, "ATT_EST_PRECISION", "f64") == "f32"
+	return dict(est_f32=est_f32,
+	            att_bias_pred=bool(c.obs_att_bias_pred),
 	            tilt_ref_shape=None if tilt is None else [float(v) for v in tilt],
 	            yaw_from_att_est=bool(c.yaw_from_att_est),
 	            yaw_trim_ff_ct=None if c.yaw_trim_ff is None else float(c.yaw_trim_ff),
@@ -459,6 +463,8 @@ def render_block_macros(m: ExportModel) -> list:
 	on, so a header without them is byte-identical to the pre-22/11 export."""
 	b = m.blocks or {}
 	out = []
+	if b.get("est_f32") and getattr(m.spec, "obs_att_estimator", False):
+		out.append("#define WNN_EST_F32 1  /* ABI 61: f32 Mahony estimator + heading (mahony_f32.rs) */")
 	if b.get("att_bias_pred"):
 		out.append("#define WNN_OBS_ATT_BIAS_PRED 1  /* CTRL-46 Mahony-bias predictor */")
 	if b.get("tilt_ref_shape") is not None:
