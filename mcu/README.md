@@ -327,6 +327,12 @@ re-export any such header.
 
 Results and caveats are in `docs/ctrl51_onboard_cost.md`.
 
+Re-run 22/11/2026: three a49 dc winners (256/264/480 n), an observer-free arm, and
+per-output parity. Several winners in one run with
+`WNN_SET="tag:header ..." bash mcu/run_bench_ctrl51.sh`, then
+`summarize_bench.py --wnn-tags tag ...`. The current Y+F+L base is NOT exportable:
+six blocks are unported, and the exporter now refuses all of them.
+
 
 ## pef64: compressed TRUE-key storage (20/11/2026)
 
