@@ -1,0 +1,143 @@
+CPI 1.5 (estimate); energy k = 0.786 mW/MHz (DS8626 typ, periph off), 1.709 periph on
+
+=== MPCOF (f64) — per call: mean / p99 / max instructions
+ [nominal] 40000 ticks, 4000 decisions, QP ran on 2
+   observer/tick             5417      5499      5539   shadow/tick      3217      6470      6554
+   decision (plan)          74833     75549   1098712   no-QP     74390     75537     76137   QP    961160   1095961   1098712
+   hold-tick total           8310     11937     12035   decision-tick total     86577     87357   1102085
+   per decision: soft-double calls      1310      1303     17162  libm         3         3        56  VFP        68        69       302
+   observer soft-double calls/tick 81; shadow 49
+  full (obs+plan+shadow)             win    161369 /   1173622  %10ms(mean/worst)@16/48/168: 151.28/1100.27  50.43/366.76  14.41/104.79  | worst decision tick %1ms: 10332.0 3444.0  984.0 |  190.2 uJ/window (413.7 periph-on)
+   float ops/window: soft-double calls 2614 (max 18364), VFP instr 188 (max 410)
+  core (shadow = firmware loop)      win    129203 /   1145876  %10ms(mean/worst)@16/48/168: 121.13/1074.26  40.38/358.09  11.54/102.31  | worst decision tick %1ms: 10301.1 3433.7  981.1 |  152.3 uJ/window (331.2 periph-on)
+ [stress] 20000 ticks, 2000 decisions, QP ran on 6
+   observer/tick             5421      5504      5537   shadow/tick      3220      6470      6535
+   decision (plan)          77145     75411   1716890   no-QP     74176     75376     75797   QP   1064004   1686695   1716890
+   hold-tick total           8317     11943     12049   decision-tick total     88899     87246   1720223
+   per decision: soft-double calls      1349      1303     26660  libm         3         3        81  VFP        68        69       423
+   observer soft-double calls/tick 81; shadow 49
+  full (obs+plan+shadow)             win    163750 /   1791735  %10ms(mean/worst)@16/48/168: 153.52/1679.75  51.17/559.92  14.62/159.98  | worst decision tick %1ms: 16127.1 5375.7 1535.9 |  193.0 uJ/window (419.8 periph-on)
+   float ops/window: soft-double calls 2653 (max 27862), VFP instr 188 (max 531)
+  core (shadow = firmware loop)      win    131553 /   1763962  %10ms(mean/worst)@16/48/168: 123.33/1653.71  41.11/551.24  11.75/157.50  | worst decision tick %1ms: 16096.5 5365.5 1533.0 |  155.0 uJ/window (337.2 periph-on)
+ [upset] 40000 ticks, 4000 decisions, QP ran on 89
+   observer/tick             5423      5506      5554   shadow/tick      3222      6474      6551
+   decision (plan)          89702    650547   2209837   no-QP     74403     75439     77876   QP    761971   2166816   2209837
+   hold-tick total           8321     11946     12039   decision-tick total    101462    662407   2213157
+   per decision: soft-double calls      1535      9898     33639  libm         4        34       110  VFP        72       216       541
+   observer soft-double calls/tick 81; shadow 49
+  full (obs+plan+shadow)             win    176349 /   2285108  %10ms(mean/worst)@16/48/168: 165.33/2142.29  55.11/714.10  15.75/204.03  | worst decision tick %1ms: 20748.3 6916.1 1976.0 |  207.8 uJ/window (452.1 periph-on)
+   float ops/window: soft-double calls 2839 (max 34836), VFP instr 192 (max 649)
+  core (shadow = firmware loop)      win    144126 /   2257358  %10ms(mean/worst)@16/48/168: 135.12/2116.27  45.04/705.42  12.87/201.55  | worst decision tick %1ms: 20717.9 6906.0 1973.1 |  169.9 uJ/window (369.5 periph-on)
+
+=== MPCOF (f32) — per call: mean / p99 / max instructions
+ [nominal] 40000 ticks, 4000 decisions, QP ran on 2
+   observer/tick              258       258       258   shadow/tick      3254      6507      6591
+   decision (plan)           6559      6537     61660   no-QP      6535      6537      6537   QP     54180     61510     61660
+   hold-tick total           3186      6784      6871   decision-tick total     13203     13310     65027
+   per decision: soft-double calls        15        15        15  libm         3         3        56  VFP      1466      1463     13924
+   observer soft-double calls/tick 0; shadow 52
+  full (obs+plan+shadow)             win     41872 /     92304  %10ms(mean/worst)@16/48/168:  39.26/ 86.53  13.09/ 28.84   3.74/  8.24  | worst decision tick %1ms:  609.6  203.2   58.1 |   49.3 uJ/window (107.3 periph-on)
+   float ops/window: soft-double calls 540 (max 540), VFP instr 2406 (max 14758)
+  core (shadow = firmware loop)      win      9336 /     64188  %10ms(mean/worst)@16/48/168:   8.75/ 60.18   2.92/ 20.06   0.83/  5.73  | worst decision tick %1ms:  578.3  192.8   55.1 |   11.0 uJ/window (23.9 periph-on)
+ [stress] 20000 ticks, 2000 decisions, QP ran on 6
+   observer/tick              258       258       258   shadow/tick      3257      6507      6572
+   decision (plan)           6694      6537     93686   no-QP      6535      6537      6565   QP     59260     92086     93686
+   hold-tick total           3188      6785      6848   decision-tick total     13343     13315     97013
+   per decision: soft-double calls        15        15        15  libm         3         3        81  VFP      1496      1463     20977
+   observer soft-double calls/tick 0; shadow 52
+  full (obs+plan+shadow)             win     42037 /    124357  %10ms(mean/worst)@16/48/168:  39.41/116.58  13.14/ 38.86   3.75/ 11.10  | worst decision tick %1ms:  909.5  303.2   86.6 |   49.5 uJ/window (107.8 periph-on)
+   float ops/window: soft-double calls 540 (max 540), VFP instr 2435 (max 21811)
+  core (shadow = firmware loop)      win      9470 /     96214  %10ms(mean/worst)@16/48/168:   8.88/ 90.20   2.96/ 30.07   0.85/  8.59  | worst decision tick %1ms:  878.5  292.9   83.7 |   11.2 uJ/window (24.3 periph-on)
+ [upset] 40000 ticks, 4000 decisions, QP ran on 89
+   observer/tick              258       258       258   shadow/tick      3259      6511      6588
+   decision (plan)           7351     37359    118715   no-QP      6536      6563      6604   QP     43157    116321    118715
+   hold-tick total           3191      6789      6868   decision-tick total     14005     44048    122029
+   per decision: soft-double calls        15        15        15  libm         4        34       110  VFP      1648      8629     26784
+   observer soft-double calls/tick 0; shadow 52
+  full (obs+plan+shadow)             win     42720 /    149363  %10ms(mean/worst)@16/48/168:  40.05/140.03  13.35/ 46.68   3.81/ 13.34  | worst decision tick %1ms: 1144.0  381.3  109.0 |   50.3 uJ/window (109.5 periph-on)
+   float ops/window: soft-double calls 540 (max 540), VFP instr 2587 (max 27618)
+  core (shadow = firmware loop)      win     10128 /    121243  %10ms(mean/worst)@16/48/168:   9.49/113.67   3.16/ 37.89   0.90/ 10.83  | worst decision tick %1ms: 1113.2  371.1  106.0 |   11.9 uJ/window (26.0 periph-on)
+
+=== WNN wnn_a49dc_s1_f64obs — 10000 ticks, 1000 decisions; mean / p99 / max
+   wnn_tick hold            19072     19242     19353   decision     85298     85607     85793
+   of which: d-hat observer (twin)      5420      5495      5534   Mahony f64 (twin)     11256     11404     11505
+   lookup+encode+decode (decision - hold, means) 66227; other features 2396
+   soft-double calls: hold 218 decision 218; VFP hold 150 decision 1493
+  full wnn_tick                      win    256945 /    258552  %10ms(mean/worst)@16/48/168: 240.89/242.39  80.30/ 80.80  22.94/ 23.09  | worst decision tick %1ms:  804.3  268.1   76.6 |  302.8 uJ/window (658.7 periph-on)
+   float ops/window: soft-double calls 2180 (max 2180), VFP instr 2840 (max 2868)  (wnn_tick only; the twins are copies)
+  without its Mahony (q given)       win    144387 /    144930  %10ms(mean/worst)@16/48/168: 135.36/135.87  45.12/ 45.29  12.89/ 12.94  | worst decision tick %1ms:  697.4  232.4   66.4 |  170.2 uJ/window (370.1 periph-on)
+
+=== WNN wnn_a49dc_s1_f32obs — 10000 ticks, 1000 decisions; mean / p99 / max
+   wnn_tick hold            13861     14009     14112   decision     80113     80396     80555
+   of which: d-hat observer (twin)       257       257       257   Mahony f64 (twin)     11256     11404     11505
+   lookup+encode+decode (decision - hold, means) 66252; other features 2348
+   soft-double calls: hold 134 decision 134; VFP hold 232 decision 1574
+  full wnn_tick                      win    204860 /    206254  %10ms(mean/worst)@16/48/168: 192.06/193.36  64.02/ 64.45  18.29/ 18.42  | worst decision tick %1ms:  755.2  251.7   71.9 |  241.4 uJ/window (525.1 periph-on)
+   float ops/window: soft-double calls 1340 (max 1340), VFP instr 3660 (max 3688)  (wnn_tick only; the twins are copies)
+  without its Mahony (q given)       win     92302 /     92594  %10ms(mean/worst)@16/48/168:  86.53/ 86.81  28.84/ 28.94   8.24/  8.27  | worst decision tick %1ms:  648.3  216.1   61.7 |  108.8 uJ/window (236.6 periph-on)
+
+=== WNN wnn_a49dc_s2_f64obs — 10000 ticks, 1000 decisions; mean / p99 / max
+   wnn_tick hold            19071     19238     19344   decision    141082    141480    141641
+   of which: d-hat observer (twin)      5421      5498      5542   Mahony f64 (twin)     11254     11396     11517
+   lookup+encode+decode (decision - hold, means) 122011; other features 2396
+   soft-double calls: hold 218 decision 218; VFP hold 150 decision 2164
+  full wnn_tick                      win    312721 /    314370  %10ms(mean/worst)@16/48/168: 293.18/294.72  97.73/ 98.24  27.92/ 28.07  | worst decision tick %1ms: 1327.9  442.6  126.5 |  368.6 uJ/window (801.6 periph-on)
+   float ops/window: soft-double calls 2180 (max 2180), VFP instr 3510 (max 3540)  (wnn_tick only; the twins are copies)
+  without its Mahony (q given)       win    200177 /    200912  %10ms(mean/worst)@16/48/168: 187.67/188.35  62.56/ 62.78  17.87/ 17.94  | worst decision tick %1ms: 1221.5  407.2  116.3 |  235.9 uJ/window (513.1 periph-on)
+
+=== WNN wnn_a49dc_s2_f32obs — 10000 ticks, 1000 decisions; mean / p99 / max
+   wnn_tick hold            13860     14002     14120   decision    135895    136227    136391
+   of which: d-hat observer (twin)       257       257       257   Mahony f64 (twin)     11254     11396     11517
+   lookup+encode+decode (decision - hold, means) 122035; other features 2348
+   soft-double calls: hold 134 decision 134; VFP hold 231 decision 2246
+  full wnn_tick                      win    260631 /    262218  %10ms(mean/worst)@16/48/168: 244.34/245.83  81.45/ 81.94  23.27/ 23.41  | worst decision tick %1ms: 1278.7  426.2  121.8 |  307.2 uJ/window (668.1 periph-on)
+   float ops/window: soft-double calls 1340 (max 1340), VFP instr 4329 (max 4360)  (wnn_tick only; the twins are copies)
+  without its Mahony (q given)       win    148087 /    148494  %10ms(mean/worst)@16/48/168: 138.83/139.21  46.28/ 46.40  13.22/ 13.26  | worst decision tick %1ms: 1172.3  390.8  111.6 |  174.5 uJ/window (379.6 periph-on)
+
+=== WNN wnn_a49dc_s3_f64obs — 10000 ticks, 1000 decisions; mean / p99 / max
+   wnn_tick hold            19074     19247     19421   decision     86835     87192     87323
+   of which: d-hat observer (twin)      5422      5496      5529   Mahony f64 (twin)     11256     11405     11571
+   lookup+encode+decode (decision - hold, means) 67761; other features 2396
+   soft-double calls: hold 218 decision 218; VFP hold 150 decision 1517
+  full wnn_tick                      win    258498 /    260314  %10ms(mean/worst)@16/48/168: 242.34/244.04  80.78/ 81.35  23.08/ 23.24  | worst decision tick %1ms:  818.7  272.9   78.0 |  304.7 uJ/window (662.6 periph-on)
+   float ops/window: soft-double calls 2180 (max 2180), VFP instr 2864 (max 2892)  (wnn_tick only; the twins are copies)
+  without its Mahony (q given)       win    145937 /    146503  %10ms(mean/worst)@16/48/168: 136.82/137.35  45.61/ 45.78  13.03/ 13.08  | worst decision tick %1ms:  712.2  237.4   67.8 |  172.0 uJ/window (374.1 periph-on)
+
+=== WNN wnn_a49dc_s3_f32obs — 10000 ticks, 1000 decisions; mean / p99 / max
+   wnn_tick hold            13861     14010     14178   decision     81647     81963     82111
+   of which: d-hat observer (twin)       257       257       257   Mahony f64 (twin)     11256     11405     11571
+   lookup+encode+decode (decision - hold, means) 67786; other features 2348
+   soft-double calls: hold 134 decision 134; VFP hold 232 decision 1598
+  full wnn_tick                      win    206399 /    208278  %10ms(mean/worst)@16/48/168: 193.50/195.26  64.50/ 65.09  18.43/ 18.60  | worst decision tick %1ms:  769.8  256.6   73.3 |  243.3 uJ/window (529.1 periph-on)
+   float ops/window: soft-double calls 1340 (max 1340), VFP instr 3683 (max 3712)  (wnn_tick only; the twins are copies)
+  without its Mahony (q given)       win     93837 /     94170  %10ms(mean/worst)@16/48/168:  87.97/ 88.28  29.32/ 29.43   8.38/  8.41  | worst decision tick %1ms:  663.1  221.0   63.1 |  110.6 uJ/window (240.5 periph-on)
+
+=== WNN wnn_a45nodres_s1_f64obs — 10000 ticks, 1000 decisions; mean / p99 / max
+   wnn_tick hold            11744     11901     11993   decision     75410     75672     75814
+   of which: d-hat observer (twin)      2459      2494      2509   Mahony f64 (twin)     11250     11404     11496
+   lookup+encode+decode (decision - hold, means) 63666; other features -1964
+   soft-double calls: hold 128 decision 128; VFP hold 129 decision 1424
+  full wnn_tick                      win    181110 /    182832  %10ms(mean/worst)@16/48/168: 169.79/171.41  56.60/ 57.13  16.17/ 16.32  | worst decision tick %1ms:  710.8  236.9   67.7 |  213.5 uJ/window (464.3 periph-on)
+   float ops/window: soft-double calls 1280 (max 1280), VFP instr 2583 (max 2610)  (wnn_tick only; the twins are copies)
+  without its Mahony (q given)       win     68611 /     68897  %10ms(mean/worst)@16/48/168:  64.32/ 64.59  21.44/ 21.53   6.13/  6.15  | worst decision tick %1ms:  604.1  201.4   57.5 |   80.9 uJ/window (175.9 periph-on)
+
+=== WNN wnn_a45nodres_s1_f32obs — 10000 ticks, 1000 decisions; mean / p99 / max
+   wnn_tick hold            11744     11901     11993   decision     75410     75672     75814
+   of which: d-hat observer (twin)       257       257       257   Mahony f64 (twin)     11250     11404     11496
+   lookup+encode+decode (decision - hold, means) 63666; other features 238
+   soft-double calls: hold 128 decision 128; VFP hold 129 decision 1424
+  full wnn_tick                      win    181110 /    182832  %10ms(mean/worst)@16/48/168: 169.79/171.41  56.60/ 57.13  16.17/ 16.32  | worst decision tick %1ms:  710.8  236.9   67.7 |  213.5 uJ/window (464.3 periph-on)
+   float ops/window: soft-double calls 1280 (max 1280), VFP instr 2583 (max 2610)  (wnn_tick only; the twins are copies)
+  without its Mahony (q given)       win     68611 /     68897  %10ms(mean/worst)@16/48/168:  64.32/ 64.59  21.44/ 21.53   6.13/  6.15  | worst decision tick %1ms:  604.1  201.4   57.5 |   80.9 uJ/window (175.9 periph-on)
+
+=== footprint (GNU ld map; bytes per object/archive: flash = .text+.rodata, ram = .data+.bss)
+  mpcof_f64_nominal    bench_ctrl51.o:flash=1485, bench_ctrl51.o:ram=14040, cascade_dhat.o:flash=764, libc_nano.a:flash=104, libc_nano.a:ram=80, libgcc.a:flash=3164, libm.a:flash=9988, mpcof_cascade.o:flash=39404, wnn_ratefw.o:flash=2180
+  mpcof_f32_nominal    bench_ctrl51.o:flash=1493, bench_ctrl51.o:ram=7464, cascade_dhat.o:flash=652, libc_nano.a:flash=104, libc_nano.a:ram=80, libgcc.a:flash=3164, libm.a:flash=8880, mpcof_cascade.o:flash=20876, wnn_ratefw.o:flash=2180
+  wnn_a49dc_s1_f64obs  bench_ctrl51.o:flash=2075237, bench_ctrl51.o:ram=2760, cascade_dhat.o:flash=764, libc_nano.a:flash=104, libc_nano.a:ram=80, libgcc.a:flash=3164, libm.a:flash=10844, wnn_ratefw.o:flash=2180
+  wnn_a49dc_s1_f32obs  bench_ctrl51.o:flash=2075229, bench_ctrl51.o:ram=2596, cascade_dhat.o:flash=652, libc_nano.a:flash=104, libc_nano.a:ram=80, libgcc.a:flash=3164, libm.a:flash=10844, wnn_ratefw.o:flash=2180
+  wnn_a49dc_s2_f64obs  bench_ctrl51.o:flash=3994293, bench_ctrl51.o:ram=3880, cascade_dhat.o:flash=764, libc_nano.a:flash=104, libc_nano.a:ram=80, libgcc.a:flash=3164, libm.a:flash=10844, wnn_ratefw.o:flash=2180
+  wnn_a49dc_s2_f32obs  bench_ctrl51.o:flash=3994285, bench_ctrl51.o:ram=3716, cascade_dhat.o:flash=652, libc_nano.a:flash=104, libc_nano.a:ram=80, libgcc.a:flash=3164, libm.a:flash=10844, wnn_ratefw.o:flash=2180
+  wnn_a49dc_s3_f64obs  bench_ctrl51.o:flash=2254241, bench_ctrl51.o:ram=2800, cascade_dhat.o:flash=764, libc_nano.a:flash=104, libc_nano.a:ram=80, libgcc.a:flash=3164, libm.a:flash=10844, wnn_ratefw.o:flash=2180
+  wnn_a49dc_s3_f32obs  bench_ctrl51.o:flash=2254233, bench_ctrl51.o:ram=2636, cascade_dhat.o:flash=652, libc_nano.a:flash=104, libc_nano.a:ram=80, libgcc.a:flash=3164, libm.a:flash=10844, wnn_ratefw.o:flash=2180
+  wnn_a45nodres_s1_f64obs bench_ctrl51.o:flash=944509, bench_ctrl51.o:ram=2728, cascade_dhat.o:flash=764, libc_nano.a:flash=104, libc_nano.a:ram=80, libgcc.a:flash=3164, libm.a:flash=10708, wnn_ratefw.o:flash=2180
+  wnn_a45nodres_s1_f32obs bench_ctrl51.o:flash=944509, bench_ctrl51.o:ram=2556, cascade_dhat.o:flash=652, libc_nano.a:flash=104, libc_nano.a:ram=80, libgcc.a:flash=3164, libm.a:flash=10708, wnn_ratefw.o:flash=2180

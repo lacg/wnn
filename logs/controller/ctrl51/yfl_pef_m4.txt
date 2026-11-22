@@ -1,0 +1,30 @@
+##### Y+F+L s1
+pef64       264     40979    116084     15049         284      1031748
+
+== 2. real VAL addresses (bench_pef_replay.c), 200 decision ticks of ctrl_trace_C-S2-d_wposx2_a59_rf_c200_dc_biasin_ms01_P_both_L1_ffF_yld_full_s1_u163226054.npz ==
+wrote /var/folders/rz/1l6rbkbx6_x1f9y33dh086jh0000gn/T/tmp.wWeRiYktV5/q.h: 200 decision ticks x 264 neurons
+format  region              mean     p50     p99     max  regions
+uint32  LOOKUP              96.1      95     149     149    52800   hits 3207
+pef64   LOOKUP             264.8     282     465     539    52800   hits 3207
+uint32  FULL             27777.5   27776   27949   27971      200   hits 3207
+pef64   FULL             74286.5   74552   76204   76267      200   hits 3207
+uint32  INC              21949.3   22363   28729   28785      199   hits 3171
+pef64   INC              57297.9   58474   76215   76641      199   hits 3171
+
+NOTE: retired INSTRUCTIONS under emulation, not silicon cycles;
+      flash wait states / cache misses on the H743 are NOT in these numbers.
+##### Y+F+L s5
+pef64       504     78192    201240     25223         244      1230344
+
+== 2. real VAL addresses (bench_pef_replay.c), 200 decision ticks of ctrl_trace_C-S2-d_wposx2_a59_rf_c200_dc_biasin_ms01_P_both_L1_ffF_yld_full_s5_u651847209.npz ==
+wrote /var/folders/rz/1l6rbkbx6_x1f9y33dh086jh0000gn/T/tmp.ogLJ8lfHvK/q.h: 200 decision ticks x 504 neurons
+format  region              mean     p50     p99     max  regions
+uint32  LOOKUP              84.8      86     140     149   100800   hits 8357
+pef64   LOOKUP             236.4     265     438     537   100800   hits 8357
+uint32  FULL             47442.2   47439   47771   47903      200   hits 8357
+pef64   FULL            127387.9  126715  136753  136811      200   hits 8357
+uint32  INC              36170.2   37386   48168   48644      199   hits 8265
+pef64   INC              94107.7   97542  128300  128798      199   hits 8265
+
+NOTE: retired INSTRUCTIONS under emulation, not silicon cycles;
+      flash wait states / cache misses on the H743 are NOT in these numbers.
