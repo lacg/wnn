@@ -48,23 +48,30 @@ def classical_rows() -> list[tuple]:
 
 
 STATE_WORD = {"queued": "q", "flying": "fly", "paused": "pause", "–": "–", "no-row": "?"}
+METRICS = (("f1", "F1 %", "%.2f", True), ("fpr", "FPR %", "%.2f", False), ("acc", "acc %", "%.2f", True))
+PLANE = {"ctrl": "IDS-56", "D": "IDS-74", "BC": "IDS-74", "V02": "IDS-74", "Eon": "IDS-73", "Eoff": "IDS-73"}
+LEGEND = ("ctrl = production unswt until 22/11 (IDS-56 encon) · D = desirability · BC = balance_classes off · "
+	"V02 = vote share 0.02 · Eon / Eoff = cut E, dedupe on / off (Eon ADOPTED 22/11)")
+COLS = ("arm", "story", "F1 %  s1 | s2 | s3 | mean", "ΔF1", "FPR %  s1 | s2 | s3 | mean", "ΔFPR",
+	"acc %  s1 | s2 | s3 | mean", "Δacc", "cells", "hours")
 
 
 def arm_cells(db, arm: str) -> list[dict]:
 	return [T.cell_values(db, arm, s) for s in CONTROLS]
 
 
-def per_seed(cells: list[dict], key: str, fmt: str) -> str:
-	return " | ".join(fmt % c["raw"][key] if "raw" in c else STATE_WORD.get(c.get("state", "–"), c.get("state", "–"))
-		for c in cells)
+def seeds_and_mean(cells: list[dict], key: str, fmt: str) -> str:
+	words = [fmt % c["raw"][key] if "raw" in c else STATE_WORD.get(c.get("state", "–"), c.get("state", "–")) for c in cells]
+	done = [c["raw"][key] for c in cells if "raw" in c]
+	return " | ".join(words + [fmt % (sum(done) / len(done)) if done else "–"])
 
 
-def paired_delta(cells: list[dict], ctrl: list[dict], key: str) -> str:
+def paired_delta(cells: list[dict], ctrl: list[dict], key: str, higher_better: bool) -> str:
 	pairs = [(c["raw"][key], k["raw"][key]) for c, k in zip(cells, ctrl) if "raw" in c and "raw" in k]
 	if not pairs:
 		return "–"
 	d = [a - b for a, b in pairs]
-	better = sum(x > 0 for x in d) if key == "f1" else sum(x < 0 for x in d)
+	better = sum((x > 0) if higher_better else (x < 0) for x in d)
 	return "%+.2f (%d/%d)" % (sum(d) / len(d), better, len(d))
 
 
@@ -74,21 +81,15 @@ def mean_cells(cells: list[dict]) -> str:
 
 
 def arm_row(arm: str, cells: list[dict], ctrl: list[dict]) -> tuple:
-	is_ctrl = arm == "ctrl"
 	hours = [float(c["hours"]) for c in cells if "raw" in c]
-	return (arm, PLANE[arm], per_seed(cells, "f1", "%.2f"), "—" if is_ctrl else paired_delta(cells, ctrl, "f1"),
-		per_seed(cells, "fpr", "%.2f"), "—" if is_ctrl else paired_delta(cells, ctrl, "fpr"),
-		mean_cells(cells), "%.1f" % (sum(hours) / len(hours)) if hours else "–")
-
-
-PLANE = {"ctrl": "IDS-56", "D": "IDS-74", "BC": "IDS-74", "V02": "IDS-74", "Eon": "IDS-73", "Eoff": "IDS-73"}
-LEGEND = ("ctrl = production unswt (IDS-56 encon) · D = desirability · BC = balance_classes off · V02 = vote share 0.02 · "
-	"Eon / Eoff = cut E, dedupe on / off")
-COLS = ("arm", "story", "F1 %  s1 | s2 | s3", "ΔF1 vs ctrl", "FPR %  s1 | s2 | s3", "ΔFPR vs ctrl", "cells", "hours")
+	row = [arm, PLANE[arm]]
+	for key, _label, fmt, higher in METRICS:
+		row += [seeds_and_mean(cells, key, fmt), "—" if arm == "ctrl" else paired_delta(cells, ctrl, key, higher)]
+	return tuple(row + [mean_cells(cells), "%.1f" % (sum(hours) / len(hours)) if hours else "–"])
 
 
 def classical_arm_rows() -> list[tuple]:
-	return [(name, "IDS-10", f1 + " (mean±SD)", "", fpr, "", size, "") for name, f1, fpr, _acc, size, _b, _h in classical_rows()]
+	return [(name, "IDS-10", f1, "", fpr, "", acc, "", size, "") for name, f1, fpr, acc, size, _b, _h in classical_rows()]
 
 
 def box(rows: list[tuple], split_after: int) -> str:
@@ -106,8 +107,8 @@ def main():
 	cells = {a: arm_cells(db, a) for a in ARMS}
 	classical = classical_arm_rows()
 	wnn = [arm_row(a, cells[a], cells["ctrl"]) for a in ARMS]
-	print("unswt (temporal_3way, 16b) · TEST · cell = GA best_f1 · margin_val_cal · seeds r20421-23 · "
-		"Δ = paired mean vs ctrl (seeds better/done) · q = queued, fly = running")
+	print("unswt (temporal_3way, 16b) · TEST · cell = GA best_f1 · margin_val_cal · seeds r20421-23 · mean = over the "
+		"arm's finished seeds · Δ = PAIRED mean vs ctrl (seeds better / paired) · classical = mean±SD · q = queued, fly = running")
 	print(LEGEND)
 	print(box(classical + wnn, len(classical)))
 
