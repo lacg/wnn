@@ -128,11 +128,48 @@ def test_fit_never_touches_val_or_test(method, monkeypatch):
 		assert np.array_equal(enc_a.thresholds_[col], enc_b.thresholds_[col]), f"{col}: val/test moved a cut"
 
 
+# ---- dedupe after supervised cuts (IDS-73, 21/11/2026) ------------------------------------------
+
+def _dedupe_frame(n: int, seed: int):
+	"""_frame + a cross-feature copy, a constant column and a NaN-bearing numeric."""
+	df, yb, ym = _frame(n, seed)
+	rng = np.random.default_rng(seed + 100)
+	df["a_copy"] = df["a"]
+	df["const"] = 3.0
+	df["c"] = np.where(rng.random(n) < 0.05, np.nan, rng.normal(size=n) + (ym == 1))
+	return df, yb, ym
+
+
+@pytest.mark.parametrize("method", ["info_gain_mc", "xgb_splits"])
+def test_dedupe_runs_on_the_full_width_supervised_cuts(method):
+	df, yb, ym = _dedupe_frame(6000, 8)
+	kw = dict(n_bits=16, cut_method=method, invalid_encoding="single_bit")
+	off = ThermometerEncoder(**kw).fit(df, y_binary=yb, y_multi=ym)
+	on = ThermometerEncoder(dedupe=True, **kw).fit(df, y_binary=yb, y_multi=ym)
+	for col in on.feature_names_:
+		if on.feature_types_[col] in ("numeric", "ranked"):
+			assert set(on.thresholds_[col].tolist()) <= set(off.thresholds_[col].tolist()), col
+	assert "a_copy" in on.dropped_features_ and "const" in on.dropped_features_
+	assert on.total_bits < off.total_bits
+	bits = _bits(on, df)
+	assert bits.shape[1] == on.total_bits
+	assert (bits.any(axis=0) & ~bits.all(axis=0)).all(), "a kept train column is constant"
+	assert len({bits[:, j].tobytes() for j in range(bits.shape[1])}) == bits.shape[1], "duplicate column"
+	assert on._has_flag("c") and not on._has_flag("a")
+
+
+def test_dedupe_after_cuts_keeps_the_cuts_that_were_already_informative():
+	"""Supervised cuts are fitted on the same budget with and without dedupe."""
+	df, yb, ym = _frame(6000, 9)
+	off = ThermometerEncoder(n_bits=16, cut_method="info_gain_mc").fit(df, y_binary=yb, y_multi=ym)
+	on = ThermometerEncoder(n_bits=16, cut_method="info_gain_mc", dedupe=True).fit(df, y_binary=yb, y_multi=ym)
+	for col in ("a", "b"):
+		assert np.array_equal(on.thresholds_[col], off.thresholds_[col]), col
+
+
 # ---- refusals / registry / cache key -----------------------------------------------------------
 
 def test_refusals():
-	with pytest.raises(ValueError, match="dedupe"):
-		ThermometerEncoder(n_bits=8, dedupe=True, cut_method="info_gain_mc")
 	with pytest.raises(NotImplementedError, match="streaming"):
 		ThermometerEncoder(n_bits=8, cut_method="xgb_splits").begin_streaming_fit({"x": "numeric"})
 	with pytest.raises(ValueError):
