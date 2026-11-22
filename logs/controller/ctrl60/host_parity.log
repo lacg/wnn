@@ -1,0 +1,121 @@
+recorded 3 episodes, 6000 ticks (motor lag 0.2s, airframe cf21_brushless, run weather)
+  PASS (bit-identical) flags_off [/Users/lacg/wnn/logs/controller/ctrl48/C-S2-d_wposx2_a49_rf_c200_dc_full_s1_winner.yaml.gz]
+      ticks=6000 decisions=600 fire_rate=0.085 setpoint!=0 per bank [T,p,q,r]=[97%, 100%, 100%, 100%]
+      cascade columns range [-0.0418,+0.159] [-0.0192,+0.185] [-1.07,+0.474]; distinct cascade frame patterns=91
+  PASS (bit-identical) rate_i [synthetic:rate_i]
+      ticks=6000 decisions=600 fire_rate=0.484 setpoint!=0 per bank [T,p,q,r]=[100%, 100%, 100%, 100%]
+      cascade columns range [-0.62,+1] [-0.951,+1] [-0.0919,+0.0548] [-1.06,+1.23] [-1.27,+0.878] [-1.87,+1.59]; distinct cascade frame patterns=297
+  PASS (bit-identical) dhat [synthetic:dhat]
+      ticks=6000 decisions=600 fire_rate=0.484 setpoint!=0 per bank [T,p,q,r]=[100%, 100%, 100%, 99%]
+      cascade columns range [-63.6,+79.9] [-95.9,+189] [-4.81,+5.88] [-0.371,+0.498] [-0.74,+0.984] [-1.3,+1.59]; distinct cascade frame patterns=370
+  PASS (bit-identical) both [synthetic:both]
+      ticks=6000 decisions=600 fire_rate=0.494 setpoint!=0 per bank [T,p,q,r]=[100%, 100%, 100%, 100%]
+      cascade columns range [-0.588,+0.735] [-0.0519,+1] [-0.0924,+0.0134] [-112,+93.1] [-172,+21.2] [-4.53,+7.33] [-0.7,+0.633] [-0.805,+0.361] [-1.24,+1.99]; distinct cascade frame patterns=379
+  PASS (bit-identical) flags_off/pef64 [/Users/lacg/wnn/logs/controller/ctrl48/C-S2-d_wposx2_a49_rf_c200_dc_full_s1_winner.yaml.gz]
+      ticks=6000 decisions=600 fire_rate=0.085 setpoint!=0 per bank [T,p,q,r]=[97%, 100%, 100%, 100%]
+      cascade columns range [-0.0418,+0.159] [-0.0192,+0.185] [-1.07,+0.474]; distinct cascade frame patterns=91
+  PASS (bit-identical) both/pef64 [synthetic:both]
+      ticks=6000 decisions=600 fire_rate=0.494 setpoint!=0 per bank [T,p,q,r]=[100%, 100%, 100%, 100%]
+      cascade columns range [-0.588,+0.735] [-0.0519,+1] [-0.0924,+0.0134] [-112,+93.1] [-172,+21.2] [-4.53,+7.33] [-0.7,+0.633] [-0.805,+0.361] [-1.24,+1.99]; distinct cascade frame patterns=379
+  INFO (not asserted) dhat/f32 [synthetic:dhat]
+      ticks=6000 decisions=600 fire_rate=0.484 setpoint!=0 per bank [T,p,q,r]=[100%, 100%, 100%, 99%]
+      cascade columns range [-63.6,+79.9] [-95.9,+189] [-4.81,+5.88] [-0.371,+0.498] [-0.74,+0.984] [-1.3,+1.59]; distinct cascade frame patterns=370
+      feature: 5997 tick(s) differ; first: [dhat/f32] episode 0 step 1: feature[22] rust=np.float32(1.4826833) c=np.float32(1.4826832) (3 of 28 differ)
+  INFO (not asserted) flags_off/fp-contract [/Users/lacg/wnn/logs/controller/ctrl48/C-S2-d_wposx2_a49_rf_c200_dc_full_s1_winner.yaml.gz]
+      ticks=6000 decisions=600 fire_rate=0.085 setpoint!=0 per bank [T,p,q,r]=[97%, 100%, 100%, 100%]
+      cascade columns range [-0.0418,+0.159] [-0.0192,+0.185] [-1.07,+0.474]; distinct cascade frame patterns=91
+      feature: 5997 tick(s) differ; first: [flags_off/fp-contract] episode 0 step 1: feature[11] rust=np.float32(-0.04282961) c=np.float32(-0.042829614) (2 of 25 differ)
+      setpoint: 2850 tick(s) differ; first: [flags_off/fp-contract] episode 0 step 10: setpoint[1] rust=np.float64(-0.4077773094177246) c=np.float32(-0.40777734) (1 of 4 differ)
+      pwm: 294 tick(s) differ; first: [flags_off/fp-contract] episode 0 step 60: pwm[0] rust=np.float32(0.69768286) c=np.float32(0.6976829) (2 of 4 differ)
+  PASS (mutant caught) dhat/mutant-lgain: [dhat/mutant-lgain] episode 0 step 1: feature[22] rust=np.float32(1.4826833) c=np.float32(2.224025) (6 of 28 differ)
+PARITY PASSED (0 strict case(s) failed)
+recorded 3 episodes, 6000 ticks (motor lag 0.2s, airframe cf21_brushless, run weather)
+  PASS (bit-identical) flags_off [/Users/lacg/wnn/logs/controller/ctrl48/C-S2-d_wposx2_a49_rf_c200_dc_full_s2_winner.yaml.gz]
+      ticks=6000 decisions=600 fire_rate=0.092 setpoint!=0 per bank [T,p,q,r]=[99%, 100%, 100%, 100%]
+      cascade columns range [-0.0324,+0.144] [-0.0272,+0.204] [-1.11,+0.502]; distinct cascade frame patterns=81
+  PASS (bit-identical) rate_i [synthetic:rate_i]
+      ticks=6000 decisions=600 fire_rate=0.478 setpoint!=0 per bank [T,p,q,r]=[100%, 100%, 100%, 100%]
+      cascade columns range [-0.869,+0.417] [-0.293,+0.54] [-0.111,+0.0429] [-0.433,+0.462] [-0.512,+0.479] [-1.19,+1.76]; distinct cascade frame patterns=370
+  PASS (bit-identical) dhat [synthetic:dhat]
+      ticks=6000 decisions=600 fire_rate=0.489 setpoint!=0 per bank [T,p,q,r]=[100%, 100%, 100%, 100%]
+      cascade columns range [-67.6,+92.8] [-68.8,+234] [-4,+4.41] [-0.516,+0.514] [-0.547,+1.46] [-1.09,+1.26]; distinct cascade frame patterns=325
+  PASS (bit-identical) both [synthetic:both]
+      ticks=6000 decisions=600 fire_rate=0.502 setpoint!=0 per bank [T,p,q,r]=[100%, 100%, 100%, 100%]
+      cascade columns range [-0.087,+1] [-0.159,+1] [-0.0801,+0.0255] [-129,+79.5] [-188,+64.7] [-4.68,+6.67] [-0.433,+0.826] [-0.971,+0.553] [-1.27,+1.8]; distinct cascade frame patterns=409
+  PASS (bit-identical) flags_off/pef64 [/Users/lacg/wnn/logs/controller/ctrl48/C-S2-d_wposx2_a49_rf_c200_dc_full_s2_winner.yaml.gz]
+      ticks=6000 decisions=600 fire_rate=0.092 setpoint!=0 per bank [T,p,q,r]=[99%, 100%, 100%, 100%]
+      cascade columns range [-0.0324,+0.144] [-0.0272,+0.204] [-1.11,+0.502]; distinct cascade frame patterns=81
+  PASS (bit-identical) both/pef64 [synthetic:both]
+      ticks=6000 decisions=600 fire_rate=0.502 setpoint!=0 per bank [T,p,q,r]=[100%, 100%, 100%, 100%]
+      cascade columns range [-0.087,+1] [-0.159,+1] [-0.0801,+0.0255] [-129,+79.5] [-188,+64.7] [-4.68,+6.67] [-0.433,+0.826] [-0.971,+0.553] [-1.27,+1.8]; distinct cascade frame patterns=409
+  INFO (not asserted) dhat/f32 [synthetic:dhat]
+      ticks=6000 decisions=600 fire_rate=0.489 setpoint!=0 per bank [T,p,q,r]=[100%, 100%, 100%, 100%]
+      cascade columns range [-67.6,+92.8] [-68.8,+234] [-4,+4.41] [-0.516,+0.514] [-0.547,+1.46] [-1.09,+1.26]; distinct cascade frame patterns=325
+      feature: 5997 tick(s) differ; first: [dhat/f32] episode 0 step 1: feature[22] rust=np.float32(1.0778862) c=np.float32(1.0778861) (6 of 28 differ)
+  INFO (not asserted) flags_off/fp-contract [/Users/lacg/wnn/logs/controller/ctrl48/C-S2-d_wposx2_a49_rf_c200_dc_full_s2_winner.yaml.gz]
+      ticks=6000 decisions=600 fire_rate=0.092 setpoint!=0 per bank [T,p,q,r]=[99%, 100%, 100%, 100%]
+      cascade columns range [-0.0324,+0.144] [-0.0272,+0.204] [-1.11,+0.502]; distinct cascade frame patterns=81
+      feature: 5996 tick(s) differ; first: [flags_off/fp-contract] episode 0 step 1: feature[12] rust=np.float32(-0.1371257) c=np.float32(-0.13712569) (3 of 25 differ)
+      setpoint: 4660 tick(s) differ; first: [flags_off/fp-contract] episode 0 step 10: setpoint[3] rust=np.float64(-0.44956666231155396) c=np.float32(-0.4495667) (1 of 4 differ)
+      pwm: 418 tick(s) differ; first: [flags_off/fp-contract] episode 0 step 14: pwm[2] rust=np.float32(0.6008163) c=np.float32(0.60081625) (1 of 4 differ)
+  PASS (mutant caught) dhat/mutant-lgain: [dhat/mutant-lgain] episode 0 step 1: feature[22] rust=np.float32(1.0778862) c=np.float32(1.6168293) (6 of 28 differ)
+PARITY PASSED (0 strict case(s) failed)
+recorded 3 episodes, 6000 ticks (motor lag 0.2s, airframe cf21_brushless, run weather)
+  PASS (bit-identical) flags_off [/Users/lacg/wnn/logs/controller/ctrl48/C-S2-d_wposx2_a49_rf_c200_dc_full_s3_winner.yaml.gz]
+      ticks=6000 decisions=600 fire_rate=0.083 setpoint!=0 per bank [T,p,q,r]=[98%, 100%, 100%, 100%]
+      cascade columns range [-0.0277,+0.136] [-0.0272,+0.202] [-1.06,+0.479]; distinct cascade frame patterns=84
+  PASS (bit-identical) rate_i [synthetic:rate_i]
+      ticks=6000 decisions=600 fire_rate=0.488 setpoint!=0 per bank [T,p,q,r]=[100%, 100%, 100%, 100%]
+      cascade columns range [-0.78,+1] [-0.6,+0.245] [-0.0864,+0.064] [-0.588,+0.538] [-0.645,+0.831] [-1.48,+2.94]; distinct cascade frame patterns=339
+  PASS (bit-identical) dhat [synthetic:dhat]
+      ticks=6000 decisions=600 fire_rate=0.479 setpoint!=0 per bank [T,p,q,r]=[100%, 100%, 100%, 100%]
+      cascade columns range [-73.7,+67.2] [-75.6,+234] [-7.26,+4.21] [-0.54,+0.348] [-0.781,+1.46] [-1.9,+1.14]; distinct cascade frame patterns=329
+  PASS (bit-identical) both [synthetic:both]
+      ticks=6000 decisions=600 fire_rate=0.487 setpoint!=0 per bank [T,p,q,r]=[100%, 100%, 100%, 100%]
+      cascade columns range [-0.641,+0.448] [-1,+1] [-0.123,+0.00614] [-54.2,+113] [-142,+174] [-4.38,+6.57] [-0.485,+0.691] [-0.788,+0.832] [-1.2,+1.75]; distinct cascade frame patterns=381
+  PASS (bit-identical) flags_off/pef64 [/Users/lacg/wnn/logs/controller/ctrl48/C-S2-d_wposx2_a49_rf_c200_dc_full_s3_winner.yaml.gz]
+      ticks=6000 decisions=600 fire_rate=0.083 setpoint!=0 per bank [T,p,q,r]=[98%, 100%, 100%, 100%]
+      cascade columns range [-0.0277,+0.136] [-0.0272,+0.202] [-1.06,+0.479]; distinct cascade frame patterns=84
+  PASS (bit-identical) both/pef64 [synthetic:both]
+      ticks=6000 decisions=600 fire_rate=0.487 setpoint!=0 per bank [T,p,q,r]=[100%, 100%, 100%, 100%]
+      cascade columns range [-0.641,+0.448] [-1,+1] [-0.123,+0.00614] [-54.2,+113] [-142,+174] [-4.38,+6.57] [-0.485,+0.691] [-0.788,+0.832] [-1.2,+1.75]; distinct cascade frame patterns=381
+  INFO (not asserted) dhat/f32 [synthetic:dhat]
+      ticks=6000 decisions=600 fire_rate=0.479 setpoint!=0 per bank [T,p,q,r]=[100%, 100%, 100%, 100%]
+      cascade columns range [-73.7,+67.2] [-75.6,+234] [-7.26,+4.21] [-0.54,+0.348] [-0.781,+1.46] [-1.9,+1.14]; distinct cascade frame patterns=329
+      feature: 5997 tick(s) differ; first: [dhat/f32] episode 0 step 1: feature[22] rust=np.float32(0.4971938) c=np.float32(0.49719417) (6 of 28 differ)
+  INFO (not asserted) flags_off/fp-contract [/Users/lacg/wnn/logs/controller/ctrl48/C-S2-d_wposx2_a49_rf_c200_dc_full_s3_winner.yaml.gz]
+      ticks=6000 decisions=600 fire_rate=0.083 setpoint!=0 per bank [T,p,q,r]=[98%, 100%, 100%, 100%]
+      cascade columns range [-0.0277,+0.136] [-0.0272,+0.202] [-1.06,+0.479]; distinct cascade frame patterns=84
+      feature: 5994 tick(s) differ; first: [flags_off/fp-contract] episode 0 step 1: feature[10] rust=np.float32(-0.06877513) c=np.float32(-0.06877514) (4 of 25 differ)
+      setpoint: 5080 tick(s) differ; first: [flags_off/fp-contract] episode 0 step 10: setpoint[3] rust=np.float64(-0.5605510473251343) c=np.float32(-0.560551) (1 of 4 differ)
+      pwm: 520 tick(s) differ; first: [flags_off/fp-contract] episode 0 step 16: pwm[0] rust=np.float32(0.63435066) c=np.float32(0.6343507) (1 of 4 differ)
+  PASS (mutant caught) dhat/mutant-lgain: [dhat/mutant-lgain] episode 0 step 1: feature[22] rust=np.float32(0.4971938) c=np.float32(0.7457907) (6 of 28 differ)
+PARITY PASSED (0 strict case(s) failed)
+recorded 3 episodes, 6000 ticks (motor lag 0.2s, airframe cf21_brushless, run weather)
+  PASS (bit-identical) flags_off [/Users/lacg/wnn/logs/controller/ctrl48/C-S2-d_wposx2_a45_rf_c200_full_s1_winner.yaml.gz]
+      ticks=6000 decisions=600 fire_rate=0.106 setpoint!=0 per bank [T,p,q,r]=[96%, 100%, 100%, 100%]
+  PASS (bit-identical) rate_i [synthetic:rate_i]
+      ticks=6000 decisions=600 fire_rate=0.483 setpoint!=0 per bank [T,p,q,r]=[100%, 100%, 100%, 99%]
+      cascade columns range [-0.349,+1] [-1,+1] [-0.0397,+0.0532]; distinct cascade frame patterns=60
+  PASS (bit-identical) dhat [synthetic:dhat]
+      ticks=6000 decisions=600 fire_rate=0.488 setpoint!=0 per bank [T,p,q,r]=[100%, 100%, 100%, 100%]
+      cascade columns range [-89.2,+126] [-86.1,+74.3] [-8.43,+5.37]; distinct cascade frame patterns=221
+  PASS (bit-identical) both [synthetic:both]
+      ticks=6000 decisions=600 fire_rate=0.496 setpoint!=0 per bank [T,p,q,r]=[100%, 100%, 100%, 100%]
+      cascade columns range [-0.14,+0.745] [-0.0675,+0.533] [-0.109,+0.0527] [-114,+25.5] [-71.9,+40.5] [-6.42,+7.36]; distinct cascade frame patterns=300
+  PASS (bit-identical) flags_off/pef64 [/Users/lacg/wnn/logs/controller/ctrl48/C-S2-d_wposx2_a45_rf_c200_full_s1_winner.yaml.gz]
+      ticks=6000 decisions=600 fire_rate=0.106 setpoint!=0 per bank [T,p,q,r]=[96%, 100%, 100%, 100%]
+  PASS (bit-identical) both/pef64 [synthetic:both]
+      ticks=6000 decisions=600 fire_rate=0.496 setpoint!=0 per bank [T,p,q,r]=[100%, 100%, 100%, 100%]
+      cascade columns range [-0.14,+0.745] [-0.0675,+0.533] [-0.109,+0.0527] [-114,+25.5] [-71.9,+40.5] [-6.42,+7.36]; distinct cascade frame patterns=300
+  INFO (not asserted) dhat/f32 [synthetic:dhat]
+      ticks=6000 decisions=600 fire_rate=0.488 setpoint!=0 per bank [T,p,q,r]=[100%, 100%, 100%, 100%]
+      cascade columns range [-89.2,+126] [-86.1,+74.3] [-8.43,+5.37]; distinct cascade frame patterns=221
+      feature: 5997 tick(s) differ; first: [dhat/f32] episode 0 step 1: feature[22] rust=np.float32(0.29913494) c=np.float32(0.2991349) (3 of 25 differ)
+  INFO (not asserted) flags_off/fp-contract [/Users/lacg/wnn/logs/controller/ctrl48/C-S2-d_wposx2_a45_rf_c200_full_s1_winner.yaml.gz]
+      ticks=6000 decisions=600 fire_rate=0.106 setpoint!=0 per bank [T,p,q,r]=[96%, 100%, 100%, 100%]
+      feature: 5986 tick(s) differ; first: [flags_off/fp-contract] episode 0 step 1: feature[11] rust=np.float32(-0.042845517) c=np.float32(-0.04284552) (1 of 22 differ)
+      setpoint: 3270 tick(s) differ; first: [flags_off/fp-contract] episode 0 step 20: setpoint[3] rust=np.float64(-0.8315156698226929) c=np.float32(-0.8315156) (1 of 4 differ)
+      pwm: 388 tick(s) differ; first: [flags_off/fp-contract] episode 0 step 104: pwm[3] rust=np.float32(0.6998153) c=np.float32(0.69981533) (1 of 4 differ)
+  PASS (mutant caught) dhat/mutant-lgain: [dhat/mutant-lgain] episode 0 step 1: feature[22] rust=np.float32(0.29913494) c=np.float32(0.44870242) (3 of 25 differ)
+PARITY PASSED (0 strict case(s) failed)

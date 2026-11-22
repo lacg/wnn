@@ -412,3 +412,36 @@ uint32 7.2 / pef64 7.7 (s1), 6.5 / 7.3 (Y3 s2). With 1 cycle/instruction and
 every line a 15-cycle miss (the probe's model, an ESTIMATE, not silicon) one
 lookup is ~190-205 vs ~360-390 cycles, i.e. ~1.9x; a full 480-neuron decision ~0.36 ms
 of a 1 ms tick at 480 MHz. Silicon DWT numbers remain task #6.
+
+
+### CTRL-60 (22/11/2026): pef64 in the FULL cascade, exportable winners
+
+The 20/11 numbers above are the lookup alone on replayed addresses. This is the whole
+`wnn_tick` (features, Mahony, observer, gather, lookup, decode) with a pef64 header,
+on the four exportable winners CTRL-51 flew (`logs/controller/ctrl48/`
+`C-S2-d_wposx2_a49_rf_c200_dc_full_s{1,2,3}`, `..._a45_rf_c200_full_s1`).
+
+**Parity (0 mismatches everywhere).**
+* Host, `test_cascade_parity.py --winner <w>` (3 x 2000 ticks): new strict cases
+  `flags_off/pef64` (the trained winner) and `both/pef64` (rate-I + d-hat synthetic)
+  are bit-identical to Rust on features, addresses, fire bits, setpoint and motor
+  command, as are their uint32 twins, so uint32 == pef64 on every tick.
+* Host, `test_pef64_exactness.py --c --tags <4 winners>`: every key, key+-1 and 1M
+  random addresses, Python and C: 0 mismatches (1.7M-4.0M queries per winner).
+* M4 (QEMU mps2-an386, `ONLY=wnn run_bench_ctrl51.sh`), 10,000 recorded ticks per
+  winner, f64 and f32 observer: `PWM_MISMATCH_TICKS 0` for pef64 (as for uint32).
+  The re-exported uint32 headers are byte-identical to the CTRL-51 ones and give the
+  same instruction totals.
+
+**Cost** (instructions, f64 observer; `summarize_bench.py --wnn-only`;
+raw: `logs/controller/ctrl60/`). Firmware = `.text` of the whole M4 image.
+
+    winner        n    firmware B uint32 -> pef64      decision tick mean / max            10-tick window mean / worst
+    a49 dc s1   256    2,091,368 ->   827,840 (0.40)    85,298 /  85,793 -> 136,327 / 139,464   256,945 / 258,552 -> 307,973 / 311,087
+    a49 dc s3   264    2,270,368 ->   889,016 (0.39)    86,835 /  87,323 -> 139,076 / 142,509   258,498 / 260,314 -> 310,740 / 314,333
+    a49 dc s2   480    4,010,424 -> 1,561,696 (0.39)   141,082 / 141,641 -> 238,178 / 243,448   312,721 / 314,370 -> 409,817 / 415,116
+    a45 s1      256      960,448 ->   415,832 (0.43)    75,410 /  75,814 -> 126,500 / 130,310   181,110 / 182,832 -> 232,199 / 235,993
+
+pef64 adds ~51k instructions per decision at 256-264 n and ~97k at 480 n (1.6-1.7x
+the decision tick, 1.2-1.3x the window); hold ticks are unchanged. Hit and miss are not
+equal-cost under pef64 (worst/mean 1.02-1.03 vs 1.006 for uint32).

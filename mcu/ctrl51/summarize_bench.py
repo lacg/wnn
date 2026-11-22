@@ -8,6 +8,7 @@ then per tick MPCOF [observe, decide-if-due, shadow], WNN [wnn_tick, observer tw
 Mahony twin]. Each line "insns soft libm vfp".
 Usage: python mcu/ctrl51/summarize_bench.py [--bench /tmp/ctrl51/bench] [--ref /tmp/ctrl51/ref]
        [--wnn-tags a49dc_s1 a49dc_s2 ...]   (run_bench_ctrl51.sh WNN_SET tags; default a49)
+       [--wnn-only]                         (an ONLY=wnn bench: skip the MPCOF rows)
 """
 
 import argparse
@@ -163,13 +164,13 @@ def add(acc: dict, sec: str, size: int, src: str):
 	acc[(kind, owner)] = acc.get((kind, owner), 0) + size
 
 
-def print_footprint(bench: Path, tags: list):
+def print_footprint(bench: Path, tags: list, wnn_only: bool):
 	"""Every object's flash/RAM. MPCOF = mpcof_cascade + cascade_dhat + wnn_ratefw (its
 	shadow). WNN = the bench TU (it #includes wnn_cascade.c: model tables + code, plus a
 	~1.5 KB driver) + cascade_dhat; its wnn_ratefw is the FIRMWARE rate loop, not the WNN.
 	The controller state lives in the driver's .bss (STATE_BYTES in the .log)."""
 	print("\n=== footprint (GNU ld map; bytes per object/archive: flash = .text+.rodata, ram = .data+.bss)")
-	names = ["mpcof_f64_nominal", "mpcof_f32_nominal"] + [f"wnn_{t}_{o}" for t in tags for o in ("f64obs", "f32obs")]
+	names = ([] if wnn_only else ["mpcof_f64_nominal", "mpcof_f32_nominal"]) + [f"wnn_{t}_{o}" for t in tags for o in ("f64obs", "f32obs")]
 	for name in names:
 		acc = footprint(bench / f"{name}.map")
 		items = ", ".join(f"{o}:{k}={v}" for (k, o), v in sorted(acc.items(), key=lambda x: (x[0][1], x[0][0])))
@@ -181,15 +182,16 @@ def main():
 	ap.add_argument("--bench", type=Path, default=Path("/tmp/ctrl51/bench"))
 	ap.add_argument("--ref", type=Path, default=Path("/tmp/ctrl51/ref"))
 	ap.add_argument("--wnn-tags", nargs="+", default=["a49"])
+	ap.add_argument("--wnn-only", action="store_true", help="a run_bench_ctrl51.sh ONLY=wnn bench (no MPCOF files)")
 	a = ap.parse_args()
 	print(f"CPI {CPI} (estimate); energy k = {MW_PER_MHZ:.3f} mW/MHz (DS8626 typ, periph off), "
 	      f"{MW_PER_MHZ_PERIPH:.3f} periph on")
-	for prec in ("f64", "f32"):
+	for prec in () if a.wnn_only else ("f64", "f32"):
 		mpcof(a.bench, a.ref, prec)
 	for tag in a.wnn_tags:
 		for obs in ("f64obs", "f32obs"):
 			wnn(a.bench, a.ref, f"wnn_{tag}_{obs}", tag)
-	print_footprint(a.bench, a.wnn_tags)
+	print_footprint(a.bench, a.wnn_tags, a.wnn_only)
 
 
 if __name__ == "__main__":

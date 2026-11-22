@@ -1,0 +1,30 @@
+C-S2-d_wposx2_a49_rf_c200_dc_full_s1: 256n x 24b  keys 515584  blocks 8195
+  python keys    checked    515584  TRUE   515584  mismatches 0  (stored keys not TRUE in ref: 0)
+  python near    checked   1031133  TRUE   120424  mismatches 0
+  python trace0  checked         0  TRUE        0  mismatches 0
+  python random  checked   1000000  TRUE      113  mismatches 0
+  C	checked 2546717	u32_vs_pef 0	u32_vs_expected 0	pef_vs_expected 0
+SIZE C-S2-d_wposx2_a49_rf_c200_dc_full_s1: keys 515584  uint32 2021 KB  pef64 786 KB  x0.389  (12.39 b/key incl. index)
+C-S2-d_wposx2_a49_rf_c200_dc_full_s2: 480n x 24b  keys 993780  blocks 15774
+  python keys    checked    993780  TRUE   993780  mismatches 0  (stored keys not TRUE in ref: 0)
+  python near    checked   1987473  TRUE   271004  mismatches 0
+  python trace0  checked         0  TRUE        0  mismatches 0
+  python random  checked   1000000  TRUE      110  mismatches 0
+  C	checked 3981253	u32_vs_pef 0	u32_vs_expected 0	pef_vs_expected 0
+SIZE C-S2-d_wposx2_a49_rf_c200_dc_full_s2: keys 993780  uint32 3895 KB  pef64 1502 KB  x0.386  (12.29 b/key incl. index)
+C-S2-d_wposx2_a49_rf_c200_dc_full_s3: 264n x 24b  keys 560279  blocks 8888
+  python keys    checked    560279  TRUE   560279  mismatches 0  (stored keys not TRUE in ref: 0)
+  python near    checked   1120501  TRUE   166516  mismatches 0
+  python trace0  checked         0  TRUE        0  mismatches 0
+  python random  checked   1000000  TRUE      140  mismatches 0
+  C	checked 2680780	u32_vs_pef 0	u32_vs_expected 0	pef_vs_expected 0
+SIZE C-S2-d_wposx2_a49_rf_c200_dc_full_s3: keys 560279  uint32 2196 KB  pef64 845 KB  x0.385  (12.27 b/key incl. index)
+C-S2-d_wposx2_a45_rf_c200_full_s1: 256n x 24b  keys 233091  blocks 3781
+  python keys    checked    233091  TRUE   233091  mismatches 0  (stored keys not TRUE in ref: 0)
+  python near    checked    466154  TRUE    56688  mismatches 0
+  python trace0  checked         0  TRUE        0  mismatches 0
+  python random  checked   1000000  TRUE       42  mismatches 0
+  C	checked 1699245	u32_vs_pef 0	u32_vs_expected 0	pef_vs_expected 0
+SIZE C-S2-d_wposx2_a45_rf_c200_full_s1: keys 233091  uint32 918 KB  pef64 384 KB  x0.419  (13.29 b/key incl. index)
+
+PEF64 EXACTNESS: PASS  (4/4 winners clean)

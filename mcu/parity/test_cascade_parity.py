@@ -28,6 +28,11 @@ THE CASES.
               of each neuron's 4096 addresses), thresholds from the PRODUCTION fit
               (the exporter's train-seed refit on the run argv + the block flag(s),
               which samples the cascade columns on the training cascade).
+  flags_off/pef64, both/pef64
+              the SAME models exported with --key-format pef64 (CTRL-60: partitioned
+              Elias-Fano TRUE-key store, mcu/wnn_pef.h) — strict like their uint32
+              twins, so the compressed lookup must give every fire bit, setpoint and
+              motor command bit for bit (uint32 == Rust == pef64 on the same ticks).
   dhat/f32    informational only: the same d-hat model built -DWNN_DHAT_F32 (the
               Metal kernel's f32 observer). Reported, never asserted.
 
@@ -86,6 +91,7 @@ class Case:
 	strict: bool = True       # False: count mismatches, never fail (informational)
 	expect_fail: bool = False  # a MUTANT: the comparator must catch it
 	cflags: tuple = ()         # appended after CFLAGS (a later flag wins)
+	key_format: str = "uint32"  # exporter --key-format (pef64: mcu/wnn_pef.h lookup)
 
 
 # ------------------------------------------------------------------ C side --
@@ -299,7 +305,8 @@ class Telemetry:
 
 def replay(case: Case, flights: list, workdir: Path, check_recorded: bool) -> tuple:
 	header = workdir / f"{case.name.replace('/', '_')}.h"
-	exp.write_header(str(header), exp.render_header(case.model.onset, case.model.source, case.model))
+	pef = exp.encode_keys(case.model.onset, case.key_format)
+	exp.write_header(str(header), exp.render_header(case.model.onset, case.model.source, case.model, pef))
 	shim = CShim(header, case, workdir, case.name.replace("/", "_"))
 	rctl, cmp = rust_controller(case.genome, case.model.motor_lag_s), Comparator(case.strict)
 	tel = Telemetry(_n_cas(case.model.spec), case.model.onset["bits_per_feature"])
@@ -401,7 +408,14 @@ def build_cases(model, genome, argv: list, ec) -> list:
 	cases = [Case(name="flags_off", model=model, genome=genome)]
 	for i, (name, ri, dh) in enumerate((("rate_i", True, False), ("dhat", False, True), ("both", True, True))):
 		cases.append(synthetic_case(name, base, argv, ec, ri, dh, seed=1000 + i))
-	return cases + control_cases(cases)
+	return cases + pef_cases(cases) + control_cases(cases)
+
+
+def pef_cases(cases: list) -> list:
+	"""CTRL-60: the trained winner and the both-blocks model again with the pef64
+	key store — strict, so the compressed lookup must be bit-exact end to end."""
+	off, both = cases[0], cases[3]
+	return [dataclasses.replace(c, name=f"{c.name}/pef64", key_format="pef64") for c in (off, both)]
 
 
 def control_cases(cases: list) -> list:
