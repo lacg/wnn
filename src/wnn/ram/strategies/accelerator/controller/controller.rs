@@ -8137,13 +8137,12 @@ pub(crate) fn clamp_f64(v: f64, lo: f64, hi: f64) -> f64
 
 #[inline]
 /// ABI 54/55: the anchored heading from a Mahony quaternion — its Euler yaw unwrapped onto
-/// the running heading `h` (never jumps at ±π). f64 inside, like the rest of the estimator.
-/// The Metal score kernel's twin is mahony_heading() (f32): CPU/GPU agree to float tolerance.
+/// the running heading `h` (never jumps at ±π). ABI 61: f32 through the deterministic
+/// atan2 (mahony_f32.rs), bit-identical to the Metal score kernel's mahony_heading()
+/// (pinned: ctrl61_f32_estimator_tests.rs). Up to ABI 60 it was f64 (quat_to_euler_f64).
 pub(crate) fn mahony_heading(h: f32, q: [f32; 4]) -> f32
 {
-	let (_, _, y) = quat_to_euler_f64(q);
-	let h = h as f64;
-	(h + wrap_angle_f64(y - h)) as f32
+	crate::mahony_f32::mahony_heading_f32(h, q)
 }
 
 pub(crate) fn wrap_angle_f64(a: f64) -> f64

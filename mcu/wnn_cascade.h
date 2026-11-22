@@ -22,7 +22,8 @@
  * Inputs a model does not use are ignored (the header's WNN_OBS_* flags say which).
  *
  * BIT PARITY. Every operation mirrors the Rust source in order and precision
- * (f32 features, f64 Mahony estimator / rate-I / d-hat observer). Build with
+ * (f32 features, f64 rate-I / d-hat observer; the Mahony estimator f32 from ABI 61,
+ * f64 before — WNN_EST_F32 below). Build with
  * -ffp-contract=off: Rust never fuses a*b+c, so a fused C build is NOT the same
  * function. Transcendentals (atan2f, powf, sqrt) come from the platform libm, so
  * bit parity is a HOST claim (mcu/parity/); an MCU libm may differ in the last ulp.
@@ -113,11 +114,26 @@ typedef struct
 	float applied_prev[4];
 } wnn_tick_in_t;
 
+/* Mahony estimator precision. WNN_EST_F32 1 (emitted by the exporter when the wheel's
+ * ram_controller.ATT_EST_PRECISION is "f32", ABI >= 61): the f32 filter + heading of
+ * mahony_f32.rs, bit-identical to Rust AND to the Metal kernel (no libm: atan2 is the
+ * deterministic atan2_det, sqrt is the IEEE sqrt). Absent / 0: the ABI <= 60 f64
+ * estimator (estimator.rs MahonyFilter + the f64 heading), so older headers keep
+ * their parity. */
+#ifndef WNN_EST_F32
+#define WNN_EST_F32 0
+#endif
+#if WNN_EST_F32
+typedef float wnn_est_real;
+#else
+typedef double wnn_est_real;
+#endif
+
 typedef struct
 {
-	double dt, kp, ki;
-	double q[4];
-	double integral[3];
+	wnn_est_real dt, kp, ki;
+	wnn_est_real q[4];
+	wnn_est_real integral[3];
 } wnn_mahony_t;
 
 #define WNN_MAX_INTEGRALS 5

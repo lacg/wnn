@@ -327,7 +327,13 @@ const ABI37_TRAIN_SCORE: [u64; 12] = [
 	0x322a_cc0b_d7a8_7301, 0xfae3_2599_6075_c40a, 0x8aa7_8178_50c0_5c9a, 0xeb85_75e5_a948_7976,
 	0xdf79_94a9_b2ea_2a8d, 0xc4d3_bce3_8662_d09a, 0x3ee9_fef6_3492_9930, 0x6950_51a2_48b3_681c,
 ];
-const ABI37_RIVALS: [u64; 4] = [0x1efc_ac56_65f8_81c3, 0xc51d_b21b_b380_bef5, 0xe2bf_f48c_969e_3f12, 0x8a6f_c5c4_348d_ce3a];
+/// RE-PINNED 22/11/2026 (symmetric ABI 61, Luiz's lineage decision 22/11: every on-board
+/// estimate is f32). These rivals are ESTIMATOR-FED (`rival`: use_estimator = true), so their
+/// Mahony moved from the f64 MahonyFilter to mahony_f32::rival_estimator — the only change in
+/// score_classical_baseline. ABI 37..60 values: 0x1efc_ac56_65f8_81c3, 0xc51d_b21b_b380_bef5,
+/// 0xe2bf_f48c_969e_3f12, 0x8a6f_c5c4_348d_ce3a. The motor path itself is still pinned by the
+/// other three digests, which did not move.
+const ABI37_RIVALS: [u64; 4] = [0xb1dc_6ee8_3e30_6b4b, 0x4931_8957_efc8_73d5, 0xd001_7013_42bf_0a0d, 0xac39_1876_d275_9307];
 const ABI37_SPLIT: [u64; 2] = [0x41ea_9fe1_b773_8472, 0x2f82_c765_db5c_0439];
 const ABI37_PIDFW: u64 = 0xcbfa_fa3a_5d95_1585;
 

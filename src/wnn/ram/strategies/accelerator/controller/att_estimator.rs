@@ -4,8 +4,8 @@
 // accelerometer reads ≈ (0, 0, T/m): it carries no tilt, so the WNN's legacy
 // ACCEL-ONLY attitude features (roll_est = atan2(ay, az), …) would be blind.
 // A real flight controller gets tilt from gyro integration corrected by the
-// accelerometer on average — an attitude estimator. This wraps the SAME Mahony
-// filter the classical rivals are fed by (estimator.rs MahonyFilter, kp/ki
+// accelerometer on average — an attitude estimator. This wraps the same Mahony
+// filter the classical rivals are fed by (mahony_f32.rs MahonyF32, kp/ki
 // defaults 2.0/0.1 = TeacherFeed / the scorers' est_kp/est_ki), warm-started
 // from the episode's initial attitude exactly like the rivals (the
 // converged-filter assumption, disclosed).
@@ -22,13 +22,18 @@
 //
 // FAIL LOUD. A live step on an UNSEEDED estimator panics: a host that forgot to
 // seed it would fly the filter from identity — a silent wrong-attitude start.
+//
+// PRECISION (ABI 61, 22/11/2026). The filter is MahonyF32 (mahony_f32.rs): f32, op for
+// op the Metal kernel's, so CPU and GPU estimates agree bit for bit. Up to ABI 60 it
+// was the f64 MahonyFilter (estimator.rs); the rivals' estimator-fed rows switched with it
+// (mahony_f32::rival_estimator), so WNN and rivals read the identical f32 estimate.
 
-use crate::estimator::MahonyFilter;
+use crate::mahony_f32::MahonyF32;
 
 #[derive(Clone)]
 pub struct AttEstimator
 {
-	filter: MahonyFilter,
+	filter: MahonyF32,
 	kp: f32,
 	ki: f32,
 	seeded: bool,
@@ -51,7 +56,7 @@ impl AttEstimator
 			));
 		}
 		Ok(Self {
-			filter: MahonyFilter::new(dt as f64, kp as f64, ki as f64),
+			filter: MahonyF32::new(dt, kp, ki),
 			kp,
 			ki,
 			seeded: false,
@@ -79,7 +84,7 @@ impl AttEstimator
 	/// Warm-start from the episode's initial attitude (the rivals' reset).
 	pub fn seed(&mut self, q0: [f32; 4])
 	{
-		self.filter.reset(Some(q0));
+		self.filter.reset(q0);
 		self.seeded = true;
 	}
 

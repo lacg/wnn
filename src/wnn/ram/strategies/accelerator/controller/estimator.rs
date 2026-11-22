@@ -18,9 +18,19 @@
 //
 // f64 internally (like pid_firmware, and like the Python reference, which
 // computes in Python floats = f64); f32 only at the sim/teacher boundary.
+//
+// TEST-ONLY SINCE SYMMETRIC ABI 61 (22/11/2026). A real board (CF2.1, Cortex-M4F
+// single-precision FPU) computes every estimate in f32, so EVERY simulated on-board
+// estimate — the WNN's AttEstimator, the classical rivals' estimator-fed rows, the
+// MPCOF eq-info row's bias predictor input, and the Python-facing MahonyEstimatorRs
+// below — is mahony_f32.rs MahonyF32 (one implementation, CPU == Metal == MCU C).
+// This f64 filter is kept only as the pinned twin of the Python reference
+// (golden test below) and as the reference mahony_f32's tracks_the_f64_filter
+// measures the f32 filter against.
 
 use pyo3::prelude::*;
 
+#[cfg(test)]
 #[derive(Clone)]
 pub struct MahonyFilter
 {
@@ -31,6 +41,7 @@ pub struct MahonyFilter
 	integral: [f64; 3],
 }
 
+#[cfg(test)]
 impl MahonyFilter
 {
 	pub fn new(dt: f64, kp: f64, ki: f64) -> Self
@@ -109,11 +120,12 @@ impl MahonyFilter
 	}
 }
 
-/// Python-facing wrapper (thin, house pattern — logic lives in MahonyFilter).
+/// Python-facing wrapper (thin, house pattern). Symmetric ABI 61: backed by the
+/// on-board f32 filter (mahony_f32.rs MahonyF32), the one every simulated board runs.
 #[pyclass]
 pub struct MahonyEstimatorRs
 {
-	inner: MahonyFilter,
+	inner: crate::mahony_f32::MahonyF32,
 }
 
 #[pymethods]
@@ -130,14 +142,15 @@ impl MahonyEstimatorRs
 			)));
 		}
 		Ok(Self {
-			inner: MahonyFilter::new(dt, kp, ki),
+			inner: crate::mahony_f32::MahonyF32::new(dt as f32, kp as f32, ki as f32),
 		})
 	}
 
+	/// Warm-start from q0 (None = identity), MahonyF32::reset semantics.
 	#[pyo3(signature = (q0 = None))]
 	pub fn reset(&mut self, q0: Option<[f32; 4]>)
 	{
-		self.inner.reset(q0);
+		self.inner.reset(q0.unwrap_or([1.0, 0.0, 0.0, 0.0]));
 	}
 
 	pub fn update(&mut self, gyro: [f32; 3], accel: [f32; 3]) -> [f32; 4]

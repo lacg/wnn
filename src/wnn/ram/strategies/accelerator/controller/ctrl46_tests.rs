@@ -462,8 +462,10 @@ fn abp_live_equals_the_model_on_onboard_inputs()
 	let mut c = abp_student(5, 0, true, 6, BINARY);
 	c.reset(0.0);
 	c.seed_att_estimator(q0);
-	let mut mahony = crate::estimator::MahonyFilter::new(0.001, 2.0, 0.1);
-	mahony.reset(Some(q0));
+	// ABI 61: the WNN's onboard filter is the f32 MahonyF32 (was the f64 MahonyFilter, whose
+	// quaternion no longer matches the controller's bit for bit).
+	let mut mahony = crate::mahony_f32::MahonyF32::new(0.001, 2.0, 0.1);
+	mahony.reset(q0);
 	let mut pred = crate::att_bias_pred::AttBiasPredictor::new(2.0, 0.1, 0.001);
 	let mut moved = false;
 	for t in 0..800

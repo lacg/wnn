@@ -82,6 +82,8 @@ mod ctrl52_yaw_trim_p_tests; // L2y' (ABI 52): proportional-only yaw trim shift,
 #[cfg(test)]
 mod ctrl54_yaw_heading_tests; // lever 1 (ABI 54): yaw heading from the student's own Mahony estimate
 #[cfg(test)]
+mod ctrl61_f32_estimator_tests; // ABI 61: f32 Mahony + heading — CPU == Metal bit for bit
+#[cfg(test)]
 mod ctrl54_e2e_parity_tests; // CTRL-54: end-to-end CPU/GPU scorer parity on trained genomes
 #[cfg(test)]
 mod ctrl60_mid_window_tests; // ABI 60: the `mid` scorer row — window definition, err decomposition, diverged fallback, CPU/GPU parity
@@ -122,6 +124,7 @@ mod rival_probe_tests; // probe-off bit-identity + the #[ignore] val-unit sweeps
 #[cfg(test)]
 mod label_replay_tests; // docs/ctrl_gap_after_block9.md §B.3: the teacher's label along a recorded STUDENT flight (#[ignore], val units)
 mod att_estimator; // ABI 32: the WNN's Mahony attitude estimate (obs_att_estimator)
+mod mahony_f32; // ABI 61: the WNN's Mahony filter + heading in f32, bit-identical to the Metal kernel
 mod att_err_ref; // CTRL-17 G5 (ABI 32): attitude error vs the position loop tilt reference
 mod plant_opts; // ABI 32: specific-force IMU + rotor drag as ONE value every sim host applies
 mod stage1; // scope C stage 1 vertical-channel config (scorer parameter object) // Phase-0 N-rotor allocation substrate (not wired; docs/OVERACTUATED_RESIDUAL_DESIGN.md)
@@ -588,7 +591,27 @@ mod metal_controller;
 ///     (cpu_score::mid_window_start / mid_episode_mean; kernel out_effort slot 7, 8 slots).
 ///     The opt-in tail export still FOLLOWS the metric slots (now 20).
 ///     Pin: ctrl60_mid_window_tests.rs. Prereg: docs/ctrl58_a2_prereg.md (Amendment 19/11).
-pub const ABI_VERSION: u32 = 60;
+/// ABI 61 (22/11/2026, Luiz plan "A + B"; NOT bit-identical — a NEW LINEAGE for every run with
+/// obs_att_estimator, i.e. every --translation run since ABI 32):
+///   * the WNN's Mahony estimator (AttEstimator) is f32 (mahony_f32.rs MahonyF32), op for op the
+///     Metal kernel's; the ABI-55 heading (obs_yaw_from_att_est, controller.rs mahony_heading) is
+///     f32 through a deterministic atan2 (atan2_det, IEEE basic ops only). The kernel's
+///     mahony_update / mahony_up / mahony_heading run in a strict-FP scope (safe math, contract
+///     off) inside the fast-math rollout library, so the estimator's quaternion, up vector and
+///     heading are CPU == GPU bit for bit (they were f64 vs f32 before: a CTRL-54 difference).
+///     SYMMETRIC: every other simulated on-board estimate is the same MahonyF32 — the classical
+///     rivals' estimator-fed rows (score/trace_classical_baseline, score_position_teacher via
+///     mahony_f32::rival_estimator; hence the MPCOF eq-info bias predictor's q input) and the
+///     Python-facing MahonyEstimatorRs — so WNN and rivals read bit-identical estimates (the
+///     f64 MahonyFilter is test-only, the Python reference twin). Oracle-fed DAgger labels are
+///     unchanged (they never read an estimate). New module constant
+///     ATT_EST_PRECISION = "f32" (a wheel without it is f64); the MCU C port reads it through
+///     the exporter (WNN_EST_F32). Pin: ctrl61_f32_estimator_tests.rs + mahony_f32 unit tests.
+pub const ABI_VERSION: u32 = 61;
+
+/// ABI 61: the precision of the WNN's own attitude estimator + heading ("f32"; a wheel
+/// without this constant runs the f64 estimator). Read by scripts/export_controller_c.py.
+pub const ATT_EST_PRECISION: &str = "f32";
 
 /// ABI 44: how output neurogenesis lays out the output layer — "segment" = every
 /// bank / E-I half resizes at its own tail (pre-44 Python resized the flat tail).
@@ -1573,6 +1596,7 @@ fn desirability_fitness_combine(
 fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()>
 {
 	m.add("ABI_VERSION", ABI_VERSION)?;
+	m.add("ATT_EST_PRECISION", ATT_EST_PRECISION)?;
 	m.add("RECORDER_INPUTS", RECORDER_INPUTS)?;
 	m.add("NEURO_LAYOUT", NEURO_LAYOUT)?;
 	m.add("BPTT_DEVICE_DEFAULT", BPTT_DEVICE_DEFAULT)?;

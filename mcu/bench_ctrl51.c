@@ -7,12 +7,14 @@
  * instructions of EVERY call, so the cost per decision has a mean AND a worst case.
  *
  *   -DBENCH_MPCOF  mpcof_cascade.c on mcu/ctrl51 traj_*.bin (the Rust teacher's own
- *                  episodes): per tick three regions [observe][decide-if-due]
- *                  [shadow rate stage]; the held setpoint is checked against the
- *                  Rust label every tick (bit equality, f64 build).
- *   -DBENCH_WNN    wnn_cascade.c on record_wnn_flights.py's stream: per tick three
+ *                  episodes): per tick four regions [observe][decide-if-due]
+ *                  [shadow rate stage][the decision's quaternion -> Euler alone, on
+ *                  decision ticks; empty otherwise]; the held setpoint is checked
+ *                  against the Rust label every tick (bit equality, f64 build).
+ *   -DBENCH_WNN    wnn_cascade.c on record_wnn_flights.py's stream: per tick five
  *                  regions [wnn_tick][the d-hat observer alone][the Mahony attitude
- *                  estimator alone] — the two on TWIN instances fed the same inputs,
+ *                  estimator alone][the ABI-55 heading alone][roll / pitch from the
+ *                  estimate alone] — the last four on TWIN instances fed the same inputs,
  *                  so each costs what it costs INSIDE wnn_tick (same code, same state
  *                  trajectory). wnn_cascade.c is included into this TU (as the parity
  *                  shim does) to reach its static estimator; wnn_tick is called
@@ -78,6 +80,14 @@ static void count_stats(int due)
 	n_failed += (uint32_t)g_m.last.failed;
 }
 
+/* The decision's attitude conversion alone (the "attitude handed" split). */
+__attribute__((noinline)) static void euler_twin(const float q[4])
+{
+	mpc_real e[3];
+	mpcof_quat_to_euler(q, e);
+	__asm__ volatile("" : : "r"(e) : "memory");
+}
+
 static void tick(const rec_t *r)
 {
 	MARK_BEGIN();
@@ -89,6 +99,17 @@ static void tick(const rec_t *r)
 	MARK_BEGIN();
 	mpcof_shadow_step(&g_m, r->gyro);
 	MARK_END();
+	if (due)
+	{
+		MARK_BEGIN();
+		euler_twin(r->q);
+		MARK_END();
+	}
+	else
+	{
+		MARK_BEGIN();
+		MARK_END();
+	}
 	count_stats(due);
 	for (int a = 0; a < 3; a++)
 	{
@@ -137,13 +158,36 @@ typedef struct
 static wnn_ctrl_t g_c;
 static cdhat_t g_twin;
 static wnn_mahony_t g_est_twin;
+static float g_est_q[4];      /* the twin's estimate of this tick (input of the next two) */
+static float g_head_twin;     /* the heading twin's running heading */
 static int (*volatile g_tick_fn)(wnn_ctrl_t *, const wnn_tick_in_t *, float *) = wnn_tick;
 
 __attribute__((noinline)) static void est_twin(const float gyro[3], const float accel[3])
 {
-	float q[4];
-	mahony_update(&g_est_twin, gyro, accel, q);
-	__asm__ volatile("" : : "r"(q) : "memory");
+	mahony_update(&g_est_twin, gyro, accel, g_est_q);
+	__asm__ volatile("" : : "r"(g_est_q) : "memory");
+}
+
+/* The ABI-55 heading alone (advance_heading's Mahony branch). */
+__attribute__((noinline)) static void heading_twin(void)
+{
+#if WNN_OBS_YAW_FROM_ATT_EST
+	if (WNN_OBS_YAW_ERR || WNN_OBS_YAW_ERR_I) g_head_twin = mahony_heading(g_head_twin, g_est_q);
+#endif
+	__asm__ volatile("" : : "r"(&g_head_twin) : "memory");
+}
+
+/* roll / pitch from the estimate alone (attitude_errors' up_from_quat + atan2 forms;
+ * what a firmware attitude task already hands over). Tilt stays the controller's. */
+__attribute__((noinline)) static void euler_twin(void)
+{
+#if WNN_OBS_ATT_EST
+	float up[3], rp[2];
+	up_from_quat(g_est_q, up);
+	rp[0] = atan2f(up[1], up[2]);
+	rp[1] = atan2f(-up[0], sqrtf(up[1] * up[1] + up[2] * up[2]));
+	__asm__ volatile("" : : "r"(rp) : "memory");
+#endif
 }
 static wnn_ratefw_t g_rate;
 static float g_applied[4];
@@ -155,6 +199,7 @@ static void episode_reset(const float q0[4], float yaw0, float anchor)
 	wnn_reset(&g_c, yaw0, q0);
 	g_twin = g_c.dhat;
 	g_est_twin = g_c.est;
+	g_head_twin = g_c.yaw_heading;
 	wnn_ratefw_reset(&g_rate);
 	wnn_ratefw_set_anchor(&g_rate, anchor);
 	for (int m = 0; m < 4; m++) g_applied[m] = 0.5f;
@@ -184,6 +229,12 @@ static void tick(const wrec_t *r)
 	MARK_END();
 	MARK_BEGIN();
 	est_twin(in.gyro, in.accel);
+	MARK_END();
+	MARK_BEGIN();
+	heading_twin();
+	MARK_END();
+	MARK_BEGIN();
+	euler_twin();
 	MARK_END();
 	wnn_ratefw_fly(&g_rate, sp, r->gyro, pwm);
 	n_mismatch += memcmp(pwm, r->pwm, sizeof pwm) != 0;

@@ -67,6 +67,11 @@ static void quat_to_euler(const float q[4], mpc_real e[3])
 	e[2] = R_ATAN2(siny_cosp, cosy_cosp);
 }
 
+void mpcof_quat_to_euler(const float q[4], mpc_real e[3])
+{
+	quat_to_euler(q, e);
+}
+
 /* optimal.rs state_error: [wrapped Euler error x3, gyro x3]. */
 static void state_error(const float q[4], const float gyro[3], const float target[3], mpc_real x[6])
 {

@@ -181,7 +181,14 @@ import os
 # ABI 60 (19/11/2026, Luiz: the CTRL-58 A2 mid-window amendment): scorer rows 19 -> 20 metrics,
 # row 19 = `mid` (mean err over 15%..80% of the steps); the opt-in tail export follows the 20
 # slots. Defaults = ABI 59 on every pre-existing row.
-EXPECTED_ABI = 60
+# ABI 61 (22/11/2026, Luiz plan "A + B"; NOT bit-identical, a NEW LINEAGE for every run with
+# --obs-att-estimator): the WNN's Mahony estimator + the ABI-55 heading are f32 (mahony_f32.rs),
+# CPU == Metal bit for bit; ATT_EST_PRECISION = "f32" (the MCU exporter emits WNN_EST_F32).
+# SYMMETRIC: the classical rivals' estimator-fed rows (score/trace_classical_baseline,
+# score_position_teacher; hence the MPCOF eq-info bias predictor) and MahonyEstimatorRs run
+# the SAME f32 filter, so WNN and rivals read bit-identical estimates (rival [est] rows are a
+# new lineage too; [oracle] rows and the oracle-fed DAgger labels are unchanged).
+EXPECTED_ABI = 61
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

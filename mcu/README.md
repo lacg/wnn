@@ -15,7 +15,7 @@ Two things live here:
 | Part | Rust reference (ABI 41) | C |
 |---|---|---|
 | features: 9 raw, tilt p/i, per-axis p/i (yaw dropped or not), integral leak/scale, yaw err/err_i (dt-integrated heading), collective / alt err / vz, pos err xy / vel xy | `controller.rs compute_features` | `compute_features` |
-| Mahony attitude estimator (f64, kp/ki from the wheel's defaults) + body "up" | `estimator.rs`, `att_estimator.rs` | `mahony_*`, `up_from_quat` |
+| Mahony attitude estimator (f32 from ABI 61 via `WNN_EST_F32`, f64 before; kp/ki from the wheel's defaults) + body "up" | `mahony_f32.rs`, `att_estimator.rs` | `mahony_*`, `up_from_quat` |
 | CTRL-38 rate-I: I / i_limit per axis (raw I when i_limit = 0) | `ctbr.rs rate_integral_norm`, `cascade_obs.rs` | `cascade_block` |
 | CTRL-38 d-hat: MPCOF offset-free observer on the APPLIED command, modelled motor lag, prime/seed protocol, clamp at c*out_limit, per-flight reset | `cascade_dhat.rs` | `dhat_*` |
 | thermometer, output-layer addresses (MSB first), TRUE on-set binary search | `step`, `neuron_memory.rs address_over` | `encode_frame`, `forward_output` |
@@ -75,9 +75,15 @@ indices >= 256 (any cascade with 32+ features x 8 bits) and -1 slots.
 * **`-ffp-contract=off` is mandatory.** Rust never fuses `a*b+c`; GCC targeting
   the M4F does by default (VFMA). Measured on the parity run: with
   `-ffp-contract=fast` 5,210 of 6,000 held setpoints differ from the simulator.
-* Estimator, rate-I and d-hat are f64 like the CPU reference. On an M4F (single
+* Rate-I and d-hat are f64 like the CPU reference. On an M4F (single
   precision FPU) that means libgcc soft-double (`__aeabi_dadd`, ...): link libgcc
-  and a libm (`atan2f`, `powf`, `sqrtf`, `sqrt`). `-DWNN_DHAT_F32` selects the
+  and a libm (`atan2f`, `powf`, `sqrtf`, `sqrt`).
+* The Mahony estimator + ABI-55 heading follow the header's `WNN_EST_F32`
+  (ram_controller ABI 61, 22/11/2026): the exporter emits `#define WNN_EST_F32 1`
+  when the wheel's `ATT_EST_PRECISION` is `"f32"`; then the filter is f32 and the
+  heading uses `atan2_det` (IEEE +, -, *, /, sqrt only, no libm), bit-identical to
+  Rust and to the Metal kernel. A header without the macro (any export from an
+  ABI <= 60 wheel) keeps the f64 estimator + f64 heading of that lineage. `-DWNN_DHAT_F32` selects the
   Metal kernel's f32 observer instead: cheaper, and NOT bit-identical (every tick's
   d-hat differs in the last bits; over the 6,000-tick parity run no thermometer
   bit flipped, which is evidence, not a guarantee).
@@ -468,3 +474,20 @@ raw: `logs/controller/ctrl60/`). Firmware = `.text` of the whole M4 image.
 pef64 adds ~51k instructions per decision at 256-264 n and ~97k at 480 n (1.6-1.7x
 the decision tick, 1.2-1.3x the window); hold ticks are unchanged. Hit and miss are not
 equal-cost under pef64 (worst/mean 1.02-1.03 vs 1.006 for uint32).
+
+### ABI 61 (22/11/2026): f32 Mahony estimator + heading, and the attitude split
+
+* **Estimator.** `wnn_cascade.c` carries both estimators, chosen by `WNN_EST_F32`
+  (see "Build flags"). The f32 one mirrors `mahony_f32.rs` op for op; the Metal kernel
+  runs the same ops under a strict-FP scope, so the estimator is CPU == GPU == C bit for
+  bit (cargo pin `ctrl61_f32_estimator_tests.rs`). The host's classical rivals
+  (estimator-fed rows) run the same f32 filter, so the on-board estimate is the same
+  for every controller; `mpcof_cascade.c` takes q as an input (no estimator inside).
+* **Bench regions.** `bench_ctrl51.c` now splits the attitude cost: MPCOF per tick
+  [observe][decide][shadow][quat->Euler twin on decision ticks], WNN per tick
+  [wnn_tick][d-hat twin][Mahony twin][heading twin][roll/pitch twin].
+  `summarize_bench.py` reads the region count from the run log (old 3-region benches
+  still summarize) and prints the "ATTITUDE EXCLUDED" rows: both controllers handed the
+  firmware's attitude (q and roll / pitch / yaw).
+* Results: `docs/ctrl51_onboard_cost.md`, "Attitude excluded (fair)".
+

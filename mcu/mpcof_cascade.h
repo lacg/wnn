@@ -94,5 +94,9 @@ int mpcof_label(mpcof_t *m, const float q[4], const float gyro[3], const float t
 /* The two halves of mpcof_label, for the benchmark's cost split. */
 int mpcof_decide_if_due(mpcof_t *m, const float q[4], const float gyro[3], const float target[3]);
 void mpcof_shadow_step(mpcof_t *m, const float gyro[3]);
+/* The benchmark's attitude split (22/11/2026): the decision's quaternion -> Euler
+ * conversion alone (controller.rs quat_to_euler_f64; what a firmware attitude task
+ * already hands over as roll / pitch / yaw). Same code as inside the decision. */
+void mpcof_quat_to_euler(const float q[4], mpc_real e[3]);
 
 #endif /* MPCOF_CASCADE_H */

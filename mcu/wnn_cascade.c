@@ -1,6 +1,6 @@
 /* On-board cascade WNN controller. Every function names the Rust it mirrors
  * (ram_controller @ ABI 41; the CTRL-48 residual @ ABI 45; the block-10 / lever
- * set of the Y+F+L base @ ABI 60); keep the operation ORDER when editing — the parity
+ * set of the Y+F+L base @ ABI 60; the f32 Mahony estimator + heading @ ABI 61); keep the operation ORDER when editing — the parity
  * test (mcu/parity/) asserts bit equality, and a reassociated sum is a different
  * function. See wnn_cascade.h for the firmware contract. */
 #include "wnn_cascade.h"
@@ -35,7 +35,66 @@ static float clampf_rs(float x, float lo, float hi)
 	return x;
 }
 
-/* ---------------------------------------- Mahony estimator (estimator.rs) */
+/* ---------------------------------------- Mahony estimator ------------- */
+#if WNN_EST_F32
+/* ABI 61: mahony_f32.rs MahonyF32 — f32, op for op (also the Metal kernel's). */
+
+/* MahonyF32::reset: q0 VERBATIM (the first update renormalizes); zero or
+ * non-finite -> identity. */
+static void mahony_reset(wnn_mahony_t *e, const float q0[4])
+{
+	int ok = 1, any = 0;
+	for (int i = 0; i < 4; i++)
+	{
+		ok &= isfinite(q0[i]) ? 1 : 0;
+		any |= (q0[i] != 0.0f) ? 1 : 0;
+	}
+	if (ok && any)
+		for (int i = 0; i < 4; i++) e->q[i] = q0[i];
+	else
+	{
+		e->q[0] = 1.0f;
+		e->q[1] = e->q[2] = e->q[3] = 0.0f;
+	}
+	for (int i = 0; i < 3; i++) e->integral[i] = 0.0f;
+}
+
+/* MahonyF32::update -> q. */
+static void mahony_update(wnn_mahony_t *e, const float gyro[3], const float accel[3], float qo[4])
+{
+	float w = e->q[0], x = e->q[1], y = e->q[2], z = e->q[3];
+	float gx = gyro[0], gy = gyro[1], gz = gyro[2];
+	float ax = accel[0], ay = accel[1], az = accel[2];
+	float nrm = sqrtf(ax * ax + ay * ay + az * az);
+	if (nrm > 1e-9f)
+	{
+		ax /= nrm; ay /= nrm; az /= nrm;
+		float vx = 2.0f * (x * z - w * y), vy = 2.0f * (w * x + y * z);
+		float vz = w * w - x * x - y * y + z * z;
+		float ex = ay * vz - az * vy, ey = az * vx - ax * vz, ez = ax * vy - ay * vx;
+		if (e->ki > 0.0f)
+		{
+			e->integral[0] += e->ki * ex * e->dt;
+			e->integral[1] += e->ki * ey * e->dt;
+			e->integral[2] += e->ki * ez * e->dt;
+		}
+		gx += e->kp * ex + e->integral[0];
+		gy += e->kp * ey + e->integral[1];
+		gz += e->kp * ez + e->integral[2];
+	}
+	float hdt = 0.5f * e->dt;
+	float dw = (-x * gx - y * gy - z * gz) * hdt;
+	float dx = (w * gx + y * gz - z * gy) * hdt;
+	float dy = (w * gy - x * gz + z * gx) * hdt;
+	float dz = (w * gz + x * gy - y * gx) * hdt;
+	w += dw; x += dx; y += dy; z += dz;
+	float n = sqrtf(w * w + x * x + y * y + z * z);
+	n = (n > 0.0f) ? n : 1.0f;
+	e->q[0] = w / n; e->q[1] = x / n; e->q[2] = y / n; e->q[3] = z / n;
+	for (int i = 0; i < 4; i++) qo[i] = e->q[i];
+}
+#else
+/* ABI <= 60: estimator.rs MahonyFilter, f64 (soft-double on an M4F). */
 
 /* MahonyFilter::reset(Some(q0)). */
 static void mahony_reset(wnn_mahony_t *e, const float q0[4])
@@ -81,6 +140,8 @@ static void mahony_update(wnn_mahony_t *e, const float gyro[3], const float acce
 	e->q[0] = w / n; e->q[1] = x / n; e->q[2] = y / n; e->q[3] = z / n;
 	for (int i = 0; i < 4; i++) qo[i] = (float)e->q[i];
 }
+
+#endif
 
 /* att_estimator.rs up_from_quat (f32). */
 static void up_from_quat(const float q[4], float up[3])
@@ -144,6 +205,49 @@ static void resid_init(wnn_ctrl_t *ctl)
 
 /* ---------------------- Mahony heading (controller.rs mahony_heading) -- */
 #if WNN_OBS_YAW_FROM_ATT_EST
+#if WNN_EST_F32
+
+/* mahony_f32.rs atan01_det / atan2_det: IEEE basic ops only (no libm), so Rust, Metal
+ * and this C give the same bits. Taylor to t^15 after one tan(pi/8) reduction. */
+static float atan01_det(float a)
+{
+	float base = 0.0f, t = a;
+	if (a > 0.41421357f)
+	{
+		base = 0.7853982f;
+		t = (a - 1.0f) / (a + 1.0f);
+	}
+	float s = t * t;
+	float p = ((((((-0.06666667f * s + 0.07692308f) * s + -0.09090909f) * s + 0.11111111f) * s + -0.14285715f) * s + 0.2f) * s)
+		+ -0.33333334f;
+	return base + (t + (t * s) * p);
+}
+
+static float atan2_det(float y, float x)
+{
+	float ax = fabsf(x), ay = fabsf(y);
+	if (ax == 0.0f && ay == 0.0f) return 0.0f;
+	int swap = ay > ax;
+	float a = swap ? (ax / ay) : (ay / ax);
+	float r = atan01_det(a);
+	if (swap) r = 1.5707964f - r;
+	if (x < 0.0f) r = 3.1415927f - r;
+	if (y < 0.0f) r = -r;
+	return r;
+}
+
+/* ABI 61 mahony_heading_f32: yaw_det(q) unwrapped onto h, f32 (wrap_angle_f32). */
+static float mahony_heading(float h, const float q[4])
+{
+	float w = q[0], x = q[1], y = q[2], z = q[3];
+	float siny_cosp = 2.0f * (w * z + x * y);
+	float cosy_cosp = 1.0f - 2.0f * (y * y + z * z);
+	float d = atan2_det(siny_cosp, cosy_cosp) - h;
+	while (d > 3.1415927f) d -= 6.2831855f;
+	while (d <= -3.1415927f) d += 6.2831855f;
+	return h + d;
+}
+#else
 
 /* wrap_angle_f64: into (-pi, pi]. */
 static double wrap_angle(double a)
@@ -165,7 +269,8 @@ static float mahony_heading(float h, const float q[4])
 	double hd = h;
 	return (float)(hd + wrap_angle(yaw - hd));
 }
-#endif
+#endif /* WNN_EST_F32 */
+#endif /* WNN_OBS_YAW_FROM_ATT_EST */
 
 /* ------------------ Mahony-bias predictor (att_bias_pred.rs, CTRL-46) ---- */
 #if WNN_OBS_ATT_BIAS_PRED
@@ -494,9 +599,9 @@ void wnn_init(wnn_ctrl_t *c)
 {
 	static const float id[4] = {1.0f, 0.0f, 0.0f, 0.0f};
 	memset(c, 0, sizeof *c);
-	c->est.dt = (double)WNN_DT;
-	c->est.kp = (double)WNN_EST_KP;
-	c->est.ki = (double)WNN_EST_KI;
+	c->est.dt = (wnn_est_real)WNN_DT;
+	c->est.kp = (wnn_est_real)WNN_EST_KP;
+	c->est.ki = (wnn_est_real)WNN_EST_KI;
 	dhat_init(&c->dhat);
 	resid_init(c);
 	/* Runtime copies: a const gamma would let the compiler fold powf(x, 2) -> x*x. */
