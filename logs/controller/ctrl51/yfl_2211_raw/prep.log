@@ -1,0 +1,50 @@
+wrote /tmp/yfl_work/hdr/yfl_s1.h  [CASCADE (runnable)] neurons=264 bits=24 in_bits=216 features=27x8 keys=662535  (~2594 KB of .rodata)
+  on-set filter: TRUE=662535 dropped FALSE/other=0 (0.0% of populated cells)
+  blocks: rate_i=False dhat=False dres=True motor_lag=0.2s action_repeat=10
+  block-10 / levers: att_bias_pred, tilt_ref_shape, yaw_from_att_est, yaw_trim_ff_ct, delta_max_yaw yaw_integral_leak=0.9994999766349792
+wrote /tmp/yfl_work/hdr/yfl_s1_pef.h  [CASCADE (runnable)] neurons=264 bits=24 in_bits=216 features=27x8 keys=662535  (~2594 KB of .rodata)
+  key format pef64 (B=64, 10491 blocks): ~1005 KB of .rodata (0.387x the uint32 keys+conn)
+  on-set filter: TRUE=662535 dropped FALSE/other=0 (0.0% of populated cells)
+  blocks: rate_i=False dhat=False dres=True motor_lag=0.2s action_repeat=10
+  block-10 / levers: att_bias_pred, tilt_ref_shape, yaw_from_att_est, yaw_trim_ff_ct, delta_max_yaw yaw_integral_leak=0.9994999766349792
+wrote /tmp/yfl_work/ref/wnn_yfl_s1_flights.bin: 5 episodes, 10000 ticks
+wrote /tmp/yfl_work/hdr/yfl_s2.h  [CASCADE (runnable)] neurons=504 bits=24 in_bits=216 features=27x8 keys=703938  (~2762 KB of .rodata)
+  on-set filter: TRUE=703938 dropped FALSE/other=0 (0.0% of populated cells)
+  blocks: rate_i=False dhat=False dres=True motor_lag=0.2s action_repeat=10
+  block-10 / levers: att_bias_pred, tilt_ref_shape, yaw_from_att_est, yaw_trim_ff_ct, delta_max_yaw yaw_integral_leak=0.9994999766349792
+wrote /tmp/yfl_work/hdr/yfl_s2_pef.h  [CASCADE (runnable)] neurons=504 bits=24 in_bits=216 features=27x8 keys=703938  (~2762 KB of .rodata)
+  key format pef64 (B=64, 11261 blocks): ~1121 KB of .rodata (0.406x the uint32 keys+conn)
+  on-set filter: TRUE=703938 dropped FALSE/other=0 (0.0% of populated cells)
+  blocks: rate_i=False dhat=False dres=True motor_lag=0.2s action_repeat=10
+  block-10 / levers: att_bias_pred, tilt_ref_shape, yaw_from_att_est, yaw_trim_ff_ct, delta_max_yaw yaw_integral_leak=0.9994999766349792
+wrote /tmp/yfl_work/ref/wnn_yfl_s2_flights.bin: 5 episodes, 10000 ticks
+wrote /tmp/yfl_work/hdr/yfl_s3.h  [CASCADE (runnable)] neurons=256 bits=24 in_bits=216 features=27x8 keys=420562  (~1649 KB of .rodata)
+  on-set filter: TRUE=420562 dropped FALSE/other=0 (0.0% of populated cells)
+  blocks: rate_i=False dhat=False dres=True motor_lag=0.2s action_repeat=10
+  block-10 / levers: att_bias_pred, tilt_ref_shape, yaw_from_att_est, yaw_trim_ff_ct, delta_max_yaw yaw_integral_leak=0.9994999766349792
+wrote /tmp/yfl_work/hdr/yfl_s3_pef.h  [CASCADE (runnable)] neurons=256 bits=24 in_bits=216 features=27x8 keys=420562  (~1649 KB of .rodata)
+  key format pef64 (B=64, 6695 blocks): ~644 KB of .rodata (0.390x the uint32 keys+conn)
+  on-set filter: TRUE=420562 dropped FALSE/other=0 (0.0% of populated cells)
+  blocks: rate_i=False dhat=False dres=True motor_lag=0.2s action_repeat=10
+  block-10 / levers: att_bias_pred, tilt_ref_shape, yaw_from_att_est, yaw_trim_ff_ct, delta_max_yaw yaw_integral_leak=0.9994999766349792
+wrote /tmp/yfl_work/ref/wnn_yfl_s3_flights.bin: 5 episodes, 10000 ticks
+wrote /tmp/yfl_work/hdr/yfl_s4.h  [CASCADE (runnable)] neurons=264 bits=24 in_bits=216 features=27x8 keys=385470  (~1512 KB of .rodata)
+  on-set filter: TRUE=385470 dropped FALSE/other=0 (0.0% of populated cells)
+  blocks: rate_i=False dhat=False dres=True motor_lag=0.2s action_repeat=10
+  block-10 / levers: att_bias_pred, tilt_ref_shape, yaw_from_att_est, yaw_trim_ff_ct, delta_max_yaw yaw_integral_leak=0.9994999766349792
+wrote /tmp/yfl_work/hdr/yfl_s4_pef.h  [CASCADE (runnable)] neurons=264 bits=24 in_bits=216 features=27x8 keys=385470  (~1512 KB of .rodata)
+  key format pef64 (B=64, 6154 blocks): ~605 KB of .rodata (0.400x the uint32 keys+conn)
+  on-set filter: TRUE=385470 dropped FALSE/other=0 (0.0% of populated cells)
+  blocks: rate_i=False dhat=False dres=True motor_lag=0.2s action_repeat=10
+  block-10 / levers: att_bias_pred, tilt_ref_shape, yaw_from_att_est, yaw_trim_ff_ct, delta_max_yaw yaw_integral_leak=0.9994999766349792
+wrote /tmp/yfl_work/ref/wnn_yfl_s4_flights.bin: 5 episodes, 10000 ticks
+wrote /tmp/yfl_work/hdr/yfl_s5.h  [CASCADE (runnable)] neurons=504 bits=24 in_bits=216 features=27x8 keys=756032  (~2965 KB of .rodata)
+  on-set filter: TRUE=756032 dropped FALSE/other=0 (0.0% of populated cells)
+  blocks: rate_i=False dhat=False dres=True motor_lag=0.2s action_repeat=10
+  block-10 / levers: att_bias_pred, tilt_ref_shape, yaw_from_att_est, yaw_trim_ff_ct, delta_max_yaw yaw_integral_leak=0.9994999766349792
+wrote /tmp/yfl_work/hdr/yfl_s5_pef.h  [CASCADE (runnable)] neurons=504 bits=24 in_bits=216 features=27x8 keys=756032  (~2965 KB of .rodata)
+  key format pef64 (B=64, 12069 blocks): ~1199 KB of .rodata (0.404x the uint32 keys+conn)
+  on-set filter: TRUE=756032 dropped FALSE/other=0 (0.0% of populated cells)
+  blocks: rate_i=False dhat=False dres=True motor_lag=0.2s action_repeat=10
+  block-10 / levers: att_bias_pred, tilt_ref_shape, yaw_from_att_est, yaw_trim_ff_ct, delta_max_yaw yaw_integral_leak=0.9994999766349792
+wrote /tmp/yfl_work/ref/wnn_yfl_s5_flights.bin: 5 episodes, 10000 ticks
