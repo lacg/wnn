@@ -55,6 +55,10 @@ def _compute_class_weights(labels: np.ndarray, num_classes: int, multiplier: flo
 	return weights
 
 
+
+# Rust modes_from_scores tags VAL-partition entries with this prefix (Protocol v2).
+VAL_MODE_PREFIX = "val:"
+
 class _ReplacedXDataset:
 	"""Lightweight proxy that overrides X_train/X_test on an existing dataset.
 
@@ -881,8 +885,14 @@ class IDSEvaluator(BaseEvaluator):
 		sweep on train margins), val-calibrated (sweep on val margins —
 		Protocol v2, only when a val partition exists)}.
 
+		The Rust side also returns VAL-partition entries (prefix "val:", Protocol v2
+		only): they go to 'val_partition' (same entry shape, metrics on VAL), never
+		into 'modes', so TEST-mode consumers cannot mistake a tuning number for a
+		report number.
+
 		Returns:
-			{'num_classes': K, 'footprint': Footprint, 'modes': {mode_name: {
+			{'num_classes': K, 'footprint': Footprint, 'val_partition': {name: entry},
+			 'modes': {mode_name: {
 				'ce', 'acc', 'macro_f1', 'weighted_f1', 'benign_fpr',
 				'f1', 'fpr',    # aliases (= macro_f1 / benign_fpr) so shared
 				                # consumers (leaderboard submit, 5-table
@@ -905,7 +915,7 @@ class IDSEvaluator(BaseEvaluator):
 			names = list(self._class_names)
 		else:
 			names = [str(c) for c in range(num_classes)]
-		modes = {}
+		modes, val_partition = {}, {}
 		for (mode, tau, ce, acc, macro_f1, weighted_f1, benign_fpr,
 				confusion, precision, recall, f1s, support) in mode_results:
 			entry = {
@@ -934,8 +944,12 @@ class IDSEvaluator(BaseEvaluator):
 				entry['attack_f1'] = f1s[attack]
 			if not math.isnan(tau):
 				entry['tau'] = tau
-			modes[mode] = entry
-		return {'num_classes': num_classes, 'footprint': Footprint.from_tuple(raw_footprint), 'modes': modes}
+			if mode.startswith(VAL_MODE_PREFIX):
+				val_partition[mode[len(VAL_MODE_PREFIX):]] = entry
+			else:
+				modes[mode] = entry
+		return {'num_classes': num_classes, 'footprint': Footprint.from_tuple(raw_footprint), 'modes': modes,
+			'val_partition': val_partition}
 
 	def evaluate_batch_full(
 		self,

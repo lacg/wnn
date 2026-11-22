@@ -647,7 +647,34 @@ pub fn modes_from_scores(
 		),
 	});
 
+	if let (Some(vs), Some(vt), Some(tau)) = (val_scores, val_targets, val_tau)
+	{
+		modes.extend(val_partition_modes(vs, vt, tau, num_classes, benign_class));
+	}
 	modes
+}
+
+/// VAL-partition metrics (prefix `val:`), Protocol v2 only: the val twin of the
+/// reporting cell (`val:margin_val_cal`, val metrics at the val-calibrated τ) and
+/// of the search decode (`val:argmax`). These are TUNING numbers — the input a
+/// phase/stage select ranks on — never a report number; Python files them under
+/// threshold_metadata['val_partition'], apart from the TEST decode modes.
+fn val_partition_modes(
+	val_scores: &[f64],
+	val_targets: &[i64],
+	val_tau: f64,
+	num_classes: usize,
+	benign_class: usize,
+) -> Vec<MulticlassModeResult>
+{
+	let (val_margins, val_attack) = benign_margins(val_scores, num_classes, benign_class);
+	let cal_preds = margin_decode(&val_margins, &val_attack, val_tau, benign_class);
+	let argmax_preds = argmax_decode(val_scores, num_classes);
+	let metrics = |preds: &[u32]| metrics_from_predictions(val_scores, preds, val_targets, num_classes, benign_class);
+	vec![
+		MulticlassModeResult { mode: "val:margin_val_cal".to_string(), tau: val_tau, metrics: metrics(&cal_preds) },
+		MulticlassModeResult { mode: "val:argmax".to_string(), tau: f64::NAN, metrics: metrics(&argmax_preds) },
+	]
 }
 
 // ---------------------------------------------------------------------------
@@ -1185,7 +1212,36 @@ mod tests
 		assert!(!names(2, false).contains(&"margin_val_f1".to_string()));
 		let three = names(3, true);
 		assert!(!three.iter().any(|m| m.ends_with("_f1")), "K=3 gained binary modes: {three:?}");
-		assert_eq!(three.len(), 8, "K>=3 mode list changed: {three:?}");
+		assert_eq!(three.len(), 10, "K>=3 mode list changed: {three:?}");
+		assert!(three.iter().filter(|m| m.starts_with("val:")).count() == 2, "{three:?}");
+		assert!(!names(3, false).iter().any(|m| m.starts_with("val:")), "val: modes without a val partition");
+	}
+
+	/// val:margin_val_cal = the VAL set decoded at margin_val_cal's τ (same τ,
+	/// metrics on val, not on eval); val:argmax = the VAL set's argmax decode.
+	#[test]
+	fn test_val_partition_modes_score_the_val_set_at_the_val_tau()
+	{
+		use rand::prelude::*;
+		let mut rng = rand::rngs::StdRng::seed_from_u64(11);
+		let n = 300usize;
+		let mut set = |shift: f64| {
+			let t: Vec<i64> = (0..n).map(|_| rng.gen_range(0..2) as i64).collect();
+			let s: Vec<f64> = t.iter().flat_map(|&y| [rng.gen_range(0.0..1.0), rng.gen_range(0.0..1.0) + shift * y as f64]).collect();
+			(s, t)
+		};
+		let ((es, et), (ts, tt), (vs, vt)) = (set(0.1), set(0.3), set(0.6));
+		let modes = modes_from_scores(&es, &et, &ts, &tt, Some(&vs), Some(&vt), 2, 0);
+		let find = |name: &str| modes.iter().find(|m| m.mode == name).expect(name);
+		let tau = find("margin_val_cal").tau;
+		assert_eq!(find("val:margin_val_cal").tau.to_bits(), tau.to_bits());
+		let (vm, va) = benign_margins(&vs, 2, 0);
+		let want = metrics_from_predictions(&vs, &margin_decode(&vm, &va, tau, 0), &vt, 2, 0);
+		assert_eq!(format!("{:?}", find("val:margin_val_cal").metrics), format!("{want:?}"));
+		let want_argmax = metrics_from_predictions(&vs, &argmax_decode(&vs, 2), &vt, 2, 0);
+		assert_eq!(format!("{:?}", find("val:argmax").metrics), format!("{want_argmax:?}"));
+		assert_ne!(format!("{:?}", find("val:margin_val_cal").metrics), format!("{:?}", find("margin_val_cal").metrics),
+			"val metrics must not be the eval-set metrics");
 	}
 
 	#[test]

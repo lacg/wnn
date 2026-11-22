@@ -1396,6 +1396,12 @@ class Experiment:
 						_mc_cached_ok = "argmax" in _cached_tm
 					except Exception:
 						pass
+				if _mc_cached_ok and getattr(val_evaluator, "_y_val", None) is not None:
+					# Protocol v2: rows written before the val scores were persisted
+					# lack 'val_partition' — re-validate once so every row carries it.
+					_mc_cached_ok = "val_partition" in _cached_tm
+					if not _mc_cached_ok:
+						self.log(f"  {genome_type.value}: cached but missing val_partition — re-validating")
 				if not _mc_cached_ok:
 					self.log(f"  {genome_type.value}: cached but missing multiclass decode modes — re-validating")
 					cached = None
@@ -1466,6 +1472,11 @@ class Experiment:
 				if 'margin_val_cal' in threshold_metadata:
 					self.log(f"    [PROTOCOL-V2] margin_val_cal tau calibrated on val partition; "
 							 f"test partition is report-only")
+				if _mc.get('val_partition'):
+					threshold_metadata['val_partition'] = _mc['val_partition']
+					_vp = _mc['val_partition'].get('margin_val_cal', {})
+					self.log(f"    [VAL] margin_val_cal on the VAL partition (tuning, not a report number): "
+							 f"MacroF1={_vp.get('macro_f1', float('nan')):.4%}, BenignFPR={_vp.get('benign_fpr', float('nan')):.4%}")
 				# Headline metrics = argmax decode (the same rule the
 				# GA-search fitness used). Binary two-cluster: F1 is the
 				# 2-class macro F1 (the 'f1' alias), the number single-cluster
@@ -1598,11 +1609,18 @@ class Experiment:
 				# the -1.0 sentinel is unused in v2 mode). Legacy 2-way: oracle
 				# threshold on the report-set scores themselves (unchanged).
 				if _protocol_v2:
-					val_cal_threshold, _vc_f1_unused, _vc_fpr_unused = (
+					val_cal_threshold, _val_f1, _val_fpr = (
 						ram_accelerator.find_optimal_threshold_f1_py(
 							val_scores, val_labels_list,
 						)
 					)
+					# The VAL partition's own score at its calibrated threshold: a
+					# TUNING number (phase/stage select), never a report number.
+					threshold_metadata['val_partition'] = {
+						'val_cal': {'f1': _val_f1, 'fpr': _val_fpr, 'threshold': val_cal_threshold},
+					}
+					self.log(f"    [VAL] val_cal on the VAL partition (tuning, not a report number): "
+							 f"F1={_val_f1:.4%}, FPR={_val_fpr:.4%}")
 					_vc_ce, _vc_acc, _vc_f1, _vc_fpr = _metrics_at(val_cal_threshold)
 					threshold_metadata['val_cal'] = {
 						'f1': _vc_f1, 'fpr': _vc_fpr, 'acc': _vc_acc,
@@ -1687,8 +1705,8 @@ class Experiment:
 						scores_arr = _np.asarray(eval_scores, dtype=_np.float64)
 						n_modes_done = 0
 						for mode_key, mode_data in list(threshold_metadata.items()):
-							if not isinstance(mode_data, dict):
-								continue
+							if not isinstance(mode_data, dict) or mode_key == "val_partition":
+								continue  # val_partition holds VAL scores, not a TEST decode mode
 							thr = mode_data.get("threshold")
 							if thr is None:
 								thr = 0.5 if mode_key == "fixed_05" else train_threshold
