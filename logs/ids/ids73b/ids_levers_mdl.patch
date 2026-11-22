@@ -1,0 +1,313 @@
+diff --git a/src/wnn/ram/experiments/ids_param_resolution.py b/src/wnn/ram/experiments/ids_param_resolution.py
+index f656942b..3e4e7aa8 100644
+--- a/src/wnn/ram/experiments/ids_param_resolution.py
++++ b/src/wnn/ram/experiments/ids_param_resolution.py
+@@ -254,7 +254,7 @@ def resolve_encoding_dedupe(params: dict) -> bool:
+ 
+ def resolve_cut_method(params: dict) -> str:
+ 	"""ids_cut_method (IDS-70): "quantile" (default, bit-identical encoding) |
+-	"info_gain_mc" | "xgb_splits" (supervised cuts fitted on TRAIN only;
++	"info_gain_mc" | "info_gain_mdl" | "xgb_splits" (supervised cuts fitted on TRAIN only;
+ 	wnn/representations/cut_method.py). Anything else is refused."""
+ 	from wnn.representations.cut_method import CutMethod
+ 	value = params.get("ids_cut_method", CutMethod.QUANTILE.value)
+diff --git a/src/wnn/ram/experiments/params.py b/src/wnn/ram/experiments/params.py
+index e8ac102b..19511bcc 100644
+--- a/src/wnn/ram/experiments/params.py
++++ b/src/wnn/ram/experiments/params.py
+@@ -137,10 +137,13 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
+ 	# own quantile cuts, bit-identical) | "info_gain_mc" (IDS-63 variant E:
+ 	# best-first information-gain cuts vs the attack classes, same total bit
+ 	# budget, categoricals as a thermometer over train attack-rate rank) |
++	# "info_gain_mdl" (22/11/2026, IDS-72: the info_gain_mc search with no budget —
++	# each split must pass the Fayyad-Irani MDLP test, so the data sets the total) |
+ 	# "xgb_splits" (variant B: every split threshold of a train-fit XGBoost on the
+ 	# numeric features). Fitted on the TRAIN partition only, seeded by the flow
+-	# seed. Pinned in the test-cache key ("cut="). Refused with ids_streaming,
+-	# ids_encoding_dedupe="on" and feature_selection top20_split.
++	# seed. Pinned in the test-cache key ("cut="). Refused with ids_streaming and
++	# feature_selection top20_split; with ids_encoding_dedupe="on" the cuts are
++	# fitted first, then deduped (IDS-73, d4556ddc).
+ 	"ids_cut_method",
+ 	# ids_feature_ranking (08/11/2026, IDS-53): "legacy" (default — the
+ 	# TOP20_RF_FEATURES constants, byte-identical) | "train_only" (the top-N
+diff --git a/src/wnn/representations/cut_method.py b/src/wnn/representations/cut_method.py
+index efe8477e..905e187e 100644
+--- a/src/wnn/representations/cut_method.py
++++ b/src/wnn/representations/cut_method.py
+@@ -6,6 +6,9 @@ INFO_GAIN_MC  -- pre-check variant E (Plane IDS-63): best-first information-gain
+                  the multiclass label (attack categories), one global budget = the bits the
+                  QUANTILE encoding spends on the numeric + categorical features; categoricals
+                  become a thermometer over their TRAIN attack-rate rank.
++INFO_GAIN_MDL -- (IDS-72) the INFO_GAIN_MC search with NO global budget: each split must pass the
++                 Fayyad-Irani MDLP test on its own segment, so the data sets every feature's bit
++                 count (and the total). Same label, same categorical rank-thermometers.
+ XGB_SPLITS    -- pre-check variant B: every split threshold of an XGBoost model fitted on the
+                  numeric features (binary label); categoricals keep their binary code.
+ 
+@@ -18,6 +21,7 @@ from enum import Enum
+ class CutMethod(Enum):
+ 	QUANTILE = "quantile"
+ 	INFO_GAIN_MC = "info_gain_mc"
++	INFO_GAIN_MDL = "info_gain_mdl"
+ 	XGB_SPLITS = "xgb_splits"
+ 
+ 
+diff --git a/src/wnn/representations/info_gain_cuts.py b/src/wnn/representations/info_gain_cuts.py
+index 1c9d0679..177f2cb6 100644
+--- a/src/wnn/representations/info_gain_cuts.py
++++ b/src/wnn/representations/info_gain_cuts.py
+@@ -1,6 +1,11 @@
+-"""Best-first information-gain cut points under one global bit budget (IDS-70, cut method
+-INFO_GAIN_MC). Ported verbatim from the IDS-63 offline pre-check (logs/ids/encoding_B/cuts.py),
+-whose cuts_E.json this reproduces. Pure functions over (sorted unique value, class count) tables.
++"""Best-first information-gain cut points (IDS-70 / IDS-72). Pure functions over (sorted unique
++value, class count) tables.
++
++INFO_GAIN_MC  -- budget_cuts: one global bit budget. Ported verbatim from the IDS-63 offline
++                 pre-check (logs/ids/encoding_B/cuts.py), whose cuts_E.json this reproduces.
++INFO_GAIN_MDL -- mdl_cuts: no budget; a split is placed only if it passes the Fayyad-Irani (1993)
++                 MDLP test on its own segment, so the data decides each feature's bit count.
++                 Ported from the IDS-72 offline pre-check (logs/ids/encoding_mdl/mdl.py).
+ """
+ 
+ import heapq
+@@ -45,15 +50,45 @@ def cut_value(u: np.ndarray, k: int) -> float:
+ def budget_cuts(tables: dict, budget: int) -> dict[str, np.ndarray]:
+ 	"""Best-first information-gain cuts across features under one global budget.
+ 	tables: {name: (u, counts)}. Returns {name: sorted cut array}."""
++	return _best_first(tables, budget, accept=None)
++
++
++def mdl_cuts(tables: dict) -> dict[str, np.ndarray]:
++	"""Best-first information-gain cuts with no budget: a split is placed only if it passes
++	mdlp_accept on its segment; a rejected segment is closed. Order-independent, so it equals
++	recursive Fayyad-Irani MDLP per feature. tables: {name: (u, counts)}."""
++	return _best_first(tables, None, accept=mdlp_accept)
++
++
++def mdlp_accept(counts: np.ndarray, lo: int, k: int, hi: int, gain: float) -> bool:
++	"""Fayyad-Irani MDLP: accept splitting rows [lo,hi) at k iff
++	gain/N > (log2(N-1) + Delta)/N, Delta = log2(3^c - 2) - [c Ent(S) - c1 Ent(S1) - c2 Ent(S2)],
++	c = classes present. `gain` is best_split's ROW-WEIGHTED gain (N x per-row gain), so gain/N is
++	the per-row information gain the criterion is stated in."""
++	s, s1, s2 = counts[lo:hi].sum(0), counts[lo:k].sum(0), counts[k:hi].sum(0)
++	n = int(s.sum())
++	if n < 2:
++		return False
++	c, c1, c2 = (int((x > 0).sum()) for x in (s, s1, s2))
++	h, h1, h2 = (entropy_rows(x[None])[0] for x in (s, s1, s2))
++	delta = np.log2(3.0 ** c - 2) - (c * h - c1 * h1 - c2 * h2)
++	return gain / n > (np.log2(n - 1) + delta) / n
++
++
++def _best_first(tables: dict, budget: int | None, accept) -> dict[str, np.ndarray]:
++	"""Pop the highest-gain open segment; place its cut (if `accept` allows) and re-open both
++	halves, until the budget (None = unbounded) is spent or no segment has positive gain."""
+ 	heap, cuts = [], {name: [] for name in tables}
+ 	for name, (u, c) in tables.items():
+ 		_push(heap, name, c, 0, len(u))
+ 	placed = 0
+-	while heap and placed < budget:
++	while heap and (budget is None or placed < budget):
+ 		neg_gain, name, lo, k, hi = heapq.heappop(heap)
+ 		if -neg_gain <= 0:
+ 			break
+ 		u, c = tables[name]
++		if accept is not None and not accept(c, lo, k, hi, -neg_gain):
++			continue
+ 		cuts[name].append(cut_value(u, k))
+ 		placed += 1
+ 		_push(heap, name, c, lo, k)
+diff --git a/src/wnn/representations/supervised_cut_fitter.py b/src/wnn/representations/supervised_cut_fitter.py
+index 60792db3..9000e84d 100644
+--- a/src/wnn/representations/supervised_cut_fitter.py
++++ b/src/wnn/representations/supervised_cut_fitter.py
+@@ -2,8 +2,9 @@
+ 
+ ThermometerEncoder.fit calls this with the train DataFrame and the train labels (it never sees
+ val/test rows). Methods (cut_method.py): INFO_GAIN_MC = IDS-63 pre-check variant E, XGB_SPLITS =
+-variant B. Binary features are never touched; with INFO_GAIN_MC the categoricals become a
+-thermometer over their train attack-rate rank and share the numeric features' bit budget.
++variant B, INFO_GAIN_MDL = IDS-72 (INFO_GAIN_MC with an MDLP stopping rule instead of the budget).
++Binary features are never touched; with INFO_GAIN_MC / INFO_GAIN_MDL the categoricals become a
++thermometer over their train attack-rate rank and are cut like the numeric features.
+ """
+ 
+ import numpy as np
+@@ -11,7 +12,7 @@ import pandas as pd
+ 
+ from wnn.representations.category_rank_map import CategoryRankMap
+ from wnn.representations.cut_method import CutMethod
+-from wnn.representations.info_gain_cuts import budget_cuts, class_table
++from wnn.representations.info_gain_cuts import budget_cuts, class_table, mdl_cuts
+ from wnn.representations.supervised_cuts import SupervisedCuts
+ from wnn.representations.xgb_split_cuts import xgb_split_cuts
+ 
+@@ -40,13 +41,15 @@ class SupervisedCutFitter:
+ 
+ 	def _info_gain(self, df: pd.DataFrame, numeric: list[str], categorical: list[str], budget: int,
+ 			y_binary: np.ndarray, y_multi: np.ndarray) -> SupervisedCuts:
++		"""INFO_GAIN_MC: best-first cuts under `budget`. INFO_GAIN_MDL: `budget` is ignored, MDLP stops."""
+ 		rank_maps = {f: CategoryRankMap.fit(df[f], y_binary) for f in categorical}
+ 		columns = {f: df[f].values.astype(np.float64) for f in numeric}
+ 		columns.update({f: rank_maps[f].transform(df[f]) for f in categorical})
+ 		y_multi = np.asarray(y_multi, dtype=np.int64)
+ 		n_classes = int(y_multi.max()) + 1
+ 		tables = {f: self._table(v, y_multi, n_classes) for f, v in columns.items()}
+-		return SupervisedCuts(thresholds=budget_cuts(tables, budget), rank_maps=rank_maps)
++		cuts = mdl_cuts(tables) if self.method == CutMethod.INFO_GAIN_MDL else budget_cuts(tables, budget)
++		return SupervisedCuts(thresholds=cuts, rank_maps=rank_maps)
+ 
+ 	@staticmethod
+ 	def _table(values: np.ndarray, y: np.ndarray, n_classes: int):
+diff --git a/src/wnn/representations/thermometer.py b/src/wnn/representations/thermometer.py
+index cc39fe86..73a2258b 100644
+--- a/src/wnn/representations/thermometer.py
++++ b/src/wnn/representations/thermometer.py
+@@ -73,7 +73,7 @@ class ThermometerEncoder:
+ 				columns and uninformative features are dropped, and the is_invalid
+ 				flag is kept only for features with invalid train rows.
+ 			cut_method: IDS-70 (flow param ids_cut_method). QUANTILE (default) = the
+-				`method` placement, bit-identical. INFO_GAIN_MC / XGB_SPLITS = supervised
++				`method` placement, bit-identical. INFO_GAIN_MC / INFO_GAIN_MDL / XGB_SPLITS = supervised
+ 				cuts (cut_method.py), fitted in fit() on the TRAIN rows and labels only.
+ 				With dedupe=True the supervised cuts are fitted FIRST at the full width
+ 				budget, then dedupe runs on those final cuts (IDS-73, 21/11/2026).
+@@ -94,7 +94,7 @@ class ThermometerEncoder:
+ 		self.flagged_features_: set[str] | None = None  # dedupe: features that keep the flag (None = all)
+ 		self.cut_method = cut_method if isinstance(cut_method, CutMethod) else CutMethod(cut_method)
+ 		self.cut_seed = cut_seed
+-		self.rank_maps_: dict = {}  # INFO_GAIN_MC: categorical -> CategoryRankMap ("ranked" features)
++		self.rank_maps_: dict = {}  # INFO_GAIN_MC / _MDL: categorical -> CategoryRankMap ("ranked" features)
+ 
+ 	@property
+ 	def supervised(self) -> bool:
+@@ -328,7 +328,7 @@ class ThermometerEncoder:
+ 			values = np.where(invalid_mask, 0.0, raw)
+ 			return values[:, np.newaxis] >= self.thresholds_[col][np.newaxis, :], invalid_mask
+ 		invalid_mask = series.isna().values  # binary & categorical: only NaN is invalid
+-		if ftype == "ranked":  # INFO_GAIN_MC categorical: thermometer over its train attack-rate rank
++		if ftype == "ranked":  # INFO_GAIN_MC / _MDL categorical: thermometer over its train attack-rate rank
+ 			values = self.rank_maps_[col].transform(series)
+ 			return values[:, np.newaxis] >= self.thresholds_[col][np.newaxis, :], invalid_mask
+ 		if ftype == "binary":
+diff --git a/tests/test_ids_cut_method.py b/tests/test_ids_cut_method.py
+index 2ae0881f..980f5575 100644
+--- a/tests/test_ids_cut_method.py
++++ b/tests/test_ids_cut_method.py
+@@ -94,9 +94,71 @@ def test_xgb_splits_cut_numerics_only():
+ 	assert np.array_equal(enc.transform(df)[0], again.transform(df)[0]), "no subsampling: seed-invariant"
+ 
+ 
++# ---- info_gain_mdl (IDS-72, 22/11/2026) ----------------------------------------------------------
++
++def _mdlp_recursive(u, counts):
++	"""Reference: textbook recursive Fayyad-Irani MDLP on one (unique, counts) table."""
++	from wnn.representations.info_gain_cuts import best_split, cut_value, mdlp_accept
++	cuts, stack = [], [(0, len(u))]
++	while stack:
++		lo, hi = stack.pop()
++		gain, k = best_split(counts, lo, hi)
++		if k < 0 or gain <= 0 or not mdlp_accept(counts, lo, k, hi, gain):
++			continue
++		cuts.append(cut_value(u, k))
++		stack += [(lo, k), (k, hi)]
++	return np.sort(np.array(cuts, dtype=np.float64))
++
++
++def test_mdl_best_first_equals_recursive_mdlp():
++	from wnn.representations.info_gain_cuts import class_table, mdl_cuts
++	df, _, ym = _frame(8000, 11)
++	tables = {f: class_table(df[f].values.astype(np.float64), ym, 3) for f in ("a", "b")}
++	got = mdl_cuts(tables)
++	for f, (u, c) in tables.items():
++		assert np.array_equal(got[f], _mdlp_recursive(u, c)), f
++	assert len(got["a"]) > 0
++
++
++def test_mdlp_accepts_a_clean_step_and_rejects_noise():
++	from wnn.representations.info_gain_cuts import class_table, mdl_cuts
++	rng = np.random.default_rng(12)
++	x = rng.integers(0, 50, 20000).astype(np.float64)
++	step = (x >= 25).astype(np.int64)
++	noise = rng.integers(0, 2, len(x))
++	cuts = mdl_cuts({"step": class_table(x, step, 2), "noise": class_table(x, noise, 2)})
++	assert cuts["step"].tolist() == [24.5]
++	assert len(cuts["noise"]) == 0, "MDLP must not pay for splits on a label-independent feature"
++
++
++def test_mdl_total_is_set_by_the_data_not_the_quantile_budget():
++	"""A 6-level staircase needs 5 cuts; the 2-bit quantile budget would allow only 2."""
++	rng = np.random.default_rng(13)
++	y_multi = rng.integers(0, 6, 12000)
++	df = pd.DataFrame({"s": y_multi * 10.0 + rng.random(len(y_multi)), "z": rng.normal(size=len(y_multi))})
++	yb = (y_multi > 0).astype(np.int64)
++	mc = ThermometerEncoder(n_bits=2, cut_method="info_gain_mc").fit(df, y_binary=yb, y_multi=y_multi)
++	mdl = ThermometerEncoder(n_bits=2, cut_method="info_gain_mdl").fit(df, y_binary=yb, y_multi=y_multi)
++	assert mc.total_bits <= 4
++	assert len(mdl.thresholds_["s"]) == 5 and len(mdl.thresholds_["z"]) == 0
++	assert _bits(mdl, df).shape[1] == mdl.total_bits
++
++
++def test_budget_cuts_unchanged_by_the_mdl_refactor():
++	"""budget_cuts (info_gain_mc) still spends exactly the budget, highest gain first."""
++	from wnn.representations.info_gain_cuts import budget_cuts, class_table
++	df, _, ym = _frame(5000, 14)
++	tables = {f: class_table(df[f].values.astype(np.float64), ym, 3) for f in ("a", "b")}
++	for budget in (1, 3, 8):
++		assert sum(len(v) for v in budget_cuts(tables, budget).values()) == budget
++	small, large = budget_cuts(tables, 3), budget_cuts(tables, 8)
++	for f in tables:
++		assert set(small[f].tolist()) <= set(large[f].tolist()), "best-first: a larger budget extends the cuts"
++
++
+ # ---- leakage: the fit sees the TRAIN rows and labels only --------------------------------------
+ 
+-@pytest.mark.parametrize("method", ["info_gain_mc", "xgb_splits"])
++@pytest.mark.parametrize("method", ["info_gain_mc", "info_gain_mdl", "xgb_splits"])
+ def test_fit_never_touches_val_or_test(method, monkeypatch):
+ 	if method == "xgb_splits":
+ 		pytest.importorskip("xgboost")
+@@ -140,7 +202,7 @@ def _dedupe_frame(n: int, seed: int):
+ 	return df, yb, ym
+ 
+ 
+-@pytest.mark.parametrize("method", ["info_gain_mc", "xgb_splits"])
++@pytest.mark.parametrize("method", ["info_gain_mc", "info_gain_mdl", "xgb_splits"])
+ def test_dedupe_runs_on_the_full_width_supervised_cuts(method):
+ 	df, yb, ym = _dedupe_frame(6000, 8)
+ 	kw = dict(n_bits=16, cut_method=method, invalid_encoding="single_bit")
+@@ -204,6 +266,9 @@ def test_param_registry_resolution_and_cache_key():
+ 	e = build_test_cache_key(dict(base, ids_cut_method="info_gain_mc"), True)
+ 	b = build_test_cache_key(dict(base, ids_cut_method="xgb_splits"), True)
+ 	assert "|cut=info_gain_mc:v1|" in e and "|cut=xgb_splits:v1|" in b and e != b
++	m = build_test_cache_key(dict(base, ids_cut_method="info_gain_mdl"), True)
++	assert "|cut=info_gain_mdl:v1|" in m and m not in (e, b)
++	assert resolve_cut_method({"ids_cut_method": "info_gain_mdl"}) == "info_gain_mdl"
+ 
+ 
+ # ---- real data: UNSW random_3way through the worker path (WNN_IDS70_REAL=1) ---------------------
+@@ -223,6 +288,7 @@ EXPECTED = {
+ 		"test": "366daadbeb41954d82574b88b0dd6520503638b25433ede3839d73a5f03ae26e"}),
+ }
+ PRECHECK_CUTS = {"info_gain_mc": "cuts_E.json", "xgb_splits": "cuts_B.json"}
++MDL_PRECHECK = Path("/Users/lacg/wnn/logs/ids/encoding_mdl/cuts_MDL.json")
+ 
+ 
+ def _flow_7585_dataset(method: str):
+@@ -246,3 +312,14 @@ def test_real_unsw_random_3way_matches_mainline_and_precheck(method):
+ 		ref = json.loads((PRECHECK / PRECHECK_CUTS[method]).read_text())
+ 		for feature, cuts in ref.items():
+ 			assert np.array_equal(ds.encoder.thresholds_[feature], np.array(cuts)), feature
++
++
++@pytest.mark.skipif(not REAL, reason="set WNN_IDS70_REAL=1 (loads UNSW-NB15 random_3way, ~10 s, ~3 GB)")
++def test_real_unsw_random_3way_mdl_reproduces_the_ids72_precheck():
++	"""IDS-72: the fitter reproduces the offline pre-check's MDL cuts (1170 bits) on flow 7585's data."""
++	ds = _flow_7585_dataset("info_gain_mdl")
++	ref = json.loads(MDL_PRECHECK.read_text())
++	assert sum(len(v) for v in ref.values()) == 1170
++	for feature, cuts in ref.items():
++		assert np.allclose(ds.encoder.thresholds_[feature], np.array(cuts)), feature
++	assert ds.X_train.total_bits == 1170 + sum(1 for f in ref if ds.encoder._has_flag(f))
