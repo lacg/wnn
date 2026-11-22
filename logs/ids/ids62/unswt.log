@@ -1,0 +1,65 @@
+[MARKER_TRAINER] GPU init: Apple M4 Max | est_simt_lanes=1280 | max_threads/tg=1024 | recommended_working_set=55.7GB
+[MARKER_TRAIN_BATCHED] 1 genomes × 499 neurons × 175341 examples (1 chunks of ≤5000000) in 75.97ms
+  [FEATURES] ranking=legacy source=TOP20_RF_FEATURES (legacy) top=20: ['ct_dst_sport_ltm', 'ct_src_dport_ltm', 'ct_srv_dst', 'ct_state_ttl', 'Dintpkt', 'dmeansz', 'Dpkts', 'dttl', 'dur', 'sbytes', 'Sintpkt', 'Sjit', 'smeansz', 'Spkts', 'sttl', 'swin', 'tcprtt', 'proto', 'service', 'state']
+  Loading from HuggingFace: lacg030175/UNSW-NB15 (temporal_3way)...
+  Temporal_3way split: 175,341 train, 41,166 test, 41,166 val
+  Using 42 features
+  [CUTS] cut_method=info_gain_mc seed=20421 fitted on TRAIN (175,341 rows): 288 total bits {'ct_dst_sport_ltm': 6, 'ct_src_dport_ltm': 8, 'ct_srv_dst': 9, 'ct_state_ttl': 4, 'Dintpkt': 11, 'dmeansz': 32, 'Dpkts': 13, 'dttl': 3, 'dur': 19, 'sbytes': 64, 'Sintpkt': 19, 'Sjit': 11, 'smeansz': 47, 'Spkts': 17, 'sttl': 4, 'swin': 1, 'tcprtt': 5, 'proto': 4, 'service': 8, 'state': 3}
+  [CUTS] dedupe after cut_method=info_gain_mc: 288 total bits
+  Encoder: 287 total bits (distributive, 16 bits/feature, feature_selection=top20, 20 features, cut_method=info_gain_mc)
+  Train: 56,000 normal, 119,341 attack
+  Test:  18,500 normal, 22,666 attack
+  Val:   18,500 normal, 22,666 attack
+[gate] flow 7600 genome 27572f9b6521ab53: TEST margin_val_cal reproduced exactly (F1 0.9289331362639415, FPR 0.038972972972972975, acc 0.9292377204489142, τ 0.10391157865524292)
+[MARKER_TRAIN_BATCHED] 1 genomes × 499 neurons × 175341 examples (1 chunks of ≤5000000) in 75.52ms
+  [FEATURES] ranking=legacy source=TOP20_RF_FEATURES (legacy) top=20: ['ct_dst_sport_ltm', 'ct_src_dport_ltm', 'ct_srv_dst', 'ct_state_ttl', 'Dintpkt', 'dmeansz', 'Dpkts', 'dttl', 'dur', 'sbytes', 'Sintpkt', 'Sjit', 'smeansz', 'Spkts', 'sttl', 'swin', 'tcprtt', 'proto', 'service', 'state']
+  Loading from HuggingFace: lacg030175/UNSW-NB15 (temporal_3way)...
+  Temporal_3way split: 175,341 train, 41,166 test, 41,166 val
+  Using 42 features
+  [CUTS] cut_method=info_gain_mc seed=20422 fitted on TRAIN (175,341 rows): 288 total bits {'ct_dst_sport_ltm': 6, 'ct_src_dport_ltm': 8, 'ct_srv_dst': 9, 'ct_state_ttl': 4, 'Dintpkt': 11, 'dmeansz': 32, 'Dpkts': 13, 'dttl': 3, 'dur': 19, 'sbytes': 64, 'Sintpkt': 19, 'Sjit': 11, 'smeansz': 47, 'Spkts': 17, 'sttl': 4, 'swin': 1, 'tcprtt': 5, 'proto': 4, 'service': 8, 'state': 3}
+  [CUTS] dedupe after cut_method=info_gain_mc: 288 total bits
+  Encoder: 287 total bits (distributive, 16 bits/feature, feature_selection=top20, 20 features, cut_method=info_gain_mc)
+  Train: 56,000 normal, 119,341 attack
+  Test:  18,500 normal, 22,666 attack
+  Val:   18,500 normal, 22,666 attack
+[gate] flow 7601 genome 350bd061f1a2ab98: TEST margin_val_cal reproduced exactly (F1 0.9254051810154458, FPR 0.029621621621621623, acc 0.9256182286352815, τ 0.1391003429889679)
+[MARKER_TRAIN_BATCHED] 1 genomes × 499 neurons × 175341 examples (1 chunks of ≤5000000) in 65.68ms
+  [FEATURES] ranking=legacy source=TOP20_RF_FEATURES (legacy) top=20: ['ct_dst_sport_ltm', 'ct_src_dport_ltm', 'ct_srv_dst', 'ct_state_ttl', 'Dintpkt', 'dmeansz', 'Dpkts', 'dttl', 'dur', 'sbytes', 'Sintpkt', 'Sjit', 'smeansz', 'Spkts', 'sttl', 'swin', 'tcprtt', 'proto', 'service', 'state']
+  Loading from HuggingFace: lacg030175/UNSW-NB15 (temporal_3way)...
+  Temporal_3way split: 175,341 train, 41,166 test, 41,166 val
+  Using 42 features
+  [CUTS] cut_method=info_gain_mc seed=20423 fitted on TRAIN (175,341 rows): 288 total bits {'ct_dst_sport_ltm': 6, 'ct_src_dport_ltm': 8, 'ct_srv_dst': 9, 'ct_state_ttl': 4, 'Dintpkt': 11, 'dmeansz': 32, 'Dpkts': 13, 'dttl': 3, 'dur': 19, 'sbytes': 64, 'Sintpkt': 19, 'Sjit': 11, 'smeansz': 47, 'Spkts': 17, 'sttl': 4, 'swin': 1, 'tcprtt': 5, 'proto': 4, 'service': 8, 'state': 3}
+  [CUTS] dedupe after cut_method=info_gain_mc: 288 total bits
+  Encoder: 287 total bits (distributive, 16 bits/feature, feature_selection=top20, 20 features, cut_method=info_gain_mc)
+  Train: 56,000 normal, 119,341 attack
+  Test:  18,500 normal, 22,666 attack
+  Val:   18,500 normal, 22,666 attack
+[gate] flow 7602 genome fc59977289d2573a: TEST margin_val_cal reproduced exactly (F1 0.9277474055265603, FPR 0.036216216216216214, acc 0.9280231258805811, τ 0.10537341237068176)
+
+=== unswt  (flows 7600,7601,7602; 3 seeds) ===
+row              | TEST F1   FPR     acc    | VAL F1    FPR     acc    | cells
+single s1 7600  |  92.893   3.897  92.924 |  92.759   4.092  92.790 | 266635
+single s2 7601  |  92.541   2.962  92.562 |  92.466   3.259  92.489 | 259247
+single s3 7602  |  92.775   3.622  92.802 |  92.655   4.043  92.686 | 270121
+single mean      |  92.736   3.494  92.763 |  92.627   3.798  92.655 | 265334
+avg-ensemble     |  92.803   3.665  92.831 |  92.672   4.022  92.703 | 796003
+vote-ensemble     |  92.781   3.432  92.807 |  92.660   3.778  92.688 | 796003
+JSON {"cohort": "unswt", "members": [{"flow": 7600, "genome": "27572f9b6521ab53", "cells": 266635, "test": {"mode": "margin_val_cal", "tau": 0.10391157865524292, "ce": 0.25612041066130636, "acc": 0.9292377204489142, "macro_f1": 0.9289331362639415, "weighted_f1": 0.9294039702953315, "benign_fpr": 0.038972972972972975}, "VAL": {"mode": "val:margin_val_cal", "tau": 0.10391157865524292, "ce": 0.2558927690737308, "acc": 0.9279016664237477, "macro_f1": 0.9275873867804822, "weighted_f1": 0.9280701629581535, "benign_fpr": 0.04091891891891892}}, {"flow": 7601, "genome": "350bd061f1a2ab98", "cells": 259247, "test": {"mode": "margin_val_cal", "tau": 0.1391003429889679, "ce": 0.2578107578329728, "acc": 0.9256182286352815, "macro_f1": 0.9254051810154458, "weighted_f1": 0.925808615735553, "benign_fpr": 0.029621621621621623}, "VAL": {"mode": "val:margin_val_cal", "tau": 0.1391003429889679, "ce": 0.2582986866119156, "acc": 0.9248894718942817, "macro_f1": 0.9246583572633175, "weighted_f1": 0.9250806482951582, "benign_fpr": 0.03259459459459459}}, {"flow": 7602, "genome": "fc59977289d2573a", "cells": 270121, "test": {"mode": "margin_val_cal", "tau": 0.10537341237068176, "ce": 0.2584901365875528, "acc": 0.9280231258805811, "macro_f1": 0.9277474055265603, "weighted_f1": 0.9281990968340124, "benign_fpr": 0.036216216216216214}, "VAL": {"mode": "val:margin_val_cal", "tau": 0.10537341237068176, "ce": 0.25846092380728686, "acc": 0.9268571150949813, "macro_f1": 0.9265525227394495, "weighted_f1": 0.9270311842834499, "benign_fpr": 0.040432432432432434}}], "ensembles": {"avg": {"test": {"mode": "margin_val_cal", "tau": 0.10798385739326477, "ce": 0.2572332767947122, "acc": 0.928314628576981, "macro_f1": 0.928033920662815, "weighted_f1": 0.9284887744825022, "benign_fpr": 0.03664864864864865}, "VAL": {"mode": "val:margin_val_cal", "tau": 0.10798385739326477, "ce": 0.25756260131629793, "acc": 0.927027158334548, "macro_f1": 0.9267235042687315, "weighted_f1": 0.9272008713774831, "benign_fpr": 0.04021621621621622}}, "vote": {"test": {"mode": "vote", "tau": NaN, "ce": 0.2572332767947122, "acc": 0.9280717096633144, "macro_f1": 0.9278107667564159, "weighted_f1": 0.9282499942918255, "benign_fpr": 0.03432432432432433}, "VAL": {"mode": "vote", "tau": NaN, "ce": 0.25756260131629793, "acc": 0.9268814069863479, "macro_f1": 0.926598875300465, "weighted_f1": 0.9270597316056288, "benign_fpr": 0.03778378378378378}}}}
+        8.95 real         5.80 user         1.00 sys
+          2017198080  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+              350473  page reclaims
+                6047  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                  79  messages sent
+                 185  messages received
+                   0  signals received
+                2852  voluntary context switches
+                6383  involuntary context switches
+        103140659988  instructions retired
+         27261194359  cycles elapsed
+          2022574480  peak memory footprint
