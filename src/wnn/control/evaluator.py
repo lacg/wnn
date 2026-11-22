@@ -744,6 +744,14 @@ def eval_mode_from_env() -> str:
 	return "gpu"
 
 
+def device_switch_allowed() -> bool:
+	"""CTRL-54 follow-up (Luiz 22/11/2026): a run scores on ONE device. Switching mid-run
+	(Metal failed -> CPU re-score, or -> the Python loop) changes scores by ~1e-3 and can
+	fork the GA, so it is an error unless WNN_CONTROLLER_ALLOW_DEVICE_SWITCH=1 (exploratory
+	work only, never a pre-registered A/B)."""
+	return os.environ.get("WNN_CONTROLLER_ALLOW_DEVICE_SWITCH", "0").strip() == "1"
+
+
 def yaw_trim_ff_kw(spec) -> bool:
 	"""ABI 58: ControllerSpec.yaw_trim_ff as the bool the wheel takes."""
 	return bool(getattr(spec, "yaw_trim_ff", False))
@@ -2419,6 +2427,16 @@ class ControllerEvaluator:
 		      "— re-scoring this batch on the Rust CPU scorer", file=sys.stderr, flush=True)
 		return self._score_population_rust(controllers, cpu_scorer)
 
+	def _refuse_device_switch(self, target: str):
+		"""Raise instead of silently re-scoring on another device (see device_switch_allowed)."""
+		if device_switch_allowed():
+			return
+		cause = getattr(self, "_rust_score_error", None)
+		raise RuntimeError(
+			f"Controller scorer failed on {self.eval_mode!r} ({cause!r}); refusing to re-score on {target} mid-run "
+			"(CTRL-54: devices differ ~1e-3 and can fork the run). Re-fly this seed, or set "
+			"WNN_CONTROLLER_ALLOW_DEVICE_SWITCH=1 for exploratory work.") from cause
+
 	def _refuse_python_fallback(self):
 		"""The Python per-step loop cannot fly the ABI-32 plant: raise the Rust scorer's own
 		error (the real cause) rather than the loop's generic refusal."""
@@ -2463,9 +2481,11 @@ class ControllerEvaluator:
 				_scorer = None
 			res = self._score_population_rust(controllers, _scorer) if _scorer is not None else None
 			if res is None and _scorer is not None and _scorer is score_controllers_metal:
+				self._refuse_device_switch("the Rust CPU scorer")
 				res = self._retry_on_rust_cpu(controllers, score_controllers_cpu)
 			if res is not None:
 				return res
+			self._refuse_device_switch("the Python per-step loop")
 			self._refuse_python_fallback()
 			# The Rust scorer failing → the slow Python per-step loop (10-50x). Warn once.
 			if not getattr(self, "_gpu_score_fallback_warned", False):
