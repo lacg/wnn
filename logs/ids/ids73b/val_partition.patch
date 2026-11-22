@@ -1,0 +1,194 @@
+diff --git a/src/wnn/ram/architecture/ids_evaluator.py b/src/wnn/ram/architecture/ids_evaluator.py
+index f0897595..e9174bbc 100644
+--- a/src/wnn/ram/architecture/ids_evaluator.py
++++ b/src/wnn/ram/architecture/ids_evaluator.py
+@@ -55,6 +55,10 @@ def _compute_class_weights(labels: np.ndarray, num_classes: int, multiplier: flo
+ 	return weights
+ 
+ 
++
++# Rust modes_from_scores tags VAL-partition entries with this prefix (Protocol v2).
++VAL_MODE_PREFIX = "val:"
++
+ class _ReplacedXDataset:
+ 	"""Lightweight proxy that overrides X_train/X_test on an existing dataset.
+ 
+@@ -881,8 +885,14 @@ class IDSEvaluator(BaseEvaluator):
+ 		sweep on train margins), val-calibrated (sweep on val margins —
+ 		Protocol v2, only when a val partition exists)}.
+ 
++		The Rust side also returns VAL-partition entries (prefix "val:", Protocol v2
++		only): they go to 'val_partition' (same entry shape, metrics on VAL), never
++		into 'modes', so TEST-mode consumers cannot mistake a tuning number for a
++		report number.
++
+ 		Returns:
+-			{'num_classes': K, 'footprint': Footprint, 'modes': {mode_name: {
++			{'num_classes': K, 'footprint': Footprint, 'val_partition': {name: entry},
++			 'modes': {mode_name: {
+ 				'ce', 'acc', 'macro_f1', 'weighted_f1', 'benign_fpr',
+ 				'f1', 'fpr',    # aliases (= macro_f1 / benign_fpr) so shared
+ 				                # consumers (leaderboard submit, 5-table
+@@ -905,7 +915,7 @@ class IDSEvaluator(BaseEvaluator):
+ 			names = list(self._class_names)
+ 		else:
+ 			names = [str(c) for c in range(num_classes)]
+-		modes = {}
++		modes, val_partition = {}, {}
+ 		for (mode, tau, ce, acc, macro_f1, weighted_f1, benign_fpr,
+ 				confusion, precision, recall, f1s, support) in mode_results:
+ 			entry = {
+@@ -934,8 +944,12 @@ class IDSEvaluator(BaseEvaluator):
+ 				entry['attack_f1'] = f1s[attack]
+ 			if not math.isnan(tau):
+ 				entry['tau'] = tau
+-			modes[mode] = entry
+-		return {'num_classes': num_classes, 'footprint': Footprint.from_tuple(raw_footprint), 'modes': modes}
++			if mode.startswith(VAL_MODE_PREFIX):
++				val_partition[mode[len(VAL_MODE_PREFIX):]] = entry
++			else:
++				modes[mode] = entry
++		return {'num_classes': num_classes, 'footprint': Footprint.from_tuple(raw_footprint), 'modes': modes,
++			'val_partition': val_partition}
+ 
+ 	def evaluate_batch_full(
+ 		self,
+diff --git a/src/wnn/ram/experiments/experiment.py b/src/wnn/ram/experiments/experiment.py
+index 143dbaa5..f2248a89 100644
+--- a/src/wnn/ram/experiments/experiment.py
++++ b/src/wnn/ram/experiments/experiment.py
+@@ -1396,6 +1396,12 @@ class Experiment:
+ 						_mc_cached_ok = "argmax" in _cached_tm
+ 					except Exception:
+ 						pass
++				if _mc_cached_ok and getattr(val_evaluator, "_y_val", None) is not None:
++					# Protocol v2: rows written before the val scores were persisted
++					# lack 'val_partition' — re-validate once so every row carries it.
++					_mc_cached_ok = "val_partition" in _cached_tm
++					if not _mc_cached_ok:
++						self.log(f"  {genome_type.value}: cached but missing val_partition — re-validating")
+ 				if not _mc_cached_ok:
+ 					self.log(f"  {genome_type.value}: cached but missing multiclass decode modes — re-validating")
+ 					cached = None
+@@ -1466,6 +1472,11 @@ class Experiment:
+ 				if 'margin_val_cal' in threshold_metadata:
+ 					self.log(f"    [PROTOCOL-V2] margin_val_cal tau calibrated on val partition; "
+ 							 f"test partition is report-only")
++				if _mc.get('val_partition'):
++					threshold_metadata['val_partition'] = _mc['val_partition']
++					_vp = _mc['val_partition'].get('margin_val_cal', {})
++					self.log(f"    [VAL] margin_val_cal on the VAL partition (tuning, not a report number): "
++							 f"MacroF1={_vp.get('macro_f1', float('nan')):.4%}, BenignFPR={_vp.get('benign_fpr', float('nan')):.4%}")
+ 				# Headline metrics = argmax decode (the same rule the
+ 				# GA-search fitness used). Binary two-cluster: F1 is the
+ 				# 2-class macro F1 (the 'f1' alias), the number single-cluster
+@@ -1598,11 +1609,18 @@ class Experiment:
+ 				# the -1.0 sentinel is unused in v2 mode). Legacy 2-way: oracle
+ 				# threshold on the report-set scores themselves (unchanged).
+ 				if _protocol_v2:
+-					val_cal_threshold, _vc_f1_unused, _vc_fpr_unused = (
++					val_cal_threshold, _val_f1, _val_fpr = (
+ 						ram_accelerator.find_optimal_threshold_f1_py(
+ 							val_scores, val_labels_list,
+ 						)
+ 					)
++					# The VAL partition's own score at its calibrated threshold: a
++					# TUNING number (phase/stage select), never a report number.
++					threshold_metadata['val_partition'] = {
++						'val_cal': {'f1': _val_f1, 'fpr': _val_fpr, 'threshold': val_cal_threshold},
++					}
++					self.log(f"    [VAL] val_cal on the VAL partition (tuning, not a report number): "
++							 f"F1={_val_f1:.4%}, FPR={_val_fpr:.4%}")
+ 					_vc_ce, _vc_acc, _vc_f1, _vc_fpr = _metrics_at(val_cal_threshold)
+ 					threshold_metadata['val_cal'] = {
+ 						'f1': _vc_f1, 'fpr': _vc_fpr, 'acc': _vc_acc,
+@@ -1687,8 +1705,8 @@ class Experiment:
+ 						scores_arr = _np.asarray(eval_scores, dtype=_np.float64)
+ 						n_modes_done = 0
+ 						for mode_key, mode_data in list(threshold_metadata.items()):
+-							if not isinstance(mode_data, dict):
+-								continue
++							if not isinstance(mode_data, dict) or mode_key == "val_partition":
++								continue  # val_partition holds VAL scores, not a TEST decode mode
+ 							thr = mode_data.get("threshold")
+ 							if thr is None:
+ 								thr = 0.5 if mode_key == "fixed_05" else train_threshold
+diff --git a/src/wnn/ram/strategies/accelerator/multiclass_metrics.rs b/src/wnn/ram/strategies/accelerator/multiclass_metrics.rs
+index aa90e85f..0e37ada9 100644
+--- a/src/wnn/ram/strategies/accelerator/multiclass_metrics.rs
++++ b/src/wnn/ram/strategies/accelerator/multiclass_metrics.rs
+@@ -647,9 +647,36 @@ pub fn modes_from_scores(
+ 		),
+ 	});
+ 
++	if let (Some(vs), Some(vt), Some(tau)) = (val_scores, val_targets, val_tau)
++	{
++		modes.extend(val_partition_modes(vs, vt, tau, num_classes, benign_class));
++	}
+ 	modes
+ }
+ 
++/// VAL-partition metrics (prefix `val:`), Protocol v2 only: the val twin of the
++/// reporting cell (`val:margin_val_cal`, val metrics at the val-calibrated τ) and
++/// of the search decode (`val:argmax`). These are TUNING numbers — the input a
++/// phase/stage select ranks on — never a report number; Python files them under
++/// threshold_metadata['val_partition'], apart from the TEST decode modes.
++fn val_partition_modes(
++	val_scores: &[f64],
++	val_targets: &[i64],
++	val_tau: f64,
++	num_classes: usize,
++	benign_class: usize,
++) -> Vec<MulticlassModeResult>
++{
++	let (val_margins, val_attack) = benign_margins(val_scores, num_classes, benign_class);
++	let cal_preds = margin_decode(&val_margins, &val_attack, val_tau, benign_class);
++	let argmax_preds = argmax_decode(val_scores, num_classes);
++	let metrics = |preds: &[u32]| metrics_from_predictions(val_scores, preds, val_targets, num_classes, benign_class);
++	vec![
++		MulticlassModeResult { mode: "val:margin_val_cal".to_string(), tau: val_tau, metrics: metrics(&cal_preds) },
++		MulticlassModeResult { mode: "val:argmax".to_string(), tau: f64::NAN, metrics: metrics(&argmax_preds) },
++	]
++}
++
+ // ---------------------------------------------------------------------------
+ // Per-class z-normalization (argmax_classnorm / margin_classnorm)
+ // ---------------------------------------------------------------------------
+@@ -1185,7 +1212,36 @@ mod tests
+ 		assert!(!names(2, false).contains(&"margin_val_f1".to_string()));
+ 		let three = names(3, true);
+ 		assert!(!three.iter().any(|m| m.ends_with("_f1")), "K=3 gained binary modes: {three:?}");
+-		assert_eq!(three.len(), 8, "K>=3 mode list changed: {three:?}");
++		assert_eq!(three.len(), 10, "K>=3 mode list changed: {three:?}");
++		assert!(three.iter().filter(|m| m.starts_with("val:")).count() == 2, "{three:?}");
++		assert!(!names(3, false).iter().any(|m| m.starts_with("val:")), "val: modes without a val partition");
++	}
++
++	/// val:margin_val_cal = the VAL set decoded at margin_val_cal's τ (same τ,
++	/// metrics on val, not on eval); val:argmax = the VAL set's argmax decode.
++	#[test]
++	fn test_val_partition_modes_score_the_val_set_at_the_val_tau()
++	{
++		use rand::prelude::*;
++		let mut rng = rand::rngs::StdRng::seed_from_u64(11);
++		let n = 300usize;
++		let mut set = |shift: f64| {
++			let t: Vec<i64> = (0..n).map(|_| rng.gen_range(0..2) as i64).collect();
++			let s: Vec<f64> = t.iter().flat_map(|&y| [rng.gen_range(0.0..1.0), rng.gen_range(0.0..1.0) + shift * y as f64]).collect();
++			(s, t)
++		};
++		let ((es, et), (ts, tt), (vs, vt)) = (set(0.1), set(0.3), set(0.6));
++		let modes = modes_from_scores(&es, &et, &ts, &tt, Some(&vs), Some(&vt), 2, 0);
++		let find = |name: &str| modes.iter().find(|m| m.mode == name).expect(name);
++		let tau = find("margin_val_cal").tau;
++		assert_eq!(find("val:margin_val_cal").tau.to_bits(), tau.to_bits());
++		let (vm, va) = benign_margins(&vs, 2, 0);
++		let want = metrics_from_predictions(&vs, &margin_decode(&vm, &va, tau, 0), &vt, 2, 0);
++		assert_eq!(format!("{:?}", find("val:margin_val_cal").metrics), format!("{want:?}"));
++		let want_argmax = metrics_from_predictions(&vs, &argmax_decode(&vs, 2), &vt, 2, 0);
++		assert_eq!(format!("{:?}", find("val:argmax").metrics), format!("{want_argmax:?}"));
++		assert_ne!(format!("{:?}", find("val:margin_val_cal").metrics), format!("{:?}", find("margin_val_cal").metrics),
++			"val metrics must not be the eval-set metrics");
+ 	}
+ 
+ 	#[test]
