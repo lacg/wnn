@@ -22,7 +22,7 @@ ARMS = ("ctrl", "D", "BC", "V02", "Eon", "Eoff")
 ARM_NAME = {
 	"D": "IDS74-unswt-%-ms01-encon-D-r{seed}", "BC": "IDS74-unswt-%-ms01-encon-BC-r{seed}",
 	"V02": "IDS74-unswt-%-ms01-encon-V02-r{seed}", "Eon": "IDS73-unswt-%-ms01-encon-cutE-r{seed}",
-	"Eoff": "IDS73b-unswt-%-ms01-cutEoff-r{seed}",
+	"Eoff": "IDS73b-unswt-%-ms01-cutEoff-r{seed}",  # 7615-7617 (Eon repeats) cancelled 21/11
 }
 BASELINES = HERE / "unsw_headroom_1611"
 
