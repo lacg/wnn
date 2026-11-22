@@ -64,3 +64,4 @@ agent (.claude/agents/paper-scout.md) and by hand.
 - [Eschmann 2024 — RLtools (JMLR)](eschmann2024_rltools.md) — 13→64→64→4 MLP: 293 µs (optimized) / 743 µs (generic) on Crazyflie STM32F405.
 - [Mysore 2021 — How to Train your Quadrotor / RE+AL](mysore2021_how_to_train_your_quadrotor.md) — real rate-loop MAE 4.20 deg/s vs PID 5.01; 5.86 A vs 8.07 A.
 - [Cobo-Briesewitz 2026 — Learned INDI (L4DC'26)](cobobriesewitz2026_learned_indi.md) — 19→24→24→6 MLP = 203 µs on Crazyflie 2.1; hybrid NN+INDI.
+- [Survey — rate tracking error / inner-loop integrator as learned-controller input](rate_error_input_survey.md) — rate error fed only by policies that REPLACE the rate loop (GymFC/Neuroflight); none over a firmware PID; Saj 2026 GRU reads inner-loop PWM.
