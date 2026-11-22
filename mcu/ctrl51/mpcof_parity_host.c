@@ -2,7 +2,7 @@
  * (ctrl51_export.rs traj_*.bin) through the C port (mcu/mpcof_cascade.c) and
  * compare, every tick, the held setpoint [p, q, r] and the plan's hidden inputs
  * (CtbrMpcOf::diag_hidden: measured ua, shadow I, shadow Fh, d-hat).
- * Prints one summary block; exit 1 on any double-build mismatch (bit equality).
+ * Prints one summary block (incl. max |C - Rust| per output and per hidden element); exit 1 on any double-build mismatch (bit equality).
  *   cc -O2 -std=c11 -ffp-contract=off -I mcu mcu/ctrl51/mpcof_parity_host.c \
  *      mcu/mpcof_cascade.c mcu/cascade_dhat.c mcu/wnn_ratefw.c -lm -o parity
  *   ./parity traj_nominal.bin [-v] [-d decisions.txt]
@@ -25,6 +25,7 @@ typedef struct
 {
 	long ticks, decisions, sp_mismatch, hid_mismatch;
 	double sp_max_abs, hid_max_rel;
+	double sp_axis_abs[3], hid_abs[12];   /* per output / per hidden element, max |C - Rust| */
 	long qp_decisions, qp_axes, solves, fallbacks, failed, max_solves;
 } summary_t;
 
@@ -54,11 +55,14 @@ static void compare(summary_t *s, const tick_rec_t *r, const double sp[3], const
 	{
 		double d = fabs(sp[a] - r->label[a]);
 		s->sp_max_abs = d > s->sp_max_abs ? d : s->sp_max_abs;
+		s->sp_axis_abs[a] = d > s->sp_axis_abs[a] ? d : s->sp_axis_abs[a];
 		bad_sp |= memcmp(&sp[a], &r->label[a], 8) != 0;
 	}
 	for (int i = 0; i < 12; i++)
 	{
-		double d = fabs(h[i] - r->hidden[i]) / (1e-12 + fabs(r->hidden[i]));
+		double ad = fabs(h[i] - r->hidden[i]);
+		double d = ad / (1e-12 + fabs(r->hidden[i]));
+		s->hid_abs[i] = ad > s->hid_abs[i] ? ad : s->hid_abs[i];
 		s->hid_max_rel = d > s->hid_max_rel ? d : s->hid_max_rel;
 		bad_h |= memcmp(&h[i], &r->hidden[i], 8) != 0;
 	}
@@ -107,6 +111,10 @@ static void print_summary(const char *path, const summary_t *s)
 	printf("ticks %ld decisions %ld\n", s->ticks, s->decisions);
 	printf("setpoint_mismatch_ticks %ld max_abs_err %.3e\n", s->sp_mismatch, s->sp_max_abs);
 	printf("hidden_mismatch_ticks %ld max_rel_err %.3e\n", s->hid_mismatch, s->hid_max_rel);
+	printf("max_abs_setpoint_rad_s p %.3e q %.3e r %.3e\n", s->sp_axis_abs[0], s->sp_axis_abs[1], s->sp_axis_abs[2]);
+	static const char *hn[4] = {"ua_measured", "shadow_I", "shadow_Fh", "dhat"};
+	for (int g = 0; g < 4; g++)
+		printf("max_abs_%s x %.3e y %.3e z %.3e\n", hn[g], s->hid_abs[3 * g], s->hid_abs[3 * g + 1], s->hid_abs[3 * g + 2]);
 	printf("qp_decisions %ld qp_axes %ld solves %ld max_solves_per_decision %ld fallbacks %ld failed %ld\n",
 	       s->qp_decisions, s->qp_axes, s->solves, s->max_solves, s->fallbacks, s->failed);
 }

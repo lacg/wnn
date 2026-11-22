@@ -7,6 +7,7 @@ Region layout (bench_ctrl51.c): line 0 = the empty marker region (overhead, subt
 then per tick MPCOF [observe, decide-if-due, shadow], WNN [wnn_tick, observer twin,
 Mahony twin]. Each line "insns soft libm vfp".
 Usage: python mcu/ctrl51/summarize_bench.py [--bench /tmp/ctrl51/bench] [--ref /tmp/ctrl51/ref]
+       [--wnn-tags a49dc_s1 a49dc_s2 ...]   (run_bench_ctrl51.sh WNN_SET tags; default a49)
 """
 
 import argparse
@@ -79,6 +80,14 @@ def row(name: str, win: np.ndarray, dec_tick: np.ndarray):
 	      f"  | worst decision tick %1ms: {d1} | {nj(m) / 1e3:6.1f} uJ/window ({nj(m, MW_PER_MHZ_PERIPH) / 1e3:.1f} periph-on)")
 
 
+def float_ops(cols: np.ndarray, steps: list) -> str:
+	"""Per 10 ms window: soft-double calls (each ~50-100 instr of libgcc) and VFP (single-
+	precision FPU) instructions, summed over the given (ticks, k) column(s) of a region file."""
+	soft = windows(cols[..., 1].reshape(len(cols), -1).sum(1), steps)
+	vfp = windows(cols[..., 3].reshape(len(cols), -1).sum(1), steps)
+	return f"float ops/window: soft-double calls {soft.mean():.0f} (max {soft.max():.0f}), VFP instr {vfp.mean():.0f} (max {vfp.max():.0f})"
+
+
 def mpcof(bench: Path, ref: Path, prec: str):
 	print(f"\n=== MPCOF ({prec}) — per call: mean / p99 / max instructions")
 	for regime in ("nominal", "stress", "upset"):
@@ -96,13 +105,14 @@ def mpcof(bench: Path, ref: Path, prec: str):
 		print(f"   per decision: soft-double calls {stat(r[dec, 1, 1])}  libm {stat(r[dec, 1, 2])}  VFP {stat(r[dec, 1, 3])}")
 		print(f"   observer soft-double calls/tick {r[:, 0, 1].mean():.0f}; shadow {r[:, 2, 1].mean():.0f}")
 		row("full (obs+plan+shadow)", windows(tick, steps), tick[dec])
+		print(f"   {float_ops(r, steps)}")
 		core = obs + decide
 		row("core (shadow = firmware loop)", windows(core, steps), core[dec])
 
 
-def wnn(bench: Path, ref: Path, name: str):
+def wnn(bench: Path, ref: Path, name: str, tag: str):
 	r = regions(bench / f"{name}.regions", 3)
-	steps = episode_steps(ref / "wnn_a49_flights.bin", True)
+	steps = episode_steps(ref / f"wnn_{tag}_flights.bin", True)
 	dec = decision_mask(steps)
 	tick, obs, est = r[:, 0, 0], r[:, 1, 0], r[:, 2, 0]
 	print(f"\n=== WNN {name} — {len(tick)} ticks, {dec.sum()} decisions; mean / p99 / max")
@@ -114,6 +124,7 @@ def wnn(bench: Path, ref: Path, name: str):
 	print(f"   soft-double calls: hold {r[~dec, 0, 1].mean():.0f} decision {r[dec, 0, 1].mean():.0f}; "
 	      f"VFP hold {r[~dec, 0, 3].mean():.0f} decision {r[dec, 0, 3].mean():.0f}")
 	row("full wnn_tick", windows(tick, steps), tick[dec])
+	print(f"   {float_ops(r[:, :1], steps)}  (wnn_tick only; the twins are copies)")
 	no_est = tick - est
 	row("without its Mahony (q given)", windows(no_est, steps), no_est[dec])
 
@@ -152,13 +163,14 @@ def add(acc: dict, sec: str, size: int, src: str):
 	acc[(kind, owner)] = acc.get((kind, owner), 0) + size
 
 
-def print_footprint(bench: Path):
+def print_footprint(bench: Path, tags: list):
 	"""Every object's flash/RAM. MPCOF = mpcof_cascade + cascade_dhat + wnn_ratefw (its
 	shadow). WNN = the bench TU (it #includes wnn_cascade.c: model tables + code, plus a
 	~1.5 KB driver) + cascade_dhat; its wnn_ratefw is the FIRMWARE rate loop, not the WNN.
 	The controller state lives in the driver's .bss (STATE_BYTES in the .log)."""
 	print("\n=== footprint (GNU ld map; bytes per object/archive: flash = .text+.rodata, ram = .data+.bss)")
-	for name in ("mpcof_f64_nominal", "mpcof_f32_nominal", "wnn_a49_f64obs", "wnn_a49_f32obs"):
+	names = ["mpcof_f64_nominal", "mpcof_f32_nominal"] + [f"wnn_{t}_{o}" for t in tags for o in ("f64obs", "f32obs")]
+	for name in names:
 		acc = footprint(bench / f"{name}.map")
 		items = ", ".join(f"{o}:{k}={v}" for (k, o), v in sorted(acc.items(), key=lambda x: (x[0][1], x[0][0])))
 		print(f"  {name:20s} {items}")
@@ -168,14 +180,16 @@ def main():
 	ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
 	ap.add_argument("--bench", type=Path, default=Path("/tmp/ctrl51/bench"))
 	ap.add_argument("--ref", type=Path, default=Path("/tmp/ctrl51/ref"))
+	ap.add_argument("--wnn-tags", nargs="+", default=["a49"])
 	a = ap.parse_args()
 	print(f"CPI {CPI} (estimate); energy k = {MW_PER_MHZ:.3f} mW/MHz (DS8626 typ, periph off), "
 	      f"{MW_PER_MHZ_PERIPH:.3f} periph on")
 	for prec in ("f64", "f32"):
 		mpcof(a.bench, a.ref, prec)
-	for name in ("wnn_a49_f64obs", "wnn_a49_f32obs"):
-		wnn(a.bench, a.ref, name)
-	print_footprint(a.bench)
+	for tag in a.wnn_tags:
+		for obs in ("f64obs", "f32obs"):
+			wnn(a.bench, a.ref, f"wnn_{tag}_{obs}", tag)
+	print_footprint(a.bench, a.wnn_tags)
 
 
 if __name__ == "__main__":

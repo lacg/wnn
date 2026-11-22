@@ -206,6 +206,30 @@ def _feature_refusals(spec) -> list:
 		why.append("dhat_b (the motor-level d-hat observer): not ported")
 	if bool(getattr(spec, "obs_att_bias_pred", False)):
 		why.append("obs_att_bias_pred (CTRL-46 Mahony-bias predictor): not ported to the on-board C yet")
+	return why + _yaw_block_refusals(spec)
+
+
+# CTRL-48 block 10 / levers (ABI 50-58): wnn_cascade.c computes NONE of these. Before
+# CTRL-51 (22/11/2026) only obs_att_bias_pred was refused, so a winner carrying any of
+# the others without it would have exported as "runnable" with the wrong features/decode.
+_UNPORTED_BOOL = (
+	("obs_yaw_trim_err", "L2y trim-referenced yaw error (yaw_trim_err.rs)"),
+	("obs_yaw_trim_err_p", "L2y' trim-referenced proportional yaw error (yaw_trim_err.rs)"),
+	("obs_yaw_from_att_est", "yaw heading from the Mahony estimate (ABI 55)"),
+	("yaw_trim_ff", "yaw-rate feed-forward cT*cresid_z on the CTBR yaw setpoint (ABI 58)"),
+)
+
+
+def _yaw_block_refusals(spec) -> list:
+	why = [f"{flag} ({what}): not ported to the on-board C yet"
+	       for flag, what in _UNPORTED_BOOL if bool(getattr(spec, flag, False))]
+	if getattr(spec, "obs_tilt_ref_err", None):
+		why.append("obs_tilt_ref_err (block 10 L1 tilt-reference error, tilt_ref_err.rs): not ported to the on-board C yet")
+	if getattr(spec, "delta_max_yaw", None) is not None:
+		why.append("delta_max_yaw (ABI 57 yaw-bank delta_max): not ported to the on-board C yet")
+	leak = getattr(spec, "yaw_integral_leak", None)
+	if leak is not None and float(leak) != float(spec.integral_leak):
+		why.append(f"yaw_integral_leak={leak} (ARM 3, != integral_leak): not ported to the on-board C yet")
 	return why
 
 

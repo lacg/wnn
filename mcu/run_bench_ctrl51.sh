@@ -12,11 +12,12 @@
 #   $REF/traj_{nominal,stress,upset}.bin   mcu/ctrl51/export_mpcof.py
 #   $REF/wnn_a49_flights.bin               mcu/ctrl51/record_wnn_flights.py
 #   $WNN_MODEL                             scripts/export_controller_c.py (a49 dres)
+#   $WNN_SET  "tag:header ..." (optional)  several winners; flights $REF/wnn_<tag>_flights.bin
 # Output: $OUT/<variant>.regions (one instruction count per call) + .log, then
 # mcu/ctrl51/summarize_bench.py prints the table.
 set -eu
 S="$(cd "$(dirname "$0")" && pwd)"
-ARM_TC="${ARM_TC:-/tmp/ctrl51/tc/arm-gnu-toolchain-15.3.rel2-darwin-arm64-arm-none-eabi/bin}"
+ARM_TC="${ARM_TC:-/tmp/ctrl51/tc/arm-gnu-toolchain-15.2.rel1-darwin-arm64-arm-none-eabi/bin}"
 REF="${REF:-/tmp/ctrl51/ref}"
 OUT="${OUT:-/tmp/ctrl51/bench}"
 WNN_MODEL="${WNN_MODEL:-/tmp/ctrl51/wnn_model_a49.h}"
@@ -80,6 +81,12 @@ ONLY="${ONLY:-all}"   # all | mpcof | wnn
 	variant "mpcof_f32_$r" "-DBENCH_MPCOF -DMPCOF_F32" "$MPCOF_SRC" "$REF/traj_$r.bin"
 done
 [ "$ONLY" = mpcof ] && exit 0
-WDEF="-DBENCH_WNN -DWNN_MODEL_HEADER=\"$WNN_MODEL\""
-variant "wnn_a49_f64obs" "$WDEF" "$WNN_SRC" "$REF/wnn_a49_flights.bin"
-variant "wnn_a49_f32obs" "$WDEF -DWNN_DHAT_F32" "$WNN_SRC" "$REF/wnn_a49_flights.bin"
+# WNN_SET: space-separated "tag:header" pairs; each tag flies $REF/wnn_<tag>_flights.bin.
+# Default = the 10/11 a49 dres run (one winner).
+WNN_SET="${WNN_SET:-a49:$WNN_MODEL}"
+for pair in $WNN_SET; do
+	tag="${pair%%:*}"; hdr="${pair#*:}"
+	WDEF="-DBENCH_WNN -DWNN_MODEL_HEADER=\"$hdr\""
+	variant "wnn_${tag}_f64obs" "$WDEF" "$WNN_SRC" "$REF/wnn_${tag}_flights.bin"
+	variant "wnn_${tag}_f32obs" "$WDEF -DWNN_DHAT_F32" "$WNN_SRC" "$REF/wnn_${tag}_flights.bin"
+done
