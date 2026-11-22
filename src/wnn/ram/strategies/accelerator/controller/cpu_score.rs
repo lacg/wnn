@@ -18,6 +18,14 @@
 //! old serial Python fallback's "last emitted thermometer" for mono). The
 //! original rayon port accidentally accumulated mono per-step / jerk globally;
 //! runs searched before this date rank fitness under the old semantics.
+//!
+//! CTRL-54 (22/11/2026): same metric SEMANTICS as the kernel, NOT bit-identical results.
+//! This path runs the f64 Mahony estimator (estimator.rs), libm transcendentals and f64
+//! metric sums; the kernel runs f32 / Metal fast-math. Episodes agree to ~1e-6 relative until
+//! an ulp lands on a feature threshold and the episode forks (~1e-3); production batches
+//! differ by ~1e-3 relative on err/steady/reward — enough to reorder near-tied genomes, so
+//! switching scorer device mid-run can fork a GA run. Tolerance pinned in
+//! ctrl54_e2e_parity_tests.rs (the older 2e-2 sweeps in metal_controller.rs cannot see it).
 
 use crate::controller::{
 	compute_reward, disturbance_episode_seed, monotonicity_violations_core, yaw_from_quat_rs,

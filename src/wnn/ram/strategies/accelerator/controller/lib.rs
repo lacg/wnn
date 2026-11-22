@@ -82,6 +82,8 @@ mod ctrl52_yaw_trim_p_tests; // L2y' (ABI 52): proportional-only yaw trim shift,
 #[cfg(test)]
 mod ctrl54_yaw_heading_tests; // lever 1 (ABI 54): yaw heading from the student's own Mahony estimate
 #[cfg(test)]
+mod ctrl54_e2e_parity_tests; // CTRL-54: end-to-end CPU/GPU scorer parity on trained genomes
+#[cfg(test)]
 mod ctrl60_mid_window_tests; // ABI 60: the `mid` scorer row — window definition, err decomposition, diverged fallback, CPU/GPU parity
 #[cfg(test)]
 mod ctrl59_tail_gate_tests; // ABI 59 (CTRL-58): tail sink inert + capped + CPU==GPU; gate tests in ram_core::fitness
