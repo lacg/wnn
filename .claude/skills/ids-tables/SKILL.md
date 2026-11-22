@@ -31,8 +31,9 @@ python3 logs/ids/ids_unswt_tick_table.py    # unswt (temporal_3way): one row per
 ## unswt table (`ids_unswt_tick_table.py`)
 Rows = arms, columns = `F1 % s1 | s2 | s3 | mean`, `ΔF1`, `FPR % … | mean`, `ΔFPR`, `acc % … | mean`,
 `Δacc`, `cells`, `hours`. Arms live in `ARMS` / `ARM_NAME` / `PLANE`; the control flows in `CONTROLS`.
-After an adoption, change `CONTROLS` to the new production flows (since 22/11 the adopted recipe is
-IDS-73 cut E + dedupe on = flows 7600-7602) and say so in the legend.
+The script prints TWO unswt tables: the finished IDS-73/74 block paired vs IDS-56 (`CONTROLS`), and the
+**lever screens** (since 22/11: C, D24, D16, MDL, E64, flows 7618-7632) paired vs the ADOPTED E + dedupe-on
+flows 7600-7602 (`LEVER_CONTROLS`, `LEVER_ARMS`, `LEVER_NAME`). New unswt arms go in the lever table.
 
 ## unswr width table (`ids_width_tick_table.py`)
 Rows = seeds (+ paired mean row), columns = F1 / FPR / acc / cells-neurons / bits / hours, each cell

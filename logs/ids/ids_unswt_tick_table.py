@@ -27,9 +27,27 @@ ARM_NAME = {
 BASELINES = HERE / "unsw_headroom_1611"
 
 
+# Lever screens (Luiz 22/11): paired vs the ADOPTED IDS-73 E + dedupe-on flows 7600-7602.
+LEVER_CONTROLS = {20421: 7600, 20422: 7601, 20423: 7602}
+LEVER_ARMS = ("E", "C", "D24", "D16", "MDL", "E64")
+LEVER_NAME = {
+	"C": "IDS64-unswt-%-cutE-rktrain-r{seed}", "D24": "IDS65-unswt-%-cutE-b24-r{seed}",
+	"D16": "IDS65-unswt-%-cutE-b16-r{seed}", "MDL": "IDS72-unswt-%-cutMDL-r{seed}",
+	"E64": "IDS72-unswt-%-64bWb-%-cutE-r{seed}",
+}
+LEVER_PLANE = {"E": "IDS-73", "C": "IDS-64", "D24": "IDS-65", "D16": "IDS-65", "MDL": "IDS-72", "E64": "IDS-72"}
+LEVER_LEGEND = ("E = adopted production unswt (cut E + dedupe on, 7600-7602) · C = train_only feature ranking · "
+	"D24 / D16 = ~910 x 24b / ~1970 x 16b neurons at equal cells · MDL = MDLP cuts (no bit budget) · E64 = cut E at 64-bit encoder")
+
+
 def flow_for(db, arm: str, seed: int):
 	if arm == "ctrl":
 		return db.execute("select id, status, started_at, completed_at from flows where id=?", (CONTROLS[seed],)).fetchone()
+	if arm == "E":
+		return db.execute("select id, status, started_at, completed_at from flows where id=?", (LEVER_CONTROLS[seed],)).fetchone()
+	if arm in LEVER_NAME:
+		return db.execute("select id, status, started_at, completed_at from flows where name like ? and status != 'cancelled' "
+			"order by id asc limit 1", (LEVER_NAME[arm].format(seed=seed),)).fetchone()
 	return db.execute("select id, status, started_at, completed_at from flows where name like ? and status != 'cancelled' "
 		"order by id asc limit 1", (ARM_NAME[arm].format(seed=seed),)).fetchone()
 
@@ -80,11 +98,11 @@ def mean_cells(cells: list[dict]) -> str:
 	return "%.2fM" % (sum(done) / len(done) / 1e6) if done else "–"
 
 
-def arm_row(arm: str, cells: list[dict], ctrl: list[dict]) -> tuple:
+def arm_row(arm: str, cells: list[dict], ctrl: list[dict], plane: dict = None, ctrl_arm: str = "ctrl") -> tuple:
 	hours = [float(c["hours"]) for c in cells if "raw" in c]
-	row = [arm, PLANE[arm]]
+	row = [arm, (plane or PLANE)[arm]]
 	for key, _label, fmt, higher in METRICS:
-		row += [seeds_and_mean(cells, key, fmt), "—" if arm == "ctrl" else paired_delta(cells, ctrl, key, higher)]
+		row += [seeds_and_mean(cells, key, fmt), "—" if arm == ctrl_arm else paired_delta(cells, ctrl, key, higher)]
 	return tuple(row + [mean_cells(cells), "%.1f" % (sum(hours) / len(hours)) if hours else "–"])
 
 
@@ -111,6 +129,12 @@ def main():
 		"arm's finished seeds · Δ = PAIRED mean vs ctrl (seeds better / paired) · classical = mean±SD · q = queued, fly = running")
 	print(LEGEND)
 	print(box(classical + wnn, len(classical)))
+	lever = {a: arm_cells(db, a) for a in LEVER_ARMS}
+	rows = [arm_row(a, lever[a], lever["E"], LEVER_PLANE, "E") for a in LEVER_ARMS]
+	print()
+	print("unswt LEVER SCREENS (22/11) · same cell and columns · Δ = PAIRED mean vs E (seeds better / paired)")
+	print(LEVER_LEGEND)
+	print(box(classical + rows, len(classical)))
 
 
 if __name__ == "__main__":
