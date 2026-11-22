@@ -73,7 +73,7 @@ class ThermometerEncoder:
 				columns and uninformative features are dropped, and the is_invalid
 				flag is kept only for features with invalid train rows.
 			cut_method: IDS-70 (flow param ids_cut_method). QUANTILE (default) = the
-				`method` placement, bit-identical. INFO_GAIN_MC / XGB_SPLITS = supervised
+				`method` placement, bit-identical. INFO_GAIN_MC / INFO_GAIN_MDL / XGB_SPLITS = supervised
 				cuts (cut_method.py), fitted in fit() on the TRAIN rows and labels only.
 				With dedupe=True the supervised cuts are fitted FIRST at the full width
 				budget, then dedupe runs on those final cuts (IDS-73, 21/11/2026).
@@ -94,7 +94,7 @@ class ThermometerEncoder:
 		self.flagged_features_: set[str] | None = None  # dedupe: features that keep the flag (None = all)
 		self.cut_method = cut_method if isinstance(cut_method, CutMethod) else CutMethod(cut_method)
 		self.cut_seed = cut_seed
-		self.rank_maps_: dict = {}  # INFO_GAIN_MC: categorical -> CategoryRankMap ("ranked" features)
+		self.rank_maps_: dict = {}  # INFO_GAIN_MC / _MDL: categorical -> CategoryRankMap ("ranked" features)
 
 	@property
 	def supervised(self) -> bool:
@@ -328,7 +328,7 @@ class ThermometerEncoder:
 			values = np.where(invalid_mask, 0.0, raw)
 			return values[:, np.newaxis] >= self.thresholds_[col][np.newaxis, :], invalid_mask
 		invalid_mask = series.isna().values  # binary & categorical: only NaN is invalid
-		if ftype == "ranked":  # INFO_GAIN_MC categorical: thermometer over its train attack-rate rank
+		if ftype == "ranked":  # INFO_GAIN_MC / _MDL categorical: thermometer over its train attack-rate rank
 			values = self.rank_maps_[col].transform(series)
 			return values[:, np.newaxis] >= self.thresholds_[col][np.newaxis, :], invalid_mask
 		if ftype == "binary":

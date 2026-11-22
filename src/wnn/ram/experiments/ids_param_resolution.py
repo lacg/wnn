@@ -254,7 +254,7 @@ def resolve_encoding_dedupe(params: dict) -> bool:
 
 def resolve_cut_method(params: dict) -> str:
 	"""ids_cut_method (IDS-70): "quantile" (default, bit-identical encoding) |
-	"info_gain_mc" | "xgb_splits" (supervised cuts fitted on TRAIN only;
+	"info_gain_mc" | "info_gain_mdl" | "xgb_splits" (supervised cuts fitted on TRAIN only;
 	wnn/representations/cut_method.py). Anything else is refused."""
 	from wnn.representations.cut_method import CutMethod
 	value = params.get("ids_cut_method", CutMethod.QUANTILE.value)

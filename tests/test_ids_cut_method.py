@@ -94,9 +94,71 @@ def test_xgb_splits_cut_numerics_only():
 	assert np.array_equal(enc.transform(df)[0], again.transform(df)[0]), "no subsampling: seed-invariant"
 
 
+# ---- info_gain_mdl (IDS-72, 22/11/2026) ----------------------------------------------------------
+
+def _mdlp_recursive(u, counts):
+	"""Reference: textbook recursive Fayyad-Irani MDLP on one (unique, counts) table."""
+	from wnn.representations.info_gain_cuts import best_split, cut_value, mdlp_accept
+	cuts, stack = [], [(0, len(u))]
+	while stack:
+		lo, hi = stack.pop()
+		gain, k = best_split(counts, lo, hi)
+		if k < 0 or gain <= 0 or not mdlp_accept(counts, lo, k, hi, gain):
+			continue
+		cuts.append(cut_value(u, k))
+		stack += [(lo, k), (k, hi)]
+	return np.sort(np.array(cuts, dtype=np.float64))
+
+
+def test_mdl_best_first_equals_recursive_mdlp():
+	from wnn.representations.info_gain_cuts import class_table, mdl_cuts
+	df, _, ym = _frame(8000, 11)
+	tables = {f: class_table(df[f].values.astype(np.float64), ym, 3) for f in ("a", "b")}
+	got = mdl_cuts(tables)
+	for f, (u, c) in tables.items():
+		assert np.array_equal(got[f], _mdlp_recursive(u, c)), f
+	assert len(got["a"]) > 0
+
+
+def test_mdlp_accepts_a_clean_step_and_rejects_noise():
+	from wnn.representations.info_gain_cuts import class_table, mdl_cuts
+	rng = np.random.default_rng(12)
+	x = rng.integers(0, 50, 20000).astype(np.float64)
+	step = (x >= 25).astype(np.int64)
+	noise = rng.integers(0, 2, len(x))
+	cuts = mdl_cuts({"step": class_table(x, step, 2), "noise": class_table(x, noise, 2)})
+	assert cuts["step"].tolist() == [24.5]
+	assert len(cuts["noise"]) == 0, "MDLP must not pay for splits on a label-independent feature"
+
+
+def test_mdl_total_is_set_by_the_data_not_the_quantile_budget():
+	"""A 6-level staircase needs 5 cuts; the 2-bit quantile budget would allow only 2."""
+	rng = np.random.default_rng(13)
+	y_multi = rng.integers(0, 6, 12000)
+	df = pd.DataFrame({"s": y_multi * 10.0 + rng.random(len(y_multi)), "z": rng.normal(size=len(y_multi))})
+	yb = (y_multi > 0).astype(np.int64)
+	mc = ThermometerEncoder(n_bits=2, cut_method="info_gain_mc").fit(df, y_binary=yb, y_multi=y_multi)
+	mdl = ThermometerEncoder(n_bits=2, cut_method="info_gain_mdl").fit(df, y_binary=yb, y_multi=y_multi)
+	assert mc.total_bits <= 4
+	assert len(mdl.thresholds_["s"]) == 5 and len(mdl.thresholds_["z"]) == 0
+	assert _bits(mdl, df).shape[1] == mdl.total_bits
+
+
+def test_budget_cuts_unchanged_by_the_mdl_refactor():
+	"""budget_cuts (info_gain_mc) still spends exactly the budget, highest gain first."""
+	from wnn.representations.info_gain_cuts import budget_cuts, class_table
+	df, _, ym = _frame(5000, 14)
+	tables = {f: class_table(df[f].values.astype(np.float64), ym, 3) for f in ("a", "b")}
+	for budget in (1, 3, 8):
+		assert sum(len(v) for v in budget_cuts(tables, budget).values()) == budget
+	small, large = budget_cuts(tables, 3), budget_cuts(tables, 8)
+	for f in tables:
+		assert set(small[f].tolist()) <= set(large[f].tolist()), "best-first: a larger budget extends the cuts"
+
+
 # ---- leakage: the fit sees the TRAIN rows and labels only --------------------------------------
 
-@pytest.mark.parametrize("method", ["info_gain_mc", "xgb_splits"])
+@pytest.mark.parametrize("method", ["info_gain_mc", "info_gain_mdl", "xgb_splits"])
 def test_fit_never_touches_val_or_test(method, monkeypatch):
 	if method == "xgb_splits":
 		pytest.importorskip("xgboost")
@@ -140,7 +202,7 @@ def _dedupe_frame(n: int, seed: int):
 	return df, yb, ym
 
 
-@pytest.mark.parametrize("method", ["info_gain_mc", "xgb_splits"])
+@pytest.mark.parametrize("method", ["info_gain_mc", "info_gain_mdl", "xgb_splits"])
 def test_dedupe_runs_on_the_full_width_supervised_cuts(method):
 	df, yb, ym = _dedupe_frame(6000, 8)
 	kw = dict(n_bits=16, cut_method=method, invalid_encoding="single_bit")
@@ -204,6 +266,9 @@ def test_param_registry_resolution_and_cache_key():
 	e = build_test_cache_key(dict(base, ids_cut_method="info_gain_mc"), True)
 	b = build_test_cache_key(dict(base, ids_cut_method="xgb_splits"), True)
 	assert "|cut=info_gain_mc:v1|" in e and "|cut=xgb_splits:v1|" in b and e != b
+	m = build_test_cache_key(dict(base, ids_cut_method="info_gain_mdl"), True)
+	assert "|cut=info_gain_mdl:v1|" in m and m not in (e, b)
+	assert resolve_cut_method({"ids_cut_method": "info_gain_mdl"}) == "info_gain_mdl"
 
 
 # ---- real data: UNSW random_3way through the worker path (WNN_IDS70_REAL=1) ---------------------
@@ -223,6 +288,7 @@ EXPECTED = {
 		"test": "366daadbeb41954d82574b88b0dd6520503638b25433ede3839d73a5f03ae26e"}),
 }
 PRECHECK_CUTS = {"info_gain_mc": "cuts_E.json", "xgb_splits": "cuts_B.json"}
+MDL_PRECHECK = Path("/Users/lacg/wnn/logs/ids/encoding_mdl/cuts_MDL.json")
 
 
 def _flow_7585_dataset(method: str):
@@ -246,3 +312,14 @@ def test_real_unsw_random_3way_matches_mainline_and_precheck(method):
 		ref = json.loads((PRECHECK / PRECHECK_CUTS[method]).read_text())
 		for feature, cuts in ref.items():
 			assert np.array_equal(ds.encoder.thresholds_[feature], np.array(cuts)), feature
+
+
+@pytest.mark.skipif(not REAL, reason="set WNN_IDS70_REAL=1 (loads UNSW-NB15 random_3way, ~10 s, ~3 GB)")
+def test_real_unsw_random_3way_mdl_reproduces_the_ids72_precheck():
+	"""IDS-72: the fitter reproduces the offline pre-check's MDL cuts (1170 bits) on flow 7585's data."""
+	ds = _flow_7585_dataset("info_gain_mdl")
+	ref = json.loads(MDL_PRECHECK.read_text())
+	assert sum(len(v) for v in ref.values()) == 1170
+	for feature, cuts in ref.items():
+		assert np.allclose(ds.encoder.thresholds_[feature], np.array(cuts)), feature
+	assert ds.X_train.total_bits == 1170 + sum(1 for f in ref if ds.encoder._has_flag(f))

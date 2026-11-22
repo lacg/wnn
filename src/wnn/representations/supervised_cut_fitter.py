@@ -2,8 +2,9 @@
 
 ThermometerEncoder.fit calls this with the train DataFrame and the train labels (it never sees
 val/test rows). Methods (cut_method.py): INFO_GAIN_MC = IDS-63 pre-check variant E, XGB_SPLITS =
-variant B. Binary features are never touched; with INFO_GAIN_MC the categoricals become a
-thermometer over their train attack-rate rank and share the numeric features' bit budget.
+variant B, INFO_GAIN_MDL = IDS-72 (INFO_GAIN_MC with an MDLP stopping rule instead of the budget).
+Binary features are never touched; with INFO_GAIN_MC / INFO_GAIN_MDL the categoricals become a
+thermometer over their train attack-rate rank and are cut like the numeric features.
 """
 
 import numpy as np
@@ -11,7 +12,7 @@ import pandas as pd
 
 from wnn.representations.category_rank_map import CategoryRankMap
 from wnn.representations.cut_method import CutMethod
-from wnn.representations.info_gain_cuts import budget_cuts, class_table
+from wnn.representations.info_gain_cuts import budget_cuts, class_table, mdl_cuts
 from wnn.representations.supervised_cuts import SupervisedCuts
 from wnn.representations.xgb_split_cuts import xgb_split_cuts
 
@@ -40,13 +41,15 @@ class SupervisedCutFitter:
 
 	def _info_gain(self, df: pd.DataFrame, numeric: list[str], categorical: list[str], budget: int,
 			y_binary: np.ndarray, y_multi: np.ndarray) -> SupervisedCuts:
+		"""INFO_GAIN_MC: best-first cuts under `budget`. INFO_GAIN_MDL: `budget` is ignored, MDLP stops."""
 		rank_maps = {f: CategoryRankMap.fit(df[f], y_binary) for f in categorical}
 		columns = {f: df[f].values.astype(np.float64) for f in numeric}
 		columns.update({f: rank_maps[f].transform(df[f]) for f in categorical})
 		y_multi = np.asarray(y_multi, dtype=np.int64)
 		n_classes = int(y_multi.max()) + 1
 		tables = {f: self._table(v, y_multi, n_classes) for f, v in columns.items()}
-		return SupervisedCuts(thresholds=budget_cuts(tables, budget), rank_maps=rank_maps)
+		cuts = mdl_cuts(tables) if self.method == CutMethod.INFO_GAIN_MDL else budget_cuts(tables, budget)
+		return SupervisedCuts(thresholds=cuts, rank_maps=rank_maps)
 
 	@staticmethod
 	def _table(values: np.ndarray, y: np.ndarray, n_classes: int):

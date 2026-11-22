@@ -6,6 +6,9 @@ INFO_GAIN_MC  -- pre-check variant E (Plane IDS-63): best-first information-gain
                  the multiclass label (attack categories), one global budget = the bits the
                  QUANTILE encoding spends on the numeric + categorical features; categoricals
                  become a thermometer over their TRAIN attack-rate rank.
+INFO_GAIN_MDL -- (IDS-72) the INFO_GAIN_MC search with NO global budget: each split must pass the
+                 Fayyad-Irani MDLP test on its own segment, so the data sets every feature's bit
+                 count (and the total). Same label, same categorical rank-thermometers.
 XGB_SPLITS    -- pre-check variant B: every split threshold of an XGBoost model fitted on the
                  numeric features (binary label); categoricals keep their binary code.
 
@@ -18,6 +21,7 @@ from enum import Enum
 class CutMethod(Enum):
 	QUANTILE = "quantile"
 	INFO_GAIN_MC = "info_gain_mc"
+	INFO_GAIN_MDL = "info_gain_mdl"
 	XGB_SPLITS = "xgb_splits"
 
 
