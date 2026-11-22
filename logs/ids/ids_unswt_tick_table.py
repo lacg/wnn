@@ -47,17 +47,69 @@ def classical_rows() -> list[tuple]:
 	return rows
 
 
+STATE_WORD = {"queued": "q", "flying": "fly", "paused": "pause", "–": "–", "no-row": "?"}
+
+
+def arm_cells(db, arm: str) -> list[dict]:
+	return [T.cell_values(db, arm, s) for s in CONTROLS]
+
+
+def per_seed(cells: list[dict], key: str, fmt: str) -> str:
+	return " | ".join(fmt % c["raw"][key] if "raw" in c else STATE_WORD.get(c.get("state", "–"), c.get("state", "–"))
+		for c in cells)
+
+
+def paired_delta(cells: list[dict], ctrl: list[dict], key: str) -> str:
+	pairs = [(c["raw"][key], k["raw"][key]) for c, k in zip(cells, ctrl) if "raw" in c and "raw" in k]
+	if not pairs:
+		return "–"
+	d = [a - b for a, b in pairs]
+	better = sum(x > 0 for x in d) if key == "f1" else sum(x < 0 for x in d)
+	return "%+.2f (%d/%d)" % (sum(d) / len(d), better, len(d))
+
+
+def mean_cells(cells: list[dict]) -> str:
+	done = [c["raw"]["cells"] for c in cells if "raw" in c]
+	return "%.2fM" % (sum(done) / len(done) / 1e6) if done else "–"
+
+
+def arm_row(arm: str, cells: list[dict], ctrl: list[dict]) -> tuple:
+	is_ctrl = arm == "ctrl"
+	hours = [float(c["hours"]) for c in cells if "raw" in c]
+	return (arm, PLANE[arm], per_seed(cells, "f1", "%.2f"), "—" if is_ctrl else paired_delta(cells, ctrl, "f1"),
+		per_seed(cells, "fpr", "%.2f"), "—" if is_ctrl else paired_delta(cells, ctrl, "fpr"),
+		mean_cells(cells), "%.1f" % (sum(hours) / len(hours)) if hours else "–")
+
+
+PLANE = {"ctrl": "IDS-56", "D": "IDS-74", "BC": "IDS-74", "V02": "IDS-74", "Eon": "IDS-73", "Eoff": "IDS-73"}
+LEGEND = ("ctrl = production unswt (IDS-56 encon) · D = desirability · BC = balance_classes off · V02 = vote share 0.02 · "
+	"Eon / Eoff = cut E, dedupe on / off")
+COLS = ("arm", "story", "F1 %  s1 | s2 | s3", "ΔF1 vs ctrl", "FPR %  s1 | s2 | s3", "ΔFPR vs ctrl", "cells", "hours")
+
+
+def classical_arm_rows() -> list[tuple]:
+	return [(name, "IDS-10", f1 + " (mean±SD)", "", fpr, "", size, "") for name, f1, fpr, _acc, size, _b, _h in classical_rows()]
+
+
+def box(rows: list[tuple], split_after: int) -> str:
+	widths = [max(len(r[i]) for r in rows + [COLS]) + 2 for i in range(len(COLS))]
+	rule = lambda l, m, r, ch="─": l + m.join(ch * w for w in widths) + r  # noqa: E731
+	line = lambda r: "│" + "│".join((" " + r[i]).ljust(widths[i]) if i < 2 else r[i].center(widths[i]) for i in range(len(COLS))) + "│"  # noqa: E731
+	out = [rule("┌", "┬", "┐"), line(COLS), rule("├", "┼", "┤")]
+	out += [line(r) for r in rows[:split_after]] + [rule("╞", "╪", "╡", "═")] + [line(r) for r in rows[split_after:]]
+	return "\n".join(out + [rule("└", "┴", "┘")])
+
+
 def main():
 	T.ARMS, T.SEEDS, T.CONTROLS, T.ARM_NAME, T.flow_for = ARMS, tuple(CONTROLS), CONTROLS, ARM_NAME, flow_for
-	cols = " | ".join(ARMS)
-	T.HEADER = ("seed", f"F1 % ({cols})", f"FPR % ({cols})", f"acc % ({cols})", f"cells/neurons ({cols})",
-		f"bits ({cols})", f"hours ({cols})")
 	db = sqlite3.connect(T.DB, uri=True)
-	per_seed = [[T.cell_values(db, a, s) for a in ARMS] for s in CONTROLS]
-	seeds = [T.seed_row(cells, "s%d (r%d)" % (i + 1, s)) for i, (s, cells) in enumerate(zip(CONTROLS, per_seed))]
-	print("unswt (temporal_3way, 16b, 34b neurons)   ctrl = IDS-56 encon · D | BC | V02 = Plane IDS-74 · Eon | Eoff = Plane IDS-73 "
-		"cut E dedupe on | off · cell = GA best_f1 · margin_val_cal · TEST")
-	print(T.render(classical_rows(), seeds, T.mean_row(per_seed)))
+	cells = {a: arm_cells(db, a) for a in ARMS}
+	classical = classical_arm_rows()
+	wnn = [arm_row(a, cells[a], cells["ctrl"]) for a in ARMS]
+	print("unswt (temporal_3way, 16b) · TEST · cell = GA best_f1 · margin_val_cal · seeds r20421-23 · "
+		"Δ = paired mean vs ctrl (seeds better/done) · q = queued, fly = running")
+	print(LEGEND)
+	print(box(classical + wnn, len(classical)))
 
 
 if __name__ == "__main__":
