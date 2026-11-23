@@ -466,7 +466,9 @@ CTBR_DEFAULT_GAMMA = (1.0, 2.0, 2.0, 2.0)
 
 def ctbr_spec_dict(ec, rate_max=CTBR_DEFAULT_RATE_MAX, coll_max=None,
                    gamma=CTBR_DEFAULT_GAMMA, obs_rate_i: bool = False,
-                   obs_cascade_dhat: bool = False, obs_cascade_dhat_residual: bool = False) -> dict:
+                   obs_cascade_dhat: bool = False, obs_cascade_dhat_residual: bool = False,
+                   obs_rate_i_axes: int = 7, obs_rate_err_tau: "float | None" = None,
+                   obs_rate_err_axes: int = 7) -> dict:
 	"""ABI 38: the ControllerSpec.ctbr dict for an episode config — the inner rate
 	loop is the airframe's firmware cascade exactly as the trainer and the rivals
 	receive it (EpisodeConfig.cascade_kwargs: SI, converted once in
@@ -506,7 +508,26 @@ def ctbr_spec_dict(ec, rate_max=CTBR_DEFAULT_RATE_MAX, coll_max=None,
 	# key present only when on (ABI-44 dicts unchanged).
 	if obs_cascade_dhat_residual:
 		d["obs_dhat_residual_plant"] = list(plant)
+	_rate_loop_obs_keys(d, obs_rate_i, obs_rate_i_axes, obs_rate_err_tau, obs_rate_err_axes)
 	return d
+
+
+def _rate_loop_obs_keys(d: dict, obs_rate_i: bool, obs_rate_i_axes: int,
+                        obs_rate_err_tau: "float | None", obs_rate_err_axes: int) -> None:
+	"""ABI 62 (CTRL-69): the rate-loop inputs' keys, present ONLY when not at their
+	defaults, so every ABI-61 spec dict (checkpoints, provenance, spec equality) is
+	unchanged: rate-I's axis subset (bitmask; 7 = all) and the model-free rate-error
+	block (one-pole LPF time constant tau s, its axis subset). CtbrSpec validates."""
+	if int(obs_rate_i_axes) != 7:
+		if not obs_rate_i:
+			raise ValueError("obs_rate_i_axes needs obs_rate_i (an axis subset of an absent block)")
+		d["obs_rate_i_axes"] = int(obs_rate_i_axes)
+	if obs_rate_err_tau is not None:
+		d["obs_rate_err_tau"] = float(obs_rate_err_tau)
+		if int(obs_rate_err_axes) != 7:
+			d["obs_rate_err_axes"] = int(obs_rate_err_axes)
+	elif int(obs_rate_err_axes) != 7:
+		raise ValueError("obs_rate_err_axes needs obs_rate_err_tau (an axis subset of an absent block)")
 
 
 def resolve_output_decode(output_decode: "str | None", memory_mode: str) -> str:
@@ -523,7 +544,10 @@ def ctbr_cascade_feature_count(ctbr: "dict | None") -> int:
 	"""CTRL-38: input features the cascade blocks append (CtbrSpec::cascade_feature_count)."""
 	if not ctbr:
 		return 0
-	return (3 * int(bool(ctbr.get("obs_rate_i", False))) + 3 * int(ctbr.get("obs_dhat_plant") is not None)
+	from wnn.control.feature_layout import axes_in
+	n_ri = len(axes_in(ctbr.get("obs_rate_i_axes", 7))) * int(bool(ctbr.get("obs_rate_i", False)))
+	n_re = len(axes_in(ctbr.get("obs_rate_err_axes", 7))) * int(ctbr.get("obs_rate_err_tau") is not None)
+	return (n_ri + n_re + 3 * int(ctbr.get("obs_dhat_plant") is not None)
 	        + 3 * int(ctbr.get("obs_dhat_residual_plant") is not None))
 
 
@@ -1259,7 +1283,7 @@ def _cascade_columns_from_training_cascade(samples_per_feature, spec, episode_co
 	if n_cas == 0:
 		return
 	if episode_config is None or getattr(episode_config, "airframe", None) is None:
-		raise ValueError("--obs-rate-i / --obs-cascade-dhat(-residual): the threshold fit needs the run's "
+		raise ValueError("--obs-rate-i / --obs-rate-err / --obs-cascade-dhat(-residual): the threshold fit needs the run's "
 		                 "EpisodeConfig with its airframe (the cascade blocks are sampled on the "
 		                 "training cascade) — got none.")
 	rust = _training_cascade_samples(spec, episode_config, cal, seed)

@@ -89,9 +89,15 @@ pub(crate) fn obs_student3(sn: usize, ar: usize, seed: u64, rate_i: bool, dhat: 
 /// obs_student3 in memory mode `mode` (BINARY decodes antagonist, as production).
 pub(crate) fn obs_student3_mode(sn: usize, ar: usize, seed: u64, rate_i: bool, dhat: bool, resid: bool, mode: u8) -> WnnController
 {
+	obs_student_spec(sn, ar, seed, obs_spec3(rate_i, dhat, resid), obs_thresholds3(rate_i, dhat, resid, seed), mode)
+}
+
+/// ABI 62: the same student on any cascade spec, `cas_th` = its blocks' ladder rows.
+pub(crate) fn obs_student_spec(sn: usize, ar: usize, seed: u64, spec: CtbrSpec, cas_th: Vec<f32>, mode: u8) -> WnnController
+{
 	let (levels, window, obpn, sbpn) = (8usize, 2usize, 10usize, 6usize);
 	let base_nf = 9 + 2 + 2 + 2 + 3 + 4;
-	let nf = base_nf + 3 * (rate_i as usize) + 3 * (dhat as usize) + 3 * (resid as usize);
+	let nf = base_nf + spec.cascade_feature_count();
 	let mut rng = SmallRng::seed_from_u64(seed);
 	let thresholds: Vec<f32> = (0..base_nf * BPF).map(|_| rng.gen_range(-0.4f32..0.4)).collect();
 	let (state_in, out_in) = (window * nf * BPF + sn, nf * BPF + sn);
@@ -106,8 +112,7 @@ pub(crate) fn obs_student3_mode(sn: usize, ar: usize, seed: u64, rate_i: bool, d
 		true, true, true, true, true, false, 1,
 	)
 	.expect("ctrl38 student must construct");
-	c.enable_ctbr_with_obs(obs_spec3(rate_i, dhat, resid), obs_thresholds3(rate_i, dhat, resid, seed))
-		.expect("ctrl38 student");
+	c.enable_ctbr_with_obs(spec, cas_th).expect("ctrl38 student");
 	assert_eq!(c.num_features(), nf);
 	c
 }

@@ -1702,6 +1702,13 @@ impl WnnController
 		&self.thresholds
 	}
 
+	/// TEST-ONLY (ctrl62): overwrite the ladder in place (same length), cells untouched.
+	#[cfg(test)]
+	pub(crate) fn thresholds_mut_for_test(&mut self) -> &mut [f32]
+	{
+		&mut self.thresholds
+	}
+
 	/// DIAGNOSTIC (imitation_probe, 06/11/2026): per output neuron, the address
 	/// the LAST step() read (from the cached output-layer input). Read-only.
 	pub(crate) fn diag_output_addresses(&self) -> Vec<u64>
@@ -2177,10 +2184,12 @@ impl WnnController
 		if obs_thresholds.len() != n_obs * self.bits_per_feature
 		{
 			return Err(format!(
-				"CTBR: the cascade feature blocks (obs_rate_i={}, obs_cascade_dhat={}) need {} thermometer \
-				 thresholds, got {}",
+				"CTBR: the cascade feature blocks (obs_rate_i={}, obs_rate_err={}, obs_cascade_dhat={}, \
+				 obs_cascade_dhat_residual={}) need {} thermometer thresholds, got {}",
 				spec.obs_rate_i,
+				spec.obs_rate_err_tau.is_some(),
 				spec.obs_dhat_plant.is_some(),
+				spec.obs_dhat_residual_plant.is_some(),
 				n_obs * self.bits_per_feature,
 				obs_thresholds.len()
 			));
@@ -2253,19 +2262,33 @@ impl WnnController
 		self.cascade_obs.as_ref().map_or([0.0; 6], |o| o.last())
 	}
 
-	/// CTRL-38 a1: true when the rate-I feature is on.
-	pub(crate) fn cascade_rate_i_on(&self) -> bool
+	/// ABI 62: a4's three values as the LAST compute_features produced them (zeros when
+	/// off) — what a rollout records per step (TrajectoryRs.rate_err) for the replay.
+	pub fn cascade_rate_err_last(&self) -> [f32; 3]
 	{
-		self.cascade_obs.as_ref().is_some_and(|o| o.needs_rate_i())
+		self.cascade_obs.as_ref().map_or([0.0; 3], |o| o.last_rate_err())
+	}
+
+	/// ABI 62: true when the rate-error block (a4) is on.
+	pub(crate) fn cascade_rate_err_on(&self) -> bool
+	{
+		self.cascade_obs.as_ref().is_some_and(|o| o.rate_err().is_some())
+	}
+
+	/// CTRL-38 a1 / ABI 62 a4: true when a cascade block reads the FLOWN rate loop
+	/// (its integrator or its tracking error).
+	pub(crate) fn cascade_reads_flown_rate(&self) -> bool
+	{
+		self.cascade_obs.as_ref().is_some_and(|o| o.reads_flown_rate())
 	}
 
 	/// CTRL-38 a1: a teacher-flown rollout (calibration, recorder, expert_drives)
 	/// hands the student the rate loop that ACTUALLY flies, before step(), so the
-	/// rate-I feature reads the vehicle's integrator rather than the student's own
-	/// unflown loop. No-op unless the rate-I feature is on (bit-identical off).
+	/// rate-I / rate-error features read the vehicle's loop rather than the student's
+	/// own unflown one. No-op unless such a feature is on (bit-identical off).
 	pub(crate) fn ctbr_adopt_flown_rate_stage(&mut self, flown: &crate::pid_firmware::RateStageFw)
 	{
-		if !self.cascade_rate_i_on()
+		if !self.cascade_reads_flown_rate()
 		{
 			return;
 		}
@@ -2436,6 +2459,15 @@ impl WnnController
 			obs.map(|o| o.cascade.len()),
 			w
 		);
+		let re_ok = !self.cascade_rate_err_on() || obs.map(|o| o.rate_err.len() == w).unwrap_or(false);
+		assert!(
+			re_ok,
+			"{site}: the rate-error block (obs_rate_err) is on but the replay rate-error stream is \
+			 missing or misaligned (got rate_err {:?}, need {} steps) — the replay has no flown rate \
+			 loop and no filter history, so it would train on values deploy never produces (ABI 62)",
+			obs.map(|o| o.rate_err.len()),
+			w
+		);
 		let yh_ok = !self.yaw_from_att_est || obs.map(|o| o.yaw_heading.len() == w).unwrap_or(false);
 		assert!(
 			yh_ok,
@@ -2519,6 +2551,14 @@ impl WnnController
 			if let (Some(c), Some(v)) = (self.cascade_obs.as_mut(), o.cascade.get(t))
 			{
 				c.set_replay(*v);
+			}
+			// ABI 62: the recorded rate-error values (only with the block on).
+			if self.cascade_rate_err_on()
+			{
+				if let (Some(c), Some(v)) = (self.cascade_obs.as_mut(), o.rate_err.get(t))
+				{
+					c.set_replay_rate_err(*v);
+				}
 			}
 			// CTRL-46: the recorded bias prediction (its state lives in the rollout).
 			if let (Some(p), Some(v)) = (self.att_bias.as_mut(), o.att_bias.get(t))
@@ -3517,13 +3557,18 @@ pub struct ReplayObs
 	// rollout, per step (WnnController::yaw_heading_est, read right AFTER the step). The
 	// replay has no live Mahony quaternion, so it applies this verbatim. Empty otherwise.
 	pub yaw_heading: Vec<f32>,
+	// ABI 62 (CTRL-69 a4): the rate-error block's three filtered values compute_features
+	// produced at rollout, per step (WnnController::cascade_rate_err_last, read right
+	// AFTER the step). The replay has no flown rate loop and no filter history, so it
+	// applies them as an override. Empty on a trajectory without the block.
+	pub rate_err: Vec<[f32; 3]>,
 }
 
 #[pymethods]
 impl ReplayObs
 {
 	#[new]
-	#[pyo3(signature = (vert, horiz, pwm_dev = vec![], att_up = vec![], cascade = vec![], dhat = vec![], att_bias = vec![], yaw_heading = vec![]))]
+	#[pyo3(signature = (vert, horiz, pwm_dev = vec![], att_up = vec![], cascade = vec![], dhat = vec![], att_bias = vec![], yaw_heading = vec![], rate_err = vec![]))]
 	fn new(
 		vert: Vec<[f32; 3]>,
 		horiz: Vec<[f32; 4]>,
@@ -3533,9 +3578,10 @@ impl ReplayObs
 		dhat: Vec<[f32; 3]>,
 		att_bias: Vec<[f32; 2]>,
 		yaw_heading: Vec<f32>,
+		rate_err: Vec<[f32; 3]>,
 	) -> Self
 	{
-		Self { vert, horiz, pwm_dev, att_up, cascade, dhat, att_bias, yaw_heading }
+		Self { vert, horiz, pwm_dev, att_up, cascade, dhat, att_bias, yaw_heading, rate_err }
 	}
 }
 
@@ -3567,6 +3613,7 @@ impl ReplayObs
 				dhat: Vec::new(),
 				att_bias: Vec::new(),
 				yaw_heading: Vec::new(),
+				rate_err: Vec::new(),
 			})
 		}
 		else
@@ -3582,6 +3629,16 @@ impl ReplayObs
 		if cascade.len() >= end
 		{
 			self.cascade = cascade[start..end].to_vec();
+		}
+		self
+	}
+
+	/// ABI 62: attach the window [start, end) of a trajectory's rate-error stream.
+	pub fn with_rate_err(mut self, rate_err: &[[f32; 3]], start: usize, end: usize) -> Self
+	{
+		if rate_err.len() >= end
+		{
+			self.rate_err = rate_err[start..end].to_vec();
 		}
 		self
 	}
@@ -6707,12 +6764,13 @@ impl WnnController
 	}
 
 	/// One physical-step tick of the cascade block (None when it is off): the recorded
-	/// six in a replay, else the live rate-I and observer.
+	/// six (and rate-error three) in a replay, else the live rate-I, rate error and observer.
 	fn tick_cascade(&mut self, gyro: [f32; 3]) -> Option<[f32; 6]>
 	{
 		let ri = self.ctbr.as_ref().map_or([0.0; 3], |c| c.rate_integral_norm());
+		let re = self.ctbr.as_ref().map_or([0.0; 3], |c| c.rate_err_raw());
 		let applied = &self.pwm_applied;
-		self.cascade_obs.as_mut().map(|o| o.tick(ri, gyro, applied))
+		self.cascade_obs.as_mut().map(|o| o.tick(ri, re, gyro, applied))
 	}
 
 	/// Subtract the observer feedforward −d̂/b from the decoded motors (no-op unless
@@ -8969,7 +9027,7 @@ mod sn0_tests
 			dep_feats.push(deploy.compute_features(g[t], a[t], tg[t]));
 			deploy.set_pwm_accumulator(pp[t]);
 		}
-		let ro = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev, att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![] };
+		let ro = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev, att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![], rate_err: vec![] };
 		// REPLAY with the stream restored.
 		let mut replay = sn0_controller_obs_pwm();
 		replay.reset(0.0);
@@ -9013,7 +9071,7 @@ mod sn0_tests
 		);
 		// The guard is the fail-LOUD half: an obs_pwm controller must refuse a
 		// stream without the accumulator.
-		let short = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![] };
+		let short = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![], rate_err: vec![] };
 		let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
 			sn0_controller_obs_pwm().replay_obs_guard(Some(&short), n, "test")
 		}));
@@ -10249,12 +10307,12 @@ mod sn0_tests
 	fn vertical_stream(n: usize) -> ReplayObs
 	{
 		let vert: Vec<[f32; 3]> = (0..n).map(|t| [0.7, -4.0 + 0.5 * t as f32, 4.0 - 0.5 * t as f32]).collect();
-		ReplayObs { vert, horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![] }
+		ReplayObs { vert, horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![], rate_err: vec![] }
 	}
 
 	fn constant_stream(n: usize, v: [f32; 3]) -> ReplayObs
 	{
-		ReplayObs { vert: vec![v; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![] }
+		ReplayObs { vert: vec![v; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![], rate_err: vec![] }
 	}
 
 	fn distinct_output_addresses_per_neuron(c: &WnnController) -> Vec<usize>

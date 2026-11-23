@@ -21,6 +21,7 @@ typedef struct
 {
 	double kp, ki, kd, i_limit;
 	double integ, prev_measured;
+	double last_err; /* ABI 62: setpoint - measured at the last update (PidCh::last_err) */
 	int first;
 	wnn_lpf2p_t filt;
 } wnn_pidch_t;
@@ -50,6 +51,9 @@ void wnn_ratefw_reset(wnn_ratefw_t *r);
 void wnn_ratefw_set_anchor(wnn_ratefw_t *r, float anchor_pwm);
 /* The integrators as they stand (pid.integ) — the WNN's rate-I input. */
 void wnn_ratefw_integ(const wnn_ratefw_t *r, double out[3]);
+/* ABI 62: the tracking error each axis's P-term used at its last update (pid.error),
+ * 0 after reset — the WNN's CTRL-69 rate-error input. */
+void wnn_ratefw_err(const wnn_ratefw_t *r, double out[3]);
 /* CtbrInner::fly: one physical tick on the held setpoint [coll dev, p, q, r]. */
 void wnn_ratefw_fly(wnn_ratefw_t *r, const float sp[4], const float gyro[3], float pwm[4]);
 /* RateStageFw::step minus the mixer: the rate PID update on update ticks

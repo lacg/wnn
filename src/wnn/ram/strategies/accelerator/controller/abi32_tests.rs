@@ -313,7 +313,7 @@ fn att_estimator_replay_is_bit_identical_and_guarded()
 		a.push(ac);
 		sim.step([0.5, 0.52, 0.5, 0.48]);
 	}
-	let ro = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: up, cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![] };
+	let ro = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: up, cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![], rate_err: vec![] };
 	let mut rep = controller(29, true);
 	rep.reset(0.0);
 	rep.replay_obs_guard(Some(&ro), n, "test");
@@ -326,7 +326,7 @@ fn att_estimator_replay_is_bit_identical_and_guarded()
 			assert_eq!(f[i].to_bits(), feats[t][i].to_bits(), "replay diverged at t={t} f={i}");
 		}
 	}
-	let short = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![] };
+	let short = ReplayObs { vert: vec![[0.0; 3]; n], horiz: vec![[0.0; 4]; n], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![], rate_err: vec![] };
 	let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
 		controller(29, true).replay_obs_guard(Some(&short), n, "test")
 	}));

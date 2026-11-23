@@ -130,6 +130,13 @@ def obs_pwm_convention(obs_pwm: bool, motor_lag_s: float) -> str:
 	return "delivered" if float(motor_lag_s) > 0.0 else "command"
 
 
+def _axes_suffix(mask: int) -> str:
+	"""ABI 62: an axis subset's token suffix — empty for all three (ABI-61 tokens unchanged)."""
+	if int(mask) == 7:
+		return ""
+	return "(axes=" + "".join("xyz"[a] for a in range(3) if (int(mask) >> a) & 1) + ")"
+
+
 def arch_token(ctbr: "dict | None", teacher: str, action_repeat: int, dt: float) -> str:
 	"""ABI 38: the provenance arch= value (see ControllerProvenance.arch)."""
 	if ctbr is None:
@@ -140,7 +147,9 @@ def arch_token(ctbr: "dict | None", teacher: str, action_repeat: int, dt: float)
 	       f"outer_hz={outer_hz:g}:range={fmt(ctbr['range'])}:gamma={fmt(ctbr['gamma'])}")
 	# CTRL-38: the cascade input blocks, named only when on (ABI-40 tokens unchanged).
 	if ctbr.get("obs_rate_i"):
-		tok += ":obs=rate_i"
+		tok += ":obs=rate_i" + _axes_suffix(ctbr.get("obs_rate_i_axes", 7))
+	if ctbr.get("obs_rate_err_tau") is not None:   # ABI 62 (CTRL-69)
+		tok += f":obs=rate_err(tau={float(ctbr['obs_rate_err_tau']):g})" + _axes_suffix(ctbr.get("obs_rate_err_axes", 7))
 	if ctbr.get("obs_dhat_plant") is not None:
 		tok += ":obs=dhat"
 	if ctbr.get("obs_dhat_residual_plant") is not None:   # CTRL-48

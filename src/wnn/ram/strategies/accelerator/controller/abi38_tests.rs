@@ -39,6 +39,9 @@ pub(crate) fn spec() -> CtbrSpec
 		obs_rate_i: false,
 		obs_dhat_plant: None,
 		obs_dhat_residual_plant: None,
+		obs_rate_i_axes: crate::rate_err_lpf::AXES_ALL,
+		obs_rate_err_tau: None,
+		obs_rate_err_axes: crate::rate_err_lpf::AXES_ALL,
 	}
 }
 

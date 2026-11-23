@@ -188,7 +188,12 @@ import os
 # score_position_teacher; hence the MPCOF eq-info bias predictor) and MahonyEstimatorRs run
 # the SAME f32 filter, so WNN and rivals read bit-identical estimates (rival [est] rows are a
 # new lineage too; [oracle] rows and the oracle-fed DAgger labels are unchanged).
-EXPECTED_ABI = 61
+# ABI 62 (22/11/2026, Luiz, Plane CTRL-69; additive, defaults = ABI 61 bit-identical):
+# CtbrSpec(obs_rate_err_tau=, obs_rate_err_axes=) — the MODEL-FREE cascade input: the flown
+# firmware rate PID's tracking error (rate_sp - gyro) / bank range, one-pole low-passed
+# (--obs-rate-err); CtbrSpec(obs_rate_i_axes=) — rate-I on an axis subset (7 = all);
+# ReplayObs(rate_err=) its replay stream. Off / all-axes => the ABI-61 layout and pipelines.
+EXPECTED_ABI = 62
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

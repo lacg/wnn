@@ -76,6 +76,13 @@ constant bool ABP = is_function_constant_defined(FC_ATT_BIAS_PRED) ? FC_ATT_BIAS
 // false ⇒ dead-stripped ⇒ the ABI-51 codegen.
 constant bool FC_YAW_TRIM_P [[function_constant(4)]];
 constant bool YTP = is_function_constant_defined(FC_YAW_TRIM_P) ? FC_YAW_TRIM_P : false;
+// ABI 62 (CTRL-69): the cascade's rate-loop inputs — rate-I on an axis subset and the
+// low-passed rate tracking error (controller/rate_err_lpf.rs) — live in their own
+// specialization (FC_RATE_LOOP_OBS=true, set on the cascade rollout pipeline and on the
+// controller_train / controller_record pipelines only when either is on); every other
+// pipeline leaves it undefined ⇒ false ⇒ every expression below folds to its ABI-61 text.
+constant bool FC_RATE_LOOP_OBS [[function_constant(5)]];
+constant bool RLO = is_function_constant_defined(FC_RATE_LOOP_OBS) ? FC_RATE_LOOP_OBS : false;
 
 // One rotor of the geometry buffer — 48 B, all-float, mirrors the Rust-side
 // RotorGpu upload. k_thrust is the EFFECTIVE coefficient (nominal x per-rotor
@@ -332,6 +339,13 @@ struct Params
 	// HELD setpoint of bank 3 (pwm_acc keeps the bank's value). 0 ⇒ off.
 	uint yff_on;
 	float yff_ct;
+	// ABI 62 (CTRL-69), appended in lockstep: read only by the FC_RATE_LOOP_OBS
+	// specialization — rate-I's emitted axes (bit 0 roll, 1 pitch, 2 yaw), the rate-error
+	// block's (0 = off), its one-pole α and the per-axis 1/range (rate_err_lpf.rs).
+	uint cas_rate_i_mask;
+	uint cas_rerr_mask;
+	float cas_rerr_alpha;
+	float cas_rerr_inv[3];
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -1161,10 +1175,28 @@ inline void cas_observe(constant Params &P, thread CasObs &o, thread const float
 // derive_features moved the default pipeline's codegen — see FC_CASCADE_OBS.)
 // rate-I = the CTBR stage as the LAST tick left it (ctbr_inner_tick runs after the
 // decision); the observer ticks once per physical step, holds included.
-inline void cas_step(constant Params &P, thread float *sensors, thread CasObs &o,
-										 thread const float *ctbr_st, thread const float *applied)
+// ABI 62: one step of the rate-error low-pass — twin of rate_err_lpf.rs lpf_step on the
+// scaled error, y + α·(e·inv − y). STRICT FP in this scope (the mahony_update rule): no
+// fused mul-add, so it is the IEEE f32 op sequence the CPU and the MCU C perform.
+inline float rl_lpf_step(float y, float e, float inv, float alpha)
 {
-	uint fi = P.num_features - 2u * P.abp_on - 3u * (P.cas_rate_i + P.cas_dhat + P.cas_resid);
+#pragma METAL fp math_mode(safe)
+#pragma METAL fp contract(off)
+	float x = e * inv;
+	return y + alpha * (x - y);
+}
+
+// ABI 62 (FC_RATE_LOOP_OBS): rate-I emits only its mask's axes, and the rate-error
+// block (after rate-I, before d̂ — the residual stays the last slot) steps its one-pole
+// low-pass on the error the rate loop's last update used (rl_err, captured before
+// ctbr_inner_tick) — rate_err_lpf.rs lpf_step: y + α·(e·(1/range) − y).
+inline void cas_step(constant Params &P, thread float *sensors, thread CasObs &o,
+										 thread const float *ctbr_st, thread const float *applied,
+										 thread const float *rl_err, thread float *rl_lpf)
+{
+	uint fi = P.num_features - 2u * P.abp_on
+						- (RLO ? (P.cas_rate_i * popcount(P.cas_rate_i_mask) + popcount(P.cas_rerr_mask) + 3u * (P.cas_dhat + P.cas_resid))
+									 : 3u * (P.cas_rate_i + P.cas_dhat + P.cas_resid));
 	float ri[3] = {0.0f, 0.0f, 0.0f};
 	if (P.cas_rate_i != 0u || P.cas_resid != 0u)
 	{
@@ -1176,7 +1208,15 @@ inline void cas_step(constant Params &P, thread float *sensors, thread CasObs &o
 	}
 	if (P.cas_rate_i != 0u)
 		for (uint a = 0u; a < 3u; a++)
-			sensors[fi++] = ri[a];
+			if (!RLO || ((P.cas_rate_i_mask >> a) & 1u) != 0u)
+				sensors[fi++] = ri[a];
+	if (RLO && P.cas_rerr_mask != 0u)
+		for (uint a = 0u; a < 3u; a++)
+		{
+			rl_lpf[a] = rl_lpf_step(rl_lpf[a], rl_err[a], P.cas_rerr_inv[a], P.cas_rerr_alpha);
+			if (((P.cas_rerr_mask >> a) & 1u) != 0u)
+				sensors[fi++] = rl_lpf[a];
+		}
 	if (P.cas_dhat != 0u || P.cas_resid != 0u)
 		cas_observe(P, o, sensors, applied);
 	if (P.cas_dhat != 0u)
@@ -1691,6 +1731,10 @@ kernel void controller_rollout(
 	cas_o.primed = false;
 	cas_o.seeded = false;
 	cas_o.have_g = false;
+	// ABI 62: the rate loop's last-update error and its low-pass (rate_err_lpf.rs reset;
+	// PidCh::last_err is 0 until the first update).
+	float rl_err[3] = {0.0f, 0.0f, 0.0f};
+	float rl_lpf[3] = {0.0f, 0.0f, 0.0f};
 	// CTRL-46: the bias predictor starts each episode at 0 (AttBiasPredictor::reset).
 	AbpState abp_s;
 	for (uint a = 0u; a < 2u; a++)
@@ -1887,8 +1931,8 @@ kernel void controller_rollout(
 		// step's (mirrors controller.rs step()'s hold branch). t=0 is a decision.
 		// CTRL-38: the cascade blocks for THIS step, on the observed gyro and the
 		// command the plant received last step (pwm_applied) — before derive_features.
-		if (CAS_OBS && (P.cas_rate_i != 0u || P.cas_dhat != 0u || P.cas_resid != 0u))
-			cas_step(P, sensors, cas_o, ctbr_st, pwm_applied);
+		if (CAS_OBS && (P.cas_rate_i != 0u || P.cas_dhat != 0u || P.cas_resid != 0u || (RLO && P.cas_rerr_mask != 0u)))
+			cas_step(P, sensors, cas_o, ctbr_st, pwm_applied, rl_err, rl_lpf);
 		// L2y of block 10: the yaw target the step's yaw error is measured against, from
 		// the residual cas_step just wrote (its last slot) — twin of
 		// YawTrimErr::effective_target. Before derive_features, inside the cascade
@@ -2111,6 +2155,11 @@ kernel void controller_rollout(
 				ctbr_held[2] = sp3[1];
 				ctbr_held[3] = sp3[2];
 			}
+			// ABI 62: an update tick's error, exactly pidfw_pid's `sp − measured` on the
+			// held setpoint and this step's gyro (PidCh::last_err twin).
+			if (RLO && ((uint)ctbr_st[21]) % max(P.pidfw_decimation, 1u) == 0u)
+				for (uint a = 0u; a < 3u; a++)
+					rl_err[a] = ctbr_held[1u + a] - sensors[a];
 			ctbr_inner_tick(ctbr_held, ctbr_transport, sensors, P, ctbr_st, pwm);
 			for (uint m = 0u; m < 4u; m++)
 				last_pwm[m] = pwm[m];
@@ -2657,6 +2706,13 @@ struct TrainParams
 	// Lever 1 (ABI 55), appended in lockstep: the anchored yaw heading follows the
 	// student's own Mahony quaternion (score: live filter; train/record: yh_rec). 0 ⇒ off.
 	uint yfe_on;
+	// ABI 62 (CTRL-69), appended in lockstep: rate-I's emitted axes and the rate-error
+	// block's (0 = off); the replay writes the recorded rate-error values, which the host
+	// appends to the cas_rec buffer at float offset cas_rerr_off (total_steps*6) — the
+	// train kernel has no free buffer slot (Metal caps them at 31). FC_RATE_LOOP_OBS only.
+	uint cas_rate_i_mask;
+	uint cas_rerr_mask;
+	uint cas_rerr_off;
 };
 
 // Mirror of WnnController::output_decode_target (controller.rs): map a per-motor
@@ -2720,10 +2776,18 @@ inline void replay_applied_inputs(constant TrainParams &P, uint s, device const 
 			dhat[a] = dhat_rec[s * 3u + a];
 		dhat_have_last = false;
 	}
-	uint fi = P.num_features - 2u * P.abp_on - 3u * (P.cas_rate_i + P.cas_dhat + P.cas_resid);
+	uint fi = P.num_features - 2u * P.abp_on
+						- (RLO ? (P.cas_rate_i * popcount(P.cas_rate_i_mask) + popcount(P.cas_rerr_mask) + 3u * (P.cas_dhat + P.cas_resid))
+									 : 3u * (P.cas_rate_i + P.cas_dhat + P.cas_resid));
 	if (P.cas_rate_i != 0u)
 		for (uint a = 0u; a < 3u; a++)
-			sensors[fi++] = cas_rec[s * 6u + a];
+			if (!RLO || ((P.cas_rate_i_mask >> a) & 1u) != 0u)
+				sensors[fi++] = cas_rec[s * 6u + a];
+	// ABI 62: the recorded rate-error three (ReplayObs.rate_err; cas_rec tail), the mask's axes.
+	if (RLO && P.cas_rerr_mask != 0u)
+		for (uint a = 0u; a < 3u; a++)
+			if (((P.cas_rerr_mask >> a) & 1u) != 0u)
+				sensors[fi++] = cas_rec[P.cas_rerr_off + s * 3u + a];
 	if (P.cas_dhat != 0u)
 		for (uint a = 0u; a < 3u; a++)
 			sensors[fi++] = cas_rec[s * 6u + 3u + a];
@@ -2762,7 +2826,7 @@ kernel void controller_train(
 		device const float *pwm_dev_rec [[buffer(25)]], // obs_pwm replay fix: pwm FEATURE values [total_steps*4]
 		device const float *att_up_rec [[buffer(26)]],  // ABI 32: attitude-estimate "up" [total_steps*3]
 		device const float *dhat_rec [[buffer(27)]],    // CTRL-40: motor d̂ values [total_steps*3]
-		device const float *cas_rec [[buffer(28)]],     // CTRL-40: cascade blocks [total_steps*6]
+		device const float *cas_rec [[buffer(28)]],     // CTRL-40: cascade blocks [total_steps*6] (+ ABI 62 rate error [total_steps*3])
 		device const float *abp_rec [[buffer(29)]],     // CTRL-46: bias prediction [total_steps*2]
 		device const float *yh_rec [[buffer(30)]],      // ABI 55: Mahony heading [total_steps]
 		uint gid [[thread_position_in_grid]])
@@ -2882,7 +2946,7 @@ kernel void controller_train(
 					F.yfe_yaw = yh_rec[s3 / 3u];
 				}
 			}
-			if (P.dhat_on != 0u || P.cas_rate_i != 0u || P.cas_dhat != 0u || P.cas_resid != 0u)
+			if (P.dhat_on != 0u || P.cas_rate_i != 0u || P.cas_dhat != 0u || P.cas_resid != 0u || (RLO && P.cas_rerr_mask != 0u))
 				replay_applied_inputs(P, s3 / 3u, dhat_rec, cas_rec, sensors, dhat, dhat_have_last);
 			// L2y of block 10: the trim-shifted yaw target from the replayed residual.
 			if (P.yte_on != 0u)
@@ -3003,7 +3067,7 @@ kernel void controller_record(
 		device const float *pwm_dev_rec [[buffer(22)]], // obs_pwm replay fix: pwm FEATURE values [total_steps*4]
 		device const float *att_up_rec [[buffer(23)]],  // ABI 32: attitude-estimate "up" [total_steps*3]
 		device const float *dhat_rec [[buffer(24)]],    // CTRL-40: motor d̂ values [total_steps*3]
-		device const float *cas_rec [[buffer(25)]],     // CTRL-40: cascade blocks [total_steps*6]
+		device const float *cas_rec [[buffer(25)]],     // CTRL-40: cascade blocks [total_steps*6] (+ ABI 62 rate error [total_steps*3])
 		device const float *abp_rec [[buffer(26)]],     // CTRL-46: bias prediction [total_steps*2]
 		device const float *yh_rec [[buffer(27)]],      // ABI 55: Mahony heading [total_steps]
 		uint2 tid [[thread_position_in_grid]])
@@ -3118,7 +3182,7 @@ kernel void controller_record(
 				F.yfe_yaw = yh_rec[s3 / 3u];
 			}
 		}
-		if (P.dhat_on != 0u || P.cas_rate_i != 0u || P.cas_dhat != 0u || P.cas_resid != 0u)
+		if (P.dhat_on != 0u || P.cas_rate_i != 0u || P.cas_dhat != 0u || P.cas_resid != 0u || (RLO && P.cas_rerr_mask != 0u))
 			replay_applied_inputs(P, s3 / 3u, dhat_rec, cas_rec, sensors, dhat, dhat_have_last);
 		// L2y of block 10: the trim-shifted yaw target from the replayed residual.
 		if (P.yte_on != 0u)

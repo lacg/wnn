@@ -260,8 +260,8 @@ fn run_episode<F: FnMut(&WnnController, &[f32])>(
 	// legacy drivers would leave the rate-I feature integrating the untrained
 	// student's zero setpoint — a universe deploy never visits. Refuse loudly.
 	assert!(
-		!c.cascade_rate_i_on() || driver.is_cascade(),
-		"record_address_universe: obs_rate_i needs the training-cascade recorder (pass reference_cfg) — \
+		!c.cascade_reads_flown_rate() || driver.is_cascade(),
+		"record_address_universe: obs_rate_i / obs_rate_err need the training-cascade recorder (pass reference_cfg) — \
 		 the legacy PID/allocator drivers fly no firmware rate loop to read the integrator from"
 	);
 	sim.reset(Some(q0), Some(om0));

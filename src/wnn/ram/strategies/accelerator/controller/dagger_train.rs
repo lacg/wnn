@@ -839,6 +839,10 @@ pub struct TrajectoryRs
 	// step (WnnController::yaw_heading_est, read right AFTER controller_step_4).
 	// ReplayObs.yaw_heading. Empty when the option is off.
 	pub yaw_heading: Vec<f32>,
+	// ABI 62 (CTRL-69 a4): the rate-error block's three filtered values compute_features
+	// produced at each step (WnnController::cascade_rate_err_last, read right AFTER
+	// controller_step_4). ReplayObs.rate_err. Empty when the block is off.
+	pub rate_err: Vec<[f32; 3]>,
 	pub cumulative_reward: f64,
 	pub mean_attitude_error_rad: f64,
 	pub diverged: bool,
@@ -2024,6 +2028,11 @@ pub(crate) fn rollout_and_label_inner(
 		{
 			traj.cascade_obs.push(controller.cascade_obs_last());
 		}
+		// ABI 62: and the rate-error block's values.
+		if controller.cascade_rate_err_on()
+		{
+			traj.rate_err.push(controller.cascade_rate_err_last());
+		}
 		// CTRL-40: and the motor d̂ it produced.
 		if controller.dhat_params().is_some()
 		{
@@ -2232,6 +2241,7 @@ fn traj_windows(traj: &TrajectoryRs, cfg: &RewardGatedConfigPacked) -> Vec<TrajW
 						.with_dhat(&traj.dhat_obs, start, end)
 						.with_att_bias(&traj.att_bias, start, end)
 						.with_yaw_heading(&traj.yaw_heading, start, end)
+						.with_rate_err(&traj.rate_err, start, end)
 				}),
 			first: start == 0,
 		});
@@ -2519,6 +2529,7 @@ pub(crate) struct GatedFlat
 	pub(crate) cas_rec: Vec<f32>,  // CTRL-40: cascade blocks per step [total_steps*6]
 	pub(crate) abp_rec: Vec<f32>,  // CTRL-46: Mahony-bias prediction per step [total_steps*2]
 	pub(crate) yh_rec: Vec<f32>,   // ABI 55: Mahony heading per step [total_steps]
+	pub(crate) rerr_rec: Vec<f32>, // ABI 62: rate-error block per step [total_steps*3]
 }
 
 /// Flatten the gated (episode-major) trajectories into `GatedFlat`. All episodes
@@ -2547,6 +2558,7 @@ pub(crate) fn flatten_gated(gated: &[&TrajectoryRs]) -> GatedFlat
 		cas_rec: Vec::with_capacity(total_steps * 6),
 		abp_rec: Vec::with_capacity(total_steps * 2),
 		yh_rec: Vec::with_capacity(total_steps),
+		rerr_rec: Vec::with_capacity(total_steps * 3),
 	};
 	let mut sbase = 0u32;
 	for t in gated
@@ -2571,6 +2583,7 @@ pub(crate) fn flatten_gated(gated: &[&TrajectoryRs]) -> GatedFlat
 			f.cas_rec.extend_from_slice(&t.cascade_obs.get(s).copied().unwrap_or([0.0; 6]));
 			f.abp_rec.extend_from_slice(&t.att_bias.get(s).copied().unwrap_or([0.0; 2]));
 			f.yh_rec.push(t.yaw_heading.get(s).copied().unwrap_or(0.0));
+			f.rerr_rec.extend_from_slice(&t.rate_err.get(s).copied().unwrap_or([0.0; 3]));
 		}
 		let (sn, cs) = (0.5 * t.init_yaw).sin_cos();
 		f.init_q.extend_from_slice(&[cs, 0.0, 0.0, sn]);
@@ -2631,6 +2644,11 @@ fn applied_streams_guard(controller: &WnnController, gated: &[&TrajectoryRs])
 			"try_gpu_split: obs_yaw_from_att_est is on but a trajectory carries {} heading records for {n} steps (ABI 55)",
 			t.yaw_heading.len()
 		);
+		assert!(
+			!controller.cascade_rate_err_on() || t.rate_err.len() == n,
+			"try_gpu_split: obs_rate_err is on but a trajectory carries {} rate-error records for {n} steps (ABI 62)",
+			t.rate_err.len()
+		);
 	}
 }
 
@@ -2665,6 +2683,7 @@ pub(crate) fn try_gpu_split(
 		cas_rec: &fb.cas_rec,
 		abp_rec: &fb.abp_rec,
 		yh_rec: &fb.yh_rec,
+		rerr_rec: &fb.rerr_rec,
 		selective: cfg.split_selective_output,
 		target_rpy: target,
 	};
@@ -3063,6 +3082,7 @@ pub(crate) fn dagger_train_inplace_with(
 							dhat: t.dhat_obs.clone(),
 							att_bias: t.att_bias.clone(),
 							yaw_heading: t.yaw_heading.clone(),
+							rate_err: t.rate_err.clone(),
 						})
 						.collect();
 					let (_r, _cf, planted, _pr, saturation, wishes) = controller.split_train_loop(

@@ -320,12 +320,25 @@ def wheel_block_constants(spec, thresholds, conn) -> dict:
 	# ABI 61: the wheel's estimator precision (a wheel without the constant is f64).
 	est_f32 = getattr(ra, "ATT_EST_PRECISION", "f64") == "f32"
 	return dict(est_f32=est_f32,
+	            rate_err=wheel_rate_err_consts(spec),
 	            att_bias_pred=bool(c.obs_att_bias_pred),
 	            tilt_ref_shape=None if tilt is None else [float(v) for v in tilt],
 	            yaw_from_att_est=bool(c.yaw_from_att_est),
 	            yaw_trim_ff_ct=None if c.yaw_trim_ff is None else float(c.yaw_trim_ff),
 	            delta_max_yaw=None if c.delta_max_yaw is None else float(c.delta_max_yaw),
 	            yaw_integral_leak=float(c.yaw_integral_leak))
+
+
+def wheel_rate_err_consts(spec):
+	"""ABI 62: (alpha, [1/range x3]) of the rate-error low-pass as the INSTALLED wheel's
+	CtbrSpec computes them for this spec's dt (rate_err_lpf.rs), None when off."""
+	if (spec.ctbr or {}).get("obs_rate_err_tau") is None:
+		return None
+	from wnn.control import _accel as ra
+	got = ra.CtbrSpec(**spec.ctbr).rate_err_lpf_consts(float(spec.dt))
+	if got is None:
+		raise SystemExit("the wheel's CtbrSpec reports no rate-error filter for an obs_rate_err spec")
+	return float(got[0]), [float(v) for v in got[1]]
 
 
 def model_from_checkpoint(path: str, argv_file) -> ExportModel:
@@ -409,7 +422,19 @@ def render_feature_flags(spec) -> list:
 	lines.append(f"#define WNN_OBS_RATE_I {int(bool(ctbr.get('obs_rate_i', False)))}")
 	lines.append(f"#define WNN_OBS_DHAT {int(ctbr.get('obs_dhat_plant') is not None)}")
 	lines.append(f"#define WNN_OBS_DRES {int(ctbr.get('obs_dhat_residual_plant') is not None)}")
-	return lines
+	return lines + render_rate_loop_flags(ctbr)
+
+
+def render_rate_loop_flags(ctbr: dict) -> list:
+	"""ABI 62 (CTRL-69): rate-I's axis subset and the rate-error block, each ONLY when not
+	at its default (every older header byte-identical; wnn_cascade.h defaults = ABI 61)."""
+	out = []
+	if ctbr.get("obs_rate_i") and int(ctbr.get("obs_rate_i_axes", 7)) != 7:
+		out.append(f"#define WNN_OBS_RATE_I_AXES {int(ctbr['obs_rate_i_axes'])}  /* bit 0 roll, 1 pitch, 2 yaw */")
+	if ctbr.get("obs_rate_err_tau") is not None:
+		out += ["#define WNN_OBS_RATE_ERR 1  /* CTRL-69 rate-loop tracking error, one-pole LPF */",
+		        f"#define WNN_OBS_RATE_ERR_AXES {int(ctbr.get('obs_rate_err_axes', 7))}"]
+	return out
 
 
 def dhat_plant(ctbr):
@@ -477,6 +502,10 @@ def render_block_macros(m: ExportModel) -> list:
 		        f"#define WNN_YAW_TRIM_FF_CT {f32_lit(b['yaw_trim_ff_ct'])}  /* rad/s per unit of cresid_z */"]
 	if b.get("delta_max_yaw") is not None:
 		out.append(f"#define WNN_DELTA_MAX_YAW {f32_lit(b['delta_max_yaw'])}  /* ABI 57 */")
+	if b.get("rate_err") is not None:
+		alpha, inv = b["rate_err"]
+		out += [f"#define WNN_RATE_ERR_ALPHA {f32_lit(alpha)}  /* ABI 62: 1 - exp(-dt/tau) */",
+		        f"#define WNN_RATE_ERR_INV_INIT {init_list(inv, f32_lit)}  /* 1 / CTBR rate range */"]
 	leak = b.get("yaw_integral_leak")
 	if leak is not None and _f32_bits(leak) != _f32_bits(m.spec.integral_leak):
 		out.append(f"#define WNN_YAW_INTEGRAL_LEAK {f32_lit(leak)}  /* ARM 3 */")
@@ -565,7 +594,9 @@ def report(out: str, o: dict, model, pef=None):
 	      f"({o['n_false'] / max(1, o['n_true'] + o['n_false']):.1%} of populated cells)")
 	if model:
 		c = model.spec.ctbr
-		print(f"  blocks: rate_i={bool(c.get('obs_rate_i'))} dhat={c.get('obs_dhat_plant') is not None} "
+		print(f"  blocks: rate_i={bool(c.get('obs_rate_i'))}(axes={c.get('obs_rate_i_axes', 7)}) "
+		      f"rate_err={c.get('obs_rate_err_tau')}(axes={c.get('obs_rate_err_axes', 7)}) "
+		      f"dhat={c.get('obs_dhat_plant') is not None} "
 		      f"dres={c.get('obs_dhat_residual_plant') is not None} "
 		      f"motor_lag={model.motor_lag_s}s action_repeat={model.spec.action_repeat}")
 		on = [k for k, v in (model.blocks or {}).items() if v not in (None, False) and k != "yaw_integral_leak"]
