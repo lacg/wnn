@@ -34,7 +34,7 @@ import numpy as np
 from wnn.control._accel import AttitudeSim, WnnController
 
 from .feature_layout import (TILT_ERROR_FEATURES, YAW_ERROR_FEATURES, YAW_INTEGRAL_FEATURES,
-                             YAW_PROPORTIONAL_FEATURES, feature_layout)
+                             YAW_PROPORTIONAL_FEATURES, YAW_RATE_FEATURES, feature_layout)
 from .threshold_calibration import CalibrationFit, ThresholdCalibration
 from .pid import AttitudePID, AttitudePIDConfig
 from .training import (
@@ -834,6 +834,11 @@ DENSE_YAW_INNER_RAD = tuple(float(np.radians(d)) for d in (0.10, 0.25))
 # (|x| 97.5 % at 2.4-2.9 deg on the block-9 VAL flights), so its fixed cuts spread over
 # that range instead of crowding 0: +-0.25, +-0.75, +-1.50 deg.
 DENSE_YAW_TRIM_INNER_RAD = tuple(float(np.radians(d)) for d in (0.25, 0.75, 1.50))
+# CTRL-71 (--gyro-z-ladder dense, docs/ctrl71_72_levers_prereg.md): the yaw-RATE input's
+# fixed cuts, rad/s. The PID-calibration quantile fit spans +-0.03 rad/s, which the
+# student's flown yaw rate exceeds on 62-91 % of ticks (CTRL-70 §5); these span the
+# flown rates (hold p99 0.29, transient p90 0.60 rad/s), innermost ~1 sigma of gyro noise.
+DENSE_GYRO_Z_INNER_RAD_S = (0.011, 0.05, 0.15, 0.45)
 
 
 def _dense_thresholds(arr: np.ndarray, bpf: int, inner, outer_quantile) -> np.ndarray:
@@ -870,8 +875,11 @@ def _yaw_integral_gain(spec) -> float:
 	return float(spec.integral_scale) / max(1.0 - leak, 1e-9)
 
 
-def _dense_inner_for(name: str, spec, yaw_dense: bool, tilt_dense: bool, yaw_trim_dense: bool = False):
-	"""The fixed inner cuts of feature `name` under the block-10 dense ladders, or None."""
+def _dense_inner_for(name: str, spec, yaw_dense: bool, tilt_dense: bool, yaw_trim_dense: bool = False,
+                     gyro_z_dense: bool = False):
+	"""The fixed inner cuts of feature `name` under the dense ladders, or None."""
+	if gyro_z_dense and name in YAW_RATE_FEATURES:
+		return DENSE_GYRO_Z_INNER_RAD_S
 	if yaw_trim_dense and name in YAW_PROPORTIONAL_FEATURES:
 		return DENSE_YAW_TRIM_INNER_RAD
 	if yaw_dense and name in YAW_ERROR_FEATURES:
@@ -885,7 +893,7 @@ def _dense_inner_for(name: str, spec, yaw_dense: bool, tilt_dense: bool, yaw_tri
 def _thresholds_from_samples(samples_per_feature, spec, method, outer_quantile, extra_samples,
                              ladder: str = "quantile", yaw_centred: bool = False,
                              yaw_dense: bool = False, tilt_dense: bool = False,
-                             yaw_trim_dense: bool = False) -> list[float]:
+                             yaw_trim_dense: bool = False, gyro_z_dense: bool = False) -> list[float]:
 	"""Per-feature thermometer thresholds from the sampled operating distribution
 	(base 9 + enabled H2 extras) — shared by the Python reference-rollout fitter and
 	the Rust training-cascade sampler (CTRL-17 G1). ladder="centred" (CTRL-48) swaps
@@ -895,8 +903,9 @@ def _thresholds_from_samples(samples_per_feature, spec, method, outer_quantile, 
 	bpf = spec.bits_per_feature
 	zero_ref = [d.zero_ref for d in feature_layout(spec)] if ladder == "centred" else [False] * nf
 	yaw_c = [d.name in YAW_ERROR_FEATURES for d in feature_layout(spec)] if yaw_centred else [False] * nf
-	dense_inner = [_dense_inner_for(d.name, spec, yaw_dense and yaw_centred, tilt_dense, yaw_trim_dense)
-	               for d in feature_layout(spec)] if (yaw_dense or tilt_dense or yaw_trim_dense) else [None] * nf
+	any_dense = yaw_dense or tilt_dense or yaw_trim_dense or gyro_z_dense
+	dense_inner = [_dense_inner_for(d.name, spec, yaw_dense and yaw_centred, tilt_dense, yaw_trim_dense, gyro_z_dense)
+	               for d in feature_layout(spec)] if any_dense else [None] * nf
 	thresholds = []
 	for f in range(nf):
 		# STUDENT STATES (option A, 10/08/2026). The fitter rolls out PID — a BETTER
@@ -993,7 +1002,7 @@ def fit_calibration(
 	thresholds = _thresholds_from_samples(samples, spec, method, cal.outer_quantile, extra,
 	                                      ladder=cal.ladder, yaw_centred=cal.yaw_centred,
 	                                      yaw_dense=cal.yaw_dense, tilt_dense=cal.tilt_dense,
-	                                      yaw_trim_dense=cal.yaw_trim_dense)
+	                                      yaw_trim_dense=cal.yaw_trim_dense, gyro_z_dense=cal.gyro_z_dense)
 	return CalibrationFit(thresholds=thresholds,
 	                      constant_features=_zero_spread_features(samples, extra))
 
