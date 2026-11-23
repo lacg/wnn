@@ -2,7 +2,12 @@
 
 Written 23/11/2026 before any flight of either arm. Luiz ruled 23/11 ~17:20 EST: Y3 (`--delta-max-yaw 0.3`,
 CTRL-68) is NOT adopted, the n=10 extension is stopped, N0 (CTRL-67) stays the model-free control, and levers 1
-and 2 of `docs/ctrl70_gap_analysis.md` §6 are pre-registered and flown. Lever 2 flies first (flags only).
+and 2 of `docs/ctrl70_gap_analysis.md` §6 are pre-registered and flown.
+
+**Flight order (Luiz, 23/11 evening, before any flight): the two arms fly in TANDEM from ONE driver,**
+`logs/controller/ctrl62/ab_gt7172.sh`, seed-interleaved G s1, T s1, G s2, T s2, ..., G s5, T s5. Nothing flies
+until the lever-1 code has landed and passed its flag-off pin and its VAL pre-check (both below). G is never
+flown alone as a fallback.
 
 ## Control: N0 (CTRL-67), not re-flown
 
@@ -16,14 +21,13 @@ Both arms run on the installed ram_controller ABI 62 with its rate-loop flags OF
 argv with only `--base-seed 31337001 -> 31337000+N`, the two save paths (tag) and the arm's ONE added flag; the
 driver also checks it against the flown N0 sN argv (arm flag + tag removed -> must equal it byte for byte).
 
-- **G (CTRL-72, lever 2) = N0 + `--ctbr-gamma 1 2 2 3`**, tags `..._a62_..._L1_yld_n0g3_full_sN`, driver
-  `logs/controller/ctrl62/ab_g72.sh`. N0 carries no `--ctbr-gamma` (default 1 2 2 2), so G changes the YAW bank's
+- **G (CTRL-72, lever 2) = N0 + `--ctbr-gamma 1 2 2 3`**, tags `..._a62_..._L1_yld_n0g3_full_sN`. N0 carries no `--ctbr-gamma` (default 1 2 2 2), so G changes the YAW bank's
   alphabet exponent 2 -> 3 and nothing else: thrust, roll and pitch banks unchanged, `--delta-max-yaw 0.5` kept
   (same largest yaw step, finer small steps). The driver verifies through phased_ga's own resolver that the
   resolved gamma is (1, 2, 2, 3) against N0's (1, 2, 2, 2) and that every other resolved ctbr field is equal.
   Thresholds (the address function) are untouched: same input lineage as N0.
 - **T (CTRL-71, lever 1, option c) = N0 + a fixed gyro-only rate ladder on gyro_z**, tags
-  `..._a62_..._L1_yld_n0gz_full_sN`, driver `logs/controller/ctrl62/ab_t71.sh` (flies after `G72 DONE`).
+  `..._a62_..._L1_yld_n0gz_full_sN`, flag `--gyro-z-ladder dense`.
   - The gyro_z thermometer takes the dense ladder with FIXED symmetric cuts **±0.011, ±0.05, ±0.15, ±0.45 rad/s**
     (8 bits per feature = 4 pairs, no cut at 0), replacing the PID-calibration quantile fit
     (N0 s1: ±0.002/0.003, ±0.008/0.009, ±0.015/0.016, ±0.029/0.031 rad/s). Inner cut ≈ 1σ of the gyro noise
@@ -79,3 +83,26 @@ wall minutes are tie-breakers only. Luiz rules on each readout.
 
 **G + T combination:** decided only after both arms have read out (they interact: both act on the yaw loop).
 No combined arm is flown or registered here.
+
+## Addendum (23/11/2026, before any flight): lever 1 landed — pin and VAL pre-check
+
+- **Code:** `--gyro-z-ladder dense` (branch `ctrl71-gyro-z-ladder`, merge 0fe3e8be). Python-side threshold fit only
+  (`evaluator.DENSE_GYRO_Z_INNER_RAD_S`, `ThresholdCalibration.gyro_z_dense`, provenance `calib=...,gyroz:dense`);
+  **no ram_controller rebuild, ABI stays 62.** Every fit site (grid, held-out/test refits, stage-select, the
+  C export's train-seed refit) reads it through `calibration_from_args`.
+- **Flag-off pin (passed):** `tests/controller_ctrl71_gyro_z_ladder.py` — on the flown N0 s1 argv, the 192 fitted
+  thresholds, the calibration token, the resolved ctbr dict and all 234 parsed arguments are identical between
+  the pre-CTRL-71 tree (4959e143) and the merged tree on the same wheel. Flag on: the gyro_z block is exactly
+  ±0.011/0.05/0.15/0.45 rad/s and the other 23 ladders are byte-identical.
+- **VAL pre-check (passed the gate; a diagnosis, not a result; never TEST):**
+  `logs/controller/ctrl71/precheck_val.py`, the ladder phased_ga fits, on the CTRL-70 VAL traces (N0 s1 winner,
+  3 val units × 100 episodes). Windows 0-0.15 / 0.15-0.3 / 0.3-0.6 / 0.6-1.0 / 1.0-1.6 s / hold:
+
+```
+                         beyond the outer cut, % of ticks       | yaw-rate variance carried by the gyro_z code
+flag off (flown N0)      90.4 / 91.2 / 84.5 / 73.7 / 66.3 / 63.0 | 0.59 / 0.66 / 0.60 / 0.58 / 0.61 / 0.65 (all 0.50)
+--gyro-z-ladder dense    11.4 / 19.8 /  5.4 /  1.3 /  0.4 /  0.1 | 0.92 / 0.94 / 0.93 / 0.92 / 0.91 / 0.90 (all 0.93)
+```
+  Gate: hold 0.1 % ≤ 5 %, worst transient window 19.8 % ≤ 25 %. (Y3 s1 traces: 6.4 / 19.3 / 1.1 / 0.1 / 0 / 0 %.)
+  The carried share is single-input (the 9-bin gyro_z code alone against the ±5-tick finite-difference yaw rate),
+  not the joint measure with the other yaw inputs.
