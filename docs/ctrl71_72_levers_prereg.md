@@ -106,3 +106,22 @@ flag off (flown N0)      90.4 / 91.2 / 84.5 / 73.7 / 66.3 / 63.0 | 0.59 / 0.66 /
   Gate: hold 0.1 % ≤ 5 %, worst transient window 19.8 % ≤ 25 %. (Y3 s1 traces: 6.4 / 19.3 / 1.1 / 0.1 / 0 / 0 %.)
   The carried share is single-input (the 9-bin gyro_z code alone against the ±5-tick finite-difference yaw rate),
   not the joint measure with the other yaw inputs.
+
+## Addendum (23/11/2026, before any G+T flight): third arm G+T, flown in parallel
+
+Written while G s1 is in the air (started 22:25:12Z) and before any T or G+T flight. This supersedes the line
+above that no combined arm is flown: at Luiz's request (23/11 ~18:00 EST) the combination is flown **in
+parallel** with G and T rather than after their readouts.
+
+- **G+T = N0 + `--ctbr-gamma 1 2 2 3` + `--gyro-z-ladder dense`**, tags `..._a62_..._L1_yld_n0g3gz_full_sN`,
+  ABI 62 flags-off, story CTRL-71/72. Vs the flown N0 sN argv it differs only by the two arm flags and the tag:
+  through the resolver, only the yaw gamma (1,2,2,2 -> 1,2,2,3) and the calibration token (`+,gyroz:dense`) move,
+  and the digest of every other resolved setting equals the control's. It is on T's threshold lineage.
+- **Order:** per seed G sN, T sN, G+T sN, seeds s1-s5 (15 runs), one driver
+  `logs/controller/ctrl62/ab_gt7172b.sh`, which takes over from `ab_gt7172.sh` between two flights (the old
+  driver logs the END of the run it is flying; no flight is interrupted, none is launched twice).
+- **Pairing and rule:** G+T sN vs N0 sN, same seed, n = 5, the same 35 TEST units, the same adoption rule as G
+  and T. **Registered direction: err lower and steady lower; stable / fails / pos not worse.**
+- **Descriptive only (no adoption rule):** G+T sN vs G sN and vs T sN on the same seed — does the combination
+  add up (G+T at least as good as the better of G and T on err and steady), or do the two yaw levers interfere?
+- Seeds s6-s8 only on Luiz's word, as for G and T.
