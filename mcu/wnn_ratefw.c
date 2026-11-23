@@ -46,6 +46,7 @@ static double pidch_update(wnn_pidch_t *p, int has_filt, double dt, double out_l
                            double setpoint, double measured)
 {
 	double error = setpoint - measured;
+	p->last_err = error;
 	p->integ += error * dt;
 	if (p->i_limit != 0.0) p->integ = clamp_d(p->integ, -p->i_limit, p->i_limit);
 	double deriv = p->first ? 0.0 : -(measured - p->prev_measured) / dt;
@@ -104,6 +105,7 @@ void wnn_ratefw_reset(wnn_ratefw_t *r)
 	{
 		wnn_pidch_t *p = &r->ax[i];
 		p->integ = 0.0;
+		p->last_err = 0.0;
 		p->prev_measured = 0.0;
 		p->first = 1;
 		p->filt.d1 = p->filt.d2 = 0.0;
@@ -128,6 +130,11 @@ void wnn_ratefw_set_anchor(wnn_ratefw_t *r, float anchor_pwm)
 void wnn_ratefw_integ(const wnn_ratefw_t *r, double out[3])
 {
 	for (int i = 0; i < 3; i++) out[i] = r->ax[i].integ;
+}
+
+void wnn_ratefw_err(const wnn_ratefw_t *r, double out[3])
+{
+	for (int i = 0; i < 3; i++) out[i] = r->ax[i].last_err;
 }
 
 /* RateStageFw::mix: per-axis force (N) -> '+' mixer -> pwm. */

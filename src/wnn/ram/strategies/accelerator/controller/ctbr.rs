@@ -80,6 +80,18 @@ pub struct CtbrSpec
 	/// obs_dhat_plant when both are set); None ⇒ the ABI-44 feature layout.
 	#[pyo3(get)]
 	pub obs_dhat_residual_plant: Option<[f64; 5]>,
+	/// ABI 62 (CTRL-69, `--obs-rate-i-axes`): the axes a1 emits — bitmask, bit 0 roll,
+	/// 1 pitch, 2 yaw. 7 (all) ⇒ the ABI-61 block exactly. Only with obs_rate_i.
+	#[pyo3(get)]
+	pub obs_rate_i_axes: u8,
+	/// ABI 62 (CTRL-69 a4, `--obs-rate-err-tau`): the time constant τ (s) of the
+	/// one-pole low-pass on the flown rate loop's tracking error (rate_err_lpf.rs).
+	/// Some ⇒ append it; None ⇒ the ABI-61 feature layout.
+	#[pyo3(get)]
+	pub obs_rate_err_tau: Option<f64>,
+	/// ABI 62 (`--obs-rate-err-axes`): the axes a4 emits (bitmask as above; 7 = all).
+	#[pyo3(get)]
+	pub obs_rate_err_axes: u8,
 }
 
 impl CtbrSpec
@@ -123,6 +135,7 @@ impl CtbrSpec
 				));
 			}
 		}
+		self.validate_rate_loop_obs()?;
 		for m in 0..CTBR_BANKS
 		{
 			let (r, g) = (self.range[m], self.gamma[m]);
@@ -133,6 +146,34 @@ impl CtbrSpec
 			if !(g.is_finite() && g > 0.0)
 			{
 				return Err(format!("CtbrSpec: gamma[{m}] = {g} must be a positive finite number"));
+			}
+		}
+		Ok(())
+	}
+
+	/// ABI 62: the axis subsets and the rate-error τ.
+	fn validate_rate_loop_obs(&self) -> Result<(), String>
+	{
+		for (name, m) in [("obs_rate_i_axes", self.obs_rate_i_axes), ("obs_rate_err_axes", self.obs_rate_err_axes)]
+		{
+			if m == 0 || m > crate::rate_err_lpf::AXES_ALL
+			{
+				return Err(format!("CtbrSpec: {name} = {m} must be a non-empty subset of roll|pitch|yaw (bitmask 1..=7)"));
+			}
+		}
+		if self.obs_rate_i_axes != crate::rate_err_lpf::AXES_ALL && !self.obs_rate_i
+		{
+			return Err("CtbrSpec: obs_rate_i_axes needs obs_rate_i (an axis subset of an absent block)".into());
+		}
+		if self.obs_rate_err_axes != crate::rate_err_lpf::AXES_ALL && self.obs_rate_err_tau.is_none()
+		{
+			return Err("CtbrSpec: obs_rate_err_axes needs obs_rate_err_tau (an axis subset of an absent block)".into());
+		}
+		if let Some(t) = self.obs_rate_err_tau
+		{
+			if !(t.is_finite() && t > 0.0)
+			{
+				return Err(format!("CtbrSpec: obs_rate_err_tau = {t} must be a positive finite time constant (s)"));
 			}
 		}
 		Ok(())
@@ -196,6 +237,11 @@ impl CtbrSpec
 		if self.obs_rate_i
 		{
 			s.push_str(" obs=rate_i");
+			s.push_str(&axes_suffix(self.obs_rate_i_axes));
+		}
+		if let Some(t) = self.obs_rate_err_tau
+		{
+			s.push_str(&format!(" obs=rate_err(tau={t}){}", axes_suffix(self.obs_rate_err_axes)));
 		}
 		if let Some(p) = self.obs_dhat_plant
 		{
@@ -211,7 +257,9 @@ impl CtbrSpec
 	/// CTRL-38/48: the features the cascade blocks append (0 when all are off).
 	pub(crate) fn cascade_feature_count(&self) -> usize
 	{
-		3 * (self.obs_rate_i as usize)
+		use crate::rate_err_lpf::axes_count;
+		(if self.obs_rate_i { axes_count(self.obs_rate_i_axes) } else { 0 })
+			+ self.obs_rate_err_tau.map_or(0, |_| axes_count(self.obs_rate_err_axes))
 			+ 3 * (self.obs_dhat_plant.is_some() as usize)
 			+ 3 * (self.obs_dhat_residual_plant.is_some() as usize)
 	}
@@ -244,7 +292,16 @@ impl CtbrSpec
 			(Some(_), Some(d)) => Some(self.residual_scale(d)),
 			_ => None,
 		};
-		Some(crate::cascade_obs::CascadeObs::new(self.obs_rate_i, dhat, self.obs_dhat_plant.is_some(), resid))
+		let rate_i = if self.obs_rate_i { self.obs_rate_i_axes } else { 0 };
+		Some(crate::cascade_obs::CascadeObs::new(rate_i, self.rate_err_lpf(dt), dhat, self.obs_dhat_plant.is_some(), resid))
+	}
+
+	/// ABI 62 a4: the rate-error low-pass on this spec's τ, the controller's dt and the
+	/// rate banks' ranges (the scale), None when off.
+	fn rate_err_lpf(&self, dt: f32) -> Option<crate::rate_err_lpf::RateErrLpf>
+	{
+		let r = [self.range[1], self.range[2], self.range[3]];
+		self.obs_rate_err_tau.map(|t| crate::rate_err_lpf::RateErrLpf::new(t, dt, r, self.obs_rate_err_axes))
 	}
 }
 
@@ -253,7 +310,9 @@ impl CtbrSpec
 {
 	#[new]
 	#[pyo3(signature = (rate_gains, out_limit_n, hover_n, k_thrust, main_loop_hz, attitude_hz, lpf_hz, range, gamma,
-	                    obs_rate_i = false, obs_dhat_plant = None, obs_dhat_residual_plant = None))]
+	                    obs_rate_i = false, obs_dhat_plant = None, obs_dhat_residual_plant = None,
+	                    obs_rate_i_axes = crate::rate_err_lpf::AXES_ALL, obs_rate_err_tau = None,
+	                    obs_rate_err_axes = crate::rate_err_lpf::AXES_ALL))]
 	#[allow(clippy::too_many_arguments)]
 	fn py_new(
 		rate_gains: [f64; 12],
@@ -268,6 +327,9 @@ impl CtbrSpec
 		obs_rate_i: bool,
 		obs_dhat_plant: Option<[f64; 5]>,
 		obs_dhat_residual_plant: Option<[f64; 5]>,
+		obs_rate_i_axes: u8,
+		obs_rate_err_tau: Option<f64>,
+		obs_rate_err_axes: u8,
 	) -> PyResult<Self>
 	{
 		let s = CtbrSpec {
@@ -283,6 +345,9 @@ impl CtbrSpec
 			obs_rate_i,
 			obs_dhat_plant,
 			obs_dhat_residual_plant,
+			obs_rate_i_axes,
+			obs_rate_err_tau,
+			obs_rate_err_axes,
 		};
 		s.validate().map_err(pyo3::exceptions::PyValueError::new_err)?;
 		Ok(s)
@@ -300,6 +365,25 @@ impl CtbrSpec
 	{
 		format!("CtbrSpec({})", self.provenance_line())
 	}
+
+	/// ABI 62: the rate-error low-pass constants (α, [1/range ×3]) a controller of
+	/// physical step `dt` runs — read by the MCU exporter, never re-derived. None when off.
+	fn rate_err_lpf_consts(&self, dt: f32) -> Option<(f32, [f32; 3])>
+	{
+		self.rate_err_lpf(dt).map(|f| (f.alpha, f.inv_scale))
+	}
+}
+
+/// ABI 62: the provenance suffix of an axis subset — empty for all three (so every
+/// ABI-61 token is unchanged), else e.g. "(axes=xy)".
+fn axes_suffix(mask: u8) -> String
+{
+	if mask == crate::rate_err_lpf::AXES_ALL
+	{
+		return String::new();
+	}
+	let n: String = ['x', 'y', 'z'].iter().enumerate().filter(|(a, _)| crate::rate_err_lpf::axis_in(mask, *a)).map(|(_, c)| *c).collect();
+	format!("(axes={n})")
 }
 
 /// The cascade's runtime state inside a WnnController: the inner stage, the HELD
@@ -382,6 +466,13 @@ impl CtbrInner
 			let integ = self.rate.axis_state(i).integ;
 			(if lim > 0.0 { integ / lim } else { integ }) as f32
 		})
+	}
+
+	/// ABI 62 (CTRL-69 a4): the raw tracking error (rate_sp − gyro, rad/s) per axis at
+	/// the loop's last update — the error its P-term used (PidCh::last_err).
+	pub(crate) fn rate_err_raw(&self) -> [f32; 3]
+	{
+		std::array::from_fn(|i| self.rate.axis_state(i).err as f32)
 	}
 
 	/// CTRL-38: adopt the state of the rate loop that is ACTUALLY flying (a teacher's

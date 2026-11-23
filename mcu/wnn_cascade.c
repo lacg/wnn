@@ -1,6 +1,7 @@
 /* On-board cascade WNN controller. Every function names the Rust it mirrors
  * (ram_controller @ ABI 41; the CTRL-48 residual @ ABI 45; the block-10 / lever
- * set of the Y+F+L base @ ABI 60; the f32 Mahony estimator + heading @ ABI 61); keep the operation ORDER when editing — the parity
+ * set of the Y+F+L base @ ABI 60; the f32 Mahony estimator + heading @ ABI 61; the
+ * CTRL-69 rate-error input + rate-I axis subsets @ ABI 62); keep the operation ORDER when editing — the parity
  * test (mcu/parity/) asserts bit equality, and a reassociated sum is a different
  * function. See wnn_cascade.h for the firmware contract. */
 #include "wnn_cascade.h"
@@ -17,6 +18,9 @@ static const double wnn_dhat_plant[5] = WNN_DHAT_PLANT_INIT;
 #endif
 #if WNN_OBS_TILT_REF_ERR
 static const float wnn_tilt_ref_shape[4] = WNN_TILT_REF_SHAPE_INIT;
+#endif
+#if WNN_OBS_RATE_ERR
+static const float wnn_rate_err_inv[3] = WNN_RATE_ERR_INV_INIT;
 #endif
 
 /* att_bias_pred.rs ABP_GRAVITY: the nominal g the predictor scales the velocity
@@ -447,13 +451,32 @@ static void cascade_values(wnn_ctrl_t *c, const wnn_tick_in_t *in, float v[6])
 #endif
 }
 
-/* CTRL-38/48 (cascade_obs.rs append): rate-I, then d-hat, then the residual
- * r = d-hat * inv_a + w * (I/L) (CasResidual::of, f32). */
+/* ABI 62 (rate_err_lpf.rs RateErrLpf::step, f32): every axis filtered, the mask's
+ * axes emitted. x = (float)e * (1/range); y = y + alpha * (x - y) (lpf_step). */
+static int rate_err_block(wnn_ctrl_t *c, int fi, const wnn_tick_in_t *in)
+{
+#if WNN_OBS_RATE_ERR
+	for (int a = 0; a < 3; a++)
+	{
+		float x = (float)in->rate_err[a] * wnn_rate_err_inv[a];
+		c->rerr_y[a] = c->rerr_y[a] + WNN_RATE_ERR_ALPHA * (x - c->rerr_y[a]);
+		if ((WNN_OBS_RATE_ERR_AXES >> a) & 1) c->features[fi++] = c->rerr_y[a];
+	}
+#else
+	(void)c; (void)in;
+#endif
+	return fi;
+}
+
+/* CTRL-38/48/69 (cascade_obs.rs emit): rate-I (its axes), the rate error (ABI 62),
+ * then d-hat, then the residual r = d-hat * inv_a + w * (I/L) (CasResidual::of, f32). */
 static int cascade_block(wnn_ctrl_t *c, int fi, const wnn_tick_in_t *in)
 {
 	float v[6];
 	cascade_values(c, in, v);
-	for (int i = 0; WNN_OBS_RATE_I && i < 3; i++) c->features[fi++] = v[i];
+	for (int i = 0; WNN_OBS_RATE_I && i < 3; i++)
+		if ((WNN_OBS_RATE_I_AXES >> i) & 1) c->features[fi++] = v[i];
+	fi = rate_err_block(c, fi, in);
 	for (int a = 0; WNN_OBS_DHAT && a < 3; a++) c->features[fi++] = v[3 + a];
 	for (int a = 0; WNN_OBS_DRES && a < 3; a++)
 	{
@@ -618,6 +641,7 @@ void wnn_reset(wnn_ctrl_t *c, float init_yaw, const float q0[4])
 	memset(&c->abp, 0, sizeof c->abp);
 	memset(c->abp_last, 0, sizeof c->abp_last);
 	c->cresid_z = 0.0f;
+	memset(c->rerr_y, 0, sizeof c->rerr_y);
 	memset(c->integ, 0, sizeof c->integ);
 	memset(c->setpoint, 0, sizeof c->setpoint);
 	memset(c->held, 0, sizeof c->held);

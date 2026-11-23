@@ -197,6 +197,12 @@ pub(crate) fn cpu_rows(c: &WnnController, steps: usize, lag: f32) -> [f64; crate
 
 pub(crate) fn gpu_rows(c: &WnnController, steps: usize, lag: f32) -> Option<Vec<f64>>
 {
+	gpu_rows_many(&[c], steps, lag).map(|mut r| r.swap_remove(0))
+}
+
+/// gpu_rows for a POPULATION in one dispatch (ABI 62: the uniform-contract check).
+pub(crate) fn gpu_rows_many(cs: &[&WnnController], steps: usize, lag: f32) -> Option<Vec<Vec<f64>>>
+{
 	if std::env::var("WNN_SKIP_GPU_TESTS").is_ok()
 	{
 		return None;
@@ -219,9 +225,9 @@ pub(crate) fn gpu_rows(c: &WnnController, steps: usize, lag: f32) -> Option<Vec<
 		seed: 777,
 	};
 	let rows = ev
-		.score(&[c], &q0, &w0, EPS, steps, (DT, ARM, KT, INERTIA, G), KD, lag, [0.0; 3], Some(d), None, None, None, Some(&s1))
+		.score(cs, &q0, &w0, EPS, steps, (DT, ARM, KT, INERTIA, G), KD, lag, [0.0; 3], Some(d), None, None, None, Some(&s1))
 		.expect("gpu score");
-	Some(rows[0].clone())
+	Some(rows)
 }
 
 fn rows_digest(r: &[f64]) -> u64

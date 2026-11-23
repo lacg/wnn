@@ -409,6 +409,13 @@ struct RolloutParams
 	// setpoint of bank 3 (cT; read only when yff_on).
 	yff_on: u32,
 	yff_ct: f32,
+	// + 6 (ABI 62, CTRL-69), appended in lockstep: the rate-loop inputs, read only by the
+	// FC_RATE_LOOP_OBS(5) specialization — rate-I's emitted axes, the rate-error block's
+	// emitted axes (0 = off), its low-pass α and the per-axis 1/range (rate_err_lpf.rs).
+	cas_rate_i_mask: u32,
+	cas_rerr_mask: u32,
+	cas_rerr_alpha: f32,
+	cas_rerr_inv: [f32; 3],
 }
 
 /// CTRL-38: the cascade feature blocks as the score kernel needs them, read off the
@@ -425,6 +432,9 @@ struct CascadeGpu
 	kt: f32,
 	/// CTRL-48 a3: the residual's scale; None ⇒ off.
 	resid: Option<crate::cascade_obs::CasResidual>,
+	/// ABI 62: a1's emitted axes (AXES_ALL when a1 is off or whole) and a4 (None ⇒ off).
+	rate_i_mask: u8,
+	rerr: Option<crate::rate_err_lpf::RateErrConsts>,
 }
 
 impl CascadeGpu
@@ -441,10 +451,31 @@ impl CascadeGpu
 			rate_i: o.rate_i_on(),
 			dhat: o.dhat_on(),
 			resid: o.residual(),
+			rate_i_mask: if o.rate_i_on() { o.rate_i_mask() } else { crate::rate_err_lpf::AXES_ALL },
+			rerr: o.rate_err().map(|f| f.consts()),
 			c: d.map_or([0.0; 3], |d| d.torque_gain().map(|v| v as f32)),
 			clamp: d.map_or([0.0; 3], |d| d.clamp().map(|v| v as f32)),
 			kt: d.map_or(0.0, |d| d.k_thrust() as f32),
 		}
+	}
+
+	/// Any block on (the FC_CASCADE_OBS pipeline is needed).
+	fn any(&self) -> bool
+	{
+		self.rate_i || self.dhat || self.resid.is_some() || self.rerr.is_some()
+	}
+
+	/// ABI 62: the FC_RATE_LOOP_OBS(5) specialization is needed — an axis subset of
+	/// rate-I, or the rate-error block. Off ⇒ the ABI-61 pipelines exactly.
+	fn rate_loop_obs(&self) -> bool
+	{
+		self.rate_i_mask != crate::rate_err_lpf::AXES_ALL || self.rerr.is_some()
+	}
+
+	/// The kernel's (rate-I mask, rate-error mask) uniforms (0 = rate error off).
+	fn masks(&self) -> (u32, u32)
+	{
+		(self.rate_i_mask as u32, self.rerr.map_or(0, |f| f.mask as u32))
 	}
 }
 
@@ -551,7 +582,8 @@ pub struct ControllerRolloutEvaluator
 	// built on first use. The default pipeline above dead-strips the blocks.
 	// CTRL-46: keyed (cascade, abp) — FC_ATT_BIAS_PRED(3) composes with it.
 	// ABI 52: keyed (cascade, abp, ytp) — FC_YAW_TRIM_P(4) composes with both.
-	cascade_obs_pipeline: std::cell::RefCell<std::collections::HashMap<(bool, bool, bool), ComputePipelineState>>,
+	// ABI 62: keyed (cascade, abp, ytp, rate_loop_obs) — FC_RATE_LOOP_OBS(5) composes.
+	cascade_obs_pipeline: std::cell::RefCell<std::collections::HashMap<(bool, bool, bool, bool), ComputePipelineState>>,
 	/// TEST-ONLY (ABI 38 label-replay identity on the GPU): Some(firmware attitude
 	/// gains) ⇒ a CTBR population's outer setpoint is the in-kernel firmware attitude
 	/// half (ctbr_outer_pid) instead of the WNN decode.
@@ -639,9 +671,9 @@ impl ControllerRolloutEvaluator
 	/// geometry — CTBR refuses geometry). Only it appends the cascade blocks.
 	/// CTRL-46: `abp` = FC_ATT_BIAS_PRED(3)=true; a constant is set ONLY when on, so the
 	/// (true, false) pipeline is the ABI-45 cascade pipeline exactly.
-	fn cascade_obs_pipeline(&self, cas: bool, abp: bool, ytp: bool) -> Result<ComputePipelineState, String>
+	fn cascade_obs_pipeline(&self, cas: bool, abp: bool, ytp: bool, rlo: bool) -> Result<ComputePipelineState, String>
 	{
-		if let Some(p) = self.cascade_obs_pipeline.borrow().get(&(cas, abp, ytp))
+		if let Some(p) = self.cascade_obs_pipeline.borrow().get(&(cas, abp, ytp, rlo))
 		{
 			return Ok(p.clone());
 		}
@@ -660,6 +692,11 @@ impl ControllerRolloutEvaluator
 		{
 			fcv.set_constant_value_at_index(&on as *const bool as *const _, MTLDataType::Bool, 4);
 		}
+		// ABI 62: the rate-loop inputs (set ONLY when on, so every ABI-61 key is the ABI-61 pipeline).
+		if rlo
+		{
+			fcv.set_constant_value_at_index(&on as *const bool as *const _, MTLDataType::Bool, 5);
+		}
 		let func = self
 			.library
 			.get_function("controller_rollout", Some(fcv))
@@ -668,7 +705,7 @@ impl ControllerRolloutEvaluator
 			.device
 			.new_compute_pipeline_state_with_function(&func)
 			.map_err(|e| format!("obs pipeline creation (cascade {cas}, abp {abp}) failed: {e}"))?;
-		self.cascade_obs_pipeline.borrow_mut().insert((cas, abp, ytp), p.clone());
+		self.cascade_obs_pipeline.borrow_mut().insert((cas, abp, ytp, rlo), p.clone());
 		Ok(p)
 	}
 
@@ -1004,13 +1041,14 @@ impl ControllerRolloutEvaluator
 		// Pipeline: legacy quad (function constants undefined → generic path
 		// dead-stripped, bit-identical pre-geometry kernel) or the N-rotor
 		// specialization. Selected ONCE — uniform across all chunks.
-		let cas_on = ctbr.is_some_and(|c| c.cas.rate_i || c.cas.dhat || c.cas.resid.is_some());
+		let cas_on = ctbr.is_some_and(|c| c.cas.any());
+		let rlo = ctbr.is_some_and(|c| c.cas.rate_loop_obs());
 		// CTRL-46: the bias-predictor block (uniform across the population, like att_est).
 		let abp_on = controllers[0].att_bias_pred_on();
 		let geom_pipeline = match geometry
 		{
 			Some(rotors) => Some(self.geometry_pipeline(rotors.len() as u32, abp_on)?),
-			None if cas_on || abp_on => Some(self.cascade_obs_pipeline(cas_on, abp_on, controllers[0].yaw_trim_p_kappa().is_some())?),
+			None if cas_on || abp_on => Some(self.cascade_obs_pipeline(cas_on, abp_on, controllers[0].yaw_trim_p_kappa().is_some(), rlo)?),
 			None => None,
 		};
 		let pipeline: &ComputePipelineState = geom_pipeline.as_ref().unwrap_or(&self.pipeline);
@@ -1273,6 +1311,10 @@ impl ControllerRolloutEvaluator
 				delta_max_yaw: controllers[0].delta_max_bank(crate::controller::YAW_BANK),
 				yff_on: controllers[0].yaw_trim_ff_gain().is_some() as u32,
 				yff_ct: controllers[0].yaw_trim_ff_gain().unwrap_or(0.0),
+				cas_rate_i_mask: ctbr.map_or(crate::rate_err_lpf::AXES_ALL as u32, |c| c.cas.masks().0),
+				cas_rerr_mask: ctbr.map_or(0, |c| c.cas.masks().1),
+				cas_rerr_alpha: ctbr.and_then(|c| c.cas.rerr).map_or(0.0, |f| f.alpha),
+				cas_rerr_inv: ctbr.and_then(|c| c.cas.rerr).map_or([0.0; 3], |f| f.inv_scale),
 			};
 
 			let b_q0 = self.buf(q0_chunk);
@@ -2261,6 +2303,28 @@ struct TrainParams
 	// + 1 (lever 1, ABI 55), appended in lockstep with the shader twin: the anchored yaw
 	// heading follows the student's own Mahony quaternion (score: live; train/record: yh_rec).
 	yfe_on: u32,
+	// + 2 (ABI 62, CTRL-69), appended in lockstep with the shader twin: rate-I's emitted
+	// axes and the rate-error block's (0 = off) — read only by the FC_RATE_LOOP_OBS(5)
+	// specialization, which writes the recorded rate-error values into the sensors tail.
+	cas_rate_i_mask: u32,
+	cas_rerr_mask: u32,
+	// the rate-error values' float offset in the cas_rec device buffer (total_steps*6):
+	// the train kernel's 31 buffer slots are all taken, so rerr_rec rides cas_rec's tail.
+	cas_rerr_off: u32,
+}
+
+/// ABI 62: the cas_rec device buffer — the six-value record, with the rate-error stream
+/// appended when the population carries it (TrainParams.cas_rerr_off = its offset).
+fn cas_device_rec<'a>(batch: &TrainBatch<'a>, controllers: &[&WnnController]) -> std::borrow::Cow<'a, [f32]>
+{
+	if !controllers.first().is_some_and(|c| c.cascade_rate_err_on())
+	{
+		return std::borrow::Cow::Borrowed(batch.cas_rec);
+	}
+	let mut v = Vec::with_capacity(batch.cas_rec.len() + batch.rerr_rec.len());
+	v.extend_from_slice(batch.cas_rec);
+	v.extend_from_slice(batch.rerr_rec);
+	std::borrow::Cow::Owned(v)
 }
 
 /// Per-genome recorded trajectory batch, flat across genomes (matches the kernel's
@@ -2302,6 +2366,9 @@ pub struct TrainBatch<'a>
 	// ABI 55: per-step recorded Mahony heading (*1, ReplayObs.yaw_heading twin; zeros when
 	// obs_yaw_from_att_est is off — never read then).
 	pub yh_rec: &'a [f32],
+	// ABI 62: per-step recorded rate-error block (*3, ReplayObs.rate_err twin). May be
+	// EMPTY when obs_rate_err is off (never read then); exactly total_steps*3 when on.
+	pub rerr_rec: &'a [f32],
 	pub selective: bool,
 	pub target_rpy: [f32; 3],
 }
@@ -2357,6 +2424,26 @@ fn replay_obs_batch_guard(batch: &TrainBatch, site: &str)
 		batch.yh_rec.len(),
 		total_steps
 	);
+	assert!(
+		batch.rerr_rec.is_empty() || batch.rerr_rec.len() == total_steps * 3,
+		"{site}: replay rate-error buffer misaligned (rerr_rec {} floats for {} steps) (ABI 62)",
+		batch.rerr_rec.len(),
+		total_steps
+	);
+}
+
+/// ABI 62: an obs_rate_err population must carry the recorded stream (an empty
+/// rerr_rec is legal only with the block off — the kernel never reads it then).
+fn rerr_batch_guard(batch: &TrainBatch, controllers: &[&WnnController], site: &str)
+{
+	let on = controllers.first().is_some_and(|c| c.cascade_rate_err_on());
+	assert!(
+		!on || batch.rerr_rec.len() == batch.gyros.len(),
+		"{site}: obs_rate_err is on but the replay rate-error stream carries {} floats for {} steps — \
+		 the replay has no flown rate loop to rebuild it from (ABI 62)",
+		batch.rerr_rec.len(),
+		batch.gyros.len() / 3
+	);
 }
 
 pub struct ControllerTrainer
@@ -2365,8 +2452,10 @@ pub struct ControllerTrainer
 	queue: CommandQueue,
 	// ABI 52: kept for the lazily built FC_YAW_TRIM_P(4) specializations of
 	// controller_train / controller_record (L2y'), built on first use.
+	// ABI 62: keyed (ytp, rate_loop_obs) — FC_RATE_LOOP_OBS(5) composes with it; the
+	// (false, false) key is never built (the default pipelines below are it).
 	library: metal::Library,
-	ytp_pipelines: std::cell::RefCell<Option<(ComputePipelineState, ComputePipelineState)>>,
+	spec_pipelines: std::cell::RefCell<std::collections::HashMap<(bool, bool), (ComputePipelineState, ComputePipelineState)>>,
 	pipeline: ComputePipelineState,              // controller_train
 	record_pipeline: ComputePipelineState,       // controller_record (P2a)
 	scan_pipeline: ComputePipelineState,         // controller_scan (P2b)
@@ -2536,7 +2625,7 @@ impl ControllerTrainer
 			device,
 			queue,
 			library,
-			ytp_pipelines: std::cell::RefCell::new(None),
+			spec_pipelines: std::cell::RefCell::new(std::collections::HashMap::new()),
 			pipeline,
 			record_pipeline,
 			scan_pipeline,
@@ -2554,27 +2643,41 @@ impl ControllerTrainer
 		})
 	}
 
-	/// L2y' (ABI 52): the FC_YAW_TRIM_P(4) (train, record) pipelines when the population
-	/// carries the option (uniform across it, like every replay option), else None.
-	fn ytp_for(&self, controllers: &[&WnnController]) -> Result<Option<(ComputePipelineState, ComputePipelineState)>, String>
+	/// L2y' (ABI 52) / ABI 62: the (train, record) specialization the population needs —
+	/// FC_YAW_TRIM_P(4) and/or FC_RATE_LOOP_OBS(5), each set only when on (uniform across
+	/// the population, like every replay option) — else None (the default pipelines).
+	fn spec_for(&self, controllers: &[&WnnController]) -> Result<Option<(ComputePipelineState, ComputePipelineState)>, String>
 	{
-		if controllers.first().map_or(true, |c| c.yaw_trim_p_kappa().is_none())
+		let Some(c0) = controllers.first()
+		else
+		{
+			return Ok(None);
+		};
+		let key = (c0.yaw_trim_p_kappa().is_some(), CascadeGpu::from_controller(c0).rate_loop_obs());
+		if key == (false, false)
 		{
 			return Ok(None);
 		}
-		if let Some(p) = self.ytp_pipelines.borrow().as_ref()
+		if let Some(p) = self.spec_pipelines.borrow().get(&key)
 		{
 			return Ok(Some(p.clone()));
 		}
 		let mk = |name: &str| -> Result<ComputePipelineState, String> {
 			let fcv = metal::FunctionConstantValues::new();
 			let on = true;
-			fcv.set_constant_value_at_index(&on as *const bool as *const _, MTLDataType::Bool, 4);
-			let func = self.library.get_function(name, Some(fcv)).map_err(|e| format!("{name} (ytp) specialization failed: {e}"))?;
-			self.device.new_compute_pipeline_state_with_function(&func).map_err(|e| format!("{name} (ytp) pipeline creation failed: {e}"))
+			if key.0
+			{
+				fcv.set_constant_value_at_index(&on as *const bool as *const _, MTLDataType::Bool, 4);
+			}
+			if key.1
+			{
+				fcv.set_constant_value_at_index(&on as *const bool as *const _, MTLDataType::Bool, 5);
+			}
+			let func = self.library.get_function(name, Some(fcv)).map_err(|e| format!("{name} {key:?} specialization failed: {e}"))?;
+			self.device.new_compute_pipeline_state_with_function(&func).map_err(|e| format!("{name} {key:?} pipeline creation failed: {e}"))
 		};
 		let p = (mk("controller_train")?, mk("controller_record")?);
-		*self.ytp_pipelines.borrow_mut() = Some(p.clone());
+		self.spec_pipelines.borrow_mut().insert(key, p.clone());
 		Ok(Some(p))
 	}
 
@@ -2867,6 +2970,9 @@ impl ControllerTrainer
 			yte_kappa: controllers[0].yaw_trim_kappa().unwrap_or(0.0),
 			ytp_kappa: controllers[0].yaw_trim_p_kappa().unwrap_or(0.0),
 				yfe_on: controllers[0].yaw_from_att_est() as u32,
+			cas_rate_i_mask: CascadeGpu::from_controller(controllers[0]).masks().0,
+			cas_rerr_mask: CascadeGpu::from_controller(controllers[0]).masks().1,
+			cas_rerr_off: batch.cas_rec.len() as u32,
 		};
 
 		let b_sc = self.buf(&state_conns);
@@ -2906,13 +3012,14 @@ impl ControllerTrainer
 		let b_pa = self.buf(batch.pwm_dev); // obs_pwm replay fix (buffer 25)
 		let b_au = self.buf(batch.att_up); // ABI 32 attitude estimate (buffer 26)
 		let b_dr = self.buf(batch.dhat_rec); // CTRL-40 motor d̂ (buffer 27)
-		let b_cr = self.buf(batch.cas_rec); // CTRL-40 cascade blocks (buffer 28)
+		rerr_batch_guard(batch, controllers, "controller_train");
+		let b_cr = self.buf(&cas_device_rec(batch, controllers)); // CTRL-40 cascade blocks (+ ABI 62 rate error) (buffer 28)
 		let b_ab = self.buf(batch.abp_rec); // CTRL-46 bias prediction (buffer 29)
 		let b_yh = self.buf(batch.yh_rec); // ABI 55 Mahony heading (buffer 30)
 
 		let cmd = self.queue.new_command_buffer();
 		let enc = cmd.new_compute_command_encoder();
-		let ytp = self.ytp_for(controllers)?;
+		let ytp = self.spec_for(controllers)?;
 		enc.set_compute_pipeline_state(ytp.as_ref().map_or(&self.pipeline, |p| &p.0));
 		let bufs: [&Buffer; 31] = [
 			&b_sc, &b_oc, &b_sk, &b_sv, &b_so, &b_scn, &b_th, &b_epb, &b_epc, &b_stb, &b_stc, &b_gy,
@@ -3097,6 +3204,9 @@ impl ControllerTrainer
 			yte_kappa: controllers[0].yaw_trim_kappa().unwrap_or(0.0),
 			ytp_kappa: controllers[0].yaw_trim_p_kappa().unwrap_or(0.0),
 				yfe_on: controllers[0].yaw_from_att_est() as u32,
+			cas_rate_i_mask: CascadeGpu::from_controller(controllers[0]).masks().0,
+			cas_rerr_mask: CascadeGpu::from_controller(controllers[0]).masks().1,
+			cas_rerr_off: batch.cas_rec.len() as u32,
 		};
 
 		let rec_out = vec![0u32; total_records * out_words];
@@ -3136,13 +3246,14 @@ impl ControllerTrainer
 		let b_pa = self.buf(batch.pwm_dev); // obs_pwm replay fix (buffer 22)
 		let b_au = self.buf(batch.att_up); // ABI 32 attitude estimate (buffer 23)
 		let b_dr = self.buf(batch.dhat_rec); // CTRL-40 motor d̂ (buffer 24)
-		let b_cr = self.buf(batch.cas_rec); // CTRL-40 cascade blocks (buffer 25)
+		rerr_batch_guard(batch, controllers, "controller_record");
+		let b_cr = self.buf(&cas_device_rec(batch, controllers)); // CTRL-40 cascade blocks (+ ABI 62 rate error) (buffer 25)
 		let b_ab = self.buf(batch.abp_rec); // CTRL-46 bias prediction (buffer 26)
 		let b_yh = self.buf(batch.yh_rec); // ABI 55 Mahony heading (buffer 27)
 
 		let cmd = self.queue.new_command_buffer();
 		let enc = cmd.new_compute_command_encoder();
-		let ytp = self.ytp_for(controllers)?;
+		let ytp = self.spec_for(controllers)?;
 		enc.set_compute_pipeline_state(ytp.as_ref().map_or(&self.record_pipeline, |p| &p.1));
 		let bufs: [&Buffer; 28] = [
 			&b_sc, &b_sk, &b_sv, &b_so, &b_scn, &b_th, &b_epb, &b_epc, &b_stb, &b_stc, &b_gy, &b_ac,
@@ -4841,7 +4952,7 @@ fn build_parity_fixture_variant(
 	let total_steps = gyros.len() / 3;
 	let cpu_obs: Vec<ReplayObs> = cpu_g
 		.iter()
-		.map(|g| ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![] })
+		.map(|g| ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![], rate_err: vec![] })
 		.collect();
 	Ok(ParityFixture {
 		c,
@@ -4905,6 +5016,7 @@ fn controller_train_parity_once(selective: bool, memory_mode: u8) -> Result<(usi
 		cas_rec: &vec![0.0f32; f.gyros.len() * 2],
 		abp_rec: &vec![0.0f32; f.gyros.len() / 3 * 2],
 		yh_rec: &vec![0.0f32; f.gyros.len() / 3],
+		rerr_rec: &[],
 		selective,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -5016,6 +5128,7 @@ fn controller_train_seeded_parity_once(
 		cas_rec: &vec![0.0f32; f.gyros.len() * 2],
 		abp_rec: &vec![0.0f32; f.gyros.len() / 3 * 2],
 		yh_rec: &vec![0.0f32; f.gyros.len() / 3],
+		rerr_rec: &[],
 		selective,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -5920,6 +6033,7 @@ pub(crate) fn controller_split_train_loop_parity_variant(
 		cas_rec: &vec![0.0f32; f_gpu.gyros.len() * 2],
 		abp_rec: &vec![0.0f32; f_gpu.gyros.len() / 3 * 2],
 		yh_rec: &vec![0.0f32; f_gpu.gyros.len() / 3],
+		rerr_rec: &[],
 		selective,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -6053,6 +6167,7 @@ fn controller_record_parity_once() -> Result<(usize, usize, usize, usize), Strin
 		cas_rec: &vec![0.0f32; f.gyros.len() * 2],
 		abp_rec: &vec![0.0f32; f.gyros.len() / 3 * 2],
 		yh_rec: &vec![0.0f32; f.gyros.len() / 3],
+		rerr_rec: &[],
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -7191,6 +7306,7 @@ fn controller_record_and_scan_parity_once() -> Result<(usize, usize, usize, usiz
 		cas_rec: &vec![0.0f32; f.gyros.len() * 2],
 		abp_rec: &vec![0.0f32; f.gyros.len() / 3 * 2],
 		yh_rec: &vec![0.0f32; f.gyros.len() / 3],
+		rerr_rec: &[],
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -7299,6 +7415,7 @@ fn controller_record_search_parity_once() -> Result<(usize, usize, usize), Strin
 		cas_rec: &vec![0.0f32; f.gyros.len() * 2],
 		abp_rec: &vec![0.0f32; f.gyros.len() / 3 * 2],
 		yh_rec: &vec![0.0f32; f.gyros.len() / 3],
+		rerr_rec: &[],
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -7744,7 +7861,7 @@ fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool)
 		{
 			pwm_flat.extend_from_slice(v);
 		}
-		cpu_obs.push(ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev, att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![] });
+		cpu_obs.push(ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev, att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![], rate_err: vec![] });
 	}
 	let (tau, target_min) = (0.05f32, 2usize);
 	let trainer = ControllerTrainer::new()?;
@@ -7766,6 +7883,7 @@ fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool)
 		cas_rec: &vec![0.0f32; f.gyros.len() * 2],
 		abp_rec: &vec![0.0f32; f.gyros.len() / 3 * 2],
 		yh_rec: &vec![0.0f32; f.gyros.len() / 3],
+		rerr_rec: &[],
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -7803,7 +7921,7 @@ fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool)
 	let const_obs: Vec<ReplayObs> = f
 		.cpu_g
 		.iter()
-		.map(|g| ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![[0.0; 4]; g.len()], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![] })
+		.map(|g| ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![[0.0; 4]; g.len()], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![], rate_err: vec![] })
 		.collect();
 	let mut c2 = c.clone();
 	let (rows_const, ..) = c2.split_record_pub(
@@ -7916,6 +8034,7 @@ fn controller_record_att_est_parity_once() -> Result<(usize, usize, usize, bool)
 			dhat: vec![],
 			att_bias: vec![],
 			yaw_heading: vec![],
+			rate_err: vec![],
 		});
 	}
 	let (tau, target_min) = (0.05f32, 2usize);
@@ -7938,6 +8057,7 @@ fn controller_record_att_est_parity_once() -> Result<(usize, usize, usize, bool)
 		cas_rec: &vec![0.0f32; f.gyros.len() * 2],
 		abp_rec: &vec![0.0f32; f.gyros.len() / 3 * 2],
 		yh_rec: &vec![0.0f32; f.gyros.len() / 3],
+		rerr_rec: &[],
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -7970,6 +8090,7 @@ fn controller_record_att_est_parity_once() -> Result<(usize, usize, usize, bool)
 			dhat: vec![],
 			att_bias: vec![],
 			yaw_heading: vec![],
+			rate_err: vec![],
 		})
 		.collect();
 	let mut c2 = c.clone();
@@ -8045,7 +8166,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 		{
 			vert_flat.extend_from_slice(v);
 		}
-		cpu_obs.push(ReplayObs { vert, horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![] });
+		cpu_obs.push(ReplayObs { vert, horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![], rate_err: vec![] });
 	}
 	let (tau, target_min) = (0.05f32, 2usize);
 	let trainer = ControllerTrainer::new()?;
@@ -8067,6 +8188,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 		cas_rec: &vec![0.0f32; f.gyros.len() * 2],
 		abp_rec: &vec![0.0f32; f.gyros.len() / 3 * 2],
 		yh_rec: &vec![0.0f32; f.gyros.len() / 3],
+		rerr_rec: &[],
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -8105,7 +8227,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 	let const_obs: Vec<ReplayObs> = f
 		.cpu_g
 		.iter()
-		.map(|g| ReplayObs { vert: vec![[0.7, 0.0, 0.0]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![] })
+		.map(|g| ReplayObs { vert: vec![[0.7, 0.0, 0.0]; g.len()], horiz: vec![[0.0; 4]; g.len()], pwm_dev: vec![], att_up: vec![], cascade: vec![], dhat: vec![], att_bias: vec![], yaw_heading: vec![], rate_err: vec![] })
 		.collect();
 	let mut c2 = c.clone();
 	let (rows_const, ..) = c2.split_record_pub(
@@ -8399,7 +8521,8 @@ mod tests
 		// + 1 (lever 1, ABI 55): yfe_on.
 		// + 1 (ABI 57): delta_max_yaw.
 		// + 2 (ABI 58): yff_on + yff_ct.
-		assert_eq!(mem::size_of::<RolloutParams>(), 193 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
+		// + 6 (ABI 62): cas_rate_i_mask + cas_rerr_mask + cas_rerr_alpha + cas_rerr_inv[3].
+		assert_eq!(mem::size_of::<RolloutParams>(), 199 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============
@@ -9055,6 +9178,9 @@ mod tests
 			obs_rate_i: false,
 			obs_dhat_plant: None,
 			obs_dhat_residual_plant: None,
+			obs_rate_i_axes: crate::rate_err_lpf::AXES_ALL,
+			obs_rate_err_tau: None,
+			obs_rate_err_axes: crate::rate_err_lpf::AXES_ALL,
 		};
 		assert_eq!(spec.rate_stage().decimation(), rs.decimation());
 		let att = bl_pidfw_cfg(2).att;
@@ -10471,6 +10597,7 @@ mod tests
 			cas_rec: &vec![0.0f32; f.gyros.len() * 2],
 			abp_rec: &vec![0.0f32; f.gyros.len() / 3 * 2],
 			yh_rec: &vec![0.0f32; f.gyros.len() / 3],
+			rerr_rec: &[],
 			selective: false,
 			target_rpy: [0.0, 0.0, 0.0],
 		};

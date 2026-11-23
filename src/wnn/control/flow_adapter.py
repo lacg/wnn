@@ -123,8 +123,10 @@ def controller_spec_from_params(params: dict) -> ControllerSpec:
 	# CTRL-38: the cascade input blocks only exist under ctbr — refuse them here too
 	# rather than build a controller that silently lacks them.
 	for key in ("controller_obs_rate_i", "controller_obs_cascade_dhat",
-	            "controller_obs_cascade_dhat_residual"):
-		if bool(_p(params, key, False)):
+	            "controller_obs_cascade_dhat_residual", "controller_obs_rate_err",
+	            "controller_obs_rate_i_axes", "controller_obs_rate_err_tau",
+	            "controller_obs_rate_err_axes"):
+		if _p(params, key, None) not in (None, False):
 			raise ValueError(f"{key}: a cascade (ctbr) input block — the dashboard flow adapter builds "
 			                 "motor-level controllers only; run it through phased_ga --output-mode ctbr.")
 	_refuse_unbuilt_keys(params)

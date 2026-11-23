@@ -115,6 +115,10 @@ struct PidCh
 	integ: f64,
 	prev_measured: f64,
 	first: bool,
+	/// ABI 62 (CTRL-69): setpoint − measured at the last update — the error the P-term
+	/// used (pid.c PidObject.error). 0 after reset. Read only by the cascade student's
+	/// rate-error input (cascade_obs.rs a4); no PID arithmetic reads it.
+	last_err: f64,
 }
 
 impl PidCh
@@ -129,11 +133,13 @@ impl PidCh
 			integ: 0.0,
 			prev_measured: 0.0,
 			first: true,
+			last_err: 0.0,
 		}
 	}
 
 	fn reset(&mut self)
 	{
+		self.last_err = 0.0;
 		self.integ = 0.0;
 		self.prev_measured = 0.0;
 		self.first = true;
@@ -152,6 +158,7 @@ impl PidCh
 		{
 			error = wrap_pi(error);
 		}
+		self.last_err = error;
 		self.integ += error * self.dt;
 		if self.g.i_limit != 0.0
 		{
@@ -257,6 +264,8 @@ pub(crate) struct RateAxisState
 	pub first: bool,
 	/// The axis force (N) held since the last update.
 	pub held: f64,
+	/// ABI 62 (CTRL-69): setpoint − measured at the last update (PidCh::last_err).
+	pub err: f64,
 }
 
 /// The RATE stage of the firmware cascade: body-rate setpoint (rad/s) -> per-axis
@@ -341,6 +350,7 @@ impl RateStageFw
 			prev_measured: c.prev_measured,
 			first: c.first,
 			held: self.held[i],
+			err: c.last_err,
 		}
 	}
 

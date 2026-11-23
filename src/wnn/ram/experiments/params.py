@@ -232,6 +232,12 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	"controller_drop_features",       # comma-separated layout names no connection may land on
 	"controller_drop_constant_features",  # exclude features measured constant at calibration
 	"controller_obs_cascade_dhat_residual",  # cascade feature: unabsorbed d̂ (+3)
+	# ABI 62 (CTRL-69): phased_ga --obs-rate-i-axes / --obs-rate-err[-tau|-axes] — the
+	# cascade's model-free rate-loop inputs. Cascade-only: the flow adapter REFUSES them.
+	"controller_obs_rate_i_axes",       # rate-I axis subset (roll,pitch,yaw)
+	"controller_obs_rate_err",          # cascade feature: rate-loop tracking error, LPF (+1/axis)
+	"controller_obs_rate_err_tau",      # its one-pole time constant (s)
+	"controller_obs_rate_err_axes",     # its axis subset (roll,pitch,yaw)
 	# CTRL-46 (ABI 46): phased_ga --write-rule/--vote-share, --dagger-label-attitude,
 	# --obs-att-bias-pred. The flow adapter builds none of them (no DAgger write rule,
 	# no estimator plant): REFUSED by _refuse_unbuilt_keys.

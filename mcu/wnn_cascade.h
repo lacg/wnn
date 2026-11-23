@@ -19,6 +19,10 @@
  *   applied_prev         the motor command the plant ACTUALLY received last tick
  *                        (post rate loop, post any trim) — CTRL-38 d-hat input and
  *                        the CTRL-48 residual (which also reads rate_integ)
+ *   rate_err             the rate PID's tracking error per axis (setpoint - measured,
+ *                        rad/s) AS IT STANDS BEFORE this tick's rate update — the
+ *                        error its P-term used at its last update (pid.error; 0 after
+ *                        reset) — ABI 62 / CTRL-69 rate-error input
  * Inputs a model does not use are ignored (the header's WNN_OBS_* flags say which).
  *
  * BIT PARITY. Every operation mirrors the Rust source in order and precision
@@ -51,6 +55,24 @@
 #define WNN_OBS_DRES 0
 #endif
 #define WNN_OBS_OBSERVER (WNN_OBS_DHAT || WNN_OBS_DRES)
+
+/* ABI 62 (CTRL-69). Emitted by the exporter ONLY when not at the default, so every older
+ * header is byte-identical and takes these (= the ABI-61 blocks):
+ *   WNN_OBS_RATE_I_AXES   rate-I's emitted axes, bitmask bit 0 roll, 1 pitch, 2 yaw (7 = all)
+ *   WNN_OBS_RATE_ERR      the model-free rate-error block: e = rate_err (the firmware rate
+ *                         PID's last-update error) * WNN_RATE_ERR_INV_INIT[a] (1/bank range),
+ *                         one-pole low-passed y += WNN_RATE_ERR_ALPHA * (x - y) every tick
+ *                         (rate_err_lpf.rs; both constants exported from the wheel), after
+ *                         rate-I and before d-hat; WNN_OBS_RATE_ERR_AXES its emitted axes */
+#ifndef WNN_OBS_RATE_I_AXES
+#define WNN_OBS_RATE_I_AXES 7
+#endif
+#ifndef WNN_OBS_RATE_ERR
+#define WNN_OBS_RATE_ERR 0
+#endif
+#ifndef WNN_OBS_RATE_ERR_AXES
+#define WNN_OBS_RATE_ERR_AXES 7
+#endif
 
 /* CTRL-48 block 10 / levers (ABI 46-58), ported 22/11/2026 so the Y+F+L base runs on
  * board. The exporter emits each macro ONLY when the winner uses it, so every older
@@ -112,6 +134,7 @@ typedef struct
 	float horiz[4];
 	double rate_integ[3];
 	float applied_prev[4];
+	double rate_err[3];
 } wnn_tick_in_t;
 
 /* Mahony estimator precision. WNN_EST_F32 1 (emitted by the exporter when the wheel's
@@ -153,6 +176,7 @@ typedef struct
 	wnn_abp_t abp;
 	float abp_last[2];       /* [abp_r, abp_p] of this tick (rad) */
 	float cresid_z;          /* this tick's yaw residual (the yaw-trim FF input) */
+	float rerr_y[3];         /* ABI 62: the rate-error low-pass state (unused unless WNN_OBS_RATE_ERR) */
 	float integ[WNN_MAX_INTEGRALS];
 	float yaw_heading;
 	float range[4], gamma[4];

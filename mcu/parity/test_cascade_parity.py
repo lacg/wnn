@@ -35,6 +35,10 @@ THE CASES.
               motor command bit for bit (uint32 == Rust == pef64 on the same ticks).
   dhat/f32    informational only: the same d-hat model built -DWNN_DHAT_F32 (the
               Metal kernel's f32 observer). Reported, never asserted.
+  rate_err_first_arm  ABI 62 (CTRL-69): the first arm's rate-loop inputs (rate error
+              roll/pitch, tau 0.05 s, + rate-I yaw, no observer) — synthetic, strict;
+  rate_err_all+dhat   the rate error on all axes next to d-hat (block order), strict;
+  rate_err_first_arm/mutant-alpha  the low-pass alpha x1.01 in the C header only: caught.
   flags_off/mutant-*
               (22/11/2026, only when the winner carries the block) one block-10 / lever
               constant broken in the C header ONLY — the yaw-trim FF gain, the tilt-
@@ -384,10 +388,27 @@ def synthetic_cells(n_neurons: int, bits: int, rng) -> tuple:
 	return keys, off, triples
 
 
-def synthetic_spec(base_spec, ec, rate_i: bool, dhat: bool):
+@dataclass(frozen=True)
+class RateLoop:
+	"""ABI 62 (CTRL-69): the rate-loop inputs of a synthetic case — the ctbr keys
+	(axis bitmasks, tau) and the phased_ga flags the exporter's ladder refit needs."""
+	ctbr: tuple    # ((key, value), ...)
+	flags: tuple   # phased_ga argv
+
+
+# The CTRL-69 first arm: the rate error on roll/pitch (tau 0.05 s), rate-I on yaw only.
+FIRST_ARM = RateLoop(ctbr=(("obs_rate_i", True), ("obs_rate_i_axes", 4), ("obs_rate_err_tau", 0.05),
+                           ("obs_rate_err_axes", 3)),
+                     flags=("--obs-rate-i", "--obs-rate-i-axes", "yaw", "--obs-rate-err",
+                            "--obs-rate-err-tau", "0.05", "--obs-rate-err-axes", "roll,pitch"))
+
+
+def synthetic_spec(base_spec, ec, rate_i: bool, dhat: bool, rate_loop: "RateLoop | None" = None):
 	ctbr = dict(base_spec.ctbr)
 	if rate_i:
 		ctbr["obs_rate_i"] = True
+	if rate_loop is not None:
+		ctbr.update(dict(rate_loop.ctbr))
 	if dhat:
 		af = ec.airframe
 		ctbr["obs_dhat_plant"] = [float(af.arm_length), float(af.k_drag), *(float(x) for x in af.inertia)]
@@ -395,10 +416,12 @@ def synthetic_spec(base_spec, ec, rate_i: bool, dhat: bool):
 	                           state_neurons=0, state_bits_per_neuron=0)
 
 
-def synthetic_case(name: str, base_spec, argv: list, ec, rate_i: bool, dhat: bool, seed: int) -> Case:
+def synthetic_case(name: str, base_spec, argv: list, ec, rate_i: bool, dhat: bool, seed: int,
+                   rate_loop: "RateLoop | None" = None) -> Case:
 	from wnn.control.evaluator import ControllerGenome
-	spec, rng = synthetic_spec(base_spec, ec, rate_i, dhat), np.random.default_rng(seed)
+	spec, rng = synthetic_spec(base_spec, ec, rate_i, dhat, rate_loop), np.random.default_rng(seed)
 	flags = (["--obs-rate-i"] if rate_i else []) + (["--obs-cascade-dhat"] if dhat else [])
+	flags += list(rate_loop.flags) if rate_loop is not None else []
 	thr, lag = exp.train_seed_thresholds(argv + flags, spec)
 	nf, bpf = exp._feature_geometry(spec)
 	n_neur, bits = 4 * spec.levels_per_motor, spec.output_bits_per_neuron
@@ -422,7 +445,20 @@ def build_cases(model, genome, argv: list, ec) -> list:
 	cases = [Case(name="flags_off", model=model, genome=genome)]
 	for i, (name, ri, dh) in enumerate((("rate_i", True, False), ("dhat", False, True), ("both", True, True))):
 		cases.append(synthetic_case(name, base, argv, ec, ri, dh, seed=1000 + i))
-	return cases + pef_cases(cases) + control_cases(cases) + block_mutants(cases[0])
+	return cases + pef_cases(cases) + control_cases(cases) + block_mutants(cases[0]) + rate_loop_cases(base, argv, ec)
+
+
+def rate_loop_cases(base, argv: list, ec) -> list:
+	"""ABI 62 (CTRL-69): the first arm (rate error roll/pitch + rate-I yaw, no observer)
+	and the rate error on all axes with d-hat (order: rate-I, rate error, d-hat), strict;
+	plus a mutant whose low-pass alpha is broken in the C header ONLY (must be caught)."""
+	all_axes = RateLoop(ctbr=(("obs_rate_err_tau", 0.05),), flags=("--obs-rate-err",))
+	arm = synthetic_case("rate_err_first_arm", base, argv, ec, False, False, seed=1100, rate_loop=FIRST_ARM)
+	full = synthetic_case("rate_err_all+dhat", base, argv, ec, False, True, seed=1101, rate_loop=all_axes)
+	b = arm.model.blocks
+	alpha, inv = b["rate_err"]
+	bad = dataclasses.replace(arm.model, blocks={**b, "rate_err": (alpha * 1.01, inv)})
+	return [arm, full, dataclasses.replace(arm, name="rate_err_first_arm/mutant-alpha", model=bad, expect_fail=True)]
 
 
 def pef_cases(cases: list) -> list:

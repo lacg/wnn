@@ -49,6 +49,7 @@ static void fill_in(wnn_tick_in_t *in, const float *gyro, const float *accel,
 	memcpy(in->vert, vert, sizeof in->vert);
 	memcpy(in->horiz, horiz, sizeof in->horiz);
 	wnn_ratefw_integ(&g_rate, in->rate_integ);
+	wnn_ratefw_err(&g_rate, in->rate_err);
 	memcpy(in->applied_prev, g_applied, sizeof g_applied);
 }
 

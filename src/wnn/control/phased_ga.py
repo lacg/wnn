@@ -466,6 +466,10 @@ def apply_output_neuron_ceiling(args, arch_cfg) -> None:
 			f"down. Raise --max-output-neurons to >= {grid_max}, or lower the grid axis.")
 
 
+# ABI 62 (CTRL-69): the rate-error low-pass default, E50 (docs/ctrl69_rate_err_precheck.md).
+OBS_RATE_ERR_TAU_DEFAULT = 0.05
+
+
 def _resolve_ctbr(args, ec) -> None:
 	"""ABI 38: resolve --output-mode into args._ctbr (the ControllerSpec.ctbr dict, or
 	None) ONCE, with the cascade's refusals, so every _make_spec call of the run
@@ -473,8 +477,10 @@ def _resolve_ctbr(args, ec) -> None:
 	as EpisodeConfig.cascade_kwargs hands it to the trainer and the rivals."""
 	args._ctbr = None
 	cascade_obs = {"--obs-rate-i": bool(getattr(args, "obs_rate_i", False)),
+	               "--obs-rate-err": bool(getattr(args, "obs_rate_err", False)),
 	               "--obs-cascade-dhat": bool(getattr(args, "obs_cascade_dhat", False)),
 	               "--obs-cascade-dhat-residual": bool(getattr(args, "obs_cascade_dhat_residual", False))}
+	rate_loop = _resolve_rate_loop_obs(args)
 	if getattr(args, "output_mode", "pwm") != "ctbr":
 		on = [f for f, v in cascade_obs.items() if v]
 		if on:
@@ -509,15 +515,51 @@ def _resolve_ctbr(args, ec) -> None:
 		gamma=tuple(args.ctbr_gamma) if args.ctbr_gamma else CTBR_DEFAULT_GAMMA,
 		obs_rate_i=cascade_obs["--obs-rate-i"],
 		obs_cascade_dhat=cascade_obs["--obs-cascade-dhat"],
-		obs_cascade_dhat_residual=cascade_obs["--obs-cascade-dhat-residual"])
+		obs_cascade_dhat_residual=cascade_obs["--obs-cascade-dhat-residual"],
+		obs_rate_i_axes=rate_loop["obs_rate_i_axes"],
+		obs_rate_err_tau=rate_loop["obs_rate_err_tau"],
+		obs_rate_err_axes=rate_loop["obs_rate_err_axes"])
 	c = args._ctbr
 	print(f"[CTBR] output_mode=ctbr: WNN outer loop at {1000.0 / max(int(args.action_repeat), 1) / (ec.dt * 1000.0):g} Hz "
 	      f"(action_repeat {args.action_repeat}) over the firmware rate PID at {c['attitude_hz']:g} Hz; "
 	      f"banks [T, p, q, r] range={c['range']} gamma={c['gamma']}; teacher={args.teacher}; "
 	      f"delta_control={'on (ablation)' if args.delta_control else 'off (absolute)'}")
 	if c.get("obs_rate_i") or c.get("obs_dhat_plant") is not None:
-		print(f"[CTRL-38] cascade input blocks: rate-I {'ON (+3: I/i_limit)' if c.get('obs_rate_i') else 'off'}; "
+		n_ri = bin(int(c.get("obs_rate_i_axes", 7))).count("1")
+		print(f"[CTRL-38] cascade input blocks: rate-I {f'ON (+{n_ri}: I/i_limit)' if c.get('obs_rate_i') else 'off'}; "
 		      f"d̂ {'ON (+3: teacher observer, plant ' + str(c['obs_dhat_plant']) + ')' if c.get('obs_dhat_plant') is not None else 'off'}")
+	_print_rate_loop_obs(c)
+
+
+def _resolve_rate_loop_obs(args) -> dict:
+	"""ABI 62 (CTRL-69): --obs-rate-i-axes / --obs-rate-err[-tau|-axes] -> the ctbr_spec_dict
+	kwargs (axis bitmasks, tau or None), refusing a subset / tau given without its block."""
+	from wnn.control.feature_layout import axes_mask
+	ri_axes = axes_mask(getattr(args, "obs_rate_i_axes", None) or "roll,pitch,yaw")
+	re_axes = axes_mask(getattr(args, "obs_rate_err_axes", None) or "roll,pitch,yaw")
+	on = bool(getattr(args, "obs_rate_err", False))
+	if ri_axes != 7 and not getattr(args, "obs_rate_i", False):
+		raise SystemExit("--obs-rate-i-axes needs --obs-rate-i (an axis subset of an absent block).")
+	if not on and (re_axes != 7 or getattr(args, "obs_rate_err_tau", None) is not None):
+		raise SystemExit("--obs-rate-err-tau / --obs-rate-err-axes need --obs-rate-err.")
+	tau = getattr(args, "obs_rate_err_tau", None)
+	tau = OBS_RATE_ERR_TAU_DEFAULT if tau is None else float(tau)
+	if on and not tau > 0.0:
+		raise SystemExit(f"--obs-rate-err-tau {tau}: the low-pass time constant must be > 0 s.")
+	return {"obs_rate_i_axes": ri_axes, "obs_rate_err_tau": tau if on else None,
+	        "obs_rate_err_axes": re_axes if on else 7}
+
+
+def _print_rate_loop_obs(c: dict) -> None:
+	"""ABI 62: the rate-loop inputs' banner line (only when one is not at its default)."""
+	if c.get("obs_rate_err_tau") is None and "obs_rate_i_axes" not in c:
+		return
+	from wnn.control.feature_layout import axes_in
+	names = lambda m: ",".join(("roll", "pitch", "yaw")[a] for a in axes_in(m))
+	ri = f"rate-I axes {names(c.get('obs_rate_i_axes', 7))}" if c.get("obs_rate_i") else "rate-I off"
+	re_ = (f"rate error ON (tau {c['obs_rate_err_tau']:g} s, axes {names(c.get('obs_rate_err_axes', 7))}, "
+	       f"e/range one-pole LPF)" if c.get("obs_rate_err_tau") is not None else "rate error off")
+	print(f"[CTRL-69] cascade rate-loop inputs (model-free): {ri}; {re_}")
 
 
 def _ctbr_rival_hold(args) -> "int | None":
@@ -3720,6 +3762,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "I per axis, normalised by its integral clamp (I/i_limit, in [-1, 1]) — the state the "
 	                     "real vehicle holds onboard; at trim it reads the disturbance as a fraction of the "
 	                     "integrator's authority. Requires --output-mode ctbr. Default OFF.")
+	ap.add_argument("--obs-rate-i-axes", type=str, default=None, metavar="AXES",
+	                help="ctbr ABI 62: the axis subset --obs-rate-i emits, comma list of roll,pitch,yaw "
+	                     "(default all three = the ABI-61 block). CTRL-69 first arm: yaw.")
+	# ABI 62 (CTRL-69, Luiz 22/11/2026): the MODEL-FREE disturbance input.
+	ap.add_argument("--obs-rate-err", action="store_true",
+	                help="ctbr CTRL-69 a4: +1 input feature per axis = the FLOWN firmware rate PID's tracking "
+	                     "error e = rate_sp - gyro (the value its P-term uses), divided by the bank's rate range "
+	                     "and one-pole low-passed (--obs-rate-err-tau). No observer, no plant model. Default OFF.")
+	ap.add_argument("--obs-rate-err-tau", type=float, default=None, metavar="SECONDS",
+	                help=f"--obs-rate-err low-pass time constant (default {OBS_RATE_ERR_TAU_DEFAULT:g} s = E50, "
+	                     "the CTRL-69 precheck's best variant).")
+	ap.add_argument("--obs-rate-err-axes", type=str, default=None, metavar="AXES",
+	                help="--obs-rate-err axis subset, comma list of roll,pitch,yaw (default all three). "
+	                     "CTRL-69 first arm: roll,pitch.")
 	ap.add_argument("--obs-cascade-dhat", action="store_true",
 	                help="ctbr CTRL-38 a2: +3 input features = d̂ (estimated external angular acceleration "
 	                     "roll/pitch/yaw, rad/s^2) from the cascade MPCOF teacher's own offset-free observer "

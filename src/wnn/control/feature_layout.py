@@ -89,6 +89,7 @@ FAMILY: dict[str, AxisFamily] = {
 	"rate_i_x": _R, "rate_i_y": _P, "rate_i_z": _Y,     # CTRL-38 a1 inner-loop I
 	"cdhat_x": _R, "cdhat_y": _P, "cdhat_z": _Y,        # CTRL-38 a2 cascade d-hat
 	"cresid_x": _R, "cresid_y": _P, "cresid_z": _Y,     # CTRL-48 a3 unabsorbed d-hat
+	"rerr_x": _R, "rerr_y": _P, "rerr_z": _Y,           # CTRL-69 a4 rate-loop tracking error (LPF)
 	# CTRL-46: the predicted Mahony bias of the student's roll / pitch reading — BODY
 	# frame (rotated by the estimate's own quaternion), so no world-frame caveat.
 	"abp_r": _R, "abp_p": _P,
@@ -104,8 +105,31 @@ ZERO_REFERENCED: frozenset[str] = frozenset({
 	"pwm", "yaw_err", "yaw_err_i", "dhat_r", "dhat_p", "dhat_y", "alt_err", "vz",
 	"e_x", "e_y", "v_x", "v_y", "rate_i_x", "rate_i_y", "rate_i_z",
 	"cdhat_x", "cdhat_y", "cdhat_z", "cresid_x", "cresid_y", "cresid_z",
+	"rerr_x", "rerr_y", "rerr_z",
 	"abp_r", "abp_p",
 })
+
+# ABI 62 (CTRL-69): an axis subset of a per-axis cascade block, as a bitmask (bit 0 roll,
+# 1 pitch, 2 yaw) — CtbrSpec.obs_rate_i_axes / obs_rate_err_axes (rate_err_lpf.rs).
+AXIS_BITS: dict[str, int] = {"roll": 1, "pitch": 2, "yaw": 4}
+AXES_ALL = 7
+
+
+def axes_mask(spec: str) -> int:
+	"""'roll,pitch' -> 3. Refuses an empty subset and unknown names."""
+	names = [n.strip().lower() for n in spec.split(",") if n.strip()]
+	bad = [n for n in names if n not in AXIS_BITS]
+	if bad or not names:
+		raise ValueError(f"axis subset {spec!r}: give a comma list of {sorted(AXIS_BITS)} (got {bad or 'nothing'})")
+	mask = 0
+	for n in names:
+		mask |= AXIS_BITS[n]
+	return mask
+
+
+def axes_in(mask: int) -> list[int]:
+	"""The axis indices (0 roll, 1 pitch, 2 yaw) of a subset bitmask, in axis order."""
+	return [a for a in range(3) if (int(mask) >> a) & 1]
 
 # ARM 2 (Luiz 12/11/2026, --yaw-centred-ladder): the yaw-ERROR inputs — the
 # yaw-anchor pair and the per-axis yaw error/integral. Only these take the
@@ -163,12 +187,23 @@ def _translation_block(spec: "ControllerSpec") -> list[str]:
 
 
 def _cascade_block(spec: "ControllerSpec") -> list[str]:
-	"""CTRL-38/48 cascade blocks, appended LAST (cascade_obs.rs::append): rate-I,
-	d-hat, then the unabsorbed residual."""
+	"""CTRL-38/48/69 cascade blocks, appended LAST (cascade_obs.rs::emit): rate-I and the
+	rate error on their axis subsets (ABI 62), d-hat, then the unabsorbed residual."""
 	c = spec.ctbr or {}
-	return (["rate_i_x", "rate_i_y", "rate_i_z"] * bool(c.get("obs_rate_i", False))
+	ri = [f"rate_i_{'xyz'[a]}" for a in axes_in(c.get("obs_rate_i_axes", AXES_ALL))]
+	re = [f"rerr_{'xyz'[a]}" for a in axes_in(c.get("obs_rate_err_axes", AXES_ALL))]
+	return (ri * bool(c.get("obs_rate_i", False))
+	        + re * (c.get("obs_rate_err_tau") is not None)
 	        + ["cdhat_x", "cdhat_y", "cdhat_z"] * (c.get("obs_dhat_plant") is not None)
 	        + ["cresid_x", "cresid_y", "cresid_z"] * (c.get("obs_dhat_residual_plant") is not None))
+
+
+def cascade_columns(spec: "ControllerSpec") -> range:
+	"""ABI 62: the feature indices of the cascade block (contiguous; the CTRL-46 bias
+	predictor, when on, sits AFTER it, so the block is not the layout's tail then)."""
+	n = len(_cascade_block(spec))
+	start = sum(len(block(spec)) for block in _BLOCKS[:_BLOCKS.index(_cascade_block)])
+	return range(start, start + n)
 
 
 def _att_bias_block(spec: "ControllerSpec") -> list[str]:
@@ -191,5 +226,5 @@ def feature_names(spec: "ControllerSpec") -> list[str]:
 
 
 __all__ = ["AxisFamily", "ALL_AXES", "BANK_FAMILIES", "FeatureDesc", "FAMILY", "ZERO_REFERENCED",
-           "YAW_ERROR_FEATURES",
+           "YAW_ERROR_FEATURES", "AXIS_BITS", "AXES_ALL", "axes_mask", "axes_in", "cascade_columns",
            "feature_layout", "feature_names"]

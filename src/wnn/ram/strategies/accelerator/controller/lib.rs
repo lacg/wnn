@@ -27,6 +27,7 @@ mod ctbr_axis_mpc; // ABI 39 (CTRL-33): the cascade outer MPC, one axis — mode
 mod ctbr_mpcof; // ABI 39 (CTRL-33): the cascade's MPCOF outer teacher (shadow rate loop + observer)
 mod cascade_dhat; // CTRL-38 (ABI 41): the cascade MPCOF's offset-free observer, shared teacher/student
 mod cascade_obs; // CTRL-38 (ABI 41): the cascade student's rate-I / d̂ input blocks
+mod rate_err_lpf; // CTRL-69 (ABI 62): the cascade student's model-free rate-error input (one-pole low-pass)
 mod controller_training;
 mod cpu_score; // CPU (rayon) batch scorer — twin of score_controllers_metal
 mod dagger_train;
@@ -83,6 +84,8 @@ mod ctrl52_yaw_trim_p_tests; // L2y' (ABI 52): proportional-only yaw trim shift,
 mod ctrl54_yaw_heading_tests; // lever 1 (ABI 54): yaw heading from the student's own Mahony estimate
 #[cfg(test)]
 mod ctrl61_f32_estimator_tests; // ABI 61: f32 Mahony + heading — CPU == Metal bit for bit
+#[cfg(test)]
+mod ctrl62_rate_err_tests; // ABI 62 (CTRL-69): rate-loop inputs — rate error LPF + rate-I axis subsets
 #[cfg(test)]
 mod ctrl54_e2e_parity_tests; // CTRL-54: end-to-end CPU/GPU scorer parity on trained genomes
 #[cfg(test)]
@@ -607,7 +610,21 @@ mod metal_controller;
 ///     unchanged (they never read an estimate). New module constant
 ///     ATT_EST_PRECISION = "f32" (a wheel without it is f64); the MCU C port reads it through
 ///     the exporter (WNN_EST_F32). Pin: ctrl61_f32_estimator_tests.rs + mahony_f32 unit tests.
-pub const ABI_VERSION: u32 = 61;
+/// ABI 62 (22/11/2026, Luiz, Plane CTRL-69; additive, default = ABI 61 bit-identical):
+///   * CtbrSpec(obs_rate_err_tau=, obs_rate_err_axes=): the MODEL-FREE cascade input a4 — the
+///     flown firmware rate loop's tracking error e = rate_sp − gyro (pid_firmware.rs
+///     PidCh::last_err, the P-term's error), / the CTBR bank range, through a one-pole
+///     low-pass of time constant τ ticked per physical step (rate_err_lpf.rs). Emitted after
+///     rate-I, before d̂ (the residual stays the cascade block's last slot). Recorded as its
+///     own replay stream (ReplayObs.rate_err / TrajectoryRs.rate_err; on Metal appended to
+///     the cas_rec device buffer at TrainParams.cas_rerr_off — the train kernel's 31 buffer
+///     slots are all taken); the six-value cascade record is unchanged.
+///   * CtbrSpec(obs_rate_i_axes=): rate-I on an axis subset (bitmask; 7 = all = ABI 61).
+///   * Metal: both live in the FC_RATE_LOOP_OBS(5) specialization (score, train, record);
+///     the LPF step is strict-FP (CPU == GPU == MCU C on equal inputs). A teacher-flown
+///     rollout lends the flown loop when either rate-loop input is on
+///     (cascade_reads_flown_rate). Pin: ctrl62_rate_err_tests.rs + rate_err_lpf unit tests.
+pub const ABI_VERSION: u32 = 62;
 
 /// ABI 61: the precision of the WNN's own attitude estimator + heading ("f32"; a wheel
 /// without this constant runs the f64 estimator). Read by scripts/export_controller_c.py.
