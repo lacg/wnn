@@ -1,0 +1,3 @@
+[CTBR] output_mode=ctbr: WNN outer loop at 100 Hz (action_repeat 10) over the firmware rate PID at 500 Hz; banks [T, p, q, r] range=[0.25, 4.2, 4.2, 2.0] gamma=[1.0, 2.0, 2.0, 2.0]; teacher=mpcof; delta_control=on (ablation)
+[fixture] unit 99990101 installed-wheel est-fed row: stable 1.0000 err 1.2518 steady 0.6052 pos 0.3406
+[fixture] 35 TEST units 99990101..99990135 x 100 episodes -> logs/controller/ctrl62/rival_fixture
