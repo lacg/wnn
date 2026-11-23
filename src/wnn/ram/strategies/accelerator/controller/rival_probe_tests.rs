@@ -552,6 +552,42 @@ fn test_units_reference_rows_alt_integral_pole3()
 	print_position_table("L3 reference rows — MPCOF, TEST (35 units × 100 episodes), alt-integral off vs pole3, one shot", &units, &arms);
 }
 
+/// CTRL-69 (Luiz 22/11/2026): rows A / B / C of docs/ctrl_rival_row_ruling.md §0 RE-SCORED
+/// on the installed lineage (ABI 61/62: every on-board attitude estimate is the f32
+/// MahonyF32). REPORT-ONLY, the same 35 TEST units × 100 episodes, nothing tuned. There is
+/// deliberately NO published-value gate: the estimator changed, so the est-fed rows are
+/// expected to move. The gate is self_check (this build == the installed wheel's est-fed
+/// row on unit 1). The ABI-60 rows are printed beside for the old-vs-new table.
+#[test]
+#[ignore = "REPORT-ONLY re-score on the 35 test units (ABI-61 f32 lineage): needs WNN_RIVAL_RESCORE_FIXTURE"]
+fn test_units_rival_rows_rescore_f32_lineage()
+{
+	let units = units_from("WNN_RIVAL_RESCORE_FIXTURE", true);
+	let seeds: Vec<u64> = units.iter().map(|u| u.seed).collect();
+	assert_eq!(seeds, (99990101..=99990135).collect::<Vec<u64>>(), "exactly the 35 published test units");
+	assert!(units.iter().all(|u| u.episodes() == 100), "100 episodes per unit");
+	self_check(&units);
+	let comp = || RivalProbe::measure_only().with_bias_comp();
+	// (row, name, est-fed, probe, ABI-60 published: stable, err, steady, pos)
+	let rows: [(&str, &str, bool, &(dyn Fn() -> RivalProbe + Sync), [f64; 4]); 3] = [
+		("A", "MPCOF>rate(h10) est-fed, no bias comp", true, &RivalProbe::measure_only, [1.0, 1.352, 0.684, 0.341]),
+		("B", "MPCOF>rate(h10) est-fed + bias comp (eq-info COMPARATOR)", true, &comp, [1.0, 0.691, 0.165, 0.357]),
+		("C", "MPCOF>rate(h10) oracle-fed (bound, label law)", false, &RivalProbe::measure_only, [1.0, 0.690, 0.163, 0.357]),
+	];
+	let fails = |a: &Arm| -> usize { a.per_unit.iter().zip(&units).map(|((r, _), u)| ((1.0 - r.0) * u.episodes() as f64).round() as usize).sum() };
+	let m = |a: &Arm, f: &dyn Fn(&Row) -> f64| mean(a.per_unit.iter().map(|(r, _)| f(r)));
+	let mut arms = Vec::new();
+	for (row, name, use_est, make, old) in rows.iter()
+	{
+		let a = Arm { name: format!("{row} {name}"), per_unit: fly(&units, *use_est, *make) };
+		println!("[rescore] row {row} NEW(f32): stable {:.2} err {:.3} steady {:.3} pos {:.3} fails {}/{} pos_hold {:.3} | OLD(ABI 60): stable {:.2} err {:.3} steady {:.3} pos {:.3} | {name}",
+			100.0 * m(&a, &|r| r.0), m(&a, &|r| r.1), m(&a, &|r| r.2), m(&a, &|r| r.4), fails(&a), units.len() * 100,
+			mean(a.per_unit.iter().map(|(_, p)| p.pos_fifths[4])), 100.0 * old[0], old[1], old[2], old[3]);
+		arms.push(a);
+	}
+	print_table("CTRL-69 — MPCOF rows A/B/C re-scored on the f32 (ABI 61/62) lineage, TEST (35 units × 100 episodes)", &units, &arms, 0);
+}
+
 /// The cascade student's output law as flown in block 8/9 ("both": --ctbr-delta-law
 /// --delta-leak 0.7 --delta-max 0.6, ranges 0.25 / 4.2 / 4.2 / 2, γ 1 / 2 / 2 / 2).
 fn both_alphabet(levels: u32) -> StudentAlphabet
