@@ -13,19 +13,31 @@ Arm patterns are regexes on the run TAG with {s} = the seed number; the LAST mat
 --style pair adds Δ columns (last arm − first arm) for err / steady / pos. --delta 'X:Y' (repeatable) instead adds one
 column per pair, "ΔX−Y err/steady/pos", for any two arms (e.g. --delta 'D+F:D' --delta 'Y+F:Y'); works with either style.
 Label arms by their recipe (D, D+F, Y, Y+F), never a bare "B" that means different bases in different tables.
+
+TIE-BREAKER columns (Luiz 23/11): `cells M (tb)` = TRUE keys of the published winner (experiments/h743_keys.json, a
+missing finished winner is counted once via scripts/count_true_keys.py) and `min (tb)` = START→END wall minutes from
+runs.log. They help decide between arms that TIE on the main metrics; they never outvote stable/err/steady/pos/fails.
 """
 import argparse
+import json
 import math
 import re
 import statistics
+import subprocess
+from datetime import datetime
 from pathlib import Path
 
 RUNS_LOG = Path("/Users/lacg/wnn/logs/controller/ctrl48/runs.log")
 UNITS_EPS = 3500
 END_RE = re.compile(r"END (\S+) rc=0 .*?stable=[\d.]+±.*?err=([\d.]+).*?steady=([\d.]+).*? pos=([\d.]+).*stable_fail=(\d+)")
 START_RE = re.compile(r"START (\S+) ")
+TS_RE = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ) ")
+REPO = Path("/Users/lacg/wnn")
+KEYS_CACHE = REPO / "experiments/h743_keys.json"
+VENV_PY = REPO / "wnn/bin/python"
 METRICS = ("stable", "err", "steady", "pos", "fails")
-UNIT = {"stable": "%", "err": "°", "steady": "°", "pos": "m", "fails": f"/{UNITS_EPS}"}
+TIEBREAK = ("cells", "min")
+UNIT = {"stable": "%", "err": "°", "steady": "°", "pos": "m", "fails": f"/{UNITS_EPS}", "cells": "M (tb)", "min": "(tb)"}
 
 
 def floor_to(x: float, digits: int) -> float:
@@ -37,41 +49,85 @@ def stable_pct(fails: int, episodes: int, digits: int) -> float:
 	return floor_to(100.0 * (1 - fails / episodes), digits)
 
 
+def stamp(line: str):
+	m = TS_RE.match(line)
+	return datetime.fromisoformat(m.group(1).replace("Z", "+00:00")) if m else None
+
+
 def parse_log(lines):
-	"""{tag: (err, steady, pos, fails)} for finished runs, and the set of started tags."""
-	ends, starts = {}, set()
+	"""{tag: (err, steady, pos, fails)} for finished runs, {tag: start time} for started runs, {tag: wall minutes}."""
+	ends, starts, minutes = {}, {}, {}
 	for line in lines:
 		m = END_RE.search(line)
 		if m:
-			ends[m.group(1)] = (float(m.group(2)), float(m.group(3)), float(m.group(4)), int(m.group(5)))
+			tag = m.group(1)
+			ends[tag] = (float(m.group(2)), float(m.group(3)), float(m.group(4)), int(m.group(5)))
+			t0, t1 = starts.get(tag), stamp(line)
+			if t0 and t1:
+				minutes[tag] = (t1 - t0).total_seconds() / 60
 			continue
 		m = START_RE.search(line)
 		if m:
-			starts.add(m.group(1))
-	return ends, starts
+			starts[m.group(1)] = stamp(line)
+	return ends, starts, minutes
 
 
-def lookup(pattern: str, seed: int, ends: dict, starts: set):
-	"""(row or None, state) for one arm at one seed."""
+def count_missing(tags, cache: dict) -> None:
+	"""Count TRUE keys once for finished winners not yet in the cache (count_true_keys.py appends to it)."""
+	for tag in tags:
+		if tag in cache:
+			continue
+		winners = sorted(REPO.glob(f"logs/controller/*/{tag}_winner.yaml.gz"))
+		if winners:
+			subprocess.run([str(VENV_PY), str(REPO / "scripts/count_true_keys.py"), "--winner", str(winners[-1])],
+				cwd=REPO, env={"PYTHONPATH": str(REPO / "src/wnn"), "PATH": "/usr/bin:/bin"}, capture_output=True, timeout=900)
+
+
+def load_cells(tags) -> dict:
+	"""{tag: TRUE keys} for the published winners of the given finished runs."""
+	read = lambda: json.loads(KEYS_CACHE.read_text()) if KEYS_CACHE.exists() else {}  # noqa: E731
+	cache = read()
+	if any(t not in cache for t in tags):
+		count_missing(tags, cache)
+		cache = read()
+	return {t: cache[t]["true_keys"] for t in tags if t in cache}
+
+
+def lookup(pattern: str, seed: int, ends: dict, starts: dict):
+	"""(tag or None, state) for one arm at one seed."""
 	rx = re.compile(pattern.replace("{s}", str(seed)))
 	done = [t for t in ends if rx.search(t)]
 	if done:
-		return ends[done[-1]], "done"
+		return done[-1], "done"
 	return None, "flying" if any(rx.search(t) for t in starts) else "–"
 
 
-def seed_values(arms, seed, ends, starts):
+def fmt_tb(cells, mins) -> dict:
+	"""Formatted tie-breaker cells: '?' when the value is unknown."""
+	return {"tb": (cells, mins), "cells": "?" if cells is None else "%.3f" % (cells / 1e6),
+		"min": "?" if mins is None else "%.0f" % mins}
+
+
+def seed_values(arms, seed, log):
 	"""Per arm: dict of formatted metric strings + the raw row (or the state word)."""
+	ends, starts, minutes, cells = log
 	out = []
 	for _, pat in arms:
-		row, state = lookup(pat, seed, ends, starts)
-		if row is None:
+		tag, state = lookup(pat, seed, ends, starts)
+		if tag is None:
 			out.append({"state": state})
 			continue
-		err, steady, pos, fails = row
+		err, steady, pos, fails = row = ends[tag]
 		out.append({"raw": row, "stable": "%.1f" % stable_pct(fails, UNITS_EPS, 1), "err": "%.2f" % err,
-			"steady": "%.2f" % steady, "pos": "%.3f" % pos, "fails": "%d" % fails})
+			"steady": "%.2f" % steady, "pos": "%.3f" % pos, "fails": "%d" % fails, **fmt_tb(cells.get(tag), minutes.get(tag))})
 	return out
+
+
+def mean_tb(cols) -> dict:
+	"""Mean tie-breakers over the given finished cells; '?' if any is unknown."""
+	vals = list(zip(*(c["tb"] for c in cols)))
+	avg = lambda v: None if any(x is None for x in v) else statistics.mean(v)  # noqa: E731
+	return fmt_tb(avg(vals[0]), avg(vals[1]))
 
 
 def mean_values(per_seed):
@@ -89,11 +145,12 @@ def mean_values(per_seed):
 			out.append({"state": "–"})
 			continue
 		rows = [cells[a]["raw"] for cells in common]
+		tb = mean_tb([cells[a] for cells in common])
 		fails = sum(r[3] for r in rows)
 		out.append({"raw": tuple(statistics.mean(r[i] for r in rows) for i in range(3)) + (fails,),
 			"stable": "%.2f" % stable_pct(fails, UNITS_EPS * n, 2), "err": "%.3f" % statistics.mean(r[0] for r in rows),
 			"steady": "%.3f" % statistics.mean(r[1] for r in rows), "pos": "%.3f" % statistics.mean(r[2] for r in rows),
-			"fails": "%d" % fails})
+			"fails": "%d" % fails, **tb})
 	return out, n
 
 
@@ -102,14 +159,15 @@ def total_values(per_seed):
 	another arm has not reached yet). fails = count per arm (denominator = n_arm x 3500, n in the row label); err/steady/pos = that arm's own mean."""
 	out = []
 	for col in zip(*per_seed.values()):
-		rows = [c["raw"] for c in col if "raw" in c]
+		done = [c for c in col if "raw" in c]
+		rows = [c["raw"] for c in done]
 		if not rows:
 			out.append({"state": "–"})
 			continue
 		n, fails = len(rows), sum(r[3] for r in rows)
 		out.append({"stable": "%.2f" % stable_pct(fails, UNITS_EPS * n, 2), "err": "%.3f" % statistics.mean(r[0] for r in rows),
 			"steady": "%.3f" % statistics.mean(r[1] for r in rows), "pos": "%.3f" % statistics.mean(r[2] for r in rows),
-			"fails": "%d" % fails, "n": n})
+			"fails": "%d" % fails, "n": n, **mean_tb(done)})
 	return out
 
 
@@ -140,24 +198,27 @@ def extra(cells, style, pairs):
 	return deltas(cells) if style == "pair" else []
 
 
-def build_rows(arms, seeds, ends, starts, style, pairs=()):
-	per_seed = {s: seed_values(arms, s, ends, starts) for s in seeds}
+COLUMNS = METRICS + TIEBREAK
+
+
+def build_rows(arms, seeds, log, style, pairs=()):
+	per_seed = {s: seed_values(arms, s, log) for s in seeds}
 	rows = []
 	for s, cells in per_seed.items():
-		rows.append(["s%d" % s] + [joined(cells, k) for k in METRICS] + extra(cells, style, pairs))
+		rows.append(["s%d" % s] + [joined(cells, k) for k in COLUMNS] + extra(cells, style, pairs))
 	mean, n = mean_values(per_seed)
 	if mean:
-		row = ["mean (n=%d)" % n] + [joined(mean, k) for k in METRICS]
+		row = ["mean (n=%d)" % n] + [joined(mean, k) for k in COLUMNS]
 		rows.append(row + extra(mean, style, pairs))
 	total = total_values(per_seed)
 	if any("n" in t for t in total) and any("n" in t and t["n"] != n for t in total):
 		nn = "/".join(str(t.get("n", 0)) for t in total)
-		rows.append(["all (n=%s)" % nn] + [joined(total, k) for k in METRICS] + [""] * len(extra(total, style, pairs)))
+		rows.append(["all (n=%s)" % nn] + [joined(total, k) for k in COLUMNS] + [""] * len(extra(total, style, pairs)))
 	return rows
 
 
 def header(labels, style, pairs=()):
-	h = ["seed"] + [f"{k} {UNIT[k]}" for k in METRICS]  # arm order printed ONCE in the legend line (Luiz 20/11: width)
+	h = ["seed"] + [f"{k} {UNIT[k]}" for k in COLUMNS]  # arm order printed ONCE in the legend line (Luiz 20/11: width)
 	if pairs:
 		h += [f"Δ{labels[x]}−{labels[y]} err/steady/pos" for x, y in pairs]
 	elif style == "pair":
@@ -207,14 +268,18 @@ def main():
 	ap.add_argument("--log", default=str(RUNS_LOG))
 	a = ap.parse_args()
 	arms = [tuple(x.split("=", 1)) for x in a.arm]
-	ends, starts = parse_log(Path(a.log).read_text(errors="replace").splitlines())
+	ends, starts, minutes = parse_log(Path(a.log).read_text(errors="replace").splitlines())
+	seeds = parse_seeds(a.seeds)
+	shown = {lookup(p, s, ends, starts)[0] for _, p in arms for s in seeds} - {None}
+	log = (ends, starts, minutes, load_cells(shown))
 	labels = [lab for lab, _ in arms]
 	pairs = [tuple(labels.index(x) for x in d.split(":")) for d in a.delta]
 	h = header(labels, a.style, pairs)
-	rows = build_rows(arms, parse_seeds(a.seeds), ends, starts, a.style, pairs)
+	rows = build_rows(arms, seeds, log, a.style, pairs)
 	pad = len(h) - 6
 	refs = [[lab] + v.split(",") + [""] * pad for lab, v in (r.split("=", 1) for r in a.ref)]
-	print("arms: " + " | ".join(labels) + "   (every cell lists the arms in this order; fails = count, /3500 per seed)")
+	print("arms: " + " | ".join(labels) + "   (every cell lists the arms in this order; fails = count, /3500 per seed;"
+		" (tb) = tie-breakers only: cells = TRUE keys of the published winner, min = wall minutes)")
 	print((render_pair if a.style == "pair" else render_box)(h, rows, refs))
 
 
