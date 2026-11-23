@@ -57,3 +57,27 @@ ADOPT B if it is consistently better than A in the expected direction on err and
 majority of the 5 in that direction and the mean delta in that direction), AND not worse elsewhere — stable,
 fails and pos (3-D, includes altitude) not worse. No magnitude bar. Flat or worse -> not adopted (A stays the
 control). Luiz rules on the readout.
+
+## Addendum (23/11/2026): n=10 extension of CTRL-67 (A) / CTRL-68 (B), seeds s6-s10
+
+Written before any s6-s10 flight, at Luiz's request (23/11 ~07:30 EST): n=5 is too close to call. TEST n=5
+(35 CF2.1 units per run): B steady 0.240° vs A 0.308° (B lower on 5/5 seeds, 2-dp END rows), err 1.100° vs 1.088°, stable
+99.97% vs 99.97%, fails 4 vs 4, pos 0.340 vs 0.339 m — steady in the expected direction, err not, the rest equal.
+
+### Arms (driver `logs/controller/ctrl62/ab_mf61_n10.sh`; seed-interleaved A s6, B s6, ..., A s10, B s10)
+- Same two arms as the ABI-61 addendum, recipes UNCHANGED: each sN argv is the flown s1 argv of the same arm
+  (`..._a61_..._L1_yld_n0_full_s1` for A, `..._a61_..._L1_yld_n0dmy03_full_s1` for B) with only the seed-dependent
+  fields changed — `--base-seed 31337001 -> 31337000+N` and the two save paths. The flown s1-s5 argv differ in
+  exactly those fields. The 35 TEST units 99990101..99990135 are the same for every seed.
+- Tags `C-S2-d_wposx2_a62_rf_c200_dc_biasin_ms01_P_both_L1_yld_n0_full_sN` (A) and `..._a62_..._yld_n0dmy03_full_sN`
+  (B); `a62` records the wheel actually installed.
+- Wheel: ABI 62 (landed by `ab_r62.sh`, merge 0b2c6338) with its new flags (`--obs-rate-err`, `--obs-rate-i-axes`)
+  OFF. ABI 62 flags-off is byte-identical to ABI 61 — `tests/controller_ctrl62_abi61_pin.py` (grid ladder, features,
+  Lamarckian write-back cell digest, scorer rows all equal across the two builds). So s6-s10 (ABI 62) pair validly
+  with s1-s5 (ABI 61): same lineage. The driver refuses any rate-loop flag in the argv.
+
+### Pairing, readout, adoption rule
+B sN vs A sN, same seed, n = 10 pairs (s1-s5 ABI 61 + s6-s10 ABI 62). TEST HEADLINE block, the whole vector:
+stable / err / steady / pos / fails. Hypothesis H-B and the adoption rule are UNCHANGED from the ABI-61 addendum
+(ADOPT B if consistently better than A on err and steady — majority of the 10 pairs and the mean delta in that
+direction — and not worse on stable, fails, pos; no magnitude bar; Luiz rules on the readout).
