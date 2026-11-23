@@ -265,6 +265,7 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	# (L3). Phased_ga-only: REFUSED by _refuse_unbuilt_keys like the keys above.
 	"controller_obs_tilt_ref_err",    # L1: roll/pitch error vs the tilt reference, bias-corrected
 	"controller_tilt_err_ladder",     # L1 ladder: dense | quantile
+	"controller_gyro_z_ladder",       # CTRL-71: dense = fixed gyro_z rate cuts (phased_ga-only, refused here)
 	"controller_obs_yaw_trim_err",    # L2y: yaw error vs the trim-shifted target
 	"controller_obs_yaw_trim_err_p",  # L2y' (ABI 52): proportional-only trim shift, raw integral
 	"controller_obs_yaw_from_att_est",

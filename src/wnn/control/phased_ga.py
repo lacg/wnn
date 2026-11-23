@@ -3553,6 +3553,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "Applies to every fit: grid, held-out/test refits and the "
 	                     "student refit. Off (default) = byte-identical. A new lineage: thresholds are part of "
 	                     "the address function.")
+	ap.add_argument("--gyro-z-ladder", choices=["dense"], default=None,
+	                help="CTRL-71 (Luiz 23/11/2026, docs/ctrl71_72_levers_prereg.md): the yaw-RATE input gyro_z "
+	                     "ONLY takes the dense ladder with FIXED symmetric cuts at +-0.011, +-0.05, +-0.15, "
+	                     "+-0.45 rad/s (any further pairs at |x| quantiles beyond the last cut), replacing the "
+	                     "PID-calibration quantile fit (+-0.03 rad/s, saturated on most flown ticks). gyro_x / "
+	                     "gyro_y and every other feature keep their ladder. Applies to every fit (grid, "
+	                     "held-out/test refits, the student refit). Off (default) = byte-identical. A new "
+	                     "lineage: thresholds are part of the address function.")
 	ap.add_argument("--drop-features", type=str, default="",
 	                help="CTRL-48: comma-separated feature-layout names no connection may land on (e.g. "
 	                     "acc_x,acc_y under the specific-force IMU). Connection space only: the frame, "

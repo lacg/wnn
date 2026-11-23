@@ -144,6 +144,10 @@ TILT_ERROR_FEATURES: frozenset[str] = frozenset({"roll_err", "pitch_err"})
 # L2y (--obs-yaw-trim-err): the PROPORTIONAL yaw-error inputs, which take the L2y dense
 # ladder (their integrals keep their own fit: they integrate the trim-shifted error).
 YAW_PROPORTIONAL_FEATURES: frozenset[str] = frozenset({"yaw_err", "yaw_err_pa"})
+# CTRL-71 (Luiz 23/11/2026, docs/ctrl71_72_levers_prereg.md, --gyro-z-ladder dense): the
+# yaw-RATE input. Only gyro_z takes the fixed rate ladder; gyro_x / gyro_y keep theirs
+# (they saturate only in the first 0.6 s, CTRL-70 §5).
+YAW_RATE_FEATURES: frozenset[str] = frozenset({"gyro_z"})
 
 
 def _block_name(name: str) -> str:
@@ -226,5 +230,5 @@ def feature_names(spec: "ControllerSpec") -> list[str]:
 
 
 __all__ = ["AxisFamily", "ALL_AXES", "BANK_FAMILIES", "FeatureDesc", "FAMILY", "ZERO_REFERENCED",
-           "YAW_ERROR_FEATURES", "AXIS_BITS", "AXES_ALL", "axes_mask", "axes_in", "cascade_columns",
+           "YAW_ERROR_FEATURES", "YAW_RATE_FEATURES", "AXIS_BITS", "AXES_ALL", "axes_mask", "axes_in", "cascade_columns",
            "feature_layout", "feature_names"]
