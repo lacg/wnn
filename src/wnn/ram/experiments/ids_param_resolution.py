@@ -201,6 +201,25 @@ def resolve_offspring_folds(params: dict) -> str:
 	return value
 
 
+def resolve_fold_rotation(params: dict) -> bool:
+	"""ids_fold_rotation (IDS-76, worker ABI 30): re-draw the K-fold partition of
+	the TRAIN rows every GA generation. Absent/None/False -> False (today's fixed
+	folds, bit-identical). Only a real bool is accepted: a string "false" would be
+	truthy and silently flip the protocol. True needs the strict K-fold CV search
+	(ids_k_folds > 1, ids_offspring_folds="all"); the evaluator refuses the rest
+	(streaming, hierarchical)."""
+	value = params.get("ids_fold_rotation")
+	if value is None:
+		return False
+	if not isinstance(value, bool):
+		raise ValueError(f"ids_fold_rotation={value!r}: expected true or false")
+	if value and (params.get("ids_k_folds", 5) <= 1 or resolve_offspring_folds(params) != "all"):
+		raise ValueError(
+			"ids_fold_rotation=true re-draws the K-fold CV partition each generation; it needs "
+			"ids_k_folds > 1 and ids_offspring_folds='all'")
+	return value
+
+
 def resolve_kfold_per_gen(params: dict) -> int:
 	"""ids_kfold_per_gen: explicit value, else k_folds under the strict "all"
 	rule (every fold, every generation) and the historical 1 under "phase"."""

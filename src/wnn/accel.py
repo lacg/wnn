@@ -157,7 +157,12 @@ import os
 #   Same ABI 29 (not deployed in between): additive READ-ONLY
 #   IDSCacheWrapper.export_neuron_outputs (IDS-57 arm E) — per-row per-neuron
 #   cells + all-cluster scores; reached through IDSEvaluator.export_neuron_outputs.
-EXPECTED_ABI = 29
+# 30 (23/11/2026, IDS-76): additive — IDSCacheWrapper.set_fold_generation (flow param
+#   ids_fold_rotation: re-draw the K-fold partition of the TRAIN rows every GA
+#   generation; generation 0 = the fixed folds). Reached only through
+#   IDSEvaluator.begin_generation_folds when the flag is on; every flag-off path is
+#   bit-identical to ABI 29. Landed at a worker-idle swap together with this Python.
+EXPECTED_ABI = 30
 
 BUILD_HINT = (
 	"Rebuild the accelerator: cd src/wnn/ram/strategies/accelerator && "

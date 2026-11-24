@@ -61,7 +61,7 @@ def test_flat_binary_matches_the_worker(captured):
 	common = dict(classification="binary", empty_value=0.0, memory_mode=2, seed=20419, run_seed=20419,
 		coverage_aware=False, write_rule="lattice", vote_share=None, two_cluster_fitness_f1="macro", offspring_folds="all", num_negatives=None, neuron_sample_rate=1.0, balance_classes=True,
 		single_cluster=True, undersample_majority=False, flip_labels=False, class_weight_multiplier=1.0,
-		calib_sample=0)
+		calib_sample=0, fold_rotation=False)
 	assert optimizer.args == {**common, "dataset": optimizer.args["dataset"], "num_parts": 5, "k_folds": 5,
 		"kfold_per_gen": 5, "reuse_cache": None}
 	assert test.args == {**common, "dataset": optimizer.args["dataset"], "num_parts": 1, "k_folds": 1,
@@ -75,6 +75,19 @@ def test_calib_sample_reaches_the_optimizer_only(captured):
 	optimizer, test = IdsEvaluatorFactory(lambda m: None).create({**SR1, "ids_calib_sample": 200_000})
 	assert optimizer.args["calib_sample"] == 200_000
 	assert test.args["calib_sample"] == 0
+
+
+def test_fold_rotation_reaches_the_optimizer_only(captured):
+	"""ids_fold_rotation re-draws the SEARCH folds: the optimizer evaluator gets
+	it; the test evaluator (full TRAIN, no folds) never does."""
+	optimizer, test = IdsEvaluatorFactory(lambda m: None).create({**SR1, "ids_fold_rotation": True})
+	assert optimizer.args["fold_rotation"] is True
+	assert test.args["fold_rotation"] is False
+
+
+def test_fold_rotation_refused_on_hierarchical(captured):
+	with pytest.raises(NotImplementedError, match="flat classification only"):
+		IdsEvaluatorFactory(lambda m: None).create({**SR1, "ids_classification": "hierarchical", "ids_fold_rotation": True})
 
 
 def test_settings_defaults_are_the_workers():

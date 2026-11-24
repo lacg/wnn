@@ -420,6 +420,39 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		# Shared: adaptive crash-save (cadence-throttled) + cooperative shutdown.
 		super()._on_generation_start(generation, **ctx)
 
+	def _rescore_carried(self, generation, genomes):
+		"""ids_fold_rotation (IDS-76): hold generation `generation`'s K-fold
+		partition; when that re-draws it, re-score `genomes` (elites + incumbent,
+		chosen on the previous partition) with the call that scores offspring and
+		immigrants — the K-fold CV mean on the new partition. Off, or partition
+		unchanged (generation 0 on the fixed folds): None, nothing re-scored."""
+		evaluator = self._cached_evaluator
+		if evaluator is None or not getattr(evaluator, "fold_rotation", False):
+			return None
+		self._require_absolute_fitness()
+		if not evaluator.begin_generation_folds(generation):
+			return None
+		metrics = evaluator.evaluate_offspring_batch(genomes, self._phase_train_idx)
+		self._log.info(f"[{self.name}] Fold rotation: gen {generation + 1} partition re-drawn; "
+		               f"re-scored {len(genomes) - 1} elites + the incumbent")
+		return metrics
+
+	def _require_absolute_fitness(self) -> None:
+		"""A re-scored incumbent is compared by its fitness ALONE, which only means
+		something when a genome's score does not depend on the pool."""
+		aggregation = getattr(self._fitness_calculator, "aggregation", None)
+		if aggregation != "desirability":
+			raise ValueError(
+				f"ids_fold_rotation=true needs fitness_aggregation='desirability' (absolute per genome); "
+				f"got {aggregation!r}")
+
+	def _restore_fixed_folds(self) -> None:
+		"""ids_fold_rotation: put the K-fold partition back to generation 0 after
+		the stage, so a later phase starts from the fixed folds."""
+		evaluator = self._cached_evaluator
+		if evaluator is not None and getattr(evaluator, "fold_rotation", False):
+			evaluator.begin_generation_folds(0)
+
 	def _build_checkpoint(self, generation, genomes, ctx, complete):
 		"""IDS GA loop state → PhaseCheckpoint. `genomes` are bare (already
 		unpacked by the shared path); _ids_to_checkpoint expects (genome, ce)
@@ -611,6 +644,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			)
 		finally:
 			self._stop_live_observer(observer)
+			self._restore_fixed_folds()
 
 		# Test summary (Rust path only: full-data evaluation)
 		if self._cached_evaluator is not None:
