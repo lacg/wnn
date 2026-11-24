@@ -172,7 +172,7 @@ def total_values(per_seed):
 
 
 def joined(cells, key):
-	return " | ".join(c.get(key, c.get("state", "–")) for c in cells)
+	return "|".join(c.get(key, c.get("state", "–")) for c in cells)
 
 
 def deltas(cells):
