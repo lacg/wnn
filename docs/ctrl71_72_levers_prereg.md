@@ -125,3 +125,29 @@ parallel** with G and T rather than after their readouts.
 - **Descriptive only (no adoption rule):** G+T sN vs G sN and vs T sN on the same seed — does the combination
   add up (G+T at least as good as the better of G and T on err and steady), or do the two yaw levers interfere?
 - Seeds s6-s8 only on Luiz's word, as for G and T.
+
+## Addendum (24/11/2026, before any s6-s10 flight): n=10 extension of G, T and G+T
+
+Written after `GT DONE` (24/11 12:50:58Z; G, T, G+T s1-s5 all finished) and before any flight below, at Luiz's
+request (24/11 ~11:15 EST): extend all three arms to n=10.
+
+- **Arms, recipes UNCHANGED:** G, T and G+T on seeds s6-s10 (base seeds 31337006-31337010), tags
+  `..._a62_..._L1_yld_n0g3_full_sN`, `..._yld_n0gz_full_sN`, `..._yld_n0g3gz_full_sN`. Each argv = the flown N0
+  s1 argv with only `--base-seed`, the save paths (tag) and the arm's flag(s); G/T/G+T differ from N0 sN only by
+  their flags (checked byte for byte and through the resolver, as for s1-s5). ABI 62, rate-loop flags off; the
+  CTRL-71 code is unchanged since its pin (`src/wnn/control` has no commits after merge 0fe3e8be).
+- **N0 controls s9 and s10 (CTRL-67 recipe, model-free control):** N0 has finished rows s1-s8 only.
+  - s10: tag `C-S2-d_wposx2_a62_rf_c200_dc_biasin_ms01_P_both_L1_yld_n0_full_s10`.
+  - s9: the tag `..._a62_..._L1_yld_n0_full_s9` is VOID (killed 23/11 at the MF10 stop: .out, no END, no .done)
+    and is never reused. The s9 control flies under `..._a62_..._L1_yld_n0_full_s9r`. This is the **first
+    completed flight of the N0 recipe on s9**, not a repeat of a finished result: no N0 s9 row exists.
+  - Both argv = the flown N0 s1 argv with only `--base-seed` and the save paths changed (the n=10 rule of the
+    CTRL-67/68 extension). Tick-table regex for N0: `_a6[12]_.*_L1_yld_n0_full_s{s}r?$` (a finished row wins over
+    the void START-only s9).
+- **Order:** per seed N0 sN (s9, s10 only), G sN, T sN, G+T sN; seeds s6..s10 = 17 runs, one driver
+  `logs/controller/ctrl62/ab_gt7172_n10.sh`. If N0 s9r or s10 does not finish (rc != 0), the driver stops
+  (`GT10 ABORT`) rather than fly arms without their control.
+- **Pairing and rule, read at n=10:** arm sN vs N0 sN, same seed, n = 10 pairs per arm (s1-s5 and s6-s8 controls
+  on ABI 61/62 flags-off as already registered, s9r/s10 on ABI 62). Same 35 TEST units, same adoption rule
+  (majority of the 10 pairs and the mean delta in the expected direction on err and steady; not worse on stable,
+  fails, pos; no magnitude bar; cells + wall minutes tie-breakers only). G+T vs G and vs T stays descriptive.
