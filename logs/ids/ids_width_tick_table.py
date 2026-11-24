@@ -59,7 +59,7 @@ def cell_values(db, arm: str, seed: int) -> dict:
 		return {"state": "–"}
 	fid, status, started, completed = f
 	if status != "completed":
-		word = "flying" if status == "running" else status
+		word = STATE_WORD.get(status, status)
 		extra = "%.1f" % hours(started, None) if status == "running" and started else word
 		return {"state": word, "hours": extra}
 	r = result(db, fid)
@@ -72,6 +72,7 @@ def cell_values(db, arm: str, seed: int) -> dict:
 
 
 KEYS = ("f1", "fpr", "acc", "size", "bits", "hours")
+STATE_WORD = {"running": "f", "queued": "q", "paused": "p"}  # short words keep the table narrow (Luiz 24/11)
 
 
 def seed_row(cells: list[dict], label: str) -> tuple:
@@ -126,6 +127,7 @@ def main():
 	per_seed = [[cell_values(db, a, s) for a in ARMS] for s in SEEDS]
 	seeds = [seed_row(cells, "s%d (r%d)" % (i + 1, s)) for i, (s, cells) in enumerate(zip(SEEDS, per_seed))]
 	print(render(classical, seeds, mean_row(per_seed)))
+	print("f = flying (running; hours column = elapsed) · q = queued · p = paused · – = no flow")
 
 
 if __name__ == "__main__":

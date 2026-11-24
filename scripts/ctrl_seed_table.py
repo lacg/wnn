@@ -3,7 +3,7 @@
 tick / report table: the M | Y | D box table and the B | F pair table.
 
 TEST over the 35 CF2.1 units. stable % is FLOORED from the fails count (Luiz: 1 fail can never print 100%):
-per seed floor to 0.1, means floor to 0.01. A cell is "flying" when its run has a START and no END yet, "–" otherwise.
+per seed floor to 0.1, means floor to 0.01. A cell is "f" (flying) when its run has a START and no END yet, "–" otherwise.
 
 Usage:
   ctrl_seed_table.py --arm 'B=_dmD_full_s{s}$|_n10D_full_s{s}$' --arm 'F=_a59_.*_ffD_F_full_s{s}$' --seeds 1-10 --style pair
@@ -99,7 +99,7 @@ def lookup(pattern: str, seed: int, ends: dict, starts: dict):
 	done = [t for t in ends if rx.search(t)]
 	if done:
 		return done[-1], "done"
-	return None, "flying" if any(rx.search(t) for t in starts) else "–"
+	return None, "f" if any(rx.search(t) for t in starts) else "–"
 
 
 def fmt_tb(cells, mins) -> dict:
@@ -281,6 +281,7 @@ def main():
 	print("arms: " + " | ".join(labels) + "   (every cell lists the arms in this order; fails = count, /3500 per seed;"
 		" (tb) = tie-breakers only: cells = TRUE keys of the published winner, min = wall minutes)")
 	print((render_pair if a.style == "pair" else render_box)(h, rows, refs))
+	print("f = flying (START logged, no END yet) · – = not flown")
 
 
 if __name__ == "__main__":
