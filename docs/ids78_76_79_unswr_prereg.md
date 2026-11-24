@@ -114,3 +114,76 @@ once Luiz decides on IDS-76.
 
 Scripts: `scripts/queue_ids78_79_unswr.py` (bodies derived from the read-only DB, asserted against the control,
 `KNOWN_PARAMS`-checked, POST /api/flows, verified, then PATCH queued).
+
+## Addendum 23/11/2026 ~21:10 EST: IDS-76 built (Luiz, 23/11 ~20:45 EST)
+
+Luiz asked to build fold rotation, deploy it at a flow boundary, and queue IDS-76 and IDS-79 after IDS-78
+(7633-7635). This addendum fixes the design before any code is written. The status line in the IDS-76 section
+above ("not implementable on ABI 29") is superseded by this section. Plane IDS-76 was not read here (no Plane access
+from this session); the design below follows the prereg hypothesis and the IDS-77 numbers.
+
+### Design: `ids_fold_rotation` (worker ABI 30)
+
+- **Param.** `ids_fold_rotation`: bool, default `false`, registered in `KNOWN_PARAMS`. Only `true`/`false` are
+  accepted. `true` needs in-memory storage (not streaming), flat classification (not hierarchical),
+  `ids_k_folds > 1` and `ids_offspring_folds = "all"`. Any other combination is refused at evaluator construction.
+- **Partition per generation.** Generation `g` of a GA stage scores every genome on partition `P(g)`. `P(0)` is the
+  partition the cache builds today (seed = flow seed). For `g >= 1`, `P(g)` is re-drawn in Rust with the same
+  stratified construction (`create_stratified_folds`: shuffle within class, deal round-robin, shuffle within fold,
+  per-fold negative seeds), seeded by `ram_core::counter_rng::draw_u64(flow seed, g, ...)` on a dedicated
+  coordinate. `P(g)` is a function of (flow seed, g) only, so runs are reproducible and a resumed run re-draws the
+  same partitions. Each `P(g)` is still a proper 5-fold CV partition of the TRAIN rows: train on 4 folds, score the
+  held-out 5th, average the 5. VAL and TEST are never touched; the test checkpoints train on the full TRAIN set and
+  do not use folds.
+- **Carried genomes are re-scored.** Fitness is frozen per genome, so after a re-draw the carried genomes would
+  hold scores from `P(g-1)` while the offspring hold scores from `P(g)`. At the start of generation `g >= 1` the GA
+  (1) selects the elites as today, on the population's `P(g-1)` scores (the whole population is on one partition),
+  (2) re-draws the partition, (3) re-scores the elites and the incumbent on `P(g)` with the same call that scores
+  offspring and immigrants (`evaluate_offspring_batch`, the 5-fold CV mean). The mu+lambda pool (elites +
+  offspring + immigrants) is then on one partition, and the "new incumbent" test compares pool[0] with the
+  incumbent re-scored on the same partition. Tournament parent selection keeps the `P(g-1)` scores (it only picks
+  parents). Non-elite population members are not re-scored: under mu+lambda only the elites enter the next pool.
+- **Cost.** 10 elites + 1 incumbent re-scored per generation vs 67 offspring evaluated (`population_size` 50,
+  `fitness_percentile` 0.75): about +16 % per generation.
+- **Fitness must be absolute.** The incumbent re-score is only meaningful when a genome's score does not depend on
+  the pool, so rotation requires `fitness_aggregation = "desirability"` (the S&P cohort's) and refuses otherwise.
+- **Patience.** Magnitude-aware patience watches the incumbent's F1/FPR, now re-scored each generation. Its
+  watermarks ratchet across partitions, so partition noise can only raise the bar (max of noisy values) and tends
+  to stop the stage earlier, not later. This is a known difference from the control, reported with the readout.
+- **Stage end.** After the GA stage the cache is restored to `P(0)`, so a later phase starts from today's folds.
+- **Flag off is unchanged.** With the flag off the new Rust method is never called and the GA hook returns
+  immediately, so folds, fitness and results are today's. Proven before the swap by (a) a Rust test that `P(0)`
+  equals the construction-time folds (rows, targets, negatives) and a re-draw followed by `g = 0` restores them byte
+  for byte, (b) a Python pin run twice, once on ABI 29 (installed wheel + current tree) and once on ABI 30 (new
+  wheel + new tree): k-fold CV means, Rust offspring search and a multi-generation GA run on a synthetic dataset,
+  compared exactly. A unit test checks that ON re-draws a valid stratified partition per generation (disjoint,
+  covers every TRAIN row, class counts per fold within 1, deterministic per (seed, g), different across g).
+
+### Flows that cross the ABI boundary
+
+The worker swap (ABI 29 -> 30) happens at the next flow boundary after 7594. 7595-7599 (IDS-70 B, IDS-71) and IDS-78
+7633-7635 were created on ABI 29 and may run on ABI 30. This is valid because ABI 30 only adds a method and two
+cache fields that are read only when `ids_fold_rotation` is true; none of these flows sets it, and the pin above
+shows the flag-off path gives identical folds, fitness and GA trajectories on both wheels. The test-result cache
+pins the worker ABI, so those flows re-compute their test cells instead of reusing ABI-29 cache entries (cost only).
+
+### IDS-76 arm
+
+- **Recipe.** Clones of the control 7591 / 7592 / 7593 (same seeds r20421-23, params verbatim) plus
+  `ids_fold_rotation: true`, same two experiments (Grid Search -> GA Neurons).
+- **Why a full clone and not a seeded GA phase.** Rotation acts inside GA Neurons from generation 1, so the arm must
+  run GA Neurons from the control's own start. The grid does not use rotation and is deterministic (OI training,
+  counter-RNG GA seeds since ABI 14), about 3 minutes per flow; it reproduces the control's grid exactly, and GA
+  Neurons generation 0 is on `P(0)`, identical to the control. The arm is a new recipe (rotation on), so this is not
+  a repeat of a flown recipe on the same seed; the shared prefix is what makes the pairing exact.
+- **Built-in fidelity check.** The arm's `after-grid` test cells must equal the control's. If not, the pairing is
+  flagged before any readout.
+- **Expected.** <= +0.1 pp TEST F1 (IDS-77: fold-specific share of the GA edge is 0.05-0.10). Same decision rule and
+  reporting cell as the other arms (GA Neurons, `final`, `best_f1`, `margin_val_cal`, TEST).
+- **Cost.** About the control's 10-15 h per flow plus about 16 % per GA generation, so roughly 35-50 h for n=3.
+
+### Queue order (revised)
+
+IDS-78 7633-7635 (queued) -> IDS-76 s1, s2, s3 -> IDS-79 s1, s2, s3, so flow ids are IDS-78 < IDS-76 < IDS-79.
+IDS-76 and IDS-79 are created only after the swap is verified, with `scripts/queue_ids78_79_unswr.py --queue ids76`
+then `--queue ids79` (their descriptions say worker ABI 30).
