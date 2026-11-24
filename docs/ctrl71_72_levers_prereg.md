@@ -151,3 +151,13 @@ request (24/11 ~11:15 EST): extend all three arms to n=10.
   on ABI 61/62 flags-off as already registered, s9r/s10 on ABI 62). Same 35 TEST units, same adoption rule
   (majority of the 10 pairs and the mean delta in the expected direction on err and steady; not worse on stable,
   fails, pos; no magnitude bar; cells + wall minutes tie-breakers only). G+T vs G and vs T stays descriptive.
+
+### Note (24/11/2026 ~18:50 EST, before the N0 s9 flight): N0 s9 tag back to plain `s9`
+
+Luiz (24/11): "let the tag say s9 for N0 ... a different tag just confuses." Naming only — recipe, seed
+(31337009), argv rule, pairing and adoption rule are UNCHANGED. The killed 23/11 flight's partial log is
+ARCHIVED (not deleted) to `logs/controller/ctrl48/void/C-S2-d_wposx2_a62_rf_c200_dc_biasin_ms01_P_both_L1_yld_n0_full_s9.out`;
+its 23/11 22:13:43Z START line in `runs.log` (no END) stays as history. The N0 s9 control now flies under
+`..._a62_..._L1_yld_n0_full_s9` (first completed N0 flight on s9; `s9r` is never flown). The remaining runs move
+from `ab_gt7172_n10.sh` to the identical `ab_gt7172_n10b.sh` (only the s9 tag differs; tags already `.done` are
+skipped) at the first run boundary, via `handover_n10b.sh` (logs `GT10 HANDOVER`). Still one run at a time.
