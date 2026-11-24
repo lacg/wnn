@@ -240,6 +240,19 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		"""Magnitude-patience floor (deg) for watching steady too; None = legacy."""
 		return None
 
+	def _rescore_carried(self, generation: int, genomes: list) -> Optional[list]:
+		"""Metrics of `genomes` (this generation's elites, then the incumbent)
+		re-measured for this generation, or None when carried scores stay valid —
+		the default: metrics are frozen per genome. IDS fold rotation
+		(ArchitectureGAStrategy) overrides it."""
+		return None
+
+	@staticmethod
+	def _incumbent_scores(fitness_calculator: Any, m: Any) -> tuple:
+		"""(fitness, acc, f1, fpr) of a re-scored incumbent. Only valid for an
+		ABSOLUTE fitness (a genome scored alone), which the override enforces."""
+		return fitness_calculator.fitness([m])[0], m.acc, getattr(m, "f1", None), getattr(m, "fpr", None)
+
 	def _rerank(self, population: list, fitness_calculator: Any) -> tuple[list, list]:
 		"""(population, scores) re-sorted under `fitness_calculator` (lower = better)."""
 		scores = fitness_calculator.fitness([t[1] for t in population])
@@ -619,6 +632,16 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 				new_population.append((elite_genome, elite_m))
 
 				self._log.debug(f"[Elite {i + 1:0{elite_width}d}/{total_elites}] {elite_m} (score={combined_scores[elite_idx]:.4f})")
+
+			# IDS-76 fold rotation: a generation that re-draws the K-fold partition
+			# re-scores the carried elites + the incumbent on it, so the mu+lambda
+			# pool and the new-incumbent test compare one partition. None (every
+			# other run) = carried metrics stay as they are.
+			_rescored = self._rescore_carried(generation, [t[0] for t in new_population] + [best])
+			if _rescored is not None:
+				new_population = [(t[0], m) for t, m in zip(new_population, _rescored)]
+				best_fitness, best_accuracy_val, best_f1_val, best_fpr_val = self._incumbent_scores(
+					fitness_calculator, _rescored[-1])
 
 			# Store fitness scores for tournament selection (so offspring parents
 			# are selected by the same metric as elites, not just raw CE)

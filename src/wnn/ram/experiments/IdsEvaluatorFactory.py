@@ -26,6 +26,8 @@ class IdsEvaluatorFactory:
 	def create(self, params: dict) -> tuple:
 		s = IdsEvaluatorSettings.from_params(params)
 		dataset = self.load(s)
+		if s.fold_rotation and s.classification == "hierarchical":
+			raise NotImplementedError("ids_fold_rotation=true is plumbed for flat classification only (not hierarchical)")
 		evaluators = self._hierarchical(dataset, s) if s.classification == "hierarchical" else self.flat(dataset, s)
 		self._attach_receptive_fields(self.receptive_fields(dataset, s), evaluators)
 		return evaluators
@@ -137,7 +139,11 @@ class IdsEvaluatorFactory:
 		if s.calib_sample > 0:
 			self._log(f"  ids_calib_sample={s.calib_sample:,}: search thresholds calibrate on a fixed stratified "
 				"train subsample (test-evaluation thresholds use every row)")
-		return self._evaluator(dataset, s, s.num_parts, s.k_folds, s.kfold_per_gen, None, s.calib_sample)
+		if s.fold_rotation:
+			self._log("  ids_fold_rotation=true: the K-fold partition of the TRAIN rows is re-drawn every GA "
+				"generation (generation 0 = the fixed folds); carried elites + incumbent are re-scored on it")
+		return self._evaluator(dataset, s, s.num_parts, s.k_folds, s.kfold_per_gen, None, s.calib_sample,
+			s.fold_rotation)
 
 	def _test(self, dataset, s: IdsEvaluatorSettings, shared_cache):
 		"""Full 80% train -> held-out report. Reuses the optimizer's Rust cache (M2:
@@ -150,12 +156,14 @@ class IdsEvaluatorFactory:
 
 	@staticmethod
 	def _evaluator(dataset, s: IdsEvaluatorSettings, num_parts: int, k_folds: int, kfold_per_gen: int, reuse_cache,
-			calib_sample: int = 0):
+			calib_sample: int = 0, fold_rotation: bool = False):
 		"""One flat IDSEvaluator with the flow's training settings (k_folds=1,
 		kfold_per_gen=1, reuse_cache=None for the test evaluator; the GA-fitness fold
 		rule ids_offspring_folds rides along). `calib_sample` (ids_calib_sample) is
 		the OPTIMIZER's only: the test evaluator shares its cache but never sets it,
-		and its full-train test-evaluation calls ignore it in Rust anyway."""
+		and its full-train test-evaluation calls ignore it in Rust anyway. `fold_rotation`
+		(ids_fold_rotation) is the OPTIMIZER's only, like calib_sample: the test
+		evaluator never touches folds."""
 		from wnn.ram.architecture.ids_evaluator import IDSEvaluator
 		return IDSEvaluator(
 			dataset=dataset, classification=s.classification, num_parts=num_parts,
@@ -167,7 +175,7 @@ class IdsEvaluatorFactory:
 			balance_classes=s.balance_classes, single_cluster=s.single_cluster,
 			undersample_majority=s.undersample_majority, flip_labels=s.flip_labels,
 			class_weight_multiplier=s.class_weight_multiplier, reuse_cache=reuse_cache,
-			calib_sample=calib_sample,
+			calib_sample=calib_sample, fold_rotation=fold_rotation,
 		)
 
 	def _set_fitness_weights(self, s: IdsEvaluatorSettings, *evaluators) -> None:

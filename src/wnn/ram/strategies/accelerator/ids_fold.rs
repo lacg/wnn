@@ -47,3 +47,22 @@ impl IDSFold
 		full_train.gather_rows(self.rows.len(), |k| self.rows[k] as usize)
 	}
 }
+
+/// `counter_rng` layer coordinate of the IDS-76 fold-rotation seed draw (a
+/// constant no other draw uses, so the rotation never aliases a GA draw).
+const FOLD_ROTATION_LAYER: u64 = 76;
+
+/// Fold-partition seed of GA generation `generation` under `ids_fold_rotation`
+/// (IDS-76, worker ABI 30). Generation 0 is the cache's own seed, i.e. the
+/// partition built at construction; every later generation is a counter-RNG
+/// draw keyed on (seed, generation), so a run (and a resumed run) re-draws the
+/// same partitions. Shifted to 62 bits: the fold construction adds small
+/// offsets to its seed (`seed + 50`, `seed + 1000 * (part + 1)`).
+pub fn rotation_seed(base_seed: u64, generation: u64) -> u64
+{
+	if generation == 0
+	{
+		return base_seed;
+	}
+	ram_core::counter_rng::draw_u64(base_seed, generation, 0, FOLD_ROTATION_LAYER, 0, 0) >> 2
+}

@@ -337,6 +337,9 @@ mod ce_path_tests;
 // ids_calib_sample: search-time threshold calibration subsample (02/11/2026).
 #[cfg(all(test, target_os = "macos"))]
 mod calib_sample_tests;
+// ids_fold_rotation: per-generation K-fold re-partition; generation 0 = today's folds (ABI 30).
+#[cfg(all(test, target_os = "macos"))]
+mod ids_fold_rotation_tests;
 // ids_receptive_fields through the genesis (train -> adapt -> retrain) cycle (ABI 27).
 #[cfg(all(test, target_os = "macos"))]
 mod receptive_fields_genesis_tests;
@@ -517,7 +520,14 @@ use pyapi::*;
 /// IDSCacheWrapper.score_multiclass_sets (IDS-62 seed ensemble) — the flat K-vector
 /// test/train/val scores evaluate_multiclass_at_thresholds decodes, plus pyfunctions
 /// multiclass_margin_predictions / multiclass_metrics_from_predictions. No existing path changes.
-pub const ABI_VERSION: u32 = 29;
+/// 30 (23/11/2026, IDS-76 fold rotation): additive — IDSCacheWrapper.set_fold_generation
+/// re-draws the K-fold partition of the TRAIN rows per GA generation (stratified,
+/// seeded by ram_core counter_rng on (flow seed, generation); generation 0 = the
+/// construction-time partition). Called only under ids_fold_rotation=true; every
+/// flag-off path is bit-identical to ABI 29 (ids_fold_rotation_tests + the Python
+/// flag-off pin). Bumped so a Python tree that sends ids_fold_rotation cannot run on
+/// a wheel without the method.
+pub const ABI_VERSION: u32 = 30;
 
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()>

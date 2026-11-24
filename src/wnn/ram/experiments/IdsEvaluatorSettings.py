@@ -17,6 +17,7 @@ from wnn.ram.experiments.ids_param_resolution import (
 	memory_mode_code,
 	resolve_encoding_dedupe,
 	resolve_feature_ranking,
+	resolve_fold_rotation,
 	resolve_invalid_encoding,
 	resolve_calib_sample,
 	resolve_cut_method,
@@ -58,6 +59,7 @@ class IdsEvaluatorSettings:
 	vote_share: Optional[float]
 	two_cluster_fitness_f1: str
 	offspring_folds: str
+	fold_rotation: bool
 	calib_sample: int
 	num_negatives: Optional[int]
 	feature_selection: str
@@ -106,6 +108,7 @@ class IdsEvaluatorSettings:
 			vote_share=resolve_vote_share(params),
 			two_cluster_fitness_f1=resolve_two_cluster_fitness_f1(params),
 			offspring_folds=resolve_offspring_folds(params),
+			fold_rotation=resolve_fold_rotation(params),
 			calib_sample=resolve_calib_sample(params),
 			num_negatives=0 if bool(params.get("ids_suppress_negatives", False)) else None,
 			feature_selection=params.get("ids_feature_selection", "all"),

@@ -37,6 +37,8 @@ INCLUDED (changes the trained memory or the reported score of a fixed genome):
 EXCLUDED (steer the search only): fitness aggregation/calculator/anchors,
   ids_two_cluster_fitness_f1 (the search F1; test evaluation decodes are unaffected),
   ids_offspring_folds (which folds a search genome's fitness averages),
+  ids_fold_rotation (re-draws the search folds per generation; the test
+  evaluator trains on the full TRAIN set, no folds),
   ids_calib_sample (the search threshold's calibration rows), GA/TS
   budgets, patience, grids, ids_k_folds / ids_num_parts / ids_kfold_per_gen
   (the test evaluator is num_parts=1, no K-fold), storage/prefetch and

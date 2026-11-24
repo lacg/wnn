@@ -237,6 +237,16 @@ impl IDSCacheWrapper
 		self.inner.reset(seed);
 	}
 
+	/// IDS-76 fold rotation (`ids_fold_rotation`, worker ABI 30): hold the
+	/// K-fold partition of GA generation `generation` (0 = the partition built
+	/// at construction; later generations are re-drawn from the flow seed +
+	/// generation). Returns True when the held partition changed. Only the
+	/// rotation path calls it: a flow without the flag never does.
+	fn set_fold_generation(&mut self, generation: u64) -> bool
+	{
+		self.inner.set_fold_generation(generation)
+	}
+
 	/// Get number of train subsets.
 	fn num_train_subsets(&self) -> usize
 	{

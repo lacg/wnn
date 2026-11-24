@@ -59,6 +59,11 @@ pub struct IDSCache
 	// demand (byte-identical to the old per-fold copy, which held the whole
 	// train set a second time — 8.6 GB at 46M rows).
 	train_folds: Vec<crate::ids_fold::IDSFold>,
+	// Seed the folds were built with (IDS-76 fold rotation re-draws them):
+	// `fold_base_seed` = the construction seed (partition P(0)), `fold_seed` =
+	// the partition currently held.
+	fold_base_seed: u64,
+	fold_seed: u64,
 
 	// Full datasets for final evaluation
 	full_train: IDSSubset,
@@ -484,6 +489,8 @@ impl IDSCache
 			num_negatives: actual_negatives,
 			num_parts,
 			train_folds,
+			fold_base_seed: seed,
+			fold_seed: seed,
 			full_train,
 			full_eval,
 			full_val,
@@ -722,6 +729,32 @@ impl IDSCache
 		subset_indices
 	}
 
+	/// IDS-76 fold rotation (`ids_fold_rotation`, worker ABI 30): hold the
+	/// K-fold partition of GA generation `generation` — re-drawn from the TRAIN
+	/// labels with the construction's own stratified scheme
+	/// (`create_stratified_folds`), seeded by `ids_fold::rotation_seed`.
+	/// Generation 0 restores the construction-time partition byte for byte.
+	/// Returns whether the held partition changed (the caller must then
+	/// re-score any genome carried from the previous partition). Never called
+	/// with the flag off.
+	pub fn set_fold_generation(&mut self, generation: u64) -> bool
+	{
+		let seed = crate::ids_fold::rotation_seed(self.fold_base_seed, generation);
+		if seed == self.fold_seed
+		{
+			return false;
+		}
+		self.train_folds = Self::create_stratified_folds(
+			&self.full_train.targets,
+			self.num_classes,
+			self.num_negatives,
+			self.num_parts,
+			seed,
+		);
+		self.fold_seed = seed;
+		true
+	}
+
 	// ── Accessors ──────────────────────────────────────────────────────
 
 	pub fn next_train_idx(&mut self) -> usize
@@ -742,6 +775,13 @@ impl IDSCache
 	{
 		let fold = &self.train_folds[idx];
 		(fold, self.subset_of(fold))
+	}
+
+	/// Full-train row indices of fold `idx`, in fold order (tests only).
+	#[cfg(test)]
+	pub(crate) fn fold_rows(&self, idx: usize) -> &[u32]
+	{
+		&self.train_folds[idx].rows
 	}
 
 	/// `kfold_train_set` plus its row list (see train_subset_with_rows).

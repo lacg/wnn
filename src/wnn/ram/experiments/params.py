@@ -47,6 +47,15 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	# "phase" (legacy, bit-identical: offspring/immigrants/neighbours on ONE
 	# phase-fixed fold; hierarchical stages single-fold).
 	"ids_offspring_folds",
+	# ids_fold_rotation (23/11/2026, IDS-76, worker ABI 30): bool, default false
+	# (today's fixed folds, bit-identical). true = the K-fold partition of the
+	# TRAIN rows is re-drawn every GA generation (Rust, stratified, seeded by the
+	# flow seed + generation; generation 0 = today's partition) and the carried
+	# elites + incumbent are re-scored on it. Still CV: train on 4, score the 5th.
+	# Needs ids_offspring_folds="all", in-memory storage, flat classification,
+	# fitness_aggregation="desirability". Steers the search only (not in the
+	# test-cache key).
+	"ids_fold_rotation",
 	# ids_calib_sample (02/11/2026, worker ABI 24): int rows. The single-cluster
 	# binary SEARCH fitness calibrates each genome x fold decision threshold on a
 	# FIXED stratified subsample of the fold's train rows (by target and, where

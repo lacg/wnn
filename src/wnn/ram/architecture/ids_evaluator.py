@@ -120,6 +120,7 @@ class IDSEvaluator(BaseEvaluator):
 		class_weight_multiplier: float = 1.0,  # Scale class balancing weights (>1 = stronger minority boost)
 		reuse_cache: Optional[Any] = None,  # M2: share an existing IDSCacheWrapper instead of building one
 		calib_sample: int = 0,  # ids_calib_sample: search-threshold calibration rows (0 = every train row)
+		fold_rotation: bool = False,  # ids_fold_rotation: re-draw the K-fold partition every GA generation
 	):
 		if classification == "binary":
 			y_train = dataset.y_train_binary
@@ -486,6 +487,7 @@ class IDSEvaluator(BaseEvaluator):
 				f"k_folds={k_folds} must equal num_parts={num_parts} "
 				f"(each part becomes one fold)"
 			)
+		self._fold_rotation = self._validated_fold_rotation(fold_rotation, k_folds, self._offspring_folds)
 
 		# Phase 5 F-prep: pre-shuffled K-fold permutation. Stored alongside
 		# the existing Rust-side stratified partitioning — not yet used to
@@ -516,6 +518,38 @@ class IDSEvaluator(BaseEvaluator):
 				f"kfold_per_gen={kfold_per_gen} would average a subset (use offspring_folds='phase')"
 			)
 		return value
+
+	def _validated_fold_rotation(self, fold_rotation: bool, k_folds: int, offspring_folds: str) -> bool:
+		"""ids_fold_rotation (IDS-76): only on the in-memory cache's strict K-fold CV
+		search. The Rust method is reached only through begin_generation_folds, so
+		a flow without the flag never calls it (and runs on any wheel)."""
+		if not fold_rotation:
+			return False
+		if self._cache is None:
+			raise NotImplementedError("ids_fold_rotation=true needs the in-memory IDS cache (not the streaming path)")
+		if k_folds <= 1 or offspring_folds != "all":
+			raise ValueError("ids_fold_rotation=true needs k_folds > 1 and offspring_folds='all'")
+		if getattr(self._cache, "set_fold_generation", None) is None:
+			raise RuntimeError(
+				"ids_fold_rotation=true needs a rebuilt ram_accelerator (IDSCacheWrapper.set_fold_generation "
+				"is missing, ABI < 30). Rebuild the worker wheel and swap it at worker-idle via scripts/worker_swap.py.")
+		return True
+
+	@property
+	def fold_rotation(self) -> bool:
+		"""True when the GA re-draws the K-fold partition every generation."""
+		return self._fold_rotation
+
+	def begin_generation_folds(self, generation: int) -> bool:
+		"""ids_fold_rotation: hold the K-fold partition of GA generation
+		`generation` (0 = the construction-time folds; later generations are
+		re-drawn in Rust from the flow seed + generation). Returns True when the
+		partition changed, i.e. every genome scored before now holds a fitness
+		from another partition and must be re-scored before it is compared.
+		Off: False, and the Rust cache is never touched."""
+		if not self._fold_rotation:
+			return False
+		return bool(self._cache.set_fold_generation(int(generation)))
 
 	def ga_fitness_folds(self) -> Optional[list[int]]:
 		"""The folds a bred / immigrant / neighbour genome's fitness averages
