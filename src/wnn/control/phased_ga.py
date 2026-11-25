@@ -3561,6 +3561,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "gyro_y and every other feature keep their ladder. Applies to every fit (grid, "
 	                     "held-out/test refits, the student refit). Off (default) = byte-identical. A new "
 	                     "lineage: thresholds are part of the address function.")
+	ap.add_argument("--gyro-xy-ladder", choices=["dense", "dense_hold"], default=None,
+	                help="CTRL-75 (L2, docs/ctrl73_gap_analysis_gt.md §6): the roll/pitch RATE inputs gyro_x / "
+	                     "gyro_y ONLY take the dense ladder with FIXED symmetric cuts at +-0.004, +-0.013, "
+	                     "+-0.05, +-0.80 rad/s (the inner two keep today's hold resolution; 0.80 ends the "
+	                     "transient saturation of the quantile fit's +-0.07-0.09 outer cut), replacing the "
+	                     "PID-calibration quantile fit. dense_hold (L2-b) = +-0.004, +-0.013, +-0.026, +-0.80: "
+	                     "keeps today's 0.026 hold cut, one bin over 0.026-0.80 in the transient. "
+	                     "Every other feature keeps its ladder. Applies to every "
+	                     "fit. Off (default) = byte-identical. A new lineage: thresholds are part of the "
+	                     "address function.")
+	ap.add_argument("--yaw-err-outer-cut", type=float, default=None, metavar="DEG",
+	                help="CTRL-76 (L3, docs/ctrl73_gap_analysis_gt.md §6): on the dense yaw ladder "
+	                     "(--yaw-centred-ladder dense) the proportional yaw-error inputs' OUTERMOST pair (a "
+	                     "quantile pair, +-2.62 deg on G+T) becomes a fixed +-DEG (e.g. 4.5); every other cut, "
+	                     "the yaw integral inputs included, is unchanged. Needs --yaw-centred-ladder dense. "
+	                     "Off (default) = byte-identical. A new lineage.")
 	ap.add_argument("--drop-features", type=str, default="",
 	                help="CTRL-48: comma-separated feature-layout names no connection may land on (e.g. "
 	                     "acc_x,acc_y under the specific-force IMU). Connection space only: the frame, "
