@@ -148,6 +148,10 @@ YAW_PROPORTIONAL_FEATURES: frozenset[str] = frozenset({"yaw_err", "yaw_err_pa"})
 # yaw-RATE input. Only gyro_z takes the fixed rate ladder; gyro_x / gyro_y keep theirs
 # (they saturate only in the first 0.6 s, CTRL-70 §5).
 YAW_RATE_FEATURES: frozenset[str] = frozenset({"gyro_z"})
+# CTRL-75 (L2, --gyro-xy-ladder dense, docs/ctrl73_gap_analysis_gt.md §6): the roll/pitch
+# RATE inputs, which still saturate in the transient (91/75/49 % of 0-0.6 s ticks beyond the
+# outer quantile cut on the G+T VAL traces). Only these take the fixed roll/pitch rate ladder.
+ROLL_PITCH_RATE_FEATURES: frozenset[str] = frozenset({"gyro_x", "gyro_y"})
 
 
 def _block_name(name: str) -> str:
@@ -230,5 +234,5 @@ def feature_names(spec: "ControllerSpec") -> list[str]:
 
 
 __all__ = ["AxisFamily", "ALL_AXES", "BANK_FAMILIES", "FeatureDesc", "FAMILY", "ZERO_REFERENCED",
-           "YAW_ERROR_FEATURES", "YAW_RATE_FEATURES", "AXIS_BITS", "AXES_ALL", "axes_mask", "axes_in", "cascade_columns",
+           "YAW_ERROR_FEATURES", "YAW_RATE_FEATURES", "ROLL_PITCH_RATE_FEATURES", "AXIS_BITS", "AXES_ALL", "axes_mask", "axes_in", "cascade_columns",
            "feature_layout", "feature_names"]

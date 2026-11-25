@@ -26,6 +26,9 @@ import numpy as np
 N0_ARGV = "--levels 16 --lamarckian --skip-stages neurons,bits --max-cells 180000 --max-cells-strict --neurons-gens 5 --neurons-patience 3 --conns-gens 5 --conns-patience 3 --memory-gens 120 --memory-patience 2 --pop 50 --num-eval-folds 5 --check-interval 2 --magnitude-aware-patience --eval-episodes 100 --memory-eval-episodes 200 --steps 2000 --tilt 5.0 --fit-aggregation zscore --zrank-clamp 3.0 --gate-stable 0.70 --gate-err 8.0 --delta-gamma 1.0 --grid-bits 24 --grid-output-neurons 256 --max-output-neurons 256 --test-episodes 100 --holdout-pop-sample 8 --runs 1 --memory-mode BINARY --airframe cf21_brushless --disturbance L4C --teacher mpcof --obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err --obs-yaw-err-i --obs-collective-cmd --obs-alt-err --obs-vz --translation --reward-lambda-alt 0 --grid-state-neurons 0 --max-state-neurons 0 --skip-stages connections,bits --max-output-neurons 512 --max-cells 1000000000 --teacher-hover derived --fit-weight-err-sq 0.28125 --fit-weight-stable 0.225 --fit-weight-steady 0.39375 --fit-weight-pos 0.1 --xy-offset 0.5 --obs-pos-err-xy --obs-vel-xy --att-err-ref tilt --neurons-gens 15 --neurons-patience 3 --eval-mem-budget auto --rotor-drag 0.78 --motor-lag-s 0.20 --output-mode ctbr --action-repeat 10 --ctbr-delta-law --delta-leak 0.7 --delta-max 0.6 --rg-gate off --fit-weight-err-sq 0.2557 --fit-weight-stable 0.2045 --fit-weight-steady 0.3580 --fit-weight-pos 0.1818 --receptive-fields axis --rf-cross 0.2 --calib-episodes 200 --drop-constant-features --test-seeds 99990101 99990102 99990103 99990104 99990105 99990106 99990107 99990108 99990109 99990110 99990111 99990112 99990113 99990114 99990115 99990116 99990117 99990118 99990119 99990120 99990121 99990122 99990123 99990124 99990125 99990126 99990127 99990128 99990129 99990130 99990131 99990132 99990133 99990134 99990135 --base-seed 31337001 --obs-att-bias-pred --write-rule vote --vote-share 0.1 --val-units 20 --select-tail p99 --yaw-centred-ladder dense --yaw-integral-leak 0.9995 --obs-tilt-ref-err --zrank-pos-floor auto --obs-yaw-from-att-est --delta-max-yaw 0.5"
 FLAG = ["--gyro-z-ladder", "dense"]
 CUTS = (0.011, 0.05, 0.15, 0.45)
+# Flags added at or after CTRL-71 (off by default; their flag-off pins are their own tests,
+# e.g. tests/controller_ctrl75_76_ladders.py): absent from the pre-CTRL-71 tree's namespace.
+LATER_KEYS = ("gyro_z_ladder", "gyro_xy_ladder", "yaw_err_outer_cut")
 
 
 def _probe(extra: list[str]):
@@ -52,7 +55,7 @@ def dump(extra: list[str]) -> dict:
 	args, ec, spec = _probe(extra)
 	s = resolve_seed_set(base=args.base_seed, run_index=0, train=args.train_seed, test=args.test_seed, val=args.val_seed)
 	thr = pg._test_thresholds(args, ec, spec, 0, s.train, use_score=True)
-	public = {k: repr(v) for k, v in sorted(vars(args).items()) if not k.startswith("_") and k != "gyro_z_ladder"}
+	public = {k: repr(v) for k, v in sorted(vars(args).items()) if not k.startswith("_") and k not in LATER_KEYS}
 	return {"thresholds": [repr(float(t)) for t in thr], "names": list(feature_names(spec)),
 	        "bpf": int(spec.bits_per_feature), "token": pg.calibration_from_args(args).token(),
 	        "ctbr": repr(sorted(args._ctbr.items())), "args": public}
