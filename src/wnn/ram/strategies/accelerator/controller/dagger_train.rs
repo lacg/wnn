@@ -3308,6 +3308,9 @@ pub fn dagger_train_inplace(
 	// ABI 58 (--yaw-trim-ff): the yaw-rate feed-forward; the recorder stores bank 3's label as
 	// sp_T − cT·cresid_z (the remainder the bank must learn). false ⇒ off.
 	yaw_trim_ff = false,
+	// ABI 63 (--delta-leak-yaw): the yaw bank's own output leak; None ⇒ delta_leak. Changes
+	// the yaw bank's decode AND its label baseline (leaked_baseline), not the layout.
+	delta_leak_yaw = None,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn dagger_train_batch_inplace(
@@ -3395,6 +3398,7 @@ pub fn dagger_train_batch_inplace(
 	obs_yaw_from_att_est: bool,
 	delta_max_yaw: Option<f32>,
 	yaw_trim_ff: bool,
+	delta_leak_yaw: Option<f32>,
 ) -> PyResult<Vec<(Py<WnnController>, TrainStats)>>
 {
 	use rayon::prelude::*;
@@ -3503,7 +3507,7 @@ pub fn dagger_train_batch_inplace(
 					2.0, // est_kp — the rivals' Mahony default (TeacherFeed / est_kp)
 					0.1, // est_ki
 					ctbr.clone(),
-					obs_att_bias_pred, yaw_integral_leak, obs_tilt_ref_err, obs_yaw_trim_err, obs_yaw_trim_err_p, obs_yaw_from_att_est, delta_max_yaw, yaw_trim_ff,
+					obs_att_bias_pred, yaw_integral_leak, obs_tilt_ref_err, obs_yaw_trim_err, obs_yaw_trim_err_p, obs_yaw_from_att_est, delta_max_yaw, yaw_trim_ff, delta_leak_yaw,
 				)?;
 				controller
 					.set_target_levels_core(target_levels)

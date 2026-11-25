@@ -593,6 +593,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                obs_yaw_from_att_est: bool = False,
                delta_max_yaw: float | None = None,
                yaw_trim_ff: bool = False,
+               delta_leak_yaw: float | None = None,
                dt: float = 0.001,
                decouple_outputs: bool = False, bits_per_feature: int = 8,
                feature_balance_ratio: float = 0.0,
@@ -654,6 +655,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		obs_yaw_from_att_est=obs_yaw_from_att_est,
 		delta_max_yaw=delta_max_yaw,
 		yaw_trim_ff=yaw_trim_ff,
+		delta_leak_yaw=delta_leak_yaw,
 		dt=dt,
 		decouple_outputs=decouple_outputs,
 		feature_balance_ratio=feature_balance_ratio,
@@ -3246,6 +3248,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "--delta-max. Changes the yaw bank's decode AND its DAgger label encoding (one "
 	                     "alphabet). Needs the delta law (--ctbr-delta-law under ctbr). Unset (default) = "
 	                     "--delta-max on every bank, byte-identical. A new lineage.")
+	ap.add_argument("--delta-leak-yaw", type=float, default=None,
+	                help="ABI 63 (Luiz 25/11/2026, CTRL-74 lever L1): the output-accumulator leak of the "
+	                     "YAW bank only (m = 3: r under --output-mode ctbr, tau_yaw under "
+	                     "--decouple-outputs); every other bank keeps --delta-leak. Lets the WNN HOLD a "
+	                     "yaw-rate trim instead of rebuilding it every action (e.g. 0.95 under a global "
+	                     "0.7). Changes the yaw bank's decode AND its DAgger label baseline (one leak). "
+	                     "Needs the delta law (--ctbr-delta-law under ctbr); in (0, 1]. Unset (default) = "
+	                     "--delta-leak on every bank, byte-identical. A new lineage.")
 	ap.add_argument("--write-priority-err", action="store_true",
 	                help="L4 arm A: commit each BPTT window's records in ascending-|err| "
 	                     "order so the HIGHEST-attitude-error record writes last and owns "
@@ -4564,6 +4574,15 @@ def resolve_block10_args(args) -> None:
 			raise SystemExit("--delta-max-yaw needs the delta law (--ctbr-delta-law under --output-mode ctbr).")
 		if getattr(args, "output_mode", "pwm") != "ctbr" and not getattr(args, "decouple_outputs", False):
 			raise SystemExit("--delta-max-yaw needs a yaw bank: --output-mode ctbr or --decouple-outputs.")
+	if getattr(args, "delta_leak_yaw", None) is not None:
+		v = float(args.delta_leak_yaw)
+		if not (math.isfinite(v) and 0.0 < v <= 1.0):
+			raise SystemExit(f"--delta-leak-yaw {v}: must be finite and in (0, 1]")
+		ctbr = getattr(args, "output_mode", "pwm") == "ctbr"
+		if not (getattr(args, "ctbr_delta_law", False) if ctbr else getattr(args, "delta_control", False)):
+			raise SystemExit("--delta-leak-yaw needs the delta law (--ctbr-delta-law under --output-mode ctbr).")
+		if not ctbr and not getattr(args, "decouple_outputs", False):
+			raise SystemExit("--delta-leak-yaw needs a yaw bank: --output-mode ctbr or --decouple-outputs.")
 	if getattr(args, "obs_yaw_from_att_est", False):
 		need = {"the attitude estimator (--obs-att-estimator; default on under --translation)":
 		        getattr(args, "obs_att_estimator", False),
@@ -4587,6 +4606,7 @@ def block10_tokens(args) -> dict:
 	                "mahony" if getattr(args, "obs_yaw_from_att_est", False) else "",
 	                "ff" if getattr(args, "yaw_trim_ff", False) else "") if t),
 	            dmax_yaw=("" if getattr(args, "delta_max_yaw", None) is None else f"{float(args.delta_max_yaw):g}"),
+	            dleak_yaw=("" if getattr(args, "delta_leak_yaw", None) is None else f"{float(args.delta_leak_yaw):g}"),
 	            pos_metric="hold" if fit_pos_metric_from_args(args) == "hold" else "")
 
 

@@ -1823,6 +1823,43 @@ impl WnnController
 		Ok(())
 	}
 
+	/// ABI 63 (CTRL-74, --delta-leak-yaw): the output-accumulator leak of bank `m` — the yaw
+	/// bank's override when set, else the shared delta_leak (the SAME value, so flag-off
+	/// arithmetic is unchanged). Read by leaked_baseline, i.e. by every decode AND by the
+	/// DAgger label baseline (label_baselines), so the label and the decoder share one leak.
+	#[inline]
+	pub(crate) fn delta_leak_bank(&self, m: usize) -> f32
+	{
+		match (m, self.delta_leak_yaw)
+		{
+			(YAW_BANK, Some(v)) => v,
+			_ => self.delta_leak,
+		}
+	}
+
+	/// ABI 63: set the yaw bank's output leak (None = the shared delta_leak). Needs the delta
+	/// law and a yaw BANK (CTBR or decouple_outputs; the raw motor path has none). (0, 1].
+	pub(crate) fn set_delta_leak_yaw(&mut self, v: Option<f32>) -> Result<(), String>
+	{
+		if let Some(x) = v
+		{
+			if !(x.is_finite() && x > 0.0 && x <= 1.0)
+			{
+				return Err(format!("delta_leak_yaw must be finite and in (0, 1] (got {x})"));
+			}
+			if !self.delta_control
+			{
+				return Err("delta_leak_yaw needs delta_control (the delta law)".into());
+			}
+			if self.ctbr.is_none() && !self.decouple_outputs
+			{
+				return Err("delta_leak_yaw needs a yaw bank: output_mode ctbr or decouple_outputs".into());
+			}
+		}
+		self.delta_leak_yaw = v;
+		Ok(())
+	}
+
 	pub(crate) fn delta_params(&self) -> (bool, f32, f32, f32)
 	{
 		(
@@ -2971,6 +3008,7 @@ impl WnnController
 			delta_max,
 			delta_max_yaw: None,
 			delta_leak,
+			delta_leak_yaw: None,
 			delta_gamma: if delta_gamma > 0.0 { delta_gamma } else { 1.0 },
 			delta_label_scale: 1.0,
 			dagger_label_delta: false,
@@ -3773,6 +3811,9 @@ pub struct WnnController
 	// leak<1.0 bounds the steady-state offset to delta/(1-leak), preventing the
 	// runaway drift that made raw delta-control tumble.
 	delta_leak: f32,
+	// ABI 63 (CTRL-74, --delta-leak-yaw): the YAW bank's (m = 3) own output leak; None ⇒
+	// delta_leak (bit-identical). Read only through delta_leak_bank(m) (leaked_baseline).
+	delta_leak_yaw: Option<f32>,
 	// Non-uniform delta alphabet (09/08/2026): |t|^gamma shaping before scaling —
 	// same range/neutral/level-count/footprint, resolution concentrated near zero.
 	// 1.0 = the original piecewise-linear map (shape_gamma short-circuits).
@@ -4145,6 +4186,7 @@ impl WnnController
 		obs_yaw_from_att_est = false,
 		delta_max_yaw = None,
 		yaw_trim_ff = false,
+		delta_leak_yaw = None,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -4214,6 +4256,8 @@ impl WnnController
 		delta_max_yaw: Option<f32>,
 		// ABI 58 (--yaw-trim-ff): the yaw-rate feed-forward cT·cresid_z. false ⇒ off.
 		yaw_trim_ff: bool,
+		// ABI 63 (--delta-leak-yaw): the yaw bank's own output leak; None ⇒ delta_leak.
+		delta_leak_yaw: Option<f32>,
 	) -> PyResult<Self>
 	{
 		// CTRL-46: the bias-predictor rows are the VERY tail (after the cascade blocks).
@@ -4322,6 +4366,8 @@ impl WnnController
 		}
 		// ABI 57: after the cascade / decouple are set (the yaw bank must exist).
 		c.set_delta_max_yaw(delta_max_yaw).map_err(pyo3::exceptions::PyValueError::new_err)?;
+		// ABI 63: same placement rule as ABI 57 (the yaw bank must exist).
+		c.set_delta_leak_yaw(delta_leak_yaw).map_err(pyo3::exceptions::PyValueError::new_err)?;
 		if yaw_trim_ff
 		{
 			c.enable_yaw_trim_ff().map_err(pyo3::exceptions::PyValueError::new_err)?;
@@ -4397,6 +4443,13 @@ impl WnnController
 	pub fn delta_max_yaw(&self) -> Option<f32>
 	{
 		self.delta_max_yaw
+	}
+
+	/// ABI 63: the yaw bank's output-leak override (None = the shared delta_leak).
+	#[getter]
+	pub fn delta_leak_yaw(&self) -> Option<f32>
+	{
+		self.delta_leak_yaw
 	}
 
 	/// ABI 56: whether the yaw heading is ANCHORED (an absolute angle: obs_yaw_err /
@@ -6953,6 +7006,20 @@ impl WnnController
 		self.neutral
 	}
 
+	/// ABI 63 test hooks: bank `m`'s accumulator value (the decoder's output, the next step's
+	/// pwm_prev) and its raw decode ∈ [0,1] from the last output cells.
+	#[cfg(test)]
+	pub(crate) fn pwm_bank_pub(&self, m: usize) -> f32
+	{
+		self.pwm[m]
+	}
+
+	#[cfg(test)]
+	pub(crate) fn raw_bank_decode_pub(&self, m: usize) -> f32
+	{
+		self.raw_bank_decode(m)
+	}
+
 	/// The operating point output bank `m` leaks toward: torque banks 0 under
 	/// decouple, the commanded collective otherwise. ONE definition, shared by
 	/// leaked_baseline and the D0 label re-base (dagger_train::rebased_label_base),
@@ -6979,7 +7046,7 @@ impl WnnController
 	fn leaked_baseline(&self, m: usize) -> f32
 	{
 		let anchor = self.bank_anchor(m);
-		anchor + self.delta_leak * (self.pwm_prev[m] - anchor)
+		anchor + self.delta_leak_bank(m) * (self.pwm_prev[m] - anchor) // ABI 63: per-bank leak
 	}
 
 	/// Bank `m`'s raw decode ∈ [0,1] from the last output cells. Mode-aware (ABI

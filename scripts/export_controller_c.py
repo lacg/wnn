@@ -210,7 +210,7 @@ def _feature_refusals(spec) -> list:
 
 # CTRL-48 block 10 / levers (ABI 50-58). PORTED 22/11/2026 (Y+F+L on board, host + M4
 # parity): obs_att_bias_pred, obs_tilt_ref_err, obs_yaw_from_att_est, yaw_trim_ff,
-# delta_max_yaw, yaw_integral_leak — wnn_cascade.c computes them from the constants
+# delta_max_yaw, delta_leak_yaw (ABI 63), yaw_integral_leak — wnn_cascade.c computes them from the constants
 # wheel_block_constants() reads off the wheel. Still NOT ported (refused):
 _UNPORTED_BOOL = (
 	("obs_yaw_trim_err", "L2y trim-referenced yaw error (yaw_trim_err.rs)"),
@@ -326,6 +326,8 @@ def wheel_block_constants(spec, thresholds, conn) -> dict:
 	            yaw_from_att_est=bool(c.yaw_from_att_est),
 	            yaw_trim_ff_ct=None if c.yaw_trim_ff is None else float(c.yaw_trim_ff),
 	            delta_max_yaw=None if c.delta_max_yaw is None else float(c.delta_max_yaw),
+	            # ABI 63: a pre-63 wheel has no getter => None (the shared leak).
+	            delta_leak_yaw=(None if getattr(c, "delta_leak_yaw", None) is None else float(c.delta_leak_yaw)),
 	            yaw_integral_leak=float(c.yaw_integral_leak))
 
 
@@ -502,6 +504,8 @@ def render_block_macros(m: ExportModel) -> list:
 		        f"#define WNN_YAW_TRIM_FF_CT {f32_lit(b['yaw_trim_ff_ct'])}  /* rad/s per unit of cresid_z */"]
 	if b.get("delta_max_yaw") is not None:
 		out.append(f"#define WNN_DELTA_MAX_YAW {f32_lit(b['delta_max_yaw'])}  /* ABI 57 */")
+	if b.get("delta_leak_yaw") is not None:
+		out.append(f"#define WNN_DELTA_LEAK_YAW {f32_lit(b['delta_leak_yaw'])}  /* ABI 63 */")
 	if b.get("rate_err") is not None:
 		alpha, inv = b["rate_err"]
 		out += [f"#define WNN_RATE_ERR_ALPHA {f32_lit(alpha)}  /* ABI 62: 1 - exp(-dt/tau) */",

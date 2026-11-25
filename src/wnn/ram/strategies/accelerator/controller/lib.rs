@@ -95,6 +95,8 @@ mod ctrl59_tail_gate_tests; // ABI 59 (CTRL-58): tail sink inert + capped + CPU=
 #[cfg(test)]
 mod ctrl58_yaw_trim_ff_tests; // ABI 58: --yaw-trim-ff — cT, refusals, setpoint-only FF, label remainder, CPU/GPU score + walk parity
 #[cfg(test)]
+mod ctrl74_delta_leak_yaw_tests; // ABI 63 (CTRL-74): --delta-leak-yaw — refusals, bit-identity, yaw-only leak, decoder/label agreement, CPU/GPU score + walk parity
+#[cfg(test)]
 mod ctrl57_delta_max_yaw_tests; // ABI 57: --delta-max-yaw — refusals, bit-identity, yaw-only decode, label round trip, CPU/GPU score + walk parity
 #[cfg(test)]
 mod ctrl56_axis_split_tests; // ABI 56: per-axis split on the WNN CPU scorer — row bit-identity, err/steady decomposition, L3 pole3
@@ -624,7 +626,18 @@ mod metal_controller;
 ///     the LPF step is strict-FP (CPU == GPU == MCU C on equal inputs). A teacher-flown
 ///     rollout lends the flown loop when either rate-loop input is on
 ///     (cascade_reads_flown_rate). Pin: ctrl62_rate_err_tests.rs + rate_err_lpf unit tests.
-pub const ABI_VERSION: u32 = 62;
+/// ABI 63 (25/11/2026, Luiz, Plane CTRL-74; additive, default = ABI 62 bit-identical):
+///   * WnnController / dagger_train_batch_inplace(delta_leak_yaw=None): the yaw bank's (m = 3)
+///     own OUTPUT-accumulator leak under the delta law (CTBR r / decouple τ_yaw), so the WNN can
+///     HOLD a per-unit yaw-rate trim instead of rebuilding it through --delta-leak every action
+///     (docs/ctrl73_gap_analysis_gt.md L1). Read only through delta_leak_bank(m) inside
+///     leaked_baseline, i.e. by every decode (decode_ctbr, decode_outputs) AND by the DAgger
+///     label baseline (label_baselines) — one leak for decoder and label. Refused without the
+///     delta law or a yaw bank, or outside (0, 1]. Metal: RolloutParams + delta_leak_yaw (200
+///     words), kernel m==3 select at the CTBR and decouple accumulators; the population must
+///     agree; the train/record kernels read CPU-encoded labels. MCU C: WNN_DELTA_LEAK_YAW.
+///     Pin: ctrl74_delta_leak_yaw_tests.rs.
+pub const ABI_VERSION: u32 = 63;
 
 /// ABI 61: the precision of the WNN's own attitude estimator + heading ("f32"; a wheel
 /// without this constant runs the f64 estimator). Read by scripts/export_controller_c.py.

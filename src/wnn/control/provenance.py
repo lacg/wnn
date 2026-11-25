@@ -92,6 +92,7 @@ class ControllerProvenance:
 	# (--fit-pos-metric hold); "" = the whole-episode pos and NOT printed.
 	pos_metric: str = ""
 	dmax_yaw: str = ""  # ABI 57 --delta-max-yaw ("" = unset: the line is unchanged)
+	dleak_yaw: str = ""  # ABI 63 --delta-leak-yaw ("" = unset: the line is unchanged)
 	# CTRL-58: the staged-refinement config (refine_config.refine_token); "" = off and
 	# NOT printed, so every line without --refine-fitness/--refine-select is unchanged.
 	refine: str = ""
@@ -118,6 +119,7 @@ class ControllerProvenance:
 		        + (f"yawref={self.yawref} " if self.yawref else "")
 		        + (f"pos_metric={self.pos_metric} " if self.pos_metric else "")
 		        + (f"dmax_yaw={self.dmax_yaw} " if self.dmax_yaw else "")
+		        + (f"dleak_yaw={self.dleak_yaw} " if self.dleak_yaw else "")
 		        + (f"refine={self.refine} " if self.refine else "") +
 		        f"fitness_pools={self.fitness_pools}")
 
@@ -163,7 +165,7 @@ def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: st
                        drop: str = UNKNOWN, write: str = UNKNOWN, label: str = UNKNOWN,
                        abp: str = UNKNOWN, select: str = UNKNOWN,
                        train_ic: str = UNKNOWN, alt: str = "", yawref: str = "", pos_metric: str = "",
-                       dmax_yaw: str = "", refine: str = "") -> ControllerProvenance:
+                       dmax_yaw: str = "", refine: str = "", dleak_yaw: str = "") -> ControllerProvenance:
 	"""Gather every field, never raising: each accessor degrades to UNKNOWN / 0."""
 	wheel, abi, sha = _wheel_identity()
 	return ControllerProvenance(
@@ -190,6 +192,7 @@ def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: st
 		yawref=yawref.replace(" ", "_").replace('"', ""),
 		pos_metric=pos_metric.replace(" ", "_").replace('"', ""),
 		dmax_yaw=dmax_yaw.replace(" ", "_").replace('"', ""),
+		dleak_yaw=dleak_yaw.replace(" ", "_").replace('"', ""),
 		refine=refine.replace(" ", "_").replace('"', ""),
 	)
 
