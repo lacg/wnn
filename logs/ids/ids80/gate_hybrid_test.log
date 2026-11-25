@@ -1,0 +1,92 @@
+  [FEATURES] ranking=legacy source=TOP20_RF_FEATURES (legacy) top=20: ['ct_dst_sport_ltm', 'ct_src_dport_ltm', 'ct_srv_dst', 'ct_state_ttl', 'Dintpkt', 'dmeansz', 'Dpkts', 'dttl', 'dur', 'sbytes', 'Sintpkt', 'Sjit', 'smeansz', 'Spkts', 'sttl', 'swin', 'tcprtt', 'proto', 'service', 'state']
+  Loading from HuggingFace: lacg030175/UNSW-NB15 (random_3way)...
+  Random_3way split: 1,267,407 train, 158,426 test, 158,426 val
+  Using 43 features
+  [CUTS] cut_method=info_gain_mc seed=20421 fitted on TRAIN (1,267,407 rows): 1104 total bits {'ct_dst_sport_ltm': 17, 'ct_src_dport_ltm': 21, 'ct_srv_dst': 24, 'ct_state_ttl': 5, 'Dintpkt': 39, 'dmeansz': 154, 'Dpkts': 51, 'dttl': 4, 'dur': 61, 'sbytes': 379, 'Sintpkt': 59, 'Sjit': 44, 'smeansz': 152, 'Spkts': 54, 'sttl': 5, 'swin': 1, 'tcprtt': 17, 'proto': 4, 'service': 10, 'state': 3}
+  Encoder: 1104 total bits (distributive, 64 bits/feature, feature_selection=top20, 20 features, cut_method=info_gain_mc)
+  Train: 1,219,123 normal, 48,284 attack
+  Test:  152,390 normal, 6,036 attack
+  Val:   152,391 normal, 6,035 attack
+[ARM] E total_bits=1104
+[MARKER_TRAINER] GPU init: Apple M4 Max | est_simt_lanes=1280 | max_threads/tg=1024 | recommended_working_set=55.7GB
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1464.10ms
+{"arm": "E", "bits": 1104, "seed": 1000, "secs": 4.2, "partition": "test", "mode": "margin_val_cal", "tau": 0.001999974250793457, "f1": 95.34391479937348, "fpr": 0.33269899599711267, "acc": 99.32081855251032, "confusion": [[151883, 507], [569, 5467]], "logical_cells": 1315828, "logical_neurons": 500}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1000.57ms
+{"arm": "E", "bits": 1104, "seed": 1001, "secs": 3.0, "partition": "test", "mode": "margin_val_cal", "tau": 0.007999971508979797, "f1": 95.33038667022909, "fpr": 0.279545901962071, "acc": 99.32713064774721, "confusion": [[151964, 426], [640, 5396]], "logical_cells": 1319898, "logical_neurons": 500}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1000.39ms
+{"arm": "E", "bits": 1104, "seed": 1002, "secs": 3.1, "partition": "test", "mode": "margin_val_cal", "tau": 0.008000008063390851, "f1": 95.26106686479532, "fpr": 0.28545180129929787, "acc": 99.31703129536818, "confusion": [[151955, 435], [647, 5389]], "logical_cells": 1316224, "logical_neurons": 500}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 982.95ms
+{"arm": "E", "bits": 1104, "seed": 1003, "secs": 3.3, "partition": "test", "mode": "margin_val_cal", "tau": 0.004000004148110747, "f1": 95.26792150909958, "fpr": 0.31170024279808384, "acc": 99.31387524774973, "confusion": [[151915, 475], [612, 5424]], "logical_cells": 1334231, "logical_neurons": 500}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1012.99ms
+{"arm": "E", "bits": 1104, "seed": 1004, "secs": 3.0, "partition": "test", "mode": "margin_val_cal", "tau": 0.0040000006556510925, "f1": 95.3478699209121, "fpr": 0.332042784959643, "acc": 99.321449762034, "confusion": [[151884, 506], [569, 5467]], "logical_cells": 1286903, "logical_neurons": 500}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 980.59ms
+{"arm": "E", "bits": 1104, "seed": 1005, "secs": 3.5, "partition": "test", "mode": "margin_val_cal", "tau": 0.007999978959560394, "f1": 95.21591407602597, "fpr": 0.30776297657326596, "acc": 99.30756315251284, "confusion": [[151921, 469], [628, 5408]], "logical_cells": 1301873, "logical_neurons": 500}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1118.19ms
+{"arm": "E", "bits": 1104, "seed": 1006, "secs": 3.4, "partition": "test", "mode": "margin_val_cal", "tau": 0.001999974250793457, "f1": 95.27522668463784, "fpr": 0.3792899796574578, "acc": 99.3044071048944, "confusion": [[151812, 578], [524, 5512]], "logical_cells": 1326069, "logical_neurons": 500}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1001.64ms
+{"arm": "E", "bits": 1104, "seed": 1007, "secs": 3.1, "partition": "test", "mode": "margin_val_cal", "tau": 0.001999974250793457, "f1": 95.23296291773403, "fpr": 0.31826235317278034, "acc": 99.30819436203655, "confusion": [[151905, 485], [611, 5425]], "logical_cells": 1294818, "logical_neurons": 500}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 984.34ms
+{"arm": "E", "bits": 1104, "seed": 1008, "secs": 3.4, "partition": "test", "mode": "margin_val_cal", "tau": 0.0059999823570251465, "f1": 95.30834704091613, "fpr": 0.3386048953343395, "acc": 99.31513766679711, "confusion": [[151874, 516], [569, 5467]], "logical_cells": 1335944, "logical_neurons": 500}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 974.25ms
+{"arm": "E", "bits": 1104, "seed": 1009, "secs": 3.3, "partition": "test", "mode": "margin_val_cal", "tau": 0.001999974250793457, "f1": 95.23867610754402, "fpr": 0.33532384014699124, "acc": 99.30630073346546, "confusion": [[151879, 511], [588, 5448]], "logical_cells": 1311990, "logical_neurons": 500}
+  [FEATURES] ranking=legacy source=TOP20_RF_FEATURES (legacy) top=20: ['ct_dst_sport_ltm', 'ct_src_dport_ltm', 'ct_srv_dst', 'ct_state_ttl', 'Dintpkt', 'dmeansz', 'Dpkts', 'dttl', 'dur', 'sbytes', 'Sintpkt', 'Sjit', 'smeansz', 'Spkts', 'sttl', 'swin', 'tcprtt', 'proto', 'service', 'state']
+  Loading from HuggingFace: lacg030175/UNSW-NB15 (random_3way)...
+  Random_3way split: 1,267,407 train, 158,426 test, 158,426 val
+  Using 43 features
+  [HYBRID] timing merge: {"dur": {"E": null, "B": 58, "added": 51, "total": 112}, "Sintpkt": {"E": null, "B": 44, "added": 38, "total": 97}, "Sjit": {"E": null, "B": 40, "added": 40, "total": 84}, "Dintpkt": {"E": null, "B": 37, "added": 36, "total": 75}}
+  [CUTS] cut_method=info_gain_mc seed=20421 fitted on TRAIN (1,267,407 rows): 1269 total bits {'ct_dst_sport_ltm': 17, 'ct_src_dport_ltm': 21, 'ct_srv_dst': 24, 'ct_state_ttl': 5, 'Dintpkt': 75, 'dmeansz': 154, 'Dpkts': 51, 'dttl': 4, 'dur': 112, 'sbytes': 379, 'Sintpkt': 97, 'Sjit': 84, 'smeansz': 152, 'Spkts': 54, 'sttl': 5, 'swin': 1, 'tcprtt': 17, 'proto': 4, 'service': 10, 'state': 3}
+  Encoder: 1269 total bits (distributive, 64 bits/feature, feature_selection=top20, 20 features, cut_method=info_gain_mc)
+  Train: 1,219,123 normal, 48,284 attack
+  Test:  152,390 normal, 6,036 attack
+  Val:   152,391 normal, 6,035 attack
+[ARM] H total_bits=1269
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1042.02ms
+{"arm": "H", "bits": 1269, "seed": 1000, "secs": 3.2, "partition": "test", "mode": "margin_val_cal", "tau": 0.003999963402748108, "f1": 95.20828600281388, "fpr": 0.3536977491961415, "acc": 99.29935742870488, "confusion": [[151851, 539], [571, 5465]], "logical_cells": 1615502, "logical_neurons": 500}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 985.50ms
+{"arm": "H", "bits": 1269, "seed": 1001, "secs": 2.7, "partition": "test", "mode": "margin_val_cal", "tau": 0.007999978261068463, "f1": 95.27544455573488, "fpr": 0.3018570772360391, "acc": 99.31640008584449, "confusion": [[151930, 460], [623, 5413]], "logical_cells": 1622425, "logical_neurons": 500}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1117.28ms
+{"arm": "H", "bits": 1269, "seed": 1002, "secs": 2.7, "partition": "test", "mode": "margin_val_cal", "tau": 0.0059999823570251465, "f1": 95.20951038205546, "fpr": 0.3103878207231446, "acc": 99.30630073346546, "confusion": [[151917, 473], [626, 5410]], "logical_cells": 1605345, "logical_neurons": 500}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1057.33ms
+{"arm": "H", "bits": 1269, "seed": 1003, "secs": 2.8, "partition": "test", "mode": "margin_val_cal", "tau": 0.003999974578619003, "f1": 95.30325691086621, "fpr": 0.34647942778397534, "acc": 99.31324403822605, "confusion": [[151862, 528], [560, 5476]], "logical_cells": 1634720, "logical_neurons": 500}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1360.23ms
+{"arm": "H", "bits": 1269, "seed": 1004, "secs": 3.7, "partition": "test", "mode": "margin_val_cal", "tau": 0.0059999823570251465, "f1": 95.14558294519692, "fpr": 0.3523853271212022, "acc": 99.29115170489692, "confusion": [[151853, 537], [586, 5450]], "logical_cells": 1574091, "logical_neurons": 500}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1113.37ms
+{"arm": "H", "bits": 1269, "seed": 1005, "secs": 3.5, "partition": "test", "mode": "margin_val_cal", "tau": 0.001999974250793457, "f1": 95.1892827759599, "fpr": 0.39372662248179013, "acc": 99.29052049537323, "confusion": [[151790, 600], [524, 5512]], "logical_cells": 1600359, "logical_neurons": 500}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1036.36ms
+{"arm": "H", "bits": 1269, "seed": 1006, "secs": 3.1, "partition": "test", "mode": "margin_val_cal", "tau": 0.009999990463256836, "f1": 95.13903125481035, "fpr": 0.31104403176061424, "acc": 99.29683259061012, "confusion": [[151916, 474], [640, 5396]], "logical_cells": 1614733, "logical_neurons": 500}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 980.57ms
+{"arm": "H", "bits": 1269, "seed": 1007, "secs": 3.3, "partition": "test", "mode": "margin_val_cal", "tau": 0.007999978493899107, "f1": 95.15934731376198, "fpr": 0.2802021129995406, "acc": 99.3044071048944, "confusion": [[151963, 427], [675, 5361]], "logical_cells": 1585118, "logical_neurons": 500}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 975.00ms
+{"arm": "H", "bits": 1269, "seed": 1008, "secs": 3.2, "partition": "test", "mode": "margin_val_cal", "tau": 0.011999979615211487, "f1": 95.17667821577847, "fpr": 0.29070148959905506, "acc": 99.3050383144181, "confusion": [[151947, 443], [658, 5378]], "logical_cells": 1593974, "logical_neurons": 500}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1125.52ms
+{"arm": "H", "bits": 1269, "seed": 1009, "secs": 3.5, "partition": "test", "mode": "margin_val_cal", "tau": 0.001999974250793457, "f1": 95.26271123170979, "fpr": 0.3235120414725376, "acc": 99.31135040965499, "confusion": [[151897, 493], [598, 5438]], "logical_cells": 1577874, "logical_neurons": 500}
+  [FEATURES] ranking=legacy source=TOP20_RF_FEATURES (legacy) top=20: ['ct_dst_sport_ltm', 'ct_src_dport_ltm', 'ct_srv_dst', 'ct_state_ttl', 'Dintpkt', 'dmeansz', 'Dpkts', 'dttl', 'dur', 'sbytes', 'Sintpkt', 'Sjit', 'smeansz', 'Spkts', 'sttl', 'swin', 'tcprtt', 'proto', 'service', 'state']
+  Loading from HuggingFace: lacg030175/UNSW-NB15 (random_3way)...
+  Random_3way split: 1,267,407 train, 158,426 test, 158,426 val
+  Using 43 features
+  [CUTS] cut_method=xgb_splits seed=20421 fitted on TRAIN (1,267,407 rows): 457 total bits {'ct_dst_sport_ltm': 4, 'ct_src_dport_ltm': 16, 'ct_srv_dst': 34, 'ct_state_ttl': 5, 'Dintpkt': 37, 'dmeansz': 38, 'Dpkts': 18, 'dttl': 1, 'dur': 58, 'sbytes': 53, 'Sintpkt': 44, 'Sjit': 40, 'smeansz': 48, 'Spkts': 24, 'sttl': 6, 'swin': 3, 'tcprtt': 12}
+  Encoder: 457 total bits (distributive, 64 bits/feature, feature_selection=top20, 20 features, cut_method=xgb_splits)
+  Train: 1,219,123 normal, 48,284 attack
+  Test:  152,390 normal, 6,036 attack
+  Val:   152,391 normal, 6,035 attack
+[ARM] B total_bits=457
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1034.49ms
+{"arm": "B", "bits": 457, "seed": 1000, "secs": 2.7, "partition": "test", "mode": "margin_val_cal", "tau": -0.001999974250793457, "f1": 95.63593272941289, "fpr": 0.4094756873810617, "acc": 99.34922298107634, "confusion": [[151766, 624], [407, 5629]], "logical_cells": 2568545, "logical_neurons": 500}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1136.55ms
+{"arm": "B", "bits": 457, "seed": 1001, "secs": 3.2, "partition": "test", "mode": "margin_val_cal", "tau": -0.0059999823570251465, "f1": 95.52206817376644, "fpr": 0.41013189841853137, "acc": 99.3334427429841, "confusion": [[151765, 625], [431, 5605]], "logical_cells": 2558214, "logical_neurons": 500}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1076.07ms
+{"arm": "B", "bits": 457, "seed": 1002, "secs": 2.8, "partition": "test", "mode": "margin_val_cal", "tau": -0.001999974250793457, "f1": 95.49516992932791, "fpr": 0.4278495964302119, "acc": 99.32713064774721, "confusion": [[151738, 652], [414, 5622]], "logical_cells": 2612506, "logical_neurons": 500}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1041.50ms
+{"arm": "B", "bits": 457, "seed": 1003, "secs": 2.8, "partition": "test", "mode": "margin_val_cal", "tau": -0.004000004380941391, "f1": 95.47683218818325, "fpr": 0.4107881094560011, "acc": 99.32713064774721, "confusion": [[151764, 626], [440, 5596]], "logical_cells": 2605233, "logical_neurons": 500}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1393.08ms
+{"arm": "B", "bits": 457, "seed": 1004, "secs": 3.2, "partition": "test", "mode": "margin_val_cal", "tau": -0.001999974250793457, "f1": 95.39142127612534, "fpr": 0.42522475228033335, "acc": 99.31324403822605, "confusion": [[151742, 648], [440, 5596]], "logical_cells": 2561702, "logical_neurons": 500}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1135.60ms
+{"arm": "B", "bits": 457, "seed": 1005, "secs": 3.5, "partition": "test", "mode": "margin_val_cal", "tau": -0.0039999959990382195, "f1": 95.41868655073513, "fpr": 0.4291620185051513, "acc": 99.31640008584449, "confusion": [[151736, 654], [429, 5607]], "logical_cells": 2562997, "logical_neurons": 500}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1082.72ms
+{"arm": "B", "bits": 457, "seed": 1006, "secs": 3.1, "partition": "test", "mode": "margin_val_cal", "tau": -0.007999971508979797, "f1": 95.52245479100156, "fpr": 0.40619463219371355, "acc": 99.3340739525078, "confusion": [[151771, 619], [436, 5600]], "logical_cells": 2604100, "logical_neurons": 500}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1507.48ms
+{"arm": "B", "bits": 457, "seed": 1007, "secs": 3.7, "partition": "test", "mode": "margin_val_cal", "tau": -0.001999974250793457, "f1": 95.54281005244593, "fpr": 0.4166940087932279, "acc": 99.33533637155517, "confusion": [[151755, 635], [418, 5618]], "logical_cells": 2607904, "logical_neurons": 500}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1607.25ms
+{"arm": "B", "bits": 457, "seed": 1008, "secs": 3.8, "partition": "test", "mode": "margin_val_cal", "tau": -0.0039999892469495535, "f1": 95.41891285662082, "fpr": 0.3956952555941991, "acc": 99.321449762034, "confusion": [[151787, 603], [472, 5564]], "logical_cells": 2575163, "logical_neurons": 500}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1396.00ms
+{"arm": "B", "bits": 457, "seed": 1009, "secs": 3.9, "partition": "test", "mode": "margin_val_cal", "tau": -0.0059999823570251465, "f1": 95.48948287347747, "fpr": 0.45672288207887657, "acc": 99.3220809715577, "confusion": [[151694, 696], [378, 5658]], "logical_cells": 2603720, "logical_neurons": 500}
