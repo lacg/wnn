@@ -65,9 +65,9 @@ class ThresholdCalibration:
 	# CTRL-71 (--gyro-z-ladder dense): gyro_z takes the DENSE ladder with the fixed
 	# rate cuts evaluator.DENSE_GYRO_Z_INNER_RAD_S. False = byte-identical.
 	gyro_z_dense: bool = False
-	# CTRL-75 (L2, --gyro-xy-ladder dense): gyro_x / gyro_y take the DENSE ladder with the
-	# fixed rate cuts evaluator.DENSE_GYRO_XY_INNER_RAD_S. False = byte-identical.
-	gyro_xy_dense: bool = False
+	# CTRL-75 (L2, --gyro-xy-ladder dense|dense_hold): gyro_x / gyro_y take the DENSE ladder
+	# with the fixed rate cuts evaluator.GYRO_XY_LADDERS[...]. None = byte-identical.
+	gyro_xy_ladder: str | None = None
 	# CTRL-76 (L3, --yaw-err-outer-cut DEG): the proportional yaw-error inputs' outermost
 	# dense-ladder pair becomes a fixed +-DEG. Needs yaw_dense. None = byte-identical.
 	yaw_err_outer_deg: float | None = None
@@ -83,6 +83,8 @@ class ThresholdCalibration:
 		if self.yaw_dense and not self.yaw_centred:
 			raise ValueError("calibration yaw_dense is an option of the yaw-centred ladder (yaw_centred=True)")
 		self._check_yaw_err_outer()
+		if self.gyro_xy_ladder not in (None, "dense", "dense_hold"):
+			raise ValueError(f"calibration gyro_xy_ladder {self.gyro_xy_ladder!r} — one of None, 'dense', 'dense_hold'")
 		if self.outer_quantile is not None and not 0.0 < float(self.outer_quantile) < 0.5:
 			raise ValueError(f"calibration outer_quantile must be in (0, 0.5) (got {self.outer_quantile})")
 		if self.student_samples is not None and not self.student_sample_count():
@@ -125,8 +127,8 @@ class ThresholdCalibration:
 			base = f"{base},yawtrim:dense"
 		if self.gyro_z_dense:
 			base = f"{base},gyroz:dense"
-		if self.gyro_xy_dense:
-			base = f"{base},gyroxy:dense"
+		if self.gyro_xy_ladder is not None:
+			base = f"{base},gyroxy:{self.gyro_xy_ladder}"
 		if self.yaw_err_outer_deg is not None:
 			base = f"{base},yawout:{float(self.yaw_err_outer_deg):g}"
 		return base if self.student_samples is None else f"{base},student:{self.student_sample_count()}"
@@ -156,7 +158,7 @@ def calibration_from_args(args) -> ThresholdCalibration:
 		and getattr(args, "tilt_err_ladder", "dense") == "dense",
 		yaw_trim_dense=bool(getattr(args, "obs_yaw_trim_err", False) or getattr(args, "obs_yaw_trim_err_p", False)),
 		gyro_z_dense=getattr(args, "gyro_z_ladder", None) == "dense",
-		gyro_xy_dense=getattr(args, "gyro_xy_ladder", None) == "dense",
+		gyro_xy_ladder=getattr(args, "gyro_xy_ladder", None),
 		yaw_err_outer_deg=getattr(args, "yaw_err_outer_cut", None),
 		# Set by phased_ga's refit (_refit_thresholds_from_student) once the grid winner
 		# has been rolled out; every later fit site reads it from here.

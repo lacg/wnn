@@ -846,6 +846,11 @@ DENSE_GYRO_Z_INNER_RAD_S = (0.011, 0.05, 0.15, 0.45)
 # gyro_y -0.0038/+0.0048, -0.0140/+0.0139); 0.05 ~ the hold p95 (0.055 / 0.048); 0.80 is
 # the smallest round cut with <= 25 % of the 0-0.15 s ticks beyond it (|gyro_x| p75 0.75).
 DENSE_GYRO_XY_INNER_RAD_S = (0.004, 0.013, 0.05, 0.80)
+# CTRL-75 L2-b (--gyro-xy-ladder dense_hold): the same ladder keeping today's third hold cut
+# (G+T s1 fit +-0.024-0.030 -> 0.026) instead of 0.05: hold resolution ~unchanged, the
+# 0.026-0.80 rad/s transient band is one bin.
+DENSE_GYRO_XY_HOLD_INNER_RAD_S = (0.004, 0.013, 0.026, 0.80)
+GYRO_XY_LADDERS = {"dense": DENSE_GYRO_XY_INNER_RAD_S, "dense_hold": DENSE_GYRO_XY_HOLD_INNER_RAD_S}
 
 
 def _dense_thresholds(arr: np.ndarray, bpf: int, inner, outer_quantile) -> np.ndarray:
@@ -897,12 +902,12 @@ def _yaw_integral_gain(spec) -> float:
 
 
 def _dense_inner_for(name: str, spec, yaw_dense: bool, tilt_dense: bool, yaw_trim_dense: bool = False,
-                     gyro_z_dense: bool = False, gyro_xy_dense: bool = False):
+                     gyro_z_dense: bool = False, gyro_xy_ladder: str | None = None):
 	"""The fixed inner cuts of feature `name` under the dense ladders, or None."""
 	if gyro_z_dense and name in YAW_RATE_FEATURES:
 		return DENSE_GYRO_Z_INNER_RAD_S
-	if gyro_xy_dense and name in ROLL_PITCH_RATE_FEATURES:
-		return DENSE_GYRO_XY_INNER_RAD_S
+	if gyro_xy_ladder is not None and name in ROLL_PITCH_RATE_FEATURES:
+		return GYRO_XY_LADDERS[gyro_xy_ladder]
 	if yaw_trim_dense and name in YAW_PROPORTIONAL_FEATURES:
 		return DENSE_YAW_TRIM_INNER_RAD
 	if yaw_dense and name in YAW_ERROR_FEATURES:
@@ -925,7 +930,7 @@ def _thresholds_from_samples(samples_per_feature, spec, method, outer_quantile, 
                              ladder: str = "quantile", yaw_centred: bool = False,
                              yaw_dense: bool = False, tilt_dense: bool = False,
                              yaw_trim_dense: bool = False, gyro_z_dense: bool = False,
-                             gyro_xy_dense: bool = False, yaw_err_outer_deg: float | None = None) -> list[float]:
+                             gyro_xy_ladder: str | None = None, yaw_err_outer_deg: float | None = None) -> list[float]:
 	"""Per-feature thermometer thresholds from the sampled operating distribution
 	(base 9 + enabled H2 extras) — shared by the Python reference-rollout fitter and
 	the Rust training-cascade sampler (CTRL-17 G1). ladder="centred" (CTRL-48) swaps
@@ -935,9 +940,9 @@ def _thresholds_from_samples(samples_per_feature, spec, method, outer_quantile, 
 	bpf = spec.bits_per_feature
 	zero_ref = [d.zero_ref for d in feature_layout(spec)] if ladder == "centred" else [False] * nf
 	yaw_c = [d.name in YAW_ERROR_FEATURES for d in feature_layout(spec)] if yaw_centred else [False] * nf
-	any_dense = yaw_dense or tilt_dense or yaw_trim_dense or gyro_z_dense or gyro_xy_dense
+	any_dense = yaw_dense or tilt_dense or yaw_trim_dense or gyro_z_dense or gyro_xy_ladder is not None
 	dense_inner = [_dense_inner_for(d.name, spec, yaw_dense and yaw_centred, tilt_dense, yaw_trim_dense, gyro_z_dense,
-	                                gyro_xy_dense)
+	                                gyro_xy_ladder)
 	               for d in feature_layout(spec)] if any_dense else [None] * nf
 	fixed_outer = [_yaw_outer_for(d.name, yaw_dense and yaw_centred, yaw_trim_dense, yaw_err_outer_deg)
 	               for d in feature_layout(spec)]
@@ -1040,7 +1045,7 @@ def fit_calibration(
 	                                      ladder=cal.ladder, yaw_centred=cal.yaw_centred,
 	                                      yaw_dense=cal.yaw_dense, tilt_dense=cal.tilt_dense,
 	                                      yaw_trim_dense=cal.yaw_trim_dense, gyro_z_dense=cal.gyro_z_dense,
-	                                      gyro_xy_dense=cal.gyro_xy_dense, yaw_err_outer_deg=cal.yaw_err_outer_deg)
+	                                      gyro_xy_ladder=cal.gyro_xy_ladder, yaw_err_outer_deg=cal.yaw_err_outer_deg)
 	return CalibrationFit(thresholds=thresholds,
 	                      constant_features=_zero_spread_features(samples, extra))
 

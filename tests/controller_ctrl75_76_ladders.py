@@ -6,6 +6,8 @@
     $CTRL75_BASE_PYTHONPATH (the pre-CTRL-75 tree) and this tree;
   * --gyro-xy-ladder dense moves the gyro_x / gyro_y blocks ONLY, to exactly +-0.004, +-0.013,
     +-0.05, +-0.80 rad/s; provenance says gyroxy:dense;
+  * --gyro-xy-ladder dense_hold (L2-b) likewise, to +-0.004, +-0.013, +-0.026, +-0.80 rad/s;
+    provenance gyroxy:dense_hold;
   * --yaw-err-outer-cut 4.5 moves ONLY the outermost yaw_err pair, to +-4.5 deg (the inner
     +-0.10 / +-0.25 deg and the quantile pair, and yaw_err_i, unchanged); provenance yawout:4.5;
   * both flags together = the union of the two moves; the fixed-outer helper and the
@@ -31,6 +33,8 @@ GT_TOKEN = "eps:200,regime:flown,ladder:quantile,yaw:dense,tilt:dense,gyroz:dens
 XY_FLAG = ["--gyro-xy-ladder", "dense"]
 YO_FLAG = ["--yaw-err-outer-cut", "4.5"]
 XY_CUTS = (0.004, 0.013, 0.05, 0.80)
+XYH_FLAG = ["--gyro-xy-ladder", "dense_hold"]
+XYH_CUTS = (0.004, 0.013, 0.026, 0.80)
 NEW_KEYS = ("gyro_xy_ladder", "yaw_err_outer_cut")
 
 
@@ -100,8 +104,8 @@ def test_flags_off_is_gt():
 	      f"{len(new['args'])} parsed arguments identical across the two trees")
 
 
-def _check_xy(off: dict, on: dict) -> None:
-	want = [-c for c in reversed(XY_CUTS)] + list(XY_CUTS)
+def _check_xy(off: dict, on: dict, cuts: tuple = XY_CUTS) -> None:
+	want = [-c for c in reversed(cuts)] + list(cuts)
 	b_on = _blocks(on)
 	assert b_on["gyro_x"] == want and b_on["gyro_y"] == want, (b_on["gyro_x"], b_on["gyro_y"])
 
@@ -122,6 +126,15 @@ def test_gyro_xy_flag_moves_gyro_xy_only():
 	assert on["args"] == off["args"] and on["ctbr"] == off["ctbr"], "flag ON changed another resolved setting"
 	print(f"✓ --gyro-xy-ladder dense: gyro_x {_blocks(off)['gyro_x']} -> +-{XY_CUTS}; the other "
 	      f"{len(_blocks(off)) - 2} ladders byte-identical; token {on['token']}")
+
+
+def test_gyro_xy_dense_hold_moves_gyro_xy_only():
+	off, on = _dump_in(_here(), []), _dump_in(_here(), XYH_FLAG)
+	assert _moved(off, on) == ["gyro_x", "gyro_y"], _moved(off, on)
+	_check_xy(off, on, XYH_CUTS)
+	assert on["token"] == off["token"] + ",gyroxy:dense_hold", on["token"]
+	assert on["args"] == off["args"] and on["ctbr"] == off["ctbr"], "flag ON changed another resolved setting"
+	print(f"✓ --gyro-xy-ladder dense_hold: gyro_x/gyro_y -> +-{XYH_CUTS}; the other ladders byte-identical")
 
 
 def test_yaw_outer_flag_moves_yaw_err_outer_only():
@@ -145,9 +158,10 @@ def test_both_flags_union():
 
 
 def test_fixed_outer_helper_and_validation():
-	from wnn.control.evaluator import DENSE_GYRO_XY_INNER_RAD_S, _dense_thresholds, _with_fixed_outer
+	from wnn.control.evaluator import (DENSE_GYRO_XY_HOLD_INNER_RAD_S, DENSE_GYRO_XY_INNER_RAD_S,
+	                                   _dense_thresholds, _with_fixed_outer)
 	from wnn.control.threshold_calibration import ThresholdCalibration
-	assert DENSE_GYRO_XY_INNER_RAD_S == XY_CUTS
+	assert DENSE_GYRO_XY_INNER_RAD_S == XY_CUTS and DENSE_GYRO_XY_HOLD_INNER_RAD_S == XYH_CUTS
 	ts = _dense_thresholds(np.random.default_rng(0).normal(0.0, 0.03, 20000), 8, (0.002, 0.004), None)
 	out = _with_fixed_outer(ts, 0.08, 2)
 	assert list(out[1:-1]) == list(ts[1:-1]) and out[0] == -0.08 and out[-1] == 0.08
@@ -158,7 +172,8 @@ def test_fixed_outer_helper_and_validation():
 			continue
 		raise AssertionError(f"_with_fixed_outer must refuse {bad[1:]}")
 	for kw in ({"yaw_err_outer_deg": 4.5}, {"yaw_centred": True, "yaw_dense": True, "yaw_err_outer_deg": 0.0},
-	           {"yaw_centred": True, "yaw_dense": True, "yaw_trim_dense": True, "yaw_err_outer_deg": 4.5}):
+	           {"yaw_centred": True, "yaw_dense": True, "yaw_trim_dense": True, "yaw_err_outer_deg": 4.5},
+	           {"gyro_xy_ladder": "quantile"}):
 		try:
 			ThresholdCalibration(**kw)
 		except ValueError:
@@ -193,6 +208,7 @@ if __name__ == "__main__":
 	test_fixed_outer_helper_and_validation()
 	test_registry_and_adapter_refusal()
 	test_gyro_xy_flag_moves_gyro_xy_only()
+	test_gyro_xy_dense_hold_moves_gyro_xy_only()
 	test_yaw_outer_flag_moves_yaw_err_outer_only()
 	test_both_flags_union()
 	test_flags_off_is_gt()

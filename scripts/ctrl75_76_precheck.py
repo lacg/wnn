@@ -3,7 +3,8 @@
 The G+T s1 VAL traces (CTRL-73 trace_val.py: 3 val units x 100 eps, never TEST) are pushed
 through the IMPLEMENTED ladders (phased_ga's own threshold fit for the flown G+T argv, flags
 off vs on). Gates from docs/ctrl73_gap_analysis_gt.md §6:
-  L2 (a) beyond-outer share <= 25 % in every transient window (0-1.6 s) and <= 5 % in the hold;
+  L2 (both ladders, dense and dense_hold, side by side with today)
+     (a) beyond-outer share <= 25 % in every transient window (0-1.6 s) and <= 5 % in the hold;
      (b) hold occupancy of the inner two pairs not coarser than today's (largest inner-bin
          share no more than 1 pp above today's).
   L3 share of 0-0.3 s ticks beyond the new yaw outer cut <= 10 %, and the hold occupancy of
@@ -21,7 +22,7 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tests"))
-from controller_ctrl75_76_ladders import XY_FLAG, YO_FLAG, _blocks, dump  # noqa: E402
+from controller_ctrl75_76_ladders import XY_FLAG, XYH_FLAG, YO_FLAG, _blocks, dump  # noqa: E402
 
 W = [(0, 150), (150, 300), (300, 600), (600, 1000), (1000, 1600), (1600, 2000)]
 
@@ -48,19 +49,35 @@ def _inner_max(x: np.ndarray, cuts: list[float]) -> float:
 	return float(_occupancy(x, cuts)[3:6].max())
 
 
-def check_l2(T: np.ndarray, off: dict, on: dict) -> bool:
-	t, ok, hold = T[:, 2], True, T[:, 2] >= 1600
+def _entropy(x: np.ndarray, cuts: list[float]) -> float:
+	p = _occupancy(x, cuts) / 100.0
+	p = p[p > 0]
+	return float(-(p * np.log2(p)).sum())
+
+
+def _l2_gate(x: np.ndarray, t: np.ndarray, c0: list[float], c1: list[float]) -> bool:
+	hold, b1 = t >= 1600, _windows(x, t, c1)
+	return max(b1[:5]) <= 25.0 and b1[5] <= 5.0 and _inner_max(x[hold], c1) <= _inner_max(x[hold], c0) + 1.0
+
+
+def _l2_rows(x: np.ndarray, t: np.ndarray, ladders: dict) -> None:
+	hold = t >= 1600
+	print(f"    {'ladder':10s} | beyond-outer % 0-.15/.15-.3/.3-.6/.6-1/1-1.6/hold | hold H bits | "
+	      f"max hold-bin % inside +-0.013 | H bits .15-.3 / .3-.6")
+	for lab, c in ladders.items():
+		b, H = _windows(x, t, c), [_entropy(x[(t >= a) & (t < bb)], c) for a, bb in W[1:3]]
+		print(f"    {lab:10s} | {'/'.join(f'{v:.1f}' for v in b):34s} | {_entropy(x[hold], c):11.2f} | "
+		      f"{_inner_max(x[hold], c):29.1f} | {H[0]:.2f} / {H[1]:.2f}")
+
+
+def check_l2(T: np.ndarray, ladders: dict) -> dict:
+	"""ladders: label -> {feature: cuts}, the first being today. Prints the values table; returns per-variant PASS."""
+	t, labs, ok = T[:, 2], list(ladders), {}
 	for col, name in ((3, "gyro_x"), (4, "gyro_y")):
-		x, c0, c1 = T[:, col], off[name], on[name]
-		b0, b1 = _windows(x, t, c0), _windows(x, t, c1)
-		a = max(b1[:5]) <= 25.0 and b1[5] <= 5.0
-		i0, i1 = _inner_max(x[hold], c0), _inner_max(x[hold], c1)
-		ok &= a and i1 <= i0 + 1.0
-		print(f"  {name}: beyond-outer % by window {'/'.join(f'{v:.1f}' for v in b0)} -> "
-		      f"{'/'.join(f'{v:.1f}' for v in b1)}  (a) {'PASS' if a else 'FAIL'}")
-		print(f"    hold occupancy today {' '.join(f'{v:.1f}' for v in _occupancy(x[hold], c0))}")
-		print(f"    hold occupancy new   {' '.join(f'{v:.1f}' for v in _occupancy(x[hold], c1))}"
-		      f"  (b) largest inner-bin share {i0:.1f} -> {i1:.1f} % {'PASS' if i1 <= i0 + 1.0 else 'FAIL'}")
+		print(f"  {name}")
+		_l2_rows(T[:, col], t, {lab: ladders[lab][name] for lab in labs})
+		for lab in labs[1:]:
+			ok[lab] = ok.get(lab, True) and _l2_gate(T[:, col], t, ladders[labs[0]][name], ladders[lab][name])
 	return ok
 
 
@@ -81,10 +98,12 @@ def check_l3(T: np.ndarray, off: dict, on: dict) -> bool:
 
 def main(path: str) -> None:
 	T = np.load(path)["trace"].astype(float)
-	off, xy, yo = _blocks(dump([])), _blocks(dump(XY_FLAG)), _blocks(dump(YO_FLAG))
+	off, yo = _blocks(dump([])), _blocks(dump(YO_FLAG))
+	ladders = {"today": off, "L2-a dense": _blocks(dump(XY_FLAG)), "L2-b hold": _blocks(dump(XYH_FLAG))}
 	print(f"VAL trace {path}: {len(T)} ticks, units {sorted(set(T[:, 0].astype(int)))}")
-	print("L2 --gyro-xy-ladder dense")
-	print(f"L2 {'PASS' if check_l2(T, off, xy) else 'FAIL'}")
+	print("L2 --gyro-xy-ladder dense (L2-a) | dense_hold (L2-b)")
+	for lab, ok in check_l2(T, ladders).items():
+		print(f"L2 {lab}: {'PASS' if ok else 'FAIL'}")
 	print("L3 --yaw-err-outer-cut 4.5")
 	print(f"L3 {'PASS' if check_l3(T, off, yo) else 'FAIL'}")
 

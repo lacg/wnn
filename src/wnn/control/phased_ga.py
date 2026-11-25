@@ -3561,12 +3561,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "gyro_y and every other feature keep their ladder. Applies to every fit (grid, "
 	                     "held-out/test refits, the student refit). Off (default) = byte-identical. A new "
 	                     "lineage: thresholds are part of the address function.")
-	ap.add_argument("--gyro-xy-ladder", choices=["dense"], default=None,
+	ap.add_argument("--gyro-xy-ladder", choices=["dense", "dense_hold"], default=None,
 	                help="CTRL-75 (L2, docs/ctrl73_gap_analysis_gt.md §6): the roll/pitch RATE inputs gyro_x / "
 	                     "gyro_y ONLY take the dense ladder with FIXED symmetric cuts at +-0.004, +-0.013, "
 	                     "+-0.05, +-0.80 rad/s (the inner two keep today's hold resolution; 0.80 ends the "
 	                     "transient saturation of the quantile fit's +-0.07-0.09 outer cut), replacing the "
-	                     "PID-calibration quantile fit. Every other feature keeps its ladder. Applies to every "
+	                     "PID-calibration quantile fit. dense_hold (L2-b) = +-0.004, +-0.013, +-0.026, +-0.80: "
+	                     "keeps today's 0.026 hold cut, one bin over 0.026-0.80 in the transient. "
+	                     "Every other feature keeps its ladder. Applies to every "
 	                     "fit. Off (default) = byte-identical. A new lineage: thresholds are part of the "
 	                     "address function.")
 	ap.add_argument("--yaw-err-outer-cut", type=float, default=None, metavar="DEG",
