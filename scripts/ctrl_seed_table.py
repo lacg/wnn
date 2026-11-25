@@ -217,8 +217,29 @@ def build_rows(arms, seeds, log, style, pairs=()):
 	return rows
 
 
+def arm_summary(cells, key):
+	"""One arm's per-seed values for `key`, then its own mean (fails: total) over its finished seeds."""
+	vals = "|".join(c.get(key, c.get("state", "–")) for c in cells)
+	done = [c for c in cells if "raw" in c]
+	if len(done) < 2 or key in TIEBREAK:
+		return vals
+	if key == "fails":
+		return "%s  Σ%d" % (vals, sum(c["raw"][3] for c in done))
+	if key == "stable":
+		return "%s  μ%.2f" % (vals, stable_pct(sum(c["raw"][3] for c in done), UNITS_EPS * len(done), 2))
+	i = {"err": 0, "steady": 1, "pos": 2}[key]
+	return "%s  μ%.3f" % (vals, statistics.mean(c["raw"][i] for c in done))
+
+
+def build_rows_arms(arms, seeds, log):
+	"""TRANSPOSED (style 'arms', Luiz 25/11: 12-arm factorial): one ROW per arm, each cell = the seeds in order
+	(s1|s2|...) then that arm's own mean over its finished seeds (μ; fails = Σ)."""
+	per_seed = [seed_values(arms, s, log) for s in seeds]
+	return [[lab] + [arm_summary([ps[a] for ps in per_seed], k) for k in COLUMNS] for a, (lab, _) in enumerate(arms)]
+
+
 def header(labels, style, pairs=()):
-	h = ["seed"] + [f"{k} {UNIT[k]}" for k in COLUMNS]  # arm order printed ONCE in the legend line (Luiz 20/11: width)
+	h = ["arm" if style == "arms" else "seed"] + [f"{k} {UNIT[k]}" for k in COLUMNS]  # arm order printed ONCE in the legend line (Luiz 20/11: width)
 	if pairs:
 		h += [f"Δ{labels[x]}−{labels[y]} err/steady/pos" for x, y in pairs]
 	elif style == "pair":
@@ -262,7 +283,7 @@ def main():
 	ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 	ap.add_argument("--arm", action="append", required=True, help="LABEL=regex-on-tag with {s}")
 	ap.add_argument("--seeds", required=True, help="e.g. 1-10 or 1,3,5")
-	ap.add_argument("--style", choices=("box", "pair"), default="box")
+	ap.add_argument("--style", choices=("box", "pair", "arms"), default="box")
 	ap.add_argument("--ref", action="append", default=[], help="LABEL=stable,err,steady,pos,fails (one value, all arms)")
 	ap.add_argument("--delta", action="append", default=[], help="X:Y arm labels -> a ΔX−Y err/steady/pos column")
 	ap.add_argument("--log", default=str(RUNS_LOG))
@@ -275,10 +296,11 @@ def main():
 	labels = [lab for lab, _ in arms]
 	pairs = [tuple(labels.index(x) for x in d.split(":")) for d in a.delta]
 	h = header(labels, a.style, pairs)
-	rows = build_rows(arms, seeds, log, a.style, pairs)
+	rows = build_rows_arms(arms, seeds, log) if a.style == "arms" else build_rows(arms, seeds, log, a.style, pairs)
 	pad = len(h) - 6
 	refs = [[lab] + v.split(",") + [""] * pad for lab, v in (r.split("=", 1) for r in a.ref)]
-	print("arms: " + " | ".join(labels) + "   (every cell lists the arms in this order; fails = count, /3500 per seed;"
+	order = ("seeds: " + " | ".join("s%d" % x for x in seeds) + "   (every cell lists the seeds in this order, then the arm's own mean μ / total Σ;") if a.style == "arms" else ("arms: " + " | ".join(labels) + "   (every cell lists the arms in this order;")
+	print(order + " fails = count, /3500 per seed;"
 		" (tb) = tie-breakers only: cells = TRUE keys of the published winner, min = wall minutes)")
 	print((render_pair if a.style == "pair" else render_box)(h, rows, refs))
 	print("f = flying (START logged, no END yet) · – = not flown")
