@@ -416,6 +416,10 @@ struct RolloutParams
 	cas_rerr_mask: u32,
 	cas_rerr_alpha: f32,
 	cas_rerr_inv: [f32; 3],
+	// + 1 (ABI 63, CTRL-74, --delta-leak-yaw), appended in lockstep with the shader twin: the
+	// yaw bank's output leak (== delta_leak when unset ⇒ the kernel's `m == 3 ? delta_leak_yaw
+	// : delta_leak` selects the SAME value — flag-off arithmetic unchanged).
+	delta_leak_yaw: f32,
 }
 
 /// CTRL-38: the cascade feature blocks as the score kernel needs them, read off the
@@ -1315,6 +1319,7 @@ impl ControllerRolloutEvaluator
 				cas_rerr_mask: ctbr.map_or(0, |c| c.cas.masks().1),
 				cas_rerr_alpha: ctbr.and_then(|c| c.cas.rerr).map_or(0.0, |f| f.alpha),
 				cas_rerr_inv: ctbr.and_then(|c| c.cas.rerr).map_or([0.0; 3], |f| f.inv_scale),
+				delta_leak_yaw: controllers[0].delta_leak_bank(crate::controller::YAW_BANK),
 			};
 
 			let b_q0 = self.buf(q0_chunk);
@@ -1786,6 +1791,11 @@ pub fn score_controllers_metal(
 	if controllers.iter().any(|c| c.delta_max_yaw() != controllers[0].delta_max_yaw())
 	{
 		return Err(verr("score_controllers_metal: a batch mixes delta_max_yaw values".to_string()));
+	}
+	// ABI 63: one RolloutParams per launch ⇒ the population must agree on the yaw leak.
+	if controllers.iter().any(|c| c.delta_leak_yaw() != controllers[0].delta_leak_yaw())
+	{
+		return Err(verr("score_controllers_metal: a batch mixes delta_leak_yaw values".to_string()));
 	}
 	// ABI 55: one RolloutParams per launch ⇒ the population must agree on the heading source.
 	if controllers.iter().any(|c| c.yaw_from_att_est() != controllers[0].yaw_from_att_est())
@@ -4894,7 +4904,7 @@ fn build_parity_fixture_variant(
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		fixture_ctbr(variant),
-		false, None, None, false, false, false, None, false,
+		false, None, None, false, false, false, None, false, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 	for _ in 0..(n_state * 4)
@@ -6779,7 +6789,7 @@ fn controller_plant_latch_parity_once(high_on: bool) -> Result<(usize, usize, us
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		None, // ctbr OFF (ABI 38: the motor-level controller)
-		false, None, None, false, false, false, None, false,
+		false, None, None, false, false, false, None, false, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -6973,7 +6983,7 @@ fn controller_plant_counter_parity_once() -> Result<(usize, usize, usize), Strin
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		None, // ctbr OFF (ABI 38: the motor-level controller)
-		false, None, None, false, false, false, None, false,
+		false, None, None, false, false, false, None, false, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7155,7 +7165,7 @@ fn controller_plant_bidir_parity_once() -> Result<(usize, usize, usize), String>
 		false, // dagger_label_delta OFF (legacy absolute label)
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		None, // ctbr OFF (ABI 38: the motor-level controller)
-		false, None, None, false, false, false, None, false,
+		false, None, None, false, false, false, None, false, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7838,7 +7848,7 @@ fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool)
 		false, false, false,
 		false, false,
 		false, 1, 1.0, false, false, 2.0, 0.1, None,
-		false, None, None, false, false, false, None, false,
+		false, None, None, false, false, false, None, false, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7995,7 +8005,7 @@ fn controller_record_att_est_parity_once() -> Result<(usize, usize, usize, bool)
 		false, false,
 		false, 1, 1.0, false,
 		true, 2.0, 0.1, None, // obs_att_estimator ON; ctbr OFF
-		false, None, None, false, false, false, None, false,
+		false, None, None, false, false, false, None, false, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -8145,7 +8155,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 		true, true, true, // stage-1 vertical channel ON
 		false, false,     // stage-2 horizontal OFF
 		false, 1, 1.0, false, false, 2.0, 0.1, None,
-		false, None, None, false, false, false, None, false,
+		false, None, None, false, false, false, None, false, None,
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -8522,7 +8532,8 @@ mod tests
 		// + 1 (ABI 57): delta_max_yaw.
 		// + 2 (ABI 58): yff_on + yff_ct.
 		// + 6 (ABI 62): cas_rate_i_mask + cas_rerr_mask + cas_rerr_alpha + cas_rerr_inv[3].
-		assert_eq!(mem::size_of::<RolloutParams>(), 199 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
+		// + 1 (ABI 63): delta_leak_yaw.
+		assert_eq!(mem::size_of::<RolloutParams>(), 200 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============

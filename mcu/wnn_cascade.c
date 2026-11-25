@@ -590,6 +590,12 @@ static float delta_max_bank(int m)
 	return (m == 3) ? WNN_DELTA_MAX_YAW : WNN_DELTA_MAX;
 }
 
+/* controller.rs delta_leak_bank: the yaw bank (3) may carry its own leak (ABI 63). */
+static float delta_leak_bank(int m)
+{
+	return (m == 3) ? WNN_DELTA_LEAK_YAW : WNN_DELTA_LEAK;
+}
+
 /* controller.rs decode_ctbr (absolute, or the leaky delta law), then (ABI 58) the
  * yaw-rate feed-forward on the HELD setpoint only. */
 static void decode_ctbr(wnn_ctrl_t *c)
@@ -602,7 +608,7 @@ static void decode_ctbr(wnn_ctrl_t *c)
 		if (WNN_DELTA_CONTROL)
 		{
 			float delta = decoded_to_delta(d, delta_max_bank(m) * r, WNN_NEUTRAL, c->gamma[m]);
-			float leaked = 0.0f + WNN_DELTA_LEAK * (c->setpoint_prev[m] - 0.0f);
+			float leaked = 0.0f + delta_leak_bank(m) * (c->setpoint_prev[m] - 0.0f);
 			v = clampf_rs(leaked + delta, -r, r);
 		}
 		else

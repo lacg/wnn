@@ -87,6 +87,7 @@
  *   WNN_YAW_TRIM_FF_CT      ABI 58: the held yaw setpoint += cT * cresid_z (clamped);
  *                           the bank value (what the delta law leaks) is untouched
  *   WNN_DELTA_MAX_YAW       ABI 57: the yaw bank's own delta_max
+ *   WNN_DELTA_LEAK_YAW      ABI 63 (CTRL-74): the yaw bank's own output leak
  *   WNN_YAW_INTEGRAL_LEAK   ARM 3: the yaw integrals' own leak
  * A refusal in scripts/export_controller_c.py is lifted only for what is ported here. */
 #ifndef WNN_OBS_ATT_BIAS_PRED
@@ -103,6 +104,9 @@
 #endif
 #ifndef WNN_DELTA_MAX_YAW
 #define WNN_DELTA_MAX_YAW WNN_DELTA_MAX
+#endif
+#ifndef WNN_DELTA_LEAK_YAW
+#define WNN_DELTA_LEAK_YAW WNN_DELTA_LEAK
 #endif
 #ifndef WNN_YAW_INTEGRAL_LEAK
 #define WNN_YAW_INTEGRAL_LEAK WNN_INTEGRAL_LEAK

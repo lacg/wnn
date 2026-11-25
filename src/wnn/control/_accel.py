@@ -193,7 +193,10 @@ import os
 # firmware rate PID's tracking error (rate_sp - gyro) / bank range, one-pole low-passed
 # (--obs-rate-err); CtbrSpec(obs_rate_i_axes=) — rate-I on an axis subset (7 = all);
 # ReplayObs(rate_err=) its replay stream. Off / all-axes => the ABI-61 layout and pipelines.
-EXPECTED_ABI = 62
+# ABI 63 (25/11/2026, Luiz, Plane CTRL-74; additive, default = ABI 62 bit-identical):
+# WnnController / dagger_train_batch_inplace(delta_leak_yaw=None) — the yaw bank's own output
+# leak (--delta-leak-yaw), read by the decode AND the DAgger label baseline; None = delta_leak.
+EXPECTED_ABI = 63
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

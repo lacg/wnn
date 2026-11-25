@@ -41,7 +41,7 @@ from wnn.control import _accel as ra   # memory_* cell operators (Rust, counter 
 from wnn.ram.strategies.connectivity.generic_strategies import GenericGAStrategy
 from wnn.ram.fitness import FitnessCalculatorType
 
-from .evaluator import ControllerSpec, tilt_ref_err_kw, yaw_trim_err_kw, yaw_trim_err_p_kw, yaw_from_att_est_kw, delta_max_yaw_kw, yaw_trim_ff_kw
+from .evaluator import ControllerSpec, tilt_ref_err_kw, yaw_trim_err_kw, yaw_trim_err_p_kw, yaw_from_att_est_kw, delta_max_yaw_kw, delta_leak_yaw_kw, yaw_trim_ff_kw
 from .ga_strategy import default_controller_ga_config
 from .training import EpisodeConfig, _sample_initial_state
 
@@ -167,6 +167,7 @@ def record_address_universe(
 		obs_yaw_trim_err_p=yaw_trim_err_p_kw(spec),  # block 10 L2y' (ABI 52)
 		obs_yaw_from_att_est=yaw_from_att_est_kw(spec),  # lever 1 (ABI 55)
 		delta_max_yaw=delta_max_yaw_kw(spec),  # ABI 57
+		delta_leak_yaw=delta_leak_yaw_kw(spec),  # ABI 63 (CTRL-74)
 		yaw_trim_ff=yaw_trim_ff_kw(spec),  # ABI 58
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
@@ -343,6 +344,7 @@ def build_controller_from_memory(genome: MemoryGenome, thresholds: list[float]) 
 		obs_yaw_trim_err_p=yaw_trim_err_p_kw(spec),  # block 10 L2y' (ABI 52)
 		obs_yaw_from_att_est=yaw_from_att_est_kw(spec),  # lever 1 (ABI 55)
 		delta_max_yaw=delta_max_yaw_kw(spec),  # ABI 57
+		delta_leak_yaw=delta_leak_yaw_kw(spec),  # ABI 63 (CTRL-74)
 		yaw_trim_ff=yaw_trim_ff_kw(spec),  # ABI 58
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),

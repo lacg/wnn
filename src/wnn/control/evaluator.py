@@ -272,6 +272,10 @@ class ControllerSpec:
 	# ABI 57 (--delta-max-yaw, Luiz 17/11/2026): the yaw bank's (m = 3) own delta_max under
 	# the delta law (CTBR r / decouple τ_yaw); None = delta_max on every bank.
 	delta_max_yaw: float | None = None
+	# ABI 63 (--delta-leak-yaw, Luiz 25/11/2026, CTRL-74): the yaw bank's (m = 3) own output
+	# leak under the delta law (CTBR r / decouple τ_yaw) — decode AND DAgger label baseline;
+	# None = delta_leak on every bank.
+	delta_leak_yaw: float | None = None
 	# ABI 58 (--yaw-trim-ff, Luiz 17/11/2026): yaw-rate feed-forward cT·cresid_z on the CTBR yaw
 	# setpoint (cT derived in Rust); bank 3 learns the remainder. False = off.
 	yaw_trim_ff: bool = False
@@ -740,6 +744,7 @@ def _feature_controller(spec: ControllerSpec) -> WnnController:
 		obs_yaw_trim_err_p=yaw_trim_err_p_kw(spec),  # block 10 L2y' (ABI 52)
 		obs_yaw_from_att_est=yaw_from_att_est_kw(spec),  # lever 1 (ABI 55)
 		delta_max_yaw=delta_max_yaw_kw(spec),  # ABI 57
+		delta_leak_yaw=delta_leak_yaw_kw(spec),  # ABI 63 (CTRL-74)
 		yaw_trim_ff=yaw_trim_ff_kw(spec),  # ABI 58
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
@@ -780,6 +785,12 @@ def device_switch_allowed() -> bool:
 def yaw_trim_ff_kw(spec) -> bool:
 	"""ABI 58: ControllerSpec.yaw_trim_ff as the bool the wheel takes."""
 	return bool(getattr(spec, "yaw_trim_ff", False))
+
+
+def delta_leak_yaw_kw(spec) -> "float | None":
+	"""ABI 63: ControllerSpec.delta_leak_yaw as the wheel's Option<f32> (None = delta_leak)."""
+	v = getattr(spec, "delta_leak_yaw", None)
+	return None if v is None else float(v)
 
 
 def delta_max_yaw_kw(spec) -> "float | None":
@@ -1717,6 +1728,7 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		obs_yaw_trim_err_p=yaw_trim_err_p_kw(spec),  # block 10 L2y' (ABI 52)
 		obs_yaw_from_att_est=yaw_from_att_est_kw(spec),  # lever 1 (ABI 55)
 		delta_max_yaw=delta_max_yaw_kw(spec),  # ABI 57
+		delta_leak_yaw=delta_leak_yaw_kw(spec),  # ABI 63 (CTRL-74)
 		yaw_trim_ff=yaw_trim_ff_kw(spec),  # ABI 58
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
@@ -2335,6 +2347,7 @@ class ControllerEvaluator:
 			obs_yaw_trim_err_p=yaw_trim_err_p_kw(first_spec),  # block 10 L2y' (ABI 52)
 			obs_yaw_from_att_est=yaw_from_att_est_kw(first_spec),  # lever 1 (ABI 55)
 			delta_max_yaw=delta_max_yaw_kw(first_spec),  # ABI 57
+			delta_leak_yaw=delta_leak_yaw_kw(first_spec),  # ABI 63 (CTRL-74)
 			yaw_trim_ff=yaw_trim_ff_kw(first_spec),  # ABI 58
 			output_full_window=getattr(first_spec, 'output_full_window', False),
 			frame_stride=int(getattr(first_spec, 'frame_stride', 1)),
@@ -2453,6 +2466,7 @@ class ControllerEvaluator:
 		obs_yaw_trim_err_p=yaw_trim_err_p_kw(spec),  # block 10 L2y' (ABI 52)
 		obs_yaw_from_att_est=yaw_from_att_est_kw(spec),  # lever 1 (ABI 55)
 		delta_max_yaw=delta_max_yaw_kw(spec),  # ABI 57
+		delta_leak_yaw=delta_leak_yaw_kw(spec),  # ABI 63 (CTRL-74)
 		yaw_trim_ff=yaw_trim_ff_kw(spec),  # ABI 58
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),

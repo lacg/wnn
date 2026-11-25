@@ -445,7 +445,26 @@ def build_cases(model, genome, argv: list, ec) -> list:
 	cases = [Case(name="flags_off", model=model, genome=genome)]
 	for i, (name, ri, dh) in enumerate((("rate_i", True, False), ("dhat", False, True), ("both", True, True))):
 		cases.append(synthetic_case(name, base, argv, ec, ri, dh, seed=1000 + i))
-	return cases + pef_cases(cases) + control_cases(cases) + block_mutants(cases[0]) + rate_loop_cases(base, argv, ec)
+	return (cases + pef_cases(cases) + control_cases(cases) + block_mutants(cases[0]) + rate_loop_cases(base, argv, ec)
+	        + delta_leak_yaw_cases(cases[0]))
+
+
+def delta_leak_yaw_cases(off: Case) -> list:
+	"""ABI 63 (CTRL-74): the trained winner with the yaw bank's own output leak (0.95 under
+	the winner's shared leak), strict — the C WNN_DELTA_LEAK_YAW twin of delta_leak_bank — plus
+	its mutant (the C header's yaw leak broken ONLY, must be caught). Skipped on a pre-63 wheel."""
+	from wnn.control.evaluator import build_controller
+	spec = dataclasses.replace(off.model.spec, delta_leak_yaw=0.95)
+	genome = dataclasses.replace(off.genome, spec=spec)
+	got = getattr(build_controller(genome), "delta_leak_yaw", None)
+	if got is None:
+		print("  SKIP flags_off/dleakyaw: the installed wheel has no delta_leak_yaw (pre-ABI 63)")
+		return []
+	blocks = {**(off.model.blocks or {}), "delta_leak_yaw": float(got)}
+	model = dataclasses.replace(off.model, spec=spec, blocks=blocks)
+	on = dataclasses.replace(off, name="flags_off/dleakyaw", model=model, genome=genome)
+	bad = dataclasses.replace(model, blocks={**blocks, "delta_leak_yaw": float(got) * 0.99})
+	return [on, dataclasses.replace(on, name="flags_off/dleakyaw/mutant", model=bad, expect_fail=True)]
 
 
 def rate_loop_cases(base, argv: list, ec) -> list:
@@ -499,6 +518,8 @@ def block_mutants(off: Case) -> list:
 		muts.append(("mutant-tiltref", _block_mutation(b, "tilt_ref_shape", shape)))
 	if b.get("delta_max_yaw") is not None:
 		muts.append(("mutant-dmaxyaw", _block_mutation(b, "delta_max_yaw", b["delta_max_yaw"] * 1.01)))
+	if b.get("delta_leak_yaw") is not None:
+		muts.append(("mutant-dleakyaw", _block_mutation(b, "delta_leak_yaw", b["delta_leak_yaw"] * 0.99)))
 	if b.get("yaw_integral_leak") is not None and b["yaw_integral_leak"] != float(np.float32(off.model.spec.integral_leak)):
 		muts.append(("mutant-yawleak", _block_mutation(b, "yaw_integral_leak", float(off.model.spec.integral_leak))))
 	if b.get("yaw_from_att_est"):

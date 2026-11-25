@@ -346,6 +346,9 @@ struct Params
 	uint cas_rerr_mask;
 	float cas_rerr_alpha;
 	float cas_rerr_inv[3];
+	// ABI 63 (CTRL-74, --delta-leak-yaw), appended in lockstep: the yaw bank's (m = 3) output
+	// leak; equal to delta_leak when the flag is unset.
+	float delta_leak_yaw;
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -2054,7 +2057,7 @@ kernel void controller_rollout(
 					if (P.delta_control != 0u)
 					{
 						float delta = decoded_to_delta(decoded, (m == 3u ? P.delta_max_yaw : P.delta_max) * r, P.residual_neutral, P.ctbr_gamma[m]); // ABI 57
-						pwm_acc[m] = clamp(P.delta_leak * pwm_acc[m] + delta, -r, r);
+						pwm_acc[m] = clamp((m == 3u ? P.delta_leak_yaw : P.delta_leak) * pwm_acc[m] + delta, -r, r); // ABI 63
 					}
 					else
 					{
@@ -2079,7 +2082,7 @@ kernel void controller_rollout(
 					{
 						float delta = decoded_to_delta(decoded, (m == 3u ? P.delta_max_yaw : P.delta_max), P.residual_neutral, P.delta_gamma); // ABI 57
 						float nb = (m >= 1u) ? neutral : coll_anchor;
-						pwm_acc[m] = clamp(nb + P.delta_leak * (pwm_acc[m] - nb) + delta, lo, 1.0f);
+						pwm_acc[m] = clamp(nb + (m == 3u ? P.delta_leak_yaw : P.delta_leak) * (pwm_acc[m] - nb) + delta, lo, 1.0f); // ABI 63
 					}
 					else
 					{
