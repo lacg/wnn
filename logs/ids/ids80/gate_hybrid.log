@@ -1,0 +1,95 @@
+  [FEATURES] ranking=legacy source=TOP20_RF_FEATURES (legacy) top=20: ['ct_dst_sport_ltm', 'ct_src_dport_ltm', 'ct_srv_dst', 'ct_state_ttl', 'Dintpkt', 'dmeansz', 'Dpkts', 'dttl', 'dur', 'sbytes', 'Sintpkt', 'Sjit', 'smeansz', 'Spkts', 'sttl', 'swin', 'tcprtt', 'proto', 'service', 'state']
+  Loading from HuggingFace: lacg030175/UNSW-NB15 (random_3way)...
+  Random_3way split: 1,267,407 train, 158,426 test, 158,426 val
+  Using 43 features
+  [CUTS] cut_method=info_gain_mc seed=20421 fitted on TRAIN (1,267,407 rows): 1104 total bits {'ct_dst_sport_ltm': 17, 'ct_src_dport_ltm': 21, 'ct_srv_dst': 24, 'ct_state_ttl': 5, 'Dintpkt': 39, 'dmeansz': 154, 'Dpkts': 51, 'dttl': 4, 'dur': 61, 'sbytes': 379, 'Sintpkt': 59, 'Sjit': 44, 'smeansz': 152, 'Spkts': 54, 'sttl': 5, 'swin': 1, 'tcprtt': 17, 'proto': 4, 'service': 10, 'state': 3}
+  Encoder: 1104 total bits (distributive, 64 bits/feature, feature_selection=top20, 20 features, cut_method=info_gain_mc)
+  Train: 1,219,123 normal, 48,284 attack
+  Test:  152,390 normal, 6,036 attack
+  Val:   152,391 normal, 6,035 attack
+[ARM] E total_bits=1104
+[MARKER_TRAINER] GPU init: Apple M4 Max | est_simt_lanes=1280 | max_threads/tg=1024 | recommended_working_set=55.7GB
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1688.40ms
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1080.60ms
+{"arm": "E", "bits": 1104, "seed": 1000, "secs": 9.6, "f1": 95.68087025233889, "fpr": 0.3294157791470625, "rec": 91.69842584921292, "rec25": 89.67688483844242, "fpr25": 0.24345269733776928, "f1_25": 95.63161802870769, "fuz25": 60.781367392937646, "footprint": "Footprint(logical_neurons=500, physical_neurons=500, logical_cells=1315828, physical_cells=1315828)"}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 986.42ms
+{"arm": "E", "bits": 1104, "seed": 1001, "secs": 4.7, "f1": 95.58980595638393, "fpr": 0.283481307951257, "rec": 90.3893951946976, "rec25": 89.49461474730738, "fpr25": 0.24935855792008713, "f1_25": 95.54299796377741, "fuz25": 60.030052592036064}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1008.79ms
+{"arm": "E", "bits": 1104, "seed": 1002, "secs": 4.6, "f1": 95.52485668658657, "fpr": 0.28020027429441374, "rec": 90.09113504556753, "rec25": 88.99751449875724, "fpr25": 0.2382030434868201, "f1_25": 95.46852770044447, "fuz25": 58.602554470323064}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1001.89ms
+{"arm": "E", "bits": 1104, "seed": 1003, "secs": 4.7, "f1": 95.71760585825419, "fpr": 0.28873096180220614, "rec": 90.95277547638774, "rec25": 89.26263463131731, "fpr25": 0.23164097617313356, "f1_25": 95.58541227143608, "fuz25": 60.030052592036064}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 989.72ms
+{"arm": "E", "bits": 1104, "seed": 1004, "secs": 4.6, "f1": 95.65950116582096, "fpr": 0.3267909522215879, "rec": 91.56586578293289, "rec25": 89.71002485501242, "fpr25": 0.24935855792008713, "f1_25": 95.60478712150389, "fuz25": 60.781367392937646}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1103.03ms
+{"arm": "E", "bits": 1104, "seed": 1005, "secs": 4.6, "f1": 95.6976173309669, "fpr": 0.2920119954590494, "rec": 90.95277547638774, "rec25": 89.32891466445734, "fpr25": 0.23689063002408278, "f1_25": 95.57210971528262, "fuz25": 59.50413223140496}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 969.73ms
+{"arm": "E", "bits": 1104, "seed": 1006, "secs": 4.5, "f1": 95.72877879848639, "fpr": 0.362226115715495, "rec": 92.57663628831814, "rec25": 89.52775476387738, "fpr25": 0.24148407714366335, "f1_25": 95.60095561729578, "fuz25": 59.9549211119459}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1047.08ms
+{"arm": "E", "bits": 1104, "seed": 1007, "secs": 4.6, "f1": 95.60635907861857, "fpr": 0.3162916445196895, "rec": 91.15161557580778, "rec25": 89.14664457332229, "fpr25": 0.23885925021818874, "f1_25": 95.50749626821458, "fuz25": 58.45229151014275}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1138.71ms
+{"arm": "E", "bits": 1104, "seed": 1008, "secs": 4.7, "f1": 95.64960357587626, "fpr": 0.3130106108628462, "rec": 91.23446561723281, "rec25": 89.71002485501242, "fpr25": 0.24476511080050659, "f1_25": 95.63303881522745, "fuz25": 61.00676183320811}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 980.58ms
+{"arm": "E", "bits": 1104, "seed": 1009, "secs": 4.6, "f1": 95.61383862716117, "fpr": 0.3189164714451641, "rec": 91.23446561723281, "rec25": 89.6106048053024, "fpr25": 0.24542131753187524, "f1_25": 95.60049692578878, "fuz25": 61.00676183320811}
+  [FEATURES] ranking=legacy source=TOP20_RF_FEATURES (legacy) top=20: ['ct_dst_sport_ltm', 'ct_src_dport_ltm', 'ct_srv_dst', 'ct_state_ttl', 'Dintpkt', 'dmeansz', 'Dpkts', 'dttl', 'dur', 'sbytes', 'Sintpkt', 'Sjit', 'smeansz', 'Spkts', 'sttl', 'swin', 'tcprtt', 'proto', 'service', 'state']
+  Loading from HuggingFace: lacg030175/UNSW-NB15 (random_3way)...
+  Random_3way split: 1,267,407 train, 158,426 test, 158,426 val
+  Using 43 features
+  [HYBRID] timing merge: {"dur": {"E": null, "B": 58, "added": 51, "total": 112}, "Sintpkt": {"E": null, "B": 44, "added": 38, "total": 97}, "Sjit": {"E": null, "B": 40, "added": 40, "total": 84}, "Dintpkt": {"E": null, "B": 37, "added": 36, "total": 75}}
+  [CUTS] cut_method=info_gain_mc seed=20421 fitted on TRAIN (1,267,407 rows): 1269 total bits {'ct_dst_sport_ltm': 17, 'ct_src_dport_ltm': 21, 'ct_srv_dst': 24, 'ct_state_ttl': 5, 'Dintpkt': 75, 'dmeansz': 154, 'Dpkts': 51, 'dttl': 4, 'dur': 112, 'sbytes': 379, 'Sintpkt': 97, 'Sjit': 84, 'smeansz': 152, 'Spkts': 54, 'sttl': 5, 'swin': 1, 'tcprtt': 17, 'proto': 4, 'service': 10, 'state': 3}
+  Encoder: 1269 total bits (distributive, 64 bits/feature, feature_selection=top20, 20 features, cut_method=info_gain_mc)
+  Train: 1,219,123 normal, 48,284 attack
+  Test:  152,390 normal, 6,036 attack
+  Val:   152,391 normal, 6,035 attack
+[ARM] H total_bits=1269
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 987.55ms
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1080.33ms
+{"arm": "H", "bits": 1269, "seed": 1000, "secs": 8.5, "f1": 95.6182652948335, "fpr": 0.32744715895295656, "rec": 91.43330571665285, "rec25": 88.8318144159072, "fpr25": 0.242140283875032, "f1_25": 95.39642596788708, "fuz25": 58.82794891059354, "footprint": "Footprint(logical_neurons=500, physical_neurons=500, logical_cells=1615502, physical_cells=1615502)"}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1073.96ms
+{"arm": "H", "bits": 1269, "seed": 1001, "secs": 5.0, "f1": 95.61054907649768, "fpr": 0.29398061565315536, "rec": 90.68765534382767, "rec25": 89.56089478044738, "fpr25": 0.2487023511887185, "f1_25": 95.56605741999826, "fuz25": 62.20886551465063}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1351.66ms
+{"arm": "H", "bits": 1269, "seed": 1002, "secs": 5.3, "f1": 95.61830507044755, "fpr": 0.2880747550708375, "rec": 90.58823529411765, "rec25": 89.32891466445734, "fpr25": 0.23885925021818874, "f1_25": 95.55997852219853, "fuz25": 60.63110443275732}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1039.15ms
+{"arm": "H", "bits": 1269, "seed": 1003, "secs": 4.8, "f1": 95.62662925166971, "fpr": 0.33532163972938034, "rec": 91.6321458160729, "rec25": 89.36205468102733, "fpr25": 0.24804614445734985, "f1_25": 95.5129747296417, "fuz25": 60.480841472577005}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1062.68ms
+{"arm": "H", "bits": 1269, "seed": 1004, "secs": 5.1, "f1": 95.53399565605976, "fpr": 0.31432302432558357, "rec": 90.85335542667772, "rec25": 88.7986743993372, "fpr25": 0.23885925021818874, "f1_25": 95.40703988866986, "fuz25": 59.12847483095417}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1066.09ms
+{"arm": "H", "bits": 1269, "seed": 1005, "secs": 5.0, "f1": 95.59348969269973, "fpr": 0.3740378368801307, "rec": 92.34465617232809, "rec25": 88.96437448218724, "fpr25": 0.2487023511887185, "f1_25": 95.39437269290507, "fuz25": 59.12847483095417}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1051.36ms
+{"arm": "H", "bits": 1269, "seed": 1006, "secs": 5.0, "f1": 95.61501179760543, "fpr": 0.3025113031609478, "rec": 90.88649544324771, "rec25": 89.09693454846727, "fpr25": 0.24673373099461257, "f1_25": 95.44471128059632, "fuz25": 60.105184072126214}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1009.28ms
+{"arm": "H", "bits": 1269, "seed": 1007, "secs": 4.9, "f1": 95.49830017821247, "fpr": 0.27757544736893913, "rec": 89.94200497100249, "rec25": 89.09693454846727, "fpr25": 0.24279649060640063, "f1_25": 95.46892708162179, "fuz25": 60.25544703230654}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 992.91ms
+{"arm": "H", "bits": 1269, "seed": 1008, "secs": 4.9, "f1": 95.5914147094423, "fpr": 0.27626303390620177, "rec": 90.24026512013256, "rec25": 89.09693454846727, "fpr25": 0.23885925021818874, "f1_25": 95.49316651478007, "fuz25": 60.405709992486855}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 996.42ms
+{"arm": "H", "bits": 1269, "seed": 1009, "secs": 4.9, "f1": 95.62413388398011, "fpr": 0.3110419906687403, "rec": 91.10190555095278, "rec25": 89.32891466445734, "fpr25": 0.2487023511887185, "f1_25": 95.49941113704857, "fuz25": 60.480841472577005}
+  [FEATURES] ranking=legacy source=TOP20_RF_FEATURES (legacy) top=20: ['ct_dst_sport_ltm', 'ct_src_dport_ltm', 'ct_srv_dst', 'ct_state_ttl', 'Dintpkt', 'dmeansz', 'Dpkts', 'dttl', 'dur', 'sbytes', 'Sintpkt', 'Sjit', 'smeansz', 'Spkts', 'sttl', 'swin', 'tcprtt', 'proto', 'service', 'state']
+  Loading from HuggingFace: lacg030175/UNSW-NB15 (random_3way)...
+  Random_3way split: 1,267,407 train, 158,426 test, 158,426 val
+  Using 43 features
+  [CUTS] cut_method=xgb_splits seed=20421 fitted on TRAIN (1,267,407 rows): 457 total bits {'ct_dst_sport_ltm': 4, 'ct_src_dport_ltm': 16, 'ct_srv_dst': 34, 'ct_state_ttl': 5, 'Dintpkt': 37, 'dmeansz': 38, 'Dpkts': 18, 'dttl': 1, 'dur': 58, 'sbytes': 53, 'Sintpkt': 44, 'Sjit': 40, 'smeansz': 48, 'Spkts': 24, 'sttl': 6, 'swin': 3, 'tcprtt': 12}
+  Encoder: 457 total bits (distributive, 64 bits/feature, feature_selection=top20, 20 features, cut_method=xgb_splits)
+  Train: 1,219,123 normal, 48,284 attack
+  Test:  152,390 normal, 6,036 attack
+  Val:   152,391 normal, 6,035 attack
+[ARM] B total_bits=457
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1290.51ms
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1037.79ms
+{"arm": "B", "bits": 457, "seed": 1000, "secs": 9.3, "f1": 95.76688481253302, "fpr": 0.4042233465230886, "rec": 93.62054681027341, "rec25": 89.80944490472245, "fpr25": 0.24935855792008713, "f1_25": 95.63326104595119, "fuz25": 63.335837716003006, "footprint": "Footprint(logical_neurons=500, physical_neurons=500, logical_cells=2568545, physical_cells=2568545)"}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 997.88ms
+{"arm": "B", "bits": 457, "seed": 1001, "secs": 5.2, "f1": 95.682980629146, "fpr": 0.4114416205681438, "rec": 93.47141673570837, "rec25": 89.34548467274233, "fpr25": 0.2487023511887185, "f1_25": 95.5041766408763, "fuz25": 61.83320811419984}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1649.86ms
+{"arm": "B", "bits": 457, "seed": 1002, "secs": 6.1, "f1": 95.72982418353966, "fpr": 0.40816058691130047, "rec": 93.5708367854184, "rec25": 89.1963545981773, "fpr25": 0.24804614445734985, "f1_25": 95.46529179644287, "fuz25": 61.532682193839214}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1677.57ms
+{"arm": "B", "bits": 457, "seed": 1003, "secs": 6.0, "f1": 95.72371213555965, "fpr": 0.39766127920940214, "rec": 93.32228666114332, "rec25": 89.46147473073736, "fpr25": 0.24410890406913796, "f1_25": 95.56576326223414, "fuz25": 61.83320811419984}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 994.06ms
+{"arm": "B", "bits": 457, "seed": 1004, "secs": 5.2, "f1": 95.74217580171403, "fpr": 0.4068481734485633, "rec": 93.5874067937034, "rec25": 89.1797845898923, "fpr25": 0.24804614445734985, "f1_25": 95.46051921445579, "fuz25": 60.70623591284748}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1371.05ms
+{"arm": "B", "bits": 457, "seed": 1005, "secs": 5.5, "f1": 95.6792420629858, "fpr": 0.41669127441909304, "rec": 93.5708367854184, "rec25": 89.13007456503729, "fpr25": 0.24935855792008713, "f1_25": 95.43813246374565, "fuz25": 60.93163035311796}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1234.24ms
+{"arm": "B", "bits": 457, "seed": 1006, "secs": 5.9, "f1": 95.71736014574348, "fpr": 0.4048795532544573, "rec": 93.45484672742337, "rec25": 89.36205468102733, "fpr25": 0.24476511080050659, "f1_25": 95.53315136597683, "fuz25": 61.98347107438017}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1698.49ms
+{"arm": "B", "bits": 457, "seed": 1007, "secs": 6.0, "f1": 95.6642067049629, "fpr": 0.4153788609563557, "rec": 93.48798674399336, "rec25": 88.68268434134217, "fpr25": 0.24279649060640063, "f1_25": 95.34924759024, "fuz25": 59.12847483095417}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1024.49ms
+{"arm": "B", "bits": 457, "seed": 1008, "secs": 5.2, "f1": 95.72751089191127, "fpr": 0.3924116253584529, "rec": 93.2228666114333, "rec25": 89.34548467274233, "fpr25": 0.24673373099461257, "f1_25": 95.51627850848519, "fuz25": 60.781367392937646}
+[MARKER_TRAIN_BATCHED] 1 genomes × 500 neurons × 1267407 examples (1 chunks of ≤5000000) in 1322.47ms
+{"arm": "B", "bits": 457, "seed": 1009, "secs": 5.4, "f1": 95.71087562724736, "fpr": 0.4567198850325807, "rec": 94.54846727423364, "rec25": 89.06379453189727, "fpr25": 0.24935855792008713, "f1_25": 95.41902545941119, "fuz25": 61.3824192336589}
