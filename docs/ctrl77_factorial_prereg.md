@@ -101,8 +101,8 @@ L1 therefore uses **`--delta-leak-yaw 0.95 --delta-max-yaw 0.08333`**. The per-a
   - **Expected vs G+T: err lower; steady not worse.** Expected to be the smallest of the three.
 - **Combinations.** The levers act on different parts: L1 on the yaw output accumulator, L2 on the roll/pitch
   rate inputs, L3 on the yaw-error input. Registered direction for every combination:
-  - with L1: **err lower and steady lower**;
-  - without L1: **err lower, steady not worse**.
+  - every arm (Luiz 25/11, his usual rule for all arms): **err lower and steady lower** (the levers target
+    the err/steady gap to MPCOF; consistently better in that direction, not worse elsewhere).
   - Combination vs its single-lever parts (and vs the other combinations) is **descriptive only**: does it add
     up, or do the parts interfere?
 
@@ -142,8 +142,7 @@ ANY of (A), (B) or (C) holds:
 **n = 10: adoption (Luiz's rule), per surviving arm vs G+T.**
 - **ADOPT if:**
   - it is consistently better in the registered direction (majority of the 10 pairs AND mean delta in that
-    direction): for arms with L1, err lower and steady lower; for arms without L1, err lower, with steady not
-    worse (not both a majority of pairs worse and the mean delta worse);
+    direction) on err and steady — the SAME rule for every arm (Luiz 25/11: "use my usual rule for all arms");
   - AND it is not worse on stable, fails and pos (3-D) over the whole vector.
 - No magnitude bar. Cells (TRUE keys) and wall minutes are tie-breakers only.
 - If more than one arm passes, Luiz chooses on the whole vector, with the combination-vs-parts tables as
