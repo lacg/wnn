@@ -1,0 +1,65 @@
+[_ms01_P_both_L1_yld_n0_full_s1] KO= thresholds 2s
+  FAIL u99990123 ep16: err 7.95 reached_hold 1 stable 0 | whole r/p/y/|v| 7.79/0.18/1.00/7.95 | hold r/p/y/|v| 0.42/0.10/0.25/0.56 | mid 7.86
+  FAIL u99990123 ep33: err 5.22 reached_hold 1 stable 0 | whole r/p/y/|v| 5.05/0.17/0.61/5.22 | hold r/p/y/|v| 0.29/0.06/0.14/0.36 | mid 5.24
+[C-S2-d_wposx2_a61_rf_c200_dc_biasin_ms01_P_both_L1_yld_n0_full_s1] 17s stable 99.94 err 1.110 steady 0.336 mid 0.768 pos 0.3387 fails 2 | logged HEADLINE ('99.9', '1.11', '0.34')
+[_ms01_P_both_L1_yld_n0_full_s2] KO= thresholds 2s
+[C-S2-d_wposx2_a61_rf_c200_dc_biasin_ms01_P_both_L1_yld_n0_full_s2] 18s stable 100.00 err 1.117 steady 0.279 mid 0.799 pos 0.3395 fails 0 | logged HEADLINE ('100.0', '1.12', '0.28')
+[_ms01_P_both_L1_yld_n0_full_s3] KO= thresholds 2s
+[C-S2-d_wposx2_a61_rf_c200_dc_biasin_ms01_P_both_L1_yld_n0_full_s3] 17s stable 100.00 err 1.058 steady 0.274 mid 0.712 pos 0.3399 fails 0 | logged HEADLINE ('100.0', '1.06', '0.28')
+[_ms01_P_both_L1_yld_n0_full_s4] KO= thresholds 2s
+  FAIL u99990112 ep86: err 5.88 reached_hold 1 stable 0 | whole r/p/y/|v| 0.33/5.72/0.67/5.88 | hold r/p/y/|v| 0.08/0.65/0.36/0.79 | mid 6.56
+[C-S2-d_wposx2_a61_rf_c200_dc_biasin_ms01_P_both_L1_yld_n0_full_s4] 18s stable 99.97 err 1.087 steady 0.317 mid 0.741 pos 0.3391 fails 1 | logged HEADLINE ('100.0', '1.09', '0.32')
+[_ms01_P_both_L1_yld_n0_full_s5] KO= thresholds 2s
+  FAIL u99990134 ep73: err 5.92 reached_hold 1 stable 0 | whole r/p/y/|v| 5.27/1.66/0.74/5.92 | hold r/p/y/|v| 0.21/0.05/0.05/0.23 | mid 5.78
+[C-S2-d_wposx2_a61_rf_c200_dc_biasin_ms01_P_both_L1_yld_n0_full_s5] 32s stable 99.97 err 1.063 steady 0.312 mid 0.731 pos 0.3357 fails 1 | logged HEADLINE ('100.0', '1.06', '0.32')
+[_ms01_P_both_L1_yld_n0_full_s6] KO= thresholds 2s
+[C-S2-d_wposx2_a62_rf_c200_dc_biasin_ms01_P_both_L1_yld_n0_full_s6] 18s stable 100.00 err 1.087 steady 0.279 mid 0.740 pos 0.3381 fails 0 | logged HEADLINE ('100.0', '1.09', '0.28')
+[_ms01_P_both_L1_yld_n0_full_s7] KO= thresholds 2s
+  FAIL u99990134 ep86: err 5.44 reached_hold 1 stable 0 | whole r/p/y/|v| 5.10/0.50/1.12/5.44 | hold r/p/y/|v| 0.46/0.15/0.25/0.55 | mid 6.17
+[C-S2-d_wposx2_a62_rf_c200_dc_biasin_ms01_P_both_L1_yld_n0_full_s7] 19s stable 99.97 err 1.094 steady 0.297 mid 0.763 pos 0.3373 fails 1 | logged HEADLINE ('100.0', '1.10', '0.30')
+[_ms01_P_both_L1_yld_n0_full_s8] KO= thresholds 2s
+  FAIL u99990123 ep16: err 5.47 reached_hold 1 stable 0 | whole r/p/y/|v| 5.31/0.22/0.80/5.47 | hold r/p/y/|v| 0.18/0.09/0.08/0.23 | mid 4.79
+[C-S2-d_wposx2_a62_rf_c200_dc_biasin_ms01_P_both_L1_yld_n0_full_s8] 17s stable 99.97 err 1.077 steady 0.297 mid 0.732 pos 0.3421 fails 1 | logged HEADLINE ('100.0', '1.08', '0.30')
+[_ms01_P_both_L1_yld_n0_full_s9] KO= thresholds 2s
+[C-S2-d_wposx2_a62_rf_c200_dc_biasin_ms01_P_both_L1_yld_n0_full_s9] 22s stable 100.00 err 1.045 steady 0.242 mid 0.712 pos 0.3430 fails 0 | logged HEADLINE ('100.0', '1.05', '0.24')
+[ms01_P_both_L1_yld_n0_full_s10] KO= thresholds 2s
+  FAIL u99990123 ep16: err 6.79 reached_hold 1 stable 0 | whole r/p/y/|v| 6.64/0.22/0.87/6.79 | hold r/p/y/|v| 1.84/0.05/0.21/1.86 | mid 6.55
+[C-S2-d_wposx2_a62_rf_c200_dc_biasin_ms01_P_both_L1_yld_n0_full_s10] 18s stable 99.97 err 1.127 steady 0.267 mid 0.802 pos 0.3388 fails 1 | logged HEADLINE ('100.0', '1.13', '0.27')
+[s01_P_both_L1_yld_n0g3_full_s1] KO= thresholds 2s
+[C-S2-d_wposx2_a62_rf_c200_dc_biasin_ms01_P_both_L1_yld_n0g3_full_s1] 30s stable 100.00 err 1.043 steady 0.313 mid 0.701 pos 0.3407 fails 0 | logged HEADLINE ('100.0', '1.04', '0.32')
+[s01_P_both_L1_yld_n0g3_full_s2] KO= thresholds 2s
+  FAIL u99990123 ep16: err 5.50 reached_hold 1 stable 0 | whole r/p/y/|v| 5.27/0.15/0.99/5.51 | hold r/p/y/|v| 0.22/0.04/0.49/0.55 | mid 4.91
+[C-S2-d_wposx2_a62_rf_c200_dc_biasin_ms01_P_both_L1_yld_n0g3_full_s2] 19s stable 99.97 err 1.098 steady 0.328 mid 0.771 pos 0.3421 fails 1 | logged HEADLINE ('100.0', '1.10', '0.33')
+[s01_P_both_L1_yld_n0g3_full_s3] KO= thresholds 2s
+[C-S2-d_wposx2_a62_rf_c200_dc_biasin_ms01_P_both_L1_yld_n0g3_full_s3] 18s stable 100.00 err 1.071 steady 0.303 mid 0.732 pos 0.3366 fails 0 | logged HEADLINE ('100.0', '1.07', '0.31')
+[s01_P_both_L1_yld_n0g3_full_s4] KO= thresholds 2s
+  FAIL u99990112 ep86: err 7.65 reached_hold 1 stable 0 | whole r/p/y/|v| 0.33/7.51/0.66/7.66 | hold r/p/y/|v| 0.14/0.15/0.16/0.27 | mid 8.17
+[C-S2-d_wposx2_a62_rf_c200_dc_biasin_ms01_P_both_L1_yld_n0g3_full_s4] 19s stable 99.97 err 1.129 steady 0.311 mid 0.783 pos 0.3401 fails 1 | logged HEADLINE ('100.0', '1.13', '0.31')
+[s01_P_both_L1_yld_n0g3_full_s5] KO= thresholds 2s
+[C-S2-d_wposx2_a62_rf_c200_dc_biasin_ms01_P_both_L1_yld_n0g3_full_s5] 18s stable 100.00 err 1.095 steady 0.287 mid 0.766 pos 0.3394 fails 0 | logged HEADLINE ('100.0', '1.10', '0.29')
+[s01_P_both_L1_yld_n0g3_full_s6] KO= thresholds 2s
+  FAIL u99990112 ep86: err 6.27 reached_hold 1 stable 0 | whole r/p/y/|v| 0.32/6.07/0.49/6.27 | hold r/p/y/|v| 0.07/0.12/0.17/0.27 | mid 6.26
+[C-S2-d_wposx2_a62_rf_c200_dc_biasin_ms01_P_both_L1_yld_n0g3_full_s6] 19s stable 99.97 err 1.081 steady 0.258 mid 0.737 pos 0.3366 fails 1 | logged HEADLINE ('100.0', '1.08', '0.26')
+[s01_P_both_L1_yld_n0g3_full_s7] KO= thresholds 2s
+  FAIL u99990121 ep15: err 5.30 reached_hold 1 stable 0 | whole r/p/y/|v| 5.13/0.55/0.39/5.30 | hold r/p/y/|v| 0.64/0.19/0.40/0.83 | mid 4.04
+[C-S2-d_wposx2_a62_rf_c200_dc_biasin_ms01_P_both_L1_yld_n0g3_full_s7] 18s stable 99.97 err 1.182 steady 0.297 mid 0.886 pos 0.3362 fails 1 | logged HEADLINE ('100.0', '1.18', '0.30')
+[s01_P_both_L1_yld_n0g3_full_s8] KO= thresholds 2s
+  FAIL u99990123 ep33: err 8.54 reached_hold 1 stable 0 | whole r/p/y/|v| 8.00/0.52/1.69/8.54 | hold r/p/y/|v| 0.27/0.16/0.27/0.45 | mid 7.71
+[C-S2-d_wposx2_a62_rf_c200_dc_biasin_ms01_P_both_L1_yld_n0g3_full_s8] 19s stable 99.97 err 1.060 steady 0.303 mid 0.713 pos 0.3411 fails 1 | logged HEADLINE ('100.0', '1.06', '0.31')
+[s01_P_both_L1_yld_n0g3_full_s9] KO= thresholds 2s
+  FAIL u99990112 ep86: err 5.01 reached_hold 1 stable 0 | whole r/p/y/|v| 0.32/4.65/0.69/5.01 | hold r/p/y/|v| 0.06/0.15/0.14/0.23 | mid 3.73
+[C-S2-d_wposx2_a62_rf_c200_dc_biasin_ms01_P_both_L1_yld_n0g3_full_s9] 18s stable 99.97 err 1.102 steady 0.316 mid 0.780 pos 0.3393 fails 1 | logged HEADLINE ('100.0', '1.10', '0.32')
+[01_P_both_L1_yld_n0g3_full_s10] KO= thresholds 2s
+  FAIL u99990123 ep16: err 6.01 reached_hold 1 stable 0 | whole r/p/y/|v| 5.88/0.16/0.66/6.01 | hold r/p/y/|v| 0.37/0.09/0.09/0.40 | mid 5.19
+[C-S2-d_wposx2_a62_rf_c200_dc_biasin_ms01_P_both_L1_yld_n0g3_full_s10] 31s stable 99.97 err 1.060 steady 0.269 mid 0.719 pos 0.3396 fails 1 | logged HEADLINE ('100.0', '1.06', '0.27')
+[s01_P_both_L1_yld_n0gz_full_s1] KO= thresholds 2s
+[C-S2-d_wposx2_a62_rf_c200_dc_biasin_ms01_P_both_L1_yld_n0gz_full_s1] 19s stable 100.00 err 0.983 steady 0.276 mid 0.636 pos 0.3452 fails 0 | logged HEADLINE ('100.0', '0.98', '0.28')
+[s01_P_both_L1_yld_n0gz_full_s2] KO= thresholds 2s
+[C-S2-d_wposx2_a62_rf_c200_dc_biasin_ms01_P_both_L1_yld_n0gz_full_s2] 18s stable 100.00 err 1.022 steady 0.322 mid 0.686 pos 0.3434 fails 0 | logged HEADLINE ('100.0', '1.02', '0.32')
+[s01_P_both_L1_yld_n0gz_full_s3] KO= thresholds 2s
+  FAIL u99990123 ep16: err 5.32 reached_hold 1 stable 0 | whole r/p/y/|v| 5.04/0.19/1.05/5.32 | hold r/p/y/|v| 0.42/0.10/0.68/0.82 | mid 4.41
+[C-S2-d_wposx2_a62_rf_c200_dc_biasin_ms01_P_both_L1_yld_n0gz_full_s3] 18s stable 99.97 err 1.038 steady 0.289 mid 0.693 pos 0.3372 fails 1 | logged HEADLINE ('100.0', '1.04', '0.29')
+[s01_P_both_L1_yld_n0gz_full_s4] KO= thresholds 2s
+  FAIL u99990112 ep86: err 5.74 reached_hold 1 stable 0 | whole r/p/y/|v| 0.36/5.61/0.57/5.74 | hold r/p/y/|v| 0.05/0.29/0.29/0.43 | mid 6.25
+[C-S2-d_wposx2_a62_rf_c200_dc_biasin_ms01_P_both_L1_yld_n0gz_full_s4] 18s stable 99.97 err 1.049 steady 0.345 mid 0.698 pos 0.3372 fails 1 | logged HEADLINE ('100.0', '1.05', '0.35')
+ALLDONE

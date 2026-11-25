@@ -1,0 +1,24 @@
+== per unit (seed-mean) vs rival C
+N0   err gap/unit min 0.293 med 0.393 max 0.614 worse 35/35 | steady gap min -0.020 med +0.140 max +0.194 worse 34/35 | hold yaw signed vs c1: slope +0.183 r +0.81; |seed-mean offset| 0.043; r(|c1|, hold|yaw|) +0.71 | r(|c1|, steady gap) +0.06 r(|c1|, err gap) +0.86
+G    err gap/unit min 0.276 med 0.406 max 0.615 worse 35/35 | steady gap min -0.040 med +0.148 max +0.216 worse 33/35 | hold yaw signed vs c1: slope +0.258 r +0.91; |seed-mean offset| 0.056; r(|c1|, hold|yaw|) +0.78 | r(|c1|, steady gap) +0.16 r(|c1|, err gap) +0.85
+T    err gap/unit min 0.243 med 0.332 max 0.433 worse 35/35 | steady gap min -0.004 med +0.149 max +0.203 worse 34/35 | hold yaw signed vs c1: slope +0.275 r +0.89; |seed-mean offset| 0.062; r(|c1|, hold|yaw|) +0.72 | r(|c1|, steady gap) +0.07 r(|c1|, err gap) +0.67
+G+T  err gap/unit min 0.200 med 0.334 max 0.443 worse 35/35 | steady gap min -0.018 med +0.143 max +0.175 worse 33/35 | hold yaw signed vs c1: slope +0.316 r +0.91; |seed-mean offset| 0.072; r(|c1|, hold|yaw|) +0.66 | r(|c1|, steady gap) +0.13 r(|c1|, err gap) +0.70
+   G+T worst steady-gap units: u113(c1 -0.20, 0.300 vs C 0.125, hold y 0.246) u102(c1 +0.15, 0.283 vs C 0.108, hold y 0.233) u130(c1 -0.37, 0.314 vs C 0.140, hold y 0.253) u119(c1 -0.14, 0.274 vs C 0.108, hold y 0.220) u106(c1 -0.24, 0.282 vs C 0.116, hold y 0.237) u108(c1 -0.26, 0.262 vs C 0.097, hold y 0.209)
+   G+T worst err-gap units:    u132(c1 -0.42, 1.070 vs C 0.627) u130(c1 -0.37, 1.073 vs C 0.655) u123(c1 +0.27, 1.514 vs C 1.106) u115(c1 -0.47, 1.174 vs C 0.774) u107(c1 -0.26, 0.961 vs C 0.566) u131(c1 +0.28, 0.947 vs C 0.558)
+
+== paired episodes on the 6 rival-scored units (seed-mean WNN vs C, same episodes)
+N0   gap mean 0.373 median 0.368 worse 566/600 | top1%/10% share 0.04/0.23 | pooled p50/p90/p99 1.04/1.51/2.16 max 7.95 | slope err/|yaw0| +0.108 | r(|yaw0|, gap) +0.38
+      |yaw0| bins gap: [0,1) 0.24 | [1,2) 0.28 | [2,3) 0.36 | [3,4) 0.46 | [4,5.01) 0.52   (C slope +0.036)
+G    gap mean 0.363 median 0.341 worse 558/600 | top1%/10% share 0.04/0.24 | pooled p50/p90/p99 1.05/1.52/2.15 max 8.54 | slope err/|yaw0| +0.111 | r(|yaw0|, gap) +0.43
+      |yaw0| bins gap: [0,1) 0.21 | [1,2) 0.25 | [2,3) 0.36 | [3,4) 0.45 | [4,5.01) 0.53   (C slope +0.036)
+T    gap mean 0.289 median 0.274 worse 545/600 | top1%/10% share 0.04/0.25 | pooled p50/p90/p99 0.99/1.39/1.90 max 8.59 | slope err/|yaw0| +0.088 | r(|yaw0|, gap) +0.32
+      |yaw0| bins gap: [0,1) 0.20 | [1,2) 0.22 | [2,3) 0.27 | [3,4) 0.34 | [4,5.01) 0.41   (C slope +0.036)
+G+T  gap mean 0.304 median 0.289 worse 536/600 | top1%/10% share 0.04/0.27 | pooled p50/p90/p99 0.99/1.40/2.03 max 7.34 | slope err/|yaw0| +0.094 | r(|yaw0|, gap) +0.34
+      |yaw0| bins gap: [0,1) 0.20 | [1,2) 0.22 | [2,3) 0.28 | [3,4) 0.38 | [4,5.01) 0.44   (C slope +0.036)
+
+== fails (err > 5 deg), per arm
+Traceback (most recent call last):
+  File "/Users/lacg/wnn/logs/controller/ctrl73/units_eps.py", line 42, in <module>
+    print(f"{lab:4s} s{s:<2d} u{u%1000} ep{k:<3d} err {e:.2f} | whole r/p/y {f[5]:.2f}/{f[6]:.2f}/{f[7]:.2f} | mid {f[16]:.2f} | hold |v| {f[12]:.2f}")
+                                                                                                                    ~^^^^
+IndexError: index 16 is out of bounds for axis 0 with size 14
