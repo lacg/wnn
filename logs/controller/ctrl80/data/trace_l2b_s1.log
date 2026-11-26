@@ -1,0 +1,4 @@
+unit 163226054: scorer err 0.853 steady 0.2801 | replay steady 0.2793 err 0.853
+unit 163226055: scorer err 0.928 steady 0.2295 | replay steady 0.2294 err 0.928
+unit 163226056: scorer err 0.912 steady 0.2642 | replay steady 0.2650 err 0.912
+saved /tmp/ctrl80/trace_l2b_s1.npz (600000, 26) [64, 0.5, 0.7, 2.0]

@@ -1,0 +1,4 @@
+unit 163226054: scorer err 0.873 steady 0.2662 | replay steady 0.2663 err 0.873
+unit 163226055: scorer err 0.949 steady 0.2747 | replay steady 0.2740 err 0.949
+unit 163226056: scorer err 0.957 steady 0.2878 | replay steady 0.2883 err 0.957
+saved /tmp/ctrl80/trace_gt_s1.npz (600000, 26) [64, 0.5, 0.7, 2.0]

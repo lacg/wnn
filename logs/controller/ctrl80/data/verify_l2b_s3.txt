@@ -1,0 +1,26 @@
+RESCORE gt_l2b_full_s3 vs control n0g3gz_full_s3  (TEST, 35 units, CPU re-score; both reproduce their logged END)
+  logged END  control: stable 100.0 err 1.03 steady 0.29 pos 0.34 fails 1/3500 | arm: stable 100.0 err 1.01 steady 0.27 pos 0.34 fails 0/3500
+row                          control       arm
+err deg                        1.027     1.005
+  whole roll                   0.479     0.498
+  whole pitch                  0.426     0.405
+  whole yaw                    0.591     0.565
+  pre-hold roll                0.571     0.595
+  pre-hold pitch               0.511     0.484
+  pre-hold yaw                 0.683     0.659
+steady deg                     0.291     0.265
+  hold roll                    0.111     0.109
+  hold pitch                   0.088     0.086
+  hold yaw                     0.223     0.190
+signed hold yaw per c1         0.300     0.295
+mean |hold yaw offset|         0.073     0.073
+pos m (3-D)                   0.3398    0.3405
+fails                              1         0
+hard episodes (err deg)      control       arm
+  u123 ep16                     5.93      4.18
+  u123 ep33                     2.44      4.68
+  u112 ep86                     2.74      2.51
+  u118 ep1                      1.93      3.31
+  u118 ep39                     1.49      1.81
+  u118 ep60                     1.31      1.41
+  u118 ep94                     1.56      1.18

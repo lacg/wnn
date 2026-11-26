@@ -1,0 +1,68 @@
+== G+T s1  (yaw_err cuts deg: -2.62 | -1.23 | -0.25 | -0.10 | +0.10 | +0.25 | +1.23 | +2.62; yaw bank 64 cells, delta max 1.00 rad/s per action, leak 0.7, range +-2.0)
+  lattice check: |t*32 - int| median 0.0000, p99 0.0230; corr(yaw_err feature, true yaw) -1.000; mean |feature - true| 0.014 deg
+  -- decision ticks 0-0.6 s, by |yaw_err input| deg: [0,1.23) | [1.23,2.62) | [2.62,4.5) | [4.5,99)
+     occupancy %                 : 55.7 | 31.1 | 11.7 | 1.6
+     mean corrective sp_r rad/s  : 0.169 | 0.366 | 0.561 | 0.631
+     mean corrective delta rad/s : 0.050 | 0.102 | 0.184 | 0.223
+     p90 / max corrective delta  : 0.209 / 0.536 | 0.244 / 0.536 | 0.371 / 0.670 | 0.422 / 0.536
+     delta saturated (|t|=1) %   : 0.00 | 0.00 | 0.00 | 0.00
+     |delta| >= 0.42 (|t|>=.75) %: 0.67 | 0.45 | 7.48 | 11.54
+     sp_r at +-2.0 clamp %       : 0.00 | 0.00 | 0.00 | 0.00
+  -- decision ticks 0-1.6 s (pre-hold), by |yaw_err input| deg: [0,1.23) | [1.23,2.62) | [2.62,4.5) | [4.5,99)
+     occupancy %                 : 81.4 | 13.6 | 4.4 | 0.6
+     mean corrective sp_r rad/s  : 0.103 | 0.376 | 0.562 | 0.631
+     mean corrective delta rad/s : 0.027 | 0.106 | 0.184 | 0.223
+     p90 / max corrective delta  : 0.178 / 0.536 | 0.244 / 0.536 | 0.371 / 0.670 | 0.422 / 0.536
+     delta saturated (|t|=1) %   : 0.00 | 0.00 | 0.00 | 0.00
+     |delta| >= 0.42 (|t|>=.75) %: 0.19 | 0.41 | 7.47 | 11.54
+     sp_r at +-2.0 clamp %       : 0.00 | 0.00 | 0.00 | 0.00
+  -- FIRST action (t=0), by |yaw_err input|: n / mean corrective delta / p90 / mean |t| code (of 32)
+     [0,1.23) n76 0.060 / 0.209 / 10.9 | [1.23,2.62) n72 0.133 / 0.283 / 14.4 | [2.62,4.5) n125 0.222 / 0.455 / 17.9 | [4.5,99) n27 0.240 / 0.477 / 18.1
+  -- yaw_err input code occupancy % (code 0 = below the lowest cut ... 8 = above the highest), all ticks
+     0.00-0.15 s:  18.5  14.7   9.9   1.4   2.2   2.3  12.7  14.4  24.0   | outer codes (0+8) 42.5
+     0.15-0.30 s:   3.0  12.2  18.9   1.7   2.9   2.3  26.5  29.1   3.3   | outer codes (0+8) 6.3
+     0.30-0.60 s:   0.1   6.8  21.0   4.1   6.2   5.3  35.1  20.1   1.4   | outer codes (0+8) 1.4
+     0.60-1.60 s:   0.0   0.6  21.5  11.2  21.8  15.6  26.8   2.5   0.0   | outer codes (0+8) 0.0
+     1.60-2.00 s:   0.0   0.0  16.3  15.8  28.2  17.7  22.0   0.0   0.0   | outer codes (0+8) 0.0
+  -- per episode by |yaw0| deg (n: 76 73 57 66 28)
+     time to first |yaw|<0.5 deg, s : [0,1.23) 0.138 | [1.23,2.62) 0.280 | [2.62,3.5) 0.264 | [3.5,4.5) 0.262 | [4.5,5.1) 0.281
+     last time |yaw|>=1.0 deg, s    : [0,1.23) 0.345 | [1.23,2.62) 0.494 | [2.62,3.5) 0.570 | [3.5,4.5) 0.649 | [4.5,5.1) 0.719
+     peak corrective sp_r, 0-0.6 s  : [0,1.23) 0.531 | [1.23,2.62) 0.589 | [2.62,3.5) 0.657 | [3.5,4.5) 0.749 | [4.5,5.1) 0.835
+     peak corrective gyro_z, 0-0.6 s: [0,1.23) 0.242 | [1.23,2.62) 0.312 | [2.62,3.5) 0.395 | [3.5,4.5) 0.478 | [4.5,5.1) 0.509
+  -- mean time course, episodes with |yaw0| >= 3.5 deg (n 94): t ms -> |yaw| deg / corrective sp_r / corrective gyro_z rad/s
+     0: 4.25 / 0.225 / -0.020 | 20: 4.25 / 0.459 / 0.025 | 50: 4.14 / 0.556 / 0.108 | 100: 3.59 / 0.483 / 0.277 | 150: 2.61 / 0.263 / 0.397 | 200: 1.43 / 0.132 / 0.410 | 300: -0.49 / -0.115 / 0.227 | 400: -1.11 / -0.002 / 0.008 | 600: -1.02 / -0.068 / 0.009 | 1000: -0.40 / -0.078 / -0.018
+  -- mean |yaw| deg: pre-hold 0.738, hold 0.231, whole 0.637
+== l3 s1  (yaw_err cuts deg: -4.50 | -1.23 | -0.25 | -0.10 | +0.10 | +0.25 | +1.23 | +4.50; yaw bank 64 cells, delta max 1.00 rad/s per action, leak 0.7, range +-2.0)
+  lattice check: |t*32 - int| median 0.0000, p99 0.0001; corr(yaw_err feature, true yaw) -1.000; mean |feature - true| 0.014 deg
+  -- decision ticks 0-0.6 s, by |yaw_err input| deg: [0,1.23) | [1.23,2.62) | [2.62,4.5) | [4.5,99)
+     occupancy %                 : 52.6 | 32.8 | 13.0 | 1.6
+     mean corrective sp_r rad/s  : 0.162 | 0.436 | 0.447 | 0.800
+     mean corrective delta rad/s : 0.044 | 0.133 | 0.137 | 0.289
+     p90 / max corrective delta  : 0.178 / 0.536 | 0.283 / 0.601 | 0.283 / 0.536 | 0.422 / 0.670
+     delta saturated (|t|=1) %   : 0.00 | 0.00 | 0.00 | 0.00
+     |delta| >= 0.42 (|t|>=.75) %: 0.43 | 1.19 | 2.10 | 14.58
+     sp_r at +-2.0 clamp %       : 0.00 | 0.00 | 0.00 | 0.00
+  -- decision ticks 0-1.6 s (pre-hold), by |yaw_err input| deg: [0,1.23) | [1.23,2.62) | [2.62,4.5) | [4.5,99)
+     occupancy %                 : 80.7 | 13.8 | 4.9 | 0.6
+     mean corrective sp_r rad/s  : 0.132 | 0.434 | 0.447 | 0.800
+     mean corrective delta rad/s : 0.035 | 0.132 | 0.137 | 0.289
+     p90 / max corrective delta  : 0.150 / 0.536 | 0.283 / 0.601 | 0.283 / 0.536 | 0.422 / 0.670
+     delta saturated (|t|=1) %   : 0.00 | 0.00 | 0.00 | 0.00
+     |delta| >= 0.42 (|t|>=.75) %: 0.14 | 1.19 | 2.09 | 14.58
+     sp_r at +-2.0 clamp %       : 0.00 | 0.00 | 0.00 | 0.00
+  -- FIRST action (t=0), by |yaw_err input|: n / mean corrective delta / p90 / mean |t| code (of 32)
+     [0,1.23) n76 0.047 / 0.178 / 11.2 | [1.23,2.62) n72 0.203 / 0.371 / 16.4 | [2.62,4.5) n125 0.191 / 0.371 / 16.3 | [4.5,99) n27 0.296 / 0.422 / 21.1
+  -- yaw_err input code occupancy % (code 0 = below the lowest cut ... 8 = above the highest), all ticks
+     0.00-0.15 s:   1.7  29.6  10.4   1.6   2.4   2.3  12.5  34.8   4.6   | outer codes (0+8) 6.3
+     0.15-0.30 s:   0.0  10.0  17.1   2.0   2.5   1.9  21.4  45.0   0.0   | outer codes (0+8) 0.0
+     0.30-0.60 s:   0.0   8.7  15.9   4.8   6.8   5.2  36.3  22.4   0.0   | outer codes (0+8) 0.0
+     0.60-1.60 s:   0.0   0.6  23.5  13.0  23.8  13.7  23.7   1.7   0.0   | outer codes (0+8) 0.0
+     1.60-2.00 s:   0.0   0.1   9.4  18.1  32.9  16.2  23.3   0.1   0.0   | outer codes (0+8) 0.0
+  -- per episode by |yaw0| deg (n: 76 73 57 66 28)
+     time to first |yaw|<0.5 deg, s : [0,1.23) 0.110 | [1.23,2.62) 0.244 | [2.62,3.5) 0.283 | [3.5,4.5) 0.290 | [4.5,5.1) 0.283
+     last time |yaw|>=1.0 deg, s    : [0,1.23) 0.360 | [1.23,2.62) 0.411 | [2.62,3.5) 0.581 | [3.5,4.5) 0.710 | [4.5,5.1) 0.755
+     peak corrective sp_r, 0-0.6 s  : [0,1.23) 0.522 | [1.23,2.62) 0.638 | [2.62,3.5) 0.657 | [3.5,4.5) 0.727 | [4.5,5.1) 0.866
+     peak corrective gyro_z, 0-0.6 s: [0,1.23) 0.263 | [1.23,2.62) 0.340 | [2.62,3.5) 0.382 | [3.5,4.5) 0.436 | [4.5,5.1) 0.483
+  -- mean time course, episodes with |yaw0| >= 3.5 deg (n 94): t ms -> |yaw| deg / corrective sp_r / corrective gyro_z rad/s
+     0: 4.25 / 0.219 / -0.020 | 20: 4.25 / 0.444 / 0.024 | 50: 4.14 / 0.525 / 0.106 | 100: 3.61 / 0.406 / 0.263 | 150: 2.70 / 0.234 / 0.359 | 200: 1.65 / 0.158 / 0.365 | 300: -0.16 / -0.030 / 0.243 | 400: -1.00 / -0.032 / 0.052 | 600: -0.99 / -0.077 / -0.013 | 1000: -0.42 / -0.026 / -0.024
+  -- mean |yaw| deg: pre-hold 0.746, hold 0.216, whole 0.640
