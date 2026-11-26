@@ -71,6 +71,9 @@ class ThresholdCalibration:
 	# CTRL-76 (L3, --yaw-err-outer-cut DEG): the proportional yaw-error inputs' outermost
 	# dense-ladder pair becomes a fixed +-DEG. Needs yaw_dense. None = byte-identical.
 	yaw_err_outer_deg: float | None = None
+	# CTRL-79 (--yaw-integral-ladder dense): yaw_err_i takes the fixed 8-cut ladder
+	# evaluator.DENSE_YAW_INTEGRAL_CUTS (feature units). False = byte-identical.
+	yaw_integral_dense: bool = False
 	student_samples: tuple | None = field(default=None, repr=False)
 
 	def __post_init__(self):
@@ -131,6 +134,8 @@ class ThresholdCalibration:
 			base = f"{base},gyroxy:{self.gyro_xy_ladder}"
 		if self.yaw_err_outer_deg is not None:
 			base = f"{base},yawout:{float(self.yaw_err_outer_deg):g}"
+		if self.yaw_integral_dense:
+			base = f"{base},yawi:dense"
 		return base if self.student_samples is None else f"{base},student:{self.student_sample_count()}"
 
 
@@ -160,6 +165,7 @@ def calibration_from_args(args) -> ThresholdCalibration:
 		gyro_z_dense=getattr(args, "gyro_z_ladder", None) == "dense",
 		gyro_xy_ladder=getattr(args, "gyro_xy_ladder", None),
 		yaw_err_outer_deg=getattr(args, "yaw_err_outer_cut", None),
+		yaw_integral_dense=getattr(args, "yaw_integral_ladder", "quantile") == "dense",
 		# Set by phased_ga's refit (_refit_thresholds_from_student) once the grid winner
 		# has been rolled out; every later fit site reads it from here.
 		student_samples=getattr(args, "_threshold_refit_samples", None),

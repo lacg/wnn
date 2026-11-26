@@ -42,6 +42,8 @@ SHRINK = ("--grid-output-neurons 64 --max-output-neurons 64 --steps 400 --eval-e
 VARIANTS = {"off": [], "equal": ["--delta-leak-yaw", "0.7"], "on": ["--delta-leak-yaw", "0.95"]}
 BEHAVIOUR = ("thresholds", "token", "ctbr", "features", "train_digest", "scorer_rows")
 ADDRESS = ("thresholds", "token", "ctbr", "features")
+# Flags added after CTRL-74 (off by default, each pinned by its own test): absent from the ABI-62 tree.
+LATER_KEYS = ("gyro_xy_ladder", "yaw_err_outer_cut", "yaw_integral_ladder")
 
 
 def _args(extra: list[str]):
@@ -89,7 +91,7 @@ def dump(variant: str) -> dict:
 	digest = list(g.cells.fingerprint()) if g.cells is not None else None
 	rows = [_metrics(m) for m in gs._evaluator.score_genomes([g])]
 	public = {k: repr(v) for k, v in sorted(vars(args).items())
-	          if not k.startswith("_") and k not in ("delta_leak_yaw", "cli_argv")}
+	          if not k.startswith("_") and k not in ("delta_leak_yaw", "cli_argv") + LATER_KEYS}
 	return {"thresholds": [repr(float(t)) for t in gs.thresholds], "token": pg.calibration_from_args(args).token(),
 	        "ctbr": repr(sorted(args._ctbr.items())), "args": public, "prov": {k: v for k, v in pg.block10_tokens(args).items() if (k, v) != ("dleak_yaw", "")},  # "" = not printed
 	        "features": feats, "train_digest": digest, "scorer_rows": rows,
