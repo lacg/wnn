@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """unswr width table for the hourly tick (Luiz 18/11/2026): C (64b) | 80 (IDS62) | 96 (IDS63), per seed.
 
-Cell = GA ga_neurons, best_f1, test_point final, margin_val_cal, TEST (test_summaries.threshold_metadata).
+Cell = the flow's LAST GA phase (ga_neurons, or ga_connections for IDS-78), best_f1, test_point final, margin_val_cal, TEST (test_summaries.threshold_metadata).
 Classical rows on top = Luiz's target rows (same random_3way TEST): untuned RF/XGB defaults, VAL-calibrated threshold,
 mean±SD over 5 seeds r20419-23, from logs/ids/unsw_headroom_1611/bl_random_3way_{thermo64,raw}.jsonl. Classical source story = Plane IDS-10 (rs=42 single fit + this 5-seed update, 18/11).
 """
@@ -12,9 +12,10 @@ from datetime import datetime, timezone
 DB = "file:/Volumes/20260401-WDBlack-SN850X-2TB/wnn/db/wnn.db?mode=ro"
 SEEDS = (20421, 20422, 20423)
 CONTROLS = {20421: 7567, 20422: 7568, 20423: 7569}
-ARMS = ("C", "C+E", "E")  # 24/11 (Luiz): contenders only. 80 (IDS-68) + B (IDS-70, not adopted) dropped; C+E = IDS-71 (cut E on config C, <=64b)
+ARMS = ("E", "E+conn", "E+rot", "E500")  # 25/11 (Luiz): IDS-71 closed (C+E adopted <=64b); now E (IDS-70, control) | IDS-78 GA Connections | IDS-76 fold rotation | IDS-79 max_neurons 500. Was ("C", "C+E", "E") 24/11 (Luiz): contenders only. 80 (IDS-68) + B (IDS-70, not adopted) dropped; C+E = IDS-71 (cut E on config C, <=64b)
 ARM_NAME = {"80": "IDS62-unswr-%-fixb80-encoff-r{seed}", "96": "IDS63-unswr-%-fixb96-encoff-r{seed}",
-	"E": "IDS70-unswr-%-fixb80-encoff-cutE-r{seed}", "C+E": "IDS71-unswr-%-b64-encoff-cutE-r{seed}", "B": "IDS70-unswr-%-fixb80-encoff-cutB-r{seed}"}
+	"E": "IDS70-unswr-%-fixb80-encoff-cutE-r{seed}", "C+E": "IDS71-unswr-%-b64-encoff-cutE-r{seed}", "B": "IDS70-unswr-%-fixb80-encoff-cutB-r{seed}",
+	"E+conn": "IDS78-unswr-%-cutE-gaconn-r{seed}", "E+rot": "IDS76-unswr-%-cutE-foldrot-r{seed}", "E500": "IDS79-unswr-%-max500-%-cutE-r{seed}"}
 CLASSICAL = (
 	("XGB 64b", "95.53±0.00", "0.417±0.000", "99.33±0.00", "6K nodes"),
 	("RF 64b", "95.32±0.07", "0.380±0.064", "99.31±0.00", "1.78M nodes"),
@@ -41,8 +42,8 @@ def hours(start: str, end: str | None) -> float:
 
 def result(db, flow_id: int) -> dict | None:
 	row = db.execute("select t.threshold_metadata, t.logical_cells, t.genome_hash from test_summaries t "
-		"join experiments e on e.id=t.experiment_id where t.flow_id=? and e.phase_type='ga_neurons' "
-		"and t.test_point='final' and t.genome_type='best_f1'", (flow_id,)).fetchone()
+		"join experiments e on e.id=t.experiment_id where t.flow_id=? and e.phase_type in ('ga_neurons', 'ga_connections') "
+		"and t.test_point='final' and t.genome_type='best_f1' order by e.id desc limit 1", (flow_id,)).fetchone()
 	if not row:
 		return None
 	m = json.loads(row[0])["margin_val_cal"]
