@@ -1,0 +1,4 @@
+unit 163226054: scorer err 0.822 steady 0.1836 | replay steady 0.1836 err 0.822
+unit 163226055: scorer err 1.014 steady 0.2822 | replay steady 0.2822 err 1.014
+unit 163226056: scorer err 0.886 steady 0.2178 | replay steady 0.2173 err 0.886
+saved /tmp/ctrl80/trace_yil_s1.npz (600000, 26) [118, 0.5, 0.7, 2.0]
