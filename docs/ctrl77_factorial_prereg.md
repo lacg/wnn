@@ -171,3 +171,18 @@ stage flies.
 - **Hard rule.** The controller yields to the IDS worker and is never in the way of it.
 - **Settings.** `--num-eval-folds 5`, rule P (`--val-units 20 --select-tail p99`), BINARY, everything else as
   G+T.
+
+## Amendment 26/11/2026 (Luiz, ~12:00 EST): n=3 → n=5 promotion criterion
+
+Luiz replaced the n=3 drop rule with an absolute promotion bar. An arm is promoted to n=5 (s4, s5) only if, over
+its three TEST seeds s1–s3 (35 CF2.1 units each):
+
+- stable is 100.0 % on every seed,
+- fails total 0,
+- mean err < 1.00°,
+- mean steady < 0.30°.
+
+Every other arm stops at n=3. Applied to the arms with s3 already flown at 12:00 EST: l2b passes (100.0 / 0 /
+0.983° / 0.263°); l1, l2a, l3 and l1l2a fail. l2bl3 met it on s1–s2 (0.995° / 0.280°, 0 fails) and is decided on its
+s3 END. The n=5 flights queue after CTRL-79 and CTRL-78 (waiter `logs/controller/ctrl63/n5_after_l78.sh`, which
+re-applies this bar to the runs.log END lines at launch time).
