@@ -152,6 +152,9 @@ YAW_RATE_FEATURES: frozenset[str] = frozenset({"gyro_z"})
 # RATE inputs, which still saturate in the transient (91/75/49 % of 0-0.6 s ticks beyond the
 # outer quantile cut on the G+T VAL traces). Only these take the fixed roll/pitch rate ladder.
 ROLL_PITCH_RATE_FEATURES: frozenset[str] = frozenset({"gyro_x", "gyro_y"})
+# CTRL-79 (--yaw-integral-ladder dense): the anchored yaw INTEGRAL input. Only yaw_err_i takes
+# the fixed integral ladder (the per-axis yaw_i_pa keeps its own fit).
+YAW_INTEGRAL_DENSE_FEATURES: frozenset[str] = frozenset({"yaw_err_i"})
 
 
 def _block_name(name: str) -> str:

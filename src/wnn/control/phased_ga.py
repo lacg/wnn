@@ -3587,6 +3587,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "quantile pair, +-2.62 deg on G+T) becomes a fixed +-DEG (e.g. 4.5); every other cut, "
 	                     "the yaw integral inputs included, is unchanged. Needs --yaw-centred-ladder dense. "
 	                     "Off (default) = byte-identical. A new lineage.")
+	ap.add_argument("--yaw-integral-ladder", choices=["quantile", "dense"], default="quantile",
+	                help="CTRL-79: the anchored yaw INTEGRAL input yaw_err_i ONLY takes a fully FIXED symmetric "
+	                     "ladder, cuts at +-1.5, +-3.5, +-6.5, +-12.0 in the feature's own units (the leaky "
+	                     "integral as the student reads it), replacing its fitted ladder (G+T: +-3.49, +-8.73 "
+	                     "gain-scaled dense cuts and +-20.6, +-40.5 quantile pairs). Every other feature keeps "
+	                     "its ladder. Applies to every fit (grid, held-out/test refits, the student refit). "
+	                     "Needs --obs-yaw-err-i and --bits-per-feature 8 (4 fixed pairs). quantile (default) = "
+	                     "byte-identical. A new lineage: thresholds are part of the address function.")
 	ap.add_argument("--drop-features", type=str, default="",
 	                help="CTRL-48: comma-separated feature-layout names no connection may land on (e.g. "
 	                     "acc_x,acc_y under the specific-force IMU). Connection space only: the frame, "
@@ -4543,6 +4551,20 @@ def resolve_yaw_channel_args(args) -> None:
 	if getattr(args, "yaw_centred_ladder", False) and not (yaw_p or yaw_i):
 		raise SystemExit("--yaw-centred-ladder needs a yaw-error input: --obs-yaw-err / --obs-yaw-err-i "
 		                 "(or --obs-peraxis-p/-i with --obs-peraxis-yaw).")
+	resolve_yaw_integral_ladder_args(args)
+
+
+def resolve_yaw_integral_ladder_args(args) -> None:
+	"""CTRL-79: refuse --yaw-integral-ladder dense on a run it cannot act on as specified
+	(no yaw_err_i input, or a ladder that is not exactly its 8 fixed cuts)."""
+	if getattr(args, "yaw_integral_ladder", "quantile") != "dense":
+		return
+	if not getattr(args, "obs_yaw_err_i", False):
+		raise SystemExit("--yaw-integral-ladder dense needs --obs-yaw-err-i: it is the ladder of the "
+		                 "yaw_err_i input (it would silently no-op without it).")
+	if int(getattr(args, "bits_per_feature", 8)) != 8:
+		raise SystemExit(f"--yaw-integral-ladder dense is 8 fixed cuts: it needs --bits-per-feature 8 "
+		                 f"(got {args.bits_per_feature}).")
 
 
 def resolve_block10_args(args) -> None:
