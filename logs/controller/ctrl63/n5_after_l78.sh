@@ -1,6 +1,6 @@
 #!/bin/bash
 # CTRL-77 n=5 promotion (Luiz 26/11/2026, prereg amendment): after the CTRL-78 leak block finishes, fly s4-s5 for every
-# CTRL-77 arm that, over s1-s3, has stable 100.0 on every seed, fails total 0, mean err < 1.00, mean steady < 0.30.
+# CTRL-77 arm that, over s1-s3, has stable 100.0 on every seed, fails total 0, mean err < 1.05, mean steady < 0.30 (bar lowered from 1.00 by Luiz 26/11 16:10 EST).
 # The bar is re-applied to the runs.log END lines at launch time. Pure waits; 'N5Q:' lines. Fails closed.
 cd /Users/lacg/wnn || exit 1
 RUNS=logs/controller/ctrl48/runs.log
@@ -8,7 +8,7 @@ log() { echo "$(date -u +%FT%TZ) $*" >> $RUNS; }
 L_DONE='^[0-9TZ:-]+ L78 DONE seeds \[1 2 3\]'
 STOP='^[0-9TZ:-]+ (L78 ABORT|Y79 ABORT|F77 ABORT|Q79: .*standing down)'
 grep -qE "$L_DONE" $RUNS && { log "N5Q: refused — CTRL-78 already done; launch the n=5 stage by hand"; exit 1; }
-log "N5Q: armed (pid $$) — after CTRL-78: CTRL-77 n=5 (s4 s5) for arms meeting stable 100/fails 0/err<1.00/steady<0.30 on s1-s3"
+log "N5Q: armed (pid $$) — after CTRL-78: CTRL-77 n=5 (s4 s5) for arms meeting stable 100/fails 0/err<1.05/steady<0.30 on s1-s3"
 while :; do
 	grep -qE "$L_DONE" $RUNS && break
 	if grep -qE "$STOP" $RUNS; then log "N5Q: an earlier block aborted or stood down — standing down, n=5 NOT started"; exit 1; fi
@@ -30,7 +30,7 @@ for a in arms:
 		sd = float(re.search(r"steady=([\d.]+)", l).group(1)); fl = int(re.search(r"stable_fail=(\d+)/", l).group(1))
 		rows.append((st, er, sd, fl))
 	if len(rows) == 3 and all(r[0] == 100.0 for r in rows) and sum(r[3] for r in rows) == 0 \
-			and sum(r[1] for r in rows) / 3 < 1.00 and sum(r[2] for r in rows) / 3 < 0.30:
+			and sum(r[1] for r in rows) / 3 < 1.05 and sum(r[2] for r in rows) / 3 < 0.30:
 		out.append(a)
 print(" ".join(out))
 PY

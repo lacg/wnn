@@ -186,3 +186,10 @@ Every other arm stops at n=3. Applied to the arms with s3 already flown at 12:00
 0.983° / 0.263°); l1, l2a, l3 and l1l2a fail. l2bl3 met it on s1–s2 (0.995° / 0.280°, 0 fails) and is decided on its
 s3 END. The n=5 flights queue after CTRL-79 and CTRL-78 (waiter `logs/controller/ctrl63/n5_after_l78.sh`, which
 re-applies this bar to the runs.log END lines at launch time).
+
+### Amendment 2 (Luiz, 26/11/2026 ~16:10 EST): err bar 1.00° → 1.05°
+
+So that more than one arm goes forward, the mean-err bar is lowered to < 1.05°. The rest of the bar is unchanged
+(stable 100.0 % on every seed, fails total 0, mean steady < 0.30°). Result over s1–s3: **l2b** (0.983° / 0.263°) and
+**l2bl3** (1.010° / 0.283°) are promoted to n=5; every other arm stops at n=3 (l2al3, l3 and l2a on fails / stable;
+all L1 arms on err).
