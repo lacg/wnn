@@ -1,0 +1,2 @@
+[yawrun] biasin_ms01_P_both_L1_yld_gt_l2b_full_s1: thresholds 4s, 35 units
+[yawrun] biasin_ms01_P_both_L1_yld_gt_l2b_full_s1: 3500 episodes gated OK vs the Rust scorer, 41s (1 workers)
