@@ -1860,6 +1860,57 @@ impl WnnController
 		Ok(())
 	}
 
+	/// CTRL-80 (ABI 64): the obs toggles ahead of the lead slot (yaw_lead.rs) — the SAME
+	/// struct the constructor builds from its arguments, so the slot the rows were lifted
+	/// from is the slot they are put back at.
+	fn yaw_channel_layout(&self) -> crate::yaw_lead::YawChannelLayout
+	{
+		crate::yaw_lead::YawChannelLayout {
+			num_motors: self.num_motors,
+			tilt_p: self.obs_tilt_p,
+			tilt_i: self.obs_tilt_i,
+			peraxis_p: self.obs_peraxis_p,
+			peraxis_i: self.obs_peraxis_i,
+			peraxis_yaw: self.obs_peraxis_yaw,
+			pwm: self.obs_pwm,
+			yaw_err: self.obs_yaw_err,
+			yaw_err_i: self.obs_yaw_err_i,
+		}
+	}
+
+	/// CTRL-80 (ABI 64, --obs-yaw-lead): add the yaw LEAD input yaw_err − τ·gyro_z
+	/// (yaw_lead.rs) as ONE feature directly after the yaw-anchor pair; `rows` = its
+	/// bits_per_feature thermometer rows. Refused without obs_yaw_err (the value it leads)
+	/// — both operands must already be student inputs.
+	pub(crate) fn enable_yaw_lead(&mut self, tau: f32, rows: Vec<f32>) -> Result<(), String>
+	{
+		if !self.obs_yaw_err
+		{
+			return Err("obs_yaw_lead needs obs_yaw_err: the lead is built from the proportional yaw input".into());
+		}
+		if self.yaw_lead.is_some()
+		{
+			return Err("obs_yaw_lead is already on".into());
+		}
+		if rows.len() != self.bits_per_feature
+		{
+			return Err(format!("obs_yaw_lead: need {} thermometer thresholds (1 feature), got {}", self.bits_per_feature, rows.len()));
+		}
+		let lead = crate::yaw_lead::YawLead::new(tau)?;
+		let at = self.yaw_channel_layout().yaw_channel_end() * self.bits_per_feature;
+		self.thresholds.splice(at..at, rows);
+		self.num_features += 1;
+		self.last_feature_vector = vec![0.0f32; self.num_features];
+		self.yaw_lead = Some(lead);
+		Ok(())
+	}
+
+	/// CTRL-80: τ of the lead input for the GPU hosts (None ⇒ off).
+	pub(crate) fn yaw_lead_tau(&self) -> Option<f32>
+	{
+		self.yaw_lead.map(|l| l.tau())
+	}
+
 	pub(crate) fn delta_params(&self) -> (bool, f32, f32, f32)
 	{
 		(
@@ -3133,6 +3184,7 @@ impl WnnController
 			yaw_trim_err: None,
 			yaw_trim_p: None,
 			yaw_trim_ff: None,
+			yaw_lead: None,
 			collective_anchor: 0.5,
 		})
 	}
@@ -3998,6 +4050,9 @@ pub struct WnnController
 	yaw_trim_p: Option<crate::yaw_trim_err::YawTrimErr>,
 	// ABI 58 (--yaw-trim-ff): cT of the yaw-rate feed-forward (None ⇒ off, bit-identical).
 	yaw_trim_ff: Option<f32>,
+	// CTRL-80 (ABI 64, --obs-yaw-lead): the yaw LEAD input yaw_err − τ·gyro_z, one feature
+	// directly after the yaw-anchor pair (yaw_lead.rs). None ⇒ off, bit-identical.
+	yaw_lead: Option<crate::yaw_lead::YawLead>,
 	// L1 (06/08/2026) — d̂ disturbance observer, the mpcof teacher's instrument moved
 	// into the student. Some(b) ⇒ 3 extra features (roll/pitch/yaw estimated external
 	// angular acceleration). The screen's D2 decomposition showed the student's error
@@ -4187,6 +4242,7 @@ impl WnnController
 		delta_max_yaw = None,
 		yaw_trim_ff = false,
 		delta_leak_yaw = None,
+		obs_yaw_lead = None,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -4258,10 +4314,32 @@ impl WnnController
 		yaw_trim_ff: bool,
 		// ABI 63 (--delta-leak-yaw): the yaw bank's own output leak; None ⇒ delta_leak.
 		delta_leak_yaw: Option<f32>,
+		// CTRL-80 (ABI 64, --obs-yaw-lead): τ (s) of the yaw LEAD input yaw_err − τ·gyro_z,
+		// one feature directly after the yaw-anchor pair (yaw_lead.rs). None ⇒ off.
+		obs_yaw_lead: Option<f32>,
 	) -> PyResult<Self>
 	{
-		// CTRL-46: the bias-predictor rows are the VERY tail (after the cascade blocks).
 		let mut thresholds = thresholds;
+		// CTRL-80: the lead input's rows sit in the MIDDLE of the ladder (head-relative
+		// slot, so independent of the tail blocks below); new_core sizes the ladder without them.
+		let lead_layout = crate::yaw_lead::YawChannelLayout {
+			num_motors,
+			tilt_p: obs_tilt_p,
+			tilt_i: obs_tilt_i,
+			peraxis_p: obs_peraxis_p,
+			peraxis_i: obs_peraxis_i,
+			peraxis_yaw: obs_peraxis_yaw,
+			pwm: obs_pwm,
+			yaw_err: obs_yaw_err,
+			yaw_err_i: obs_yaw_err_i,
+		};
+		let lead_rows = match obs_yaw_lead
+		{
+			Some(_) => crate::yaw_lead::take_rows(&mut thresholds, lead_layout.yaw_channel_end(), bits_per_feature)
+				.map_err(pyo3::exceptions::PyValueError::new_err)?,
+			None => Vec::new(),
+		};
+		// CTRL-46: the bias-predictor rows are the VERY tail (after the cascade blocks).
 		let n_abp = if obs_att_bias_pred { crate::att_bias_pred::ABP_FEATURES * bits_per_feature } else { 0 };
 		if thresholds.len() < n_abp
 		{
@@ -4328,6 +4406,11 @@ impl WnnController
 		c.set_delta_label_scale_core(delta_label_scale)
 			.map_err(pyo3::exceptions::PyValueError::new_err)?;
 		c.dagger_label_delta = dagger_label_delta;
+		// CTRL-80: FIRST of the layout-changing enables (its slot is head-relative).
+		if let Some(tau) = obs_yaw_lead
+		{
+			c.enable_yaw_lead(tau, lead_rows).map_err(pyo3::exceptions::PyValueError::new_err)?;
+		}
 		if obs_att_estimator
 		{
 			c.enable_att_estimator(est_kp, est_ki)
@@ -4450,6 +4533,13 @@ impl WnnController
 	pub fn delta_leak_yaw(&self) -> Option<f32>
 	{
 		self.delta_leak_yaw
+	}
+
+	/// CTRL-80 (ABI 64): the yaw LEAD input — None when off, else τ (s).
+	#[getter]
+	pub fn obs_yaw_lead(&self) -> Option<f32>
+	{
+		self.yaw_lead_tau()
 	}
 
 	/// ABI 56: whether the yaw heading is ANCHORED (an absolute angle: obs_yaw_err /
@@ -6677,6 +6767,13 @@ impl WnnController
 		{
 			self.integral_acc[iacc] = self.yaw_integral_leak * self.integral_acc[iacc] + yaw_err;
 			feats.push(self.integral_acc[iacc] * self.integral_scale);
+		}
+		// CTRL-80 (ABI 64): the yaw LEAD input, directly after the yaw-anchor pair — the
+		// value the proportional yaw input carries, led by τ·gyro_z (yaw_lead.rs; the
+		// kernels' yaw_lead_value). Both operands are replayed streams ⇒ replay == live.
+		if let Some(lead) = self.yaw_lead
+		{
+			feats.push(lead.value(yaw_push, gyro[2]));
 		}
 		// L1 d̂ observer (canonical order LAST, after the yaw channel). Mirrors
 		// optimal.rs::update_dhat — the mpcof teacher's law — INCLUDING its input

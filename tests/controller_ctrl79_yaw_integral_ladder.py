@@ -35,7 +35,7 @@ OFF_FLAG = ["--yaw-integral-ladder", "quantile"]
 XY_FLAG = ["--gyro-xy-ladder", "dense"]
 YAWI_CUTS = [-12.0, -6.5, -3.5, -1.5, 1.5, 3.5, 6.5, 12.0]
 # Absent from the pre-CTRL-79 tree's namespace (default quantile; this test is its pin).
-NEW_KEYS = ("yaw_integral_ladder",)
+NEW_KEYS = ("yaw_integral_ladder", "obs_yaw_lead", "obs_yaw_lead_tau")  # + CTRL-80 (ABI 64), absent from older trees
 
 
 def _probe(extra: list[str]):

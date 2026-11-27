@@ -281,6 +281,8 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	"controller_obs_yaw_trim_err",    # L2y: yaw error vs the trim-shifted target
 	"controller_obs_yaw_trim_err_p",  # L2y' (ABI 52): proportional-only trim shift, raw integral
 	"controller_obs_yaw_from_att_est",
+	"controller_obs_yaw_lead",      # ABI 64 (CTRL-80): yaw lead input yaw_err - tau*gyro_z (phased_ga-only, refused here)
+	"controller_obs_yaw_lead_tau",  # ABI 64 (CTRL-80): its tau, s (default 0.10)
 	"controller_delta_leak_yaw",  # ABI 63 (CTRL-74): the yaw bank's own output leak (None = --delta-leak)
 	"controller_delta_max_yaw",
 	"controller_yaw_trim_ff",  # ABI 58: yaw-rate feed-forward cT*cresid_z on the CTBR yaw setpoint  # ABI 57: the yaw bank's own delta_max (None = --delta-max)  # lever 1 (ABI 55): yaw heading from the student's Mahony estimate

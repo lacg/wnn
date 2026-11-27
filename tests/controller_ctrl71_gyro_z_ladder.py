@@ -28,7 +28,7 @@ FLAG = ["--gyro-z-ladder", "dense"]
 CUTS = (0.011, 0.05, 0.15, 0.45)
 # Flags added at or after CTRL-71 (off by default; their flag-off pins are their own tests,
 # e.g. tests/controller_ctrl75_76_ladders.py): absent from the pre-CTRL-71 tree's namespace.
-LATER_KEYS = ("gyro_z_ladder", "delta_leak_yaw", "gyro_xy_ladder", "yaw_err_outer_cut", "yaw_integral_ladder")
+LATER_KEYS = ("gyro_z_ladder", "delta_leak_yaw", "gyro_xy_ladder", "yaw_err_outer_cut", "yaw_integral_ladder", "obs_yaw_lead", "obs_yaw_lead_tau")
 
 
 def _probe(extra: list[str]):

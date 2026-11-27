@@ -196,7 +196,11 @@ import os
 # ABI 63 (25/11/2026, Luiz, Plane CTRL-74; additive, default = ABI 62 bit-identical):
 # WnnController / dagger_train_batch_inplace(delta_leak_yaw=None) — the yaw bank's own output
 # leak (--delta-leak-yaw), read by the decode AND the DAgger label baseline; None = delta_leak.
-EXPECTED_ABI = 63
+# ABI 64 (26/11/2026, Luiz, Plane CTRL-80; additive, default = ABI 63 bit-identical):
+# WnnController / dagger_train_batch_inplace(obs_yaw_lead=None) — the yaw LEAD input
+# yaw_err - tau * gyro_z (--obs-yaw-lead), one feature directly after the yaw-anchor pair
+# (its ladder rows sit in the MIDDLE of the thresholds). None = the ABI-63 layout and pipelines.
+EXPECTED_ABI = 64
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

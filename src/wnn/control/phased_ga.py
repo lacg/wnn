@@ -355,6 +355,7 @@ from wnn.control.threshold_calibration import (
 	CALIB_LADDERS, CALIB_REGIMES, calibration_from_args,
 )
 from wnn.control.evaluator import (
+	yaw_lead_tau_from_args,
 	ControllerSpec, ControllerEvaluator, arch_shape_from_spec, spec_from_arch,
 	fit_thresholds_from_pid_rollouts,
 	collect_student_feature_samples,
@@ -594,6 +595,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                delta_max_yaw: float | None = None,
                yaw_trim_ff: bool = False,
                delta_leak_yaw: float | None = None,
+               obs_yaw_lead: float | None = None,
                dt: float = 0.001,
                decouple_outputs: bool = False, bits_per_feature: int = 8,
                feature_balance_ratio: float = 0.0,
@@ -656,6 +658,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		delta_max_yaw=delta_max_yaw,
 		yaw_trim_ff=yaw_trim_ff,
 		delta_leak_yaw=delta_leak_yaw,
+		obs_yaw_lead=obs_yaw_lead,
 		dt=dt,
 		decouple_outputs=decouple_outputs,
 		feature_balance_ratio=feature_balance_ratio,
@@ -3248,6 +3251,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "--delta-max. Changes the yaw bank's decode AND its DAgger label encoding (one "
 	                     "alphabet). Needs the delta law (--ctbr-delta-law under ctbr). Unset (default) = "
 	                     "--delta-max on every bank, byte-identical. A new lineage.")
+	ap.add_argument("--obs-yaw-lead", action=argparse.BooleanOptionalAction, default=False,
+	                help="ABI 64 (Luiz 26/11/2026, CTRL-80): add the yaw LEAD input yaw_lead = yaw_err - "
+	                     "tau * gyro_z (1 feature, directly after the yaw-anchor pair): where the yaw error "
+	                     "will be in tau seconds at the present rate — the time-to-go a (yaw_err code x "
+	                     "gyro_z code) cell cannot give. A fixed linear combination of two inputs the "
+	                     "student already reads (no observer, no plant model). It takes its OWN fixed "
+	                     "centred ladder, +-0.40 / 0.80 / 1.35 / 2.25 deg; no other feature's ladder moves. "
+	                     "Needs --obs-yaw-err and --bits-per-feature 8. Default OFF = byte-identical. "
+	                     "A new lineage (the layout grows by one feature).")
+	ap.add_argument("--obs-yaw-lead-tau", type=float, default=0.10,
+	                help="CTRL-80: tau (s) of --obs-yaw-lead, in (0, 1]. Default 0.10 (the measured "
+	                     "setpoint -> yaw-rate lag of the G+T base). Read only with --obs-yaw-lead.")
 	ap.add_argument("--delta-leak-yaw", type=float, default=None,
 	                help="ABI 63 (Luiz 25/11/2026, CTRL-74 lever L1): the output-accumulator leak of the "
 	                     "YAW bank only (m = 3: r under --output-mode ctbr, tau_yaw under "
@@ -4552,6 +4567,22 @@ def resolve_yaw_channel_args(args) -> None:
 		raise SystemExit("--yaw-centred-ladder needs a yaw-error input: --obs-yaw-err / --obs-yaw-err-i "
 		                 "(or --obs-peraxis-p/-i with --obs-peraxis-yaw).")
 	resolve_yaw_integral_ladder_args(args)
+	resolve_yaw_lead_args(args)
+
+
+def resolve_yaw_lead_args(args) -> None:
+	"""CTRL-80: refuse --obs-yaw-lead on a run it cannot act on as specified (no proportional
+	yaw input to lead, a ladder that is not exactly its 8 fixed cuts, or a tau out of range)."""
+	tau = yaw_lead_tau_from_args(args)
+	if tau is None:
+		return
+	if not getattr(args, "obs_yaw_err", False):
+		raise SystemExit("--obs-yaw-lead needs --obs-yaw-err: the lead is yaw_err - tau * gyro_z.")
+	if int(getattr(args, "bits_per_feature", 8)) != 8:
+		raise SystemExit(f"--obs-yaw-lead has an 8-cut fixed ladder: it needs --bits-per-feature 8 "
+		                 f"(got {args.bits_per_feature}).")
+	if not (math.isfinite(tau) and 0.0 < tau <= 1.0):
+		raise SystemExit(f"--obs-yaw-lead-tau {tau}: must be finite and in (0, 1] s")
 
 
 def resolve_yaw_integral_ladder_args(args) -> None:
@@ -4645,6 +4676,7 @@ def block10_tokens(args) -> dict:
 	                "ff" if getattr(args, "yaw_trim_ff", False) else "") if t),
 	            dmax_yaw=("" if getattr(args, "delta_max_yaw", None) is None else f"{float(args.delta_max_yaw):g}"),
 	            dleak_yaw=("" if getattr(args, "delta_leak_yaw", None) is None else f"{float(args.delta_leak_yaw):g}"),
+	            ylead=("" if yaw_lead_tau_from_args(args) is None else f"{yaw_lead_tau_from_args(args):g}"),
 	            pos_metric="hold" if fit_pos_metric_from_args(args) == "hold" else "")
 
 

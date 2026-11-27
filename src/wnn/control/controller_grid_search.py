@@ -31,6 +31,7 @@ from wnn.control.evaluator import (
 	arch_shape_from_spec,
 	fit_calibration,
 	calib_episode_config as _calib_ec,
+	yaw_lead_tau_from_args,
 )
 from wnn.control.feature_layout import feature_names
 from wnn.control.pos_floor import fit_pos_metric_from_args, zrank_pos_floor_from_args
@@ -209,6 +210,7 @@ class ControllerGridSearch(GenericGridSearch):
 			obs_yaw_from_att_est=bool(getattr(args, "obs_yaw_from_att_est", False)),  # lever 1 (ABI 55)
 			delta_max_yaw=getattr(args, "delta_max_yaw", None),  # ABI 57
 			delta_leak_yaw=getattr(args, "delta_leak_yaw", None),  # ABI 63 (CTRL-74)
+			obs_yaw_lead=yaw_lead_tau_from_args(args),  # ABI 64 (CTRL-80)
 			yaw_trim_ff=bool(getattr(args, "yaw_trim_ff", False)),  # ABI 58
 			decouple_outputs=args.decouple_outputs,
 			bits_per_feature=args.bits_per_feature,

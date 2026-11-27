@@ -53,6 +53,7 @@ fn via_ctor(tilt_ref_err: Option<(f32, f32, f32, f32)>) -> WnnController
 		None, // delta_max_yaw (ABI 57)
 		false, // yaw_trim_ff (ABI 58)
 		None, // delta_leak_yaw (ABI 63)
+		None, // obs_yaw_lead (ABI 64)
 	)
 	.expect("ctor")
 }

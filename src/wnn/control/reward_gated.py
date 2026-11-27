@@ -48,7 +48,7 @@ import numpy as np
 from wnn.control._accel import AttitudeSim, WnnController, compute_reward, monotonicity_violations
 
 from .pid import AttitudePID, AttitudePIDConfig
-from .evaluator import ControllerSpec, NUM_FEATURES, random_connectivity, tilt_ref_err_kw, yaw_trim_err_kw, yaw_trim_err_p_kw, yaw_from_att_est_kw, delta_max_yaw_kw, delta_leak_yaw_kw, yaw_trim_ff_kw
+from .evaluator import ControllerSpec, NUM_FEATURES, random_connectivity, tilt_ref_err_kw, yaw_trim_err_kw, yaw_trim_err_p_kw, yaw_from_att_est_kw, delta_max_yaw_kw, delta_leak_yaw_kw, yaw_lead_kw, yaw_trim_ff_kw
 from .training import (
 	EpisodeConfig,
 	_sample_initial_state,
@@ -509,6 +509,7 @@ def reward_gated_train(
 		obs_yaw_from_att_est=yaw_from_att_est_kw(spec),  # lever 1 (ABI 55)
 		delta_max_yaw=delta_max_yaw_kw(spec),  # ABI 57
 		delta_leak_yaw=delta_leak_yaw_kw(spec),  # ABI 63 (CTRL-74)
+		obs_yaw_lead=yaw_lead_kw(spec),  # ABI 64 (CTRL-80)
 		yaw_trim_ff=yaw_trim_ff_kw(spec),  # ABI 58
 		dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt, integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
 		action_repeat=spec.action_repeat,

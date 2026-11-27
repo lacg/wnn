@@ -420,6 +420,9 @@ struct RolloutParams
 	// yaw bank's output leak (== delta_leak when unset ⇒ the kernel's `m == 3 ? delta_leak_yaw
 	// : delta_leak` selects the SAME value — flag-off arithmetic unchanged).
 	delta_leak_yaw: f32,
+	// + 1 (ABI 64, CTRL-80, --obs-yaw-lead), appended in lockstep with the shader twin: τ of
+	// the yaw LEAD input; read only by the FC_YAW_LEAD(6) specialization.
+	ylead_tau: f32,
 }
 
 /// CTRL-38: the cascade feature blocks as the score kernel needs them, read off the
@@ -587,7 +590,9 @@ pub struct ControllerRolloutEvaluator
 	// CTRL-46: keyed (cascade, abp) — FC_ATT_BIAS_PRED(3) composes with it.
 	// ABI 52: keyed (cascade, abp, ytp) — FC_YAW_TRIM_P(4) composes with both.
 	// ABI 62: keyed (cascade, abp, ytp, rate_loop_obs) — FC_RATE_LOOP_OBS(5) composes.
-	cascade_obs_pipeline: std::cell::RefCell<std::collections::HashMap<(bool, bool, bool, bool), ComputePipelineState>>,
+	// ABI 64: keyed (.., yaw_lead) — FC_YAW_LEAD(6) composes (and alone selects this map:
+	// the lead input needs neither the cascade blocks nor the bias predictor).
+	cascade_obs_pipeline: std::cell::RefCell<std::collections::HashMap<(bool, bool, bool, bool, bool), ComputePipelineState>>,
 	/// TEST-ONLY (ABI 38 label-replay identity on the GPU): Some(firmware attitude
 	/// gains) ⇒ a CTBR population's outer setpoint is the in-kernel firmware attitude
 	/// half (ctbr_outer_pid) instead of the WNN decode.
@@ -675,9 +680,9 @@ impl ControllerRolloutEvaluator
 	/// geometry — CTBR refuses geometry). Only it appends the cascade blocks.
 	/// CTRL-46: `abp` = FC_ATT_BIAS_PRED(3)=true; a constant is set ONLY when on, so the
 	/// (true, false) pipeline is the ABI-45 cascade pipeline exactly.
-	fn cascade_obs_pipeline(&self, cas: bool, abp: bool, ytp: bool, rlo: bool) -> Result<ComputePipelineState, String>
+	fn cascade_obs_pipeline(&self, cas: bool, abp: bool, ytp: bool, rlo: bool, ylead: bool) -> Result<ComputePipelineState, String>
 	{
-		if let Some(p) = self.cascade_obs_pipeline.borrow().get(&(cas, abp, ytp, rlo))
+		if let Some(p) = self.cascade_obs_pipeline.borrow().get(&(cas, abp, ytp, rlo, ylead))
 		{
 			return Ok(p.clone());
 		}
@@ -701,15 +706,20 @@ impl ControllerRolloutEvaluator
 		{
 			fcv.set_constant_value_at_index(&on as *const bool as *const _, MTLDataType::Bool, 5);
 		}
+		// ABI 64: the yaw LEAD input (set ONLY when on, so every ABI-63 key is the ABI-63 pipeline).
+		if ylead
+		{
+			fcv.set_constant_value_at_index(&on as *const bool as *const _, MTLDataType::Bool, 6);
+		}
 		let func = self
 			.library
 			.get_function("controller_rollout", Some(fcv))
-			.map_err(|e| format!("controller_rollout specialization (cascade obs {cas}, abp {abp}, ytp {ytp}) failed: {e}"))?;
+			.map_err(|e| format!("controller_rollout specialization (cascade obs {cas}, abp {abp}, ytp {ytp}, ylead {ylead}) failed: {e}"))?;
 		let p = self
 			.device
 			.new_compute_pipeline_state_with_function(&func)
 			.map_err(|e| format!("obs pipeline creation (cascade {cas}, abp {abp}) failed: {e}"))?;
-		self.cascade_obs_pipeline.borrow_mut().insert((cas, abp, ytp, rlo), p.clone());
+		self.cascade_obs_pipeline.borrow_mut().insert((cas, abp, ytp, rlo, ylead), p.clone());
 		Ok(p)
 	}
 
@@ -1049,10 +1059,17 @@ impl ControllerRolloutEvaluator
 		let rlo = ctbr.is_some_and(|c| c.cas.rate_loop_obs());
 		// CTRL-46: the bias-predictor block (uniform across the population, like att_est).
 		let abp_on = controllers[0].att_bias_pred_on();
+		// ABI 64: the yaw LEAD input (uniform across the population; refused on a mixed batch
+		// by score_controllers_metal). The N-rotor specialization does not carry it.
+		let ylead_on = controllers[0].yaw_lead_tau().is_some();
+		if ylead_on && geometry.is_some()
+		{
+			return Err("score_controllers_metal: obs_yaw_lead is not carried by the N-rotor geometry pipeline".into());
+		}
 		let geom_pipeline = match geometry
 		{
 			Some(rotors) => Some(self.geometry_pipeline(rotors.len() as u32, abp_on)?),
-			None if cas_on || abp_on => Some(self.cascade_obs_pipeline(cas_on, abp_on, controllers[0].yaw_trim_p_kappa().is_some(), rlo)?),
+			None if cas_on || abp_on || ylead_on => Some(self.cascade_obs_pipeline(cas_on, abp_on, controllers[0].yaw_trim_p_kappa().is_some(), rlo, ylead_on)?),
 			None => None,
 		};
 		let pipeline: &ComputePipelineState = geom_pipeline.as_ref().unwrap_or(&self.pipeline);
@@ -1320,6 +1337,7 @@ impl ControllerRolloutEvaluator
 				cas_rerr_alpha: ctbr.and_then(|c| c.cas.rerr).map_or(0.0, |f| f.alpha),
 				cas_rerr_inv: ctbr.and_then(|c| c.cas.rerr).map_or([0.0; 3], |f| f.inv_scale),
 				delta_leak_yaw: controllers[0].delta_leak_bank(crate::controller::YAW_BANK),
+				ylead_tau: controllers[0].yaw_lead_tau().unwrap_or(0.0),
 			};
 
 			let b_q0 = self.buf(q0_chunk);
@@ -1791,6 +1809,11 @@ pub fn score_controllers_metal(
 	if controllers.iter().any(|c| c.delta_max_yaw() != controllers[0].delta_max_yaw())
 	{
 		return Err(verr("score_controllers_metal: a batch mixes delta_max_yaw values".to_string()));
+	}
+	// ABI 64: one RolloutParams per launch ⇒ the population must agree on the lead input.
+	if controllers.iter().any(|c| c.yaw_lead_tau() != controllers[0].yaw_lead_tau())
+	{
+		return Err(verr("score_controllers_metal: a batch mixes obs_yaw_lead values".to_string()));
 	}
 	// ABI 63: one RolloutParams per launch ⇒ the population must agree on the yaw leak.
 	if controllers.iter().any(|c| c.delta_leak_yaw() != controllers[0].delta_leak_yaw())
@@ -2321,6 +2344,9 @@ struct TrainParams
 	// the rate-error values' float offset in the cas_rec device buffer (total_steps*6):
 	// the train kernel's 31 buffer slots are all taken, so rerr_rec rides cas_rec's tail.
 	cas_rerr_off: u32,
+	// + 1 (ABI 64, CTRL-80, --obs-yaw-lead), appended in lockstep with the shader twin: τ of
+	// the yaw LEAD input; read only by the FC_YAW_LEAD(6) specialization.
+	ylead_tau: f32,
 }
 
 /// ABI 62: the cas_rec device buffer — the six-value record, with the rate-error stream
@@ -2464,8 +2490,9 @@ pub struct ControllerTrainer
 	// controller_train / controller_record (L2y'), built on first use.
 	// ABI 62: keyed (ytp, rate_loop_obs) — FC_RATE_LOOP_OBS(5) composes with it; the
 	// (false, false) key is never built (the default pipelines below are it).
+	// ABI 64: keyed (ytp, rate_loop_obs, yaw_lead) — FC_YAW_LEAD(6) composes with both.
 	library: metal::Library,
-	spec_pipelines: std::cell::RefCell<std::collections::HashMap<(bool, bool), (ComputePipelineState, ComputePipelineState)>>,
+	spec_pipelines: std::cell::RefCell<std::collections::HashMap<(bool, bool, bool), (ComputePipelineState, ComputePipelineState)>>,
 	pipeline: ComputePipelineState,              // controller_train
 	record_pipeline: ComputePipelineState,       // controller_record (P2a)
 	scan_pipeline: ComputePipelineState,         // controller_scan (P2b)
@@ -2663,8 +2690,8 @@ impl ControllerTrainer
 		{
 			return Ok(None);
 		};
-		let key = (c0.yaw_trim_p_kappa().is_some(), CascadeGpu::from_controller(c0).rate_loop_obs());
-		if key == (false, false)
+		let key = (c0.yaw_trim_p_kappa().is_some(), CascadeGpu::from_controller(c0).rate_loop_obs(), c0.yaw_lead_tau().is_some());
+		if key == (false, false, false)
 		{
 			return Ok(None);
 		}
@@ -2682,6 +2709,10 @@ impl ControllerTrainer
 			if key.1
 			{
 				fcv.set_constant_value_at_index(&on as *const bool as *const _, MTLDataType::Bool, 5);
+			}
+			if key.2
+			{
+				fcv.set_constant_value_at_index(&on as *const bool as *const _, MTLDataType::Bool, 6);
 			}
 			let func = self.library.get_function(name, Some(fcv)).map_err(|e| format!("{name} {key:?} specialization failed: {e}"))?;
 			self.device.new_compute_pipeline_state_with_function(&func).map_err(|e| format!("{name} {key:?} pipeline creation failed: {e}"))
@@ -2983,6 +3014,7 @@ impl ControllerTrainer
 			cas_rate_i_mask: CascadeGpu::from_controller(controllers[0]).masks().0,
 			cas_rerr_mask: CascadeGpu::from_controller(controllers[0]).masks().1,
 			cas_rerr_off: batch.cas_rec.len() as u32,
+			ylead_tau: controllers[0].yaw_lead_tau().unwrap_or(0.0),
 		};
 
 		let b_sc = self.buf(&state_conns);
@@ -3217,6 +3249,7 @@ impl ControllerTrainer
 			cas_rate_i_mask: CascadeGpu::from_controller(controllers[0]).masks().0,
 			cas_rerr_mask: CascadeGpu::from_controller(controllers[0]).masks().1,
 			cas_rerr_off: batch.cas_rec.len() as u32,
+			ylead_tau: controllers[0].yaw_lead_tau().unwrap_or(0.0),
 		};
 
 		let rec_out = vec![0u32; total_records * out_words];
@@ -4905,6 +4938,7 @@ fn build_parity_fixture_variant(
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		fixture_ctbr(variant),
 		false, None, None, false, false, false, None, false, None,
+		None, // obs_yaw_lead (ABI 64)
 	)
 	.map_err(|e| format!("{e}"))?;
 	for _ in 0..(n_state * 4)
@@ -6790,6 +6824,7 @@ fn controller_plant_latch_parity_once(high_on: bool) -> Result<(usize, usize, us
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		None, // ctbr OFF (ABI 38: the motor-level controller)
 		false, None, None, false, false, false, None, false, None,
+		None, // obs_yaw_lead (ABI 64)
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -6984,6 +7019,7 @@ fn controller_plant_counter_parity_once() -> Result<(usize, usize, usize), Strin
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		None, // ctbr OFF (ABI 38: the motor-level controller)
 		false, None, None, false, false, false, None, false, None,
+		None, // obs_yaw_lead (ABI 64)
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7166,6 +7202,7 @@ fn controller_plant_bidir_parity_once() -> Result<(usize, usize, usize), String>
 		false, 2.0, 0.1, // obs_att_estimator OFF (ABI 32)
 		None, // ctbr OFF (ABI 38: the motor-level controller)
 		false, None, None, false, false, false, None, false, None,
+		None, // obs_yaw_lead (ABI 64)
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -7849,6 +7886,7 @@ fn controller_record_obs_pwm_parity_once() -> Result<(usize, usize, usize, bool)
 		false, false,
 		false, 1, 1.0, false, false, 2.0, 0.1, None,
 		false, None, None, false, false, false, None, false, None,
+		None, // obs_yaw_lead (ABI 64)
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -8006,6 +8044,7 @@ fn controller_record_att_est_parity_once() -> Result<(usize, usize, usize, bool)
 		false, 1, 1.0, false,
 		true, 2.0, 0.1, None, // obs_att_estimator ON; ctbr OFF
 		false, None, None, false, false, false, None, false, None,
+		None, // obs_yaw_lead (ABI 64)
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -8156,6 +8195,7 @@ fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, 
 		false, false,     // stage-2 horizontal OFF
 		false, 1, 1.0, false, false, 2.0, 0.1, None,
 		false, None, None, false, false, false, None, false, None,
+		None, // obs_yaw_lead (ABI 64)
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -8533,7 +8573,8 @@ mod tests
 		// + 2 (ABI 58): yff_on + yff_ct.
 		// + 6 (ABI 62): cas_rate_i_mask + cas_rerr_mask + cas_rerr_alpha + cas_rerr_inv[3].
 		// + 1 (ABI 63): delta_leak_yaw.
-		assert_eq!(mem::size_of::<RolloutParams>(), 200 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
+		// + 1 (ABI 64): ylead_tau.
+		assert_eq!(mem::size_of::<RolloutParams>(), 201 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============
