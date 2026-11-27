@@ -1,0 +1,3 @@
+[_P_both_L1_yld_gt_lk90_full_s3] KO= thresholds 2s
+  FAIL u99990112 ep86: err 5.51 reached_hold 1 stable 0 | whole r/p/y/|v| 0.36/5.31/0.66/5.52 | hold r/p/y/|v| 0.18/0.24/0.24/0.43 | mid 5.04
+[C-S2-d_wposx2_a63_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_lk90_full_s3] 17s stable 99.97 err 1.156 steady 0.388 mid 0.796 pos 0.3352 fails 1 | logged HEADLINE ('100.0', '1.16', '0.39')
