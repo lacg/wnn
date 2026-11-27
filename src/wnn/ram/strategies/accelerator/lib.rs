@@ -337,6 +337,9 @@ mod ce_path_tests;
 // ids_calib_sample: search-time threshold calibration subsample (02/11/2026).
 #[cfg(all(test, target_os = "macos"))]
 mod calib_sample_tests;
+// IDS-81 swap pin: live IDS configs bit-identical across the swap (#[ignore]d).
+#[cfg(all(test, target_os = "macos"))]
+mod ids81_live_pin_tests;
 // ids_fold_rotation: per-generation K-fold re-partition; generation 0 = today's folds (ABI 30).
 #[cfg(all(test, target_os = "macos"))]
 mod ids_fold_rotation_tests;

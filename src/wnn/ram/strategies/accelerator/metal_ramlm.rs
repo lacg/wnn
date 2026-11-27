@@ -180,42 +180,22 @@ impl MetalRAMLMEvaluator
 		let input = packed_input.upload(&self.device);
 		let input_buffer = input.buffer();
 
-		let conn_buffer = self.device.new_buffer_with_data(
-			connections_i32.as_ptr() as *const _,
-			(connections_i32.len() * mem::size_of::<i32>()) as u64,
-			MTLResourceOptions::StorageModeShared,
-		);
+		let conn_buffer = self.buffer_of(&connections_i32);
 
-		let memory_buffer = self.device.new_buffer_with_data(
-			memory_words.as_ptr() as *const _,
-			(memory_words.len() * mem::size_of::<i64>()) as u64,
-			MTLResourceOptions::StorageModeShared,
-		);
+		let memory_buffer = self.buffer_of(memory_words);
 
 		// Metal refuses a zero-length buffer, so an untracked bitmap becomes a
 		// 1-element dummy the shader never reads (coverage_aware == 0).
 		let coverage_src: &[u64] = if coverage.is_empty() { &[0u64] } else { coverage };
-		let coverage_buffer = self.device.new_buffer_with_data(
-			coverage_src.as_ptr() as *const _,
-			std::mem::size_of_val(coverage_src) as u64,
-			metal::MTLResourceOptions::StorageModeShared,
-		);
+		let coverage_buffer = self.buffer_of(coverage_src);
 
-		let params_buffer = self.device.new_buffer_with_data(
-			&params as *const _ as *const _,
-			mem::size_of::<RAMLMParams>() as u64,
-			MTLResourceOptions::StorageModeShared,
-		);
-		let cluster_neurons_buffer = self.device.new_buffer_with_data(
-			cluster_neurons.as_ptr() as *const _,
-			std::mem::size_of_val(cluster_neurons.as_slice()) as u64,
-			MTLResourceOptions::StorageModeShared,
-		);
+		let params_buffer = self.buffer_of(std::slice::from_ref(&params));
+		let cluster_neurons_buffer = self.buffer_of(&cluster_neurons);
 
 		// Output buffer
 		let output_size = num_examples * num_clusters;
 		let output_buffer = self.device.new_buffer(
-			(output_size * mem::size_of::<f32>()) as u64,
+			(output_size.max(1) * mem::size_of::<f32>()) as u64,
 			MTLResourceOptions::StorageModeShared,
 		);
 
@@ -362,9 +342,7 @@ impl MetalRAMLMEvaluator
 
 	fn buffer_of<T>(&self, data: &[T]) -> Buffer
 	{
-		// Metal refuses a zero-length buffer; an empty slice gets one dummy byte.
-		let bytes = std::mem::size_of_val(data).max(1) as u64;
-		self.device.new_buffer_with_data(data.as_ptr() as *const _, bytes, MTLResourceOptions::StorageModeShared)
+		ram_core::metal_buffer::shared_buffer_of(&self.device, data)
 	}
 }
 

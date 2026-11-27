@@ -341,7 +341,7 @@ pub(crate) fn axonogenesis_pass_adaptive(
 	num_examples: usize,
 	_num_clusters: usize,
 	memory_mode: u8,
-	_empty_value: f32,
+	empty_value: f32,
 	rate: f32,
 	rng: &mut impl rand::Rng,
 ) -> usize
@@ -532,7 +532,7 @@ pub(crate) fn axonogenesis_pass_adaptive(
 						old_addr,
 						ram_core::metal_sparse::default_cell_for_mode(memory_mode) as u8,
 					);
-					let old_weight = ram_core::neuron_memory::QUAD_WEIGHTS[old_cell.clamp(0, 3) as usize];
+					let old_weight = cell_to_weight(old_cell, memory_mode, empty_value);
 					let old_correct = (old_weight >= 0.5) == target_is_this;
 
 					// Flip address bit at local_idx if old/new input bits differ
@@ -562,7 +562,7 @@ pub(crate) fn axonogenesis_pass_adaptive(
 						new_addr,
 						ram_core::metal_sparse::default_cell_for_mode(memory_mode) as u8,
 					);
-					let new_weight = ram_core::neuron_memory::QUAD_WEIGHTS[new_cell.clamp(0, 3) as usize];
+					let new_weight = cell_to_weight(new_cell, memory_mode, empty_value);
 					let new_correct = (new_weight >= 0.5) == target_is_this;
 
 					delta += new_correct as i32 - old_correct as i32;

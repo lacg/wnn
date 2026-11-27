@@ -56,9 +56,11 @@ struct ProbeParams
 	uint examples_in_dispatch; // examples this dispatch covers
 };
 
-// QUAD cell → integer weight quantized ×4. votes/4.0 reproduces the
-// WNN_QUAD_WEIGHTS sum exactly (all quarters are exact in f32).
-constant uint WNN_QUAD_VOTES_X4[4] = {0u, 1u, 3u, 4u};
+// QUAD cell → integer vote: wnn_quad_weight_x4 (common.metal — the ONE
+// definition, derived from WNN_QUAD_WEIGHTS; a per-shader table lived here
+// until IDS-81). The probe is QUAD_WEIGHTED-only and coverage-blind by
+// construction: try_eval_in_place_batch declines every other mode and
+// coverage_aware (a miss here is WEAK_FALSE, never the coverage-aware 0).
 
 // Sign-extend the 30-bit net field of a packed OI counter (mirrors
 // neuron_memory.rs oi_unpack's net handling).
@@ -187,7 +189,7 @@ kernel void marker_probe_eval(
 	uint cell = found ? oi_bin_to_cell_inline(acc) : 1u; // miss → WEAK_FALSE
 	atomic_fetch_add_explicit(
 			&votes[example_idx * params.num_clusters + meta.cluster_idx],
-			WNN_QUAD_VOTES_X4[cell],
+			wnn_quad_weight_x4(cell),
 			memory_order_relaxed);
 }
 

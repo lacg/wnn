@@ -86,12 +86,15 @@ impl SparseGpuExport
 	/// GROUP of `grouping`; the result holds one neuron per UNIT, whose
 	/// offset/count point at its group's range. Keys/values are stored once —
 	/// k copies of a unit cost 8 bytes of (offset, count) each, not k ranges.
-	pub fn alias(&self, grouping: &UnitGrouping) -> Self
+	/// Takes `self` by value: the keys/values MOVE into the view (IDS-81 — the
+	/// by-reference form cloned them, briefly holding every sparse logical
+	/// group twice while `from_physical` ran).
+	pub fn alias(self, grouping: &UnitGrouping) -> Self
 	{
 		assert_eq!(self.num_neurons, grouping.num_groups(), "alias: export neurons != grouping groups");
 		Self {
-			keys: self.keys.clone(),
-			values: self.values.clone(),
+			keys: self.keys,
+			values: self.values,
 			offsets: grouping.expand(&self.offsets),
 			counts: grouping.expand(&self.counts),
 			num_neurons: grouping.num_units(),
@@ -117,7 +120,7 @@ mod tests
 	{
 		let phys = physical();
 		let grouping = UnitGrouping::by_key(["a", "c", "a", "b", "c", "a"]);
-		let logical = phys.alias(&grouping);
+		let logical = phys.clone().alias(&grouping);
 		assert_eq!(logical.num_neurons, 6);
 		assert_eq!(logical.total_entries(), phys.total_entries(), "alias must not copy ranges");
 		// The same logical layout trained plain: every copy owns its own range.
@@ -135,6 +138,6 @@ mod tests
 	fn sparse_alias_identity_is_noop()
 	{
 		let phys = physical();
-		assert_eq!(phys.alias(&UnitGrouping::identity(3)), phys);
+		assert_eq!(phys.clone().alias(&UnitGrouping::identity(3)), phys);
 	}
 }

@@ -105,11 +105,7 @@ impl<'a> GpuInputRows<'a>
 		match self
 		{
 			GpuInputRows::Packed(rows) => GpuInputBuffer::Aliased(NoCopyInputBuffer::new(device, rows)),
-			GpuInputRows::Words(words) => GpuInputBuffer::Copied(device.new_buffer_with_data(
-				words.as_ptr() as *const std::ffi::c_void,
-				(words.len().max(1) * 8) as u64,
-				MTLResourceOptions::StorageModeShared,
-			)),
+			GpuInputRows::Words(words) => GpuInputBuffer::Copied(crate::metal_buffer::shared_buffer_of(device, words)),
 		}
 	}
 }

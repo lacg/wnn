@@ -166,9 +166,7 @@ impl MetalSparseEvaluator
 
 	fn buffer_of<T>(&self, data: &[T]) -> Buffer
 	{
-		// Metal refuses a zero-length buffer; an empty slice gets one dummy byte.
-		let bytes = std::mem::size_of_val(data).max(1) as u64;
-		self.device.new_buffer_with_data(data.as_ptr() as *const _, bytes, MTLResourceOptions::StorageModeShared)
+		crate::metal_buffer::shared_buffer_of(&self.device, data)
 	}
 
 	/// Coalesced-group forward: clusters laid out at `max_neurons_per_cluster`
@@ -409,45 +407,21 @@ impl MetalSparseEvaluator
 		let input = packed_input.upload(&self.device);
 		let input_buffer = input.buffer();
 
-		let conn_buffer = self.device.new_buffer_with_data(
-			connections_i32.as_ptr() as *const _,
-			(connections_i32.len() * mem::size_of::<i32>()) as u64,
-			MTLResourceOptions::StorageModeShared,
-		);
+		let conn_buffer = self.buffer_of(&connections_i32);
 
-		let keys_buffer = self.device.new_buffer_with_data(
-			keys_flat.as_ptr() as *const _,
-			(keys_flat.len() * mem::size_of::<u64>()) as u64,
-			MTLResourceOptions::StorageModeShared,
-		);
+		let keys_buffer = self.buffer_of(keys_flat);
 
-		let values_buffer = self.device.new_buffer_with_data(
-			values_flat.as_ptr() as *const _,
-			(values_flat.len() * mem::size_of::<u8>()) as u64,
-			MTLResourceOptions::StorageModeShared,
-		);
+		let values_buffer = self.buffer_of(values_flat);
 
-		let offsets_buffer = self.device.new_buffer_with_data(
-			offsets.as_ptr() as *const _,
-			(offsets.len() * mem::size_of::<u32>()) as u64,
-			MTLResourceOptions::StorageModeShared,
-		);
+		let offsets_buffer = self.buffer_of(offsets);
 
-		let counts_buffer = self.device.new_buffer_with_data(
-			counts.as_ptr() as *const _,
-			(counts.len() * mem::size_of::<u32>()) as u64,
-			MTLResourceOptions::StorageModeShared,
-		);
+		let counts_buffer = self.buffer_of(counts);
 
-		let params_buffer = self.device.new_buffer_with_data(
-			&params as *const _ as *const _,
-			mem::size_of::<SparseParams>() as u64,
-			MTLResourceOptions::StorageModeShared,
-		);
+		let params_buffer = self.buffer_of(std::slice::from_ref(&params));
 
 		let output_size = num_examples * num_clusters;
 		let output_buffer = self.device.new_buffer(
-			(output_size * mem::size_of::<f32>()) as u64,
+			(output_size.max(1) * mem::size_of::<f32>()) as u64,
 			MTLResourceOptions::StorageModeShared,
 		);
 
@@ -577,57 +551,25 @@ impl MetalSparseEvaluator
 			.collect();
 
 		// Create buffers
-		let input_buffer = self.device.new_buffer_with_data(
-			packed_input.as_ptr() as *const _,
-			(packed_input.len() * mem::size_of::<u64>()) as u64,
-			MTLResourceOptions::StorageModeShared,
-		);
+		let input_buffer = self.buffer_of(packed_input);
 
-		let conn_buffer = self.device.new_buffer_with_data(
-			connections_i32.as_ptr() as *const _,
-			(connections_i32.len() * mem::size_of::<i32>()) as u64,
-			MTLResourceOptions::StorageModeShared,
-		);
+		let conn_buffer = self.buffer_of(&connections_i32);
 
-		let keys_buffer = self.device.new_buffer_with_data(
-			keys_flat.as_ptr() as *const _,
-			(keys_flat.len() * mem::size_of::<u64>()) as u64,
-			MTLResourceOptions::StorageModeShared,
-		);
+		let keys_buffer = self.buffer_of(keys_flat);
 
-		let values_buffer = self.device.new_buffer_with_data(
-			values_flat.as_ptr() as *const _,
-			(values_flat.len() * mem::size_of::<u8>()) as u64,
-			MTLResourceOptions::StorageModeShared,
-		);
+		let values_buffer = self.buffer_of(values_flat);
 
-		let offsets_buffer = self.device.new_buffer_with_data(
-			offsets.as_ptr() as *const _,
-			(offsets.len() * mem::size_of::<u32>()) as u64,
-			MTLResourceOptions::StorageModeShared,
-		);
+		let offsets_buffer = self.buffer_of(offsets);
 
-		let counts_buffer = self.device.new_buffer_with_data(
-			counts.as_ptr() as *const _,
-			(counts.len() * mem::size_of::<u32>()) as u64,
-			MTLResourceOptions::StorageModeShared,
-		);
+		let counts_buffer = self.buffer_of(counts);
 
-		let cluster_info_buffer = self.device.new_buffer_with_data(
-			cluster_info_structs.as_ptr() as *const _,
-			(cluster_info_structs.len() * mem::size_of::<ClusterInfo>()) as u64,
-			MTLResourceOptions::StorageModeShared,
-		);
+		let cluster_info_buffer = self.buffer_of(&cluster_info_structs);
 
-		let params_buffer = self.device.new_buffer_with_data(
-			&params as *const _ as *const _,
-			mem::size_of::<GeneralParams>() as u64,
-			MTLResourceOptions::StorageModeShared,
-		);
+		let params_buffer = self.buffer_of(std::slice::from_ref(&params));
 
 		let output_size = num_examples * num_clusters;
 		let output_buffer = self.device.new_buffer(
-			(output_size * mem::size_of::<f32>()) as u64,
+			(output_size.max(1) * mem::size_of::<f32>()) as u64,
 			MTLResourceOptions::StorageModeShared,
 		);
 
@@ -677,6 +619,35 @@ mod tests
 				"Failed to create sparse evaluator: {:?}",
 				evaluator.err()
 			);
+		}
+	}
+
+	/// IDS-81: an untrained genome's sparse export has NO keys/values (every
+	/// count 0). Every forward route must score it as all-misses — the mode's
+	/// miss default — and must not read through the empty slices' dangling
+	/// pointers (the masked route's `buffer_of` copied one byte from one).
+	#[test]
+	fn forward_on_an_empty_sparse_export_reads_every_cell_as_the_miss_default()
+	{
+		let Ok(ev) = MetalSparseEvaluator::new() else { return };
+		let (n, bits, rows) = (3usize, 20usize, 5usize);
+		let conns: Vec<i64> = (0..n * bits).map(|i| (i % 40) as i64).collect();
+		let words: Vec<u64> = (0..rows as u64).map(|r| 0x9E37_79B9_7F4A_7C15u64.wrapping_mul(r + 1)).collect();
+		let zero = vec![0u32; n];
+		let input = crate::metal_input_buffer::GpuInputRows::Words(&words);
+		for mode in [crate::cell_mode::CellMode::Binary, crate::cell_mode::CellMode::Ternary, crate::cell_mode::CellMode::QuadBinary, crate::cell_mode::CellMode::QuadWeighted]
+		{
+			let code = mode.as_u8();
+			let want = crate::neuron_memory::cell_to_weight(default_cell_for_mode(code) as i64, code, 0.5);
+			let actual = [n as u32];
+			for masked in [None, Some(&actual[..])]
+			{
+				let out = ev
+					.forward_batch_sparse(input, &conns, &[], &[], &zero, &zero, rows, 1, n, bits, n, 1, false, code, 0.5, 0, 0, masked)
+					.expect("forward on an empty export");
+				assert_eq!(out.len(), rows, "{mode} masked={}", masked.is_some());
+				assert!(out.iter().all(|&x| (x - want).abs() < 1e-6), "{mode} masked={}: {out:?} vs {want}", masked.is_some());
+			}
 		}
 	}
 }

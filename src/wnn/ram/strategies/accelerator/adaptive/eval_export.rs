@@ -261,10 +261,7 @@ pub(crate) fn calculate_pool_size(
 	{
 		if group.bits <= SPARSE_THRESHOLD
 		{
-			// Dense: 2 bits per cell, 2^bits cells per neuron
-			let cells_per_neuron = 1 << group.bits;
-			let words_per_neuron = (cells_per_neuron + 30) / 31; // 31 cells per word
-			bytes_per_genome += group.total_neurons() * words_per_neuron * 8;
+			bytes_per_genome += group.total_neurons() * dense_bytes_per_neuron(group.bits, oi_factor > 1);
 		}
 		else
 		{
@@ -311,6 +308,21 @@ pub(crate) fn calculate_pool_size(
 	let batch_size = pool_size;
 
 	(pool_size, batch_size)
+}
+
+/// Training footprint of one DENSE neuron (bits <= SPARSE_THRESHOLD), as
+/// `GroupDenseMemory` allocates it: the packed words (2 bits/cell, 31 cells per
+/// i64), the coverage bitmap (1 bit/address, always allocated), and — while OI
+/// or vote counters train (`counters`, the same gate as the sparse oi_factor) —
+/// one u32 counter per address. IDS-81: the estimate used to charge the words
+/// only, ~17x low under OI/vote.
+fn dense_bytes_per_neuron(bits: usize, counters: bool) -> usize
+{
+	let addresses = 1usize << bits;
+	let words = addresses.div_ceil(ram_core::neuron_memory::CELLS_PER_WORD) * 8;
+	let coverage = addresses.div_ceil(64) * 8;
+	let counter_bytes = if counters { addresses * std::mem::size_of::<u32>() } else { 0 };
+	words + coverage + counter_bytes
 }
 
 /// Concurrent-genome budget of one training call: the MOST restrictive genome
@@ -1235,6 +1247,28 @@ mod pool_size_tests
 			"100K-scale batch should stay multi-genome, got {}",
 			batch
 		);
+	}
+
+	// IDS-81: a DENSE group's training footprint is its packed words PLUS the
+	// coverage bitmap (1 bit/address, always allocated by GroupDenseMemory)
+	// PLUS one u32 OI/vote counter per address while counters train — the
+	// estimate used to charge the words only (~17x low under OI/vote).
+	// 1000 neurons x 12 bits: words 133 x 8 = 1064 B, coverage 512 B,
+	// counters 16384 B per neuron; a 0.01 GB budget and a 1000-core cap make
+	// the budget the binding limit.
+	#[test]
+	fn test_pool_size_dense_counts_coverage_and_counters()
+	{
+		let (bits, neurons, budget_gb) = (vec![12usize], vec![1000usize], 0.01);
+		let budget_bytes = (budget_gb * 1024.0 * 1024.0 * 1024.0) as usize;
+		for vote_tallies in [false, true]
+		{
+			let counters = vote_tallies || ram_core::neuron_memory::order_independent_training_enabled();
+			let per_neuron = 1064 + 512 + if counters { 16384 } else { 0 };
+			let want = (budget_bytes / (1000 * per_neuron)).max(1);
+			let (_, batch) = calculate_pool_size(&bits, &neurons, 1, budget_gb, 1000, 100_000, 1.0, vote_tallies);
+			assert_eq!(batch, want, "vote_tallies={vote_tallies} counters={counters}");
+		}
 	}
 
 	// Budget floor: even a starved memory reading must yield batch >= 1.

@@ -553,7 +553,8 @@ fn train_one_genome_cpu(
 ///   evaluate_genome_hybrid's single-cluster branch).
 ///
 /// Returns None (→ caller runs the normal export path) unless EVERY genome in
-/// the batch is eligible: env gate on, single-cluster, OI + QUAD, provided
+/// the batch is eligible: env gate on, single-cluster, OI + QUAD_WEIGHTED with
+/// coverage-aware scoring off (`eval_in_place_admits`), provided
 /// connections, and individually over the batch budget. Winner saves,
 /// validation multi-threshold scoring and k-fold accumulate exports never
 /// route through here — they consume real exports via train_single_via_marker
@@ -590,12 +591,7 @@ fn try_eval_in_place_batch(
 	{
 		return None;
 	}
-	// The probe merges OI counters — only meaningful when this mode trains
-	// through them (env AND `CellMode::uses_oi_counters`).
-	// The per-flow vote writer also uses counters but bins by sign — the probe
-	// kernel only knows the QUAD OI binning, so vote keeps the export path.
-	if ram_core::cell_mode::CounterBin::for_training(cfg.write_rule, cfg.memory_mode)
-		!= Some(ram_core::cell_mode::CounterBin::Oi)
+	if !eval_in_place_admits(cfg.memory_mode, cfg.write_rule, settings.coverage_aware)
 	{
 		return None;
 	}
@@ -684,6 +680,31 @@ fn try_eval_in_place_batch(
 		out.push((g, ce, acc, f1, fpr, threshold, ms));
 	}
 	Some(out)
+}
+
+/// The mode/scorer half of the eval-in-place gate: may the probe score this
+/// configuration bit-identically to the export path?
+///
+/// - The probe merges OI counters — only meaningful when this mode trains
+///   through them (env AND `CellMode::uses_oi_counters`). The per-flow vote
+///   writer also uses counters but bins by sign — the probe kernel only knows
+///   the QUAD OI binning, so vote keeps the export path.
+/// - The probe READS as QUAD_WEIGHTED (`wnn_quad_weight_x4`). QUAD_BINARY and
+///   QSR share the OI trainer but read differently (threshold / seeded coin),
+///   so they keep the export path (IDS-81: the 13/10 gate let them through).
+/// - The probe scores a miss as WEAK_FALSE; coverage-aware scoring reads a
+///   miss as 0, so `coverage_aware` keeps the export path too (IDS-81).
+#[cfg(target_os = "macos")]
+pub(crate) fn eval_in_place_admits(
+	memory_mode: u8,
+	write_rule: ram_core::cell_mode::WriteRule,
+	coverage_aware: bool,
+) -> bool
+{
+	memory_mode == ram_core::neuron_memory::QUAD_WEIGHTED
+		&& !coverage_aware
+		&& ram_core::cell_mode::CounterBin::for_training(write_rule, memory_mode)
+			== Some(ram_core::cell_mode::CounterBin::Oi)
 }
 
 /// True iff the multiplicity layer would train some genome in [start, end)

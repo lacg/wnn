@@ -68,6 +68,16 @@ inline uint wnn_write_rule(uint memory_mode, uint vote)
 // (must match neuron_memory.rs QUAD_WEIGHTS)
 constant float WNN_QUAD_WEIGHTS[4] = {0.0f, 0.25f, 0.75f, 1.0f};
 
+// QUAD_WEIGHTED weight quantized x4 as an exact integer vote (F=0, wF=1, wT=3,
+// T=4): DERIVED from WNN_QUAD_WEIGHTS, never a second table. votes/4.0 is the
+// WNN_QUAD_WEIGHTS sum exactly (every quarter is exact in f32). The eval-in-place
+// probe (marker_probe_eval.metal) accumulates these atomically; it is gated to
+// QUAD_WEIGHTED only (IDS-81), so QUAD_BINARY/QSR reads never come through here.
+inline uint wnn_quad_weight_x4(uint cell)
+{
+	return uint(WNN_QUAD_WEIGHTS[min(cell, 3u)] * 4.0f);
+}
+
 // Expected read of an untrained 3-state u-cell under the PLN fair coin — PLN's
 // deterministic weight, its coin probability, and the controller's fixed TERNARY
 // empty value (twin of neuron_memory.rs PLN_U_EXPECTED).

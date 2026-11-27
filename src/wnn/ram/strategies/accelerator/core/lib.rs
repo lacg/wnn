@@ -70,6 +70,9 @@ pub mod metal_sparse;
 // Zero-copy Metal view of a PackedBits input (unified memory, 13/10/2026).
 #[cfg(target_os = "macos")]
 pub mod metal_input_buffer;
+// Host slice -> Metal buffer, safe for an empty slice (IDS-81).
+#[cfg(target_os = "macos")]
+pub mod metal_buffer;
 
 #[cfg(not(target_os = "macos"))]
 pub mod metal_sparse

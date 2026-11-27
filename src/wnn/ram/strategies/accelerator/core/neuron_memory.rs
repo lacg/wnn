@@ -776,7 +776,27 @@ pub enum ClusterStorage
 
 impl ClusterStorage
 {
+	/// Widest sparse cluster the u32-keyed maps can hold without aliasing.
+	pub const MAX_SPARSE_BITS: usize = 32;
+
+	/// IDS-81 guard (Luiz 27/11: refuse, do not rekey): the sparse maps key a
+	/// cell by `u32`, so a sparse cluster wider than 32 bits would silently
+	/// merge distinct addresses. The LM bitwise / multistage paths never fly
+	/// such widths; refuse them loudly instead of training a corrupt memory.
+	pub fn check_sparse_width(bits: usize) -> Result<(), String>
+	{
+		if bits > Self::MAX_SPARSE_BITS
+		{
+			return Err(format!(
+				"ClusterStorage: a sparse LM cluster of {bits} bits is wider than 32 bits \
+				 (u32-keyed cells would alias addresses) — refused (IDS-81)"
+			));
+		}
+		Ok(())
+	}
+
 	/// Create storage for a cluster. Uses dense if `bits <= threshold`, sparse otherwise.
+	/// Panics (`check_sparse_width`) on a sparse cluster wider than 32 bits.
 	pub fn new(
 		num_neurons: usize,
 		bits: usize,
@@ -800,6 +820,10 @@ impl ClusterStorage
 		}
 		else
 		{
+			if let Err(e) = Self::check_sparse_width(bits)
+			{
+				panic!("{e}");
+			}
 			let empty_cell = match memory_mode
 			{
 				QUAD_BINARY | QUAD_WEIGHTED | QSR => 1, // QUAD_WEAK_FALSE
@@ -1739,6 +1763,24 @@ mod oi_tests
 	// =========================================================================
 	// ClusterStorage OI tests (LM single-threaded path)
 	// =========================================================================
+
+	/// IDS-81: the LM sparse ClusterStorage keys cells by u32, so a sparse
+	/// cluster wider than 32 bits would alias distinct addresses. Refused (a
+	/// guard, not a rekey — Luiz 27/11); 32 bits and any dense width pass.
+	#[test]
+	#[should_panic(expected = "wider than 32 bits")]
+	fn sparse_lm_cluster_wider_than_32_bits_is_refused()
+	{
+		ClusterStorage::new(4, 33, 12, empty_word_for_mode(QUAD_WEIGHTED), QUAD_WEIGHTED);
+	}
+
+	#[test]
+	fn sparse_lm_cluster_up_to_32_bits_is_accepted()
+	{
+		let s = ClusterStorage::new(4, 32, 12, empty_word_for_mode(QUAD_WEIGHTED), QUAD_WEIGHTED);
+		assert!(matches!(s, ClusterStorage::Sparse { .. }));
+		assert!(matches!(ClusterStorage::new(2, 8, 12, 0, TERNARY), ClusterStorage::Dense { .. }));
+	}
 
 	fn cluster_train_oi_dense(
 		nudges: &[(usize, usize, bool, u32)],

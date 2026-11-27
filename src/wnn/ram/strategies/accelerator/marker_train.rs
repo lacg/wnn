@@ -3004,6 +3004,75 @@ pub mod batched_path
 			}
 		}
 
+		/// IDS-81: over EVERY memory mode x coverage_aware, eval-in-place either
+		/// DECLINES (`eval_in_place_admits` false → the caller runs the export
+		/// path) or scores bit-identically to the export path at every
+		/// threshold. The probe kernel only knows the QUAD_WEIGHTED read with a
+		/// WEAK_FALSE miss, so QUAD_BINARY / QSR (same OI trainer, different
+		/// read) and coverage_aware (miss = 0) must decline. OI + Metal only.
+		#[test]
+		fn eval_in_place_matches_export_or_declines_for_every_mode_and_coverage()
+		{
+			if !ram_core::neuron_memory::order_independent_training_enabled() || get_trainer().is_err()
+			{
+				eprintln!("[eval_in_place_modes] needs WNN_ORDER_INDEPENDENT_TRAIN=1 + Metal — skipping");
+				return;
+			}
+			let (num_train, n) = (1500usize, 7usize);
+			let (bits_flat, conns, packed, targets) = distinct_neuron_fixture(num_train, n);
+			let eval = packed.gather_rows(700, |k| (k * 13) % num_train);
+			let eval_targets: Vec<i64> = (0..700).map(|k| targets[(k * 13) % num_train]).collect();
+			let mut admitted = Vec::new();
+			for mode in ram_core::cell_mode::CellMode::ALL
+			{
+				for coverage_aware in [false, true]
+				{
+					let (code, rule) = (mode.as_u8(), mode.write_rule());
+					if !crate::adaptive::eval_in_place_admits(code, rule, coverage_aware)
+					{
+						continue;
+					}
+					admitted.push((mode, coverage_aware));
+					let settings = ram_core::neuron_memory::EvalSettings {
+						empty_value: 0.5,
+						memory_mode: code,
+						normal_class: 0,
+						fitness_weights: None,
+						run_seed: 0,
+						coverage_aware,
+						write_vote: None,
+						fitness_attack_f1: false,
+					};
+					let export = batched_train_offspring(
+						&bits_flat, &[n], &conns, 1, 1, &packed, &targets, &[], num_train, 0, 18, 0.5, 1.0, 42, None, code, rule,
+					)
+					.expect("export path train failed")
+					.remove(0);
+					let per_neuron = marker_capacity_for_train(num_train, 17, 1.0) * 16;
+					let votes = train_single_genome_chunked_scored_with_budget(
+						&bits_flat, &conns, &packed, &targets, &[], num_train, 0, 18, 0.5, 1.0, 42, None, &eval, 700, true,
+						per_neuron * n.div_ceil(3), code,
+					)
+					.expect("probe route failed");
+					for threshold in [Some(0.5), Some(-1.0), None]
+					{
+						let via_export = export_path_metrics(&export, &packed, &targets, &eval, &eval_targets, settings, threshold);
+						let via_probe = crate::adaptive::score_vote_sums(&votes, &eval_targets, &targets, settings, threshold);
+						let bits = |m: (f64, f64, f64, f64, f64)| [m.0.to_bits(), m.1.to_bits(), m.2.to_bits(), m.3.to_bits(), m.4.to_bits()];
+						assert_eq!(
+							bits(via_export), bits(via_probe),
+							"{mode} coverage_aware={coverage_aware} threshold {threshold:?}: export {via_export:?} vs probe {via_probe:?} — the probe must match or decline",
+						);
+					}
+				}
+			}
+			eprintln!("[eval_in_place_modes] probe admitted for {admitted:?}; every other (mode, coverage) declines");
+			assert!(
+				admitted.contains(&(ram_core::cell_mode::CellMode::QuadWeighted, false)),
+				"the production configuration (QUAD_WEIGHTED, coverage off) must keep the probe",
+			);
+		}
+
 		/// IDS-34: eval-in-place vs the export path where the slot regions are
 		/// DIRECT-addressed (2^bits <= slot_capacity, marker_direct.metal) — the
 		/// probe kernel reads `slot_offset + addr` instead of the hash chain, so
