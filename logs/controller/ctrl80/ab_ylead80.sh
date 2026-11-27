@@ -24,9 +24,9 @@ L=logs/controller/ctrl48
 RUNS=$L/runs.log
 VENV=/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv
 ABI=64
-ALL_ARMS="ylead"
+ALL_ARMS="ylead l2bylead"
 SEEDS=${Y80_SEEDS:-1 2 3}
-ARMS=${Y80_ARMS:-$ALL_ARMS}
+ARMS=${Y80_ARMS:-l2bylead}   # Luiz 27/11: fly the lead on the adopted l2b base
 DRY=${Y80_DRY:-0}
 PREREG=docs/ctrl80_yaw_lead_prereg.md
 PREREG_HDR="^## Adoption rule"
@@ -54,9 +54,12 @@ flags_of()
 {
 	local f=""
 	[ "$1" = ylead ] && f="--obs-yaw-lead --obs-yaw-lead-tau $TAU"
+	[ "$1" = l2bylead ] && f="--gyro-xy-ladder dense_hold --obs-yaw-lead --obs-yaw-lead-tau $TAU"
 	echo "$f"
 }
-what_of() { echo "yaw lead input yaw_err - ${TAU}s*gyro_z (own fixed ladder +-0.40/0.80/1.35/2.25 deg): can the student see when to brake the yaw transient?"; }
+calib_of() { [ "$1" = l2bylead ] && { echo "$GT_CALIB,gyroxy:dense_hold"; return; }; echo "$GT_CALIB"; }
+l2b_of() { echo ${PFX}_a63_${MID}_gt_l2b_full_s$1; }
+what_of() { [ "$1" = l2bylead ] && printf "L2-b gyro_x/y dense_hold (the adopted base) + "; echo "yaw lead input yaw_err - ${TAU}s*gyro_z (own fixed ladder +-0.40/0.80/1.35/2.25 deg): can the student see when to brake the yaw transient?"; }
 tag_of() { echo ${PFX}_a${ABI}_${MID}_gt_$2_full_s$1; }
 ctl_of() { echo ${PFX}_a62_${MID}_n0g3gz_full_s$1; }
 count() { echo "$1" | grep -o -- "$2" | wc -l | tr -d ' '; }
@@ -72,7 +75,7 @@ import hashlib, shlex, sys
 from wnn.control import phased_ga as p
 a = p.build_arg_parser().parse_args(shlex.split(sys.argv[1]))
 ec = p.episode_config_from_args(a); p._resolve_ctbr(a, ec); p.resolve_block10_args(a); c = a._ctbr
-skip = ('obs_yaw_lead', 'obs_yaw_lead_tau', 'save_stage_checkpoints', 'save_winner')
+skip = ('obs_yaw_lead', 'gyro_xy_ladder', 'obs_yaw_lead_tau', 'save_stage_checkpoints', 'save_winner')
 rest = repr(sorted((k, repr(v)) for k, v in c.items())) + repr(sorted((k, repr(v)) for k, v in vars(a).items() if not k.startswith('_') and k not in skip))
 lk = a.delta_leak_yaw if a.delta_leak_yaw is not None else a.delta_leak
 gain = round(a.delta_max_yaw / (1.0 - lk), 3)
@@ -85,6 +88,7 @@ build()
 	tag=$(tag_of $s $arm); ctl=$(ctl_of $s); flags=$(flags_of $arm)
 	[ -n "$flags" ] || abort "$arm: no flags (unknown arm)"
 	[ -f $L/$ctl.done ] || abort "s$s: the G+T control $ctl has not finished — never fly an arm without its control"
+	[ "$arm" = l2bylead ] && { [ -f $L/$(l2b_of $s).done ] || abort "s$s: the l2b base run $(l2b_of $s) (the pairing reference) has not finished"; }
 	CLINE=$(grep -a '^\[argv\] ' $L/$ctl.out | cut -c8-)
 	[ "$(echo "$CLINE" | grep -c .)" = 1 ] || abort "$ctl: expected exactly one [argv] line"
 	[ "$(count "$CLINE" "--base-seed $((31337000 + s)) ")" = 1 ] || abort "$ctl: does not carry --base-seed $((31337000 + s)) once"
@@ -117,7 +121,7 @@ build()
 	VAL_CTL=$vc; VAL_ARM=$v
 	[ "${vc% | *}" = "OK $((31337000 + s)) $DMAX0 None $GT_GAMMA gain 1.667 lead False 0.1 | $GT_CALIB | 5 35 99990101 99990135" ] \
 		|| abort "$ctl: the G+T s$s control does not resolve to G+T: $vc"
-	want="OK $((31337000 + s)) $DMAX0 None $GT_GAMMA gain 1.667 lead True 0.1 | $GT_CALIB | 5 35 99990101 99990135 | ${vc##* | }"
+	want="OK $((31337000 + s)) $DMAX0 None $GT_GAMMA gain 1.667 lead True 0.1 | $(calib_of $arm) | 5 35 99990101 99990135 | ${vc##* | }"
 	[ "$v" = "$want" ] || abort "$tag: phased_ga refuses / mis-resolves the arm (want '$want'): $v"
 }
 

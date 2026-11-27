@@ -93,3 +93,17 @@ yaw) and not worse elsewhere** (stable / steady / pos / fails). No magnitude bar
 - After s1: a VAL trace of the winner (`trace80.py` + `phase80.py` + `ylead80.py`: overshoot by |yaw0|, the braking
   cells, lead-code occupancy in the hold) as diagnosis, never a result.
 - cells / minutes are tie-breakers only.
+
+## Amendment 1 (Luiz 27/11/2026 ~07:45 EST): fly the lead on the adopted l2b base
+
+CTRL-77 closed with **l2b adopted** as the new model-free base (G+T + `--gyro-xy-ladder dense_hold`). The CTRL-80 arm
+is therefore **l2bylead = l2b + `--obs-yaw-lead --obs-yaw-lead-tau 0.10`** (tag `…_a64_…_gt_l2bylead_full_sN`),
+not G+T + lead. The plain `ylead` arm stays in the driver but is not flown by default.
+
+- **Primary pair:** l2bylead sN vs the flown **l2b sN** (`…_a63_…_gt_l2b_full_sN`, s1–s3), same readout and the same
+  adoption / drop rule as above (G+T replaced by l2b everywhere in the rule). G+T sN is a descriptive reference.
+- **Argv validation** is unchanged in kind: the arm argv minus its flags and tag must equal the flown G+T sN argv byte
+  for byte; the resolver must give the G+T digest with token `…,gyroxy:dense_hold` and `lead True 0.1`. The driver also
+  refuses to fly sN unless l2b sN has finished. Dry run (unpacked ABI-64 wheel) validated 3/3 on 27/11.
+- Note: l2b sN were flown on ABI 63 and l2bylead flies on ABI 64; the flag-off pin (ABI 64 == ABI 63) is what makes
+  that pair valid.
