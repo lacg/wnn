@@ -107,3 +107,27 @@ not G+T + lead. The plain `ylead` arm stays in the driver but is not flown by de
   refuses to fly sN unless l2b sN has finished. Dry run (unpacked ABI-64 wheel) validated 3/3 on 27/11.
 - Note: l2b sN were flown on ABI 63 and l2bylead flies on ABI 64; the flag-off pin (ABI 64 == ABI 63) is what makes
   that pair valid.
+
+## Amendment 2 (Luiz 27/11/2026 ~18:30 EST): arm l2byleadngz — the lead replaces gyro_z in the yaw bank
+
+l2bylead s1–s3 (vs l2b): helps the transient and the tails on 3/3 (whole-err p99.9 2.55/2.34/2.51 vs 2.78/2.63/3.16,
+pre-hold yaw lower 3/3), costs the hold (steady higher 2/3, wear offset larger 3/3); by the letter it dropped on (B).
+VAL diagnosis (logs/controller/ctrl80/hold81.py, genome81.py; mechanism only): gyro-noise chatter is NOT the main cause;
+the yaw bank spreads its 24 bits over its yaw-family inputs, so the 4th input cut yaw_err_i from ~6.6 to ~5.0 bits per
+neuron (27-28 % → 20-21 % share, 3/3), and the trim is learned less well (offset per trim larger 3/3; inferred causal).
+
+- **Arm l2byleadngz** = l2bylead + `--drop-features gyro_z` (tag `…_a64_…_gt_l2byleadngz_full_sN`): yaw inputs become
+  [yaw_err, yaw_err_i, yaw_lead]; the lead still carries the rate (yaw_err − 0.10·gyro_z). No code change, ABI 64.
+- **Hypothesis H-ngz:** with the integral's bits back and the hold address chatter halved (VAL re-code: 24/22/20 vs
+  51/50/49 toggles/s), the lead's transient gain stays and the trim cost goes: err lower via pre-hold yaw; steady not
+  higher; wear offset per c1 at or below l2b's; stable / fails / pos unchanged.
+- **Pre-checks (VAL, re-coded flown traces):** braking-cell accuracy identical to l2bylead (83.9/76.4, 89.0/70.9,
+  84.4/78.7 %) vs 67.5/60.7/62.5 % with today's yaw_err × gyro_z; hold-yaw representability .117/.194/.084 vs
+  .104/.189/.079 deg.
+- **Stated risk:** removing the dense gyro_z ladder (lever G of G+T) from the yaw bank may coarsen hold rate damping.
+- **Rule:** same as above, l2b sN as control: drop at n=3 if (A) err not lower on a majority, (B) steady higher on a
+  majority, (C) fails sum > l2b's + 2, (D) more fails on a majority. l2bylead sN is a descriptive reference.
+- **Readout per END:** paired vector vs l2b sN, `rescore_end.sh <arm> <l2b sN>`, `yawrun_end.sh <arm> <l2b sN>`; after
+  s1 the VAL hold check (hold81.py) on the new winner.
+- Driver `logs/controller/ctrl80/ab_ylead80.sh` (default arm now l2byleadngz; digest skip adds `drop_features`); dry run
+  3/3 validated 27/11.
