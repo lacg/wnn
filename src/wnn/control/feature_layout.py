@@ -83,6 +83,7 @@ FAMILY: dict[str, AxisFamily] = {
 	"roll_i": _R, "pitch_i": _P, "yaw_i_pa": _Y,
 	"pwm": ALL_AXES,                                    # motor space mixes every axis
 	"yaw_err": _Y, "yaw_err_i": _Y,
+	"yaw_lead": _Y,                                     # CTRL-80: yaw_err - tau * gyro_z
 	"dhat_r": _R, "dhat_p": _P, "dhat_y": _Y,           # L1 student d-hat
 	"coll_cmd": _T, "alt_err": _T, "vz": _T,            # vertical channel
 	"e_x": _P, "e_y": _R, "v_x": _P, "v_y": _R,         # world frame — see CAVEAT
@@ -102,7 +103,7 @@ FAMILY: dict[str, AxisFamily] = {
 ZERO_REFERENCED: frozenset[str] = frozenset({
 	"gyro_x", "gyro_y", "gyro_z", "acc_x", "acc_y", "tgt_r", "tgt_p", "tgt_y",
 	"roll_err", "pitch_err", "yaw_err_pa", "roll_i", "pitch_i", "yaw_i_pa",
-	"pwm", "yaw_err", "yaw_err_i", "dhat_r", "dhat_p", "dhat_y", "alt_err", "vz",
+	"pwm", "yaw_err", "yaw_err_i", "yaw_lead", "dhat_r", "dhat_p", "dhat_y", "alt_err", "vz",
 	"e_x", "e_y", "v_x", "v_y", "rate_i_x", "rate_i_y", "rate_i_z",
 	"cdhat_x", "cdhat_y", "cdhat_z", "cresid_x", "cresid_y", "cresid_z",
 	"rerr_x", "rerr_y", "rerr_z",
@@ -155,6 +156,11 @@ ROLL_PITCH_RATE_FEATURES: frozenset[str] = frozenset({"gyro_x", "gyro_y"})
 # CTRL-79 (--yaw-integral-ladder dense): the anchored yaw INTEGRAL input. Only yaw_err_i takes
 # the fixed integral ladder (the per-axis yaw_i_pa keeps its own fit).
 YAW_INTEGRAL_DENSE_FEATURES: frozenset[str] = frozenset({"yaw_err_i"})
+# CTRL-80 (ABI 64, --obs-yaw-lead): the yaw LEAD input yaw_err - tau * gyro_z. It takes its
+# OWN fixed centred ladder (evaluator.DENSE_YAW_LEAD_CUTS_DEG) and is deliberately NOT in
+# YAW_ERROR_FEATURES / YAW_PROPORTIONAL_FEATURES: no other feature's ladder rule applies to
+# it and it changes no other feature's ladder.
+YAW_LEAD_FEATURES: frozenset[str] = frozenset({"yaw_lead"})
 
 
 def _block_name(name: str) -> str:
@@ -184,9 +190,11 @@ def _attitude_block(spec: "ControllerSpec") -> list[str]:
 
 
 def _actuator_block(spec: "ControllerSpec") -> list[str]:
-	"""obs_pwm, the yaw-anchor pair and the L1 d-hat."""
+	"""obs_pwm, the yaw-anchor pair, the CTRL-80 yaw lead (directly after the pair:
+	controller.rs compute_features) and the L1 d-hat."""
 	return ([f"pwm_{m}" for m in range(spec.num_motors)] * spec.obs_pwm
 	        + ["yaw_err"] * spec.obs_yaw_err + ["yaw_err_i"] * spec.obs_yaw_err_i
+	        + ["yaw_lead"] * (getattr(spec, "obs_yaw_lead", None) is not None)
 	        + ["dhat_r", "dhat_p", "dhat_y"] * (spec.dhat_b is not None))
 
 
@@ -237,5 +245,5 @@ def feature_names(spec: "ControllerSpec") -> list[str]:
 
 
 __all__ = ["AxisFamily", "ALL_AXES", "BANK_FAMILIES", "FeatureDesc", "FAMILY", "ZERO_REFERENCED",
-           "YAW_ERROR_FEATURES", "YAW_RATE_FEATURES", "ROLL_PITCH_RATE_FEATURES", "AXIS_BITS", "AXES_ALL", "axes_mask", "axes_in", "cascade_columns",
+           "YAW_ERROR_FEATURES", "YAW_RATE_FEATURES", "YAW_LEAD_FEATURES", "ROLL_PITCH_RATE_FEATURES", "AXIS_BITS", "AXES_ALL", "axes_mask", "axes_in", "cascade_columns",
            "feature_layout", "feature_names"]

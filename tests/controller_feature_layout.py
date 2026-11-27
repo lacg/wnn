@@ -37,11 +37,11 @@ VERT = (0.71, 0.83, 0.97)
 HORIZ = (1.13, 1.27, 1.39, 1.51)
 
 
-def _spec(on: dict, ctbr: "dict | None" = None) -> ControllerSpec:
+def _spec(on: dict, ctbr: "dict | None" = None, lead: "float | None" = None) -> ControllerSpec:
 	kw = {f: bool(on.get(f, False)) for f in FLAGS if f != "dhat"}
 	return ControllerSpec(num_motors=4, levels_per_motor=2, bits_per_feature=2, input_window_k=1,
 	                      state_neurons=0, state_bits_per_neuron=0, output_bits_per_neuron=4,
-	                      dhat_b=DHAT_B if on.get("dhat") else None, ctbr=ctbr, **kw)
+	                      dhat_b=DHAT_B if on.get("dhat") else None, ctbr=ctbr, obs_yaw_lead=lead, **kw)
 
 
 def _controller(spec: ControllerSpec):
@@ -83,6 +83,7 @@ def _expected(spec: ControllerSpec) -> dict[str, float]:
 	exp = {"gyro_x": 0.011, "gyro_y": 0.022, "gyro_z": 0.0, "acc_x": 0.0, "acc_y": 0.0,
 	       "acc_z": 9.81, "tgt_r": r, "tgt_p": p, "tgt_y": y, "tilt": 0.0, "tilt_i": 0.0,
 	       "roll_err": r, "pitch_err": p, "yaw_err_pa": y, "yaw_err": y,
+	       "yaw_lead": y,   # CTRL-80: yaw_err - tau * gyro_z, and the sentinel step has gyro_z = 0
 	       "coll_cmd": VERT[0], "alt_err": VERT[1], "vz": VERT[2],
 	       "e_x": HORIZ[0], "e_y": HORIZ[1], "v_x": HORIZ[2], "v_y": HORIZ[3]}
 	s = spec.integral_scale
@@ -116,6 +117,48 @@ def test_positions_with_every_block_on():
 	      f"(all blocks on; yaw-dropped per-axis; + cascade tails)")
 
 
+LEAD_TAU = 0.1
+
+
+def test_yaw_lead_slot_count_and_value():
+	"""CTRL-80 (ABI 64): the yaw lead is ONE feature directly after the yaw-anchor pair in
+	every flag combination that carries obs_yaw_err; every later block keeps its sentinel
+	(so the rows the wheel lifts out of the MIDDLE of the ladder are the layout's); its
+	value is yaw_err - tau * gyro_z in f32."""
+	n = 0
+	for bits in itertools.product((False, True), repeat=len(FLAGS)):
+		on = dict(zip(FLAGS, bits))
+		if not on["obs_yaw_err"]:
+			continue
+		spec = _spec(on, lead=LEAD_TAU)
+		names = feature_names(spec)
+		assert names.index("yaw_lead") == names.index("yaw_err") + 1 + on["obs_yaw_err_i"], names
+		assert _controller(spec).num_features() == len(names) == len(feature_names(_spec(on))) + 1, on
+		n += 1
+	every = {f: True for f in FLAGS}
+	k = _assert_positions(_spec(every, lead=LEAD_TAU))
+	for ctbr in _cascade_dicts()[1:]:
+		_assert_positions(_spec({**every, "obs_pwm": False, "dhat": False}, ctbr=ctbr, lead=LEAD_TAU))
+	spec = _spec(every, lead=LEAD_TAU)
+	c, names = _controller(spec), feature_names(spec)
+	assert abs(c.obs_yaw_lead - LEAD_TAU) < 1e-7 and _controller(_spec(every)).obs_yaw_lead is None
+	c.reset()
+	for t in range(20):
+		gz = 0.3 * np.sin(0.4 * t) + 0.05
+		c.step([0.011, 0.022, float(gz)], [0.0, 0.0, 9.81], list(TARGET))
+		vec = np.array(c.get_last_feature_vector(), dtype=np.float32)
+		want = vec[names.index("yaw_err")] - np.float32(LEAD_TAU) * np.float32(gz)
+		assert vec[names.index("yaw_lead")] == np.float32(want), (t, vec[names.index("yaw_lead")], want)
+	try:
+		_controller(_spec({"obs_peraxis_p": True}, lead=LEAD_TAU))
+	except ValueError as e:
+		assert "obs_yaw_err" in str(e), e
+	else:
+		raise AssertionError("obs_yaw_lead without obs_yaw_err was not refused by the wheel")
+	print(f"✓ yaw lead (ABI 64): slot + count over {n} flag combinations, {k} sentinels with every block on "
+	      f"(+ cascade tails), value == yaw_err - tau*gyro_z, refused without obs_yaw_err")
+
+
 def test_recipe_family_sizes():
 	"""The CTRL-37/38 posx2 recipe layout (22 features) has the design's family sizes."""
 	from wnn.control.feature_layout import BANK_FAMILIES
@@ -132,4 +175,5 @@ if __name__ == "__main__":
 	test_recipe_family_sizes()
 	test_positions_with_every_block_on()
 	test_count_every_flag_combination()
+	test_yaw_lead_slot_count_and_value()
 	print("\nAll feature-layout parity tests passed.")

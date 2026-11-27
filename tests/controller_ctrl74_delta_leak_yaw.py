@@ -43,7 +43,7 @@ VARIANTS = {"off": [], "equal": ["--delta-leak-yaw", "0.7"], "on": ["--delta-lea
 BEHAVIOUR = ("thresholds", "token", "ctbr", "features", "train_digest", "scorer_rows")
 ADDRESS = ("thresholds", "token", "ctbr", "features")
 # Flags added after CTRL-74 (off by default, each pinned by its own test): absent from the ABI-62 tree.
-LATER_KEYS = ("gyro_xy_ladder", "yaw_err_outer_cut", "yaw_integral_ladder")
+LATER_KEYS = ("gyro_xy_ladder", "yaw_err_outer_cut", "yaw_integral_ladder", "obs_yaw_lead", "obs_yaw_lead_tau")
 
 
 def _args(extra: list[str]):

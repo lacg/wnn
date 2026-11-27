@@ -1,0 +1,29 @@
+== G+T s1  tau 0.10 s, lead cuts deg +-[0.4, 0.8, 1.35, 2.25], 300 VAL episodes x 2000 ticks
+   sign: d(yaw_err over 100 ms) = -0.0771 * gyro_z  (ideal -tau = -0.1000); RMSE deg predicting yaw_err(t+100 ms), 0-0.6 s: yaw_err 1.034 | yaw_err - tau*gz 0.627 | yaw_err + tau*gz 2.059
+   0-0.6 s        |lead| deg p20/40/50/60/80/90/95/99: 0.39 0.81 1.06 1.35 2.23 2.92 3.50 4.78 | sd(lead - yaw_err) 1.116 | lead code occupancy % 6.8 6.3 8.7 7.7 20.8 10.8 12.0 13.9 13.0 | outer 19.7
+   0.6-1.6 s      |lead| deg p20/40/50/60/80/90/95/99: 0.13 0.27 0.35 0.45 0.75 1.01 1.22 1.62 | sd(lead - yaw_err) 0.417 | lead code occupancy % 0.0 0.9 6.7 12.9 54.9 14.5 8.0 2.0 0.1 | outer 0.1
+   hold 1.6-2.0 s |lead| deg p20/40/50/60/80/90/95/99: 0.11 0.24 0.30 0.38 0.61 0.81 0.97 1.22 | sd(lead - yaw_err) 0.383 | lead code occupancy % 0.0 0.1 3.3 13.2 62.0 14.4 6.8 0.2 0.0 | outer 0.0
+   -- all decision ticks 0-0.6 s (n 18000): crossed zero 100 ms later 16.2 % ; overshoot > 0.5 deg within 300 ms 22.4 %
+      yaw_err code                                : distinct codes   9 | acc crossed 67.7 % | acc overshoot 67.6 % | RMSE deg yaw_err(t+100 ms) 1.006
+      yaw_err x gyro_z codes (the student today)  : distinct codes  79 | acc crossed 87.1 % | acc overshoot 75.0 % | RMSE deg yaw_err(t+100 ms) 0.663
+      lead code                                   : distinct codes   9 | acc crossed 83.8 % | acc overshoot 71.2 % | RMSE deg yaw_err(t+100 ms) 0.815
+      yaw_err x gyro_z x lead codes (the arm)     : distinct codes 200 | acc crossed 88.3 % | acc overshoot 73.5 % | RMSE deg yaw_err(t+100 ms) 0.580
+   -- cell |yaw_err| [1.23,2.62) x closing [0.15,0.45) (n 1454): crossed zero 100 ms later 21.7 % ; overshoot > 0.5 deg within 300 ms 39.8 %
+      yaw_err code                                : distinct codes   4 | acc crossed 62.9 % | acc overshoot 73.8 % | RMSE deg yaw_err(t+100 ms) 0.692
+      yaw_err x gyro_z codes (the student today)  : distinct codes   4 | acc crossed 62.9 % | acc overshoot 73.8 % | RMSE deg yaw_err(t+100 ms) 0.692
+      lead code                                   : distinct codes   7 | acc crossed 78.3 % | acc overshoot 50.1 % | RMSE deg yaw_err(t+100 ms) 0.606
+      yaw_err x gyro_z x lead codes (the arm)     : distinct codes  15 | acc crossed 78.1 % | acc overshoot 67.7 % | RMSE deg yaw_err(t+100 ms) 0.525
+   -- cell |yaw_err| [0.25,1.23) x closing [0.15,0.45) (n 1164): crossed zero 100 ms later 64.3 % ; overshoot > 0.5 deg within 300 ms 53.6 %
+      yaw_err code                                : distinct codes   3 | acc crossed 52.5 % | acc overshoot 46.2 % | RMSE deg yaw_err(t+100 ms) 0.833
+      yaw_err x gyro_z codes (the student today)  : distinct codes   3 | acc crossed 52.5 % | acc overshoot 46.2 % | RMSE deg yaw_err(t+100 ms) 0.833
+      lead code                                   : distinct codes   7 | acc crossed 78.9 % | acc overshoot 64.1 % | RMSE deg yaw_err(t+100 ms) 0.541
+      yaw_err x gyro_z x lead codes (the arm)     : distinct codes   9 | acc crossed 71.9 % | acc overshoot 60.1 % | RMSE deg yaw_err(t+100 ms) 0.585
+   -- cell |yaw_err| [0.25,1.23) x closing [0.05,0.15) (n 2020): crossed zero 100 ms later 14.6 % ; overshoot > 0.5 deg within 300 ms 15.2 %
+      yaw_err code                                : distinct codes   4 | acc crossed 85.4 % | acc overshoot 84.8 % | RMSE deg yaw_err(t+100 ms) 0.530
+      yaw_err x gyro_z codes (the student today)  : distinct codes   4 | acc crossed 85.4 % | acc overshoot 84.8 % | RMSE deg yaw_err(t+100 ms) 0.530
+      lead code                                   : distinct codes   5 | acc crossed 85.4 % | acc overshoot 84.4 % | RMSE deg yaw_err(t+100 ms) 0.460
+      yaw_err x gyro_z x lead codes (the arm)     : distinct codes  11 | acc crossed 86.0 % | acc overshoot 78.4 % | RMSE deg yaw_err(t+100 ms) 0.484
+   -- flat cell, by time-to-go tercile: median ttg ms | (yaw_err, gyro_z) joint codes used | signed lead deg p10/50/90 | lead code occupancy % (code of sign-normalised lead, 0..8)
+      ttg   87 ms | joint codes 2 (top share 51 %) | -0.79/-0.23/+0.07 | 0 0 10 23 67 0 0 0 0
+      ttg  129 ms | joint codes 2 (top share 58 %) | +0.18/+0.38/+0.65 | 0 0 0 0 56 43 0 0 0
+      ttg  180 ms | joint codes 4 (top share 65 %) | +0.59/+0.91/+1.34 | 0 0 0 0 0 35 55 10 0

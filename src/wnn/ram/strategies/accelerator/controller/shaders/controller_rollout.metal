@@ -83,6 +83,14 @@ constant bool YTP = is_function_constant_defined(FC_YAW_TRIM_P) ? FC_YAW_TRIM_P 
 // pipeline leaves it undefined ⇒ false ⇒ every expression below folds to its ABI-61 text.
 constant bool FC_RATE_LOOP_OBS [[function_constant(5)]];
 constant bool RLO = is_function_constant_defined(FC_RATE_LOOP_OBS) ? FC_RATE_LOOP_OBS : false;
+// ABI 64 (CTRL-80, --obs-yaw-lead): the yaw LEAD input yaw_err − τ·gyro_z (controller/
+// yaw_lead.rs), one feature directly after the yaw-anchor pair. The append sits INSIDE
+// derive_features, so it lives in its own specialization (FC_YAW_LEAD=true, set on the
+// rollout pipeline and on the controller_train / controller_record pipelines only when
+// the option is on); every other pipeline leaves it undefined ⇒ false ⇒ dead-stripped ⇒
+// the ABI-63 codegen.
+constant bool FC_YAW_LEAD [[function_constant(6)]];
+constant bool YLEAD = is_function_constant_defined(FC_YAW_LEAD) ? FC_YAW_LEAD : false;
 
 // One rotor of the geometry buffer — 48 B, all-float, mirrors the Rust-side
 // RotorGpu upload. k_thrust is the EFFECTIVE coefficient (nominal x per-rotor
@@ -349,6 +357,9 @@ struct Params
 	// ABI 63 (CTRL-74, --delta-leak-yaw), appended in lockstep: the yaw bank's (m = 3) output
 	// leak; equal to delta_leak when the flag is unset.
 	float delta_leak_yaw;
+	// ABI 64 (CTRL-80, --obs-yaw-lead), appended in lockstep: τ of the yaw LEAD input
+	// (read only by the FC_YAW_LEAD specialization).
+	float ylead_tau;
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -893,6 +904,9 @@ struct FwdParams
 	// the positional initializer; 0 ⇒ the dead-reckon below, bit-identical.
 	uint yfe_on;
 	float yfe_yaw;
+	// ABI 64 (CTRL-80): τ of the yaw LEAD input, assigned after the initializer at every
+	// site under `if (YLEAD)`; read only when YLEAD.
+	float ylead_tau;
 };
 
 // ABI 61: deterministic f32 atan2 from IEEE basic ops — BIT-IDENTICAL twin of
@@ -960,6 +974,17 @@ inline float mahony_heading(float h, float4 mq)
 // QUAD can take the antagonist path; BINARY still gets it by default.
 #define WNN_DECODE_CUMULATIVE 0u
 #define WNN_DECODE_ANTAGONIST 1u
+
+// ABI 64 (CTRL-80): the yaw LEAD input — twin of yaw_lead.rs YawLead::value: the product,
+// then the difference, as two IEEE f32 ops. STRICT FP in this scope (the mahony_update
+// rule): the fast-math library would fuse them into one mul-add.
+inline float yaw_lead_value(float yaw_err, float gyro_z, float tau)
+{
+#pragma METAL fp math_mode(safe)
+#pragma METAL fp contract(off)
+	float d = tau * gyro_z;
+	return yaw_err - d;
+}
 
 // =============================================================================
 // derive_features — section (1) of the per-step forward: append the enabled H2
@@ -1055,6 +1080,15 @@ inline void derive_features(
 			integ[ii] = P.yaw_integral_leak * integ[ii] + yaw_err; // ARM 3
 			sensors[fi++] = integ[ii] * P.integral_scale;
 			ii++;
+		}
+		// ABI 64 (CTRL-80): the yaw LEAD input, directly after the yaw-anchor pair — the
+		// value the proportional yaw input carries (its slot, written just above: the lead
+		// needs obs_yaw_err), led by τ·gyro_z (sensors[2]). Twin of controller.rs.
+		if (YLEAD)
+		{
+			uint ye = fi - 1u - ((P.obs_yaw_err_i != 0u) ? 1u : 0u);
+			sensors[fi] = yaw_lead_value(sensors[ye], sensors[2], P.ylead_tau);
+			fi++;
 		}
 		// L1 d̂ observer (canonical order LAST). Twin of controller.rs
 		// compute_features()'s dhat block, which is itself optimal.rs::update_dhat.
@@ -1722,6 +1756,8 @@ kernel void controller_rollout(
 		F.ytp_kappa = P.ytp_kappa;
 		F.ytp_cres = P.num_features - 2u * P.abp_on - 1u;
 	}
+	if (YLEAD) // ABI 64 (CTRL-80): τ of the yaw LEAD input
+		F.ylead_tau = P.ylead_tau;
 	// CTRL-38: the cascade d̂ observer's per-episode state (cascade_dhat.rs reset).
 	CasObs cas_o;
 	for (uint m = 0u; m < 4u; m++)
@@ -2716,6 +2752,9 @@ struct TrainParams
 	uint cas_rate_i_mask;
 	uint cas_rerr_mask;
 	uint cas_rerr_off;
+	// ABI 64 (CTRL-80, --obs-yaw-lead), appended in lockstep: τ of the yaw LEAD input
+	// (read only by the FC_YAW_LEAD specialization).
+	float ylead_tau;
 };
 
 // Mirror of WnnController::output_decode_target (controller.rs): map a per-motor
@@ -2873,6 +2912,8 @@ kernel void controller_train(
 		F.ytp_kappa = P.ytp_kappa;
 		F.ytp_cres = P.num_features - 2u * P.abp_on - 1u;
 	}
+	if (YLEAD) // ABI 64 (CTRL-80): τ of the yaw LEAD input
+		F.ylead_tau = P.ylead_tau;
 
 	uint E = ep_count[g];
 	for (uint ej = 0u; ej < E; ej++)
@@ -3108,6 +3149,8 @@ kernel void controller_record(
 		F.ytp_kappa = P.ytp_kappa;
 		F.ytp_cres = P.num_features - 2u * P.abp_on - 1u;
 	}
+	if (YLEAD) // ABI 64 (CTRL-80): τ of the yaw LEAD input
+		F.ylead_tau = P.ylead_tau;
 
 	uchar prev_state[MAX_STATE_NEURONS];
 	uchar new_state[MAX_STATE_NEURONS];

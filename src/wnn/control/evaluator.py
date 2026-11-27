@@ -34,8 +34,8 @@ import numpy as np
 from wnn.control._accel import AttitudeSim, WnnController
 
 from .feature_layout import (ROLL_PITCH_RATE_FEATURES, TILT_ERROR_FEATURES, YAW_ERROR_FEATURES,
-                             YAW_INTEGRAL_DENSE_FEATURES, YAW_INTEGRAL_FEATURES, YAW_PROPORTIONAL_FEATURES,
-                             YAW_RATE_FEATURES,
+                             YAW_INTEGRAL_DENSE_FEATURES, YAW_INTEGRAL_FEATURES, YAW_LEAD_FEATURES,
+                             YAW_PROPORTIONAL_FEATURES, YAW_RATE_FEATURES,
                              feature_layout)
 from .threshold_calibration import CalibrationFit, ThresholdCalibration
 from .pid import AttitudePID, AttitudePIDConfig
@@ -277,6 +277,10 @@ class ControllerSpec:
 	# leak under the delta law (CTBR r / decouple τ_yaw) — decode AND DAgger label baseline;
 	# None = delta_leak on every bank.
 	delta_leak_yaw: float | None = None
+	# ABI 64 (--obs-yaw-lead, Luiz 26/11/2026, CTRL-80): tau (s) of the yaw LEAD input
+	# yaw_lead = yaw_err - tau * gyro_z, ONE feature directly after the yaw-anchor pair
+	# (feature_layout "yaw_lead"; controller/yaw_lead.rs). Needs obs_yaw_err. None = off.
+	obs_yaw_lead: float | None = None
 	# ABI 58 (--yaw-trim-ff, Luiz 17/11/2026): yaw-rate feed-forward cT·cresid_z on the CTBR yaw
 	# setpoint (cT derived in Rust); bank 3 learns the remainder. False = off.
 	yaw_trim_ff: bool = False
@@ -746,6 +750,7 @@ def _feature_controller(spec: ControllerSpec) -> WnnController:
 		obs_yaw_from_att_est=yaw_from_att_est_kw(spec),  # lever 1 (ABI 55)
 		delta_max_yaw=delta_max_yaw_kw(spec),  # ABI 57
 		delta_leak_yaw=delta_leak_yaw_kw(spec),  # ABI 63 (CTRL-74)
+		obs_yaw_lead=yaw_lead_kw(spec),  # ABI 64 (CTRL-80)
 		yaw_trim_ff=yaw_trim_ff_kw(spec),  # ABI 58
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
@@ -786,6 +791,17 @@ def device_switch_allowed() -> bool:
 def yaw_trim_ff_kw(spec) -> bool:
 	"""ABI 58: ControllerSpec.yaw_trim_ff as the bool the wheel takes."""
 	return bool(getattr(spec, "yaw_trim_ff", False))
+
+
+def yaw_lead_kw(spec) -> "float | None":
+	"""ABI 64: ControllerSpec.obs_yaw_lead (tau, s) as the wheel's Option<f32> (None = off)."""
+	v = getattr(spec, "obs_yaw_lead", None)
+	return None if v is None else float(v)
+
+
+def yaw_lead_tau_from_args(args) -> "float | None":
+	"""CTRL-80: tau of the yaw LEAD input, or None when --obs-yaw-lead is off."""
+	return float(getattr(args, "obs_yaw_lead_tau", 0.10)) if getattr(args, "obs_yaw_lead", False) else None
 
 
 def delta_leak_yaw_kw(spec) -> "float | None":
@@ -868,6 +884,13 @@ GYRO_XY_LADDERS = {"dense": DENSE_GYRO_XY_INNER_RAD_S, "dense_hold": DENSE_GYRO_
 # All four pairs of the 8-bit ladder are fixed; they replace the dense yaw ladder's gain-scaled
 # +-3.49 / +-8.73 and its two quantile pairs (+-20.6 / +-40.5 on G+T).
 DENSE_YAW_INTEGRAL_CUTS = (1.5, 3.5, 6.5, 12.0)
+# CTRL-80 (--obs-yaw-lead): the yaw LEAD input's OWN fully fixed, centred ladder, degrees —
+# the 20/40/60/80 % quantiles of |yaw_lead| over the first 0.6 s of the G+T s1 VAL traces
+# (0.39 / 0.81 / 1.35 / 2.23 deg, tau 0.10 s; logs/controller/ctrl80/data/ylead80.txt),
+# rounded. No cut of any other feature moves; the dead band is +-0.40 deg (an even ladder
+# spends no cut on 0).
+DENSE_YAW_LEAD_CUTS_DEG = (0.40, 0.80, 1.35, 2.25)
+DENSE_YAW_LEAD_CUTS_RAD = tuple(float(np.radians(c)) for c in DENSE_YAW_LEAD_CUTS_DEG)
 
 
 def _dense_thresholds(arr: np.ndarray, bpf: int, inner, outer_quantile) -> np.ndarray:
@@ -922,6 +945,8 @@ def _dense_inner_for(name: str, spec, yaw_dense: bool, tilt_dense: bool, yaw_tri
                      gyro_z_dense: bool = False, gyro_xy_ladder: str | None = None,
                      yaw_integral_dense: bool = False):
 	"""The fixed inner cuts of feature `name` under the dense ladders, or None."""
+	if name in YAW_LEAD_FEATURES:
+		return DENSE_YAW_LEAD_CUTS_RAD
 	if yaw_integral_dense and name in YAW_INTEGRAL_DENSE_FEATURES:
 		return DENSE_YAW_INTEGRAL_CUTS
 	if gyro_z_dense and name in YAW_RATE_FEATURES:
@@ -959,6 +984,19 @@ def _check_yaw_integral_dense(spec) -> None:
 		                 f"(got {spec.bits_per_feature})")
 
 
+def _has_yaw_lead(spec) -> bool:
+	"""CTRL-80: the layout carries the yaw LEAD input, whose ladder is exactly
+	2 * len(cuts) fixed thresholds — refuse any other width (a wider ladder would grow
+	quantile pairs, a narrower one would drop fixed cuts)."""
+	if not any(d.name in YAW_LEAD_FEATURES for d in feature_layout(spec)):
+		return False
+	want = 2 * len(DENSE_YAW_LEAD_CUTS_RAD)
+	if int(spec.bits_per_feature) != want:
+		raise ValueError(f"yaw-lead ladder: {want} fixed cuts need bits_per_feature == {want} "
+		                 f"(got {spec.bits_per_feature})")
+	return True
+
+
 def _thresholds_from_samples(samples_per_feature, spec, method, outer_quantile, extra_samples,
                              ladder: str = "quantile", yaw_centred: bool = False,
                              yaw_dense: bool = False, tilt_dense: bool = False,
@@ -977,7 +1015,7 @@ def _thresholds_from_samples(samples_per_feature, spec, method, outer_quantile, 
 	if yaw_integral_dense:
 		_check_yaw_integral_dense(spec)
 	any_dense = (yaw_dense or tilt_dense or yaw_trim_dense or gyro_z_dense or gyro_xy_ladder is not None
-	             or yaw_integral_dense)
+	             or yaw_integral_dense or _has_yaw_lead(spec))
 	dense_inner = [_dense_inner_for(d.name, spec, yaw_dense and yaw_centred, tilt_dense, yaw_trim_dense, gyro_z_dense,
 	                                gyro_xy_ladder, yaw_integral_dense=yaw_integral_dense)
 	               for d in feature_layout(spec)] if any_dense else [None] * nf
@@ -1756,6 +1794,7 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		obs_yaw_from_att_est=yaw_from_att_est_kw(spec),  # lever 1 (ABI 55)
 		delta_max_yaw=delta_max_yaw_kw(spec),  # ABI 57
 		delta_leak_yaw=delta_leak_yaw_kw(spec),  # ABI 63 (CTRL-74)
+		obs_yaw_lead=yaw_lead_kw(spec),  # ABI 64 (CTRL-80)
 		yaw_trim_ff=yaw_trim_ff_kw(spec),  # ABI 58
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),
@@ -2375,6 +2414,7 @@ class ControllerEvaluator:
 			obs_yaw_from_att_est=yaw_from_att_est_kw(first_spec),  # lever 1 (ABI 55)
 			delta_max_yaw=delta_max_yaw_kw(first_spec),  # ABI 57
 			delta_leak_yaw=delta_leak_yaw_kw(first_spec),  # ABI 63 (CTRL-74)
+			obs_yaw_lead=yaw_lead_kw(first_spec),  # ABI 64 (CTRL-80)
 			yaw_trim_ff=yaw_trim_ff_kw(first_spec),  # ABI 58
 			output_full_window=getattr(first_spec, 'output_full_window', False),
 			frame_stride=int(getattr(first_spec, 'frame_stride', 1)),
@@ -2494,6 +2534,7 @@ class ControllerEvaluator:
 		obs_yaw_from_att_est=yaw_from_att_est_kw(spec),  # lever 1 (ABI 55)
 		delta_max_yaw=delta_max_yaw_kw(spec),  # ABI 57
 		delta_leak_yaw=delta_leak_yaw_kw(spec),  # ABI 63 (CTRL-74)
+		obs_yaw_lead=yaw_lead_kw(spec),  # ABI 64 (CTRL-80)
 		yaw_trim_ff=yaw_trim_ff_kw(spec),  # ABI 58
 		output_full_window=getattr(spec, 'output_full_window', False),
 		frame_stride=int(getattr(spec, 'frame_stride', 1)),

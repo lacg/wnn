@@ -215,6 +215,7 @@ def _feature_refusals(spec) -> list:
 _UNPORTED_BOOL = (
 	("obs_yaw_trim_err", "L2y trim-referenced yaw error (yaw_trim_err.rs)"),
 	("obs_yaw_trim_err_p", "L2y' trim-referenced proportional yaw error (yaw_trim_err.rs)"),
+	("obs_yaw_lead", "CTRL-80 yaw lead input yaw_err - tau*gyro_z (yaw_lead.rs, ABI 64)"),
 )
 
 

@@ -97,6 +97,8 @@ mod ctrl58_yaw_trim_ff_tests; // ABI 58: --yaw-trim-ff — cT, refusals, setpoin
 #[cfg(test)]
 mod ctrl74_delta_leak_yaw_tests; // ABI 63 (CTRL-74): --delta-leak-yaw — refusals, bit-identity, yaw-only leak, decoder/label agreement, CPU/GPU score + walk parity
 #[cfg(test)]
+mod ctrl80_yaw_lead_tests; // ABI 64 (CTRL-80): --obs-yaw-lead — refusals, layout + definition, flag-off identity, replay == live, CPU/GPU score + split + walk parity
+#[cfg(test)]
 mod ctrl57_delta_max_yaw_tests; // ABI 57: --delta-max-yaw — refusals, bit-identity, yaw-only decode, label round trip, CPU/GPU score + walk parity
 #[cfg(test)]
 mod ctrl56_axis_split_tests; // ABI 56: per-axis split on the WNN CPU scorer — row bit-identity, err/steady decomposition, L3 pole3
@@ -119,6 +121,7 @@ mod abi38_tests; // ABI 38: the cascade controller — identity, rivals, CPU/GPU
 #[cfg(test)]
 mod abi34_tests; // ABI 34: lag-aware teachers, one pwm convention under motor lag, T=0 pins
 mod yaw_trim_err; // L2y (ABI 51): yaw error referenced to the trim the rate loop rides on (--obs-yaw-trim-err)
+mod yaw_lead; // CTRL-80 (ABI 64): the yaw LEAD input yaw_err − τ·gyro_z (--obs-yaw-lead)
 mod tilt_ref_err; // L1 (ABI 51): roll/pitch error vs the tilt reference, bias-corrected (--obs-tilt-ref-err)
 mod att_bias_pred; // CTRL-46 (ABI 46): onboard predictor of the Mahony specific-force bias (--obs-att-bias-pred)
 mod episode_tail; // ABI 59 (CTRL-58): the GA's near-fail tail (p99 of per-episode err, inverted_cdf)
@@ -637,7 +640,21 @@ mod metal_controller;
 ///     words), kernel m==3 select at the CTBR and decouple accumulators; the population must
 ///     agree; the train/record kernels read CPU-encoded labels. MCU C: WNN_DELTA_LEAK_YAW.
 ///     Pin: ctrl74_delta_leak_yaw_tests.rs.
-pub const ABI_VERSION: u32 = 63;
+/// ABI 64 (26/11/2026, Luiz, Plane CTRL-80; additive, default = ABI 63 bit-identical):
+///   * WnnController / dagger_train_batch_inplace(obs_yaw_lead=None): the yaw LEAD input
+///     yaw_lead = yaw_err − τ·gyro_z (yaw_lead.rs; τ seconds, fixed) — where the proportional
+///     yaw input will be in τ at the present rate. ONE feature directly after the yaw-anchor
+///     pair (yaw_err, yaw_err_i), so its thermometer rows sit in the MIDDLE of the ladder and
+///     every later feature moves up one slot. Needs obs_yaw_err. A fixed linear combination
+///     of two inputs the student already reads: no observer, no plant model, no new replay
+///     stream (gyro and the heading are already replayed). Metal: FC_YAW_LEAD(6)
+///     specialization of the rollout (alone it selects the cascade-obs pipeline map) and of
+///     controller_train / controller_record; RolloutParams (201 words) / TrainParams gain one
+///     trailing float (ylead_tau); the kernel's yaw_lead_value is strict-FP (CPU == GPU on
+///     equal inputs). Refused on the N-rotor geometry pipeline and on a mixed batch. The MCU
+///     C port does not carry it (export_controller_c.py refuses). Pin: ctrl80_yaw_lead_tests.rs
+///     + yaw_lead unit tests.
+pub const ABI_VERSION: u32 = 64;
 
 /// ABI 61: the precision of the WNN's own attitude estimator + heading ("f32"; a wheel
 /// without this constant runs the f64 estimator). Read by scripts/export_controller_c.py.

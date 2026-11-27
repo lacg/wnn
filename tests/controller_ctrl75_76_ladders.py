@@ -37,7 +37,7 @@ XYH_FLAG = ["--gyro-xy-ladder", "dense_hold"]
 XYH_CUTS = (0.004, 0.013, 0.026, 0.80)
 # delta_leak_yaw (CTRL-74, merged after this base) and yaw_integral_ladder (CTRL-79) are also absent
 # from the pre-CTRL-75 tree; each is pinned by its own test.
-NEW_KEYS = ("gyro_xy_ladder", "yaw_err_outer_cut", "delta_leak_yaw", "yaw_integral_ladder")
+NEW_KEYS = ("gyro_xy_ladder", "yaw_err_outer_cut", "delta_leak_yaw", "yaw_integral_ladder", "obs_yaw_lead", "obs_yaw_lead_tau")
 
 
 def _probe(extra: list[str]):
