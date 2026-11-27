@@ -1,0 +1,3 @@
+[_both_L1_yld_gt_l2byil_full_s3] KO= thresholds 2s
+  FAIL u99990123 ep16: err 6.60 reached_hold 1 stable 0 | whole r/p/y/|v| 6.38/0.25/0.96/6.60 | hold r/p/y/|v| 0.46/0.14/0.37/0.71 | mid 6.32
+[C-S2-d_wposx2_a63_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2byil_full_s3] 17s stable 99.97 err 1.023 steady 0.278 mid 0.694 pos 0.3394 fails 1 | logged HEADLINE ('100.0', '1.02', '0.28')
