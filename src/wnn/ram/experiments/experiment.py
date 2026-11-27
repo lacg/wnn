@@ -1152,12 +1152,15 @@ class Experiment:
 		phase_result = result.to_phase_result()
 
 		# Save compressed
+		# IDS-81: record the worker ABI so a resume never reuses a completed
+		# phase from another trainer lineage (worker_abi_guard).
+		from wnn.ram.strategies.phased.worker_abi_guard import installed_worker_abi, stamp_metadata
 		data = {
 			"phase_result": phase_result.serialize(),
-			"_metadata": {
+			"_metadata": stamp_metadata({
 				"elapsed_seconds": result.elapsed_seconds,
 				"improvement_percent": result.improvement_percent,
-			},
+			}, installed_worker_abi()),
 		}
 		# Save population metrics for cross-experiment reuse (avoids re-evaluation on resume)
 		if result.population_metrics is not None:

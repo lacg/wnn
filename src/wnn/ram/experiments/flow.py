@@ -21,6 +21,7 @@ from wnn.ram.experiments.experiment import Experiment, ClusterType, ExperimentCo
 from wnn.ram.experiments.dashboard_client import DashboardClient, FlowConfig as APIFlowConfig
 from wnn.ram.experiments.test_cache_scope import TestCacheScope
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
+from wnn.ram.strategies.phased.worker_abi_guard import completed_phase_refusal, installed_worker_abi
 
 
 class FlowStoppedError(Exception):
@@ -1421,16 +1422,36 @@ class Flow:
 		)
 
 	def _determine_start_idx(self, resume_from: Optional[int]) -> int:
-		"""Resume index: explicit resume_from, else auto-detected from completed experiments.
+		"""Resume index: explicit resume_from, else auto-detected from completed
+		experiments — then clamped by the worker-ABI guard (IDS-81) so no
+		completed phase from another worker ABI (or an untagged one) is reused.
 
 		Auto-detect handles the case where a flow crashed (no graceful stop checkpoint)
 		and the dashboard re-queues it without setting start_from_experiment.
 		We only determine start_idx here — the skip loop in _run_experiment_loop
 		handles loading checkpoints and setting genome/population/etc.
 		"""
+		start = resume_from if resume_from is not None else self._auto_resume_idx()
+		return self._abi_clamped_start_idx(start, installed_worker_abi())
+
+	def _abi_clamped_start_idx(self, start_idx: int, installed: Optional[int]) -> int:
+		"""First skipped experiment whose completed result fails the worker-ABI
+		guard (that phase and every later one re-run from scratch), else
+		``start_idx``. ``installed`` None (no accelerator) = no check."""
+		if installed is None or start_idx <= 0:
+			return start_idx
+		for idx in range(start_idx):
+			reason = (completed_phase_refusal(self.checkpoint_dir / f"exp_{idx:02d}", installed)
+			          if self.checkpoint_dir else f"no checkpoint dir to verify, installed ABI {installed}")
+			if reason is not None:
+				self.log(f"[CKPT] ⚠️ experiment {idx} ({self.config.experiments[idx].name}): {reason} — "
+				         f"ABI mismatch — re-running it from scratch (completed result NOT reused)")
+				return idx
+		return start_idx
+
+	def _auto_resume_idx(self) -> int:
+		"""First experiment not completed in the DB with a checkpoint file on disk."""
 		cfg = self.config
-		if resume_from is not None:
-			return resume_from
 		if not (self.tracker and self._flow_id and self.checkpoint_dir):
 			return 0
 
