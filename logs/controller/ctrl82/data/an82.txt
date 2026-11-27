@@ -1,0 +1,34 @@
+VAL ONLY. episodes: hard 47 random 120 | inner-loop replay gate max |pwm diff|: G+T 3.0e-08 lk90 3.0e-08 l2b 3.0e-08
+
+== A. per-episode mean |err| by axis (deg, whole 2 s), VAL
+   set      arm  :   roll    pitch      yaw  | pre-hold roll/pitch/yaw | hold roll/pitch/yaw
+   hard    G+T  :   1.238   0.455   1.394  |   1.522   0.543   1.476 |   0.102   0.103   1.064
+   hard    lk90 :   0.860   0.524   1.554  |   1.050   0.633   1.798 |   0.102   0.087   0.580
+   hard    l2b  :   0.939   0.424   1.880  |   1.146   0.507   1.948 |   0.112   0.092   1.609
+   random  G+T  :   0.473   0.446   0.605  |   0.569   0.532   0.700 |   0.089   0.101   0.225
+   random  lk90 :   0.473   0.455   0.757  |   0.569   0.546   0.858 |   0.090   0.090   0.350
+   random  l2b  :   0.434   0.432   0.584  |   0.519   0.518   0.680 |   0.091   0.089   0.200
+
+== B. on EXCURSION ticks (hard eps, |roll|or|pitch err| > 3.0 deg, t<1.6 s), each arm on its own excursion ticks; VAL
+         G+T |      lk90 |       l2b   (columns = arms)
+   ticks                                      14817      10505      10143
+   motor-sat %                                0.776      1.666      1.341
+   yaw-caused sat %                           0.776      1.666      1.341
+   rate out-limit %                           2.328      5.654      4.466
+   deliv/cmd axis                             0.999      0.996      0.998
+   |yaw force|/hover %                        6.382      8.431      6.442
+   |gyro_z| rad/s                             0.156      0.228      0.181
+   |yaw->axis torque| % of axis torque       23.873     17.200     21.384
+   signed (+ = helps) %                     -10.811    -10.157     -9.093
+   |yaw-kinematic axis rate| deg/s            0.256      0.400      0.335
+   signed (+ = grows err) deg/s              -0.007     -0.025     -0.007
+
+== C. same quantities on HOLD ticks (t >= 1.6 s, all 167 eps) and on normal pre-hold ticks (random eps, t<1.6 s, not excursion); VAL
+   -- hold
+   G+T   motor-sat % 0.0000 | |yaw force|/hover % 6.94 | |gyro_z| 0.069 | |yaw->roll torque|/|roll torque| % 242.6 | |kin roll rate| 0.010 deg/s
+   lk90  motor-sat % 0.0000 | |yaw force|/hover % 6.54 | |gyro_z| 0.073 | |yaw->roll torque|/|roll torque| % 384.2 | |kin roll rate| 0.012 deg/s
+   l2b   motor-sat % 0.0000 | |yaw force|/hover % 6.76 | |gyro_z| 0.058 | |yaw->roll torque|/|roll torque| % 216.7 | |kin roll rate| 0.008 deg/s
+   -- normal pre-hold
+   G+T   motor-sat % 0.0000 | |yaw force|/hover % 5.82 | |gyro_z| 0.078 | |yaw->roll torque|/|roll torque| % 52.4 | |kin roll rate| 0.065 deg/s
+   lk90  motor-sat % 0.0000 | |yaw force|/hover % 5.57 | |gyro_z| 0.103 | |yaw->roll torque|/|roll torque| % 58.4 | |kin roll rate| 0.087 deg/s
+   l2b   motor-sat % 0.0000 | |yaw force|/hover % 5.71 | |gyro_z| 0.075 | |yaw->roll torque|/|roll torque| % 54.4 | |kin roll rate| 0.066 deg/s

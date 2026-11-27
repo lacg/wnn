@@ -1,0 +1,34 @@
+VAL hard episodes (47), decision ticks t<1.6 s. Per |axis err| bin deg: [0,1) | [1,2) | [2,3) | [3,5) | [5,8) | [8,99)
+== G+T
+   roll  n          :    5148     699     305     469     596     303
+   roll  corr sp    :  +0.044  +0.194  +0.448  +0.544  +0.706  +0.726
+   roll  corr delta :  +0.015  +0.064  +0.166  +0.194  +0.238  +0.215
+   roll  corr gyro  :  +0.021  +0.141  +0.275  +0.243  +0.205  +0.236
+   pitch n          :    6397     561     249     229      84       0
+   pitch corr sp    :  +0.053  +0.300  +0.544  +0.784  +0.990      . 
+   pitch corr delta :  +0.018  +0.086  +0.182  +0.291  +0.383      . 
+   pitch corr gyro  :  +0.017  +0.145  +0.253  +0.366  +0.251      . 
+   roll stall (|err|>3 deg and corrective gyro_x < 0.1 rad/s): 388 decision ticks = 28.4% of |err|>3 ticks
+   p-bank TRUE cells % of bank (E+I) by |roll err| bin:    6.8   12.8   17.8   22.6   23.1   25.3
+== lk90
+   roll  n          :    5808     573     290     357     322     170
+   roll  corr sp    :  +0.053  +0.300  +0.560  +0.793  +1.050  +1.238
+   roll  corr delta :  +0.017  +0.089  +0.224  +0.308  +0.389  +0.445
+   roll  corr gyro  :  +0.016  +0.201  +0.246  +0.321  +0.316  +0.340
+   pitch n          :    6128     654     305     329     100       4
+   pitch corr sp    :  +0.048  +0.287  +0.572  +0.767  +0.912  +0.209
+   pitch corr delta :  +0.016  +0.095  +0.212  +0.303  +0.365  +0.113
+   pitch corr gyro  :  +0.017  +0.120  +0.227  +0.299  +0.271  +0.434
+   roll stall (|err|>3 deg and corrective gyro_x < 0.1 rad/s): 241 decision ticks = 28.4% of |err|>3 ticks
+   p-bank TRUE cells % of bank (E+I) by |roll err| bin:    6.8   14.6   17.9   20.8   23.5   24.8
+== l2b
+   roll  n          :    5843     513     262     304     395     203
+   roll  corr sp    :  +0.051  +0.242  +0.551  +0.725  +0.823  +0.897
+   roll  corr delta :  +0.017  +0.067  +0.194  +0.259  +0.282  +0.277
+   roll  corr gyro  :  +0.023  +0.187  +0.295  +0.355  +0.230  +0.325
+   pitch n          :    6471     515     238     221      75       0
+   pitch corr sp    :  +0.051  +0.289  +0.591  +0.790  +0.987      . 
+   pitch corr delta :  +0.016  +0.083  +0.188  +0.292  +0.388      . 
+   pitch corr gyro  :  +0.017  +0.172  +0.252  +0.354  +0.300      . 
+   roll stall (|err|>3 deg and corrective gyro_x < 0.1 rad/s): 190 decision ticks = 21.1% of |err|>3 ticks
+   p-bank TRUE cells % of bank (E+I) by |roll err| bin:    7.0   12.2   17.0   19.8   20.9   22.6

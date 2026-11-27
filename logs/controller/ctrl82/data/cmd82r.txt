@@ -1,0 +1,19 @@
+VAL RANDOM episodes (120, neutral), decision ticks t<1.6 s. Per |axis err| bin deg: [0,1) | [1,2) | [2,3) | [3,5) | [5,8) | [8,99)
+== G+T
+   roll  n          :   16018    1659     716     635     172       0
+   roll  corr sp    :  +0.064  +0.319  +0.559  +0.739  +0.864      . 
+   roll  corr delta :  +0.021  +0.105  +0.202  +0.275  +0.319      . 
+   roll  corr gyro  :  +0.015  +0.129  +0.223  +0.248  +0.305      . 
+   roll stall (|err|>3 deg and corrective gyro_x < 0.1 rad/s): 280 decision ticks = 34.7% of |err|>3 ticks
+== lk90
+   roll  n          :   16132    1532     708     669     159       0
+   roll  corr sp    :  +0.062  +0.320  +0.624  +0.811  +0.891      . 
+   roll  corr delta :  +0.020  +0.101  +0.232  +0.319  +0.350      . 
+   roll  corr gyro  :  +0.014  +0.123  +0.221  +0.248  +0.309      . 
+   roll stall (|err|>3 deg and corrective gyro_x < 0.1 rad/s): 290 decision ticks = 35.0% of |err|>3 ticks
+== l2b
+   roll  n          :   16433    1546     574     473     174       0
+   roll  corr sp    :  +0.064  +0.280  +0.618  +0.846  +0.929      . 
+   roll  corr delta :  +0.021  +0.082  +0.224  +0.316  +0.343      . 
+   roll  corr gyro  :  +0.014  +0.146  +0.239  +0.294  +0.284      . 
+   roll stall (|err|>3 deg and corrective gyro_x < 0.1 rad/s): 225 decision ticks = 34.8% of |err|>3 ticks

@@ -1,0 +1,30 @@
+== l2b (VAL, tick level): hard-transient ticks 21757 (of which t>=150 ms: 8098), hold ticks 66800, normal pre-hold ticks 180386
+   |tilt_err| (est) deg: hold p99 0.451, p99.99 0.841, max 0.846
+     > 1.0  : recall hard 100.0% (t>=150ms 100.0%) | fires hold 0.0000% | normal pre-hold 16.27% | random eps firing after 0.3 s  66.7%
+     > 1.5  : recall hard 100.0% (t>=150ms 100.0%) | fires hold 0.0000% | normal pre-hold  9.90% | random eps firing after 0.3 s  35.8%
+     > 2.0  : recall hard 100.0% (t>=150ms 100.0%) | fires hold 0.0000% | normal pre-hold  5.94% | random eps firing after 0.3 s  14.2%
+     > 3.0  : recall hard  99.6% (t>=150ms  99.2%) | fires hold 0.0000% | normal pre-hold  1.03% | random eps firing after 0.3 s   1.7%
+   |gyro_xy| rad/s: hold p99 0.137, p99.99 0.251, max 0.267
+     > 0.15 : recall hard  96.9% (t>=150ms  95.3%) | fires hold 0.5569% | normal pre-hold 28.20% | random eps firing after 0.3 s  99.2%
+     > 0.3  : recall hard  87.3% (t>=150ms  81.1%) | fires hold 0.0000% | normal pre-hold 13.80% | random eps firing after 0.3 s  72.5%
+     > 0.5  : recall hard  70.6% (t>=150ms  56.8%) | fires hold 0.0000% | normal pre-hold  7.14% | random eps firing after 0.3 s  31.7%
+     > 1.0  : recall hard  28.7% (t>=150ms  11.7%) | fires hold 0.0000% | normal pre-hold  2.48% | random eps firing after 0.3 s   1.7%
+   max(|tilt|/3deg, |gyro_xy|/0.5): hold p99 0.276, p99.99 0.502, max 0.533
+     > 0.5  : recall hard 100.0% (t>=150ms 100.0%) | fires hold 0.0120% | normal pre-hold 19.82% | random eps firing after 0.3 s  85.8%
+     > 0.75 : recall hard 100.0% (t>=150ms 100.0%) | fires hold 0.0000% | normal pre-hold 11.68% | random eps firing after 0.3 s  58.3%
+     > 1.0  : recall hard  99.9% (t>=150ms  99.7%) | fires hold 0.0000% | normal pre-hold  7.52% | random eps firing after 0.3 s  31.7%
+== G+T (VAL, tick level): hard-transient ticks 28019 (of which t>=150 ms: 13966), hold ticks 66800, normal pre-hold ticks 178798
+   |tilt_err| (est) deg: hold p99 0.466, p99.99 0.733, max 0.736
+     > 1.0  : recall hard 100.0% (t>=150ms 100.0%) | fires hold 0.0000% | normal pre-hold 17.31% | random eps firing after 0.3 s  70.0%
+     > 1.5  : recall hard 100.0% (t>=150ms 100.0%) | fires hold 0.0000% | normal pre-hold 10.33% | random eps firing after 0.3 s  46.7%
+     > 2.0  : recall hard 100.0% (t>=150ms 100.0%) | fires hold 0.0000% | normal pre-hold  6.17% | random eps firing after 0.3 s  22.5%
+     > 3.0  : recall hard  99.4% (t>=150ms  99.1%) | fires hold 0.0000% | normal pre-hold  1.12% | random eps firing after 0.3 s   5.8%
+   |gyro_xy| rad/s: hold p99 0.130, p99.99 0.215, max 0.221
+     > 0.15 : recall hard  92.7% (t>=150ms  87.6%) | fires hold 0.4626% | normal pre-hold 27.30% | random eps firing after 0.3 s  98.3%
+     > 0.3  : recall hard  76.9% (t>=150ms  63.0%) | fires hold 0.0000% | normal pre-hold 14.80% | random eps firing after 0.3 s  75.8%
+     > 0.5  : recall hard  55.9% (t>=150ms  34.4%) | fires hold 0.0000% | normal pre-hold  8.03% | random eps firing after 0.3 s  36.7%
+     > 1.0  : recall hard  22.8% (t>=150ms   6.2%) | fires hold 0.0000% | normal pre-hold  2.54% | random eps firing after 0.3 s   6.7%
+   max(|tilt|/3deg, |gyro_xy|/0.5): hold p99 0.260, p99.99 0.431, max 0.443
+     > 0.5  : recall hard 100.0% (t>=150ms 100.0%) | fires hold 0.0000% | normal pre-hold 20.23% | random eps firing after 0.3 s  85.8%
+     > 0.75 : recall hard 100.0% (t>=150ms 100.0%) | fires hold 0.0000% | normal pre-hold 12.60% | random eps firing after 0.3 s  58.3%
+     > 1.0  : recall hard  99.8% (t>=150ms  99.6%) | fires hold 0.0000% | normal pre-hold  8.40% | random eps firing after 0.3 s  37.5%
