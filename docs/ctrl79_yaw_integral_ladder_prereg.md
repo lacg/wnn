@@ -57,3 +57,18 @@ not worse on stable / fails / pos. No magnitude bar. n=3 (s1–s3) is a screen:
 - Each END: paired vs G+T same seed (stable / err / steady / pos / fails, 35 CF2.1 TEST units), as VALUES.
 - After s1: a VAL trace of the winner (hold code occupancy, held-setpoint SD, hold yaw) as diagnosis, never a result.
 - cells / minutes are tie-breakers only.
+
+## Amendment 1 (Luiz 26/11/2026 ~22:10 EST): yil to n=5 + stacking arm l2byil
+
+- **yil OVERRIDES the n=3 drop.** By the letter yil stopped on rule (C) (2/3 seeds with one more fail than G+T, both
+  u123 ep16). Luiz: "Yil is not bad, it deserves n=5". yil flies s4–s5, paired vs the flown G+T s4/s5 controls
+  (`…_a62_…_n0g3gz_full_s{4,5}`), same readout; adoption still decided at n=10.
+- **New arm l2byil = G+T + `--gyro-xy-ladder dense_hold` + `--yaw-integral-ladder dense`** (l2b + yil; tag
+  `…_a63_…_gt_l2byil_full_sN`). Question: do the two promoted levers add? l2b acts on roll/pitch rate coverage
+  (pre-hold roll/pitch), yil on the hold-yaw trim (steady, wear offset) — separate mechanisms, but the CTRL-77
+  factorial showed l2b + l3 was not additive on yaw, so stacking is tested, not assumed. Screen at n=3 (s1–s3), paired
+  vs G+T same seed (primary, same drop rule A/B/C as above), plus l2b and yil same seed as descriptive references.
+- **Order** (one controller at a time, all ABI 63): CTRL-78 (flying) → CTRL-77 n=5 (l2b, l2bl3 × s4–s5) → yil s4–s5 →
+  l2byil s1–s3 → CTRL-80 (ABI 64 install).
+- Driver: same `logs/controller/ctrl63/ab_yil79.sh` (arm l2byil added; digest skip adds `gyro_xy_ladder`; token
+  must be `…,gyroxy:dense_hold,yawi:dense`); dry runs 2/2 (yil s4–s5) and 3/3 (l2byil s1–s3) validated 26/11.

@@ -24,7 +24,7 @@ L=logs/controller/ctrl48
 RUNS=$L/runs.log
 VENV=/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv
 ABI=63
-ALL_ARMS="yil"
+ALL_ARMS="yil l2byil"
 SEEDS=${Y79_SEEDS:-1 2 3}
 ARMS=${Y79_ARMS:-$ALL_ARMS}
 DRY=${Y79_DRY:-0}
@@ -53,15 +53,17 @@ flags_of()
 {
 	local f=""
 	[ "$1" = yil ] && f="--yaw-integral-ladder dense"
+	[ "$1" = l2byil ] && f="--gyro-xy-ladder dense_hold --yaw-integral-ladder dense"
 	echo "$f"
 }
-calib_of() { echo "$GT_CALIB,yawi:dense"; }
+calib_of() { [ "$1" = l2byil ] && { echo "$GT_CALIB,gyroxy:dense_hold,yawi:dense"; return; }; echo "$GT_CALIB,yawi:dense"; }
 dmax_of() { echo $DMAX0; }
 leak_of() { echo None; }
 what_of()
 {
 	local w=""
 	w="yaw-integral ladder dense (yaw_err_i cuts +-1.5/3.5/6.5/12): read the yaw trim from the integral input"
+	[ "$1" = l2byil ] && w="L2-b gyro_x/y dense_hold ladder + $w (stacking screen, Luiz 26/11)"
 	echo "$w"
 }
 tag_of() { echo ${PFX}_a${ABI}_${MID}_gt_$2_full_s$1; }
@@ -75,7 +77,7 @@ import hashlib, shlex, sys
 from wnn.control import phased_ga as p
 a = p.build_arg_parser().parse_args(shlex.split(sys.argv[1]))
 ec = p.episode_config_from_args(a); p._resolve_ctbr(a, ec); p.resolve_block10_args(a); c = a._ctbr
-skip = ('yaw_integral_ladder', 'save_stage_checkpoints', 'save_winner')
+skip = ('yaw_integral_ladder', 'gyro_xy_ladder', 'save_stage_checkpoints', 'save_winner')
 rest = repr(sorted((k, repr(v)) for k, v in c.items())) + repr(sorted((k, repr(v)) for k, v in vars(a).items() if not k.startswith('_') and k not in skip))
 lk = a.delta_leak_yaw if a.delta_leak_yaw is not None else a.delta_leak
 gain = round(a.delta_max_yaw / (1.0 - lk), 3)
