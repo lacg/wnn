@@ -72,3 +72,10 @@ not worse on stable / fails / pos. No magnitude bar. n=3 (s1–s3) is a screen:
   l2byil s1–s3 → CTRL-80 (ABI 64 install).
 - Driver: same `logs/controller/ctrl63/ab_yil79.sh` (arm l2byil added; digest skip adds `gyro_xy_ladder`; token
   must be `…,gyroxy:dense_hold,yawi:dense`); dry runs 2/2 (yil s4–s5) and 3/3 (l2byil s1–s3) validated 26/11.
+
+## Amendment 2 (Luiz 27/11/2026 ~07:45 EST): l2byil is read against l2b
+
+CTRL-77 closed with l2b adopted as the new base. **l2byil s1–s3 is read primarily against l2b sN** (same seed,
+`…_a63_…_gt_l2b_full_sN`), with the same drop rule A/B/C (l2b in place of G+T). G+T and yil same seed stay as
+descriptive references. Nothing about the flight changes (same argv, same driver); only the comparison. yil s4–s5 is
+unchanged: it completes yil's own n=5 against G+T.
