@@ -444,7 +444,7 @@ mod tests
 	/// cargo test --release ... bench_bptt_walk -- --ignored --nocapture
 	#[cfg(target_os = "macos")]
 	#[test]
-	#[ignore]
+	#[ignore = "benchmark: CPU vs GPU BPTT walk wall-time at production shape (Metal); prints; run with --release"]
 	fn bench_bptt_walk()
 	{
 		for &sn in &[4usize, 8]

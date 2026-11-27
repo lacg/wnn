@@ -714,7 +714,7 @@ mod tests
 	/// CTRL-49 diagnosis: WNN_IMIT_DIAG=1 WNN_IMIT_FIXTURE=<fixture> WNN_IMIT_DIAG_LAYOUT=<layout>
 	/// [WNN_IMIT_DIAG_TAG=<tag>] cargo test --release ... diag_ctrl49 -- --ignored --nocapture
 	#[test]
-	#[ignore]
+	#[ignore = "diagnostic: CTRL-49 input-representation probe, prints; needs WNN_IMIT_DIAG=1 + WNN_IMIT_FIXTURE + _LAYOUT"]
 	fn diag_ctrl49_input_representation()
 	{
 		if std::env::var("WNN_IMIT_DIAG").ok().as_deref() != Some("1")

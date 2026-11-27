@@ -492,7 +492,7 @@ fn teacher_driven_hosts_fly_the_cascade()
 /// DIAGNOSTIC: the mpcof CTBR label's planning offset N_o vs the outer hold, on an
 /// attitude-only L4C plant, 20 episodes: mean err (deg) and stable fraction.
 #[test]
-#[ignore]
+#[ignore = "diagnostic: mpcof CTBR label offset N_o vs outer hold, 20 eps; prints err/stable, asserts nothing"]
 fn diag_mpcof_rate_label_offset()
 {
 	for lag in [0.0f32, 0.20]
@@ -559,7 +559,7 @@ fn diag_cases() -> Vec<(u8, usize, usize)>
 /// scorer draws it (±20%), no other weather. Steady error (last 20%) with the
 /// rate-loop and attitude-loop integrators on/off, vs the symmetric plant.
 #[test]
-#[ignore]
+#[ignore = "diagnostic: does the rate-PID integral absorb ±20% motor asymmetry; prints steady err, asserts nothing"]
 fn diag_rate_integral_absorbs_asymmetry()
 {
 	use crate::abi38_pins::{PID_ATT, PID_RATE};
@@ -631,7 +631,7 @@ fn diag_rate_integral_absorbs_asymmetry()
 /// DIAGNOSTIC (design R6): the CTBR label histogram per bank on the stage-2 L4C
 /// regime, for both outer teachers — sizes the r_sp range (provisional ±1.6).
 #[test]
-#[ignore]
+#[ignore = "diagnostic: CTBR label histogram per bank (sizes the r_sp range); prints quantiles, asserts nothing"]
 fn diag_ctbr_label_histogram()
 {
 	for (teacher, name) in [(0u8, "pid"), (4u8, "mpcof")]

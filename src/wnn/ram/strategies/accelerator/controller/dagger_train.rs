@@ -5375,7 +5375,7 @@ mod d0_hover_anchor_tests
 	/// through step() with the recorded stream restored and count EMPTY output
 	/// reads (address misses). Run with `-- --ignored --nocapture`.
 	#[test]
-	#[ignore]
+	#[ignore = "diagnostic: obs_pwm deploy address-miss rate after a mini-DAgger; prints, ~60 s; --nocapture"]
 	fn diag_obs_pwm_deploy_miss_rate()
 	{
 		for obs_pwm in [false, true]

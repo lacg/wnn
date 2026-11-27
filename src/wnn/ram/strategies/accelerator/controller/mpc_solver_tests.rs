@@ -366,7 +366,7 @@ fn print_report(name: &str, r: &mut Report)
 /// STEP A MEASUREMENT (ignored — prints). Run with
 /// `cargo test -p ram_controller --lib --no-default-features mpc_qp_convergence_census -- --ignored --nocapture`.
 #[test]
-#[ignore]
+#[ignore = "measurement: MPC QP convergence census (step A); prints, asserts nothing; optional MPC_CENSUS_EPS (8)"]
 fn mpc_qp_convergence_census()
 {
 	let eps: usize = std::env::var("MPC_CENSUS_EPS").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
@@ -429,7 +429,7 @@ fn label_digest(cfg: &RewardGatedConfigPacked, episodes: usize, seed: u64) -> (u
 /// bit-identical across the FISTA → exact-solver change and to size the
 /// constrained-path label change.
 #[test]
-#[ignore]
+#[ignore = "diagnostic: prints the MPC label digests (source of the pinned FISTA-build constants); asserts nothing"]
 fn mpc_label_digest_print()
 {
 	for (name, xy, expert) in [
@@ -578,7 +578,7 @@ const STAGE1_EXPERT_LABELS: usize = 8000;
 /// stage-2 rollout visited through a fresh teacher's step_axes_rs (same warm-start
 /// chain), best of 5. Run on both builds to compare.
 #[test]
-#[ignore]
+#[ignore = "benchmark: MPC teacher solve throughput (us/solve, best of 5); prints; run with --release"]
 fn mpc_solver_timing()
 {
 	for (name, xy) in [("stage2", 0.5f32), ("stage1", 0.0)]
