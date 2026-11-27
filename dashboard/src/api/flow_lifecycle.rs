@@ -123,36 +123,12 @@ pub(crate) async fn restart_flow(
 	// If restarting from beginning, clear the seed checkpoint and delete checkpoint files
 	let seed_checkpoint_id = if req.from_beginning
 	{
-		// Delete checkpoint directory for this flow.
-		// SECURITY: the directory name is derived from the user-supplied flow
-		// name; restrict it to [a-z0-9_-] so sequences like ".." can never
-		// escape the checkpoints root (remove_dir_all on a traversal path
-		// would delete arbitrary directories). Benign names produce the same
-		// result as the worker's `lower().replace(" ","_").replace("/","_")`.
-		let safe_name: String = flow
-			.name
-			.to_lowercase()
-			.chars()
-			.map(|c| {
-				if c.is_ascii_alphanumeric() || c == '-' || c == '_'
-				{
-					c
-				}
-				else
-				{
-					'_'
-				}
-			})
-			.collect();
+		// Delete checkpoint directory for this flow — named EXACTLY as the
+		// worker names it (checkpoint_dir_name.rs, IDS-81). A name that is not
+		// one safe path component is refused, never renamed.
+		let safe_name = super::checkpoint_dir_name::worker_checkpoint_dir_name(&flow.name);
 
-		if safe_name.trim_matches('_').is_empty()
-		{
-			tracing::warn!(
-				"Flow name {:?} sanitizes to nothing safe — skipping checkpoint-dir deletion",
-				flow.name
-			);
-		}
-		else
+		if let Some(safe_name) = safe_name
 		{
 			// Try parent directory first (project root checkpoints)
 			let parent_checkpoint_dir = std::path::Path::new("../checkpoints").join(&safe_name);
@@ -176,6 +152,13 @@ pub(crate) async fn restart_flow(
 					}
 				}
 			}
+		}
+		else
+		{
+			tracing::warn!(
+				"Flow name {:?} is not one safe path component — skipping checkpoint-dir deletion",
+				flow.name
+			);
 		}
 		Some(None) // Clear checkpoint reference in DB
 	}

@@ -25,6 +25,7 @@ from typing import Optional
 from wnn.ram.fitness import FitnessCalculatorType
 from wnn.ram.experiments.dashboard_client import DashboardClient, DashboardClientConfig
 from wnn.ram.experiments.flow import Flow, FlowConfig
+from wnn.ram.experiments.flow_dir_name import flow_dir_name
 from wnn.ram.experiments.experiment import ExperimentConfig, ExperimentType, GridSource
 from wnn.ram.experiments.experiment_setting_resolver import ExperimentSettingResolver
 from wnn.ram.experiments.inert_params import refuse_inert_experiment_knobs
@@ -172,7 +173,7 @@ class FlowWorker:
         date_dir = self._log_dir / now.strftime("%Y/%m/%d")
         date_dir.mkdir(parents=True, exist_ok=True)
 
-        safe_name = flow_name.lower().replace(" ", "_").replace("/", "_")
+        safe_name = flow_dir_name(flow_name)
         timestamp = now.strftime("%H%M%S")
         log_file = date_dir / f"{safe_name}_{timestamp}.log"
 
@@ -983,7 +984,7 @@ class FlowWorker:
         context_size = params.get("context_size", self.context_size)
 
         # Setup checkpoint directory
-        safe_name = flow_name.lower().replace(" ", "_").replace("/", "_")
+        safe_name = flow_dir_name(flow_name)
         checkpoint_dir = self.checkpoint_base_dir / safe_name
 
         # Detect architecture type

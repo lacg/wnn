@@ -1,0 +1,13 @@
+{
+	"_doc": "Flow name -> checkpoint folder name. Shared by tests/test_flow_dir_name.py (worker) and dashboard/src/api/checkpoint_dir_name.rs (dashboard). null = the dashboard refuses to delete (not a single safe path component); the worker value is then irrelevant.",
+	"cases": [
+		["IDS6-ciciot46m-B15AC-desir-r20419-rate0.25-abi30", "ids6-ciciot46m-b15ac-desir-r20419-rate0.25-abi30"],
+		["IDS56C-cicids-CE20-zs-BINARY-2m-max250-xo_blend_neuron-rate0.25-lattice-encon-r20421", "ids56c-cicids-ce20-zs-binary-2m-max250-xo_blend_neuron-rate0.25-lattice-encon-r20421"],
+		["IDS79-unswr-WbCTRL-desir-BINARY-2m-max500-xo_blend_cluster-rate0.25-rklegacy-nb02-fixb80-encoff-cutE-r20423", "ids79-unswr-wbctrl-desir-binary-2m-max500-xo_blend_cluster-rate0.25-rklegacy-nb02-fixb80-encoff-cute-r20423"],
+		["Grid Search: rate 1.0/abi30", "grid_search:_rate_1.0_abi30"],
+		["a/../b", "a_.._b"],
+		["..", null],
+		[".", null],
+		["", null]
+	]
+}

@@ -19,6 +19,7 @@ use crate::db::DbPool;
 use crate::models::*;
 
 mod best_genomes;
+mod checkpoint_dir_name;
 mod checkpoints;
 mod experiments;
 mod flow_lifecycle;
