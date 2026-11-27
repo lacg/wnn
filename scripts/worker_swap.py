@@ -51,6 +51,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 
 TERMINAL = {"completed", "failed", "cancelled"}
@@ -144,7 +145,17 @@ def apply_patch(project: Path, patch: Path) -> bool:
 	return r.returncode == 0
 
 
-def install_wheel(venv: Path, wheel: Path) -> None:
+def revert_patch(project: Path, patch: Path) -> bool:
+	"""git apply -R the staged Python, putting the tree back on the old state."""
+	r = subprocess.run(["git", "-C", str(project), "apply", "-R", str(patch.resolve())],
+	                   capture_output=True, text=True)
+	print(f"[swap] git apply -R {patch.name}: rc={r.returncode} {r.stderr.strip()[-400:]}", flush=True)
+	return r.returncode == 0
+
+
+def install_wheel(venv: Path, wheel: Path) -> bool:
+	"""pip install --force-reinstall the wheel. False = install failed (pip rolls
+	back its own uninstall, so the OLD wheel stays importable)."""
 	print(f"[swap] pip install --force-reinstall {wheel.name}", flush=True)
 	pip = venv / "bin" / "pip"
 	r = subprocess.run([str(pip), "install", "--force-reinstall", "--no-deps", str(wheel)],
@@ -152,7 +163,49 @@ def install_wheel(venv: Path, wheel: Path) -> None:
 	print((r.stdout or "")[-400:], flush=True)
 	if r.returncode != 0:
 		print(f"[swap] ⚠️ pip install FAILED: {r.stderr[-600:]}", flush=True)
-		raise SystemExit(3)
+	return r.returncode == 0
+
+
+@dataclass
+class InstallOutcome:
+	"""What step 4 (patch + wheel) actually left on disk."""
+	patched: bool | None = None          # None = no --apply-patch given
+	installed: Path | None = None        # the wheel now installed, or None
+	install_failed: bool = False
+	patch_reverted: bool | None = None   # None = no revert was needed
+
+
+def _revert_after_failed_install(args, out: InstallOutcome) -> None:
+	"""Install failed: undo the patch so the tree matches the OLD wheel again
+	(the pre-IDS-81 code exited here, leaving patched Python + stale wheel)."""
+	out.install_failed = True
+	if out.patched:
+		out.patch_reverted = revert_patch(args.project, args.apply_patch)
+		if not out.patch_reverted:
+			print("[swap] ⚠️ patch REVERT FAILED — tree is patched over the old wheel; "
+			      "fix by hand before trusting any flow.", flush=True)
+	print("[swap] ⚠️ wheel install failed — continuing on the OLD wheel "
+	      "(requeue + relaunch still run).", flush=True)
+
+
+def patch_then_install(args) -> InstallOutcome:
+	"""Step 4: optional patch, then wheel (worker DOWN → safe to replace the .so).
+	Patch first: if it fails, skip the wheel; if the wheel fails, revert the patch
+	— the tree and the wheel never disagree (an ABI-mismatched pair fails every flow)."""
+	out = InstallOutcome()
+	install = args.install_wheel
+	if args.apply_patch is not None:
+		out.patched = apply_patch(args.project, args.apply_patch)
+		if not out.patched:
+			print("[swap] ⚠️ patch failed — NOT installing the wheel; relaunching on the old state.", flush=True)
+			install = None
+	if install is None:
+		return out
+	if install_wheel(args.venv, install):
+		out.installed = install
+	else:
+		_revert_after_failed_install(args, out)
+	return out
 
 
 # Env vars of the OLD worker that the relaunch must keep (WNN_EVAL_IN_PLACE,
@@ -328,18 +381,9 @@ def main() -> int:
 		print(f"[swap] carrying worker env: {carry_env}", flush=True)
 		stop_worker(pid, args.grace_secs)
 
-	# 4) Optional Python patch, then wheel install (worker is down → safe to replace
-	# the shared .so). Patch first: if it fails, skip the wheel too, so the tree and
-	# the wheel never disagree (an ABI-mismatched pair fails every flow).
-	patched = None
-	install = args.install_wheel
-	if args.apply_patch is not None:
-		patched = apply_patch(args.project, args.apply_patch)
-		if not patched:
-			print("[swap] ⚠️ patch failed — NOT installing the wheel; relaunching on the old state.", flush=True)
-			install = None
-	if install is not None:
-		install_wheel(args.venv, install)
+	# 4) Optional Python patch, then wheel install (see patch_then_install).
+	step4 = patch_then_install(args)
+	patched, install = step4.patched, step4.installed
 
 	# 5) Re-queue interrupted flows via the API (keep checkpoints) BEFORE the relaunch.
 	# A flow_runner stopped by SIGTERM normally re-queues ITSELF ('queued'); calling
@@ -364,14 +408,17 @@ def main() -> int:
 		"interrupted": interrupted,
 		"requeued": requeued,
 		"installed_wheel": str(install) if install else None,
-		"applied_patch": str(args.apply_patch) if patched else None,
+		"applied_patch": str(args.apply_patch) if patched and not step4.patch_reverted else None,
 		"patch_failed": patched is False,
+		"install_failed": step4.install_failed,
+		"patch_reverted": step4.patch_reverted,
 		"new_worker_pid": new_pid,
 		"restarted": not args.no_restart,
 	})
 	print(f"[swap] DONE — watched={watch} interrupted={interrupted} requeued={requeued} "
-	      f"wheel={'yes' if install else 'no'} patch={patched} new_pid={new_pid}", flush=True)
-	return 0
+	      f"wheel={'yes' if install else 'no'} patch={patched} install_failed={step4.install_failed} "
+	      f"new_pid={new_pid}", flush=True)
+	return 3 if step4.install_failed else 0
 
 
 if __name__ == "__main__":

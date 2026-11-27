@@ -29,6 +29,7 @@ from wnn.ram.strategies.phased.checkpoint import (
 	find_checkpoint_file,
 )
 from wnn.ram.strategies.phased.codecs import GenomeCodec
+from wnn.ram.strategies.phased.worker_abi_guard import stamp_worker_abi, worker_abi_refusal
 
 
 class PhasedCheckpointManager:
@@ -36,13 +37,18 @@ class PhasedCheckpointManager:
 
 	def __init__(self, path: "str | Path", codec: GenomeCodec, cadence: SaveCadence,
 	             *, async_save: bool = False,
-	             logger: Optional[Callable[[str], None]] = None):
+	             logger: Optional[Callable[[str], None]] = None,
+	             worker_abi: Optional[int] = None):
+		"""``worker_abi`` (IDS strand only, IDS-81): stamp every save with it and
+		refuse to load a checkpoint written under a different ABI or none at all
+		(see worker_abi_guard). None (controller) = no stamp, no check."""
 		self._path = Path(path)
 		self._codec = codec
 		self._cadence = cadence
 		self._async = async_save
 		self._log = logger or (lambda _m: None)
 		self._thread = None  # single in-flight async writer
+		self._worker_abi = worker_abi
 
 	# --- WHEN ---------------------------------------------------------------
 	def should_save_now(self, generation: int) -> bool:
@@ -61,6 +67,8 @@ class PhasedCheckpointManager:
 	def save(self, checkpoint: PhaseCheckpoint) -> Path:
 		"""Write now (cadence-independent). Async mode keeps a single writer in
 		flight (joins the prior one first), so two writes never collide."""
+		if self._worker_abi is not None:
+			checkpoint = stamp_worker_abi(checkpoint, self._worker_abi)
 		if self._async:
 			self.join()
 			p, self._thread = save_checkpoint_async(self._path, checkpoint, self._codec)
@@ -83,5 +91,14 @@ class PhasedCheckpointManager:
 
 	def load(self) -> Optional[PhaseCheckpoint]:
 		"""Return the resumable PhaseCheckpoint (schema-2 / legacy formats), or
-		None if no checkpoint exists for this path."""
-		return load_checkpoint(self._path, self._codec)
+		None if no checkpoint exists for this path — or if the worker-ABI guard
+		refuses it, in which case the caller starts the phase fresh."""
+		ckpt = load_checkpoint(self._path, self._codec)
+		if ckpt is None or self._worker_abi is None:
+			return ckpt
+		reason = worker_abi_refusal(ckpt, self._worker_abi)
+		if reason is None:
+			return ckpt
+		self._log(f"[CKPT] ⚠️ {self._path.name}: {reason} — ABI mismatch — "
+		          f"restarting from scratch (checkpoint NOT resumed)")
+		return None
