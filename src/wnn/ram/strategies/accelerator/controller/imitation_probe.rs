@@ -735,7 +735,7 @@ mod tests
 {
 	/// The RECIPE probe: WNN_IMIT_FIXTURE=<dump_recipe_fixture.py output>.
 	#[test]
-	#[ignore]
+	#[ignore = "diagnostic: imitation probe on a recorded recipe, prints; needs WNN_IMIT_FIXTURE (dump_recipe_fixture.py)"]
 	fn diag_imitation_probe_recipe()
 	{
 		let path = std::env::var("WNN_IMIT_FIXTURE").expect("WNN_IMIT_FIXTURE");
@@ -747,7 +747,7 @@ mod tests
 	/// Light probe on the lag_student_law_tests RAM student (not the recipe —
 	/// the recipe run is WNN_IMIT_PROBE=1 on phased_ga). --ignored --nocapture.
 	#[test]
-	#[ignore]
+	#[ignore = "diagnostic: light imitation probe on the lag-law RAM student; prints, asserts nothing; --nocapture"]
 	fn diag_imitation_probe_light()
 	{
 		for lag in [0.0f32, 0.20]

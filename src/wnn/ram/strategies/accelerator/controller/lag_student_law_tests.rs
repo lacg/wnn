@@ -129,7 +129,7 @@ pub(crate) fn surrogate(id: u8, lag: f32, law: Law, episodes: usize, steps: usiz
 
 /// Prints the dose table; asserts nothing (run with --ignored --nocapture).
 #[test]
-#[ignore]
+#[ignore = "diagnostic: prints the student-law-under-lag dose table, asserts nothing; run with --ignored --nocapture"]
 fn diag_student_law_under_lag()
 {
 	let laws = [
@@ -382,7 +382,7 @@ fn fit(rows: &[(Vec<f64>, [f64; 3])]) -> (Fit, [f64; 3])
 }
 
 #[test]
-#[ignore]
+#[ignore = "diagnostic: linear memoryless student observability (ridge-DAgger R2 + flight); prints, asserts nothing"]
 fn diag_memoryless_student_observability()
 {
 	for id in [4u8, 1]
@@ -467,7 +467,7 @@ fn thermo(f: &[f64], thr: &[Vec<f64>]) -> Vec<f64>
 }
 
 #[test]
-#[ignore]
+#[ignore = "diagnostic: thermometer-encoded linear student, resolution vs observability; prints, asserts nothing"]
 fn diag_thermometer_student_resolution()
 {
 	for bpf in [8usize, 32]
@@ -612,7 +612,7 @@ fn ram_probe(lag: f32, force_command: bool, seed: u64, dmax: f32, leak: f32, tr:
 }
 
 #[test]
-#[ignore]
+#[ignore = "diagnostic: real RAM trainer under actuator lag; prints, asserts nothing; optional LAGDIAG_LAWS/_TRANSLATION"]
 fn diag_ram_student_real_trainer_under_lag()
 {
 	let laws: Vec<(f32, f32)> = std::env::var("LAGDIAG_LAWS")
@@ -642,7 +642,7 @@ fn noise_sigma() -> f64
 /// Probe 5: how much white imitation error (control-space pwm units) the
 /// fitted linear student tolerates, T=0 vs T=0.20 (u_a observed).
 #[test]
-#[ignore]
+#[ignore = "diagnostic: linear-student tolerance to imitation noise (LAGDIAG_NOISE sigma); prints, asserts nothing"]
 fn diag_noise_tolerance_under_lag()
 {
 	for lag in [0.0f32, 0.20]
@@ -666,7 +666,7 @@ fn diag_noise_tolerance_under_lag()
 /// weights scaled by kappa (a RAM whose addresses rarely sample the u_a bits
 /// under-weights them), and its whole output scaled by g (gain error).
 #[test]
-#[ignore]
+#[ignore = "diagnostic: u_a weight (kappa) and gain sensitivity of the fitted student at T=0.20; prints only"]
 fn diag_ua_weight_and_gain_sensitivity()
 {
 	let lag = 0.20f32;

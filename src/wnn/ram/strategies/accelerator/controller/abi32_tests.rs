@@ -502,7 +502,7 @@ fn prod_rows_lag(c: &WnnController, s1: &Stage1Cfg, steps: usize, dist: bool, la
 }
 
 #[test]
-#[ignore]
+#[ignore = "diagnostic: CPU vs GPU scorer over the production-regime ladder (Metal); prints rel err, asserts nothing"]
 fn diag_prod_regime_cpu_vs_gpu()
 {
 	let plant_full = PlantOpts::new(true, 0.78).unwrap();
@@ -531,7 +531,7 @@ fn diag_prod_regime_cpu_vs_gpu()
 }
 
 #[test]
-#[ignore]
+#[ignore = "diagnostic: CPU vs GPU scorer per feature-ablation set (Metal); prints rel err, asserts nothing"]
 fn diag_prod_feature_ablation_cpu_vs_gpu()
 {
 	let names = ["peraxis_i", "obs_pwm", "yaw_err", "yaw_err_i", "vert", "horiz"];

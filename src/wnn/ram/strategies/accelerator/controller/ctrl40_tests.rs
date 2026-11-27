@@ -270,7 +270,7 @@ fn split_replay_refuses_a_dhat_student_without_the_stream()
 /// A rough speed probe (ignored by default): CPU vs Metal split train on the cascade
 /// fixture. `cargo test ... ctrl40_speed -- --ignored --nocapture`.
 #[test]
-#[ignore]
+#[ignore = "benchmark: CPU vs Metal split train on the cascade fixture; prints timings, asserts nothing"]
 fn ctrl40_speed_cpu_vs_gpu_split()
 {
 	let cfg = zero_yaw(l4c_cfg(0.20, 4), 0.20);
