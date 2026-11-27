@@ -1,0 +1,4 @@
+[1_P_both_L1_yld_gt_l2b_full_s4] KO= thresholds 2s
+  FAIL u99990112 ep86: err 6.32 reached_hold 1 stable 0 | whole r/p/y/|v| 0.22/6.16/0.65/6.32 | hold r/p/y/|v| 0.13/0.32/0.24/0.44 | mid 4.72
+  FAIL u99990123 ep16: err 5.91 reached_hold 1 stable 0 | whole r/p/y/|v| 5.70/0.17/0.98/5.91 | hold r/p/y/|v| 0.31/0.20/0.32/0.53 | mid 5.03
+[C-S2-d_wposx2_a63_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2b_full_s4] 17s stable 99.94 err 1.001 steady 0.268 mid 0.646 pos 0.3383 fails 2 | logged HEADLINE ('99.9', '1.00', '0.27')

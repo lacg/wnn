@@ -1,0 +1,3 @@
+[P_both_L1_yld_gt_l2bl3_full_s5] KO= thresholds 2s
+  FAIL u99990134 ep73: err 5.20 reached_hold 1 stable 0 | whole r/p/y/|v| 4.88/1.00/0.56/5.20 | hold r/p/y/|v| 0.12/0.07/0.16/0.24 | mid 4.03
+[C-S2-d_wposx2_a63_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2bl3_full_s5] 17s stable 99.97 err 1.013 steady 0.295 mid 0.681 pos 0.3416 fails 1 | logged HEADLINE ('100.0', '1.01', '0.30')
