@@ -1,0 +1,2 @@
+[yawrun] n_ms01_P_both_L1_yld_gt_l2bylead_full_s3: thresholds 3s, 35 units
+[yawrun] n_ms01_P_both_L1_yld_gt_l2bylead_full_s3: 3500 episodes gated OK vs the Rust scorer, 53s (1 workers)
