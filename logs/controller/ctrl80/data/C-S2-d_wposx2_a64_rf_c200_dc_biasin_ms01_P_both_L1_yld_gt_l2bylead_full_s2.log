@@ -1,0 +1,2 @@
+[oth_L1_yld_gt_l2bylead_full_s2] KO= thresholds 2s
+[C-S2-d_wposx2_a64_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2bylead_full_s2] 17s stable 100.00 err 0.994 steady 0.290 mid 0.665 pos 0.3402 fails 0 | logged HEADLINE ('100.0', '1.00', '0.29')
