@@ -1399,25 +1399,41 @@ def _calibration_samples(spec, cal: "ThresholdCalibration", seed, geometry, allo
 
 def _cascade_columns_from_training_cascade(samples_per_feature, spec, episode_config,
                                            cal: "ThresholdCalibration", seed: int) -> None:
-	"""CTRL-38: refit the cascade blocks' columns (the LAST ctbr_cascade_feature_count
-	features) on rollouts that actually PRODUCE them. This Python rollout flies a PID
+	"""CTRL-38: refit the cascade blocks' columns (feature_layout.cascade_columns — by
+	layout, NOT the tail: the CTRL-46 bias predictor sits after them when on) on rollouts
+	that actually PRODUCE them. This Python rollout flies a PID
 	the feature controller does not see: the controller's rate integrator would
 	integrate its own zero setpoint and its d̂ observer would read its own untrained
 	command. The Rust sampler flies the training cascade (teacher through the cascade's
 	inner stage), lends the student the flown rate loop and feeds its observer the
 	applied command (calib_sampler.rs). Only the new columns are replaced, so every
 	other feature's ladder is byte-identical to the blocks-off control arm."""
-	n_cas = ctbr_cascade_feature_count(getattr(spec, "ctbr", None))
-	if n_cas == 0:
+	cols = _cascade_refit_columns(spec)
+	if not cols:
 		return
 	if episode_config is None or getattr(episode_config, "airframe", None) is None:
 		raise ValueError("--obs-rate-i / --obs-rate-err / --obs-cascade-dhat(-residual): the threshold fit needs the run's "
 		                 "EpisodeConfig with its airframe (the cascade blocks are sampled on the "
 		                 "training cascade) — got none.")
 	rust = _training_cascade_samples(spec, episode_config, cal, seed)
-	nf = spec.num_features()
-	for f in range(nf - n_cas, nf):
+	if len(rust) != len(samples_per_feature):
+		raise ValueError(f"cascade refit: the training-cascade sampler returned {len(rust)} feature "
+		                 f"columns, the layout has {len(samples_per_feature)}")
+	for f in cols:
 		samples_per_feature[f] = [float(v) for v in rust[f]]
+
+
+def _cascade_refit_columns(spec) -> range:
+	"""The cascade blocks' feature indices, from the layout table (the one Python mirror of
+	compute_features' order). Tail arithmetic (range(nf - n, nf)) covered the bias
+	predictor's two columns and missed the first two cascade ones whenever both were on."""
+	from wnn.control.feature_layout import cascade_columns
+	cols = cascade_columns(spec)
+	n_cas = ctbr_cascade_feature_count(getattr(spec, "ctbr", None))
+	if len(cols) != n_cas:
+		raise ValueError(f"cascade refit: the layout has {len(cols)} cascade columns, "
+		                 f"CtbrSpec counts {n_cas}")
+	return cols
 
 
 def random_connectivity(spec: ControllerSpec, seed: int = 0) -> tuple[list[int], list[int]]:
