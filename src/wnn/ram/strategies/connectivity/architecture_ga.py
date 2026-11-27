@@ -26,6 +26,7 @@ from wnn.ram.strategies.connectivity.checkpoint_manager import CheckpointConfig
 from wnn.ram.strategies.phased import (
 	PhasedCheckpointManager, PhaseCheckpoint, SaveCadence, ClusterGenomeCodec,
 )
+from wnn.ram.strategies.phased.worker_abi_guard import installed_worker_abi
 
 if TYPE_CHECKING:
 	from wnn.ram.strategies.connectivity.adaptive_cluster import (
@@ -471,6 +472,47 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 	# Simplified optimize: setup + super() + test evaluation
 	# =========================================================================
 
+	def _resume_from_checkpoint(self, initial_population):
+		"""Resume the GA from this phase's checkpoint when there is a usable one;
+		return the population to seed with (the caller's on a fresh start).
+
+		``load()`` returns None when the worker-ABI guard refuses the checkpoint
+		(IDS-81: saved under another worker ABI, or legacy with none) — the phase
+		then starts fresh from the provided seeds, never mixing two trainer
+		lineages in one result."""
+		_ckpt = self._checkpoint_mgr.load() if self._checkpoint_mgr.has_checkpoint() else None
+		if _ckpt is None:
+			return initial_population
+		resume_state = _ids_resume_from_checkpoint(_ckpt)
+		_extra = resume_state.get('extra_state') or {}
+		_resume_pop = [g for g, _ in resume_state['population']]
+		# GUARD: a completion checkpoint is written with population=[] +
+		# complete=True purely as a "done" marker (see the final save below).
+		# Resuming from it would seed an EMPTY population and offset the
+		# generation counter — silently poisoning the run. Never resume from
+		# a complete OR empty checkpoint; fall back to a fresh start (the
+		# provided grid-seeded initial_population) and say so loudly.
+		if _extra.get('complete') or not _resume_pop:
+			reason = "marked complete" if _extra.get('complete') else "has an empty population"
+			self._log.warning(
+				f"[{self.name}] Checkpoint {reason} — NOT resuming from it; "
+				f"starting fresh from the provided seed population.")
+		else:
+			self._log.info(f"[{self.name}] Resuming from checkpoint at generation {resume_state['current_iteration']}")
+			# Restore population as initial_population (will be re-evaluated).
+			initial_population = _resume_pop
+			# Restore GA control state so resume CONTINUES from the exact stop.
+			# The checkpoint is saved in _on_generation_start with
+			# iterations_run=generation (the IN-PROGRESS gen, whose population +
+			# patience are the post-(gen-1) state), so we resume AT that gen — NOT
+			# +1, which would SKIP the in-progress gen and drop its patience tick.
+			# (threshold is a pure function of generation, so it follows start_gen;
+			#  best_fitness is recomputed from the restored population.)
+			# Shared template entry point (WNN-1): generation + the FULL
+			# early-stopper / adaptive-scaler snapshot, same as the controller.
+			self.resume_state_from_checkpoint(_ckpt)
+		return initial_population
+
 	def optimize(
 		self,
 		evaluate_fn: Callable[['ClusterGenome'], float] = None,
@@ -502,38 +544,9 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 				ClusterGenomeCodec(),
 				SaveCadence(cfg_ck.target_loss_seconds, cfg_ck.max_interval),
 				logger=self._log.info,
+				worker_abi=installed_worker_abi(),
 			)
-			# Checkpoint resume
-			if self._checkpoint_mgr.has_checkpoint():
-				_ckpt = self._checkpoint_mgr.load()
-				resume_state = _ids_resume_from_checkpoint(_ckpt)
-				_extra = resume_state.get('extra_state') or {}
-				_resume_pop = [g for g, _ in resume_state['population']]
-				# GUARD: a completion checkpoint is written with population=[] +
-				# complete=True purely as a "done" marker (see the final save below).
-				# Resuming from it would seed an EMPTY population and offset the
-				# generation counter — silently poisoning the run. Never resume from
-				# a complete OR empty checkpoint; fall back to a fresh start (the
-				# provided grid-seeded initial_population) and say so loudly.
-				if _extra.get('complete') or not _resume_pop:
-					reason = "marked complete" if _extra.get('complete') else "has an empty population"
-					self._log.warning(
-						f"[{self.name}] Checkpoint {reason} — NOT resuming from it; "
-						f"starting fresh from the provided seed population.")
-				else:
-					self._log.info(f"[{self.name}] Resuming from checkpoint at generation {resume_state['current_iteration']}")
-					# Restore population as initial_population (will be re-evaluated).
-					initial_population = _resume_pop
-					# Restore GA control state so resume CONTINUES from the exact stop.
-					# The checkpoint is saved in _on_generation_start with
-					# iterations_run=generation (the IN-PROGRESS gen, whose population +
-					# patience are the post-(gen-1) state), so we resume AT that gen — NOT
-					# +1, which would SKIP the in-progress gen and drop its patience tick.
-					# (threshold is a pure function of generation, so it follows start_gen;
-					#  best_fitness is recomputed from the restored population.)
-					# Shared template entry point (WNN-1): generation + the FULL
-					# early-stopper / adaptive-scaler snapshot, same as the controller.
-					self.resume_state_from_checkpoint(_ckpt)
+			initial_population = self._resume_from_checkpoint(initial_population)
 
 		# Set up phase state for Rust acceleration
 		if self._cached_evaluator is not None:
