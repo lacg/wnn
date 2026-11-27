@@ -1436,8 +1436,13 @@ class Flow:
 
 	def _abi_clamped_start_idx(self, start_idx: int, installed: Optional[int]) -> int:
 		"""First skipped experiment whose completed result fails the worker-ABI
-		guard (that phase and every later one re-run from scratch), else
-		``start_idx``. ``installed`` None (no accelerator) = no check."""
+		guard, else ``start_idx``. ``installed`` None (no accelerator) = no check.
+
+		That phase and every later one re-run: none reuses its completed result.
+		A later GA phase still resumes its own IN-PROGRESS checkpoint when that
+		checkpoint is tagged with the installed ABI (``PhasedCheckpointManager.load``),
+		continuing its saved population instead of seeding from the re-run phase;
+		a completion marker or a checkpoint from another ABI starts it fresh."""
 		if installed is None or start_idx <= 0:
 			return start_idx
 		for idx in range(start_idx):
@@ -1445,7 +1450,9 @@ class Flow:
 			          if self.checkpoint_dir else f"no checkpoint dir to verify, installed ABI {installed}")
 			if reason is not None:
 				self.log(f"[CKPT] ⚠️ experiment {idx} ({self.config.experiments[idx].name}): {reason} — "
-				         f"ABI mismatch — re-running it from scratch (completed result NOT reused)")
+				         f"ABI mismatch — re-running experiments {idx}..{len(self.config.experiments) - 1} "
+				         f"(no completed result reused; a later GA phase still resumes an in-progress "
+				         f"checkpoint tagged ABI {installed}, else starts fresh from the re-run seeds)")
 				return idx
 		return start_idx
 

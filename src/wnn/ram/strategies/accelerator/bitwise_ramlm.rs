@@ -2780,7 +2780,7 @@ pub fn evaluate_genomes_adaptive(
 								train_subset.num_examples,
 								num_clusters,
 								adapt_config,
-								memory_mode,
+								crate::lm_cell_read::LmCellRead { memory_mode, empty_value },
 							)
 						}
 						None => (0..batch_size)
@@ -2859,7 +2859,7 @@ pub fn evaluate_genomes_adaptive(
 										train_subset.num_examples,
 										num_clusters,
 										adapt_config,
-										memory_mode,
+										crate::lm_cell_read::LmCellRead { memory_mode, empty_value },
 									),
 									None => adaptation::compute_combined_stats(
 										&adapt_bits[i],

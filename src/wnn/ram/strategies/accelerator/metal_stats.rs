@@ -10,7 +10,9 @@
 use metal::*;
 use std::mem;
 
-use ram_core::neuron_memory::{ClusterStorage, EMPTY_U8, QSR, QUAD_BINARY, QUAD_WEIGHTED};
+use ram_core::neuron_memory::{empty_word_for_mode, ClusterStorage};
+
+use crate::lm_cell_read::LmCellRead;
 
 // =============================================================================
 // Public types for batched multi-genome dispatch
@@ -68,7 +70,20 @@ struct StatsParams
 	sample_size: u32,
 	words_per_example: u32,
 	num_clusters: u32,
+	/// Clusters per genome = the target_bits row width. A batched dispatch
+	/// concatenates genomes (num_clusters = all of them) but every genome shares
+	/// one [examples × clusters_per_genome] target matrix.
+	target_stride: u32,
 	empty_cell_value: u32,
+	memory_mode: u32,
+	empty_value: f32,
+}
+
+/// The mode's unwritten cell — the same value ClusterStorage fills dense words
+/// with and returns on a sparse miss (BINARY = FALSE(0), not EMPTY(2)).
+fn unwritten_cell(memory_mode: u8) -> u32
+{
+	(empty_word_for_mode(memory_mode) & 0x3) as u32
 }
 
 #[repr(C)]
@@ -147,7 +162,7 @@ impl MetalStatsComputer
 		target_bits: &[u8],
 		sample_indices: &[u32],
 		num_clusters: usize,
-		memory_mode: u8,
+		read: LmCellRead,
 	) -> (Vec<u32>, Vec<u32>, Vec<u32>, Vec<u32>, Vec<u32>)
 	{
 		let total_neurons: usize = neurons_per_cluster.iter().sum();
@@ -189,12 +204,6 @@ impl MetalStatsComputer
 		let mut global_n = 0usize;
 		let mut dense_word_cursor = 0u32;
 		let mut sparse_neuron_cursor = 0u32;
-
-		let empty_cell = match memory_mode
-		{
-			QUAD_BINARY | QUAD_WEIGHTED | QSR => 1u32, // QUAD_WEAK_FALSE
-			_ => EMPTY_U8 as u32,
-		};
 
 		for cluster in 0..num_clusters
 		{
@@ -298,7 +307,10 @@ impl MetalStatsComputer
 			sample_size: sample_size as u32,
 			words_per_example: words_per_example as u32,
 			num_clusters: num_clusters as u32,
-			empty_cell_value: empty_cell,
+			target_stride: num_clusters as u32,
+			empty_cell_value: unwritten_cell(read.memory_mode),
+			memory_mode: read.memory_mode as u32,
+			empty_value: read.empty_value,
 		};
 
 		// =====================================================================
@@ -442,7 +454,8 @@ impl MetalStatsComputer
 		all_cluster_metas: &[BatchedClusterMeta],
 		total_neurons: usize,
 		total_clusters: usize,
-		empty_cell_value: u32,
+		clusters_per_genome: usize,
+		read: LmCellRead,
 	) -> BatchedStatsResult
 	{
 		let sample_size = sample_indices.len();
@@ -485,7 +498,10 @@ impl MetalStatsComputer
 			sample_size: sample_size as u32,
 			words_per_example: words_per_example as u32,
 			num_clusters: total_clusters as u32,
-			empty_cell_value,
+			target_stride: clusters_per_genome.max(1) as u32,
+			empty_cell_value: unwritten_cell(read.memory_mode),
+			memory_mode: read.memory_mode as u32,
+			empty_value: read.empty_value,
 		};
 
 		// Ensure non-empty buffers

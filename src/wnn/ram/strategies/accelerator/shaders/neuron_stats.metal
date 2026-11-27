@@ -12,9 +12,9 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// Bit-packing constants (must match neuron_memory.rs)
-
-// Quad weights for vote computation (QUAD_WEIGHTED mode)
+// Bit-packing constants and cell semantics come from common.metal (prepended
+// at compile time). Votes decode through wnn_cell_weight(cell, memory_mode,
+// empty_value) — the twin of the CPU LmCellRead / cell_to_weight read.
 
 // Per-neuron metadata — describes storage layout for heterogeneous configs
 struct NeuronMeta
@@ -34,8 +34,11 @@ struct StatsParams
 	uint num_neurons;				// Total neurons across all clusters
 	uint sample_size;				// Number of sampled examples
 	uint words_per_example; // Packed u64 words per example
-	uint num_clusters;			// Number of clusters
-	uint empty_cell_value;	// Empty cell value (2 for ternary, 1 for quad)
+	uint num_clusters;			// Number of clusters (all genomes in a batched dispatch)
+	uint target_stride;			// Clusters per genome = target_bits row width
+	uint empty_cell_value;	// Mode's unwritten cell (empty_word_for_mode & 3)
+	uint memory_mode;				// WNN_MODE_* the storages were trained under
+	float empty_value;			// TERNARY EMPTY read (ignored by other modes)
 };
 
 // Per-cluster metadata for Pass 2
@@ -114,7 +117,7 @@ inline uint sparse_lookup(
 kernel void compute_neuron_stats_kernel(
 		device const ulong *packed_input [[buffer(0)]],			// [num_examples * words_per_example]
 		device const int *connections [[buffer(1)]],				// Flattened connections
-		device const uchar *target_bits [[buffer(2)]],			// [num_examples * num_clusters]
+		device const uchar *target_bits [[buffer(2)]],			// [num_examples * target_stride]
 		device const uint *sample_indices [[buffer(3)]],		// [sample_size]
 		device const long *dense_memory [[buffer(4)]],			// Flattened dense memory
 		device const ulong *sparse_keys [[buffer(5)]],			// Sparse sorted keys
@@ -163,15 +166,16 @@ kernel void compute_neuron_stats_kernel(
 					ulong(address), params.empty_cell_value);
 		}
 
-		// Compute vote using quad weights (always QUAD_WEIGHTED in bitwise path)
-		float vote_val = WNN_QUAD_WEIGHTS[min(cell, 3u)];
+		// Vote through the mode's own read (IDS-81: was WNN_QUAD_WEIGHTS for
+		// every mode, so a TERNARY/PLN/BINARY TRUE (cell 1) scored 0.25).
+		float vote_val = wnn_cell_weight(cell, params.memory_mode, params.empty_value);
 		uchar vote = (vote_val >= 0.5f) ? 1 : 0;
 
 		// Store vote for Pass 2
 		votes[neuron_idx * params.sample_size + s] = vote;
 
 		// Compare with target
-		uchar target = target_bits[ex * params.num_clusters + meta.cluster_id];
+		uchar target = target_bits[ex * params.target_stride + meta.cluster_id % params.target_stride];
 		if (vote != target)
 		{
 			errors++;
@@ -219,7 +223,7 @@ kernel void compute_neuron_stats_kernel(
 
 kernel void compute_cluster_stats_kernel(
 		device const uchar *votes [[buffer(0)]],							// [total_neurons * sample_size]
-		device const uchar *target_bits [[buffer(1)]],				// [num_examples * num_clusters]
+		device const uchar *target_bits [[buffer(1)]],				// [num_examples * target_stride]
 		device const uint *sample_indices [[buffer(2)]],			// [sample_size]
 		device const ClusterMeta *cluster_meta [[buffer(3)]], // [num_clusters]
 		constant StatsParams &params [[buffer(4)]],
@@ -237,7 +241,7 @@ kernel void compute_cluster_stats_kernel(
 
 	ClusterMeta cm = cluster_meta[cluster_idx];
 	uint ex = sample_indices[sample_idx];
-	uchar target = target_bits[ex * params.num_clusters + cluster_idx];
+	uchar target = target_bits[ex * params.target_stride + cluster_idx % params.target_stride];
 	bool target_true = (target != 0);
 
 	// Count votes_true across neurons in this cluster

@@ -1510,7 +1510,7 @@ pub fn compute_neuron_and_cluster_stats_gpu(
 	num_examples: usize,
 	num_clusters: usize,
 	config: &AdaptationConfig,
-	memory_mode: u8,
+	read: crate::lm_cell_read::LmCellRead,
 ) -> (Vec<NeuronStats>, Vec<ClusterStats>)
 {
 	let total_neurons: usize = neurons_per_cluster.iter().sum();
@@ -1568,7 +1568,7 @@ pub fn compute_neuron_and_cluster_stats_gpu(
 			target_bits,
 			&sample_indices_u32,
 			num_clusters,
-			memory_mode,
+			read,
 		);
 
 	// Build NeuronStats
@@ -1697,11 +1697,10 @@ pub fn compute_batch_stats_gpu(
 	num_examples: usize,
 	num_clusters_per_genome: usize,
 	config: &AdaptationConfig,
-	memory_mode: u8,
+	read: crate::lm_cell_read::LmCellRead,
 ) -> Vec<(Vec<NeuronStats>, Vec<ClusterStats>)>
 {
 	use crate::metal_stats::{BatchedClusterMeta, BatchedNeuronMeta};
-	use ram_core::neuron_memory::{EMPTY_U8, QSR, QUAD_BINARY, QUAD_WEIGHTED};
 
 	let num_genomes = genomes.len();
 	if num_genomes == 0
@@ -1721,12 +1720,6 @@ pub fn compute_batch_stats_gpu(
 		&sample_indices_usize,
 		config.total_input_bits,
 	);
-
-	let empty_cell = match memory_mode
-	{
-		QUAD_BINARY | QUAD_WEIGHTED | QSR => 1u32,
-		_ => EMPTY_U8 as u32,
-	};
 
 	// =========================================================================
 	// Marshal all genomes into concatenated arrays
@@ -1890,7 +1883,8 @@ pub fn compute_batch_stats_gpu(
 		&all_cluster_metas,
 		total_neurons,
 		total_clusters,
-		empty_cell,
+		num_clusters_per_genome,
+		read,
 	);
 
 	// =========================================================================

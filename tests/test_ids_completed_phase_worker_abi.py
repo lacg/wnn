@@ -1,6 +1,7 @@
 """IDS-81 step 2: a COMPLETED phase result (exp_NN/*.json.gz, e.g. the grid
 search) records the worker ABI, and a resume never reuses one written under
-another ABI (or none): Flow re-runs that phase — and every later one — fresh.
+another ABI (or none): Flow re-runs that phase and every later one (a later
+GA phase still resumes its own same-ABI in-progress checkpoint).
 
 Run: PYTHONPATH=src/wnn python -m pytest tests/test_ids_completed_phase_worker_abi.py -q
 """
@@ -79,7 +80,11 @@ def test_untagged_grid_is_rerun_on_resume(monkeypatch):
 	_write_result(d / "exp_00")
 	assert _start(d, 1, ABI_N, monkeypatch, lines) == 0
 	assert lines and lines[0].startswith("[CKPT] ⚠️ experiment 0 (Grid Search")
-	assert "re-running it from scratch" in lines[0]
+	# The message names the re-run range and the one thing NOT redone: a later
+	# GA phase still resumes an in-progress checkpoint tagged with this ABI.
+	assert f"re-running experiments 0..{len(NAMES) - 1}" in lines[0]
+	assert f"in-progress checkpoint tagged ABI {ABI_N}" in lines[0]
+	assert "from scratch" not in lines[0]
 
 
 def test_other_abi_phase_and_everything_after_rerun(monkeypatch):

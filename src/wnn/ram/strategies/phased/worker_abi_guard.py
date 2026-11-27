@@ -20,8 +20,10 @@ The same lineage rule covers a COMPLETED phase (IDS-81 step 2): a finished
 experiment's result file (``exp_NN/*.json.gz``, written by
 ``Experiment._save_checkpoint``) records the ABI in ``_metadata`` via
 ``stamp_metadata``; on resume ``completed_phase_refusal`` rejects one from
-another ABI (or none) and ``Flow`` re-runs that phase — and everything after
-it — from scratch instead of reusing it.
+another ABI (or none) and ``Flow`` re-runs that phase and everything after
+it instead of reusing any completed result. A later GA phase still resumes its
+own in-progress checkpoint when that checkpoint passes ``worker_abi_refusal``
+(tagged with the installed ABI); otherwise it starts fresh.
 """
 
 import gzip
