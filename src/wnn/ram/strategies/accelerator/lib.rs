@@ -276,6 +276,10 @@ mod multistage;
 
 #[path = "adaptation.rs"]
 mod adaptation;
+// How LM adaptation reads a ClusterStorage cell under the flow's memory mode (IDS-81).
+pub mod lm_cell_read;
+#[cfg(test)]
+mod lm_cell_read_tests;
 
 #[cfg(target_os = "macos")]
 #[path = "metal_stats.rs"]

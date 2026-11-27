@@ -22,8 +22,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 
 use ram_core::neuron_memory::{
-	auto_sparse_threshold, ClusterStorage, NeuronTrainMeta, BINARY, CELLS_PER_WORD, EMPTY, QSR,
-	QUAD_BINARY, QUAD_WEAK_TRUE, QUAD_WEIGHTED, QUAD_WEIGHTS, TERNARY, TRUE,
+	auto_sparse_threshold, ClusterStorage, NeuronTrainMeta, BINARY, CELLS_PER_WORD, QSR,
+	QUAD_BINARY, QUAD_WEIGHTED, TERNARY, TRUE,
 };
 
 // =============================================================================
@@ -786,7 +786,7 @@ fn geometric_skip(rng: &mut u32, inv_log_complement: f32) -> usize
 }
 
 // Canonical address computation lives in neuron_memory.rs (single source of truth).
-use ram_core::neuron_memory::compute_address_packed;
+use ram_core::neuron_memory::{cell_to_weight, compute_address_packed};
 
 /// Pre-computed per-cluster layout for heterogeneous configs.
 ///
@@ -1609,102 +1609,49 @@ pub(crate) fn forward_eval_into(
 	}
 
 	// ===== CPU FORWARD PASS on eval data (fallback) =====
-	let num_eval = eval_subset.num_examples;
-	let wpe_eval = eval_subset.words_per_example;
+	cpu_forward_eval_into(
+		connections, bits_per_neuron, neurons_per_cluster, num_clusters, layout, eval_subset, clusters, out_probs,
+		memory_mode, empty_value,
+	);
+}
 
-	for ex in 0..num_eval
+/// CPU forward (the GPU-less fallback of `forward_eval_into`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn cpu_forward_eval_into(
+	connections: &[i64],
+	bits_per_neuron: &[usize],
+	neurons_per_cluster: &[usize],
+	num_clusters: usize,
+	layout: &GenomeLayout,
+	eval_subset: &BitwiseEvalSubset,
+	clusters: &[ClusterStorage],
+	out_probs: &mut [f32],
+	memory_mode: u8,
+	empty_value: f32,
+)
+{
+	// Every mode through the shared cell semantics (cell_to_weight; QSR / PLN
+	// at their expected value). Until IDS-81 this was a per-mode match whose
+	// catch-all scored QSR / PLN as a constant 0.5.
+	let wpe_eval = eval_subset.words_per_example;
+	for ex in 0..eval_subset.num_examples
 	{
 		let packed = &eval_subset.packed_input[ex * wpe_eval..(ex + 1) * wpe_eval];
 		let ex_probs = &mut out_probs[ex * num_clusters..(ex + 1) * num_clusters];
-
-		for cluster in 0..num_clusters
+		for (cluster, prob) in ex_probs.iter_mut().enumerate()
 		{
 			let c_neurons = neurons_per_cluster[cluster];
 			let neuron_base = layout.neuron_offsets[cluster];
-
-			match memory_mode
+			let mut weighted_sum = 0.0f32;
+			for n in 0..c_neurons
 			{
-				TERNARY =>
-				{
-					let mut count_true = 0u32;
-					let mut count_empty = 0u32;
-					for n in 0..c_neurons
-					{
-						let global_n = neuron_base + n;
-						let n_bits = bits_per_neuron[global_n];
-						let conn_start = layout.conn_offsets[global_n];
-						let conns = &connections[conn_start..conn_start + n_bits];
-						let addr = compute_address_packed(packed, conns, n_bits);
-						let cell = clusters[cluster].read_cell(n, addr);
-						if cell == TRUE
-						{
-							count_true += 1;
-						}
-						else if cell == EMPTY
-						{
-							count_empty += 1;
-						}
-					}
-					ex_probs[cluster] =
-						(count_true as f32 + empty_value * count_empty as f32) / c_neurons as f32;
-				}
-				BINARY =>
-				{
-					// Classical 1-bit read: P = fraction of neurons whose
-					// addressed cell is TRUE (no empty term — unwritten = 0).
-					let mut count_true = 0u32;
-					for n in 0..c_neurons
-					{
-						let global_n = neuron_base + n;
-						let n_bits = bits_per_neuron[global_n];
-						let conn_start = layout.conn_offsets[global_n];
-						let conns = &connections[conn_start..conn_start + n_bits];
-						let addr = compute_address_packed(packed, conns, n_bits);
-						if clusters[cluster].read_cell(n, addr) == TRUE
-						{
-							count_true += 1;
-						}
-					}
-					ex_probs[cluster] = count_true as f32 / c_neurons as f32;
-				}
-				QUAD_BINARY =>
-				{
-					let mut count_true = 0u32;
-					for n in 0..c_neurons
-					{
-						let global_n = neuron_base + n;
-						let n_bits = bits_per_neuron[global_n];
-						let conn_start = layout.conn_offsets[global_n];
-						let conns = &connections[conn_start..conn_start + n_bits];
-						let addr = compute_address_packed(packed, conns, n_bits);
-						let cell = clusters[cluster].read_cell(n, addr);
-						if cell >= QUAD_WEAK_TRUE
-						{
-							count_true += 1;
-						}
-					}
-					ex_probs[cluster] = count_true as f32 / c_neurons as f32;
-				}
-				QUAD_WEIGHTED =>
-				{
-					let mut weighted_sum = 0.0f32;
-					for n in 0..c_neurons
-					{
-						let global_n = neuron_base + n;
-						let n_bits = bits_per_neuron[global_n];
-						let conn_start = layout.conn_offsets[global_n];
-						let conns = &connections[conn_start..conn_start + n_bits];
-						let addr = compute_address_packed(packed, conns, n_bits);
-						let cell = clusters[cluster].read_cell(n, addr);
-						weighted_sum += QUAD_WEIGHTS[cell as usize];
-					}
-					ex_probs[cluster] = weighted_sum / c_neurons as f32;
-				}
-				_ =>
-				{
-					ex_probs[cluster] = 0.5;
-				}
+				let global_n = neuron_base + n;
+				let n_bits = bits_per_neuron[global_n];
+				let conn_start = layout.conn_offsets[global_n];
+				let addr = compute_address_packed(packed, &connections[conn_start..conn_start + n_bits], n_bits);
+				weighted_sum += cell_to_weight(clusters[cluster].read_cell(n, addr), memory_mode, empty_value);
 			}
+			*prob = weighted_sum / c_neurons as f32;
 		}
 	}
 }
@@ -2849,6 +2796,7 @@ pub fn evaluate_genomes_adaptive(
 									train_subset.num_examples,
 									num_clusters,
 									adapt_config,
+								crate::lm_cell_read::LmCellRead { memory_mode, empty_value },
 								)
 							})
 							.collect(),
@@ -2868,6 +2816,7 @@ pub fn evaluate_genomes_adaptive(
 							train_subset.num_examples,
 							num_clusters,
 							adapt_config,
+								crate::lm_cell_read::LmCellRead { memory_mode, empty_value },
 						)
 					})
 					.collect();
@@ -2923,6 +2872,7 @@ pub fn evaluate_genomes_adaptive(
 										train_subset.num_examples,
 										num_clusters,
 										adapt_config,
+								crate::lm_cell_read::LmCellRead { memory_mode, empty_value },
 									),
 								};
 								cluster_stats = recomputed.1;
@@ -2940,6 +2890,7 @@ pub fn evaluate_genomes_adaptive(
 									train_subset.num_examples,
 									num_clusters,
 									adapt_config,
+								crate::lm_cell_read::LmCellRead { memory_mode, empty_value },
 								);
 								cluster_stats = recomputed.1;
 							}
@@ -2974,6 +2925,7 @@ pub fn evaluate_genomes_adaptive(
 							&neuron_stats,
 							&trained_data[i].0,
 							adapt_config,
+								crate::lm_cell_read::LmCellRead { memory_mode, empty_value },
 							&train_subset.packed_input,
 							train_subset.words_per_example,
 							&train_subset.target_bits,

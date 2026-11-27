@@ -322,6 +322,7 @@ pub fn compute_neuron_stats(
 	num_examples: usize,
 	num_clusters: usize,
 	config: &AdaptationConfig,
+	read: crate::lm_cell_read::LmCellRead,
 ) -> Vec<NeuronStats>
 {
 	let total_neurons: usize = neurons_per_cluster.iter().sum();
@@ -402,7 +403,7 @@ pub fn compute_neuron_stats(
 						addr |= 1 << (n_bits - 1 - bit_i);
 					}
 				}
-				let vote = storage_read(&storages[cluster], local_n, addr);
+				let vote = read.vote(&storages[cluster], local_n, addr);
 				let predicted_true = vote >= 0.5;
 				let target_true = target != 0;
 				if predicted_true != target_true
@@ -446,6 +447,7 @@ pub fn compute_cluster_stats(
 	num_examples: usize,
 	num_clusters: usize,
 	config: &AdaptationConfig,
+	read: crate::lm_cell_read::LmCellRead,
 ) -> Vec<ClusterStats>
 {
 	let mut conn_offsets = vec![0usize];
@@ -511,7 +513,7 @@ pub fn compute_cluster_stats(
 							addr |= 1 << (n_bits - 1 - bit_i);
 						}
 					}
-					let vote = storage_read(&storages[cluster], local_n, addr);
+					let vote = read.vote(&storages[cluster], local_n, addr);
 					let is_true = vote >= 0.5;
 					if is_true
 					{
@@ -809,6 +811,7 @@ pub fn axonogenesis_pass(
 	neuron_stats: &[NeuronStats],
 	storages: &[ClusterStorage],
 	config: &AdaptationConfig,
+	read: crate::lm_cell_read::LmCellRead,
 	packed_input: &[u64],
 	words_per_example: usize,
 	target_bits: &[u8],
@@ -998,7 +1001,7 @@ pub fn axonogenesis_pass(
 					let target = target_bits[ex * num_clusters + cluster];
 
 					// Old prediction
-					let old_val = storage_read(&storages[cluster], local_n, old_addr);
+					let old_val = read.vote(&storages[cluster], local_n, old_addr);
 					let old_correct = (old_val >= 0.5) == (target > 0);
 
 					// Flip the address bit at local_idx if old/new input bits differ
@@ -1017,7 +1020,7 @@ pub fn axonogenesis_pass(
 					};
 
 					// New prediction
-					let new_val = storage_read(&storages[cluster], local_n, new_addr);
+					let new_val = read.vote(&storages[cluster], local_n, new_addr);
 					let new_correct = (new_val >= 0.5) == (target > 0);
 
 					delta += new_correct as i32 - old_correct as i32;
@@ -1389,14 +1392,6 @@ pub fn neurogenesis_pass(
 // Storage Helpers
 // =============================================================================
 
-/// Read a cell value from ClusterStorage as a float vote.
-/// Bitwise path uses quad mode: [0.0, 0.25, 0.75, 1.0] for raw values 0-3.
-fn storage_read(storage: &ClusterStorage, neuron_idx: usize, address: u32) -> f32
-{
-	let raw = storage.read_cell(neuron_idx, address as usize);
-	ram_core::neuron_memory::QUAD_WEIGHTS[raw.clamp(0, 3) as usize]
-}
-
 /// Compute fill rate for a neuron in its storage.
 fn storage_fill_rate(storage: &ClusterStorage, neuron_idx: usize, bits: usize) -> f32
 {
@@ -1461,6 +1456,7 @@ pub fn compute_combined_stats(
 	num_examples: usize,
 	num_clusters: usize,
 	config: &AdaptationConfig,
+	read: crate::lm_cell_read::LmCellRead,
 ) -> (Vec<NeuronStats>, Vec<ClusterStats>)
 {
 	let neuron_stats = compute_neuron_stats(
@@ -1474,6 +1470,7 @@ pub fn compute_combined_stats(
 		num_examples,
 		num_clusters,
 		config,
+		read,
 	);
 	let cluster_stats = compute_cluster_stats(
 		&neuron_stats,
@@ -1487,6 +1484,7 @@ pub fn compute_combined_stats(
 		num_examples,
 		num_clusters,
 		config,
+		read,
 	);
 	(neuron_stats, cluster_stats)
 }

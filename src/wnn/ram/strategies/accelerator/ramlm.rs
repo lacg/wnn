@@ -20,7 +20,7 @@ use std::sync::atomic::{fence, AtomicI32, AtomicI64, Ordering};
 
 use ram_core::neuron_memory::{
 	BITS_PER_CELL, CELLS_PER_WORD, CELL_MASK, EMPTY, FALSE, QUAD_WEAK_TRUE,
-	QUAD_WEIGHTS, TRUE,
+	TRUE,
 };
 
 /// Inline xorshift32 PRNG — returns a float in [0, 1)
@@ -691,46 +691,19 @@ pub fn bitwise_train_and_eval_full(
 	);
 
 	// 2. Forward pass (example-parallel CPU)
-	let bit_scores = match memory_mode
-	{
-		0 => forward_batch(
-			eval_input_bits,
-			connections_flat,
-			memory_words,
-			num_eval,
-			total_input_bits,
-			0,
-			bits_per_neuron,
-			neurons_per_cluster,
-			num_clusters,
-			words_per_neuron,
-			empty_value,
-		),
-		1 => forward_batch_quad_binary(
-			eval_input_bits,
-			connections_flat,
-			memory_words,
-			num_eval,
-			total_input_bits,
-			0,
-			bits_per_neuron,
-			neurons_per_cluster,
-			num_clusters,
-			words_per_neuron,
-		),
-		_ => forward_batch_quad_weighted(
-			eval_input_bits,
-			connections_flat,
-			memory_words,
-			num_eval,
-			total_input_bits,
-			0,
-			bits_per_neuron,
-			neurons_per_cluster,
-			num_clusters,
-			words_per_neuron,
-		),
-	};
+	let bit_scores = forward_for_mode(
+		eval_input_bits,
+		connections_flat,
+		memory_words,
+		num_eval,
+		total_input_bits,
+		bits_per_neuron,
+		neurons_per_cluster,
+		num_clusters,
+		words_per_neuron,
+		memory_mode,
+		empty_value,
+	);
 
 	// 3. Per-bit accuracy (CPU, cheap)
 	let mut per_bit_correct = vec![0u64; num_clusters];
@@ -886,7 +859,39 @@ pub fn forward_batch_quad_binary(
 	probs
 }
 
+/// The per-mode CPU forward of `bitwise_train_and_eval_full` (TERNARY and
+/// QUAD_BINARY keep their dedicated kernels).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn forward_for_mode(
+	input_bits_flat: &[bool],
+	connections_flat: &[i64],
+	memory_words: &[i64],
+	num_examples: usize,
+	total_input_bits: usize,
+	bits_per_neuron: usize,
+	neurons_per_cluster: usize,
+	num_clusters: usize,
+	words_per_neuron: usize,
+	memory_mode: u8,
+	empty_value: f32,
+) -> Vec<f32>
+{
+	let (i, c, m, n, t) = (input_bits_flat, connections_flat, memory_words, num_examples, total_input_bits);
+	match memory_mode
+	{
+		0 => forward_batch(i, c, m, n, t, 0, bits_per_neuron, neurons_per_cluster, num_clusters, words_per_neuron, empty_value),
+		1 => forward_batch_quad_binary(i, c, m, n, t, 0, bits_per_neuron, neurons_per_cluster, num_clusters, words_per_neuron),
+		// QUAD_WEIGHTED, BINARY, QSR (expected value), PLN (expected value): the
+		// shared cell semantics. Until IDS-81 all four took the QUAD_WEIGHTED
+		// table, so a BINARY / PLN TRUE (cell 1) scored 0.25.
+		_ => forward_batch_cell_weights(
+			i, c, m, n, t, bits_per_neuron, neurons_per_cluster, num_clusters, words_per_neuron, memory_mode, empty_value,
+		),
+	}
+}
+
 /// Forward pass for QUAD_WEIGHTED mode: P = sum(weight[cell]) / neurons_per_cluster
+#[allow(clippy::too_many_arguments)]
 pub fn forward_batch_quad_weighted(
 	input_bits_flat: &[bool],
 	connections_flat: &[i64],
@@ -900,35 +905,46 @@ pub fn forward_batch_quad_weighted(
 	words_per_neuron: usize,
 ) -> Vec<f32>
 {
+	forward_batch_cell_weights(
+		input_bits_flat, connections_flat, memory_words, num_examples, total_input_bits, bits_per_neuron,
+		neurons_per_cluster, num_clusters, words_per_neuron, ram_core::neuron_memory::QUAD_WEIGHTED, 0.0,
+	)
+}
+
+/// P = sum(cell_to_weight(cell, memory_mode, empty_value)) / neurons_per_cluster.
+#[allow(clippy::too_many_arguments)]
+fn forward_batch_cell_weights(
+	input_bits_flat: &[bool],
+	connections_flat: &[i64],
+	memory_words: &[i64],
+	num_examples: usize,
+	total_input_bits: usize,
+	bits_per_neuron: usize,
+	neurons_per_cluster: usize,
+	num_clusters: usize,
+	words_per_neuron: usize,
+	memory_mode: u8,
+	empty_value: f32,
+) -> Vec<f32>
+{
 	let mut probs = vec![0.0f32; num_examples * num_clusters];
-
-	probs
-		.par_chunks_mut(num_clusters)
-		.enumerate()
-		.for_each(|(ex_idx, ex_probs)| {
-			let input_start = ex_idx * total_input_bits;
-			let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
-
-			for cluster_idx in 0..num_clusters
+	probs.par_chunks_mut(num_clusters).enumerate().for_each(|(ex_idx, ex_probs)| {
+		let input_start = ex_idx * total_input_bits;
+		let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
+		for cluster_idx in 0..num_clusters
+		{
+			let mut weighted_sum = 0.0f32;
+			for neuron_idx in cluster_idx * neurons_per_cluster..(cluster_idx + 1) * neurons_per_cluster
 			{
-				let start_neuron = cluster_idx * neurons_per_cluster;
-				let mut weighted_sum = 0.0f32;
-
-				for neuron_offset in 0..neurons_per_cluster
-				{
-					let neuron_idx = start_neuron + neuron_offset;
-					let conn_start = neuron_idx * bits_per_neuron;
-					let connections = &connections_flat[conn_start..conn_start + bits_per_neuron];
-					let address = compute_address(input_bits, connections, bits_per_neuron);
-					let cell_value = read_cell(memory_words, neuron_idx, address, words_per_neuron);
-
-					weighted_sum += QUAD_WEIGHTS[cell_value as usize];
-				}
-
-				ex_probs[cluster_idx] = weighted_sum / neurons_per_cluster as f32;
+				let conn_start = neuron_idx * bits_per_neuron;
+				let connections = &connections_flat[conn_start..conn_start + bits_per_neuron];
+				let address = compute_address(input_bits, connections, bits_per_neuron);
+				let cell_value = read_cell(memory_words, neuron_idx, address, words_per_neuron);
+				weighted_sum += ram_core::neuron_memory::cell_to_weight(cell_value, memory_mode, empty_value);
 			}
-		});
-
+			ex_probs[cluster_idx] = weighted_sum / neurons_per_cluster as f32;
+		}
+	});
 	probs
 }
 
