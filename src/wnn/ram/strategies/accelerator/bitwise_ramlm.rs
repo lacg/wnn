@@ -3290,7 +3290,7 @@ mod binary_mode_tests
 		assert_eq!(dense.read_cell(0, 7), TRUE);
 		let sparse = ClusterStorage::new(
 			2,
-			40,
+			32, // the widest sparse LM cluster (IDS-81 guard refuses > 32)
 			0, // force sparse
 			ram_core::neuron_memory::empty_word_for_mode(MB),
 			MB,
