@@ -1,0 +1,7 @@
+run           L  yaw cells  all cells yaw conn | yaw-bank connection share % :    gyro_z   yaw_err yaw_err_i  yaw_lead     tgt_y     abp_r     abp_p | yaw neurons with >=1 lead bit %
+l2b_s1        64      71287     390484     1536 |                                  27.3      28.3      27.7       nan       0.0       0.8       0.9 | nan
+lead_s1       104     106826     600358     2496 |                                  20.9      20.7      20.6      21.2       0.0       1.0       0.7 | 100
+l2b_s2        64      69887     402025     1536 |                                  28.5      27.1      27.7       nan       0.0       0.7       0.6 | nan
+lead_s2        64      66092     358854     1536 |                                  21.3      20.0      20.1      21.9       0.0       0.7       0.8 | 100
+l2b_s3        64      69711     381492     1536 |                                  28.1      28.6      26.6       nan       0.0       1.1       0.8 | nan
+lead_s3       120     125844     604004     2880 |                                  20.4      20.8      21.4      20.8       0.0       0.8       0.8 | 100

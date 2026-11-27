@@ -1,0 +1,12 @@
+unit 163226054: scorer err 0.853 steady 0.2801 | replay steady 0.2793 err 0.853
+unit 163226055: scorer err 0.928 steady 0.2295 | replay steady 0.2294 err 0.928
+unit 163226056: scorer err 0.912 steady 0.2642 | replay steady 0.2650 err 0.912
+unit 163226057: scorer err 0.927 steady 0.2400 | replay steady 0.2412 err 0.927
+unit 163226058: scorer err 0.894 steady 0.3076 | replay steady 0.3064 err 0.893
+unit 163226059: scorer err 0.773 steady 0.1801 | replay steady 0.1801 err 0.773
+unit 163226060: scorer err 0.920 steady 0.2159 | replay steady 0.2166 err 0.920
+unit 163226061: scorer err 0.925 steady 0.2737 | replay steady 0.2742 err 0.925
+unit 163226062: scorer err 0.921 steady 0.2447 | replay steady 0.2439 err 0.921
+unit 163226063: scorer err 0.825 steady 0.2211 | replay steady 0.2208 err 0.825
+saved /tmp/ctrl80/trace81_l2b_s1.npz (2000000, 26) [64, 0.5, 0.7, 2.0]
+nice -n 15 $P trace81.py $tag /tmp/ctrl80/trace81_${short}_s$s.npz 10  14.78s user 0.26s system 99% cpu 15.101 total

@@ -1,0 +1,75 @@
+loaded l2b_s1: 1000 VAL episodes, yaw levels 64, lead input False
+loaded lead_s1: 1000 VAL episodes, yaw levels 104, lead input True
+
+== A. HOLD (t >= 1.6 s), VAL, decision ticks for codes / setpoint
+                                                                l2b_s1               lead_s1
+lead code occupancy % (codes 0..8)              0.0 0.1 2.5 11.1 72.7 10.7 2.8 0.1 0.00.1 1.7 4.8 10.1 66.8 10.9 4.6 1.0 0.1
+  centre code (|lead|<0.40) %                                     72.7                  66.8
+lead-code toggles /s (recomputed, measured gz)                    11.3                  13.9
+  same with TRUE gz (noise-free)                                   6.7                   9.6
+yaw_err code toggles /s                                           10.6                  12.2
+gyro_z code toggles /s                                            36.8                  35.4
+yaw address toggles /s (ye x gz)                                  44.8                  45.2
+yaw address toggles /s (ye x gz x lead)                           49.7                  50.9
+sd(tau * gz noise) deg                                           0.061                 0.061
+sd(tau * true gz) deg                                            0.302                 0.432
+sd(lead - yaw_err) deg                                           0.308                 0.437
+held sp_r within-ep SD rad/s                                    0.1154                0.1428
+per-ep trim |mean sp_r| rad/s                                   0.1403                0.1446
+median nonzero |d sp_r| rad/s                                   0.0184                0.0228
+hold |yaw| deg                                                   0.197                 0.221
+hold yaw within-ep SD deg                                        0.159                 0.191
+per-ep |mean hold yaw| (offset) deg                              0.133                 0.120
+per-UNIT |mean hold yaw| deg                                     0.057                 0.088
+hold yaw osc Hz (zero crossings)                                  2.56                  2.85
+hold yaw FFT peak Hz (1.2-2 s)                                    1.25                  2.50
+wcorr(sp_r, yaw_err)                                            +0.589                +0.764
+wcorr(sp_r, lead code)                                          +0.611                +0.730
+wcorr(sp_r, lead value)                                         +0.710                +0.767
+wcorr(sp_r, -gyro_z)                                            +0.469                +0.455
+wcorr(sp_r, -gz noise)                                          +0.107                +0.114
+wcorr(sp_r, yaw_err_i)                                          -0.049                -0.174
+corr(per-ep trim, per-ep offset)                                -0.295                -0.632
+offset per trim, per-ep fit deg/(rad/s)                         -0.288                -0.516
+offset per trim, per-UNIT fit deg/(rad/s)                       -0.231                -0.481
+per-UNIT |mean sp_r| (trim) rad/s                               0.1402                0.1436
+
+== B. TRANSIENT, VAL: mean |yaw| deg 0-0.6 s / pre-hold 0-1.6 s / whole
+   l2b_s1               1.179 / 0.652 / 0.561
+   lead_s1              1.047 / 0.580 / 0.509
+
+== C. CANDIDATE PRE-CHECKS (re-coding the flown traces): hold toggles/s | hold centre-code % | braking-cell acc of sign(yaw_err +100 ms), cell1 / cell2 (today's codes in brackets)
+-- l2b_s1  (today ye x gz: cell1 80.4 %, cell2 65.3 %)
+   shipped tau .10, +-.40                       11.3 /s | centre  72.7 % |  86.6 /  78.6 %
+   (a) inner cut +-0.80 (.8/1.35/2.25/3.2)       2.4 /s | centre  94.5 % |  82.9 /  58.9 %
+   (a) inner cut +-0.60 (.6/1.0/1.6/2.4)         5.7 /s | centre  87.4 % |  84.7 /  67.0 %
+   (b) gate |ye|<.40 & |gz|<.05 -> ye           10.0 /s | centre  78.3 % |  86.6 /  78.6 %
+   (b') gate |ye|<.80 -> ye                      2.0 /s | centre  89.7 % |  86.6 /  62.3 %
+   (c) gz LPF 20 Hz                              7.5 /s | centre  71.9 % |  85.8 /  76.1 %
+   (c) gz LPF 10 Hz                              7.5 /s | centre  71.2 % |  84.8 /  70.8 %
+   (d) tau .05                                   5.2 /s | centre  84.1 % |  81.8 /  76.0 %
+   (d) tau .05, cuts x0.6                       12.7 /s | centre  61.9 % |  84.6 /  75.9 %
+   (f) rate deadband |gz|-.05                    4.6 /s | centre  85.5 % |  81.9 /  69.8 %
+-- lead_s1  (today ye x gz: cell1 78.2 %, cell2 67.5 %)
+   shipped tau .10, +-.40                       13.9 /s | centre  66.8 % |  83.9 /  76.4 %
+   (a) inner cut +-0.80 (.8/1.35/2.25/3.2)       4.7 /s | centre  87.8 % |  81.1 /  56.2 %
+   (a) inner cut +-0.60 (.6/1.0/1.6/2.4)         8.2 /s | centre  80.3 % |  82.5 /  68.7 %
+   (b) gate |ye|<.40 & |gz|<.05 -> ye           12.3 /s | centre  71.6 % |  83.9 /  76.4 %
+   (b') gate |ye|<.80 -> ye                      3.8 /s | centre  85.7 % |  83.9 /  60.5 %
+   (c) gz LPF 20 Hz                             10.3 /s | centre  66.4 % |  82.4 /  70.8 %
+   (c) gz LPF 10 Hz                             10.3 /s | centre  65.8 % |  81.3 /  67.4 %
+   (d) tau .05                                   6.8 /s | centre  78.6 % |  82.1 /  75.5 %
+   (d) tau .05, cuts x0.6                       15.1 /s | centre  56.8 % |  83.2 /  74.9 %
+   (f) rate deadband |gz|-.05                    7.2 /s | centre  78.7 % |  81.9 /  61.7 %
+
+== D. KEY SETS for candidate (e) (which yaw-family inputs the yaw bank addresses). Transient 0-0.6 s: acc sign(yaw_err +100 ms) cell1 / cell2 / all ticks %, RMSE yaw_err(+100 ms) deg; hold: RMSE of the flown sp_r rad/s and of hold yaw deg from key x yaw_err_i code (leave-one-unit-out)
+-- l2b_s1
+   ye x gz (l2b)                   80.4 /  65.3 /  87.1 % | 0.517 deg | hold sp_r 0.1048 | hold yaw 0.099 | hold address toggles 44.8 /s
+   ye x gz x lead (flown arm)      86.6 /  78.6 /  88.8 % | 0.411 deg | hold sp_r 0.1098 | hold yaw 0.089 | hold address toggles 49.7 /s
+   gz x lead (drop yaw_err)        86.6 /  78.6 /  86.0 % | 0.444 deg | hold sp_r 0.1211 | hold yaw 0.187 | hold address toggles 43.0 /s
+   ye x lead (drop gyro_z)         86.6 /  78.6 /  88.6 % | 0.419 deg | hold sp_r 0.1257 | hold yaw 0.095 | hold address toggles 20.2 /s
+-- lead_s1
+   ye x gz (l2b)                   78.2 /  67.5 /  83.5 % | 0.493 deg | hold sp_r 0.1389 | hold yaw 0.121 | hold address toggles 45.2 /s
+   ye x gz x lead (flown arm)      83.9 /  76.4 /  85.1 % | 0.424 deg | hold sp_r 0.1276 | hold yaw 0.104 | hold address toggles 50.9 /s
+   gz x lead (drop yaw_err)        83.9 /  76.4 /  81.7 % | 0.461 deg | hold sp_r 0.1406 | hold yaw 0.189 | hold address toggles 43.0 /s
+   ye x lead (drop gyro_z)         83.9 /  76.4 /  84.6 % | 0.434 deg | hold sp_r 0.1338 | hold yaw 0.117 | hold address toggles 23.8 /s
