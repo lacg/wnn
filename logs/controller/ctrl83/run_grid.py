@@ -1,7 +1,8 @@
 """CTRL-83 stress panel runner: every (controller x cell) of cells.py, resumable, cached.
 
   run_grid.py [--cells c1,c2] [--controllers k1,k2] [--no-row-b] [--list]
-  CTRL-87 readout: --controllers l2bnm_s1,... (cells.EXTRA_WNN) --no-row-b --cells nom,wear30,mass25,lag30,lag10,noise2
+  CTRL-87 readout: --controllers l2bnm_s1,... (cells.EXTRA_WNN) --no-row-b --cells nom,all
+  Reported cells (Amendment 2, Luiz 28/11): cells.PRIMARY = nom, all. The one-factor cells are diagnostic.
 
 Order is INTERLEAVED (prereg §5): cell-major in cells.CELLS order (primary cells first),
 and inside a cell every controller (5 WNN seeds, rows A/C, PID, LQI, then row B), so a

@@ -217,7 +217,11 @@ import os
 # actuator twin stay at motor_lag_s) and on score_controllers_cpu/metal (the GA SEARCH pools,
 # drawn host-side; Metal FC_EP_LAG(8) + a 7-float buffer-30 record). Carried by
 # EpisodeConfig.train_lag_kwargs(); the wear spread (--train-motor-asym-mag) is Python-only.
-EXPECTED_ABI = 68
+# ABI 69 (28/11/2026, Luiz, CTRL-83 cell `all`; additive, default = ABI 68 bit-identical):
+# train_motor_lag_range=None on score_classical_baseline too — the rivals fly the WNN scorers'
+# per-episode plant-lag draw. Carried at report time by EpisodeConfig.stress_kwargs()
+# (stress_motor_lag_range), never by the trainer.
+EXPECTED_ABI = 69
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

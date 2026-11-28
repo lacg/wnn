@@ -538,6 +538,12 @@ class EpisodeConfig:
 	# weather seed (Rust train_lag_range.rs). The teachers and the WNN's actuator twin keep the
 	# nominal motor_lag_s (the design lag); TEST / VAL / report fly motor_lag_s.
 	train_motor_lag_range: tuple | None = None
+	# --- CTRL-83 cell `all` (ABI 69, Luiz 28/11 — the single joint-OOD headline): a REPORT-time
+	# per-episode plant-lag draw (lo, hi) s. The SAME Rust draw as train_motor_lag_range
+	# (T_e from the episode's weather seed), but handed by stress_kwargs() to every SCORER —
+	# both WNN scorers and score_classical_baseline — never to the trainer. Every controller's
+	# model (the WNN twin, the rivals' designs) stays at motor_lag_s. None = off (byte-identical).
+	stress_motor_lag_range: tuple | None = None
 
 	def train_asym_mag(self) -> float:
 		"""The TRAINING plant's wear magnitude: --train-motor-asym-mag when set, else the
@@ -596,6 +602,17 @@ class EpisodeConfig:
 			out["payload_mass_scale"] = float(self.payload_mass_scale)
 		elif float(self.payload_mass_scale) != 1.0:
 			raise ValueError("EpisodeConfig.payload_mass_scale needs payload_step_s (the time of the step)")
+		r = self.stress_motor_lag_range
+		if r is not None:
+			lo, hi = float(r[0]), float(r[1])
+			if not (math.isfinite(lo) and math.isfinite(hi) and 0.0 < lo <= hi):
+				raise ValueError(f"EpisodeConfig.stress_motor_lag_range must be finite with 0 < lo <= hi (s), got ({lo}, {hi})")
+			if not float(self.motor_lag_s) > 0.0 or float(self.motor_lag_down_s) > 0.0 or float(self.pwm_min) > 0.0:
+				raise ValueError("EpisodeConfig.stress_motor_lag_range needs a symmetric, floor-free, lag-on actuator")
+			if self.disturbance is None:
+				raise ValueError("EpisodeConfig.stress_motor_lag_range needs a disturbance (its draw is keyed on the weather seed)")
+			# ONE Rust kwarg for the per-episode lag on all three scorers (ABI 68 WNN, ABI 69 rivals).
+			out["train_motor_lag_range"] = (lo, hi)
 		if out and not self.translation:
 			raise ValueError("EpisodeConfig.model_motor_lag_s / payload_step_s require translation=True")
 		return out

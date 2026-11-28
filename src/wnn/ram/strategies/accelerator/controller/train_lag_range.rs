@@ -16,7 +16,12 @@
 //! ep_seed, the scorers' disturbance_episode_seed(dist_seed, e) — so it is a pure function of
 //! (seed, episode), never touches a loop rng (the draw order of everything else is unchanged),
 //! and is computed ONCE on the host for both scorers: the CPU rollout and the Metal kernel
-//! (buffer 30, 7th float) read the same f32 per episode. lo == hi == motor_lag_s is the fixed
+//! (buffer 30, 7th float) read the same f32 per episode.
+//!
+//! ABI 69 (CTRL-83 cell `all`, Luiz 28/11): the same draw is also a REPORT-time stress — the
+//! joint-OOD stress cell passes the range to both WNN scorers AND score_classical_baseline (the
+//! rivals, the row-B probe), so every controller flies the identical per-episode plant lag.
+//! Outside that cell the TEST/VAL/report sentence below still holds. lo == hi == motor_lag_s is the fixed
 //! lag bit for bit (pinned by ctrl87_train_spread_tests).
 //!
 //! Scope: a symmetric, floor-free actuator (the cf21 lineage); the CTRL-86 extended actuator

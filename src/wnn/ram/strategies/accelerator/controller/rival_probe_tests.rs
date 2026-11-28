@@ -38,7 +38,7 @@ fn small(teacher: u8, use_est: bool, probe: Option<&mut RivalProbe>) -> pyo3::Py
 		2.0, 1.0, 0.25,
 		s1.init_x.clone(), s1.init_y.clone(), 1.0, 1.0, 0.5236,
 		0.20, true, 0.0, true, 10,
-		0, (0.0, 0.0), crate::stress_opts::StressKwargs::OFF, // alt_integral off
+		0, (0.0, 0.0), crate::stress_opts::StressKwargs::OFF, None, // alt_integral off; no per-episode lag
 		probe,
 	)
 	.map(crate::dagger_train::rival_first8)
@@ -182,6 +182,16 @@ impl Unit
 		}
 	}
 
+	/// CTRL-83 cell `all` (ABI 69): the per-episode plant-lag range `train_motor_lag_range lo hi`,
+	/// present only when the Python row set it — every older fixture flies the fixed lag.
+	fn ep_lag_range(&self) -> Option<(f32, f32)>
+	{
+		self.f.get("train_motor_lag_range").map(|v| {
+			assert_eq!(v.len(), 2, "train_motor_lag_range: expected lo hi");
+			(v[0] as f32, v[1] as f32)
+		})
+	}
+
 	fn episodes(&self) -> usize
 	{
 		self.v("init_qs").len() / 4
@@ -249,7 +259,7 @@ impl Unit
 			self.s("rotor_drag") as f32,
 			self.b("att_err_tilt_ref"),
 			self.s("ctbr_outer_hold") as usize,
-			tw.alt_integral, (0.0, 0.0), self.stress_kw(),
+			tw.alt_integral, (0.0, 0.0), self.stress_kw(), self.ep_lag_range(),
 			probe,
 		)
 		.map(crate::dagger_train::rival_first8)

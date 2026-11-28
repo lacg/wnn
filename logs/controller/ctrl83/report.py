@@ -28,7 +28,7 @@ def main():
 		bj = os.path.join(DATA, f"mpcofB__{cid}.json")
 		if not wnn and not riv and not os.path.exists(bj):
 			continue
-		print(f"\n### {cid} — {lab} ({'primary' if prim else 'secondary'}) — TEST, 35 units x 100 eps")
+		print(f"\n### {cid} — {lab} ({'reported' if prim else 'diagnostic, not reported'}) — TEST, 35 units x 100 eps")
 		print(f"    {'controller':16s} | {'stable %':>9s} | {'err °':>12s} | {'steady °':>12s} | {'pos m':>13s} | {'fails':>11s} | {'p99.9 °':>8s} | {'p99 °':>6s} | {'worst unit °':>12s}")
 		print("    " + "-" * 16 + "-+" + "-+".join("-" * w for w in (10, 13, 13, 14, 12, 9, 7, 13)))
 		if wnn:

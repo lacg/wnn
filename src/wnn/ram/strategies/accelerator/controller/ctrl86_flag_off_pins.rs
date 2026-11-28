@@ -215,6 +215,18 @@ pub(crate) fn rival_kw(
 	kw: crate::stress_opts::StressKwargs,
 ) -> pyo3::PyResult<(f64, f64, f64, f64, f64, f64, f64, f64)>
 {
+	rival_kw_lag(teacher, s1, lag, kw, None)
+}
+
+/// rival_kw with the CTRL-83 cell-`all` per-episode plant-lag range (ABI 69; None ⇒ rival_kw).
+pub(crate) fn rival_kw_lag(
+	teacher: u8,
+	s1: &Stage1Cfg,
+	lag: f32,
+	kw: crate::stress_opts::StressKwargs,
+	range: Option<(f32, f32)>,
+) -> pyo3::PyResult<(f64, f64, f64, f64, f64, f64, f64, f64)>
+{
 	let (q0, w0) = ics();
 	crate::dagger_train::score_classical_baseline(
 		teacher, q0, w0, 600, 5.0,
@@ -226,7 +238,7 @@ pub(crate) fn rival_kw(
 		2.0, 1.0, 0.25,
 		s1.init_x.clone(), s1.init_y.clone(), 1.0, 1.0, 0.5236,
 		lag, true, ROTOR_DRAG, true, if teacher == 3 { 0 } else { 10 }, 0, None, s1.plant.motor_lag_down_s, s1.plant.pwm_min,
-		kw.model_motor_lag_s, kw.payload_step_s, kw.payload_mass_scale,
+		kw.model_motor_lag_s, kw.payload_step_s, kw.payload_mass_scale, range,
 	)
 	.map(crate::dagger_train::rival_first8)
 }
