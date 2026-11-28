@@ -15,6 +15,7 @@ mod design_model; // CTRL-83 D1 (ABI 66): the controllers' design-time actuator 
 mod payload_step; // CTRL-83 D3 (ABI 66): mid-episode payload (mass) step
 mod stress_opts; // CTRL-83 (ABI 66): D1 + D3 as ONE scorer-side value on Stage1Cfg
 mod train_lag_range; // CTRL-87 (ABI 68): per-episode TRAINING motor-lag spread (trainer + search scorers)
+mod plant_jitter; // CTRL-89 (ABI 70): per-episode plant inertia scale + control latency (stress cell + training spread)
 mod altitude_integrator; // L3 (ABI 51): altitude integrator in front of the altitude PD (--alt-integral)
 mod altitude_pd; // scope C stage 1: outer altitude loop handing a collective to a teacher
 mod box_qp; // exact box-QP solver for the MPC teachers (PDAS + primal active-set)
@@ -111,6 +112,8 @@ mod ctrl86_actuator_tests; // CTRL-86 S1/S2 (ABI 65): asymmetric lag + idle floo
 mod ctrl83_flag_off_pins; // CTRL-83 (ABI 66): every stress/info flag at its default is the ABI-65 cf21 rollout
 #[cfg(test)]
 mod ctrl87_train_spread_tests; // CTRL-87 (ABI 68): training lag spread — [0.20,0.20] pin, hosts, CPU/GPU parity, draw, nominal twin
+#[cfg(test)]
+mod ctrl89_plant_jitter_tests; // CTRL-89 (ABI 70): plant inertia + control latency — zeros pin, trivial-draw pin, CPU/GPU parity, 1-step delay, nominal models
 #[cfg(test)]
 mod ctrl83_stress_tests; // CTRL-83 (ABI 66): D1 mismatch keeps the models nominal, D2 anchor, D3 payload CPU/GPU parity
 #[cfg(test)]
@@ -711,7 +714,19 @@ mod metal_controller;
 ///   words). The teachers and the student's actuator twin stay at the nominal motor_lag_s.
 ///   TEST / VAL / report calls never pass it. Training wear spread (--train-motor-asym-mag)
 ///   is Python-only (dist_motor_asym_mag already takes any value in [0, 1)).
-pub const ABI_VERSION: u32 = 68;
+/// - 70 (28/11/2026, Luiz, CTRL-89; additive, default = ABI 68 bit-identical; 69 is claimed
+///   by another branch): per-episode plant INERTIA scaling and CONTROL LATENCY
+///   (plant_jitter.rs) for the combined OOD stress cell and the training spread.
+///   `inertia_jitter=0.0, control_latency_ms=None` on score_controllers_cpu /
+///   score_controllers_metal / score_classical_baseline (the same host-side draws from
+///   disturbance_episode_seed(dist_seed, e) on counter_rng layers 9 / 10, Stage1Cfg.ep_plant;
+///   Metal: FC_EP_JIT(9) + a [s_e, n_e] tail on buffer 30's record) and
+///   `train_inertia_jitter=0.0, train_latency_ms=None` on RewardGatedConfigPacked
+///   (arm_cfg_disturbance). Inertia: one JOINT diagonal scale s_e ~ U(1 − j, 1 + j) on the
+///   plant only (every design model keeps the nominal inertia). Latency: n_e physics steps
+///   (uniform integers in [round(lo/dt), round(hi/dt)], ≤ 32) between every controller's
+///   recorded command and the actuator. Zeros resolve to OFF on every host.
+pub const ABI_VERSION: u32 = 70;
 
 /// ABI 61: the precision of the WNN's own attitude estimator + heading ("f32"; a wheel
 /// without this constant runs the f64 estimator). Read by scripts/export_controller_c.py.
@@ -1394,6 +1409,7 @@ fn recorder_stage1_cfg(
 				alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 				stress: crate::stress_opts::StressOpts::OFF,
 				ep_motor_lag: Vec::new(),
+				ep_plant: crate::plant_jitter::EpisodePlant::OFF,
 			};
 			cfg
 				.validate(n_eps)

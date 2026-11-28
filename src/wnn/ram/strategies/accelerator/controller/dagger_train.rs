@@ -439,6 +439,15 @@ pub struct RewardGatedConfigPacked
 	/// stay at the nominal `motor_lag_s`. None ⇒ the fixed lag, the ABI-66 trainer.
 	#[pyo3(get)]
 	pub train_motor_lag_range: Option<(f32, f32)>,
+	/// CTRL-89 (ABI 70, OPT-IN): the TRAINING plant jitter — every training episode's plant
+	/// flies inertia × s_e, s_e ~ U(1 − j, 1 + j) (joint diagonal), and a command delay of
+	/// n_e steps drawn from `train_latency_ms` (lo, hi) ms, both from its weather seed
+	/// (plant_jitter.rs, armed in arm_cfg_disturbance). Teachers / twins stay nominal.
+	/// 0.0 / None ⇒ the ABI-68 trainer.
+	#[pyo3(get)]
+	pub train_inertia_jitter: f32,
+	#[pyo3(get)]
+	pub train_latency_ms: Option<(f32, f32)>,
 }
 
 #[pymethods]
@@ -489,6 +498,7 @@ impl RewardGatedConfigPacked
 		motor_lag_down_s = 0.0, pwm_min = 0.0,
 		anchor_nominal_mass = false,
 		train_motor_lag_range = None,
+		train_inertia_jitter = 0.0, train_latency_ms = None,
 ))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -585,6 +595,8 @@ impl RewardGatedConfigPacked
 		pwm_min: f32,
 		anchor_nominal_mass: bool,
 		train_motor_lag_range: Option<(f32, f32)>,
+		train_inertia_jitter: f32,
+		train_latency_ms: Option<(f32, f32)>,
 	) -> PyResult<Self>
 	{
 		let cfg = Self {
@@ -681,6 +693,8 @@ impl RewardGatedConfigPacked
 			pwm_min,
 			anchor_nominal_mass,
 			train_motor_lag_range,
+			train_inertia_jitter,
+			train_latency_ms,
 		};
 		if anchor_nominal_mass && !translation
 		{
@@ -690,6 +704,7 @@ impl RewardGatedConfigPacked
 		}
 		cfg.validate_abi32().map_err(pyo3::exceptions::PyValueError::new_err)?;
 		cfg.validate_lag_range().map_err(pyo3::exceptions::PyValueError::new_err)?;
+		cfg.validate_plant_jitter().map_err(pyo3::exceptions::PyValueError::new_err)?;
 		cfg.validate_alt_integral().map_err(pyo3::exceptions::PyValueError::new_err)?;
 		cfg.write_vote_share().map_err(pyo3::exceptions::PyValueError::new_err)?;
 		cfg.validate_init_vxy().map_err(pyo3::exceptions::PyValueError::new_err)?;
@@ -733,6 +748,20 @@ impl RewardGatedConfigPacked
 				"RewardGatedConfigPacked",
 			),
 		}
+	}
+
+	/// CTRL-89 (ABI 70): the training plant jitter, validated (OFF ⇒ the ABI-68 trainer).
+	pub(crate) fn plant_jitter(&self) -> crate::plant_jitter::PlantJitter
+	{
+		crate::plant_jitter::PlantJitter::new(self.train_inertia_jitter, self.train_latency_ms, self.dt as f32)
+			.expect("RewardGatedConfigPacked: train_inertia_jitter / train_latency_ms validated at construction")
+	}
+
+	/// CTRL-89: the jitter needs translation and the weather (its draws' seed).
+	pub(crate) fn validate_plant_jitter(&self) -> Result<(), String>
+	{
+		crate::plant_jitter::PlantJitter::new(self.train_inertia_jitter, self.train_latency_ms, self.dt as f32)?
+			.require_host(self.translation, self.dist_enabled, "RewardGatedConfigPacked")
 	}
 
 	/// L3 (ABI 51): the altitude integrator needs the altitude loop it sits in front of
@@ -1668,6 +1697,10 @@ pub(crate) fn arm_cfg_disturbance(sim: &mut AttitudeSim, cfg: &RewardGatedConfig
 	{
 		sim.set_motor_lag(r.draw(ep_seed));
 	}
+	// CTRL-89 (ABI 70): this training episode's plant inertia scale + control latency from
+	// the same weather seed. The teachers (AirframeRs, nominal inertia) and the student's
+	// twins never read the sim's inertia or see the delayed command. OFF calls nothing.
+	cfg.plant_jitter().arm(sim, ep_seed);
 }
 
 fn teacher_default(id: u8, cfg: &RewardGatedConfigPacked) -> Teacher
@@ -3994,6 +4027,11 @@ pub fn eval_ensemble_closed_loop(
 	// the plant's lag, ABI 65 — D1); payload_step_s / payload_mass_scale = the mid-episode
 	// payload step the WNN scorers fly identically (None ⇒ off — D3).
 	model_motor_lag_s = None, payload_step_s = None, payload_mass_scale = 1.0,
+	// CTRL-89 (ABI 70), translation + weather only, default-inert: the per-episode joint
+	// plant-inertia scale and control latency the WNN scorers fly from the SAME kwargs
+	// (plant_jitter.rs; drawn from dist_seed per episode). The rival's design (af) keeps
+	// the nominal inertia; the delay is in the plant, after the rival's last_applied.
+	inertia_jitter = 0.0, control_latency_ms = None,
 	))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_classical_baseline(
@@ -4056,6 +4094,8 @@ pub fn score_classical_baseline(
 	model_motor_lag_s: Option<f32>,
 	payload_step_s: Option<f32>,
 	payload_mass_scale: f32,
+	inertia_jitter: f32,
+	control_latency_ms: Option<(f32, f32)>,
 ) -> PyResult<(f64, f64, f64, f64, f64, f64, f64, f64, f64, f64)>
 {
 	let mut probe = axis_out.map(|_| crate::rival_probe::RivalProbe::measure_only());
@@ -4116,6 +4156,7 @@ pub fn score_classical_baseline(
 		alt_integral,
 		(motor_lag_down_s, pwm_min),
 		stress_kw,
+		(inertia_jitter, control_latency_ms),
 		probe.as_mut(),
 	)?;
 	if let (Some(list), Some(p)) = (axis_out, probe.as_ref())
@@ -4199,6 +4240,8 @@ pub(crate) fn score_classical_baseline_probed(
 	actuator_extras: (f32, f32),
 	// CTRL-83 (ABI 66): design-model lag + payload step; StressKwargs::OFF ⇒ the ABI-65 row.
 	stress_kw: crate::stress_opts::StressKwargs,
+	// CTRL-89 (ABI 70): (inertia_jitter, control_latency_ms); (0.0, None) ⇒ the ABI-68 row.
+	jitter_kw: (f32, Option<(f32, f32)>),
 	mut probe: Option<&mut crate::rival_probe::RivalProbe>,
 ) -> PyResult<(f64, f64, f64, f64, f64, f64, f64, f64, f64, f64)>
 {
@@ -4238,6 +4281,18 @@ pub(crate) fn score_classical_baseline_probed(
 		));
 	}
 	let num_episodes = init_qs.len() / 4;
+	// CTRL-89: the SAME per-episode draws the WNN scorers make from the same kwargs.
+	let ep_plant = crate::plant_jitter::scorer_episode_plant(
+		jitter_kw.0,
+		jitter_kw.1,
+		af_dt,
+		translation,
+		dist_enabled,
+		dist_seed,
+		num_episodes,
+		"score_classical_baseline",
+	)
+	.map_err(pyo3::exceptions::PyValueError::new_err)?;
 	// SCOPE C STAGE 1 (14/08/2026): fly the rival on the SAME randomized plant
 	// the WNN flies — per-episode mass draws, altitude offsets, the vehicle
 	// allowed to fall — with the SAME cascade DAgger trains with (attitude
@@ -4265,6 +4320,7 @@ pub(crate) fn score_classical_baseline_probed(
 			alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 			stress,
 			ep_motor_lag: Vec::new(),
+			ep_plant,
 		};
 		cfg
 			.validate(num_episodes)
@@ -4452,6 +4508,8 @@ pub(crate) fn score_classical_baseline_probed(
 			{
 				sim.set_horizontal_state(cfg.init_x[ep], cfg.init_y[ep], 0.0, 0.0);
 			}
+			// CTRL-89: this episode's plant inertia scale + control latency (cpu_score twin).
+			cfg.ep_plant.apply(&mut sim, ep);
 		}
 		// Warm-start from the episode's initial attitude (converged-filter
 		// assumption; the same yaw anchor the WNN gets at reset).
@@ -5057,6 +5115,7 @@ mod rival_plant_tests
 			0, None, // alt_integral off
 			0.0, 0.0, // CTRL-86: actuator extras off
 			None, None, 1.0, // CTRL-83: stress off
+			0.0, None, // CTRL-89: jitter off
 		)
 		.map(rival_first8)
 		.expect("scorer must accept a well-formed plant")
@@ -5267,6 +5326,8 @@ mod d0_hover_anchor_tests
 			pwm_min: 0.0,
 			anchor_nominal_mass: false,
 			train_motor_lag_range: None,
+			train_inertia_jitter: 0.0,
+			train_latency_ms: None,
 		}
 	}
 
@@ -5802,6 +5863,8 @@ mod motor_lag_axis_f_tests
 			pwm_min: 0.0,
 			anchor_nominal_mass: false,
 			train_motor_lag_range: None,
+			train_inertia_jitter: 0.0,
+			train_latency_ms: None,
 		}
 	}
 
@@ -5885,6 +5948,7 @@ mod motor_lag_axis_f_tests
 			false, 0.0, vec![], vec![], vec![], vec![],
 			2.0, 1.0, 0.25, vec![], vec![], 1.0, 1.0, 0.5236,
 			motor_lag_s, false, 0.0, false, 0, 0, None, 0.0, 0.0, None, None, 1.0, // CTRL-83: stress off
+			0.0, None, // CTRL-89: jitter off
 		)
 		.map(rival_first8)
 		.expect("baseline scores")

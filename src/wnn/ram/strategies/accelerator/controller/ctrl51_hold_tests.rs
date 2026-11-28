@@ -34,7 +34,7 @@ fn rival(teacher: u8, use_est: bool, hold: usize, steps: usize, translation: boo
 		2.0, 1.0, 0.25,
 		v(&s1.init_x), v(&s1.init_y), 1.0, 1.0, 0.5236,
 		0.20, false, 0.0, translation, hold,
-		0, (0.0, 0.0), crate::stress_opts::StressKwargs::OFF,
+		0, (0.0, 0.0), crate::stress_opts::StressKwargs::OFF, (0.0, None),
 		probe,
 	)
 	.expect("rival must score")
@@ -82,6 +82,7 @@ fn rival_first_eight_values_are_the_pinned_row()
 			2.0, 1.0, 0.25,
 			s1.init_x.clone(), s1.init_y.clone(), 1.0, 1.0, 0.5236,
 			0.20, false, 0.0, true, 0, 0, None, 0.0, 0.0, None, None, 1.0, // CTRL-83: stress off
+			0.0, None, // CTRL-89: jitter off
 		)
 		.expect("rival must score");
 		assert_eq!(format!("{:?}", crate::dagger_train::rival_first8(now)), format!("{pinned:?}"), "teacher {teacher}");

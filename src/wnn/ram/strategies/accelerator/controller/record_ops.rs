@@ -155,7 +155,9 @@ impl Driver<'_>
 		{
 			// CTRL-87 (ABI 68): a training lag spread also needs the training weather — its
 			// draw is keyed on the episode's weather seed (arm_cfg_disturbance).
-			if c.cfg.dist_enabled && (c.cfg.dist_motor_asym_mag > 0.0 || c.cfg.train_motor_lag_range.is_some())
+			// CTRL-89 (ABI 70): so does the training plant jitter (inertia / latency).
+			if c.cfg.dist_enabled
+				&& (c.cfg.dist_motor_asym_mag > 0.0 || c.cfg.train_motor_lag_range.is_some() || !c.cfg.plant_jitter().is_off())
 			{
 				let seed = crate::controller::disturbance_episode_seed(RECORDER_WEATHER_SALT, ep as u64);
 				crate::dagger_train::arm_cfg_disturbance(sim, c.cfg, seed);
@@ -528,6 +530,7 @@ mod tests
 			alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 			stress: crate::stress_opts::StressOpts::OFF,
 			ep_motor_lag: Vec::new(),
+			ep_plant: crate::plant_jitter::EpisodePlant::OFF,
 		};
 		cfg.validate(eps).expect("fixture must be well-formed");
 

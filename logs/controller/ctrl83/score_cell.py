@@ -51,13 +51,17 @@ PLANT_MAP = {
 	                  "translation", "imu_specific_force", "rotor_drag", "att_err_tilt_ref", "pos_zeta",
 	                  "pos_max_tilt_rad", "alt_integral",
 	                  # ABI 66 (CTRL-83 D1/D3): the design lag and the payload step reach both sides.
-	                  "model_motor_lag_s", "payload_step_s", "payload_mass_scale")},
+	                  "model_motor_lag_s", "payload_step_s", "payload_mass_scale",
+	                  # ABI 70 (CTRL-89): the per-episode joint inertia scale + control latency. Both
+	                  # sides draw them from dist_seed per episode, so equal kwargs = equal draws.
+	                  "inertia_jitter", "control_latency_ms")},
 	"target_altitude": "s1_target_altitude", "init_z": "s1_init_z", "init_vz": "s1_init_vz",
 	"ep_mass": "s1_mass", "ep_collective_frac": "s1_collective_frac", "init_x": "s2_init_x",
 	"init_y": "s2_init_y", "pos_omega": "pos_omega_n",
 }
 # Which WNN kwarg each axis must move (G3).
 AXIS_KW = {"wear": "dist_motor_asym", "mass": "ep_mass", "lag": "motor_lag_s", "noise": "dist_gyro_sigma",
+           "inertia": "inertia_jitter", "latency": "control_latency_ms",  # CTRL-89 (ABI 70)
            "payload": "payload_step_s"}
 
 

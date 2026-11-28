@@ -217,7 +217,13 @@ import os
 # actuator twin stay at motor_lag_s) and on score_controllers_cpu/metal (the GA SEARCH pools,
 # drawn host-side; Metal FC_EP_LAG(8) + a 7-float buffer-30 record). Carried by
 # EpisodeConfig.train_lag_kwargs(); the wear spread (--train-motor-asym-mag) is Python-only.
-EXPECTED_ABI = 68
+# ABI 70 (28/11/2026, Luiz, CTRL-89; additive, default = ABI 68 bit-identical; 69 is another
+# branch's): inertia_jitter=0.0 / control_latency_ms=None on score_controllers_cpu/metal and
+# score_classical_baseline (the stress plant, EpisodeConfig.stress_kwargs(); a GA-search pool's
+# EpisodeConfig.search_jitter_kwargs() overrides it) and train_inertia_jitter=0.0 /
+# train_latency_ms=None on RewardGatedConfigPacked (EpisodeConfig.train_jitter_kwargs()).
+# Per-episode joint plant-inertia scale + command transport delay, drawn from the weather seed.
+EXPECTED_ABI = 70
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "
