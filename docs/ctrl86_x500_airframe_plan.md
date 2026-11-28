@@ -701,3 +701,15 @@ stay small next to the task, sensor error should be ≤ 0.05 m (10 % of 0.5 m).
 8. **G1/G2 thresholds** (PID ≥ 90 %, MPCOF ≥ 95 %) and the episode-length rule (§5c).
 9. **Accel σ:** one scalar at the z figure (conservative) or split per axis (needs a small plant
    change).
+
+## Amendment 1 — Luiz's decisions 27/11/2026 ~21:10 EST
+
+- **Shared code rule:** anything common to the IDS worker and the controller goes in `ram_core` once, for both wheels;
+  never a controller-only copy to avoid a worker swap. Each step must say which shared pieces move to core; a step that
+  touches `ram_core` rebuilds both wheels and its worker wheel is swapped at worker-idle (scripts/worker_swap.py).
+- Positioning: **RTK GNSS (u-blox ZED-F9P class)** outdoors. Battery: **4S**, with the sag model.
+- Mixer: **a true X plant** (not the '+'-equivalent) — accept the +4–6 days.
+- Gyro bias walk: keep the current conservative value. IMU: model the **ICM-45686** (Pixhawk 6X Rev 8) if its datasheet
+  gives noise density; otherwise the ICM-42688-P.
+- Linear teachers' motor lag: the **mean** of up/down. Teachers label from TRUE position; rivals read the MEASURED one.
+- Gates: PID ≥ 90 % and MPCOF ≥ 95 % stable before any WNN training; ~4000-step episodes.
