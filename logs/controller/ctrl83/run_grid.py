@@ -1,6 +1,7 @@
 """CTRL-83 stress panel runner: every (controller x cell) of cells.py, resumable, cached.
 
   run_grid.py [--cells c1,c2] [--controllers k1,k2] [--no-row-b] [--list]
+  CTRL-87 readout: --controllers l2bnm_s1,... (cells.EXTRA_WNN) --no-row-b --cells nom,wear30,mass25,lag30,lag10,noise2
 
 Order is INTERLEAVED (prereg §5): cell-major in cells.CELLS order (primary cells first),
 and inside a cell every controller (5 WNN seeds, rows A/C, PID, LQI, then row B), so a
@@ -33,12 +34,12 @@ def jobs(cells, ctrls, row_b):
 def cmd_for(k, c, out):
 	if k == "mpcofB":
 		return [PY, os.path.join(HERE, "rowb.py"), c, out]
-	extra = [] if k.startswith("wnn_s") else ["--rival-tail"]
+	extra = [] if C.is_wnn(k) else ["--rival-tail"]
 	return [PY, os.path.join(HERE, "score_cell.py"), k, c, out, *extra]
 
 
 def est(k):
-	return EST_S["mpcofB"] if k == "mpcofB" else EST_S["wnn"] if k.startswith("wnn_s") else EST_S["rival"]
+	return EST_S["mpcofB"] if k == "mpcofB" else EST_S["wnn"] if C.is_wnn(k) else EST_S["rival"]
 
 
 def main():
@@ -53,7 +54,7 @@ def main():
 		if c not in C.CELL:
 			sys.exit(f"unknown cell {c}")
 	for k in ctrls:
-		if k not in C.CONTROLLERS:
+		if k not in C.ALL_CONTROLLERS:
 			sys.exit(f"unknown controller {k}")
 	os.makedirs(DATA, exist_ok=True)
 	todo = [j for j in jobs(cells, ctrls, not o.no_row_b) if not os.path.exists(j[2])]

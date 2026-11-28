@@ -1,7 +1,7 @@
 """CTRL-83 stress panel: score ONE (controller x cell) on the 35 TEST units 99990101..135.
 
   score_cell.py <controller> <cell> <out.npz> [--rival-tail]
-    controller: wnn_s1..wnn_s5 | mpcofA | mpcofC | pid | lqi      (cells.py)
+    controller: wnn_s1..wnn_s5 | mpcofA | mpcofC | pid | lqi | <EXTRA_WNN arm>_sN (cells.py)
     cell      : a cells.CELLS id
 
 REPORT-ONLY. No training, no selection: the WNN is the published winner
@@ -96,7 +96,7 @@ def plant_identity(wnn_kw, riv_kw, unit):
 def load_run(controller):
 	import ctrl_gap_student_trace as T
 	from wnn.control import phased_ga as P
-	tag = C.WNN_TAG.format(s=int(controller[5:]) if controller.startswith("wnn_s") else 1)
+	tag = C.wnn_tag(controller if C.is_wnn(controller) else "wnn_s1")
 	txt, a, ec0 = T.run_args(tag)
 	P._resolve_ctbr(a, ec0)
 	if [int(u) for u in a.test_seeds] != UNITS:
@@ -229,7 +229,7 @@ def _nominal_kw(a, ec0, unit):
 
 def gate_nominal(controller, tag, txt, U):
 	m = U.mean(0)
-	if controller.startswith("wnn_s"):
+	if C.is_wnn(controller):
 		from rescore_end import logged_end, TOL
 		end = logged_end(tag)
 		v = dict(stable=100 * m[1], err=m[2], steady=m[3], pos=m[4])
@@ -257,14 +257,14 @@ def gate_nominal(controller, tag, txt, U):
 
 def main():
 	ap = argparse.ArgumentParser()
-	ap.add_argument("controller", choices=C.CONTROLLERS)
+	ap.add_argument("controller", choices=C.ALL_CONTROLLERS)
 	ap.add_argument("cell", choices=list(C.CELL))
 	ap.add_argument("out")
 	ap.add_argument("--rival-tail", action="store_true")
 	o = ap.parse_args()
 	import wnn.control._accel as A
 	t0 = time.time()
-	if o.controller.startswith("wnn_s"):
+	if C.is_wnn(o.controller):
 		tag, a, U, EPS = score_wnn(o.controller, o.cell)
 	else:
 		tag, a, U, EPS = score_rival(o.controller, o.cell, o.rival_tail)

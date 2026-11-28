@@ -102,6 +102,27 @@ RIVALS = (
 	("lqi", 3, 0, True, "LQI motor-level, est-fed"),
 )
 CONTROLLERS = tuple(f"wnn_s{s}" for s in WNN_SEEDS) + tuple(r[0] for r in RIVALS)
+# CTRL-87 (28/11): EXTRA WNN controllers re-scored on this grid after each END (report-only readout,
+# docs/ctrl87_nominal_mass_wide_spread_prereg.md). id = "<arm>_s<N>". NOT in the default CONTROLLERS (their
+# winners land one END at a time): name them with run_grid.py --controllers. The grid itself is unchanged.
+EXTRA_WNN = {
+	"l2bnm": "C-S2-d_wposx2_a66_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2bnm_full_s{s}",
+	"l2bnmw": "C-S2-d_wposx2_a66_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2bnmw_full_s{s}",
+}
+EXTRA_CONTROLLERS = tuple(f"{arm}_s{s}" for arm in EXTRA_WNN for s in WNN_SEEDS)
+ALL_CONTROLLERS = CONTROLLERS + EXTRA_CONTROLLERS
+
+
+def is_wnn(k):
+	return k.startswith("wnn_s") or k in EXTRA_CONTROLLERS
+
+
+def wnn_tag(k):
+	"""Run tag of a WNN controller id (wnn_sN = the l2b reference; <arm>_sN = an EXTRA_WNN arm)."""
+	if k.startswith("wnn_s"):
+		return WNN_TAG.format(s=int(k[5:]))
+	arm, s = k.rsplit("_s", 1)
+	return EXTRA_WNN[arm].format(s=int(s))
 
 
 def apply(cell_id, ec):
