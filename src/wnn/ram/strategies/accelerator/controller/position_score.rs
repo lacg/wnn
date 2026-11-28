@@ -61,7 +61,11 @@ use crate::position_loop::PositionLoop;
 	imu_specific_force = false, rotor_drag = 0.0, att_err_tilt_ref = false,
 	// L3 (ABI 51): the altitude integrator in front of the altitude PD — 0 off
 	// (bit-identical), 1 pi, 2 pole3 (altitude_integrator.rs).
-	alt_integral = 0))]
+	alt_integral = 0,
+	// CTRL-86 S1/S2 (ABI 65): the plant actuator's spin-down settling time (0 ⇒
+	// symmetric) and armed-idle floor (0 ⇒ none). Real-life plant (translation) only.
+	motor_lag_down_s = 0.0, pwm_min = 0.0,
+	))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_position_teacher(
 	teacher_id: u8,
@@ -111,6 +115,8 @@ pub fn score_position_teacher(
 	rotor_drag: f32,
 	att_err_tilt_ref: bool,
 	alt_integral: u8,
+	motor_lag_down_s: f32,
+	pwm_min: f32,
 ) -> PyResult<(f64, f64, f64, f64, f64, f64, f64)>
 {
 	let err = |m: String| pyo3::exceptions::PyValueError::new_err(m);
@@ -124,6 +130,7 @@ pub fn score_position_teacher(
 		pos_max_tilt_deg.to_radians() as f32,
 	)
 	.map_err(err)?;
+	let plant = plant.with_actuator(motor_lag_s, motor_lag_down_s, pwm_min).map_err(err)?;
 	if init_qs.len() % 4 != 0 || init_omegas.len() % 3 != 0 || init_p.len() % 3 != 0
 	{
 		return Err(err(
@@ -211,8 +218,10 @@ pub fn score_position_teacher(
 		af_inertia,
 		af_gravity,
 		hover_pwm,
-		motor_lag_s,
+		af.actuator().design_lag_s(),
 	);
+	// CTRL-86: the twins track the plant's actuator (extended only; else ABI 64).
+	af.arm_teacher_actuator(&mut teacher);
 	// Symmetric ABI 61: the on-board f32 Mahony the WNN reads (mahony_f32.rs).
 	let mut est = crate::mahony_f32::rival_estimator(use_estimator, af_dt, est_kp, est_ki);
 

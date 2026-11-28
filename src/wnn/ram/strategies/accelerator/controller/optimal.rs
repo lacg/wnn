@@ -1520,6 +1520,16 @@ impl AttitudeMpcRs
 		}
 	}
 
+	/// CTRL-86: replace the actuator estimate (lag-aware builds only — a lag-free MPC
+	/// has no actuator state to estimate).
+	fn arm_actuator(&mut self, twin: ActuatorLag)
+	{
+		if self.act.is_some()
+		{
+			self.act = Some(twin);
+		}
+	}
+
 	/// ABI 34: the pwm applied last step → actuator estimate (no-op without lag).
 	pub(crate) fn observe_applied(&mut self, applied_pwm: [f64; 4])
 	{
@@ -2183,6 +2193,32 @@ impl Teacher
 				R_CTRL, 25, 0.001, 0.05, 0.2, t,
 			)),
 			_ => Self::from_id_with_hover(id, dt, arm_length, k_thrust, k_drag, inertia, gravity, hover),
+		}
+	}
+
+	/// CTRL-86 S1/S2 (ABI 65): re-arm every actuator TWIN of this teacher with the
+	/// plant's actuator (asymmetric lag + idle floor). The design model stays the one
+	/// it was built on (from_id_lagged at ActuatorSpec::design_lag_s — the mean of up
+	/// and down, Luiz's amendment 1); only the estimates, which must track the plant's
+	/// switching filter exactly, change. PID is lag-blind by design and keeps nothing.
+	/// Callers arm only an EXTENDED spec: a symmetric one is the ABI-64 teacher as built.
+	pub(crate) fn arm_actuator(&mut self, spec: crate::actuator_spec::ActuatorSpec, dt: f32)
+	{
+		let twin = || ActuatorLag::for_actuator(spec, dt);
+		match self
+		{
+			Teacher::Lqr(t) => t.lag.iter_mut().for_each(|l| l.act = twin()),
+			Teacher::Lqi(t) => t.lag.iter_mut().for_each(|l| l.act = twin()),
+			Teacher::Mpc(m) => m.arm_actuator(twin()),
+			Teacher::MpcOf(m) =>
+			{
+				m.mpc.arm_actuator(twin());
+				if let Some(c) = m.ctbr.as_mut()
+				{
+					c.arm_actuator(spec, dt);
+				}
+			}
+			Teacher::Pid(_) | Teacher::PidFw(_) => {}
 		}
 	}
 

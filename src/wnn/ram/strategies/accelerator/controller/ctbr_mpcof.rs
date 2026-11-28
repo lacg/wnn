@@ -114,6 +114,14 @@ impl CtbrMpcOf
 		}
 	}
 
+	/// CTRL-86: arm the observer's measured-actuator filter with the plant actuator
+	/// (asymmetric lag / idle floor). The outer plan keeps its design lag (the mean,
+	/// AirframeRs::teacher); only the measurement twin must match the plant.
+	pub(crate) fn arm_actuator(&mut self, spec: crate::actuator_spec::ActuatorSpec, dt: f32)
+	{
+		self.obs.set_actuator(spec, dt);
+	}
+
 	pub(crate) fn reset(&mut self)
 	{
 		self.shadow.reset();

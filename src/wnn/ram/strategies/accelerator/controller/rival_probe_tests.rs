@@ -38,7 +38,7 @@ fn small(teacher: u8, use_est: bool, probe: Option<&mut RivalProbe>) -> pyo3::Py
 		2.0, 1.0, 0.25,
 		s1.init_x.clone(), s1.init_y.clone(), 1.0, 1.0, 0.5236,
 		0.20, true, 0.0, true, 10,
-		0, // alt_integral off
+		0, (0.0, 0.0), // alt_integral off
 		probe,
 	)
 	.map(crate::dagger_train::rival_first8)
@@ -237,7 +237,7 @@ impl Unit
 			self.s("rotor_drag") as f32,
 			self.b("att_err_tilt_ref"),
 			self.s("ctbr_outer_hold") as usize,
-			tw.alt_integral,
+			tw.alt_integral, (0.0, 0.0),
 			probe,
 		)
 		.map(crate::dagger_train::rival_first8)

@@ -554,7 +554,7 @@ pub(crate) fn run(base: &WnnController, cfg: &RewardGatedConfigPacked, target: [
 
 	// (A) BEHAVIOUR CLONING — teacher drives, the real sn=0 write path, no gate.
 	let mut c = base.clone();
-	c.set_observer_motor_lag_core(rig.sim.motor_lag());
+	c.set_observer_actuator_core(rig.sim.actuator());
 	let mut train = ImitCapture::new(true, false);
 	let cfg_bc = rig.cfg_bc.clone();
 	// Same budget as the production trainer: every fold, every round, every episode.

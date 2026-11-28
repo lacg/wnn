@@ -666,7 +666,7 @@ pub(crate) fn diagnose(c0: &WnnController, cfg: &RewardGatedConfigPacked, target
 	cfg_bc.expert_drives = true;
 	let mut rig = Rig { cfg_bc, teachers: TeacherBank::new(AirframeRs::from_cfg(cfg)), sim: sim_default(cfg), target };
 	let mut c = c0.clone();
-	c.set_observer_motor_lag_core(rig.sim.motor_lag());
+	c.set_observer_actuator_core(rig.sim.actuator());
 	let ctx = context(&c, cfg, lay);
 	let rounds = env_usize("WNN_IMIT_DIAG_ROUNDS", cfg.num_rounds);
 	let plan_tr: Vec<(usize, f64)> = (0..rounds).flat_map(|it| (0..cfg.episodes_per_round).map(move |_| it)).map(|it| (it, cfg.round_tilt_rad(it))).collect();

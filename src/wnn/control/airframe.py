@@ -241,8 +241,72 @@ _CF2X_FIRMWARE = Airframe(
 	      "arm (0.046 vs 0.0397) — different builds behind #ifdefs.",
 )
 
+# ---------------------------------------------------------------------------
+# LINEAGE C — CTRL-86: the Holybro X500 as the PX4 SITL flies it (Luiz, 27/11/2026:
+# PX4 SITL numbers now, measured X500 V2 numbers in 2028). Every number is read from
+# PX4-Autopilot tag v1.16.0 (commit 6ea3539157ca358c70a515878b77077af7d4611d) and its
+# gz-models submodule PX4-gazebo-models e05f4312d3f28aa621157610584a4870406cb6d3:
+# models/x500_base/model.sdf + models/x500/model.sdf (plant) and
+# ROMFS/px4fmu_common/init.d-posix/airframes/4001_gz_x500 (ESC range). Derivations are
+# docs/ctrl86_x500_airframe_plan.md §1a. The motor lag (gz timeConstantUp/Down) and the
+# armed-idle floor (SIM_GZ_EC_MIN) live with the other airframe-bound actuator numbers
+# (phased_ga.AIRFRAME_MOTOR_LAG_S / AIRFRAME_PWM_MIN).
+#
+# NOT FLYABLE YET: no inner loop is registered for it until the PX4 cascade port lands
+# (CTRL-86 S3/S4), so every flight path refuses it (`require_inner_loop`) instead of
+# falling back silently to the legacy single loop (the cf2x_urdf lesson).
+# ---------------------------------------------------------------------------
+_X500_PIN = "PX4-Autopilot v1.16.0 (6ea35391) + PX4-gazebo-models e05f4312"
+_X500_BODY_M = 2.0                 # x500_base base_link <mass>
+_X500_ROTOR_M = 0.016077           # rotor_i <mass>, x4
+_X500_ROTOR_XY = 0.174             # rotor_i <pose> (+-0.174, +-0.174, +0.06)
+_X500_KF = 8.54858e-06             # x500 <motorConstant>, N/(rad/s)^2
+_X500_OMEGA_MAX = 1000.0           # x500 <maxRotVelocity>, rad/s
+
+_X500_SITL = Airframe(
+	name="x500_sitl",
+	mass=_X500_BODY_M + 4 * _X500_ROTOR_M,                   # 2.064308 kg
+	# Motor radius hypot(0.174, 0.174) = 0.24607 m; the '+'-equivalent mixer arm r*sqrt(2)
+	# = 0.348 m, the same equivalence cf21 uses (CTRL-86 amendment 1 moves x500 to a true X
+	# plant in a later step; this entry is the plant data, not the mixer).
+	arm_length=axis_arm_from_radius(sqrt(2.0) * _X500_ROTOR_XY),
+	k_thrust=_X500_KF * _X500_OMEGA_MAX ** 2,                 # 8.54858 N at pwm = omega/omega_max = 1
+	k_drag=0.016,                                            # x500 <momentConstant>, m
+	# Aggregate about the combined CoM (z_c 1.87 mm above the base origin): base inertia
+	# 0.021667/0.021667/0.040 plus the four rotors by the parallel-axis theorem plus their
+	# self-inertia — the plan's §1a derivation.
+	inertia=(0.023839, 0.023942, 0.044000),
+	gravity=9.81,
+	source=f"{_X500_PIN}: models/x500_base/model.sdf (base_link + rotor_i mass, pose) and "
+	       "models/x500/model.sdf (motorConstant 8.54858e-06, maxRotVelocity 1000, "
+	       "momentConstant 0.016). k_thrust = kf*omega_max^2; mass = body + 4 rotors.",
+	inertia_source=f"DERIVED from {_X500_PIN} models/x500_base/model.sdf: base_link "
+	               "<inertia> 0.021667/0.021667/0.040 (products 0) + 4 rotors by the "
+	               "parallel-axis theorem about the combined CoM + rotor self-inertia "
+	               "(docs/ctrl86_x500_airframe_plan.md §1a). Gravity 9.81 vs gz 9.8 (0.1 %).",
+	notes="Rotors at (+-0.174, +-0.174, +0.06) m: ABOVE the base origin, so rotor drag has "
+	      "a moment arm (unlike cf2x_urdf). PX4's CA_ROTOR geometry (0.13/0.22) is "
+	      "deliberately mismatched to the SDF; the SDF is the plant. "
+	      "rollingMomentCoefficient 1e-6 is ignored (no rolling-moment term in the sim).",
+)
+
+# Airframes whose inner (attitude/rate) loop is not registered yet: every flight path
+# refuses them by name (EpisodeConfig.airframe_kwargs / sim_kwargs / cascade_kwargs).
+UNFLYABLE_AIRFRAMES = {
+	"x500_sitl": "no inner loop registered (the PX4 cascade port is CTRL-86 S3/S4)",
+}
+
+
+def require_inner_loop(af: "Airframe") -> None:
+	"""Refuse an airframe that has no registered inner loop — never fly it on the legacy
+	single loop by accident."""
+	why = UNFLYABLE_AIRFRAMES.get(af.name)
+	if why is not None:
+		raise ValueError(f"airframe '{af.name}' cannot be flown yet: {why}.")
+
+
 _AIRFRAMES = {
-	af.name: af for af in (_CF2X_URDF, _CF21_BRUSHLESS, _CF2X_FIRMWARE)
+	af.name: af for af in (_CF2X_URDF, _CF21_BRUSHLESS, _CF2X_FIRMWARE, _X500_SITL)
 }
 
 

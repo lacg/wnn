@@ -94,6 +94,9 @@ class ControllerProvenance:
 	dmax_yaw: str = ""  # ABI 57 --delta-max-yaw ("" = unset: the line is unchanged)
 	dleak_yaw: str = ""  # ABI 63 --delta-leak-yaw ("" = unset: the line is unchanged)
 	ylead: str = ""  # ABI 64 --obs-yaw-lead: its tau in s ("" = off: the line is unchanged)
+	# CTRL-86 S1/S2 (ABI 65): the extended plant actuator — "down=<T_down>s" and/or
+	# "idle=<pwm_min>" ("" = the ABI-64 actuator: the line is unchanged).
+	actuator: str = ""
 	# CTRL-58: the staged-refinement config (refine_config.refine_token); "" = off and
 	# NOT printed, so every line without --refine-fitness/--refine-select is unchanged.
 	refine: str = ""
@@ -122,6 +125,7 @@ class ControllerProvenance:
 		        + (f"dmax_yaw={self.dmax_yaw} " if self.dmax_yaw else "")
 		        + (f"dleak_yaw={self.dleak_yaw} " if self.dleak_yaw else "")
 		        + (f"ylead={self.ylead} " if self.ylead else "")
+		        + (f"actuator={self.actuator} " if self.actuator else "")
 		        + (f"refine={self.refine} " if self.refine else "") +
 		        f"fitness_pools={self.fitness_pools}")
 
@@ -168,7 +172,7 @@ def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: st
                        abp: str = UNKNOWN, select: str = UNKNOWN,
                        train_ic: str = UNKNOWN, alt: str = "", yawref: str = "", pos_metric: str = "",
                        dmax_yaw: str = "", refine: str = "", dleak_yaw: str = "",
-                       ylead: str = "") -> ControllerProvenance:
+                       ylead: str = "", actuator: str = "") -> ControllerProvenance:
 	"""Gather every field, never raising: each accessor degrades to UNKNOWN / 0."""
 	wheel, abi, sha = _wheel_identity()
 	return ControllerProvenance(
@@ -197,6 +201,7 @@ def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: st
 		dmax_yaw=dmax_yaw.replace(" ", "_").replace('"', ""),
 		dleak_yaw=dleak_yaw.replace(" ", "_").replace('"', ""),
 		ylead=ylead.replace(" ", "_").replace('"', ""),
+		actuator=actuator.replace(" ", "_").replace('"', ""),
 		refine=refine.replace(" ", "_").replace('"', ""),
 	)
 

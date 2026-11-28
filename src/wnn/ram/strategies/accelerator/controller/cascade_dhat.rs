@@ -44,6 +44,11 @@ pub(crate) struct CascadeDhat
 	dt: f64,
 	/// The plant's lag coefficient 4dt/max(T, 4dt) (actuator_lag::motor_lag_alpha).
 	alpha: f64,
+	/// CTRL-86 S1: the spin-down coefficient (== alpha when symmetric) and S2: the
+	/// plant's idle floor (0 ⇒ the ABI-64 clamp [0, 1]). The filter is per motor
+	/// already, so the direction switch needs no other change.
+	alpha_down: f64,
+	pwm_min: f64,
 	clamp: [f64; 3],
 	/// Observer gain per plant tick. CTBR_MPC_L_GAIN unless a probe overrides it
 	/// (set_observer_gain — the stage −1 sweep, docs/ctrl_indi_teacher_spec.md §10).
@@ -61,11 +66,14 @@ impl CascadeDhat
 	/// `motor_lag_s` = the plant's 2% settling time (0 ⇒ the command itself).
 	pub(crate) fn new(c: [f64; 3], k_thrust: f64, dt: f32, motor_lag_s: f32, out_limit_n: f64) -> Self
 	{
+		let alpha = crate::actuator_lag::motor_lag_alpha(motor_lag_s, dt);
 		CascadeDhat {
 			c,
 			k_thrust,
 			dt: dt as f64,
-			alpha: crate::actuator_lag::motor_lag_alpha(motor_lag_s, dt),
+			alpha,
+			alpha_down: alpha,
+			pwm_min: 0.0,
 			clamp: [c[0] * out_limit_n, c[1] * out_limit_n, c[2] * out_limit_n],
 			l_gain: CTBR_MPC_L_GAIN,
 			lag_pwm: [0.0; 4],
@@ -86,11 +94,14 @@ impl CascadeDhat
 		self.last_gyro = None;
 	}
 
-	/// Re-arm the actuator filter for a plant with settling time `motor_lag_s` (the
-	/// student's hosts call this per plant; the teacher is built with it).
-	pub(crate) fn set_motor_lag(&mut self, motor_lag_s: f32, dt: f32)
+	/// Re-arm the actuator filter for the plant actuator `spec` (the student's hosts
+	/// call this per plant; the teacher is built with the lag). CTRL-86: asymmetric lag
+	/// and idle floor; a symmetric, floor-free spec is the ABI-64 set_motor_lag(up).
+	pub(crate) fn set_actuator(&mut self, spec: crate::actuator_spec::ActuatorSpec, dt: f32)
 	{
-		self.alpha = crate::actuator_lag::motor_lag_alpha(motor_lag_s, dt);
+		self.alpha = crate::actuator_lag::motor_lag_alpha(spec.lag_up_s, dt);
+		self.alpha_down = crate::actuator_lag::motor_lag_alpha(spec.down_s(), dt);
+		self.pwm_min = spec.pwm_min as f64;
 	}
 
 	/// PROBE ONLY (stage −1, docs/ctrl_indi_teacher_spec.md §10): override the observer
@@ -132,7 +143,7 @@ impl CascadeDhat
 			self.primed = true;
 			return None;
 		}
-		let cmd = applied.map(|v| v.clamp(0.0, 1.0));
+		let cmd = applied.map(|v| v.clamp(self.pwm_min, 1.0));
 		if !self.seeded
 		{
 			self.lag_pwm = cmd;
@@ -142,7 +153,7 @@ impl CascadeDhat
 		{
 			for m in 0..4
 			{
-				self.lag_pwm[m] += self.alpha * (cmd[m] - self.lag_pwm[m]);
+				self.lag_pwm[m] = crate::actuator_spec::lag_step_f64(self.lag_pwm[m], cmd[m], self.alpha, self.alpha_down);
 			}
 		}
 		Some(self.lagged_force())

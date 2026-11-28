@@ -91,6 +91,14 @@ constant bool RLO = is_function_constant_defined(FC_RATE_LOOP_OBS) ? FC_RATE_LOO
 // the ABI-63 codegen.
 constant bool FC_YAW_LEAD [[function_constant(6)]];
 constant bool YLEAD = is_function_constant_defined(FC_YAW_LEAD) ? FC_YAW_LEAD : false;
+// ABI 65 (CTRL-86 S1/S2): the EXTENDED plant actuator — asymmetric motor lag (spin-down
+// settling time) and/or the armed-idle floor. Its per-motor direction switch and floor
+// clamps change the codegen of the plant filter even when they select the legacy values,
+// so they live in their own specialization (FC_ACTUATOR_EXT=true, set ONLY when the
+// scored plant's actuator is extended); every other pipeline leaves it undefined ⇒
+// false ⇒ dead-stripped ⇒ the ABI-64 codegen.
+constant bool FC_ACTUATOR_EXT [[function_constant(7)]];
+constant bool ACT_EXT = is_function_constant_defined(FC_ACTUATOR_EXT) ? FC_ACTUATOR_EXT : false;
 
 // One rotor of the geometry buffer — 48 B, all-float, mirrors the Rust-side
 // RotorGpu upload. k_thrust is the EFFECTIVE coefficient (nominal x per-rotor
@@ -360,7 +368,20 @@ struct Params
 	// ABI 64 (CTRL-80, --obs-yaw-lead), appended in lockstep: τ of the yaw LEAD input
 	// (read only by the FC_YAW_LEAD specialization).
 	float ylead_tau;
+	// ABI 65 (CTRL-86 S1/S2), appended in lockstep: the motor lag's spin-down settling time
+	// (0 ⇒ symmetric — lag_alpha_down() then returns the ABI-64 coefficient) and the plant's
+	// armed-idle floor (0 ⇒ none: clamp(x, 0, 1), the ABI-64 operation).
+	float motor_settling_time_down_s;
+	float pwm_min;
 };
+
+// CTRL-86 S1: the plant lag's spin-down coefficient — twin of actuator_spec.rs alphas()
+// (the spin-up settling time when the lag is symmetric). Read only under FC_ACTUATOR_EXT.
+inline float lag_alpha_down(constant Params &P)
+{
+	float t = (P.motor_settling_time_down_s > 0.0f) ? P.motor_settling_time_down_s : P.motor_settling_time_s;
+	return 4.0f * P.dt / max(t, 4.0f * P.dt);
+}
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
 // dist_hash_u32 / dist_uniform / dist_gauss / channel ids. The canonical
@@ -1178,10 +1199,18 @@ inline void cas_observe(constant Params &P, thread CasObs &o, thread const float
 	if (o.primed)
 	{
 		float a_lag = 4.0f * P.dt / max(P.motor_settling_time_s, 4.0f * P.dt);
+		float a_dn = ACT_EXT ? lag_alpha_down(P) : a_lag; // CTRL-86 S1
+		float lo = ACT_EXT ? P.pwm_min : 0.0f;            // CTRL-86 S2
 		for (uint m = 0u; m < 4u; m++)
 		{
-			float cmd = clamp(applied[m], 0.0f, 1.0f);
-			o.lag[m] = o.seeded ? (o.lag[m] + a_lag * (cmd - o.lag[m])) : cmd;
+			float cmd = clamp(applied[m], lo, 1.0f);
+			if (ACT_EXT)
+			{
+				float a_m = (cmd > o.lag[m]) ? a_lag : a_dn;
+				o.lag[m] = o.seeded ? (o.lag[m] + a_m * (cmd - o.lag[m])) : cmd;
+			}
+			else
+				o.lag[m] = o.seeded ? (o.lag[m] + a_lag * (cmd - o.lag[m])) : cmd;
 		}
 		o.seeded = true;
 		upd = o.have_g;
@@ -2315,13 +2344,34 @@ kernel void controller_rollout(
 			pwm_applied[m] = pwm[m];
 		// ABI 35: advance the observer's actuator twin with this command (the CPU
 		// advances it lazily at the next compute_features — the same update).
-		if (act_twin_on)
+		if (act_twin_on && !ACT_EXT)
 		{
 			float t_obs = max(P.motor_settling_time_s, 4.0f * P.dt);
 			float a_obs = 4.0f * P.dt / t_obs;
 			for (uint m = 0u; m < min(P.num_motors, (uint)MAX_ROTORS); m++)
 				dhat_ua[m] = dhat_ua_seeded ? (dhat_ua[m] + a_obs * (pwm_applied[m] - dhat_ua[m])) : pwm_applied[m];
 			dhat_ua_seeded = true;
+		}
+		if (ACT_EXT)
+		{
+			// CTRL-86 S1/S2: the same twin with the plant's per-motor direction switch and
+			// its idle floor (twin of controller.rs act_twin_next).
+			if (act_twin_on)
+			{
+				float a_obs = 4.0f * P.dt / max(P.motor_settling_time_s, 4.0f * P.dt);
+				float a_obs_dn = lag_alpha_down(P);
+				for (uint m = 0u; m < min(P.num_motors, (uint)MAX_ROTORS); m++)
+				{
+					float u = (P.pwm_min > 0.0f) ? clamp(pwm_applied[m], P.pwm_min, 1.0f) : pwm_applied[m];
+					float a_m = (u > dhat_ua[m]) ? a_obs : a_obs_dn;
+					dhat_ua[m] = dhat_ua_seeded ? (dhat_ua[m] + a_m * (u - dhat_ua[m])) : u;
+				}
+				dhat_ua_seeded = true;
+			}
+			// The armed-idle floor, where the plant consumes the command and BEFORE the lag
+			// (twin of AttitudeSim::step's clamp(pwm_min, 1)).
+			for (uint m = 0u; m < P.num_motors; m++)
+				pwm[m] = clamp(pwm[m], P.pwm_min, 1.0f);
 		}
 		// MOTOR LAG (Molchanov eq. 7), applied to the FINAL command before the
 		// plant sees it — twin of AttitudeSim::apply_motor_lag. T<=0 => skipped
@@ -2337,10 +2387,25 @@ kernel void controller_rollout(
 					motor_filt[m] = pwm[m];
 				motor_filt_init = true;
 			}
-			for (uint m = 0u; m < P.num_motors; m++)
+			if (ACT_EXT)
 			{
-				motor_filt[m] += a_lag * (pwm[m] - motor_filt[m]);
-				pwm[m] = motor_filt[m];
+				// CTRL-86 S1: per motor, the spin-up coefficient above the filter, spin-down
+				// below (twin of actuator_spec::lag_step).
+				float a_dn = lag_alpha_down(P);
+				for (uint m = 0u; m < P.num_motors; m++)
+				{
+					float a_m = (pwm[m] > motor_filt[m]) ? a_lag : a_dn;
+					motor_filt[m] += a_m * (pwm[m] - motor_filt[m]);
+					pwm[m] = motor_filt[m];
+				}
+			}
+			else
+			{
+				for (uint m = 0u; m < P.num_motors; m++)
+				{
+					motor_filt[m] += a_lag * (pwm[m] - motor_filt[m]);
+					pwm[m] = motor_filt[m];
+				}
 			}
 		}
 		// ---- sim.step (RK4) --------------------------------------------------

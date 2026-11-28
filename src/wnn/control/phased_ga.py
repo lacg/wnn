@@ -3340,7 +3340,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "item I): with --translation the AIRFRAME's measured lag "
 	                     "(cf21_brushless 0.20, cf2x_firmware 0.26 — see AIRFRAME_MOTOR_LAG_S; "
 	                     "other airframes must pass it); without --translation 0 = OFF. "
-	                     "0 = explicit opt-out.")
+	                     "0 = explicit opt-out. Under an asymmetric airframe lag (x500_sitl) "
+	                     "this is the SPIN-UP time; see --motor-lag-down-s.")
+	ap.add_argument("--motor-lag-down-s", type=float, default=None,
+	                help="CTRL-86 S1 (ABI 65): the motor lag's SPIN-DOWN 2%% settling time T_down "
+	                     "(s); --motor-lag-s is then the spin-up time. Per motor per step the "
+	                     "plant uses T_up when the command is above the filtered value, T_down "
+	                     "otherwise. DEFAULT: the airframe's measured value when the lag itself "
+	                     "is airframe-bound (x500_sitl 0.10 vs up 0.05, PX4 v1.16.0 gz "
+	                     "timeConstantDown/Up x 4), else symmetric. Needs --translation and a "
+	                     "lag > 0.")
+	ap.add_argument("--pwm-min", type=float, default=None,
+	                help="CTRL-86 S2 (ABI 65): the armed-idle floor of every motor command — the "
+	                     "plant clamps to [pwm_min, 1] before the lag, so no controller (WNN or "
+	                     "raw-pwm rival) commands a rotor below idle. DEFAULT under --translation: "
+	                     "the airframe's value (x500_sitl 0.15 = SIM_GZ_EC_MIN 150 / "
+	                     "SIM_GZ_EC_MAX 1000), else 0 = none (cf21). Needs --translation.")
 	ap.add_argument("--bptt-device", choices=("cpu", "gpu"), default=None,
 	                help="ABI 35: where the sn>0 EDRA-BPTT DAgger trainer walks — 'cpu' (rayon) "
 	                     "or 'gpu' (the resident Metal walk, controller_bptt_walk; bit-identical "
@@ -4425,10 +4440,30 @@ DEFAULT_ROTOR_DRAG = 0.78
 # Any OTHER airframe under --translation has no measured value here: refused unless --motor-lag-s
 # is given. Explicit opt-out (axis F's lag-off arm): --motor-lag-s 0 or --no-motor-lag. Without
 # --translation nothing changes (0 unless given — every attitude-only run reproduces).
+#   x500_sitl (CTRL-86 S1, ABI 65): ASYMMETRIC — up T = 0.05 s, down T = 0.10 s. SOURCE: PX4-Autopilot
+#     v1.16.0 / PX4-gazebo-models e05f4312 models/x500/model.sdf <timeConstantUp> 0.0125 s and
+#     <timeConstantDown> 0.025 s (gz MulticopterMotorModel, first order on rotor VELOCITY; our
+#     filter acts on pwm ∝ ω, the same filter) -> 4 × tau. An entry is (T, src) or, asymmetric,
+#     (T_up, T_down, src); resolve_motor_lag returns T_up and resolve_motor_lag_down T_down.
 AIRFRAME_MOTOR_LAG_S = {
 	"cf21_brushless": (0.20, "grafe2026"),
 	"cf2x_firmware": (0.26, "forster2015"),
+	"x500_sitl": (0.05, 0.10, "px4_v1.16.0_gz_x500"),
 }
+
+# CTRL-86 S2 (ABI 65): AIRFRAME-BOUND ARMED-IDLE FLOOR under --translation. x500_sitl: 0.15 = PX4
+# v1.16.0 ROMFS 4001_gz_x500 SIM_GZ_EC_MIN 150 / SIM_GZ_EC_MAX 1000 rad/s (gz_bridge publishes the ESC
+# output as rotor velocity; sim pwm = omega / omega_max). Airframes not listed have no floor (cf21:
+# 0, every banked run reproduces).
+AIRFRAME_PWM_MIN = {
+	"x500_sitl": (0.15, "px4_v1.16.0_SIM_GZ_EC_MIN"),
+}
+
+
+def _airframe_lag_entry(airframe) -> tuple:
+	"""(T_up, T_down or 0, src) of an AIRFRAME_MOTOR_LAG_S entry (either form)."""
+	e = AIRFRAME_MOTOR_LAG_S[airframe]
+	return (e[0], 0.0, e[1]) if len(e) == 2 else e
 
 
 def resolve_motor_lag(translation: bool, airframe, motor_lag_s, no_motor_lag: bool) -> tuple:
@@ -4452,17 +4487,65 @@ def resolve_motor_lag(translation: bool, airframe, motor_lag_s, no_motor_lag: bo
 			f"--translation flies the real-life plant, whose motor lag is airframe-bound, and "
 			f"airframe {airframe!r} has no measured lag (known: {sorted(AIRFRAME_MOTOR_LAG_S)}). "
 			f"Pass --motor-lag-s T explicitly (or --no-motor-lag to fly lag-free).")
-	lag, src = AIRFRAME_MOTOR_LAG_S[airframe]
+	lag, _, src = _airframe_lag_entry(airframe)
 	return lag, f"airframe:{src}"
 
 
+def resolve_motor_lag_down(translation: bool, airframe, lag_s: float, lag_source: str,
+                           motor_lag_down_s) -> float:
+	"""CTRL-86 S1: the spin-down settling time (0 = symmetric) for the RESOLVED spin-up time
+	`lag_s` / `lag_source` (resolve_motor_lag). Explicit --motor-lag-down-s wins; else the
+	airframe's down value when the lag itself came from that airframe; else symmetric (an
+	explicit --motor-lag-s never inherits an airframe's down time)."""
+	if motor_lag_down_s is not None:
+		down = float(motor_lag_down_s)
+		if not math.isfinite(down) or down < 0.0:
+			raise SystemExit(f"--motor-lag-down-s must be finite and >= 0 s (got {motor_lag_down_s}).")
+		if down > 0.0 and not lag_s > 0.0:
+			raise SystemExit("--motor-lag-down-s needs a motor lag (--motor-lag-s > 0 or an "
+			                 "airframe-bound lag): a spin-down time on a lag-free plant is inert.")
+		if down > 0.0 and not translation:
+			raise SystemExit("--motor-lag-down-s requires --translation (the real-life plant).")
+		return down
+	if lag_source.startswith("airframe:") and airframe in AIRFRAME_MOTOR_LAG_S:
+		return _airframe_lag_entry(airframe)[1]
+	return 0.0
+
+
+def resolve_pwm_min(translation: bool, airframe, pwm_min) -> tuple:
+	"""CTRL-86 S2: (idle floor, source tag). Explicit --pwm-min wins; else the airframe's floor
+	under --translation; else 0 (cf21 and every attitude-only run)."""
+	if pwm_min is not None:
+		p = float(pwm_min)
+		if not math.isfinite(p) or not 0.0 <= p < 1.0:
+			raise SystemExit(f"--pwm-min must be an idle floor in [0, 1) (got {pwm_min}).")
+		if p > 0.0 and not translation:
+			raise SystemExit("--pwm-min requires --translation (the real-life plant).")
+		return p, ("explicit" if p > 0.0 else "opt-out")
+	if translation and airframe in AIRFRAME_PWM_MIN:
+		p, src = AIRFRAME_PWM_MIN[airframe]
+		return p, f"airframe:{src}"
+	return 0.0, "off"
+
+
 def _resolve_motor_lag_args(args) -> None:
-	"""Resolve args.motor_lag_s IN PLACE (idempotent: the source is remembered)."""
+	"""Resolve args.motor_lag_s / motor_lag_down_s / pwm_min IN PLACE (idempotent: the source
+	is remembered)."""
 	if getattr(args, "motor_lag_source", None) is not None:
 		return
+	tr, af = bool(getattr(args, "translation", False)), getattr(args, "airframe", None)
 	args.motor_lag_s, args.motor_lag_source = resolve_motor_lag(
-		bool(getattr(args, "translation", False)), getattr(args, "airframe", None),
-		getattr(args, "motor_lag_s", None), bool(getattr(args, "no_motor_lag", False)))
+		tr, af, getattr(args, "motor_lag_s", None), bool(getattr(args, "no_motor_lag", False)))
+	args.motor_lag_down_s = resolve_motor_lag_down(
+		tr, af, args.motor_lag_s, args.motor_lag_source, getattr(args, "motor_lag_down_s", None))
+	args.pwm_min, args.pwm_min_source = resolve_pwm_min(tr, af, getattr(args, "pwm_min", None))
+
+
+def actuator_token(args) -> str:
+	"""Provenance actuator= value: "down=<T>s" and/or "idle=<p>" ("" = the ABI-64 actuator)."""
+	down, floor = float(getattr(args, "motor_lag_down_s", 0.0) or 0.0), float(getattr(args, "pwm_min", 0.0) or 0.0)
+	parts = ([f"down={down:g}s"] if down > 0.0 else []) + ([f"idle={floor:g}"] if floor > 0.0 else [])
+	return ",".join(parts)
 
 
 def resolve_abi32_plant(args) -> None:
@@ -4699,7 +4782,9 @@ def _plant_header(args, ec) -> str:
 	        f"rotor_drag={ec.rotor_drag:g} "
 	        f"att_features={'estimator' if args.obs_att_estimator else 'accel'} "
 	        f"att_err_ref={ec.att_err_ref} translation={ec.translation} "
-	        f"motor_lag={ec.motor_lag_s:g}s({getattr(args, 'motor_lag_source', 'off')})")
+	        f"motor_lag={ec.motor_lag_s:g}s({getattr(args, 'motor_lag_source', 'off')})"
+	        + (f" motor_lag_down={ec.motor_lag_down_s:g}s" if ec.motor_lag_down_s > 0.0 else "")
+	        + (f" pwm_min={ec.pwm_min:g}({getattr(args, 'pwm_min_source', 'off')})" if ec.pwm_min > 0.0 else ""))
 
 
 def episode_config_from_args(args) -> EpisodeConfig:
@@ -4758,6 +4843,9 @@ def episode_config_from_args(args) -> EpisodeConfig:
 		# ABI 32: the real-life plant + the G5 reference (resolve_abi32_plant).
 		imu_specific_force=bool(args.imu_specific_force),
 		rotor_drag=float(args.rotor_drag),
+		# CTRL-86 S1/S2 (ABI 65): the actuator extras (resolve_abi32_plant), 0 = the ABI-64 plant.
+		motor_lag_down_s=float(getattr(args, "motor_lag_down_s", 0.0) or 0.0),
+		pwm_min=float(getattr(args, "pwm_min", 0.0) or 0.0),
 		att_err_ref=str(getattr(args, "att_err_ref", "level")),
 		# Block 10 L3 (ABI 51): the altitude integrator, "off" = bit-identical.
 		alt_integral=str(getattr(args, "alt_integral", "off")),
@@ -5049,7 +5137,8 @@ def main():
 	                         rf=rf_token(args), calib=calibration_from_args(args).token(),
 	                         drop=drop_token(args), select=select_tail_token(args),
 	                         train_ic=train_ic_token(args), **ctrl46_tokens(args),
-	                         **block10_tokens(args), refine=refine_token(args)).line())
+	                         **block10_tokens(args), refine=refine_token(args),
+	                         actuator=actuator_token(args)).line())
 	from wnn.control.provenance import env_header_line
 	from wnn.control.evaluator import eval_mode_from_env
 	print(env_header_line(eval_mode_from_env()), flush=True)

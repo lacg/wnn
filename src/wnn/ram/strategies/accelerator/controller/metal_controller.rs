@@ -423,6 +423,11 @@ struct RolloutParams
 	// + 1 (ABI 64, CTRL-80, --obs-yaw-lead), appended in lockstep with the shader twin: τ of
 	// the yaw LEAD input; read only by the FC_YAW_LEAD(6) specialization.
 	ylead_tau: f32,
+	// + 2 (ABI 65, CTRL-86 S1/S2), appended in lockstep with the shader twin: the motor lag's
+	// spin-down settling time (0 ⇒ symmetric: the kernel then uses motor_settling_time_s, the
+	// ABI-64 coefficient) and the plant's armed-idle floor (0 ⇒ none, the ABI-64 path).
+	motor_settling_time_down_s: f32,
+	pwm_min: f32,
 }
 
 /// CTRL-38: the cascade feature blocks as the score kernel needs them, read off the
@@ -592,7 +597,8 @@ pub struct ControllerRolloutEvaluator
 	// ABI 62: keyed (cascade, abp, ytp, rate_loop_obs) — FC_RATE_LOOP_OBS(5) composes.
 	// ABI 64: keyed (.., yaw_lead) — FC_YAW_LEAD(6) composes (and alone selects this map:
 	// the lead input needs neither the cascade blocks nor the bias predictor).
-	cascade_obs_pipeline: std::cell::RefCell<std::collections::HashMap<(bool, bool, bool, bool, bool), ComputePipelineState>>,
+	// ABI 65: keyed (.., act_ext) — FC_ACTUATOR_EXT(7) composes (and alone selects this map).
+	cascade_obs_pipeline: std::cell::RefCell<std::collections::HashMap<(bool, bool, bool, bool, bool, bool), ComputePipelineState>>,
 	/// TEST-ONLY (ABI 38 label-replay identity on the GPU): Some(firmware attitude
 	/// gains) ⇒ a CTBR population's outer setpoint is the in-kernel firmware attitude
 	/// half (ctbr_outer_pid) instead of the WNN decode.
@@ -680,9 +686,10 @@ impl ControllerRolloutEvaluator
 	/// geometry — CTBR refuses geometry). Only it appends the cascade blocks.
 	/// CTRL-46: `abp` = FC_ATT_BIAS_PRED(3)=true; a constant is set ONLY when on, so the
 	/// (true, false) pipeline is the ABI-45 cascade pipeline exactly.
-	fn cascade_obs_pipeline(&self, cas: bool, abp: bool, ytp: bool, rlo: bool, ylead: bool) -> Result<ComputePipelineState, String>
+	#[allow(clippy::too_many_arguments)]
+	fn cascade_obs_pipeline(&self, cas: bool, abp: bool, ytp: bool, rlo: bool, ylead: bool, act_ext: bool) -> Result<ComputePipelineState, String>
 	{
-		if let Some(p) = self.cascade_obs_pipeline.borrow().get(&(cas, abp, ytp, rlo, ylead))
+		if let Some(p) = self.cascade_obs_pipeline.borrow().get(&(cas, abp, ytp, rlo, ylead, act_ext))
 		{
 			return Ok(p.clone());
 		}
@@ -711,15 +718,20 @@ impl ControllerRolloutEvaluator
 		{
 			fcv.set_constant_value_at_index(&on as *const bool as *const _, MTLDataType::Bool, 6);
 		}
+		// ABI 65: the extended actuator (set ONLY when on, so every ABI-64 key is the ABI-64 pipeline).
+		if act_ext
+		{
+			fcv.set_constant_value_at_index(&on as *const bool as *const _, MTLDataType::Bool, 7);
+		}
 		let func = self
 			.library
 			.get_function("controller_rollout", Some(fcv))
-			.map_err(|e| format!("controller_rollout specialization (cascade obs {cas}, abp {abp}, ytp {ytp}, ylead {ylead}) failed: {e}"))?;
+			.map_err(|e| format!("controller_rollout specialization (cascade obs {cas}, abp {abp}, ytp {ytp}, ylead {ylead}, act_ext {act_ext}) failed: {e}"))?;
 		let p = self
 			.device
 			.new_compute_pipeline_state_with_function(&func)
 			.map_err(|e| format!("obs pipeline creation (cascade {cas}, abp {abp}) failed: {e}"))?;
-		self.cascade_obs_pipeline.borrow_mut().insert((cas, abp, ytp, rlo, ylead), p.clone());
+		self.cascade_obs_pipeline.borrow_mut().insert((cas, abp, ytp, rlo, ylead, act_ext), p.clone());
 		Ok(p)
 	}
 
@@ -1066,10 +1078,20 @@ impl ControllerRolloutEvaluator
 		{
 			return Err("score_controllers_metal: obs_yaw_lead is not carried by the N-rotor geometry pipeline".into());
 		}
+		// ABI 65 (CTRL-86): the extended plant actuator (asymmetric lag / idle floor) rides the
+		// stage-1 plant; the N-rotor specialization does not carry it.
+		let act_ext = stage1.is_some_and(|s| s.plant.actuator(motor_lag_s).extended());
+		if act_ext && geometry.is_some()
+		{
+			return Err("score_controllers_metal: the CTRL-86 actuator (motor_lag_down_s / pwm_min) is not carried by the N-rotor geometry pipeline".into());
+		}
 		let geom_pipeline = match geometry
 		{
 			Some(rotors) => Some(self.geometry_pipeline(rotors.len() as u32, abp_on)?),
-			None if cas_on || abp_on || ylead_on => Some(self.cascade_obs_pipeline(cas_on, abp_on, controllers[0].yaw_trim_p_kappa().is_some(), rlo, ylead_on)?),
+			None if cas_on || abp_on || ylead_on || act_ext =>
+			{
+				Some(self.cascade_obs_pipeline(cas_on, abp_on, controllers[0].yaw_trim_p_kappa().is_some(), rlo, ylead_on, act_ext)?)
+			}
 			None => None,
 		};
 		let pipeline: &ComputePipelineState = geom_pipeline.as_ref().unwrap_or(&self.pipeline);
@@ -1338,6 +1360,8 @@ impl ControllerRolloutEvaluator
 				cas_rerr_inv: ctbr.and_then(|c| c.cas.rerr).map_or([0.0; 3], |f| f.inv_scale),
 				delta_leak_yaw: controllers[0].delta_leak_bank(crate::controller::YAW_BANK),
 				ylead_tau: controllers[0].yaw_lead_tau().unwrap_or(0.0),
+				motor_settling_time_down_s: stage1.map_or(0.0, |s| s.plant.motor_lag_down_s),
+				pwm_min: stage1.map_or(0.0, |s| s.plant.pwm_min),
 			};
 
 			let b_q0 = self.buf(q0_chunk);
@@ -1701,6 +1725,9 @@ impl ControllerRolloutEvaluator
 	// score_controllers_cpu(episode_errs=). False (default) ⇒ rows unchanged.
 	episode_errs = false,
 	tail_diverged_err_deg = 8.0,
+	// CTRL-86 S1/S2 (ABI 65): the plant actuator's spin-down settling time (0 ⇒
+	// symmetric) and armed-idle floor (0 ⇒ none). Real-life plant (translation) only.
+	motor_lag_down_s = 0.0, pwm_min = 0.0,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_controllers_metal(
@@ -1777,6 +1804,8 @@ pub fn score_controllers_metal(
 	alt_pd_mass: f64,
 	episode_errs: bool,
 	tail_diverged_err_deg: f64,
+	motor_lag_down_s: f32,
+	pwm_min: f32,
 ) -> PyResult<Vec<Vec<f64>>>
 {
 	let verr = pyo3::exceptions::PyValueError::new_err;
@@ -1790,6 +1819,7 @@ pub fn score_controllers_metal(
 		pos_max_tilt_rad,
 	)
 	.map_err(verr)?;
+	let plant = plant.with_actuator(motor_lag_s, motor_lag_down_s, pwm_min).map_err(verr)?;
 	plant.require_translation(translation, "score_controllers_metal").map_err(verr)?;
 	if att_ref.is_tilt() && !translation
 	{
@@ -8574,7 +8604,8 @@ mod tests
 		// + 6 (ABI 62): cas_rate_i_mask + cas_rerr_mask + cas_rerr_alpha + cas_rerr_inv[3].
 		// + 1 (ABI 63): delta_leak_yaw.
 		// + 1 (ABI 64): ylead_tau.
-		assert_eq!(mem::size_of::<RolloutParams>(), 201 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
+		// + 2 (ABI 65, CTRL-86): motor_settling_time_down_s + pwm_min.
+		assert_eq!(mem::size_of::<RolloutParams>(), 203 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============

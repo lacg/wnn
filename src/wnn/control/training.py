@@ -23,6 +23,7 @@ import numpy as np
 if TYPE_CHECKING:  # avoid a runtime import cycle
 	from wnn.control.airframe import Airframe
 
+from wnn.control.airframe import require_inner_loop  # CTRL-86: refuse unflyable airframes
 from wnn.control._accel import (
 	AttitudeSim,
 	WnnController,
@@ -560,6 +561,14 @@ class EpisodeConfig:
 	imu_specific_force: bool = False
 	# Linear rotor-drag coefficient k_d (1/s) on the horizontal body velocity.
 	rotor_drag: float = 0.0
+	# CTRL-86 S1/S2 (ABI 65): the real-life plant's actuator extras, carried with the rest of
+	# the ABI-32 plant (imu_kwargs) to the trainer config, both batch scorers and the classical
+	# rivals. motor_lag_down_s = the motor lag's SPIN-DOWN 2% settling time (s; 0 = symmetric,
+	# the ABI-64 lag — motor_lag_s is then both directions); pwm_min = the armed-idle floor of
+	# every motor command (0 = none). Translation-only; resolved airframe-bound by phased_ga
+	# (AIRFRAME_MOTOR_LAG_S / AIRFRAME_PWM_MIN), so cf21 keeps both at 0.
+	motor_lag_down_s: float = 0.0
+	pwm_min: float = 0.0
 	# CTRL-17 G5: what the per-step attitude error (err/stable/steady, the DAgger
 	# gate and checkpoint, the rivals) is measured against. "level" = identity
 	# (ABI ≤ 31); "tilt" = the position loop's tilt reference (the teacher's own
@@ -579,9 +588,28 @@ class EpisodeConfig:
 			out["imu_specific_force"] = True
 		if k_d > 0.0:
 			out["rotor_drag"] = k_d
+		out.update(self._actuator_kwargs())
 		if out and not self.translation:
-			raise ValueError("EpisodeConfig.imu_specific_force / rotor_drag require translation=True "
-			                 "(both act on the translational dynamics)")
+			raise ValueError("EpisodeConfig.imu_specific_force / rotor_drag / motor_lag_down_s / pwm_min "
+			                 "require translation=True (the real-life plant flies translation)")
+		return out
+
+	def _actuator_kwargs(self) -> dict:
+		"""CTRL-86 S1/S2: `motor_lag_down_s=` / `pwm_min=`, each only when set (> 0), so every
+		cf21 call stays byte-identical. Validated here like Rust's ActuatorSpec::new."""
+		down, floor = float(self.motor_lag_down_s), float(self.pwm_min)
+		if not math.isfinite(down) or down < 0.0:
+			raise ValueError(f"EpisodeConfig.motor_lag_down_s must be finite and >= 0 s, got {down}")
+		if down > 0.0 and not float(self.motor_lag_s) > 0.0:
+			raise ValueError("EpisodeConfig.motor_lag_down_s needs motor_lag_s > 0 (a spin-down time on "
+			                 "a lag-free plant would be silently inert)")
+		if not math.isfinite(floor) or not 0.0 <= floor < 1.0:
+			raise ValueError(f"EpisodeConfig.pwm_min must be an idle floor in [0, 1), got {floor}")
+		out = {}
+		if down > 0.0:
+			out["motor_lag_down_s"] = down
+		if floor > 0.0:
+			out["pwm_min"] = floor
 		return out
 
 	def att_ref_kwargs(self) -> dict:
@@ -605,6 +633,7 @@ class EpisodeConfig:
 		af = self.airframe
 		if af is None:
 			return {}
+		require_inner_loop(af)
 		out = dict(
 			af_arm_length=float(af.arm_length), af_k_thrust=float(af.k_thrust),
 			af_k_drag=float(af.k_drag),
@@ -666,6 +695,7 @@ class EpisodeConfig:
 		af = self.airframe
 		if af is None:
 			return {}
+		require_inner_loop(af)
 		return {k: v for k, v in self._pid_cascade_kwargs(af).items()
 		        if k.startswith("af_pid_")}
 
@@ -678,6 +708,7 @@ class EpisodeConfig:
 		af = self.airframe
 		if af is None:
 			return {}
+		require_inner_loop(af)
 		return dict(
 			arm_length=float(af.arm_length), k_thrust=float(af.k_thrust),
 			k_drag=float(af.k_drag),
@@ -693,10 +724,13 @@ def refuse_python_abi32_plant(config, site: str) -> None:
 	the translating paths are all Rust (trainer, scorers, calibration, recorder)."""
 	if config is None:
 		return
-	if getattr(config, "imu_specific_force", False) or float(getattr(config, "rotor_drag", 0.0) or 0.0) > 0.0:
+	real_life = ("rotor_drag", "motor_lag_down_s", "pwm_min")  # CTRL-86: + the actuator extras
+	if getattr(config, "imu_specific_force", False) or any(
+			float(getattr(config, k, 0.0) or 0.0) > 0.0 for k in real_life):
 		raise NotImplementedError(
 			f"{site}: the Python per-step loop has no translation integrator, so the ABI-32 "
-			"plant (imu_specific_force / rotor_drag) cannot be flown here — use the Rust path "
+			"plant (imu_specific_force / rotor_drag / motor_lag_down_s / pwm_min) cannot be "
+			"flown here — use the Rust path "
 			"(WNN_RUST_DAGGER / the batch scorers), or --imu-inclinometer --no-rotor-drag.")
 
 

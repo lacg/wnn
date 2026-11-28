@@ -10,6 +10,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
 mod actuator_lag; // ABI 34: the lag-aware teachers' actuator-state estimate
+mod actuator_spec; // CTRL-86 S1/S2 (ABI 65): the plant actuator — asymmetric lag + idle floor
 mod altitude_integrator; // L3 (ABI 51): altitude integrator in front of the altitude PD (--alt-integral)
 mod altitude_pd; // scope C stage 1: outer altitude loop handing a collective to a teacher
 mod box_qp; // exact box-QP solver for the MPC teachers (PDAS + primal active-set)
@@ -98,6 +99,10 @@ mod ctrl58_yaw_trim_ff_tests; // ABI 58: --yaw-trim-ff — cT, refusals, setpoin
 mod ctrl74_delta_leak_yaw_tests; // ABI 63 (CTRL-74): --delta-leak-yaw — refusals, bit-identity, yaw-only leak, decoder/label agreement, CPU/GPU score + walk parity
 #[cfg(test)]
 mod ctrl80_yaw_lead_tests; // ABI 64 (CTRL-80): --obs-yaw-lead — refusals, layout + definition, flag-off identity, replay == live, CPU/GPU score + split + walk parity
+#[cfg(test)]
+mod ctrl86_flag_off_pins; // CTRL-86 S1/S2: cf21 flag-off byte-identity pins (captured on ABI 64)
+#[cfg(test)]
+mod ctrl86_actuator_tests; // CTRL-86 S1/S2 (ABI 65): asymmetric lag + idle floor — hand steps, CPU/GPU parity, reach, refusals
 #[cfg(test)]
 mod ctrl57_delta_max_yaw_tests; // ABI 57: --delta-max-yaw — refusals, bit-identity, yaw-only decode, label round trip, CPU/GPU score + walk parity
 #[cfg(test)]
@@ -654,7 +659,24 @@ mod metal_controller;
 ///     equal inputs). Refused on the N-rotor geometry pipeline and on a mixed batch. The MCU
 ///     C port does not carry it (export_controller_c.py refuses). Pin: ctrl80_yaw_lead_tests.rs
 ///     + yaw_lead unit tests.
-pub const ABI_VERSION: u32 = 64;
+/// ABI 65 (27/11/2026, Luiz, Plane CTRL-86 S1+S2 — one bump for both; additive, default =
+/// ABI 64 bit-identical):
+///   * S1 ASYMMETRIC MOTOR LAG: motor_lag_down_s (s, the spin-down 2% settling time; 0 ⇒
+///     symmetric) on RewardGatedConfigPacked, score_controllers_cpu/metal,
+///     score_classical_baseline and score_position_teacher, carried by PlantOpts
+///     (translation-only, like the rest of the real-life plant). Per motor per step the plant
+///     filter uses T_up when the command is above the filtered value, T_down otherwise
+///     (actuator_spec.rs). Every twin follows the plant's ActuatorSpec: the teachers'
+///     ActuatorLag goes PER MOTOR when extended (up/down switching breaks the per-axis
+///     linearity), the cascade d̂ and the student's actuator twin switch per motor too; the
+///     linear teachers DESIGN at the mean of up and down (amendment 1).
+///   * S2 IDLE FLOOR: pwm_min (0 ⇒ none) — the plant clamps every motor command to
+///     [pwm_min, 1] before the lag; the twins clamp the command they filter the same way.
+///   * Metal: RolloutParams (203 words) gains motor_settling_time_down_s + pwm_min; the
+///     rollout's plant filter, actuator twin and cascade d̂ twin switch per motor.
+///     Pins: ctrl86_flag_off_pins.rs (cf21 l2b-shaped regime, captured on ABI 64, both
+///     spellings) + ctrl86_actuator_tests.rs (hand-computed steps, CPU/GPU parity).
+pub const ABI_VERSION: u32 = 65;
 
 /// ABI 61: the precision of the WNN's own attitude estimator + heading ("f32"; a wheel
 /// without this constant runs the f64 estimator). Read by scripts/export_controller_c.py.

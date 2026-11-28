@@ -197,11 +197,13 @@ impl CascadeObs
 		self.replay_rerr = None;
 	}
 
-	pub(crate) fn set_motor_lag(&mut self, motor_lag_s: f32, dt: f32)
+	/// CTRL-86: the plant actuator (a symmetric, floor-free spec is the ABI-64
+	/// set_motor_lag).
+	pub(crate) fn set_actuator(&mut self, spec: crate::actuator_spec::ActuatorSpec, dt: f32)
 	{
 		if let Some(d) = self.dhat.as_mut()
 		{
-			d.set_motor_lag(motor_lag_s, dt);
+			d.set_actuator(spec, dt);
 		}
 	}
 

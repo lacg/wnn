@@ -200,7 +200,12 @@ import os
 # WnnController / dagger_train_batch_inplace(obs_yaw_lead=None) — the yaw LEAD input
 # yaw_err - tau * gyro_z (--obs-yaw-lead), one feature directly after the yaw-anchor pair
 # (its ladder rows sit in the MIDDLE of the thresholds). None = the ABI-63 layout and pipelines.
-EXPECTED_ABI = 64
+# ABI 65 (27/11/2026, Luiz, Plane CTRL-86 S1+S2; additive, default = ABI 64 bit-identical):
+# motor_lag_down_s=0.0 / pwm_min=0.0 on RewardGatedConfigPacked, score_controllers_cpu/metal,
+# score_classical_baseline and score_position_teacher — the real-life plant's asymmetric motor
+# lag (spin-down settling time; 0 = symmetric) and armed-idle floor (0 = none). Translation-only,
+# carried by EpisodeConfig.imu_kwargs() with the rest of the ABI-32 plant.
+EXPECTED_ABI = 65
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

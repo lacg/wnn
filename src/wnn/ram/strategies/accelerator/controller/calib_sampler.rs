@@ -55,7 +55,7 @@ pub fn sample_calibration_features_rs(
 	let mut bank = TeacherBank::new(af);
 	let mut sim = af.sim();
 	// ABI 35: the student's d̂ observer subtracts the plant's LAGGED actuator — same T as the plant.
-	controller.set_observer_motor_lag_core(sim.motor_lag());
+	controller.set_observer_actuator_core(sim.actuator());
 	let loops = OuterLoops::for_cfg(cfg);
 	let mut ep_ctx = CalibEpisode {
 		cfg,
@@ -97,7 +97,7 @@ pub fn sample_student_features_rs(
 	let af = AirframeRs::from_cfg(&cfg);
 	let mut bank = TeacherBank::new(af);
 	let mut sim = af.sim();
-	controller.set_observer_motor_lag_core(sim.motor_lag());
+	controller.set_observer_actuator_core(sim.actuator());
 	let tilt = cfg.full_tilt_deg.to_radians();
 	let mut cap = ImitCapture::feature_sampler();
 	for ep in 0..num_episodes

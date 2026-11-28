@@ -157,13 +157,14 @@ pub(crate) fn rollout_one(
 	{
 		sim.set_motor_lag(motor_lag_s);
 	}
-	// ABI 35: the student's d̂ observer subtracts the plant's LAGGED actuator — same T as the plant.
-	c.set_observer_motor_lag_core(motor_lag_s);
 	// ABI 32: real-life plant options ride the translation config (OFF calls nothing).
 	if let Some(s1) = stage1
 	{
 		s1.plant.apply(&mut sim);
 	}
+	// ABI 35: the student's d̂ observer subtracts the plant's LAGGED actuator — the
+	// plant's own actuator (CTRL-86: up/down lag + idle floor; symmetric ⇒ ABI 64).
+	c.set_observer_actuator_core(sim.actuator());
 	// G5: what the per-step attitude error is measured against (LEVEL = legacy).
 	let att_ref = stage1.map_or(crate::att_err_ref::AttErrRef::LEVEL, |s| s.att_ref);
 	if let Some(rows) = geometry
@@ -801,6 +802,9 @@ pub(crate) fn rollout_one(
 	// err_deg, the run's --gate-err). False (default) ⇒ rows unchanged.
 	episode_errs = false,
 	tail_diverged_err_deg = 8.0,
+	// CTRL-86 S1/S2 (ABI 65): the plant actuator's spin-down settling time (0 ⇒
+	// symmetric) and armed-idle floor (0 ⇒ none). Real-life plant (translation) only.
+	motor_lag_down_s = 0.0, pwm_min = 0.0,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_controllers_cpu(
@@ -866,6 +870,8 @@ pub fn score_controllers_cpu(
 	axis_out: Option<&Bound<'_, pyo3::types::PyList>>,
 	episode_errs: bool,
 	tail_diverged_err_deg: f64,
+	motor_lag_down_s: f32,
+	pwm_min: f32,
 ) -> PyResult<Vec<Vec<f64>>>
 {
 	if controllers.is_empty()
@@ -887,6 +893,7 @@ pub fn score_controllers_cpu(
 		pos_max_tilt_rad,
 	)
 	.map_err(verr)?;
+	let plant = plant.with_actuator(motor_lag_s, motor_lag_down_s, pwm_min).map_err(verr)?;
 	plant.require_translation(translation, "score_controllers_cpu").map_err(verr)?;
 	if att_ref.is_tilt() && !translation
 	{

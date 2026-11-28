@@ -34,7 +34,7 @@ fn rival(teacher: u8, use_est: bool, hold: usize, steps: usize, translation: boo
 		2.0, 1.0, 0.25,
 		v(&s1.init_x), v(&s1.init_y), 1.0, 1.0, 0.5236,
 		0.20, false, 0.0, translation, hold,
-		0,
+		0, (0.0, 0.0),
 		probe,
 	)
 	.expect("rival must score")
@@ -81,7 +81,7 @@ fn rival_first_eight_values_are_the_pinned_row()
 			true, 0.0, s1.init_z.clone(), s1.init_vz.clone(), s1.mass.clone(), s1.collective_frac.clone(),
 			2.0, 1.0, 0.25,
 			s1.init_x.clone(), s1.init_y.clone(), 1.0, 1.0, 0.5236,
-			0.20, false, 0.0, true, 0, 0, None,
+			0.20, false, 0.0, true, 0, 0, None, 0.0, 0.0,
 		)
 		.expect("rival must score");
 		assert_eq!(format!("{:?}", crate::dagger_train::rival_first8(now)), format!("{pinned:?}"), "teacher {teacher}");
@@ -103,7 +103,7 @@ fn position_teacher_hold_column_equals_direct_recomputation()
 		false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0, 0.0, 0, 0, 0.0,
 		ARM, KT, KD, INERTIA, G, DT,
 		[0.0; 12], [0.0; 12], 0.0, 0.0, 0.0, 0.0,
-		false, 2.0, 0.1, 0.0, false, 0.0, false, 0,
+		false, 2.0, 0.1, 0.0, false, 0.0, false, 0, 0.0, 0.0,
 	)
 	.expect("position teacher scores");
 	// The same cascade, by hand.

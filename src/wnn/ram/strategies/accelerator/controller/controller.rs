@@ -441,6 +441,14 @@ pub struct AttitudeSim
 	// than a boolean so the breaking point can be SWEPT (Luiz, 12/08): "how much
 	// lag survives" is a far more useful number than a pass/fail.
 	motor_settling_time_s: f32,
+	// CTRL-86 S1 (ABI 65): the SPIN-DOWN settling time. 0.0 ⇒ symmetric (down = up):
+	// the ABI-64 coefficient on every step, bit-identical. Per motor per step the
+	// filter uses T_up when the command is above the filtered value, T_down otherwise
+	// (actuator_spec.rs).
+	motor_settling_time_down_s: f32,
+	// CTRL-86 S2 (ABI 65): the armed-idle floor of every motor command. 0.0 ⇒ the
+	// ABI-64 clamp [0, 1] (the same f32 operation), bit-identical.
+	pwm_min: f32,
 	// Filtered rotor commands u'. Episode-scoped: reset() seeds them to the
 	// neutral hover expression, matching the controller's own accumulator init,
 	// so a lagged episode does not open with a spurious spin-up transient.
@@ -982,6 +990,8 @@ impl AttitudeSim
 			dt,
 			// Motor lag OFF by default ⇒ every pre-12/08 result reproduces bit-identically.
 			motor_settling_time_s: 0.0,
+			motor_settling_time_down_s: 0.0,
+			pwm_min: 0.0,
 			motor_filt: [0.0; 8],
 			motor_filt_init: false,
 			arm_length,
@@ -1231,15 +1241,7 @@ impl AttitudeSim
 	/// Uses RK4 integration of Euler's rotational equation + quaternion update.
 	pub fn step(&mut self, motor_pwm: [f32; 4])
 	{
-		let cmd = [
-			motor_pwm[0].clamp(0.0, 1.0),
-			motor_pwm[1].clamp(0.0, 1.0),
-			motor_pwm[2].clamp(0.0, 1.0),
-			motor_pwm[3].clamp(0.0, 1.0),
-		];
-		// Motor lag (0.0 ⇒ returns cmd unchanged, bit-identical legacy path).
-		let lagged = self.apply_motor_lag(&cmd, 4);
-		let pwm = [lagged[0], lagged[1], lagged[2], lagged[3]];
+		let pwm = self.actuate(motor_pwm);
 		// W2.4 D5/D6: advance the observation-channel state (freeze transition +
 		// ring push) BEFORE physics — read_imu() at this step saw exactly these
 		// values. Zero fields ⇒ no-op (bit-identical legacy step).
@@ -2696,13 +2698,15 @@ impl WnnController
 		let mut ua = self.dhat_ua;
 		for m in 0..n
 		{
+			// CTRL-86 S2: the plant filters the command clamped to its idle floor.
+			let cmd = if self.obs_pwm_min > 0.0 { self.pwm_applied[m].clamp(self.obs_pwm_min, 1.0) } else { self.pwm_applied[m] };
 			ua[m] = if self.dhat_ua_seeded
 			{
-				ua[m] + self.dhat_lag_alpha * (self.pwm_applied[m] - ua[m])
+				crate::actuator_spec::lag_step(ua[m], cmd, self.dhat_lag_alpha, self.dhat_lag_alpha_down)
 			}
 			else
 			{
-				self.pwm_applied[m]
+				cmd
 			};
 		}
 		ua
@@ -2761,21 +2765,27 @@ impl WnnController
 	/// expression 4dt/max(T, 4dt) on this controller's dt.
 	pub(crate) fn set_observer_motor_lag_core(&mut self, settling_s: f32)
 	{
-		self.dhat_lag_alpha = if settling_s > 0.0
-		{
-			4.0 * self.dt / settling_s.max(4.0 * self.dt)
-		}
-		else
-		{
-			0.0
-		};
+		self.set_observer_actuator_core(crate::actuator_spec::ActuatorSpec::symmetric(settling_s));
+	}
+
+	/// CTRL-86 (ABI 65): arm every twin of the plant's actuator filter with the
+	/// plant's own actuator (`AttitudeSim::actuator()`): lag up/down + idle floor. A
+	/// symmetric, floor-free spec is exactly the ABI-64 set_observer_motor_lag. The
+	/// floor is only modelled where the lag twin runs (lag on) — every CTRL-86
+	/// airframe flies a lag.
+	pub(crate) fn set_observer_actuator_core(&mut self, spec: crate::actuator_spec::ActuatorSpec)
+	{
+		let (a_up, a_down) = spec.alphas(self.dt);
+		self.dhat_lag_alpha = if spec.lag_on() { a_up } else { 0.0 };
+		self.dhat_lag_alpha_down = if spec.lag_on() { a_down } else { 0.0 };
+		self.obs_pwm_min = spec.pwm_min;
 		self.dhat_ua = [0.0; 8];
 		self.dhat_ua_seeded = false;
 		// CTRL-38: the cascade d̂ observer models the same plant lag, with the
 		// teacher's own coefficient (actuator_lag::motor_lag_alpha).
 		if let Some(o) = self.cascade_obs.as_mut()
 		{
-			o.set_motor_lag(settling_s, self.dt);
+			o.set_actuator(spec, self.dt);
 		}
 	}
 
@@ -3161,6 +3171,8 @@ impl WnnController
 			dhat_last_gyro: [0.0f32; 3],
 			dhat_have_last: false,
 			dhat_lag_alpha: 0.0,
+			dhat_lag_alpha_down: 0.0,
+			obs_pwm_min: 0.0,
 			dhat_ua: [0.0f32; 8],
 			dhat_ua_seeded: false,
 			act_have_last: false,
@@ -3427,6 +3439,46 @@ impl WnnController
 
 impl AttitudeSim
 {
+	/// The actuator between the command and the rotors: the clamp to [pwm_min, 1]
+	/// (CTRL-86 S2; pwm_min = 0 is the ABI-64 clamp [0, 1]) then the motor lag (0.0 ⇒
+	/// the clamped command unchanged, the bit-identical legacy path).
+	fn actuate(&mut self, motor_pwm: [f32; 4]) -> [f32; 4]
+	{
+		let cmd = motor_pwm.map(|p| p.clamp(self.pwm_min, 1.0));
+		let lagged = self.apply_motor_lag(&cmd, 4);
+		[lagged[0], lagged[1], lagged[2], lagged[3]]
+	}
+
+	/// TEST-ONLY: one actuator step (clamp + lag) without the physics.
+	#[cfg(test)]
+	pub(crate) fn actuate_for_test(&mut self, motor_pwm: [f32; 4]) -> [f32; 4]
+	{
+		self.actuate(motor_pwm)
+	}
+
+	/// CTRL-86 S1/S2: the spin-down settling time (0 ⇒ symmetric) and the idle floor
+	/// (0 ⇒ none), for Rust hosts (PlantOpts::apply). The caller has validated them
+	/// (ActuatorSpec::new). Like the lag they persist across `reset`.
+	pub(crate) fn set_actuator_extras_core(&mut self, lag_down_s: f32, pwm_min: f32)
+	{
+		debug_assert!(lag_down_s.is_finite() && lag_down_s >= 0.0 && (0.0..1.0).contains(&pwm_min));
+		self.motor_settling_time_down_s = lag_down_s;
+		self.pwm_min = pwm_min;
+		self.motor_filt = [0.0; 8];
+		self.motor_filt_init = false;
+	}
+
+	/// The actuator this plant flies (lag up/down + idle floor) — what every twin of
+	/// its filter is armed from.
+	pub(crate) fn actuator(&self) -> crate::actuator_spec::ActuatorSpec
+	{
+		crate::actuator_spec::ActuatorSpec {
+			lag_up_s: self.motor_settling_time_s,
+			lag_down_s: self.motor_settling_time_down_s,
+			pwm_min: self.pwm_min,
+		}
+	}
+
 	/// ABI 32: rotor-drag setter for Rust hosts (PlantOpts::apply). The caller
 	/// has validated k_d (PlantOpts::new); the pymethod twin validates itself.
 	pub(crate) fn set_rotor_drag_core(&mut self, k_d: f32)
@@ -3453,8 +3505,8 @@ impl AttitudeSim
 		{
 			return out; // OFF — bit-identical legacy path
 		}
-		let t_eff = tt.max(4.0 * self.dt);
-		let alpha = 4.0 * self.dt / t_eff; // == dt/τ, τ = T/4
+		// == dt/τ, τ = T/4. CTRL-86 S1: α_down = α_up when symmetric (the ABI-64 update).
+		let (a_up, a_down) = self.actuator().alphas(self.dt);
 		if !self.motor_filt_init
 		{
 			// Seed at the commanded value on the first step of an episode: the
@@ -3465,7 +3517,7 @@ impl AttitudeSim
 		}
 		for m in 0..n
 		{
-			self.motor_filt[m] += alpha * (cmd[m] - self.motor_filt[m]);
+			self.motor_filt[m] = crate::actuator_spec::lag_step(self.motor_filt[m], cmd[m], a_up, a_down);
 			out[m] = self.motor_filt[m];
 		}
 		out
@@ -4086,6 +4138,12 @@ pub struct WnnController
 	// teachers). Set by the HOST that owns the plant (set_observer_motor_lag),
 	// like the teachers' lag.
 	dhat_lag_alpha: f32,
+	// CTRL-86 S1/S2 (ABI 65): the twin's spin-down coefficient (== dhat_lag_alpha when
+	// the plant's lag is symmetric — the ABI-64 update) and the plant's idle floor
+	// (0 ⇒ the command is filtered unclamped, as in ABI 64). Set with the lag by
+	// set_observer_actuator_core.
+	dhat_lag_alpha_down: f32,
+	obs_pwm_min: f32,
 	dhat_ua: [f32; 8], // ABI 36: the actuator twin, per motor (≤ 8), shared by obs_pwm + d̂
 	dhat_ua_seeded: bool,
 	act_have_last: bool, // ABI 36: a command has flown since reset (twin advances from then on)

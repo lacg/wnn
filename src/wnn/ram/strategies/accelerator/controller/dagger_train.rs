@@ -414,6 +414,16 @@ pub struct RewardGatedConfigPacked
 	// Translation only; pole3 needs alt_pd_zeta == 1.
 	#[pyo3(get)]
 	pub alt_integral: u8,
+	// --- CTRL-86 S1/S2 (ABI 65): the real-life plant's actuator extras, read by
+	// AirframeRs::from_cfg through plant_opts() exactly like rotor_drag — so every sim
+	// it builds (DAgger rollouts, per-round eval, calibration sampler, recorder) flies
+	// the plant the scorers do. motor_lag_down_s = the spin-down 2% settling time
+	// (0 ⇒ symmetric, the ABI-64 lag); pwm_min = the armed-idle floor (0 ⇒ none).
+	// Translation-only, like the rest of PlantOpts (validate_abi32).
+	#[pyo3(get)]
+	pub motor_lag_down_s: f32,
+	#[pyo3(get)]
+	pub pwm_min: f32,
 }
 
 #[pymethods]
@@ -461,6 +471,7 @@ impl RewardGatedConfigPacked
 		write_vote = false, vote_share = None, dagger_label_estimate = false,
 		init_vxy = 0.0,
 		alt_integral = 0,
+		motor_lag_down_s = 0.0, pwm_min = 0.0,
 ))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -553,6 +564,8 @@ impl RewardGatedConfigPacked
 		dagger_label_estimate: bool,
 		init_vxy: f32,
 		alt_integral: u8,
+		motor_lag_down_s: f32,
+		pwm_min: f32,
 	) -> PyResult<Self>
 	{
 		let cfg = Self {
@@ -645,6 +658,8 @@ impl RewardGatedConfigPacked
 			dagger_label_estimate,
 			init_vxy,
 			alt_integral,
+			motor_lag_down_s,
+			pwm_min,
 		};
 		cfg.validate_abi32().map_err(pyo3::exceptions::PyValueError::new_err)?;
 		cfg.validate_alt_integral().map_err(pyo3::exceptions::PyValueError::new_err)?;
@@ -666,6 +681,7 @@ impl RewardGatedConfigPacked
 	pub(crate) fn plant_opts(&self) -> crate::plant_opts::PlantOpts
 	{
 		crate::plant_opts::PlantOpts::new(self.imu_specific_force, self.rotor_drag)
+			.and_then(|p| p.with_actuator(self.motor_lag_s, self.motor_lag_down_s, self.pwm_min))
 			.expect("RewardGatedConfigPacked: plant options validated at construction")
 	}
 
@@ -735,6 +751,7 @@ impl RewardGatedConfigPacked
 	pub(crate) fn validate_abi32(&self) -> Result<(), String>
 	{
 		crate::plant_opts::PlantOpts::new(self.imu_specific_force, self.rotor_drag)?
+			.with_actuator(self.motor_lag_s, self.motor_lag_down_s, self.pwm_min)?
 			.require_translation(self.translation, "RewardGatedConfigPacked")?;
 		if self.att_err_tilt_ref && (!self.translation || self.xy_offset <= 0.0)
 		{
@@ -1226,7 +1243,39 @@ impl AirframeRs
 		self.plant.apply(&mut sim);
 		sim
 	}
+	/// CTRL-86: the plant's actuator (lag up/down + idle floor) — what sim() flies.
+	pub(crate) fn actuator(&self) -> crate::actuator_spec::ActuatorSpec
+	{
+		self.plant.actuator(self.motor_lag_s)
+	}
+
+	/// The lag the linear teachers DESIGN at: T itself when symmetric (ABI 64), the
+	/// mean of up and down under CTRL-86 S1 (amendment 1).
+	fn design_lag_s(&self) -> f32
+	{
+		self.actuator().design_lag_s()
+	}
+
+	/// CTRL-86: arm the teacher's actuator twins with the plant's actuator — only when
+	/// it is extended; a symmetric, floor-free plant leaves the ABI-64 teacher as built.
+	pub(crate) fn arm_teacher_actuator(&self, t: &mut Teacher)
+	{
+		let spec = self.actuator();
+		if spec.extended()
+		{
+			t.arm_actuator(spec, self.dt);
+		}
+	}
+
 	pub(crate) fn teacher(&self, id: u8) -> Teacher
+	{
+		let mut t = self.teacher_build(id);
+		self.arm_teacher_actuator(&mut t);
+		t
+	}
+
+	/// The teacher at the design lag, before its twins see the plant's actuator.
+	fn teacher_build(&self, id: u8) -> Teacher
 	{
 		let mut t = self.teacher_motor(id);
 		// ABI 39 (CTRL-33): mpcof's CASCADE law plans setpoints for the firmware rate
@@ -1242,7 +1291,7 @@ impl AirframeRs
 				self.k_drag,
 				self.inertia,
 				self.k_thrust,
-				self.motor_lag_s,
+				self.design_lag_s(),
 			));
 		}
 		t
@@ -1277,7 +1326,7 @@ impl AirframeRs
 				self.inertia,
 				self.gravity,
 				self.teacher_hover.unwrap_or(0.5),
-				self.motor_lag_s,
+				self.design_lag_s(),
 			);
 		}
 		// D0: ids 1-4 anchor at teacher_hover when one is set (scorer rival, or
@@ -2958,7 +3007,7 @@ pub(crate) fn dagger_train_inplace_with(
 	let mut teachers = TeacherBank::new(af);
 	let mut sim = sim_default(cfg);
 	// ABI 35: the student's d̂ observer subtracts the plant's LAGGED actuator — same T as the plant.
-	controller.set_observer_motor_lag_core(sim.motor_lag());
+	controller.set_observer_actuator_core(sim.actuator());
 
 	let mut stats = TrainStats::default();
 	let mut history_scores: Vec<f64> = Vec::new();
@@ -3689,7 +3738,7 @@ pub fn eval_ensemble_closed_loop(
 		{
 			let mut cb = c.borrow_mut(py);
 			// ABI 35: the d̂ observer subtracts the plant's LAGGED actuator — same T.
-			cb.set_observer_motor_lag_core(sim.motor_lag());
+			cb.set_observer_actuator_core(sim.actuator());
 			cb.reset(iy);
 			cb.seed_att_estimator(init_q); // ABI 32 (no-op when off)
 			cb.set_decode_seed(coin_seed);
@@ -3867,7 +3916,11 @@ pub fn eval_ensemble_closed_loop(
 	// with a measure-only RivalProbe (inert: rival_probe_tests pins the return bit-identical)
 	// and the 14 values of rival_probe::AxisSplit::flat are appended to it. None (the
 	// default) never builds a probe — the shipped call.
-	axis_out = None))]
+	axis_out = None,
+	// CTRL-86 S1/S2 (ABI 65): the plant actuator's spin-down settling time (0 ⇒
+	// symmetric) and armed-idle floor (0 ⇒ none). Real-life plant (translation) only.
+	motor_lag_down_s = 0.0, pwm_min = 0.0,
+	))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_classical_baseline(
 	teacher_id: u8,
@@ -3924,6 +3977,8 @@ pub fn score_classical_baseline(
 	ctbr_outer_hold: usize,
 	alt_integral: u8,
 	axis_out: Option<&Bound<'_, pyo3::types::PyList>>,
+	motor_lag_down_s: f32,
+	pwm_min: f32,
 ) -> PyResult<(f64, f64, f64, f64, f64, f64, f64, f64, f64, f64)>
 {
 	let mut probe = axis_out.map(|_| crate::rival_probe::RivalProbe::measure_only());
@@ -3981,6 +4036,7 @@ pub fn score_classical_baseline(
 		att_err_tilt_ref,
 		ctbr_outer_hold,
 		alt_integral,
+		(motor_lag_down_s, pwm_min),
 		probe.as_mut(),
 	)?;
 	if let (Some(list), Some(p)) = (axis_out, probe.as_ref())
@@ -4060,6 +4116,8 @@ pub(crate) fn score_classical_baseline_probed(
 	att_err_tilt_ref: bool,
 	ctbr_outer_hold: usize,
 	alt_integral: u8,
+	// CTRL-86 S1/S2: (spin-down settling time, idle floor); (0, 0) ⇒ the ABI-64 actuator.
+	actuator_extras: (f32, f32),
 	mut probe: Option<&mut crate::rival_probe::RivalProbe>,
 ) -> PyResult<(f64, f64, f64, f64, f64, f64, f64, f64, f64, f64)>
 {
@@ -4073,6 +4131,9 @@ pub(crate) fn score_classical_baseline_probed(
 		pos_max_tilt_rad as f32,
 	)
 	.map_err(pyo3::exceptions::PyValueError::new_err)?;
+	let plant = plant
+		.with_actuator(motor_lag_s, actuator_extras.0, actuator_extras.1)
+		.map_err(pyo3::exceptions::PyValueError::new_err)?;
 	plant
 		.require_translation(translation, "score_classical_baseline")
 		.map_err(pyo3::exceptions::PyValueError::new_err)?;
@@ -4899,6 +4960,7 @@ mod rival_plant_tests
 			false,
 			0,
 			0, None, // alt_integral off
+			0.0, 0.0, // CTRL-86: actuator extras off
 		)
 		.map(rival_first8)
 		.expect("scorer must accept a well-formed plant")
@@ -5105,6 +5167,8 @@ mod d0_hover_anchor_tests
 			write_vote: false, vote_share: None, dagger_label_estimate: false,
 			init_vxy: 0.0,
 			alt_integral: 0,
+			motor_lag_down_s: 0.0,
+			pwm_min: 0.0,
 		}
 	}
 
@@ -5636,6 +5700,8 @@ mod motor_lag_axis_f_tests
 			write_vote: false, vote_share: None, dagger_label_estimate: false,
 			init_vxy: 0.0,
 			alt_integral: 0,
+			motor_lag_down_s: 0.0,
+			pwm_min: 0.0,
 		}
 	}
 
@@ -5718,7 +5784,7 @@ mod motor_lag_axis_f_tests
 			false, 2.0, 0.1,
 			false, 0.0, vec![], vec![], vec![], vec![],
 			2.0, 1.0, 0.25, vec![], vec![], 1.0, 1.0, 0.5236,
-			motor_lag_s, false, 0.0, false, 0, 0, None,
+			motor_lag_s, false, 0.0, false, 0, 0, None, 0.0, 0.0,
 		)
 		.map(rival_first8)
 		.expect("baseline scores")
