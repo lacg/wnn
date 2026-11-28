@@ -23,6 +23,22 @@ stress_kwargs(). Every model (the WNN twin, the rivals' designs) stays at the no
 From 28/11 `all` is the ONLY robustness number reported; the one-factor cells below are
 DIAGNOSTIC (kept, scorable, never reported). `nom` stays as the in-range reference + G4 gate.
 
+CELL `all` RE-LEVELLED (Luiz 28/11/2026 — prereg Amendment 3, "Zhang rule on the l2b reference ranges"):
+Zhang 2022 Table I rule — every test bound = training lower x0.8 / training upper x1.2 — applied to ONE FIXED
+reference, the training ranges of the ORIGINAL base l2b (never an arm's own: the yardstick must not move with the
+arm). l2b trained wear factor 0.80-1.20, mass 0.85-1.15, lag T 0.20 fixed, noise x1  ->  `all` = wear factor
+U(0.64, 1.44) per motor (EXACT: fixed base 1.04 x (1 + U(-0.3846, 0.3846)), the multiplier composition
+apply_motor_fault already uses), mass 1 + U(-0.38, 0.38) (SYMMETRIC FALLBACK, 0.62-1.38: the mass draw has no base
+factor, so the exact 0.68-1.38 needs code; harsher at the low end), lag T_e ~ U(0.16, 0.24) s, noise x1.2 FIXED
+(the training noise is a point, so the Zhang interval is [x0.8, x1.2]; less noise is not a stress, the scorer has no
+per-episode noise draw, x1.2 = the range's worst case). Inertia ±20 % and latency 8-12 ms JOINED on ABI 70 (Luiz
+28/11, prereg Amendment 4): `all` now also flies inertia_jitter 0.20 (diag scale U(0.8, 1.2) per episode) and
+control_latency_ms (8, 12) (Zhang's 10 ms x0.8 / x1.2). The ABI-69 `all` (no inertia / latency) is kept, scorable, as
+`all_a69` (diagnostic); its caches were renamed data/<k>__all_a69.* (their meta still says cell "all").
+The Amendment-2 cell (wear +-30 %, mass +-25 %, lag U(0.15, 0.30), noise x2) is kept, scorable, as `all_v1`
+(diagnostic): every number quoted as "all" before this amendment is an all_v1 number (caches renamed
+data/<k>__all_v1.npz; their meta still says cell "all" — that is the v1 definition).
+
 CTRL-83 fairness fixes (ABI 66, Luiz 28/11 "fix it properly"):
   D1  a lag cell changes the PLANT's lag only. Every controller's design-time model stays
       at the nominal T = 0.20 (EpisodeConfig.model_motor_lag_s): MPCOF / LQI are no longer
@@ -67,19 +83,86 @@ def _lag(T):
 	return f
 
 
-# CELL `all` levels (Amendment 2): the four one-factor PRIMARY levels, flown jointly.
-ALL_LEVELS = dict(wear=0.30, mass=0.25, lag_range=(0.15, 0.30), noise=2.0)
+# The FIXED Zhang reference (Amendment 3): the ORIGINAL base l2b's training ranges. Never an arm's own.
+ZHANG_REF = dict(wear_factor=(0.80, 1.20), mass_factor=(0.85, 1.15), lag_T=(0.20, 0.20), noise=(1.0, 1.0))
+ZHANG_LO, ZHANG_HI = 0.8, 1.2   # Zhang 2022 Table I: test = train lower x0.8, train upper x1.2
+
+# CELL `all_v1` levels (Amendment 2, scored 28/11 on ABI 69 — superseded as the headline by Amendment 3).
+ALL_LEVELS_V1 = dict(wear=0.30, mass=0.25, lag_range=(0.15, 0.30), noise=2.0)
+# CELL `all` levels (Amendments 3+4, Luiz 28/11): Zhang on ZHANG_REF. wear_range = the per-motor thrust factor range
+# (exact); mass = symmetric jitter (fallback for 0.68-1.38, see the module doc); lag_range s; noise = fixed multiplier;
+# inertia -> EpisodeConfig.inertia_jitter (diag scale U(0.8, 1.2); l2b trained the nominal inertia);
+# latency_ms -> EpisodeConfig.control_latency_ms (Zhang's 10 ms observation latency x0.8 / x1.2). ABI 70.
+ALL_LEVELS = dict(wear_range=(0.64, 1.44), mass=0.38, lag_range=(0.16, 0.24), noise=1.2,
+                  inertia=0.20, latency_ms=(8.0, 12.0))
+# CELL `all_a69`: the Amendment-3 cell as scored on ABI 69 (no inertia / latency), kept for its caches (diagnostic).
+ALL_LEVELS_A69 = {k: v for k, v in ALL_LEVELS.items() if k not in ("inertia", "latency_ms")}
 
 
-def _all(ec):
+def _wear_range(lo, hi):
+	"""Per-motor thrust factor U(lo, hi), exact: fixed base b = (lo+hi)/2 times the scorer's own (1 + U(-m, m)),
+	m = (hi-lo)/(hi+lo). Composes like apply_motor_fault (the base multiplier flows to every scorer's resolved draw)."""
+	def f(ec):
+		d = ec.disturbance
+		if any(abs(float(x) - 1.0) > 1e-12 for x in d.motor_asym):
+			raise SystemExit(f"ctrl83: wear range on a faulted base multiplier {d.motor_asym} — not the amended plant")
+		b, m = 0.5 * (lo + hi), (hi - lo) / (hi + lo)
+		return dc.replace(ec, disturbance=dc.replace(d, motor_asym=(b, b, b, b), motor_asym_mag=float(m)))
+	return f
+
+
+def _check_joint_plant(ec, cell):
 	if float(getattr(ec, "motor_lag_down_s", 0.0)) != 0.0 or float(getattr(ec, "pwm_min", 0.0)) != 0.0:
-		raise SystemExit("ctrl83: cell all on an asymmetric/floored actuator — not the amended plant")
+		raise SystemExit(f"ctrl83: cell {cell} on an asymmetric/floored actuator — not the amended plant")
 	if float(ec.motor_lag_s) != float(NOMINAL["lag_T"]):
-		raise SystemExit(f"ctrl83: cell all needs the nominal plant lag {NOMINAL['lag_T']} (got {ec.motor_lag_s})")
-	ec = _noise(ALL_LEVELS["noise"])(_mass(ALL_LEVELS["mass"])(_wear(ALL_LEVELS["wear"])(ec)))
+		raise SystemExit(f"ctrl83: cell {cell} needs the nominal plant lag {NOMINAL['lag_T']} (got {ec.motor_lag_s})")
+
+
+def _per_episode_lag(ec, rng):
 	# The plant lag is drawn PER EPISODE (Rust); every MODEL stays at the nominal design lag (D1).
-	return dc.replace(ec, model_motor_lag_s=float(NOMINAL["lag_T"]),
-	                  stress_motor_lag_range=tuple(float(x) for x in ALL_LEVELS["lag_range"]))
+	return dc.replace(ec, model_motor_lag_s=float(NOMINAL["lag_T"]), stress_motor_lag_range=tuple(float(x) for x in rng))
+
+
+def _all_v1(ec):
+	_check_joint_plant(ec, "all_v1")
+	L = ALL_LEVELS_V1
+	return _per_episode_lag(_noise(L["noise"])(_mass(L["mass"])(_wear(L["wear"])(ec))), L["lag_range"])
+
+
+# CTRL-90 SECONDARY readout (docs/ctrl90_zhang_trained_prereg.md): Zhang x0.8/x1.2 applied to the l2bnmwz arm's OWN
+# training ranges = the honest OOD read for an arm trained on `all`. From ABI 70 the arm trains the FULL golden cell
+# (--train-motor-asym-range 0.64 1.44, --train-mass-jitter 0.38, --train-noise-scale 1.2, --train-motor-lag-range
+# 0.16 0.24, --train-inertia-jitter 0.20, --train-latency-range 8 12), so every axis is derived by the same rule:
+#   wear    factor 0.64-1.44      -> U(0.512, 1.728)  (exact, base x mag)
+#   mass    factor 0.62-1.38      -> 0.496-1.656      -> ±0.656 (SYMMETRIC FALLBACK, max deviation; harsher low end)
+#   lag     U(0.16, 0.24) s       -> U(0.128, 0.288)  (exact)
+#   noise   x1.2 (a point)        -> x1.44            (the interval's worst case, as `all`)
+#   inertia scale 0.8-1.2         -> 0.64-1.44        -> ±0.44 (SYMMETRIC FALLBACK: inertia_jitter has no base factor)
+#   latency 8-12 ms               -> (6.4, 14.4) ms   (exact; the scorer rounds to physics steps)
+# Report-only for l2bnmwz (+ its l2bnmw pair); NOT a headline.
+ALLZ90_LEVELS = dict(wear_range=(0.512, 1.728), mass=0.656, lag_range=(0.128, 0.288), noise=1.44,
+                     inertia=0.44, latency_ms=(6.4, 14.4))
+
+
+def _plant_jitter(L):
+	"""The CTRL-89 (ABI 70) inertia / latency stress a joint cell's LEVELS carry (absent keys = off)."""
+	def f(ec):
+		ch = {}
+		if "inertia" in L:
+			ch["inertia_jitter"] = float(L["inertia"])
+		if "latency_ms" in L:
+			ch["control_latency_ms"] = tuple(float(x) for x in L["latency_ms"])
+		return dc.replace(ec, **ch) if ch else ec
+	return f
+
+
+def _zhang_joint(cell, L):
+	"""A Zhang joint cell (`all`, `all_a69`, `allz90`): wear range + mass + noise + inertia/latency + per-episode lag."""
+	def f(ec):
+		_check_joint_plant(ec, cell)
+		ec = _plant_jitter(L)(_noise(L["noise"])(_mass(L["mass"])(_wear_range(*L["wear_range"])(ec))))
+		return _per_episode_lag(ec, L["lag_range"])
+	return f
 
 
 def _payload(scale, t_s):
@@ -101,7 +184,16 @@ def _noise(k):
 # (in-range reference + G4). The former primary one-factor cells (wear30 .. noise2) are diagnostic.
 CELLS = (
 	("nom", "anchor", "training values", True, lambda ec: ec),
-	("all", "joint", "wear ±30% + mass ±25% + lag T_e~U(0.15,0.30) s + noise x2", True, _all),
+	("all", "joint", "Zhang on l2b: wear U(0.64,1.44) + mass ±38% + lag T_e~U(0.16,0.24) s + noise x1.2"
+	                 " + inertia ±20% + latency 8-12 ms", True, _zhang_joint("all", ALL_LEVELS)),
+	# Amendment 3's cell as scored on ABI 69 (before inertia / latency joined; kept for its caches).
+	("all_a69", "joint", "Zhang on l2b, ABI 69: wear U(0.64,1.44) + mass ±38% + lag T_e~U(0.16,0.24) s + noise x1.2",
+	 False, _zhang_joint("all_a69", ALL_LEVELS_A69)),
+	# Amendment 2's joint cell, superseded by Amendment 3 (kept scorable; every pre-amendment "all" number).
+	("all_v1", "joint", "wear ±30% + mass ±25% + lag T_e~U(0.15,0.30) s + noise x2", False, _all_v1),
+	("allz90", "joint", "Zhang on l2bnmwz's own training: wear U(0.512,1.728) + mass ±65.6% + lag U(0.128,0.288) s"
+	                    " + noise x1.44 + inertia ±44% + latency 6.4-14.4 ms (CTRL-90 secondary)", False,
+	 _zhang_joint("allz90", ALLZ90_LEVELS)),
 	("wear30", "wear", "motor_asym_mag 0.30", False, _wear(0.30)),
 	("mass25", "mass", "mass_jitter 0.25", False, _mass(0.25)),
 	("lag30", "lag", "motor_lag_s T 0.30", False, _lag(0.30)),
@@ -139,7 +231,14 @@ CONTROLLERS = tuple(f"wnn_s{s}" for s in WNN_SEEDS) + tuple(r[0] for r in RIVALS
 EXTRA_WNN = {
 	"l2bnm": "C-S2-d_wposx2_a66_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2bnm_full_s{s}",
 	"l2bnmw": "C-S2-d_wposx2_a68_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2bnmw_full_s{s}",
+	# CTRL-90 (prereg docs/ctrl90_zhang_trained_prereg.md): l2bnmw trained ON the full Zhang `all` ranges (ABI 70).
+	"l2bnmwz": "C-S2-d_wposx2_a70_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2bnmwz_full_s{s}",
 }
+# Each joint cell's LEVELS: the ONE source its transform AND score_cell.py's G3 gate read (a cell and its gate
+# cannot disagree; tests/controller_ctrl83_cells.py pins it).
+CELL_LEVELS = {"all": ALL_LEVELS, "all_a69": ALL_LEVELS_A69, "all_v1": ALL_LEVELS_V1, "allz90": ALLZ90_LEVELS}
+# The lag range each joint cell draws per episode (score_cell.py G3).
+CELL_LAG_RANGE = {c: L["lag_range"] for c, L in CELL_LEVELS.items()}
 EXTRA_CONTROLLERS = tuple(f"{arm}_s{s}" for arm in EXTRA_WNN for s in WNN_SEEDS)
 ALL_CONTROLLERS = CONTROLLERS + EXTRA_CONTROLLERS
 
@@ -154,6 +253,17 @@ def wnn_tag(k):
 		return WNN_TAG.format(s=int(k[5:]))
 	arm, s = k.rsplit("_s", 1)
 	return EXTRA_WNN[arm].format(s=int(s))
+
+
+def jitter_levels(cell_id):
+	"""{scorer kwarg: level} of the CTRL-89 inertia / latency stress a joint cell carries (empty = none)."""
+	L = CELL_LEVELS.get(cell_id, {})
+	out = {}
+	if "inertia" in L:
+		out["inertia_jitter"] = float(L["inertia"])
+	if "latency_ms" in L:
+		out["control_latency_ms"] = tuple(float(x) for x in L["latency_ms"])
+	return out
 
 
 def apply(cell_id, ec):

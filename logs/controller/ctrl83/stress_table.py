@@ -2,7 +2,8 @@
 MPCOF eq-info (row B) on top, then every WNN arm (seeds s1|s2|s3.. + mean μ / total Σ), then the rivals (MPCOF
 est-fed, PID firmware, LQI; deterministic, one value).
 
-Default (prereg Amendment 2, Luiz 28/11): ONLY the joint-OOD cell `all` — THE robustness number — plus the
+Default (prereg Amendments 2+3, Luiz 28/11): ONLY the joint-OOD cell `all` (Zhang rule since Amdt 3; the
+Amendment-2 cell is `all_v1`, --diagnostic) — THE robustness number — plus the
 in-range TEST row `nom` for reference. The one-factor cells are diagnostic-only: --diagnostic prints them too.
 
   stress_table.py [--diagnostic] [arm=prefix ...]   (default arms: l2b=wnn, l2bnm, l2bnmw)
@@ -13,12 +14,13 @@ import report as R
 D = os.path.join(HERE, "data")
 ARGS = [a for a in sys.argv[1:] if a != "--diagnostic"]
 DIAG = "--diagnostic" in sys.argv[1:]
-W = [a.split("=") for a in ARGS] or [("WNN l2b", "wnn"), ("WNN l2bnm", "l2bnm"), ("WNN l2bnmw", "l2bnmw")]
-LABEL = {"nom": "in range (TEST)", "all": "ALL joint-OOD", "wear30": "wear ±30%", "lag30": "lag 0.30 s",
+W = [a.split("=") for a in ARGS] or [("WNN l2b", "wnn"), ("WNN l2bnm", "l2bnm"), ("WNN l2bnmw", "l2bnmw"),
+                                     ("WNN l2bnmwz", "l2bnmwz")]
+LABEL = {"nom": "in range (TEST)", "all": "ALL joint-OOD (Zhang)", "all_v1": "all_v1 (Amdt 2)", "all_a69": "all_a69 (Amdt 3, ABI 69)","allz90": "allz90 (CTRL-90 OOD)", "wear30": "wear ±30%", "lag30": "lag 0.30 s",
          "mass25": "mass spread ±25%", "lag10": "lag 0.10 s", "noise2": "noise ×2"}
 CELLS = [("all", LABEL["all"]), ("nom", LABEL["nom"])]
 if DIAG:
-	CELLS += [(c, LABEL[c] + " (diag)") for c in ("wear30", "mass25", "lag30", "lag10", "noise2")]
+	CELLS += [(c, LABEL[c] + " (diag)") for c in ("allz90", "all_a69", "all_v1", "wear30", "mass25", "lag30", "lag10", "noise2")]
 RIV = [("mpcofA", "MPCOF est-fed"), ("pid", "PID firmware"), ("lqi", "LQI")]
 SEEDS = (1, 2, 3, 4, 5)
 
@@ -34,8 +36,10 @@ def wnn_rows(prefix, c):
 	return v
 
 
-print("cell `all` = every episode draws wear ±30% + mass spread ±25% + plant lag T_e ~ U(0.15, 0.30) s + sensor noise ×2"
-      " at once; every model (WNN twin, rival designs) stays at the nominal 0.20 s · TEST, 35 CF2.1 units × 100 eps")
+print("cell `all` (Amdts 3+4, Zhang x0.8/x1.2 on l2b's ranges, ABI 70) = every episode draws wear factor U(0.64, 1.44)"
+      " per motor + mass ±38% + plant lag T_e ~ U(0.16, 0.24) s + sensor noise ×1.2 + inertia ±20% + latency 8-12 ms at"
+      " once; every model stays at the nominal 0.20 s · TEST, 35 CF2.1 units × 100 eps · older cells = all_a69 (no"
+      " inertia/latency), all_v1 (--diagnostic)")
 print("WNN rows: seeds s1|s2|s3.. then the arm's mean μ / total Σ over the seeds scored (f = flying/not scored) ·"
       " rival rows: one deterministic controller, one value")
 print(f"{'cell / controller':34s} | {'stable %':44s} | {'err °':33s} | {'steady °':33s} | fails /3500")
