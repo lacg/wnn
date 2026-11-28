@@ -1,0 +1,19 @@
+
+running 1 test
+test rival_probe_tests::test_units_rival_rows_rescore_f32_lineage ... [self-check] unit 99990101 est-fed shipped row reproduces the installed wheel: stable 1.0000 err 1.6927° steady 0.8094° pos 0.4691 m
+[rescore] row A NEW(f32): stable 87.43 err 4.875 steady 2.876 pos 0.513 fails 440/3500 pos_hold 0.588 | OLD(ABI 60): stable 100.00 err 1.352 steady 0.684 pos 0.341 | MPCOF>rate(h10) est-fed, no bias comp
+[rescore] row B NEW(f32): stable 91.29 err 3.912 steady 1.911 pos 0.521 fails 305/3500 pos_hold 0.612 | OLD(ABI 60): stable 100.00 err 0.691 steady 0.165 pos 0.357 | MPCOF>rate(h10) est-fed + bias comp (eq-info COMPARATOR)
+[rescore] row C NEW(f32): stable 91.14 err 4.014 steady 2.101 pos 0.522 fails 310/3500 pos_hold 0.620 | OLD(ABI 60): stable 100.00 err 0.690 steady 0.163 pos 0.357 | MPCOF>rate(h10) oracle-fed (bound, label law)
+
+CTRL-69 — MPCOF rows A/B/C re-scored on the f32 (ABI 61/62) lineage, TEST (35 units × 100 episodes)
+| arm | stable % | err ° | steady ° | pos m | fails /3500 | Δ steady vs shipped ° | units better/worse | hold roll ° | hold pitch ° | hold yaw ° | fed bias r/p ° | after comp r/p ° |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| A MPCOF>rate(h10) est-fed, no bias comp | 87.43 | 4.875 | 2.876 | 0.513 | 440 | +0.000 | 0/0 | 2.099 | 0.980 | 0.840 | 1.02 / 0.62 | 1.02 / 0.62 |
+| B MPCOF>rate(h10) est-fed + bias comp (eq-info COMPARATOR) | 91.29 | 3.912 | 1.911 | 0.521 | 305 | -0.964 | 35/0 | 1.377 | 0.530 | 0.847 | 0.57 / 0.28 | 0.18 / 0.13 |
+| C MPCOF>rate(h10) oracle-fed (bound, label law) | 91.14 | 4.014 | 2.101 | 0.522 | 310 | -0.774 | 33/2 | 1.416 | 0.566 | 1.009 | 0.00 / 0.00 | 0.00 / 0.00 |
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 545 filtered out; finished in 1.16s
+
+    Finished `release` profile [optimized] target(s) in 0.03s
+     Running unittests lib.rs (/Volumes/20260401-WDBlack-SN850X-2TB/cargo-target/release/deps/ram_controller-ccaa6824e83c78eb)

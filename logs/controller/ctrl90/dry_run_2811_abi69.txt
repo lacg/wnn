@@ -1,0 +1,14 @@
+# CTRL-90 dry run 28/11/2026 (ABI 69 installed, Z90_DRY=1, live checkout)
+DRY C-S2-d_wposx2_a69_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2bnmwz_full_s1  (reference C-S2-d_wposx2_a68_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2bnmw_full_s1)
+< 0.30 > 0.44 < 0.15 < 0.30 > 0.16 > 0.24 
+  validate ref (l2bnmw): OK 31337001 0.5 None dense_hold lag 0.2 None test-wear 0.2 | anchor nominal nominal | train per_episode:0.3 uniform:0.15,0.3 | eps:200,regime:flown,ladder:quantile,yaw:dense,tilt:dense,gyroz:dense,gyroxy:dense_hold | 5 35 99990101 99990135 | bccc19a0c051d13e
+  validate arm: OK 31337001 0.5 None dense_hold lag 0.2 None test-wear 0.2 | anchor nominal nominal | train per_episode:0.44 uniform:0.16,0.24 | eps:200,regime:flown,ladder:quantile,yaw:dense,tilt:dense,gyroz:dense,gyroxy:dense_hold | 5 35 99990101 99990135 | bccc19a0c051d13e
+DRY C-S2-d_wposx2_a69_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2bnmwz_full_s2  (reference C-S2-d_wposx2_a68_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2bnmw_full_s2)
+< 0.30 > 0.44 < 0.15 < 0.30 > 0.16 > 0.24 
+  validate ref (l2bnmw): OK 31337002 0.5 None dense_hold lag 0.2 None test-wear 0.2 | anchor nominal nominal | train per_episode:0.3 uniform:0.15,0.3 | eps:200,regime:flown,ladder:quantile,yaw:dense,tilt:dense,gyroz:dense,gyroxy:dense_hold | 5 35 99990101 99990135 | afcb0877a4d40562
+  validate arm: OK 31337002 0.5 None dense_hold lag 0.2 None test-wear 0.2 | anchor nominal nominal | train per_episode:0.44 uniform:0.16,0.24 | eps:200,regime:flown,ladder:quantile,yaw:dense,tilt:dense,gyroz:dense,gyroxy:dense_hold | 5 35 99990101 99990135 | afcb0877a4d40562
+DRY C-S2-d_wposx2_a69_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2bnmwz_full_s3  (reference C-S2-d_wposx2_a68_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2bnmw_full_s3)
+< 0.30 > 0.44 < 0.15 < 0.30 > 0.16 > 0.24 
+  validate ref (l2bnmw): OK 31337003 0.5 None dense_hold lag 0.2 None test-wear 0.2 | anchor nominal nominal | train per_episode:0.3 uniform:0.15,0.3 | eps:200,regime:flown,ladder:quantile,yaw:dense,tilt:dense,gyroz:dense,gyroxy:dense_hold | 5 35 99990101 99990135 | c6d2aed2cd41056c
+  validate arm: OK 31337003 0.5 None dense_hold lag 0.2 None test-wear 0.2 | anchor nominal nominal | train per_episode:0.44 uniform:0.16,0.24 | eps:200,regime:flown,ladder:quantile,yaw:dense,tilt:dense,gyroz:dense,gyroxy:dense_hold | 5 35 99990101 99990135 | c6d2aed2cd41056c
+DRY OK: 3 runs validated (seeds: 1 2 3; arms: l2bnmwz)
