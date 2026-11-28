@@ -1,0 +1,27 @@
+# CTRL-87 dry run 28/11/2026 (ABI 68, N87_DRY=1, branch ctrl87-train-spread + the UNPACKED ABI-68 wheel /tmp/ctrl87_site, never installed; run logs read from the live checkout)
+## N87_ARMS='l2bnm l2bnmw'
+DRY C-S2-d_wposx2_a66_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2bnm_full_s1  (reference C-S2-d_wposx2_a63_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2b_full_s1)
+> --anchor-mass > nominal 
+  validate l2b: OK 31337001 0.5 None dense_hold lag 0.2 None test-wear 0.2 | anchor true true | train per_episode:0.2 fixed | eps:200,regime:flown,ladder:quantile,yaw:dense,tilt:dense,gyroz:dense,gyroxy:dense_hold | 5 35 99990101 99990135 | bccc19a0c051d13e
+  validate arm: OK 31337001 0.5 None dense_hold lag 0.2 None test-wear 0.2 | anchor nominal nominal | train per_episode:0.2 fixed | eps:200,regime:flown,ladder:quantile,yaw:dense,tilt:dense,gyroz:dense,gyroxy:dense_hold | 5 35 99990101 99990135 | bccc19a0c051d13e
+DRY C-S2-d_wposx2_a68_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2bnmw_full_s1  (reference C-S2-d_wposx2_a63_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2b_full_s1)
+> --anchor-mass > nominal > --train-motor-asym-mag > 0.30 > --train-motor-lag-range > 0.15 > 0.30 
+  validate l2b: OK 31337001 0.5 None dense_hold lag 0.2 None test-wear 0.2 | anchor true true | train per_episode:0.2 fixed | eps:200,regime:flown,ladder:quantile,yaw:dense,tilt:dense,gyroz:dense,gyroxy:dense_hold | 5 35 99990101 99990135 | bccc19a0c051d13e
+  validate arm: OK 31337001 0.5 None dense_hold lag 0.2 None test-wear 0.2 | anchor nominal nominal | train per_episode:0.3 uniform:0.15,0.3 | eps:200,regime:flown,ladder:quantile,yaw:dense,tilt:dense,gyroz:dense,gyroxy:dense_hold | 5 35 99990101 99990135 | bccc19a0c051d13e
+DRY C-S2-d_wposx2_a66_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2bnm_full_s2  (reference C-S2-d_wposx2_a63_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2b_full_s2)
+> --anchor-mass > nominal 
+  validate l2b: OK 31337002 0.5 None dense_hold lag 0.2 None test-wear 0.2 | anchor true true | train per_episode:0.2 fixed | eps:200,regime:flown,ladder:quantile,yaw:dense,tilt:dense,gyroz:dense,gyroxy:dense_hold | 5 35 99990101 99990135 | afcb0877a4d40562
+  validate arm: OK 31337002 0.5 None dense_hold lag 0.2 None test-wear 0.2 | anchor nominal nominal | train per_episode:0.2 fixed | eps:200,regime:flown,ladder:quantile,yaw:dense,tilt:dense,gyroz:dense,gyroxy:dense_hold | 5 35 99990101 99990135 | afcb0877a4d40562
+DRY C-S2-d_wposx2_a68_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2bnmw_full_s2  (reference C-S2-d_wposx2_a63_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2b_full_s2)
+> --anchor-mass > nominal > --train-motor-asym-mag > 0.30 > --train-motor-lag-range > 0.15 > 0.30 
+  validate l2b: OK 31337002 0.5 None dense_hold lag 0.2 None test-wear 0.2 | anchor true true | train per_episode:0.2 fixed | eps:200,regime:flown,ladder:quantile,yaw:dense,tilt:dense,gyroz:dense,gyroxy:dense_hold | 5 35 99990101 99990135 | afcb0877a4d40562
+  validate arm: OK 31337002 0.5 None dense_hold lag 0.2 None test-wear 0.2 | anchor nominal nominal | train per_episode:0.3 uniform:0.15,0.3 | eps:200,regime:flown,ladder:quantile,yaw:dense,tilt:dense,gyroz:dense,gyroxy:dense_hold | 5 35 99990101 99990135 | afcb0877a4d40562
+DRY C-S2-d_wposx2_a66_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2bnm_full_s3  (reference C-S2-d_wposx2_a63_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2b_full_s3)
+> --anchor-mass > nominal 
+  validate l2b: OK 31337003 0.5 None dense_hold lag 0.2 None test-wear 0.2 | anchor true true | train per_episode:0.2 fixed | eps:200,regime:flown,ladder:quantile,yaw:dense,tilt:dense,gyroz:dense,gyroxy:dense_hold | 5 35 99990101 99990135 | c6d2aed2cd41056c
+  validate arm: OK 31337003 0.5 None dense_hold lag 0.2 None test-wear 0.2 | anchor nominal nominal | train per_episode:0.2 fixed | eps:200,regime:flown,ladder:quantile,yaw:dense,tilt:dense,gyroz:dense,gyroxy:dense_hold | 5 35 99990101 99990135 | c6d2aed2cd41056c
+DRY C-S2-d_wposx2_a68_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2bnmw_full_s3  (reference C-S2-d_wposx2_a63_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2b_full_s3)
+> --anchor-mass > nominal > --train-motor-asym-mag > 0.30 > --train-motor-lag-range > 0.15 > 0.30 
+  validate l2b: OK 31337003 0.5 None dense_hold lag 0.2 None test-wear 0.2 | anchor true true | train per_episode:0.2 fixed | eps:200,regime:flown,ladder:quantile,yaw:dense,tilt:dense,gyroz:dense,gyroxy:dense_hold | 5 35 99990101 99990135 | c6d2aed2cd41056c
+  validate arm: OK 31337003 0.5 None dense_hold lag 0.2 None test-wear 0.2 | anchor nominal nominal | train per_episode:0.3 uniform:0.15,0.3 | eps:200,regime:flown,ladder:quantile,yaw:dense,tilt:dense,gyroz:dense,gyroxy:dense_hold | 5 35 99990101 99990135 | c6d2aed2cd41056c
+DRY OK: 6 runs validated (seeds: 1 2 3; arms: l2bnm l2bnmw)

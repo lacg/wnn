@@ -28,7 +28,8 @@
 # default to the live checkout.
 ROOT=${N87_ROOT:-/Users/lacg/wnn}
 cd $ROOT || exit 1
-L=${N87_L:-logs/controller/ctrl48}
+SAVE=logs/controller/ctrl48  # the save paths phased_ga writes (relative to ROOT, as every flown argv carries)
+L=${N87_L:-$SAVE}
 RUNS=$L/runs.log
 VENV=/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv
 ABI=68
@@ -111,7 +112,7 @@ build()
 	[ "$(validate "$RAWLINE")" = "$(validate "$CLINE")" ] || abort "$ref: the deduped l2b argv does not resolve like the flown one"
 	[ "$(count "$CLINE" "--base-seed $((31337000 + s)) ")" = 1 ] || abort "$ref: does not carry --base-seed $((31337000 + s)) once"
 	echo "$CLINE" | grep -qE -- "--anchor-mass|$WEAR_FLAG|$LAG_FLAG|--obs-yaw-lead|--motor-lag-down-s|--model-motor-lag" && abort "$ref: the reference already carries an arm flag"
-	ARGV=$($VENV/bin/python $L/rebuild_argv.py $L/$ref.out fly $L/ckpt_$tag $L/${tag}_winner.yaml.gz $flags 2>/dev/null) \
+	ARGV=$($VENV/bin/python $L/rebuild_argv.py $L/$ref.out fly $SAVE/ckpt_$tag $SAVE/${tag}_winner.yaml.gz $flags 2>/dev/null) \
 		|| abort "argv rebuild failed for $tag"
 	[ "$(count "$ARGV" " $flags ")" = 1 ] || abort "$tag: the arm flags '$flags' not in the argv exactly once"
 	back=${ARGV/ $flags / }
