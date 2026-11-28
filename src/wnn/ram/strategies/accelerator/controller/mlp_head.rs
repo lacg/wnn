@@ -18,7 +18,10 @@
 //! `acc = b; for i in 0..n_in { acc = fma(w[i], z[i], acc) }` in ascending `i`, then the
 //! activation. `f32::mul_add` and Metal's `fma` are both the correctly rounded fused op, so
 //! with ReLU the CPU and the kernel (controller_rollout.metal `mlp_forward`) agree BIT FOR BIT
-//! on the same input; tanh goes through each side's own tanh and agrees to ~1e-6.
+//! on the same input. ReLU is the only activation: it is the prereg's choice, and a tanh would go
+//! through each side's own libm/Metal tanh (not bit-identical) — and its libm import alone tipped
+//! the cdylib onto an ld-27106 bug (odd indirect-symbol count ⇒ mis-aligned LINKEDIT string pool,
+//! dyld refuses the wheel), so it was dropped rather than worked around.
 //!
 //! PARAMETER LAYOUT (`params`, flat f32): per layer l (inputs n_l -> outputs n_{l+1}) the
 //! row-major weights W_l[o][i] (o outer) then the biases b_l[o]; layers in order
@@ -29,7 +32,6 @@
 pub(crate) enum MlpAct
 {
 	Relu,
-	Tanh,
 }
 
 impl MlpAct
@@ -39,8 +41,7 @@ impl MlpAct
 		match s
 		{
 			"relu" => Ok(Self::Relu),
-			"tanh" => Ok(Self::Tanh),
-			_ => Err(format!("mlp activation {s:?}: expected \"relu\" or \"tanh\"")),
+			_ => Err(format!("mlp activation {s:?}: only \"relu\" (the CPU/GPU bit-parity activation)")),
 		}
 	}
 
@@ -49,7 +50,6 @@ impl MlpAct
 		match self
 		{
 			Self::Relu => "relu",
-			Self::Tanh => "tanh",
 		}
 	}
 
@@ -59,7 +59,6 @@ impl MlpAct
 		match self
 		{
 			Self::Relu => 0,
-			Self::Tanh => 1,
 		}
 	}
 
@@ -69,7 +68,6 @@ impl MlpAct
 		match self
 		{
 			Self::Relu => v.max(0.0),
-			Self::Tanh => v.tanh(),
 		}
 	}
 }
@@ -267,7 +265,7 @@ mod tests
 	#[test]
 	fn mlp_forward_matches_reference_layout()
 	{
-		for act in [MlpAct::Relu, MlpAct::Tanh]
+		for act in [MlpAct::Relu]
 		{
 			let h = head(act, 7);
 			let x = [0.3f32, -1.2, 0.0, 2.5, -0.4];
@@ -286,7 +284,7 @@ mod tests
 					{
 						a += h.params[base + o * ni + i] as f64 * cur[i];
 					}
-					nx[o] = if l == 2 { a.clamp(0.0, 1.0) } else if act == MlpAct::Relu { a.max(0.0) } else { a.tanh() };
+					nx[o] = if l == 2 { a.clamp(0.0, 1.0) } else { a.max(0.0) };
 				}
 				base += ni * no + no;
 				cur = nx;
@@ -320,6 +318,6 @@ mod tests
 		assert_eq!(n, 24 * 64 + 64 + 64 * 64 + 64 + 64 * 4 + 4);
 		let h = MlpHead::new(24, vec![64, 64], 4, MlpAct::Relu, vec![0.0; 24], vec![1.0; 24], vec![0.0; n]).unwrap();
 		assert_eq!(h.cost(), (24 * 64 + 64 * 64 + 64 * 4 + 24, 128, n + 48));
-		assert!(MlpAct::parse("gelu").is_err());
+		assert!(MlpAct::parse("gelu").is_err() && MlpAct::parse("tanh").is_err());
 	}
 }

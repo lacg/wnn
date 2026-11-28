@@ -66,7 +66,7 @@ class MlpFitter:
 		"""Hidden layers: torch's default init. Output layer: zero weights, bias = the decode
 		NEUTRAL, so the untrained head is the empty WNN's policy (hold: zero delta)."""
 		nn = self.torch.nn
-		act = {"relu": nn.ReLU, "tanh": nn.Tanh}[self.cfg.activation]
+		act = {"relu": nn.ReLU}[self.cfg.activation]  # the Rust head is ReLU-only (mlp_head.rs)
 		layers, w = [], self.in_dim
 		for h in self.cfg.hidden:
 			layers += [nn.Linear(w, int(h)), act()]
@@ -109,13 +109,13 @@ class MlpFitter:
 		self.scale = np.where(sd > 1e-9, 1.0 / np.maximum(sd, 1e-30), 0.0).astype(np.float32)
 		self._norm_fixed = True
 
-	def __call__(self, feats: bytes, targets: bytes, n: int, in_dim: int, out_dim: int, round_idx: int):
+	def __call__(self, feats, targets, n: int, in_dim: int, out_dim: int, round_idx: int):
 		"""dagger_train_mlp's fit callback: aggregate, fit, return the new head (or None)."""
 		if (in_dim, out_dim) != (self.in_dim, self.out_dim):
 			raise ValueError(f"fit callback dims ({in_dim}, {out_dim}) != fitter ({self.in_dim}, {self.out_dim})")
 		if n > 0:
-			self._feats.append(np.frombuffer(feats, dtype="<f4").reshape(n, in_dim).copy())
-			self._targets.append(np.frombuffer(targets, dtype="<f4").reshape(n, out_dim).copy())
+			self._feats.append(np.asarray(feats, dtype=np.float32).reshape(n, in_dim).copy())
+			self._targets.append(np.asarray(targets, dtype=np.float32).reshape(n, out_dim).copy())
 			self.n_records += n
 		if self.n_records == 0:
 			return None

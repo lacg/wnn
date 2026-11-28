@@ -44,15 +44,15 @@ class MlpPayload:
 
 	def rust_tuple(self) -> tuple:
 		"""The dagger_train_mlp fit-callback return form."""
-		return (list(self.hidden), self.activation, self.shift.tobytes(), self.scale.tobytes(), self.params.tobytes())
+		return (list(self.hidden), self.activation, self.shift, self.scale, self.params)
 
 	@classmethod
 	def from_rust(cls, in_dim: int, out_dim: int, exported: tuple, meta: dict | None = None) -> "MlpPayload":
 		"""From WnnController.mlp_head_export()."""
 		hidden, act, shift, scale, params = exported
 		return cls(in_dim=in_dim, hidden=tuple(hidden), activation=act, out_dim=out_dim,
-		           shift=np.frombuffer(shift, dtype="<f4"), scale=np.frombuffer(scale, dtype="<f4"),
-		           params=np.frombuffer(params, dtype="<f4"), meta=dict(meta or {}))
+		           shift=np.asarray(shift, dtype=np.float32), scale=np.asarray(scale, dtype=np.float32),
+		           params=np.asarray(params, dtype=np.float32), meta=dict(meta or {}))
 
 	def shape_key(self) -> tuple:
 		return (self.in_dim, self.hidden, self.out_dim, self.activation)

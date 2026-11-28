@@ -22,7 +22,7 @@ use crate::dagger_train::{
 };
 use crate::mlp_head::{MlpAct, MlpHead};
 use pyo3::prelude::*;
-use pyo3::types::PyBytes;
+use numpy::{IntoPyArray, PyArrayMethods, PyReadonlyArray1};
 use rand::rngs::SmallRng;
 use rand::SeedableRng;
 
@@ -138,28 +138,18 @@ pub(crate) fn dagger_train_mlp_with(
 	Ok(stats)
 }
 
-fn f32_bytes<'py>(py: Python<'py>, v: &[f32]) -> Bound<'py, PyBytes>
+fn array_f32(a: &PyReadonlyArray1<'_, f32>, what: &str) -> Result<Vec<f32>, String>
 {
-	let b: Vec<u8> = v.iter().flat_map(|x| x.to_le_bytes()).collect();
-	PyBytes::new(py, &b)
-}
-
-fn bytes_f32(b: &[u8], what: &str) -> Result<Vec<f32>, String>
-{
-	if b.len() % 4 != 0
-	{
-		return Err(format!("dagger_train_mlp: {what} is {} bytes, not a whole number of float32", b.len()));
-	}
-	Ok(b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
+	a.as_slice().map(|s| s.to_vec()).map_err(|e| format!("dagger_train_mlp: {what} is not a contiguous float32 array: {e}"))
 }
 
 /// CTRL-84 (ABI 71): DAgger-train the controller's MLP head in place (one fold; call once per
 /// fold seed, as dagger_train_batch_inplace does for the WNN). The controller must carry the
 /// INITIAL head (WnnController.set_mlp_head). After each round's gated rollouts are recorded,
 /// `fit_callback(feats, targets, n, in_dim, out_dim, round)` is called with the round's NEW
-/// records as little-endian float32 bytes (feats [n, in_dim], targets [n, out_dim] — the
+/// records as flat float32 numpy arrays (feats [n * in_dim], targets [n * out_dim] — the
 /// per-bank raw-decode targets in [0, 1]); it returns None (keep the head) or
-/// (hidden: list[int], activation: str, shift: bytes, scale: bytes, params: bytes) — the new
+/// (hidden: list[int], activation: str, shift, scale, params: float32 arrays) — the new
 /// head, which the next round flies. Returns TrainStats with iter_cells_written = the round's
 /// record count (no cells are written).
 #[pyfunction]
@@ -177,7 +167,7 @@ pub fn dagger_train_mlp(
 	let out_dim = controller.num_motors();
 	let mut py_err: Option<PyErr> = None;
 	let mut fit = |rec: &MlpRecords, round: usize| -> Result<Option<MlpHead>, String> {
-		let args = (f32_bytes(py, &rec.feats), f32_bytes(py, &rec.targets), rec.n, in_dim, out_dim, round);
+		let args = (rec.feats.clone().into_pyarray(py), rec.targets.clone().into_pyarray(py), rec.n, in_dim, out_dim, round);
 		let r = match fit_callback.call1(py, args)
 		{
 			Ok(r) => r,
@@ -193,16 +183,16 @@ pub fn dagger_train_mlp(
 			return Ok(None);
 		}
 		let r = r.bind(py);
-		let (hidden, act, shift, scale, params): (Vec<usize>, String, Bound<'_, PyBytes>, Bound<'_, PyBytes>, Bound<'_, PyBytes>) =
-			r.extract().map_err(|e| format!("dagger_train_mlp: fit_callback must return None or (hidden, act, shift: bytes, scale: bytes, params: bytes): {e}"))?;
+		let (hidden, act, shift, scale, params): (Vec<usize>, String, PyReadonlyArray1<'_, f32>, PyReadonlyArray1<'_, f32>, PyReadonlyArray1<'_, f32>) =
+			r.extract().map_err(|e| format!("dagger_train_mlp: fit_callback must return None or (hidden, act, shift, scale, params as float32 arrays): {e}"))?;
 		MlpHead::new(
 			in_dim,
 			hidden,
 			out_dim,
 			MlpAct::parse(&act)?,
-			bytes_f32(shift.as_bytes(), "shift")?,
-			bytes_f32(scale.as_bytes(), "scale")?,
-			bytes_f32(params.as_bytes(), "params")?,
+			array_f32(&shift, "shift")?,
+			array_f32(&scale, "scale")?,
+			array_f32(&params, "params")?,
 		)
 		.map(Some)
 	};

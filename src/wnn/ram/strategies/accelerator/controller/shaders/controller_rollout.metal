@@ -399,7 +399,7 @@ struct Params
 	uint payload_step_idx;
 	float payload_mass_scale;
 	// ABI 71 (CTRL-84), appended in lockstep: the MLP head's widths (mlp_h1 = 0 ⇒ one hidden
-	// layer), activation (0 relu, 1 tanh), and where each genome's blob [shift | scale |
+	// layer), activation (0 = relu, the only one), and where each genome's blob [shift | scale |
 	// params] sits in the thresholds buffer (float index mlp_off + g * mlp_stride). Read
 	// only under FC_MLP.
 	uint mlp_in;
@@ -412,7 +412,7 @@ struct Params
 };
 
 // CTRL-84: the MLP head's forward — the bit-for-bit twin of mlp_head.rs MlpHead::forward
-// (standardise, then per neuron acc = b; acc = fma(w_i, z_i, acc) in ascending i; ReLU/tanh on
+// (standardise, then per neuron acc = b; acc = fma(w_i, z_i, acc) in ascending i; ReLU on
 // the hidden layers; the linear output clamped to [0, 1]).
 inline void mlp_forward(thread const float *x, device const float *blob, uint n_in, uint h0, uint h1,
                         uint n_out, uint act, thread float *out)
@@ -444,7 +444,7 @@ inline void mlp_forward(thread const float *x, device const float *blob, uint n_
 			if (last)
 				out[o] = clamp(acc, 0.0f, 1.0f);
 			else
-				nxt[o] = (act == 1u) ? tanh(acc) : max(acc, 0.0f);
+				nxt[o] = max(acc, 0.0f); // act 0 = relu (mlp_head.rs refuses any other)
 		}
 		w = bias + no;
 		thread float *t = cur;

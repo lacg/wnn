@@ -6,7 +6,7 @@
 //!   held through 65-68) must not move; and a head installed then cleared leaves the
 //!   controller's rollout bit-identical to one that never had a head.
 //! * FORWARD PARITY: the kernel's `mlp_forward` == `MlpHead::forward` BIT FOR BIT (ReLU; both
-//!   are the same fma chain), tanh within 1e-6.
+//!   are the same fma chain).
 //! * ROLLOUT PARITY: the CPU scorer and the Metal scorer (FC_MLP specialization) on the same MLP
 //!   controller and episodes, within the CTRL-54 aggregate tolerance (the scorers differ in the
 //!   feature pipeline's precision, not in the head).
@@ -89,7 +89,7 @@ fn ctrl84_mlp_forward_cpu_gpu_bit_identical()
 		return;
 	};
 	let n = 384usize;
-	for (hidden, act, seed) in [(vec![64usize, 64], MlpAct::Relu, 1u64), (vec![576, 576], MlpAct::Relu, 2), (vec![32], MlpAct::Relu, 3), (vec![64, 64], MlpAct::Tanh, 4)]
+	for (hidden, act, seed) in [(vec![64usize, 64], MlpAct::Relu, 1u64), (vec![576, 576], MlpAct::Relu, 2), (vec![32], MlpAct::Relu, 3)]
 	{
 		let w = 0.6 / (*hidden.iter().max().unwrap() as f32).sqrt();
 		let h = random_head(24, &hidden, act, w, 0.5, seed);
@@ -107,10 +107,7 @@ fn ctrl84_mlp_forward_cpu_gpu_bit_identical()
 				let g = gpu[r * 4 + k];
 				worst = worst.max((g - cpu[k]).abs());
 				moved += usize::from(cpu[k] > 0.0 && cpu[k] < 1.0);
-				if act == MlpAct::Relu
-				{
-					assert_eq!(g.to_bits(), cpu[k].to_bits(), "{hidden:?} relu row {r} out {k}: gpu {g} cpu {}", cpu[k]);
-				}
+				assert_eq!(g.to_bits(), cpu[k].to_bits(), "{hidden:?} relu row {r} out {k}: gpu {g} cpu {}", cpu[k]);
 			}
 		}
 		eprintln!("[ctrl84] forward {hidden:?} {act:?}: worst |gpu-cpu| {worst:.3e}, {moved}/{} unclamped outputs", n * 4);

@@ -6529,15 +6529,18 @@ impl WnnController
 	}
 
 	/// CTRL-84: the installed head as (hidden, activation, shift, scale, params) — the three
-	/// arrays as little-endian float32 bytes (the dagger_train_mlp callback's return form) — or
-	/// None. The trainer reads back the head the best-checkpoint rule kept.
+	/// arrays as float32 numpy arrays (the dagger_train_mlp callback's return form) — or None.
+	/// The trainer reads back the head the best-checkpoint rule kept.
+	#[allow(clippy::type_complexity)]
 	pub fn mlp_head_export<'py>(
 		&self,
 		py: Python<'py>,
-	) -> Option<(Vec<usize>, String, Bound<'py, pyo3::types::PyBytes>, Bound<'py, pyo3::types::PyBytes>, Bound<'py, pyo3::types::PyBytes>)>
+	) -> Option<(Vec<usize>, String, Bound<'py, numpy::PyArray1<f32>>, Bound<'py, numpy::PyArray1<f32>>, Bound<'py, numpy::PyArray1<f32>>)>
 	{
-		let b = |v: &[f32]| pyo3::types::PyBytes::new(py, &v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>());
-		self.mlp.as_ref().map(|h| (h.hidden().to_vec(), h.act().name().to_string(), b(h.shift()), b(h.scale()), b(h.params())))
+		use numpy::IntoPyArray;
+		self.mlp.as_ref().map(|h| {
+			(h.hidden().to_vec(), h.act().name().to_string(), h.shift().to_vec().into_pyarray(py), h.scale().to_vec().into_pyarray(py), h.params().to_vec().into_pyarray(py))
+		})
 	}
 
 	/// CTRL-84: the head's per-bank outputs at the last decision step (diagnostic).
