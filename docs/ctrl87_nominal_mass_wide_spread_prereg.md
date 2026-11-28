@@ -101,3 +101,13 @@ may drop a lever that is neutral at nominal and better OOD. Alternative (only if
 
 2 arms × 3 seeds × ~1 h (l2b / CTRL-80 runs: 50-71 min each) ≈ 6 h of controller time, plus ~2-3 min CPU stress
 readout per END. Phase 1 (l2bnm s1-s3, flies now) ≈ 3 h; l2bnmw (≈ 3 h) waits on the code gap.
+
+## Amendment 1 (Luiz 28/11/2026 ~06:00 EST)
+- **l2bnm becomes the new base** after its cost readout (fairness baseline from here on).
+- **l2bnmw = wear AND lag together** (one combined arm): training wear ±30 % and a per-episode training motor-lag
+  range around 0.20 s, applied COHERENTLY to the memory writes (DAgger/training episodes) AND the GA search's
+  evaluation episodes (otherwise selection would still optimise for ±20 % / fixed lag). The 35 TEST units stay at
+  the reporting conditions (±20 %, lag 0.20) so in-range numbers stay comparable; the stress cells test beyond.
+  The WNN's internal actuator twin stays at the nominal 0.20 s design lag. Needs code (wear flag: Python; lag range:
+  Rust + Metal, controller ABI 68 after the per-bank-width branch takes 67).
+- **Rule for l2bnmw = A'**: fewer wear30 fails than l2bnm on a majority of seeds; B–D kept as non-inferiority in range.
