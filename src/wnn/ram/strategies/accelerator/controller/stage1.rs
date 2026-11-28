@@ -18,7 +18,9 @@
 use crate::altitude_integrator::AltitudeIntegrator;
 use crate::att_err_ref::AttErrRef;
 use crate::plant_opts::PlantOpts;
+use crate::stress_opts::StressOpts;
 
+#[derive(Clone)]
 pub struct Stage1Cfg
 {
 	/// The altitude every episode is asked to hold (m). Episodes start at
@@ -55,6 +57,9 @@ pub struct Stage1Cfg
 	/// (altitude_integrator.rs). A zero-state prototype: each episode flies a fresh
 	/// copy. AltitudeIntegrator::OFF ⇒ alt_err = target − z, bit-identically.
 	pub alt_int: AltitudeIntegrator,
+	/// CTRL-83 (ABI 66): the scorer-only stress — design-model override (D1) and the
+	/// mid-episode payload step (D3). StressOpts::OFF ⇒ the ABI-65 rollout, bit-identically.
+	pub stress: StressOpts,
 }
 
 /// ABI 32: the scorer kwargs (imu_specific_force, rotor_drag, att_err_tilt_ref +
@@ -81,6 +86,16 @@ pub fn stage1_extras(
 		pos_max_tilt_rad as f64,
 	)?;
 	Ok((plant, att_ref))
+}
+
+/// CTRL-83 D2: `anchor_mass` exists only where there is a collective anchor (translation).
+pub fn require_anchor_translation(anchor_mass: Option<f32>, translation: bool, site: &str) -> Result<(), String>
+{
+	if anchor_mass.is_some() && !translation
+	{
+		return Err(format!("{site}: anchor_mass needs translation=True (there is no collective anchor without it)"));
+	}
+	Ok(())
 }
 
 impl Stage1Cfg
@@ -151,6 +166,27 @@ impl Stage1Cfg
 		(hover * (1.0 + self.collective_frac[ep])).clamp(0.0, 1.0)
 	}
 
+	/// CTRL-83 D2 (ABI 66, OPT-IN): anchor every episode's commanded collective at the
+	/// hover of `anchor_mass` (the airframe's NOMINAL mass — what a real outer loop knows)
+	/// instead of the episode's TRUE mass draw. Rewrites the commanded fraction once so
+	/// that hover(m_true)·(1 + c') = hover(m_true)·√(m_anchor/m_true)·(1 + c) — i.e. the
+	/// nominal hover × (1 + c) — and every consumer (CPU collective_pwm, the Metal
+	/// kernel's in-shader hover, the recorder) reads the SAME rebased draws, so CPU and
+	/// GPU stay one computation. The plant still flies the true mass. Never called ⇒ the
+	/// legacy true-mass anchor (every result up to ABI 65).
+	pub fn anchor_at_mass(&mut self, anchor_mass: f32) -> Result<(), String>
+	{
+		if !(anchor_mass.is_finite() && anchor_mass > 0.0)
+		{
+			return Err(format!("anchor_mass = {anchor_mass} must be finite and > 0 kg"));
+		}
+		for (c, m) in self.collective_frac.iter_mut().zip(&self.mass)
+		{
+			*c = (1.0 + *c) * (anchor_mass / *m).sqrt() - 1.0;
+		}
+		Ok(())
+	}
+
 	/// Flatten to the GPU's interleaved layout: 6 floats per episode,
 	/// [z0, vz0, mass, collective_frac, x0, y0] — buffer 30's contract
 	/// (widened 4→6 on 14/08/2026 for stage 2; host and shader ship together,
@@ -193,6 +229,7 @@ mod tests
 			plant: PlantOpts::OFF,
 			att_ref: AttErrRef::LEVEL,
 			alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
+			stress: StressOpts::OFF,
 		}
 	}
 
@@ -242,6 +279,7 @@ mod tests
 			plant: PlantOpts::OFF,
 			att_ref: AttErrRef::LEVEL,
 			alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
+			stress: StressOpts::OFF,
 		};
 		// Stage-1 (horizontal off): stride 6 with zero-padded x0/y0.
 		assert_eq!(
@@ -255,5 +293,22 @@ mod tests
 			c.to_gpu_blob(),
 			vec![1.0, 2.0, 3.0, 4.0, 9.0, 10.0, 5.0, 6.0, 7.0, 8.0, 11.0, 12.0]
 		);
+	}
+
+	/// CTRL-83 D2: the rebased anchor is the NOMINAL hover × (1 + c), whatever the draw.
+	#[test]
+	fn anchor_at_mass_rides_the_nominal_hover()
+	{
+		let (g, k, m0) = (9.81f32, 0.25f32, 0.04f32);
+		let mut c = cfg(3);
+		c.mass = vec![m0 * 0.85, m0, m0 * 1.15];
+		c.collective_frac = vec![0.1, -0.05, 0.0];
+		let want: Vec<f32> = c.collective_frac.iter().map(|f| (m0 * g / (4.0 * k)).sqrt() * (1.0 + f)).collect();
+		c.anchor_at_mass(m0).unwrap();
+		for ep in 0..3
+		{
+			assert!((c.collective_pwm(ep, g, k) - want[ep]).abs() < 1e-6, "ep {ep}");
+		}
+		assert!(c.anchor_at_mass(0.0).is_err());
 	}
 }

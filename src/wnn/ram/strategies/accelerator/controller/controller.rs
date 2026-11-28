@@ -623,6 +623,15 @@ impl AttitudeSim
 		self.vz
 	}
 
+	/// CTRL-83 D3 (ABI 66): change the translating plant's mass MID-EPISODE (a payload
+	/// step) — the mass only: position, velocity and attitude carry on. The payload is a
+	/// point mass at the CoM, so the inertia is untouched (payload_step.rs).
+	pub(crate) fn set_mass_core(&mut self, mass: f32)
+	{
+		debug_assert!(self.translation_enabled && mass.is_finite() && mass > 0.0);
+		self.mass = mass;
+	}
+
 	pub(crate) fn set_translation_core(&mut self, mass: f32) -> Result<(), String>
 	{
 		if !mass.is_finite() || mass <= 0.0
@@ -1556,7 +1565,7 @@ impl AttitudeSim
 
 	/// Vehicle mass (kg). 0.0 while translation is disabled.
 	#[getter]
-	fn vehicle_mass(&self) -> f32
+	pub(crate) fn vehicle_mass(&self) -> f32
 	{
 		self.mass
 	}

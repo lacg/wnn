@@ -193,7 +193,7 @@ def score_all(ec, draw: HoldoutDraw, feed: TeacherFeed = TeacherFeed()) -> dict:
 	# comparison is between two different aircraft. AXIS F: that includes the
 	# actuator lag (motor_lag_kwargs — empty when the axis is off).
 	fields = {**fields, **ec.airframe_kwargs(), **ec.motor_lag_kwargs(), **ec.alt_integral_kwargs(),
-	          **feed.fields(), **_stage1_fields(ec, draw), **_abi32_fields(ec)}
+	          **feed.fields(), **_stage1_fields(ec, draw), **_abi32_fields(ec), **ec.stress_kwargs()}
 	out = {}
 	for tid, name in _NAMES.items():
 		# Slice, don't destructure: the scorer gained a 6th value (jerk) on
@@ -239,7 +239,7 @@ def teacher_metrics(ec, draw: HoldoutDraw, feed: TeacherFeed, teacher_id: int,
 	s1 = _stage1_fields(ec, draw)
 	fields = {**fields, **ec.airframe_kwargs(), **ec.motor_lag_kwargs(), **ec.alt_integral_kwargs(),
 	          **feed.fields(), **s1,
-	          **_abi32_fields(ec)}
+	          **_abi32_fields(ec), **ec.stress_kwargs()}  # CTRL-83: D1 design lag + D3 payload
 	# 6th value (21/08/2026): mean motor-command jerk, same definition as the
 	# WNN scorer's, so teacher and WNN jerk are directly comparable. Tolerate a
 	# 5-tuple wheel so this Python can land before the wheel does.

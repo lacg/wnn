@@ -507,6 +507,55 @@ class EpisodeConfig:
 			raise ValueError(f"EpisodeConfig.motor_lag_s must be >= 0 s, got {lag}")
 		return {"motor_lag_s": lag} if lag > 0.0 else {}
 
+	# --- CTRL-83 (ABI 66): the out-of-distribution stress panel's SCORER-side options.
+	# D1: the lag every controller's MODEL is built on (the rivals' lag-aware designs and
+	# observer twins, the WNN's actuator twin). None = the plant's own lag (matched, ABI 65);
+	# a stress cell holds it at the nominal 0.20 while the plant flies the stressed lag.
+	model_motor_lag_s: float | None = None
+	# D3: a mid-episode payload step — at payload_step_s the plant mass becomes the episode's
+	# draw x payload_mass_scale (> 1 added, < 1 dropped). None = off. Inertia unchanged (a
+	# point payload at the CoM). Every controller flies the identical event; none is told.
+	payload_step_s: float | None = None
+	payload_mass_scale: float = 1.0
+	# D2: which mass the WNN's collective anchor (and its coll_cmd input) is computed at —
+	# "true" = the episode's TRUE mass draw (every result up to ABI 65), "nominal" = the
+	# airframe's nominal mass, the information a real outer loop and the rivals have. A
+	# LINEAGE switch: trainer and scorers must agree (anchor_kwargs / _stage1_train_kwargs).
+	anchor_mass: str = "true"
+
+	def stress_kwargs(self) -> dict:
+		"""CTRL-83 D1 + D3 for the SCORERS (both WNN scorers and score_classical_baseline,
+		one spelling): `model_motor_lag_s=`, `payload_step_s=`, `payload_mass_scale=`, each
+		only when set, so every existing call stays byte-identical. Never the trainer: a
+		stress panel scores published controllers."""
+		out = {}
+		if self.model_motor_lag_s is not None:
+			out["model_motor_lag_s"] = float(self.model_motor_lag_s)
+		if self.payload_step_s is not None:
+			out["payload_step_s"] = float(self.payload_step_s)
+			out["payload_mass_scale"] = float(self.payload_mass_scale)
+		elif float(self.payload_mass_scale) != 1.0:
+			raise ValueError("EpisodeConfig.payload_mass_scale needs payload_step_s (the time of the step)")
+		if out and not self.translation:
+			raise ValueError("EpisodeConfig.model_motor_lag_s / payload_step_s require translation=True")
+		return out
+
+	def anchor_nominal(self) -> bool:
+		if self.anchor_mass not in ("true", "nominal"):
+			raise ValueError(f"EpisodeConfig.anchor_mass {self.anchor_mass!r} — one of 'true', 'nominal'")
+		if self.anchor_mass == "nominal" and not self.translation:
+			raise ValueError("EpisodeConfig.anchor_mass='nominal' needs translation (no collective anchor without it)")
+		return self.anchor_mass == "nominal"
+
+	def anchor_kwargs(self) -> dict:
+		"""CTRL-83 D2 for the WNN SCORERS: `anchor_mass=` (the airframe's nominal mass) only
+		under anchor_mass='nominal'. Empty otherwise — the byte-identical true-mass anchor."""
+		if not self.anchor_nominal():
+			return {}
+		if self.airframe is None:
+			raise ValueError("EpisodeConfig.anchor_mass='nominal' needs an airframe (its nominal mass)")
+		return {"anchor_mass": float(self.airframe.mass)}
+
 	# --- Block 10 L3 (ABI 51, docs/ctrl48_block10_levers_spec.md): the altitude
 	# integrator in the collective law — "off" (the PD, bit-identical), "pi" or
 	# "pole3". ONE setting for the trainer config, every classical rival and the WNN

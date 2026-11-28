@@ -97,6 +97,9 @@ class ControllerProvenance:
 	# CTRL-86 S1/S2 (ABI 65): the extended plant actuator — "down=<T_down>s" and/or
 	# "idle=<pwm_min>" ("" = the ABI-64 actuator: the line is unchanged).
 	actuator: str = ""
+	# CTRL-83 D2 (ABI 66): "nominal" when the collective anchor rides the NOMINAL mass
+	# (--anchor-mass nominal, a lineage switch); "" = the true-mass anchor, NOT printed.
+	anchor: str = ""
 	# CTRL-58: the staged-refinement config (refine_config.refine_token); "" = off and
 	# NOT printed, so every line without --refine-fitness/--refine-select is unchanged.
 	refine: str = ""
@@ -126,6 +129,7 @@ class ControllerProvenance:
 		        + (f"dleak_yaw={self.dleak_yaw} " if self.dleak_yaw else "")
 		        + (f"ylead={self.ylead} " if self.ylead else "")
 		        + (f"actuator={self.actuator} " if self.actuator else "")
+		        + (f"anchor={self.anchor} " if self.anchor else "")
 		        + (f"refine={self.refine} " if self.refine else "") +
 		        f"fitness_pools={self.fitness_pools}")
 
@@ -172,7 +176,7 @@ def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: st
                        abp: str = UNKNOWN, select: str = UNKNOWN,
                        train_ic: str = UNKNOWN, alt: str = "", yawref: str = "", pos_metric: str = "",
                        dmax_yaw: str = "", refine: str = "", dleak_yaw: str = "",
-                       ylead: str = "", actuator: str = "") -> ControllerProvenance:
+                       ylead: str = "", actuator: str = "", anchor: str = "") -> ControllerProvenance:
 	"""Gather every field, never raising: each accessor degrades to UNKNOWN / 0."""
 	wheel, abi, sha = _wheel_identity()
 	return ControllerProvenance(
@@ -202,6 +206,7 @@ def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: st
 		dleak_yaw=dleak_yaw.replace(" ", "_").replace('"', ""),
 		ylead=ylead.replace(" ", "_").replace('"', ""),
 		actuator=actuator.replace(" ", "_").replace('"', ""),
+		anchor=anchor.replace(" ", "_").replace('"', ""),
 		refine=refine.replace(" ", "_").replace('"', ""),
 	)
 

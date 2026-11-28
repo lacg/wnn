@@ -524,6 +524,7 @@ mod tests
 			plant: crate::plant_opts::PlantOpts::OFF,
 			att_ref: crate::att_err_ref::AttErrRef::LEVEL,
 			alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
+			stress: crate::stress_opts::StressOpts::OFF,
 		};
 		cfg.validate(eps).expect("fixture must be well-formed");
 

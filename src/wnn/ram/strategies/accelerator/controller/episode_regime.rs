@@ -136,7 +136,10 @@ pub(crate) fn draw_translation_episode(
 		let vy0 = jitter_sym(rng, cfg.init_vxy);
 		sim.set_horizontal_state(x0, y0, vx0, vy0);
 	}
-	let hover = (m * cfg.af_gravity / (4.0 * cfg.af_k_thrust)).sqrt();
+	// CTRL-83 D2: the anchor's mass — the true draw (ABI 65), or the nominal one when the
+	// lineage trains on what a real outer loop knows (anchor_nominal_mass).
+	let m_anchor = if cfg.anchor_nominal_mass { cfg.af_mass } else { m };
+	let hover = (m_anchor * cfg.af_gravity / (4.0 * cfg.af_k_thrust)).sqrt();
 	(hover * (1.0 + jitter_sym(rng, cfg.collective_jitter))).clamp(0.0, 1.0)
 }
 

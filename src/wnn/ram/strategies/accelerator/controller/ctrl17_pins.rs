@@ -109,6 +109,7 @@ pub(crate) fn pin_translation_cfg(xy: f32) -> RewardGatedConfigPacked
 		0.0, // ABI 48: init_vxy = 0 (at rest, draws nothing)
 		0, // ABI 51: alt_integral off
 		0.0, 0.0, // CTRL-86: motor_lag_down_s, pwm_min off
+		false, // CTRL-83 D2: anchor_nominal_mass off (true-mass anchor)
 	)
 	.expect("pin config must validate");
 	c.teacher = 0;

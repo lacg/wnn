@@ -54,7 +54,8 @@ def _fields(a, ec, unit: int) -> dict:
 	                      eval_folds=a.num_eval_folds)
 	q0, w0, f = CB._episode_fields(ec, draw)
 	f = {**f, **ec.airframe_kwargs(), **ec.motor_lag_kwargs(), **CB.TeacherFeed(use_estimator=True).fields(),
-	     **CB._stage1_fields(ec, draw), **CB._abi32_fields(ec), "ctbr_outer_hold": int(a.action_repeat)}
+	     **CB._stage1_fields(ec, draw), **CB._abi32_fields(ec), **ec.stress_kwargs(),  # CTRL-83 D1/D3
+	     "ctbr_outer_hold": int(a.action_repeat)}
 	return {"init_qs": list(q0), "init_omegas": list(w0), "steps": draw.steps, "stable_deg": draw.stable_deg, **f}
 
 

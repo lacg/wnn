@@ -11,6 +11,9 @@ use pyo3::types::PyModule;
 
 mod actuator_lag; // ABI 34: the lag-aware teachers' actuator-state estimate
 mod actuator_spec; // CTRL-86 S1/S2 (ABI 65): the plant actuator — asymmetric lag + idle floor
+mod design_model; // CTRL-83 D1 (ABI 66): the controllers' design-time actuator model, held apart from the plant
+mod payload_step; // CTRL-83 D3 (ABI 66): mid-episode payload (mass) step
+mod stress_opts; // CTRL-83 (ABI 66): D1 + D3 as ONE scorer-side value on Stage1Cfg
 mod altitude_integrator; // L3 (ABI 51): altitude integrator in front of the altitude PD (--alt-integral)
 mod altitude_pd; // scope C stage 1: outer altitude loop handing a collective to a teacher
 mod box_qp; // exact box-QP solver for the MPC teachers (PDAS + primal active-set)
@@ -103,6 +106,10 @@ mod ctrl80_yaw_lead_tests; // ABI 64 (CTRL-80): --obs-yaw-lead — refusals, lay
 mod ctrl86_flag_off_pins; // CTRL-86 S1/S2: cf21 flag-off byte-identity pins (captured on ABI 64)
 #[cfg(test)]
 mod ctrl86_actuator_tests; // CTRL-86 S1/S2 (ABI 65): asymmetric lag + idle floor — hand steps, CPU/GPU parity, reach, refusals
+#[cfg(test)]
+mod ctrl83_flag_off_pins; // CTRL-83 (ABI 66): every stress/info flag at its default is the ABI-65 cf21 rollout
+#[cfg(test)]
+mod ctrl83_stress_tests; // CTRL-83 (ABI 66): D1 mismatch keeps the models nominal, D2 anchor, D3 payload CPU/GPU parity
 #[cfg(test)]
 mod ctrl57_delta_max_yaw_tests; // ABI 57: --delta-max-yaw — refusals, bit-identity, yaw-only decode, label round trip, CPU/GPU score + walk parity
 #[cfg(test)]
@@ -676,7 +683,21 @@ mod metal_controller;
 ///     rollout's plant filter, actuator twin and cascade d̂ twin switch per motor.
 ///     Pins: ctrl86_flag_off_pins.rs (cf21 l2b-shaped regime, captured on ABI 64, both
 ///     spellings) + ctrl86_actuator_tests.rs (hand-computed steps, CPU/GPU parity).
-pub const ABI_VERSION: u32 = 65;
+/// ABI 66 (28/11/2026, Luiz, CTRL-83 stress-panel fairness — one bump for the batch;
+/// additive, every default = ABI 65 bit-identical, pinned by ctrl83_flag_off_pins.rs):
+///   * D1 DESIGN-MODEL OVERRIDE: model_motor_lag_s (None ⇒ the plant's lag) on
+///     score_controllers_cpu/metal and score_classical_baseline — the lag every controller's
+///     MODEL is built on (the rivals' lag-aware designs and observer twins; the WNN's
+///     actuator twin), held apart from the plant's (design_model.rs). Metal: the twins read
+///     Params.twin_settling_time_s.
+///   * D2 NOMINAL-MASS ANCHOR (opt-in, default = the TRUE-mass anchor): anchor_mass on both
+///     WNN scorers (Stage1Cfg::anchor_at_mass rebases the commanded fraction once, so CPU,
+///     Metal and the recorder agree) and anchor_nominal_mass on RewardGatedConfigPacked (the
+///     trainer + calib sampler + recorder via episode_regime). A lineage break when on.
+///   * D3 PAYLOAD STEP: payload_step_s / payload_mass_scale on both WNN scorers and the
+///     rivals — the plant mass becomes draw × scale at that step (payload_step.rs).
+///     Metal: Params.payload_step_idx / payload_mass_scale (RolloutParams 203 → 206 words).
+pub const ABI_VERSION: u32 = 66;
 
 /// ABI 61: the precision of the WNN's own attitude estimator + heading ("f32"; a wheel
 /// without this constant runs the f64 estimator). Read by scripts/export_controller_c.py.
@@ -1230,7 +1251,12 @@ fn record_address_universe(
 			&legacy_plant,
 			geometry_rows.is_some(),
 		)?;
-		let s1_cfg = s1_cfg.expect("checked: reference_cfg requires the stage-1 draws");
+		let mut s1_cfg = s1_cfg.expect("checked: reference_cfg requires the stage-1 draws");
+		// CTRL-83 D2: the recorder anchors where the lineage trained (the trainer's own flag).
+		if cfg.anchor_nominal_mass
+		{
+			s1_cfg.anchor_at_mass(cfg.af_mass).map_err(pyo3::exceptions::PyValueError::new_err)?;
+		}
 		return Ok(record_on_training_cascade(
 			&mut controller,
 			cfg,
@@ -1352,6 +1378,7 @@ fn recorder_stage1_cfg(
 				plant: plant_opts::PlantOpts::OFF,
 				att_ref: att_err_ref::AttErrRef::LEVEL,
 				alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
+				stress: crate::stress_opts::StressOpts::OFF,
 			};
 			cfg
 				.validate(n_eps)

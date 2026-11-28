@@ -70,6 +70,7 @@ fn regime(xy: f32, steps: usize, expert_drives: bool) -> RewardGatedConfigPacked
 		alt_integral: 0,
 		motor_lag_down_s: 0.0,
 		pwm_min: 0.0,
+		anchor_nominal_mass: false,
 	}
 }
 

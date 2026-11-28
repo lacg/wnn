@@ -234,7 +234,7 @@ fn rival_ctbr_res(teacher: u8, lag: f32, hold: usize) -> pyo3::PyResult<(f64, f6
 		true, 0.0, s1.init_z.clone(), s1.init_vz.clone(), s1.mass.clone(), s1.collective_frac.clone(),
 		2.0, 1.0, 0.25,
 		s1.init_x.clone(), s1.init_y.clone(), 1.0, 1.0, 0.5236,
-		lag, false, 0.0, true, hold, 0, None, 0.0, 0.0,
+		lag, false, 0.0, true, hold, 0, None, 0.0, 0.0, None, None, 1.0, // CTRL-83: stress off
 	)
 	.map(crate::dagger_train::rival_first8)
 }

@@ -3436,6 +3436,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                help="Stage 1: per-episode mass randomization fraction. A PLANT "
 	                     "parameter — randomized, never observed (Molchanov randomizes "
 	                     "thrust-to-weight and never inputs it).")
+	ap.add_argument("--anchor-mass", choices=("true", "nominal"), default="true",
+	                help="CTRL-83 D2 (ABI 66): the mass the collective anchor (and the coll_cmd "
+	                     "input) is computed at — 'true' (default) = each episode's TRUE mass draw, "
+	                     "the lineage up to ABI 65; 'nominal' = the airframe's nominal mass, the "
+	                     "information a real outer loop and the classical rivals have. A LINEAGE "
+	                     "switch: it changes training and scoring together.")
 	ap.add_argument("--target-altitude", type=float, default=0.0,
 	                help="Stage 1: the altitude every episode holds (m).")
 	ap.add_argument("--reward-lambda-alt", type=float, default=None,
@@ -4829,6 +4835,7 @@ def episode_config_from_args(args) -> EpisodeConfig:
 		max_initial_vz=float(getattr(args, "init_vz", 0.2)),
 		collective_cmd_jitter=float(getattr(args, "collective_jitter", 0.1)),
 		mass_jitter=float(getattr(args, "mass_jitter", 0.15)),
+		anchor_mass=str(getattr(args, "anchor_mass", "true")),  # CTRL-83 D2
 		target_altitude=float(getattr(args, "target_altitude", 0.0)),
 		# CTRL-17 G4: unset (None) ⇒ 0 for the SCORER; the gate λ is resolved
 		# separately in _rg_config (wnn/control/gate_lambdas.py).
@@ -5138,7 +5145,8 @@ def main():
 	                         drop=drop_token(args), select=select_tail_token(args),
 	                         train_ic=train_ic_token(args), **ctrl46_tokens(args),
 	                         **block10_tokens(args), refine=refine_token(args),
-	                         actuator=actuator_token(args)).line())
+	                         actuator=actuator_token(args),
+	                         anchor="nominal" if getattr(args, "anchor_mass", "true") == "nominal" else "").line())
 	from wnn.control.provenance import env_header_line
 	from wnn.control.evaluator import eval_mode_from_env
 	print(env_header_line(eval_mode_from_env()), flush=True)

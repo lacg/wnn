@@ -424,6 +424,14 @@ pub struct RewardGatedConfigPacked
 	pub motor_lag_down_s: f32,
 	#[pyo3(get)]
 	pub pwm_min: f32,
+	/// CTRL-83 D2 (ABI 66, OPT-IN): anchor every training episode's collective at the
+	/// NOMINAL hover (af_mass) × (1 + collective jitter) instead of the TRUE mass draw's —
+	/// the information a real outer loop has (it does not know the payload). The plant still
+	/// flies the true mass and the rng draw order is unchanged. false ⇒ the ABI-65 trainer.
+	/// The WNN scorers' twin is their `anchor_mass` kwarg: a lineage trained with this on
+	/// must be scored with anchor_mass = af_mass, and vice versa.
+	#[pyo3(get)]
+	pub anchor_nominal_mass: bool,
 }
 
 #[pymethods]
@@ -472,6 +480,7 @@ impl RewardGatedConfigPacked
 		init_vxy = 0.0,
 		alt_integral = 0,
 		motor_lag_down_s = 0.0, pwm_min = 0.0,
+		anchor_nominal_mass = false,
 ))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -566,6 +575,7 @@ impl RewardGatedConfigPacked
 		alt_integral: u8,
 		motor_lag_down_s: f32,
 		pwm_min: f32,
+		anchor_nominal_mass: bool,
 	) -> PyResult<Self>
 	{
 		let cfg = Self {
@@ -660,7 +670,14 @@ impl RewardGatedConfigPacked
 			alt_integral,
 			motor_lag_down_s,
 			pwm_min,
+			anchor_nominal_mass,
 		};
+		if anchor_nominal_mass && !translation
+		{
+			return Err(pyo3::exceptions::PyValueError::new_err(
+				"anchor_nominal_mass needs translation (there is no collective anchor without it)",
+			));
+		}
 		cfg.validate_abi32().map_err(pyo3::exceptions::PyValueError::new_err)?;
 		cfg.validate_alt_integral().map_err(pyo3::exceptions::PyValueError::new_err)?;
 		cfg.write_vote_share().map_err(pyo3::exceptions::PyValueError::new_err)?;
@@ -1243,6 +1260,17 @@ impl AirframeRs
 		self.plant.apply(&mut sim);
 		sim
 	}
+	/// CTRL-83 D1 (ABI 66): the airframe the controllers' MODELS are built on — this plant
+	/// with the motor lag held at the design value (design_model.rs). MATCHED ⇒ `*self`, so
+	/// every teacher built through it is the ABI-65 teacher bit for bit.
+	pub(crate) fn designed(&self, design: crate::design_model::DesignModel) -> AirframeRs
+	{
+		AirframeRs {
+			motor_lag_s: design.lag_s(self.motor_lag_s),
+			..*self
+		}
+	}
+
 	/// CTRL-86: the plant's actuator (lag up/down + idle floor) — what sim() flies.
 	pub(crate) fn actuator(&self) -> crate::actuator_spec::ActuatorSpec
 	{
@@ -3920,6 +3948,11 @@ pub fn eval_ensemble_closed_loop(
 	// CTRL-86 S1/S2 (ABI 65): the plant actuator's spin-down settling time (0 ⇒
 	// symmetric) and armed-idle floor (0 ⇒ none). Real-life plant (translation) only.
 	motor_lag_down_s = 0.0, pwm_min = 0.0,
+	// CTRL-83 (ABI 66), translation-only, default-inert: model_motor_lag_s = the lag the
+	// rival is DESIGNED on (its lag-aware model, its MPCOF / cascade observer twins; None ⇒
+	// the plant's lag, ABI 65 — D1); payload_step_s / payload_mass_scale = the mid-episode
+	// payload step the WNN scorers fly identically (None ⇒ off — D3).
+	model_motor_lag_s = None, payload_step_s = None, payload_mass_scale = 1.0,
 	))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_classical_baseline(
@@ -3979,9 +4012,13 @@ pub fn score_classical_baseline(
 	axis_out: Option<&Bound<'_, pyo3::types::PyList>>,
 	motor_lag_down_s: f32,
 	pwm_min: f32,
+	model_motor_lag_s: Option<f32>,
+	payload_step_s: Option<f32>,
+	payload_mass_scale: f32,
 ) -> PyResult<(f64, f64, f64, f64, f64, f64, f64, f64, f64, f64)>
 {
 	let mut probe = axis_out.map(|_| crate::rival_probe::RivalProbe::measure_only());
+	let stress_kw = crate::stress_opts::StressKwargs { model_motor_lag_s, payload_step_s, payload_mass_scale };
 	let row = score_classical_baseline_probed(
 		teacher_id,
 		init_qs,
@@ -4037,6 +4074,7 @@ pub fn score_classical_baseline(
 		ctbr_outer_hold,
 		alt_integral,
 		(motor_lag_down_s, pwm_min),
+		stress_kw,
 		probe.as_mut(),
 	)?;
 	if let (Some(list), Some(p)) = (axis_out, probe.as_ref())
@@ -4118,6 +4156,8 @@ pub(crate) fn score_classical_baseline_probed(
 	alt_integral: u8,
 	// CTRL-86 S1/S2: (spin-down settling time, idle floor); (0, 0) ⇒ the ABI-64 actuator.
 	actuator_extras: (f32, f32),
+	// CTRL-83 (ABI 66): design-model lag + payload step; StressKwargs::OFF ⇒ the ABI-65 row.
+	stress_kw: crate::stress_opts::StressKwargs,
 	mut probe: Option<&mut crate::rival_probe::RivalProbe>,
 ) -> PyResult<(f64, f64, f64, f64, f64, f64, f64, f64, f64, f64)>
 {
@@ -4135,6 +4175,11 @@ pub(crate) fn score_classical_baseline_probed(
 		.with_actuator(motor_lag_s, actuator_extras.0, actuator_extras.1)
 		.map_err(pyo3::exceptions::PyValueError::new_err)?;
 	plant
+		.require_translation(translation, "score_classical_baseline")
+		.map_err(pyo3::exceptions::PyValueError::new_err)?;
+	let stress = crate::stress_opts::StressOpts::from_kwargs(stress_kw, plant.actuator(motor_lag_s), af_dt, steps)
+		.map_err(pyo3::exceptions::PyValueError::new_err)?;
+	stress
 		.require_translation(translation, "score_classical_baseline")
 		.map_err(pyo3::exceptions::PyValueError::new_err)?;
 	if att_ref.is_tilt() && !translation
@@ -4177,6 +4222,7 @@ pub(crate) fn score_classical_baseline_probed(
 			plant,
 			att_ref,
 			alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
+			stress,
 		};
 		cfg
 			.validate(num_episodes)
@@ -4277,7 +4323,9 @@ pub(crate) fn score_classical_baseline_probed(
 		plant,
 	};
 	let mut sim = af.sim();
-	let mut teacher = af.teacher(teacher_id);
+	// CTRL-83 D1: the rival's MODEL (lag-aware design + observer twins) is built on the
+	// design airframe; the plant above flies the stressed one. MATCHED ⇒ af itself.
+	let mut teacher = af.designed(stress.design).teacher(teacher_id);
 	if let Some(p) = probe.as_deref_mut()
 	{
 		p.arm(&mut teacher, use_estimator.then_some((est_kp, est_ki)), af_dt)
@@ -4421,6 +4469,11 @@ pub(crate) fn score_classical_baseline_probed(
 			{
 				diverged = true;
 				break;
+			}
+			// CTRL-83 D3: the SAME payload step the WNN scorers fly (cpu_score / kernel twin).
+			if let Some(m) = s1.as_ref().and_then(|c| c.stress.payload.mass_at(t, c.mass[ep]))
+			{
+				sim.set_mass_core(m);
 			}
 			let (gyro, accel) = sim.read_imu();
 			let q = match est.as_mut()
@@ -4961,6 +5014,7 @@ mod rival_plant_tests
 			0,
 			0, None, // alt_integral off
 			0.0, 0.0, // CTRL-86: actuator extras off
+			None, None, 1.0, // CTRL-83: stress off
 		)
 		.map(rival_first8)
 		.expect("scorer must accept a well-formed plant")
@@ -5169,6 +5223,7 @@ mod d0_hover_anchor_tests
 			alt_integral: 0,
 			motor_lag_down_s: 0.0,
 			pwm_min: 0.0,
+			anchor_nominal_mass: false,
 		}
 	}
 
@@ -5702,6 +5757,7 @@ mod motor_lag_axis_f_tests
 			alt_integral: 0,
 			motor_lag_down_s: 0.0,
 			pwm_min: 0.0,
+			anchor_nominal_mass: false,
 		}
 	}
 
@@ -5784,7 +5840,7 @@ mod motor_lag_axis_f_tests
 			false, 2.0, 0.1,
 			false, 0.0, vec![], vec![], vec![], vec![],
 			2.0, 1.0, 0.25, vec![], vec![], 1.0, 1.0, 0.5236,
-			motor_lag_s, false, 0.0, false, 0, 0, None, 0.0, 0.0,
+			motor_lag_s, false, 0.0, false, 0, 0, None, 0.0, 0.0, None, None, 1.0, // CTRL-83: stress off
 		)
 		.map(rival_first8)
 		.expect("baseline scores")

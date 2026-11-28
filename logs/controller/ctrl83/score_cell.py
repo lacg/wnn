@@ -49,13 +49,16 @@ PLANT_MAP = {
 	                  "dist_gyro_sigma", "dist_gyro_bias_walk", "dist_accel_sigma", "dist_seed", "dist_dropout_prob",
 	                  "dist_dropout_len_steps", "dist_obs_delay_steps", "dist_torque_scale_jitter",
 	                  "translation", "imu_specific_force", "rotor_drag", "att_err_tilt_ref", "pos_zeta",
-	                  "pos_max_tilt_rad", "alt_integral")},
+	                  "pos_max_tilt_rad", "alt_integral",
+	                  # ABI 66 (CTRL-83 D1/D3): the design lag and the payload step reach both sides.
+	                  "model_motor_lag_s", "payload_step_s", "payload_mass_scale")},
 	"target_altitude": "s1_target_altitude", "init_z": "s1_init_z", "init_vz": "s1_init_vz",
 	"ep_mass": "s1_mass", "ep_collective_frac": "s1_collective_frac", "init_x": "s2_init_x",
 	"init_y": "s2_init_y", "pos_omega": "pos_omega_n",
 }
 # Which WNN kwarg each axis must move (G3).
-AXIS_KW = {"wear": "dist_motor_asym", "mass": "ep_mass", "lag": "motor_lag_s", "noise": "dist_gyro_sigma"}
+AXIS_KW = {"wear": "dist_motor_asym", "mass": "ep_mass", "lag": "motor_lag_s", "noise": "dist_gyro_sigma",
+           "payload": "payload_step_s"}
 
 
 def die(msg):
@@ -205,8 +208,12 @@ def score_wnn(controller, cell):
 		# G3: the stress reached the call.
 		if axis in AXIS_KW and unit == UNITS[0]:
 			nom_kw = _nominal_kw(a, ec0, unit)
-			if np.allclose(as_arr(wkw.get(AXIS_KW[axis])), as_arr(nom_kw.get(PLANT_MAP[AXIS_KW[axis]]))):
+			got, nom = as_arr(wkw.get(AXIS_KW[axis])), as_arr(nom_kw.get(PLANT_MAP[AXIS_KW[axis]]))
+			if got is None or (nom is not None and np.allclose(got, nom)):
 				die(f"{cell}: {AXIS_KW[axis]} identical to nominal — the stress did not reach the WNN scorer")
+			# D1 (ABI 66): a lag cell holds every model at the nominal design lag.
+			if axis == "lag" and not np.allclose(as_arr(wkw.get("model_motor_lag_s")), C.NOMINAL["lag_T"]):
+				die(f"{cell}: model_motor_lag_s {wkw.get('model_motor_lag_s')} is not the nominal design lag")
 		st = float(row[2])
 		U.append([unit, st, math.degrees(row[1]), math.degrees(row[5]), m.mean_position_error_m, m.mean_altitude_error_m,
 		          m.mean_position_hold_m, round((1 - st) * a.test_episodes)])

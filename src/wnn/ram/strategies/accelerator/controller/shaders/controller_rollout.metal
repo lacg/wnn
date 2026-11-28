@@ -373,6 +373,15 @@ struct Params
 	// armed-idle floor (0 ⇒ none: clamp(x, 0, 1), the ABI-64 operation).
 	float motor_settling_time_down_s;
 	float pwm_min;
+	// ABI 66 (CTRL-83), appended in lockstep: the settling time every actuator TWIN (d̂
+	// observer, obs_pwm actuator estimate, cascade d̂) is DESIGNED at — == motor_settling_
+	// time_s unless a design-model override holds the WNN at the nominal lag (D1; refused
+	// on an extended actuator, so lag_alpha_down() stays the plant's) — and the mid-episode
+	// payload step (D3): at the START of physical step payload_step_idx (0xFFFFFFFF = off)
+	// the plant mass becomes the episode's draw × payload_mass_scale.
+	float twin_settling_time_s;
+	uint payload_step_idx;
+	float payload_mass_scale;
 };
 
 // CTRL-86 S1: the plant lag's spin-down coefficient — twin of actuator_spec.rs alphas()
@@ -1198,7 +1207,7 @@ inline void cas_observe(constant Params &P, thread CasObs &o, thread const float
 	bool upd = false;
 	if (o.primed)
 	{
-		float a_lag = 4.0f * P.dt / max(P.motor_settling_time_s, 4.0f * P.dt);
+		float a_lag = 4.0f * P.dt / max(P.twin_settling_time_s, 4.0f * P.dt); // ABI 66: the DESIGN lag
 		float a_dn = ACT_EXT ? lag_alpha_down(P) : a_lag; // CTRL-86 S1
 		float lo = ACT_EXT ? P.pwm_min : 0.0f;            // CTRL-86 S2
 		for (uint m = 0u; m < 4u; m++)
@@ -1647,11 +1656,11 @@ kernel void controller_rollout(
 	for (uint m = 0u; m < MAX_ROTORS; m++)
 		dhat_ua[m] = 0.0f;
 	bool dhat_ua_seeded = false;
-	bool dhat_lag_obs = (P.dhat_on != 0u) && (P.motor_settling_time_s > 0.0f);
+	bool dhat_lag_obs = (P.dhat_on != 0u) && (P.twin_settling_time_s > 0.0f); // ABI 66: design lag
 	// ABI 36: the twin is the student's ACTUATOR estimate, not only d̂'s — it
 	// advances whenever the lag is on, and under lag the obs_pwm feature reports
 	// it (delivered u_a − anchor; controller.rs act_twin_next/delivered_feature).
-	bool act_twin_on = (P.motor_settling_time_s > 0.0f);
+	bool act_twin_on = (P.twin_settling_time_s > 0.0f);
 	thread const float *dhat_u_src = dhat_lag_obs ? (thread const float *)dhat_ua : (thread const float *)pwm_applied;
 	for (uint m = 0u; m < MAX_ROTORS; m++)
 		motor_filt[m] = 0.0f;
@@ -1831,6 +1840,10 @@ kernel void controller_rollout(
 			diverged = 1u;
 			break;
 		}
+		// ABI 66 (CTRL-83 D3): the payload step, at the START of its step — twin of
+		// cpu_score.rs PayloadStep::mass_at (the same f32 product). Off ⇒ never equal.
+		if (t == P.payload_step_idx)
+			ep_mass_kg = ep_mass_kg * P.payload_mass_scale;
 
 		// read_imu: gyro = omega; accel = -(gravity rotated to body)
 		float3 grav_world = float3(0.0f, 0.0f, -P.gravity);
@@ -2346,7 +2359,7 @@ kernel void controller_rollout(
 		// advances it lazily at the next compute_features — the same update).
 		if (act_twin_on && !ACT_EXT)
 		{
-			float t_obs = max(P.motor_settling_time_s, 4.0f * P.dt);
+			float t_obs = max(P.twin_settling_time_s, 4.0f * P.dt);
 			float a_obs = 4.0f * P.dt / t_obs;
 			for (uint m = 0u; m < min(P.num_motors, (uint)MAX_ROTORS); m++)
 				dhat_ua[m] = dhat_ua_seeded ? (dhat_ua[m] + a_obs * (pwm_applied[m] - dhat_ua[m])) : pwm_applied[m];
@@ -2358,7 +2371,7 @@ kernel void controller_rollout(
 			// its idle floor (twin of controller.rs act_twin_next).
 			if (act_twin_on)
 			{
-				float a_obs = 4.0f * P.dt / max(P.motor_settling_time_s, 4.0f * P.dt);
+				float a_obs = 4.0f * P.dt / max(P.twin_settling_time_s, 4.0f * P.dt);
 				float a_obs_dn = lag_alpha_down(P);
 				for (uint m = 0u; m < min(P.num_motors, (uint)MAX_ROTORS); m++)
 				{
