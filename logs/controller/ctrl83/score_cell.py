@@ -227,8 +227,8 @@ def score_wnn(controller, cell):
 			if axis == "joint":
 				if not np.allclose(as_arr(wkw.get("motor_lag_s")), C.NOMINAL["lag_T"]):
 					die(f"{cell}: motor_lag_s {wkw.get('motor_lag_s')} is not the nominal lag the twin keeps")
-				if not np.allclose(as_arr(wkw.get("train_motor_lag_range")), C.ALL_LEVELS["lag_range"]):
-					die(f"{cell}: train_motor_lag_range {wkw.get('train_motor_lag_range')} != {C.ALL_LEVELS['lag_range']}")
+				if not np.allclose(as_arr(wkw.get("train_motor_lag_range")), C.CELL_LAG_RANGE[cell]):
+					die(f"{cell}: train_motor_lag_range {wkw.get('train_motor_lag_range')} != {C.CELL_LAG_RANGE[cell]}")
 		st = float(row[2])
 		U.append([unit, st, math.degrees(row[1]), math.degrees(row[5]), m.mean_position_error_m, m.mean_altitude_error_m,
 		          m.mean_position_hold_m, round((1 - st) * a.test_episodes)])

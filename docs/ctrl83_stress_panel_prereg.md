@@ -228,3 +228,54 @@ moves every rival row. Every existing flag-off pin passes `None` and is unchange
 --train-motor-lag-range 0.15 0.30`, so for that arm the wear and lag axes of `all` are inside its training spread;
 only mass ±25 % and noise ×2 are out of distribution for it. l2b and l2bnm trained at wear 0.20 and a fixed T = 0.20.
 Any arm-vs-arm comparison on `all` must name this.
+
+## 11. Amendment 3 (Luiz 28/11): Zhang rule on the l2b reference ranges — cell `all` re-levelled; the old cell is `all_v1`
+
+**Decision (Luiz, 28/11/2026):** the golden joint-OOD cell `all` follows Zhang et al. 2022's protocol
+(`docs/papers/zhang2022_single_nearhover_controller.md`, Table I): every test bound = training lower bound ×0.8 /
+training upper bound ×1.2, all parameters drawn jointly. **The training ranges are those of the ORIGINAL base l2b**,
+a fixed reference, never an arm's own ranges. Otherwise the yardstick would move with every arm and no two rows would
+be comparable. `all` stays the only reported robustness number. §10's cell is renamed **`all_v1`** (diagnostic, kept
+scorable). **Every number quoted as "all" before this amendment is an `all_v1` number.** Its caches are renamed
+`ctrl83/data/<k>__all_v1.npz` / `mpcofB__all_v1.json` / `fixtures/all_v1`, and their stored meta still reads cell
+"all" (= the v1 definition).
+
+```
+stress            | l2b training (reference) | Zhang test range        | `all` as flown (ABI 69)                          | exact?
+------------------+--------------------------+-------------------------+--------------------------------------------------+----------------------------
+motor wear        | thrust factor 0.80-1.20  | 0.64-1.44               | per-motor factor 1.04 x (1 + U(-0.3846, 0.3846)) | EXACT (base x mag; resolved
+                  | (L4C, ±0.20)             |                         |   = U(0.64, 1.44)                                |   35-unit draw 0.641-1.436)
+mass              | 0.85-1.15 (±0.15)        | 0.68-1.38               | mass_jitter 0.38 -> 0.62-1.38                    | FALLBACK, harsher low end
+motor lag (plant) | T = 0.20 s fixed         | 0.16-0.24 s             | T_e ~ U(0.16, 0.24) s per episode                | EXACT
+sensor noise      | x1 (ADIS16448)           | x0.8-x1.2               | x1.2 FIXED (gyro σ, bias walk, accel σ)          | worst case of the range
+inertia           | nominal                  | ±20 % (x0.8-x1.2)       | PENDING: inertia_jitter 0.20                     | requires ABI 70
+latency           | 10 ms (Zhang's value)    | 8-12 ms                 | PENDING: control_latency_ms (8, 12)              | requires ABI 70
+every MODEL       | T = 0.20                 | -                       | T = 0.20 (D1 unchanged)                          |
+```
+
+Representation notes (written before any result):
+- **Wear is exact without code.** `DisturbanceConfig.motor_asym` (the fixed per-motor multiplier, base 1.0 under
+  L4C) composes with the per-unit draw `base·(1 + U(−mag, mag))`. That is the same composition `apply_motor_fault`
+  uses, and it reaches every scorer's resolved draw (gated by G2). b = (0.64+1.44)/2 = 1.04, m = 0.80/2.08 = 0.3846.
+  The mean factor rises to 1.04: that is the centre of Zhang's interval, not an added bias. The cell refuses a
+  faulted base.
+- **Mass is a symmetric fallback.** The mass draw is `af_mass·(1 + U(−j, j))` with no base factor, and moving the
+  airframe mass would move the nominal anchor and every rival design. j = 0.38 covers 0.62-1.38: Zhang's upper bound
+  exactly, and 0.06 HARSHER at the low end (a lighter craft, i.e. more thrust margin). The exact 0.68-1.38 needs code
+  (an asymmetric mass range / mass base factor).
+- **Noise is fixed at x1.2.** The l2b training noise is a point (x1), so Zhang's interval is [x0.8, x1.2]. Less noise
+  is not a stress, the scorers have no per-episode noise draw (U(0.8, 1.2) would need code), and x1.2 is the range's
+  worst case. So the cell is at least as hard as the Zhang draw on this axis.
+- **Inertia and latency** (ABI 70, branch `ctrl89-latency-inertia` dc222d3d: `inertia_jitter`, `control_latency_ms`)
+  are recorded in `cells.ALL_LEVELS` as pending and are **not applied and not scored** on ABI 69. When ABI 70 is
+  installed they join `all`, the ABI-69 `all` caches are renamed (as for `all_v1`), and every row is re-scored.
+  Until then the `all` rows are the "ABI-69 part" of the Zhang cell.
+
+Gates unchanged (G2 identity incl. the lag range; G3 per-cell lag range, `cells.CELL_LAG_RANGE`). Re-scored on
+ABI 69, 28/11: wnn_s1-5 (l2b), l2bnm_s1-3, l2bnmw_s1-3, MPCOF row A, PID, LQI, row B
+(`run_grid.py --cells nom,all`; log `logs/controller/ctrl83/all_zhang_abi69_2811.log`).
+
+**Read caveat.** Against this cell, l2bnmw's TRAINING spread (wear ±0.30 = 0.70-1.30, lag U(0.15, 0.30)) covers the lag
+axis fully and the wear axis only partly (the test range reaches 0.64 and 1.44). Mass and noise remain OOD for it.
+The CTRL-90 arm `l2bnmwz` is trained ON this cell's wear and lag ranges (docs/ctrl90_zhang_trained_prereg.md):
+for it, those axes are in-distribution and the read is covered-range robustness, not OOD generalization.
