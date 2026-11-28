@@ -434,6 +434,15 @@ struct RolloutParams
 	twin_settling_time_s: f32,
 	payload_step_idx: u32,
 	payload_mass_scale: f32,
+	// + 7 (ABI 71, CTRL-84), appended in lockstep with the shader twin: the MLP head's widths,
+	// activation and blob placement in the thresholds buffer (read only under FC_MLP(9)).
+	mlp_in: u32,
+	mlp_h0: u32,
+	mlp_h1: u32,
+	mlp_out: u32,
+	mlp_act: u32,
+	mlp_off: u32,
+	mlp_stride: u32,
 }
 
 /// CTRL-38: the cascade feature blocks as the score kernel needs them, read off the
@@ -605,7 +614,8 @@ pub struct ControllerRolloutEvaluator
 	// the lead input needs neither the cascade blocks nor the bias predictor).
 	// ABI 65: keyed (.., act_ext) — FC_ACTUATOR_EXT(7) composes (and alone selects this map).
 	// ABI 68: keyed (.., ep_lag) — FC_EP_LAG(8) composes (and alone selects this map).
-	cascade_obs_pipeline: std::cell::RefCell<std::collections::HashMap<(bool, bool, bool, bool, bool, bool, bool), ComputePipelineState>>,
+	// ABI 71: keyed (.., mlp) — FC_MLP(9) composes (and alone selects this map).
+	cascade_obs_pipeline: std::cell::RefCell<std::collections::HashMap<(bool, bool, bool, bool, bool, bool, bool, bool), ComputePipelineState>>,
 	/// TEST-ONLY (ABI 38 label-replay identity on the GPU): Some(firmware attitude
 	/// gains) ⇒ a CTBR population's outer setpoint is the in-kernel firmware attitude
 	/// half (ctbr_outer_pid) instead of the WNN decode.
@@ -613,8 +623,79 @@ pub struct ControllerRolloutEvaluator
 	pub(crate) test_ctbr_outer_pid: std::cell::Cell<Option<[f32; 12]>>,
 }
 
+/// CTRL-84 (ABI 71): the population's MLP heads as the score kernel needs them.
+pub(crate) struct MlpPopulation
+{
+	/// [in, h0, h1 (0 = one hidden layer), out]
+	pub(crate) dims: [u32; 4],
+	pub(crate) act: u32,
+	/// floats per genome blob ([shift | scale | params])
+	pub(crate) stride: u32,
+	/// every genome's blob, genome-major
+	pub(crate) blobs: Vec<f32>,
+}
+
+/// None when no controller carries a head; refuses a population that mixes heads and WNNs or
+/// head shapes (the kernel is specialized once per dispatch).
+pub(crate) fn mlp_population(controllers: &[&WnnController]) -> Result<Option<MlpPopulation>, String>
+{
+	let Some(h0) = controllers[0].mlp_head_ref()
+	else
+	{
+		if controllers.iter().any(|c| c.mlp_head_ref().is_some())
+		{
+			return Err("score_controllers_metal: the population mixes MLP heads and WNN lookups — score each kind separately".into());
+		}
+		return Ok(None);
+	};
+	let hid = h0.hidden();
+	let dims = [h0.in_dim() as u32, hid[0] as u32, hid.get(1).copied().unwrap_or(0) as u32, h0.out_dim() as u32];
+	let mut blobs = Vec::new();
+	for c in controllers
+	{
+		match c.mlp_head_ref()
+		{
+			Some(h) if h.same_shape(h0) => blobs.extend(h.gpu_blob()),
+			_ => return Err("score_controllers_metal: the MLP population is not uniform in shape (widths/activation)".into()),
+		}
+	}
+	let stride = (blobs.len() / controllers.len()) as u32;
+	Ok(Some(MlpPopulation { dims, act: h0.act().code(), stride, blobs }))
+}
+
 impl ControllerRolloutEvaluator
 {
+	/// CTRL-84 test hook: run `controller_mlp_forward` (the kernel's mlp_forward) on `n` inputs.
+	#[cfg(test)]
+	pub(crate) fn mlp_forward_gpu(&self, h: &crate::mlp_head::MlpHead, feats: &[f32], n: usize) -> Result<Vec<f32>, String>
+	{
+		let func = self
+			.library
+			.get_function("controller_mlp_forward", Some(metal::FunctionConstantValues::new()))
+			.map_err(|e| format!("controller_mlp_forward: {e}"))?;
+		let p = self.device.new_compute_pipeline_state_with_function(&func).map_err(|e| e.to_string())?;
+		let hid = h.hidden();
+		let dims: [u32; 6] = [n as u32, h.in_dim() as u32, hid[0] as u32, hid.get(1).copied().unwrap_or(0) as u32, h.out_dim() as u32, h.act().code()];
+		let b_x = self.buf(feats);
+		let b_blob = self.buf(&h.gpu_blob());
+		let b_out = self.buf(&vec![0.0f32; n * h.out_dim()]);
+		let b_dims = self.buf(&dims);
+		let cmd = self.queue.new_command_buffer();
+		let enc = cmd.new_compute_command_encoder();
+		enc.set_compute_pipeline_state(&p);
+		enc.set_buffer(0, Some(&b_x), 0);
+		enc.set_buffer(1, Some(&b_blob), 0);
+		enc.set_buffer(2, Some(&b_out), 0);
+		enc.set_buffer(3, Some(&b_dims), 0);
+		let tg = p.max_total_threads_per_threadgroup().min(64);
+		enc.dispatch_threads(metal::MTLSize::new(n as u64, 1, 1), metal::MTLSize::new(tg, 1, 1));
+		enc.end_encoding();
+		cmd.commit();
+		cmd.wait_until_completed();
+		let ptr = b_out.contents() as *const f32;
+		Ok(unsafe { std::slice::from_raw_parts(ptr, n * h.out_dim()) }.to_vec())
+	}
+
 	pub fn new() -> Result<Self, String>
 	{
 		let device = Device::system_default().ok_or("No Metal device found")?;
@@ -694,9 +775,9 @@ impl ControllerRolloutEvaluator
 	/// CTRL-46: `abp` = FC_ATT_BIAS_PRED(3)=true; a constant is set ONLY when on, so the
 	/// (true, false) pipeline is the ABI-45 cascade pipeline exactly.
 	#[allow(clippy::too_many_arguments)]
-	fn cascade_obs_pipeline(&self, cas: bool, abp: bool, ytp: bool, rlo: bool, ylead: bool, act_ext: bool, ep_lag: bool) -> Result<ComputePipelineState, String>
+	fn cascade_obs_pipeline(&self, cas: bool, abp: bool, ytp: bool, rlo: bool, ylead: bool, act_ext: bool, ep_lag: bool, mlp: bool) -> Result<ComputePipelineState, String>
 	{
-		let key = (cas, abp, ytp, rlo, ylead, act_ext, ep_lag);
+		let key = (cas, abp, ytp, rlo, ylead, act_ext, ep_lag, mlp);
 		if let Some(p) = self.cascade_obs_pipeline.borrow().get(&key)
 		{
 			return Ok(p.clone());
@@ -735,6 +816,11 @@ impl ControllerRolloutEvaluator
 		if ep_lag
 		{
 			fcv.set_constant_value_at_index(&on as *const bool as *const _, MTLDataType::Bool, 8);
+		}
+		// ABI 71: the MLP head (set ONLY when on, so every ABI-68 key is the ABI-68 pipeline).
+		if mlp
+		{
+			fcv.set_constant_value_at_index(&on as *const bool as *const _, MTLDataType::Bool, 9);
 		}
 		let func = self
 			.library
@@ -1105,12 +1191,19 @@ impl ControllerRolloutEvaluator
 		{
 			return Err("score_controllers_metal: train_motor_lag_range is not carried by the N-rotor geometry pipeline".into());
 		}
+		// ABI 71 (CTRL-84): a population of MLP heads (uniform shape) or none; quad only.
+		let mlp = mlp_population(controllers)?;
+		if mlp.is_some() && geometry.is_some()
+		{
+			return Err("score_controllers_metal: the MLP head is not carried by the N-rotor geometry pipeline".into());
+		}
+		let mlp_on = mlp.is_some();
 		let geom_pipeline = match geometry
 		{
 			Some(rotors) => Some(self.geometry_pipeline(rotors.len() as u32, abp_on)?),
-			None if cas_on || abp_on || ylead_on || act_ext || ep_lag =>
+			None if cas_on || abp_on || ylead_on || act_ext || ep_lag || mlp_on =>
 			{
-				Some(self.cascade_obs_pipeline(cas_on, abp_on, controllers[0].yaw_trim_p_kappa().is_some(), rlo, ylead_on, act_ext, ep_lag)?)
+				Some(self.cascade_obs_pipeline(cas_on, abp_on, controllers[0].yaw_trim_p_kappa().is_some(), rlo, ylead_on, act_ext, ep_lag, mlp_on)?)
 			}
 			None => None,
 		};
@@ -1143,7 +1236,20 @@ impl ControllerRolloutEvaluator
 		let b_ov = self.buf(&o_vals);
 		let b_oo = self.buf(&o_off);
 		let b_ocn = self.buf(&o_cnt);
-		let b_th = self.buf(controllers[0].thresholds_ref());
+		// ABI 71: under FC_MLP the heads' blobs ride AFTER the thresholds in buffer 10 (the
+		// kernel's 31 buffer slots are all taken); without a head the buffer is unchanged.
+		let th_blob: std::borrow::Cow<[f32]> = match &mlp
+		{
+			None => std::borrow::Cow::Borrowed(controllers[0].thresholds_ref()),
+			Some(m) =>
+			{
+				let mut v = controllers[0].thresholds_ref().to_vec();
+				v.extend_from_slice(&m.blobs);
+				std::borrow::Cow::Owned(v)
+			}
+		};
+		let mlp_off = controllers[0].thresholds_ref().len() as u32;
+		let b_th = self.buf(&th_blob);
 
 		// Per-genome aggregators (initialised to "no data yet"). When a chunk
 		// completes we accumulate; when cancellation hits we return the
@@ -1385,6 +1491,13 @@ impl ControllerRolloutEvaluator
 				twin_settling_time_s: stage1.map_or(motor_lag_s, |s| s.stress.design.lag_s(motor_lag_s)),
 				payload_step_idx: stage1.map_or(u32::MAX, |s| s.stress.payload.step),
 				payload_mass_scale: stage1.map_or(1.0, |s| s.stress.payload.mass_scale),
+				mlp_in: mlp.as_ref().map_or(0, |m| m.dims[0]),
+				mlp_h0: mlp.as_ref().map_or(0, |m| m.dims[1]),
+				mlp_h1: mlp.as_ref().map_or(0, |m| m.dims[2]),
+				mlp_out: mlp.as_ref().map_or(0, |m| m.dims[3]),
+				mlp_act: mlp.as_ref().map_or(0, |m| m.act),
+				mlp_off,
+				mlp_stride: mlp.as_ref().map_or(0, |m| m.stride),
 			};
 
 			let b_q0 = self.buf(q0_chunk);
@@ -8666,7 +8779,8 @@ mod tests
 		// + 2 (ABI 65, CTRL-86): motor_settling_time_down_s + pwm_min.
 		// + 3 (ABI 66, CTRL-83): twin_settling_time_s + payload_step_idx + payload_mass_scale.
 		// (ABI 68, CTRL-87: no new word — the lag spread is the FC_EP_LAG(8) specialization.)
-		assert_eq!(mem::size_of::<RolloutParams>(), 206 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
+		// + 7 (ABI 71, CTRL-84): mlp_in/h0/h1/out/act/off/stride.
+		assert_eq!(mem::size_of::<RolloutParams>(), 213 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============

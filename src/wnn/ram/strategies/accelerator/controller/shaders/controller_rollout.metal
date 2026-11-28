@@ -109,6 +109,13 @@ constant bool ACT_EXT = is_function_constant_defined(FC_ACTUATOR_EXT) ? FC_ACTUA
 constant bool FC_EP_LAG [[function_constant(8)]];
 constant bool EP_LAG = is_function_constant_defined(FC_EP_LAG) ? FC_EP_LAG : false;
 
+// CTRL-84 (ABI 71): the MLP baseline head (mlp_head.rs) in place of the output-layer lookup.
+// Set ONLY for a population of MLP controllers; every other pipeline leaves it undefined ⇒
+// false ⇒ the head and its blob reads are dead-stripped ⇒ the ABI-68 codegen.
+constant bool FC_MLP [[function_constant(9)]];
+constant bool MLP = is_function_constant_defined(FC_MLP) ? FC_MLP : false;
+#define MLP_MAX_WIDTH 1024
+
 // One rotor of the geometry buffer — 48 B, all-float, mirrors the Rust-side
 // RotorGpu upload. k_thrust is the EFFECTIVE coefficient (nominal x per-rotor
 // asym baked at upload; tilt/position error arrive as a perturbed table), so
@@ -391,7 +398,80 @@ struct Params
 	float twin_settling_time_s;
 	uint payload_step_idx;
 	float payload_mass_scale;
+	// ABI 71 (CTRL-84), appended in lockstep: the MLP head's widths (mlp_h1 = 0 ⇒ one hidden
+	// layer), activation (0 relu, 1 tanh), and where each genome's blob [shift | scale |
+	// params] sits in the thresholds buffer (float index mlp_off + g * mlp_stride). Read
+	// only under FC_MLP.
+	uint mlp_in;
+	uint mlp_h0;
+	uint mlp_h1;
+	uint mlp_out;
+	uint mlp_act;
+	uint mlp_off;
+	uint mlp_stride;
 };
+
+// CTRL-84: the MLP head's forward — the bit-for-bit twin of mlp_head.rs MlpHead::forward
+// (standardise, then per neuron acc = b; acc = fma(w_i, z_i, acc) in ascending i; ReLU/tanh on
+// the hidden layers; the linear output clamped to [0, 1]).
+inline void mlp_forward(thread const float *x, device const float *blob, uint n_in, uint h0, uint h1,
+                        uint n_out, uint act, thread float *out)
+{
+	float bufa[MLP_MAX_WIDTH];
+	float bufb[MLP_MAX_WIDTH];
+	device const float *shift = blob;
+	device const float *scale = blob + n_in;
+	device const float *w = blob + 2u * n_in;
+	for (uint i = 0u; i < n_in; i++)
+		bufa[i] = (x[i] - shift[i]) * scale[i];
+	uint widths[4] = {n_in, h0, h1, n_out};
+	uint n_layers = (h1 == 0u) ? 2u : 3u;
+	if (h1 == 0u)
+		widths[2] = n_out;
+	thread float *cur = bufa;
+	thread float *nxt = bufb;
+	for (uint l = 0u; l < n_layers; l++)
+	{
+		uint ni = widths[l], no = widths[l + 1u];
+		bool last = (l + 1u == n_layers);
+		device const float *bias = w + ni * no;
+		for (uint o = 0u; o < no; o++)
+		{
+			device const float *row = w + o * ni;
+			float acc = bias[o];
+			for (uint i = 0u; i < ni; i++)
+				acc = fma(row[i], cur[i], acc);
+			if (last)
+				out[o] = clamp(acc, 0.0f, 1.0f);
+			else
+				nxt[o] = (act == 1u) ? tanh(acc) : max(acc, 0.0f);
+		}
+		w = bias + no;
+		thread float *t = cur;
+		cur = nxt;
+		nxt = t;
+	}
+}
+
+// CTRL-84 test kernel: one forward per thread (feats [n * n_in] -> out [n * n_out]); the
+// CPU/GPU forward parity in ctrl84_mlp_tests.rs. Not used by any scorer.
+kernel void controller_mlp_forward(
+		device const float *feats [[buffer(0)]],
+		device const float *blob [[buffer(1)]],
+		device float *outs [[buffer(2)]],
+		constant uint *dims [[buffer(3)]], // [n, n_in, h0, h1, n_out, act]
+		uint tid [[thread_position_in_grid]])
+{
+	if (tid >= dims[0])
+		return;
+	float x[MLP_MAX_WIDTH];
+	for (uint i = 0u; i < dims[1]; i++)
+		x[i] = feats[tid * dims[1] + i];
+	float o[8];
+	mlp_forward(x, blob, dims[1], dims[2], dims[3], dims[4], dims[5], o);
+	for (uint k = 0u; k < dims[4]; k++)
+		outs[tid * dims[4] + k] = o[k];
+}
 
 // CTRL-86 S1: the plant lag's spin-down coefficient — twin of actuator_spec.rs alphas()
 // (the spin-up settling time when the lag is symmetric). Read only under FC_ACTUATOR_EXT.
@@ -2082,6 +2162,11 @@ kernel void controller_rollout(
 			// ---- output layer Strategy-5 decode, per motor (reads the cell at each
 			//      neuron's shared Mealy address) --------------------------------
 			float mono_step = 0.0f;
+			// CTRL-84: the MLP head's per-bank raw decodes on this decision's features.
+			float mlp_o[MAX_ROTORS];
+			if (MLP)
+				mlp_forward(sensors, thresholds + P.mlp_off + g * P.mlp_stride, P.mlp_in, P.mlp_h0, P.mlp_h1,
+				            P.mlp_out, P.mlp_act, mlp_o);
 			// Antagonist halves (E | I): each half is its own thermometer run for mono;
 			// decode = 0.5 + (ΣE−ΣI)/levels (cell_mode::decode_motor_cells twin). Keyed
 			// on TOPOLOGY now, so an antagonist QUAD splits too — the weight sum is
@@ -2092,7 +2177,7 @@ kernel void controller_rollout(
 				float sum = 0.0f;		// QUAD/TERNARY weight sum, or BINARY ΣE
 				float sum_i = 0.0f; // BINARY ΣI (inhibitory half)
 				bool seen_one = false, prev_zero = false;
-				for (uint l = 0u; l < P.levels; l++)
+				for (uint l = 0u; l < (MLP ? 0u : P.levels); l++)
 				{
 					uint n = m * P.levels + l;
 					uint gn = g_out_base + n;
@@ -2134,7 +2219,8 @@ kernel void controller_rollout(
 					else
 						sum += w;
 				}
-				float decoded = (bin_half != 0u)
+				float decoded = MLP ? mlp_o[m]
+				                : (bin_half != 0u)
 														? clamp(0.5f + (sum - sum_i) / (float)P.levels, 0.0f, 1.0f)
 														: clamp(sum / (float)P.levels, 0.0f, 1.0f);
 				if (P.ctbr_on != 0u)

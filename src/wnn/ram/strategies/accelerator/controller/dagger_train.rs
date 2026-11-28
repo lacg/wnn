@@ -2301,27 +2301,27 @@ pub fn train_on_trajectory_rs(
 /// One bptt window's slices of a trajectory — THE chunking both trainers use
 /// (bptt_window steps, reset on the first chunk only). Tightly coupled helper of
 /// train_on_trajectory_rs / plan_trajectory_rs.
-struct TrajWindow
+pub(crate) struct TrajWindow
 {
-	g: Vec<[f32; 3]>,
-	a: Vec<[f32; 3]>,
-	tg: Vec<[f32; 3]>,
-	pp: Vec<[f32; 4]>,
+	pub(crate) g: Vec<[f32; 3]>,
+	pub(crate) a: Vec<[f32; 3]>,
+	pub(crate) tg: Vec<[f32; 3]>,
+	pub(crate) pp: Vec<[f32; 4]>,
 	// Option A: per-chunk integral targets for the state layer (None if the
 	// trajectory didn't record them — the walk then uses the indirect state solve).
-	ig: Option<Vec<[f32; 3]>>,
+	pub(crate) ig: Option<Vec<[f32; 3]>>,
 	// L4: per-record |attitude err| for the magnitude-priority commit.
-	ae: Option<Vec<f32>>,
+	pub(crate) ae: Option<Vec<f32>>,
 	// DOB Fix A: the applied-pwm stream for the replay's observer.
-	sp: Option<Vec<[f32; 4]>>,
+	pub(crate) sp: Option<Vec<[f32; 4]>>,
 	// True-delta label baseline.
-	lb: Option<Vec<[f32; 4]>>,
+	pub(crate) lb: Option<Vec<[f32; 4]>>,
 	// Stale-altitude-features fix: the per-step observation streams.
-	ro: Option<ReplayObs>,
-	first: bool,
+	pub(crate) ro: Option<ReplayObs>,
+	pub(crate) first: bool,
 }
 
-fn traj_windows(traj: &TrajectoryRs, cfg: &RewardGatedConfigPacked) -> Vec<TrajWindow>
+pub(crate) fn traj_windows(traj: &TrajectoryRs, cfg: &RewardGatedConfigPacked) -> Vec<TrajWindow>
 {
 	let w = cfg.bptt_window;
 	let n = traj.steps;

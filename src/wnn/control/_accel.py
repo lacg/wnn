@@ -221,7 +221,13 @@ import os
 # train_motor_lag_range=None on score_classical_baseline too — the rivals fly the WNN scorers'
 # per-episode plant-lag draw. Carried at report time by EpisodeConfig.stress_kwargs()
 # (stress_motor_lag_range), never by the trainer.
-EXPECTED_ABI = 69
+# ABI 71 (28/11/2026, Luiz, CTRL-84 MLP baseline; additive, default = ABI 69 bit-identical; 70 is
+# the latency/inertia branch's): WnnController.set_mlp_head /
+# clear_mlp_head / mlp_head_info / mlp_head_export / mlp_last_outputs (a dense head on the
+# pre-thermometer features in place of the output-layer lookup, both scorers; Metal FC_MLP(9))
+# and dagger_train_mlp (the DAgger loop with a PyTorch fit callback in place of the RAM write).
+# Python: mlp_payload.py / mlp_fitter.py / mlp_dagger.py, ControllerEvaluator.score_mlp.
+EXPECTED_ABI = 71
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

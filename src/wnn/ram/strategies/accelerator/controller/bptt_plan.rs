@@ -25,6 +25,9 @@ pub(crate) struct BpttWindowPlan
 	pub frame: Vec<bool>,
 	/// [n_rec * num_out] — the teacher target bit of every output neuron.
 	pub out_target: Vec<bool>,
+	/// CTRL-84 (ABI 71): [n_rec * num_features] — each record's pre-thermometer feature
+	/// vector (what the MLP baseline's head reads). Recorded only; no walk reads it.
+	pub feats: Vec<f32>,
 	/// Option A (WNN_STATE_INTEGRAL_TARGET=1): [n_rec * state_neurons] direct state
 	/// target cell, or NO_STATE_OVERRIDE where the walk's d_s decides.
 	pub state_target: Option<Vec<u8>>,

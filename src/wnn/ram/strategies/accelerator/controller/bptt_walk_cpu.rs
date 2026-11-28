@@ -188,6 +188,7 @@ impl WnnController
 			frame: Vec::with_capacity(w * frame_bits),
 			out_target: Vec::new(),
 			state_target: None,
+			feats: Vec::with_capacity(w.div_ceil(self.action_repeat.max(1)) * self.num_features),
 		};
 		for t in 0..w
 		{
@@ -236,6 +237,7 @@ impl WnnController
 			}
 			plan.sensor.extend_from_slice(&sensor);
 			plan.frame.extend_from_slice(&frame);
+			plan.feats.extend_from_slice(&feats);
 			plan.rec_step.push(t);
 		}
 		plan.n_rec = plan.rec_step.len();

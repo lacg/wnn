@@ -2,6 +2,8 @@
 
   score_cell.py <controller> <cell> <out.npz> [--rival-tail]
     controller: wnn_s1..wnn_s5 | mpcofA | mpcofC | pid | lqi | <EXTRA_WNN arm>_sN (cells.py)
+                | mlpa_sN / mlpb_sN (CTRL-84 MLP baseline, ctrl84/mlp_ids.py: the VAL-selected head flown
+                  on the paired l2bnm sN run's plant/episodes, through ControllerEvaluator.score_mlp)
     cell      : a cells.CELLS id
 
 REPORT-ONLY. No training, no selection: the WNN is the published winner
@@ -36,6 +38,8 @@ sys.path.insert(0, "/Users/lacg/wnn/logs/controller/ctrl80")
 import inspect
 import numpy as np
 import cells as C
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "ctrl84"))
+import mlp_ids as M  # CTRL-84: the MLP baseline as a scorable controller kind (mlp<arm>_sN)
 
 N_MET = 20
 CAP_DEG = 8.0       # per-episode err cap for the tail (episode_tail.rs gate limit); applied to BOTH sides at report
@@ -175,7 +179,9 @@ def score_rival(controller, cell, tail):
 	return tag, a, np.array(U), np.array(EPS) if EPS else np.zeros((0, 4))
 
 
-def score_wnn(controller, cell):
+def score_wnn(controller, cell, mlp=None):
+	"""mlp (CTRL-84): an MlpPayload — `controller` is then the paired WNN id whose run supplies the
+	argv / plant / episodes / spec, and the scored controller is that head (ev.score_mlp), not the winner."""
 	import wnn.control._accel as A
 	from wnn.control.phased_ga import _test_thresholds, _rg_config, _ctl_load
 	from wnn.control.evaluator import ControllerEvaluator
@@ -184,7 +190,7 @@ def score_wnn(controller, cell):
 	seeds = resolve_seed_set(base=a.base_seed, run_index=0, train=a.train_seed, test=a.test_seed, val=a.val_seed)
 	pay = _ctl_load(f"/Users/lacg/wnn/logs/controller/ctrl48/{tag}_winner.yaml.gz")
 	spec, genome = pay["spec"], pay["best_genome"]
-	if genome.cells is None:
+	if genome.cells is None and mlp is None:
 		die(f"{tag}: winner has no cells")
 	# The address function is part of the published controller: fitted on the NOMINAL plant.
 	thr = _test_thresholds(a, ec0, spec, UNITS[0], seeds.train, use_score=True)
@@ -198,7 +204,7 @@ def score_wnn(controller, cell):
 			ev = ControllerEvaluator(spec, num_eval_episodes=a.test_episodes, seed=unit, episode_config=ec, thresholds=thr,
 			                         rg_config=_rg_config(a, ec, unit), max_train_workers=1, num_eval_folds=a.num_eval_folds,
 			                         max_eval_workers_gpu=False)
-			m = ev.score_genomes([genome])[0]
+			m = ev.score_genomes([genome])[0] if mlp is None else ev.score_mlp([mlp])[0]
 		finally:
 			A.score_controllers_cpu = real
 		if len(cap.calls) != 1:
@@ -272,14 +278,17 @@ def gate_nominal(controller, tag, txt, U):
 
 def main():
 	ap = argparse.ArgumentParser()
-	ap.add_argument("controller", choices=C.ALL_CONTROLLERS)
+	ap.add_argument("controller", choices=C.ALL_CONTROLLERS + M.MLP_IDS)
 	ap.add_argument("cell", choices=list(C.CELL))
 	ap.add_argument("out")
 	ap.add_argument("--rival-tail", action="store_true")
 	o = ap.parse_args()
 	import wnn.control._accel as A
 	t0 = time.time()
-	if C.is_wnn(o.controller):
+	if M.is_mlp(o.controller):
+		from wnn.control.mlp_payload import MlpPayload
+		tag, a, U, EPS = score_wnn(M.base_id(o.controller), o.cell, mlp=MlpPayload.load(M.payload_path(o.controller)))
+	elif C.is_wnn(o.controller):
 		tag, a, U, EPS = score_wnn(o.controller, o.cell)
 	else:
 		tag, a, U, EPS = score_rival(o.controller, o.cell, o.rival_tail)

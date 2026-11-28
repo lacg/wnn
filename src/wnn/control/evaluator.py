@@ -1797,6 +1797,31 @@ def _label_kwargs(spec) -> dict:
 	return out
 
 
+def _metrics_from_scored(scored: list) -> list:
+	"""[(reward, metrics dict)] from the scorer → [ControllerMetrics] (score_genomes and the
+	CTRL-84 score_mlp share it, so an MLP row carries exactly the WNN row's fields)."""
+	from wnn.ram.metrics import ControllerMetrics as Metrics
+	# jerk + mono from the SAME scoring dict the arch stages use → the MEMORY
+	# stage now ranks on them identically (the orthogonality fix).
+	return [Metrics(reward=float(r), stable_rate=float(m.get("stable_rate", 0.0)), fitness=float(r),
+	                mean_attitude_error_deg=float(m.get("mean_attitude_error_deg", 0.0)),
+	                motor_jerk_mean=(float(m["mean_pwm_jerk"]) if m.get("mean_pwm_jerk") is not None else None),
+	                mono_violations_total=(float(m["mono_violations"]) if m.get("mono_violations") is not None else None),
+	                mean_steady_error_deg=(float(m["mean_steady_error_deg"]) if m.get("mean_steady_error_deg") is not None else None),
+	                mean_effort=(float(m["mean_effort"]) if m.get("mean_effort") is not None else None),
+	                mean_position_error_m=(float(m["mean_position_error_m"])
+	                                       if m.get("mean_position_error_m") is not None else None),
+	                mean_altitude_error_m=(float(m["mean_altitude_error_m"])
+	                                       if m.get("mean_altitude_error_m") is not None else None),
+	                mean_dx_m=(float(m["mean_dx_m"]) if m.get("mean_dx_m") is not None else None),
+	                mean_dy_m=(float(m["mean_dy_m"]) if m.get("mean_dy_m") is not None else None),
+	                mean_position_hold_m=m.get("mean_position_hold_m"),
+	                mean_dz_hold_m=m.get("mean_dz_hold_m"),
+	                mean_mid_error_deg=m.get("mean_mid_error_deg"),  # ABI 60 (None unless armed)
+	                episode_err_p99_deg=m.get("episode_err_p99_deg"))  # CTRL-58 (None unless armed)
+	        for (r, m) in scored]
+
+
 def build_controller(genome: ControllerGenome) -> WnnController:
 	"""Instantiate a Rust WnnController from a ControllerGenome and apply
 	all learned cells. The Rust controller takes connectivity at
@@ -2483,18 +2508,18 @@ class ControllerEvaluator:
 			trained.append((controller, stats))
 		return trained
 
-	def _train_genome_rust(self, spec, state_conns, output_conns, init_s, init_o, seed):
-		"""Rust dagger_train_inplace fast-path. Returns (WnnController, stats_dict)
-		matching the Python reward_gated_train return shape."""
+	def packed_train_config(self):
+		"""The RewardGatedConfigPacked this evaluator's trainer runs with (rg_config mapped to the
+		Rust packed form; string enums → integers, 0=improvement/pid, 1=quantile/student). ONE
+		definition shared by the WNN's per-genome trainer and the CTRL-84 MLP DAgger
+		(mlp_dagger.py), so both students train under the identical config."""
 		from wnn.control import _accel as ra
-		# Map the Python RewardGatedConfig → RewardGatedConfigPacked. String
-		# enums become integers (0=improvement/pid, 1=quantile/student).
 		rg = self.rg_config
 		# W2 disturbances → the in-search training rollouts (train-under-weather).
 		(dist_en, dist_tb, dist_gs, dist_gtc, dist_ma,
 		 dist_gys, dist_gbw, dist_acs,
 		 dist_dp, dist_dls, dist_ods, dist_tsj) = _dist_packed_fields(rg)
-		cfg = ra.RewardGatedConfigPacked(
+		return ra.RewardGatedConfigPacked(
 			num_rounds=rg.num_rounds,
 			episodes_per_round=rg.episodes_per_round,
 			steps_per_episode=rg.steps_per_episode,
@@ -2555,6 +2580,11 @@ class ControllerEvaluator:
 			# ABI 32: real-life plant (AirframeRs) + G5 gate/checkpoint reference.
 			**rg.episode_config.imu_kwargs(), **rg.episode_config.att_ref_kwargs(),
 		)
+
+	def new_train_controller(self, spec, state_conns, output_conns):
+		"""An empty-memory WnnController for `spec` exactly as the per-genome trainer builds it
+		(this evaluator's thresholds; target_levels applied). Shared with the CTRL-84 MLP DAgger."""
+		from wnn.control import _accel as ra
 		controller = ra.WnnController(
 			num_motors=spec.num_motors, levels_per_motor=spec.levels_per_motor,
 			bits_per_feature=spec.bits_per_feature, input_window_k=spec.input_window_k,
@@ -2595,6 +2625,17 @@ class ControllerEvaluator:
 			if not hasattr(controller, 'set_target_levels'):
 				raise RuntimeError("target_levels set but the installed wheel predates it")
 			controller.set_target_levels(_tl)
+		return controller
+
+	def _train_genome_rust(self, spec, state_conns, output_conns, init_s, init_o, seed):
+		"""Rust dagger_train_inplace fast-path. Returns (WnnController, stats_dict)
+		matching the Python reward_gated_train return shape."""
+		from wnn.control import _accel as ra
+		# Map the Python RewardGatedConfig → RewardGatedConfigPacked. String
+		# enums become integers (0=improvement/pid, 1=quantile/student).
+		rg = self.rg_config
+		cfg = self.packed_train_config()
+		controller = self.new_train_controller(spec, state_conns, output_conns)
 		# ONE FFI call for the whole warm-start (was one per cell, ~500k/genome).
 		# load_cells reproduces write_*_cell semantics exactly — canonicalising
 		# write, 2-bit mask, bounds check — unlike restore_cells, which uses the
@@ -3518,25 +3559,30 @@ class ControllerEvaluator:
 					f"[ControllerEvaluator] score_genomes cancelled {_CANCEL_RETRIES}x consecutively "
 					f"(SPURIOUS — no SIGTERM to this process) — refusing to return a degenerate batch."
 				)
-		# jerk + mono from the SAME scoring dict the arch stages use → the MEMORY
-		# stage now ranks on them identically (the orthogonality fix).
-		return [Metrics(reward=float(r), stable_rate=float(m.get("stable_rate", 0.0)), fitness=float(r),
-		                mean_attitude_error_deg=float(m.get("mean_attitude_error_deg", 0.0)),
-		                motor_jerk_mean=(float(m["mean_pwm_jerk"]) if m.get("mean_pwm_jerk") is not None else None),
-		                mono_violations_total=(float(m["mono_violations"]) if m.get("mono_violations") is not None else None),
-		                mean_steady_error_deg=(float(m["mean_steady_error_deg"]) if m.get("mean_steady_error_deg") is not None else None),
-		                mean_effort=(float(m["mean_effort"]) if m.get("mean_effort") is not None else None),
-		                mean_position_error_m=(float(m["mean_position_error_m"])
-		                                       if m.get("mean_position_error_m") is not None else None),
-		                mean_altitude_error_m=(float(m["mean_altitude_error_m"])
-		                                       if m.get("mean_altitude_error_m") is not None else None),
-		                mean_dx_m=(float(m["mean_dx_m"]) if m.get("mean_dx_m") is not None else None),
-		                mean_dy_m=(float(m["mean_dy_m"]) if m.get("mean_dy_m") is not None else None),
-		                mean_position_hold_m=m.get("mean_position_hold_m"),
-		                mean_dz_hold_m=m.get("mean_dz_hold_m"),
-		                mean_mid_error_deg=m.get("mean_mid_error_deg"),  # ABI 60 (None unless armed)
-		                episode_err_p99_deg=m.get("episode_err_p99_deg"))  # CTRL-58 (None unless armed)
-		        for (r, m) in scored]
+		return _metrics_from_scored(scored)
+
+	def score_mlp(self, payloads: list) -> list:
+		"""CTRL-84 (ABI 71): the MLP baseline's scorer hook — score_genomes for MLP controllers.
+		Each payload (mlp_payload.MlpPayload) is installed on an empty-memory controller of this
+		evaluator's spec (same features, CTBR decode, delta law, inner rate loop, plant) and
+		scored through the SAME path (fold rotation, _score_fitness → score_population → the
+		Rust score_controllers_cpu / score_controllers_metal). No training. Returns
+		[ControllerMetrics] in input order. A cancel mid-score raises (report-only caller)."""
+		from wnn.control._accel import require_accel
+		ram_accelerator = require_accel()
+		self._ensure_ga_ready()
+		self._advance_fold()
+		sc, oc = random_connectivity(self.spec, seed=0)  # never read: the head replaces the lookup
+		controllers = []
+		for p in payloads:
+			c = build_controller(ControllerGenome(spec=self.spec, thresholds=self.thresholds,
+			                                      state_connections=sc, output_connections=oc))
+			p.attach(c)
+			controllers.append(c)
+		scored = self._score_fitness(controllers, [("mlp", p.shape_key()) for p in payloads])
+		if bool(ram_accelerator.is_cancelled()):
+			raise RuntimeError("[ControllerEvaluator] score_mlp: cancel flag set during the score")
+		return _metrics_from_scored(scored)
 
 	def _score_grouped(self, controllers: list, shape_keys: list) -> list:
 		"""Score controllers in shape-uniform groups, reassembled in input order.

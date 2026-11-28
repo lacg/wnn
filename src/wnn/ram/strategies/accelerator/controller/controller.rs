@@ -2847,6 +2847,39 @@ impl WnnController
 	{
 		self.obs_pwm
 	}
+	/// CTRL-84 (ABI 71): install the MLP baseline head (mlp_head.rs). Refused where the
+	/// head would not be the ONLY difference from the WNN: a state layer (the head is
+	/// memoryless, like the sn=0 output layer it replaces), a stochastic decode (QSR/PLN
+	/// draw a per-level coin the head has no levels for), or a feature/bank count mismatch.
+	pub(crate) fn set_mlp_head_core(&mut self, h: crate::mlp_head::MlpHead) -> Result<(), String>
+	{
+		if self.state_neurons != 0
+		{
+			return Err(format!("mlp head: state_neurons = {} (the head replaces the sn=0 output layer)", self.state_neurons));
+		}
+		if CellMode::of(self.memory_mode).is_stochastic()
+		{
+			return Err("mlp head: a stochastic decode mode (QSR/PLN) has no meaning for a dense head".into());
+		}
+		if h.in_dim() != self.num_features
+		{
+			return Err(format!("mlp head: in_dim {} != the controller's num_features {}", h.in_dim(), self.num_features));
+		}
+		if h.out_dim() != self.num_motors
+		{
+			return Err(format!("mlp head: out_dim {} != num_motors {}", h.out_dim(), self.num_motors));
+		}
+		self.mlp = Some(h);
+		self.mlp_out = vec![0.0f32; self.num_motors];
+		Ok(())
+	}
+
+	/// The installed MLP head (None = the WNN).
+	pub(crate) fn mlp_head_ref(&self) -> Option<&crate::mlp_head::MlpHead>
+	{
+		self.mlp.as_ref()
+	}
+
 	/// Borrow of the last compute_features output (no clone) — the calibration
 	/// sampler reads it once per step.
 	pub(crate) fn last_feature_vector_ref(&self) -> &[f32]
@@ -3167,6 +3200,9 @@ impl WnnController
 			// only read for is_stochastic modes, which the scorers always seed).
 			decode_run_seed: 0,
 			decode_step: 0,
+			// CTRL-84 (ABI 71): no MLP head = the WNN lookup (bit-identical).
+			mlp: None,
+			mlp_out: vec![0.0f32; num_motors],
 			// L1 d̂ observer state. b is stored as f32 (the feature path is f32
 			// throughout); the division guard mirrors the teacher's — a zero b axis
 			// would make the estimate meaningless, so it is rejected at construction.
@@ -4239,6 +4275,15 @@ pub struct WnnController
 	// cell_mode::is_stochastic(memory_mode) (QSR/PLN); deterministic modes never
 	// touch these two fields → the QUAD/TERNARY/BINARY parity anchor is untouched.
 	decode_step: u32,
+
+	// --- CTRL-84 (ABI 71): the MLP baseline head (mlp_head.rs) ---
+	// Some ⇒ each decision step's per-bank raw decode is the head's output on the
+	// pre-thermometer feature vector instead of the output-layer lookup; every other
+	// stage of the controller (features, decode, delta law, inner rate loop) is unchanged.
+	// None (default) ⇒ the WNN, bit-identical to ABI 68.
+	mlp: Option<crate::mlp_head::MlpHead>,
+	// The head's outputs at the last decision step (read by raw_bank_decode).
+	mlp_out: Vec<f32>,
 }
 
 #[pymethods]
@@ -6377,8 +6422,17 @@ impl WnnController
 		// Cache for edra_train_step (it solves the state bits; frame is immutable).
 		self.last_output_layer_input = output_input.clone();
 
-		// 6. Output-layer forward.
-		let num_out = self.num_motors * self.levels_per_motor;
+		// 6. Output-layer forward — or, CTRL-84, the MLP head on the same step's features
+		//    (the lookup is skipped: an MLP controller has no output cells).
+		let num_out = if let Some(h) = self.mlp.as_ref()
+		{
+			h.forward(&feats, &mut self.mlp_out);
+			0
+		}
+		else
+		{
+			self.num_motors * self.levels_per_motor
+		};
 		for n in 0..num_out
 		{
 			let conn_start = n * self.output_bits_per_neuron;
@@ -6441,6 +6495,55 @@ impl WnnController
 		// the value stored here at the decision step, so no store there.
 		self.pwm_applied.clone_from(&pwm);
 		pwm
+	}
+
+	/// CTRL-84 (ABI 71): install an MLP head (see mlp_head.rs for the layout). Python:
+	/// wnn.control.mlp_payload.MlpPayload.attach(controller).
+	#[pyo3(signature = (in_dim, hidden, activation, shift, scale, params))]
+	pub fn set_mlp_head(
+		&mut self,
+		in_dim: usize,
+		hidden: Vec<usize>,
+		activation: &str,
+		shift: Vec<f32>,
+		scale: Vec<f32>,
+		params: Vec<f32>,
+	) -> PyResult<()>
+	{
+		let act = crate::mlp_head::MlpAct::parse(activation).map_err(pyo3::exceptions::PyValueError::new_err)?;
+		let h = crate::mlp_head::MlpHead::new(in_dim, hidden, self.num_motors, act, shift, scale, params)
+			.map_err(pyo3::exceptions::PyValueError::new_err)?;
+		self.set_mlp_head_core(h).map_err(pyo3::exceptions::PyValueError::new_err)
+	}
+
+	/// CTRL-84: remove the MLP head (back to the WNN lookup).
+	pub fn clear_mlp_head(&mut self)
+	{
+		self.mlp = None;
+	}
+
+	/// CTRL-84: (in_dim, hidden, activation, n_params, macs_per_decision) of the head, or None.
+	pub fn mlp_head_info(&self) -> Option<(usize, Vec<usize>, String, usize, usize)>
+	{
+		self.mlp.as_ref().map(|h| (h.in_dim(), h.hidden().to_vec(), h.act().name().to_string(), h.params().len(), h.cost().0))
+	}
+
+	/// CTRL-84: the installed head as (hidden, activation, shift, scale, params) — the three
+	/// arrays as little-endian float32 bytes (the dagger_train_mlp callback's return form) — or
+	/// None. The trainer reads back the head the best-checkpoint rule kept.
+	pub fn mlp_head_export<'py>(
+		&self,
+		py: Python<'py>,
+	) -> Option<(Vec<usize>, String, Bound<'py, pyo3::types::PyBytes>, Bound<'py, pyo3::types::PyBytes>, Bound<'py, pyo3::types::PyBytes>)>
+	{
+		let b = |v: &[f32]| pyo3::types::PyBytes::new(py, &v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>());
+		self.mlp.as_ref().map(|h| (h.hidden().to_vec(), h.act().name().to_string(), b(h.shift()), b(h.scale()), b(h.params())))
+	}
+
+	/// CTRL-84: the head's per-bank outputs at the last decision step (diagnostic).
+	pub fn mlp_last_outputs(&self) -> Option<Vec<f32>>
+	{
+		self.mlp.as_ref().map(|_| self.mlp_out.clone())
 	}
 
 	#[getter]
@@ -7162,6 +7265,27 @@ impl WnnController
 		}
 	}
 
+	/// CTRL-84 (ABI 71): append each prepared record's per-bank raw-decode TARGET — the
+	/// value the WNN's thermometer target bits encode (output_target_at, the same label,
+	/// baseline and alphabet) — to `out` ([n_rec * num_motors]).
+	pub(crate) fn mlp_targets_into(
+		&self,
+		plan: &crate::bptt_plan::BpttWindowPlan,
+		pid_pwms: &[[f32; 4]],
+		label_base: Option<&[[f32; 4]]>,
+		out: &mut Vec<f32>,
+	)
+	{
+		for d in 0..plan.n_rec
+		{
+			let t = plan.rec_step[d];
+			for m in 0..self.num_motors
+			{
+				out.push(self.output_target_at(m, t, pid_pwms, label_base));
+			}
+		}
+	}
+
 	/// ABI 57 test hook: the label encoder (delta_label_target) and the decode neutral.
 	#[cfg(test)]
 	pub(crate) fn delta_label_target_pub(&self, m: usize, delta: f32) -> f32
@@ -7227,6 +7351,11 @@ impl WnnController
 	#[inline]
 	fn raw_bank_decode(&self, m: usize) -> f32
 	{
+		// CTRL-84: the MLP head's output for bank m (set at this decision step).
+		if self.mlp.is_some()
+		{
+			return self.mlp_out[m];
+		}
 		let start = m * self.levels_per_motor;
 		if CellMode::of(self.memory_mode).is_stochastic()
 		{

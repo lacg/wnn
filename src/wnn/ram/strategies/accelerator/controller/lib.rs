@@ -152,6 +152,10 @@ mod att_estimator; // ABI 32: the WNN's Mahony attitude estimate (obs_att_estima
 mod mahony_f32; // ABI 61: the WNN's Mahony filter + heading in f32, bit-identical to the Metal kernel
 mod att_err_ref; // CTRL-17 G5 (ABI 32): attitude error vs the position loop tilt reference
 mod plant_opts; // ABI 32: specific-force IMU + rotor drag as ONE value every sim host applies
+mod mlp_head; // CTRL-84 (ABI 71): the MLP baseline head (dense net in place of the output-layer lookup)
+mod mlp_dagger; // CTRL-84 (ABI 71): DAgger with the MLP student (the WNN loop, fit callback in place of the write)
+#[cfg(test)]
+mod ctrl84_mlp_tests; // CTRL-84 (ABI 71): flag-off pin, CPU/GPU forward + rollout parity, determinism, DAgger smoke, cost bench
 mod stage1; // scope C stage 1 vertical-channel config (scorer parameter object) // Phase-0 N-rotor allocation substrate (not wired; docs/OVERACTUATED_RESIDUAL_DESIGN.md)
 
 // ABI 35: GPU-resident sn>0 bptt walk host (macOS/Metal only).
@@ -720,7 +724,17 @@ mod metal_controller;
 ///   (train_lag_range::scorer_episode_lags), episode e keyed on disturbance_episode_seed(dist_seed, e).
 ///   The rival's model keeps motor_lag_s / model_motor_lag_s (D1). Used at REPORT time by the
 ///   stress cell only; the trainer is untouched.
-pub const ABI_VERSION: u32 = 69;
+/// - 71 (28/11/2026, Luiz, CTRL-84 MLP baseline; additive, default = ABI 69 bit-identical; 70
+///   is claimed by the latency/inertia branch): an optional
+///   MLP head on WnnController (mlp_head.rs — WnnController.set_mlp_head / clear_mlp_head /
+///   mlp_head_info / mlp_last_outputs) that replaces the output-layer lookup with a dense net
+///   on the pre-thermometer features (everything else of the controller unchanged; sn=0,
+///   deterministic modes only); dagger_train_mlp (mlp_dagger.rs: the DAgger loop with a fit
+///   callback in place of the RAM write); both scorers fly it (score_controllers_cpu via
+///   step(); score_controllers_metal via the FC_MLP(9) specialization, the heads' blob
+///   appended to the thresholds buffer, RolloutParams 206 → 213 words). No head ⇒ the ABI-69
+///   pipelines and rows, pinned in ctrl84_mlp_tests.rs.
+pub const ABI_VERSION: u32 = 71;
 
 /// ABI 61: the precision of the WNN's own attitude estimator + heading ("f32"; a wheel
 /// without this constant runs the f64 estimator). Read by scripts/export_controller_c.py.
@@ -1782,6 +1796,7 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()>
 	m.add_class::<dagger_train::RewardGatedConfigPacked>()?;
 	m.add_class::<dagger_train::TrainStats>()?;
 	m.add_function(wrap_pyfunction!(dagger_train::dagger_train_inplace, m)?)?;
+	m.add_function(wrap_pyfunction!(mlp_dagger::dagger_train_mlp, m)?)?; // CTRL-84 (ABI 71)
 	m.add_function(wrap_pyfunction!(
 		dagger_train::dagger_train_batch_inplace,
 		m
