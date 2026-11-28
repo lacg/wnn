@@ -8,6 +8,16 @@ description: Per-seed controller comparison table (TEST, 35 CF2.1 units) from ru
 ONE script renders every per-seed controller table: `scripts/ctrl_seed_table.py`. Run it and paste its output
 VERBATIM in a fenced block — never retype numbers, never compute a cell by hand.
 
+## DEFAULT = `--style arms` (Luiz 28/11, said twice)
+Arms on ROWS, seeds inside each cell (`s1|s2|s3  μmean`, fails `Σtotal`), MPCOF eq-info ref row on top, every arm
+of the lineage in ONE table. Use this for every readout and every tick run-END. `--style pair` / `box` (seeds on rows)
+only when Luiz asks for them by name. Example (CTRL-87):
+```bash
+python3 scripts/ctrl_seed_table.py --style arms --seeds 1-3 \
+  --arm 'l2b=_a63_.*_L1_yld_gt_l2b_full_s{s}$' --arm 'l2bnm=_a66_.*_L1_yld_gt_l2bnm_full_s{s}$' \
+  --arm 'l2bnmw=_a68_.*_L1_yld_gt_l2bnmw_full_s{s}$' --ref 'MPCOF eq-info=100.00,0.691,0.165,0.357,0'
+```
+
 ## Rules the script enforces (Luiz)
 - Rows = every seed of the block (s1 → last), finished or not: `flying` for a started run, `–` for not yet.
 - Cells are `A | B (| C)` raw values; the reference row (MPCOF eq-info = THE comparator) sits on top.
