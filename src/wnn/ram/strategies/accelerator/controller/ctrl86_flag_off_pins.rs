@@ -137,12 +137,19 @@ fn cpu_rows(c: &WnnController, spelling: Spelling, steps: usize) -> u64
 /// The CPU scorer's row on the stage-2 episodes `s1` (L4C-like weather, lag LAG).
 pub(crate) fn cpu_rows_on(c: &WnnController, s1: &Stage1Cfg, steps: usize) -> [f64; crate::cpu_score::ROW_METRICS]
 {
+	cpu_rows_lag(&mut c.clone(), s1, steps, LAG)
+}
+
+/// cpu_rows_on on a plant with motor lag `lag` (CTRL-83), scoring `cc` in place (so a
+/// caller can inspect the controller the scorer armed).
+pub(crate) fn cpu_rows_lag(cc: &mut WnnController, s1: &Stage1Cfg, steps: usize, lag: f32) -> [f64; crate::cpu_score::ROW_METRICS]
+{
 	let (q0, w0) = ics();
-	let mut cc = c.clone();
+	let levels = cc.levels_per_motor();
 	crate::cpu_score::rollout_one(
-		&mut cc, &q0, &w0, crate::abi38_pins::EPS, steps, DT, ARM, KT, KD, INERTIA, G, LAG, [0.0; 3],
+		cc, &q0, &w0, crate::abi38_pins::EPS, steps, DT, ARM, KT, KD, INERTIA, G, lag, [0.0; 3],
 		true, [0.0; 3], 0.0, 0.1, ASYM, 0.0107, 0.0, 0.0, 777,
-		0.0, 0, 0, 0.2, c.levels_per_motor(), 4, None, None, None, 1.0, 0.4, None, Some(s1), None, None,
+		0.0, 0, 0, 0.2, levels, 4, None, None, None, 1.0, 0.4, None, Some(s1), None, None,
 	)
 }
 
@@ -153,6 +160,12 @@ fn gpu_rows(c: &WnnController, spelling: Spelling, steps: usize) -> Option<u64>
 
 /// The Metal scorer's row on the same episodes (None without a GPU / WNN_SKIP_GPU_TESTS).
 pub(crate) fn gpu_rows_on(c: &WnnController, s1: &Stage1Cfg, steps: usize) -> Option<Vec<f64>>
+{
+	gpu_rows_lag(c, s1, steps, LAG)
+}
+
+/// gpu_rows_on on a plant with motor lag `lag` (CTRL-83).
+pub(crate) fn gpu_rows_lag(c: &WnnController, s1: &Stage1Cfg, steps: usize, lag: f32) -> Option<Vec<f64>>
 {
 	if std::env::var("WNN_SKIP_GPU_TESTS").is_ok()
 	{
@@ -175,7 +188,7 @@ pub(crate) fn gpu_rows_on(c: &WnnController, s1: &Stage1Cfg, steps: usize) -> Op
 		seed: 777,
 	};
 	let mut rows = ev
-		.score(&[c], &q0, &w0, crate::abi38_pins::EPS, steps, (DT, ARM, KT, INERTIA, G), KD, LAG, [0.0; 3], Some(d), None, None, None, Some(s1))
+		.score(&[c], &q0, &w0, crate::abi38_pins::EPS, steps, (DT, ARM, KT, INERTIA, G), KD, lag, [0.0; 3], Some(d), None, None, None, Some(s1))
 		.expect("gpu score");
 	Some(rows.swap_remove(0))
 }
@@ -190,6 +203,18 @@ fn rival(teacher: u8, spelling: Spelling) -> u64
 /// One classical cascade rival (outer hold 10) on the stage-2 episodes `s1`.
 pub(crate) fn rival_on(teacher: u8, s1: &Stage1Cfg) -> (f64, f64, f64, f64, f64, f64, f64, f64)
 {
+	rival_kw(teacher, s1, LAG, crate::stress_opts::StressKwargs::OFF).expect("rival must score")
+}
+
+/// rival_on on a plant with motor lag `lag` and the CTRL-83 stress kwargs `kw` (cascade
+/// outer hold 10 for PID / mpcof; LQI has no cascade law and flies motor-level, hold 0).
+pub(crate) fn rival_kw(
+	teacher: u8,
+	s1: &Stage1Cfg,
+	lag: f32,
+	kw: crate::stress_opts::StressKwargs,
+) -> pyo3::PyResult<(f64, f64, f64, f64, f64, f64, f64, f64)>
+{
 	let (q0, w0) = ics();
 	crate::dagger_train::score_classical_baseline(
 		teacher, q0, w0, 600, 5.0,
@@ -200,10 +225,10 @@ pub(crate) fn rival_on(teacher: u8, s1: &Stage1Cfg) -> (f64, f64, f64, f64, f64,
 		true, 0.0, s1.init_z.clone(), s1.init_vz.clone(), s1.mass.clone(), s1.collective_frac.clone(),
 		2.0, 1.0, 0.25,
 		s1.init_x.clone(), s1.init_y.clone(), 1.0, 1.0, 0.5236,
-		LAG, true, ROTOR_DRAG, true, 10, 0, None, s1.plant.motor_lag_down_s, s1.plant.pwm_min,
+		lag, true, ROTOR_DRAG, true, if teacher == 3 { 0 } else { 10 }, 0, None, s1.plant.motor_lag_down_s, s1.plant.pwm_min,
+		kw.model_motor_lag_s, kw.payload_step_s, kw.payload_mass_scale,
 	)
 	.map(crate::dagger_train::rival_first8)
-	.expect("rival must score")
 }
 
 fn calib_digest(spelling: Spelling) -> u64
@@ -231,7 +256,7 @@ pub(crate) fn digests(spelling: Spelling) -> [u64; 7]
 }
 
 /// Captured on the ABI-64 build (see the module note).
-const ABI64_CF21: [u64; 7] = [
+pub(crate) const ABI64_CF21: [u64; 7] = [
 	0xf1ab_d7ec_1545_872c, 0xe4ef_46d7_9d1b_f6b6, 0xade4_e37f_d045_c6e0, 0x4749_3be3_a07a_4c5d,
 	0xdaa0_45a3_4a4a_ab0c, 0x964c_6f34_ad92_948f, 0xa899_da8f_a410_606f,
 ];

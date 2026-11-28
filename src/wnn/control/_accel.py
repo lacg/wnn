@@ -205,7 +205,13 @@ import os
 # score_classical_baseline and score_position_teacher — the real-life plant's asymmetric motor
 # lag (spin-down settling time; 0 = symmetric) and armed-idle floor (0 = none). Translation-only,
 # carried by EpisodeConfig.imu_kwargs() with the rest of the ABI-32 plant.
-EXPECTED_ABI = 65
+# ABI 66 (28/11/2026, Luiz, CTRL-83 stress-panel fairness; additive, default = ABI 65
+# bit-identical): model_motor_lag_s=None (D1: the lag every controller's MODEL is built on) and
+# payload_step_s=None / payload_mass_scale=1.0 (D3: mid-episode payload step) on
+# score_controllers_cpu/metal and score_classical_baseline, carried by
+# EpisodeConfig.stress_kwargs(); anchor_mass=None on both WNN scorers and
+# anchor_nominal_mass=False on RewardGatedConfigPacked (D2, --anchor-mass nominal).
+EXPECTED_ABI = 66
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

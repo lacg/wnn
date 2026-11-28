@@ -172,3 +172,20 @@ firmware. The paper reports R2 against B and PID; A, C, LQI are context rows.
   and the WNN see the same noise.
 - **D5 ABI**: the panel runs on installed ABI 65. If ABI 65 is not adopted, re-run `nom` on the adopted wheel first
   (G4 decides).
+
+## 9. Amendment 1 (28/11/2026, Luiz: "fix it properly") — controller ABI 66, branch `ctrl83-sim-fairness`
+
+- **D1 resolved (option c, now the panel default).** `EpisodeConfig.model_motor_lag_s` holds every controller's
+  design-time actuator model at the nominal T = 0.20 while the plant flies the cell's lag: MPCOF / LQI / LQR / MPC
+  are built on 0.20 (`AirframeRs::designed`), their observer twins too, and the WNN's actuator twin is armed with
+  0.20 (CPU `set_observer_actuator_core`, Metal `Params.twin_settling_time_s`). `cells._lag` sets it. Audit: no
+  rival re-derives from wear, noise, rotor drag or the mass draw. At T = 0.20 it is bit-identical
+  (`ctrl83_flag_off_pins`). **Every lag cell scored on ABI 65 is matched-model and is superseded.**
+- **D2: investigated, flag only, default unchanged.** Both sides traced: the WNN's anchor AND its `coll_cmd` input
+  are √(m_true·g/4k)·(1 + c) in training (`episode_regime::draw_translation_episode`), calibration, the recorder and
+  both scorers; the l2b winners wire `coll_cmd` into 99–112 of 256 output neurons. The rivals use the nominal mass
+  (`af_pid_hover_n`) and ignore c. Flag: `--anchor-mass nominal` (trainer + scorers + recorder, a lineage switch);
+  default `true`. Mass cells keep the §8 label until Luiz picks the D2 option.
+- **D3 resolved.** `payload_step_s` / `payload_mass_scale`: at t_step the plant mass becomes draw × scale (inertia
+  unchanged: point payload at the CoM), the identical event on the WNN CPU / Metal scorers and every rival; no model
+  is told. SECONDARY cells `pay25`, `pay50`, `drop20` (t = 1.0 s) — added after the prereg, no rank claim.

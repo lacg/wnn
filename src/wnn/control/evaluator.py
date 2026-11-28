@@ -1609,7 +1609,11 @@ def _stage1_train_kwargs(ec) -> dict:
 	if af is None:
 		raise ValueError("EpisodeConfig.translation requires an airframe — mass is a "
 		                 "plant parameter and the synthetic default has none.")
+	# CTRL-83 D2: the nominal-mass anchor is a LINEAGE switch — passed only when on, so a
+	# true-mass run's trainer config is the byte-identical ABI-65 call.
+	anchor = {"anchor_nominal_mass": True} if ec.anchor_nominal() else {}
 	return dict(
+		**anchor,
 		translation=True,
 		af_mass=float(af.mass),
 		mass_jitter=float(getattr(ec, "mass_jitter", 0.0)),
@@ -2784,7 +2788,7 @@ class ControllerEvaluator:
 					controllers, q0, omega0, self.num_eval, ec.steps_per_episode,
 					geometry=geo_rows, rotor_asym=geo_asym,
 					**ec.sim_kwargs(), **ec.motor_lag_kwargs(), **ec.alt_integral_scorer_kwargs(),
-					**ec.imu_kwargs(), **ec.att_ref_kwargs(),
+					**ec.imu_kwargs(), **ec.att_ref_kwargs(), **ec.stress_kwargs(), **ec.anchor_kwargs(),
 					**alloc_kwargs, **stage1_kwargs)
 			else:
 				# W2: weather-on scoring. Base seed = dist.seed XOR the active
@@ -2811,7 +2815,7 @@ class ControllerEvaluator:
 					dist_torque_scale_jitter=float(dist.torque_scale_jitter),
 					geometry=geo_rows, rotor_asym=geo_asym,
 					**ec.sim_kwargs(), **ec.motor_lag_kwargs(), **ec.alt_integral_scorer_kwargs(),
-					**ec.imu_kwargs(), **ec.att_ref_kwargs(),
+					**ec.imu_kwargs(), **ec.att_ref_kwargs(), **ec.stress_kwargs(), **ec.anchor_kwargs(),
 					**alloc_kwargs, **stage1_kwargs)
 		except Exception as e:
 			# Kept for score_population: a swallowed scorer error made dropconst s3's headline

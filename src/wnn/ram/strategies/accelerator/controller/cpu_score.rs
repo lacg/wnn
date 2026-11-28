@@ -164,7 +164,9 @@ pub(crate) fn rollout_one(
 	}
 	// ABI 35: the student's d̂ observer subtracts the plant's LAGGED actuator — the
 	// plant's own actuator (CTRL-86: up/down lag + idle floor; symmetric ⇒ ABI 64).
-	c.set_observer_actuator_core(sim.actuator());
+	// CTRL-83 D1 (ABI 66): under a design-model override the twin is the DESIGN actuator
+	// (the WNN, like every rival, keeps its design-time knowledge); MATCHED ⇒ the plant's.
+	c.set_observer_actuator_core(stage1.map_or(sim.actuator(), |s| s.stress.design.actuator(sim.actuator())));
 	// G5: what the per-step attitude error is measured against (LEVEL = legacy).
 	let att_ref = stage1.map_or(crate::att_err_ref::AttErrRef::LEVEL, |s| s.att_ref);
 	if let Some(rows) = geometry
@@ -348,6 +350,11 @@ pub(crate) fn rollout_one(
 			{
 				diverged = true;
 				break;
+			}
+			// CTRL-83 D3 (ABI 66): the payload step, at the START of its step (kernel twin).
+			if let Some(m) = stage1.and_then(|s| s.stress.payload.mass_at(_t, s.mass[ep]))
+			{
+				sim.set_mass_core(m);
 			}
 			let (gyro, accel) = sim.read_imu();
 			// STAGE 1: the vertical observation for THIS step, read at the same
@@ -805,6 +812,11 @@ pub(crate) fn rollout_one(
 	// CTRL-86 S1/S2 (ABI 65): the plant actuator's spin-down settling time (0 ⇒
 	// symmetric) and armed-idle floor (0 ⇒ none). Real-life plant (translation) only.
 	motor_lag_down_s = 0.0, pwm_min = 0.0,
+	// CTRL-83 (ABI 66), translation-only, all default-inert: model_motor_lag_s = the lag the
+	// controller's actuator twin is DESIGNED at (None ⇒ the plant's, D1); payload_step_s /
+	// payload_mass_scale = the mid-episode payload step (None ⇒ off, D3); anchor_mass = the
+	// mass the collective anchor is computed at (None ⇒ each episode's TRUE mass, D2).
+	model_motor_lag_s = None, payload_step_s = None, payload_mass_scale = 1.0, anchor_mass = None,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_controllers_cpu(
@@ -872,6 +884,10 @@ pub fn score_controllers_cpu(
 	tail_diverged_err_deg: f64,
 	motor_lag_down_s: f32,
 	pwm_min: f32,
+	model_motor_lag_s: Option<f32>,
+	payload_step_s: Option<f32>,
+	payload_mass_scale: f32,
+	anchor_mass: Option<f32>,
 ) -> PyResult<Vec<Vec<f64>>>
 {
 	if controllers.is_empty()
@@ -895,6 +911,10 @@ pub fn score_controllers_cpu(
 	.map_err(verr)?;
 	let plant = plant.with_actuator(motor_lag_s, motor_lag_down_s, pwm_min).map_err(verr)?;
 	plant.require_translation(translation, "score_controllers_cpu").map_err(verr)?;
+	let stress_kw = crate::stress_opts::StressKwargs { model_motor_lag_s, payload_step_s, payload_mass_scale };
+	let stress = crate::stress_opts::StressOpts::from_kwargs(stress_kw, plant.actuator(motor_lag_s), dt, steps).map_err(verr)?;
+	stress.require_translation(translation, "score_controllers_cpu").map_err(verr)?;
+	crate::stage1::require_anchor_translation(anchor_mass, translation, "score_controllers_cpu").map_err(verr)?;
 	if att_ref.is_tilt() && !translation
 	{
 		return Err(verr("score_controllers_cpu: att_err_tilt_ref needs translation=True".to_string()));
@@ -919,7 +939,7 @@ pub fn score_controllers_cpu(
 	// can index the per-episode vectors unconditionally (the geometry idiom).
 	let stage1_cfg = if translation
 	{
-		let cfg = crate::stage1::Stage1Cfg {
+		let mut cfg = crate::stage1::Stage1Cfg {
 			target_altitude,
 			lambda_alt,
 			init_z,
@@ -932,10 +952,15 @@ pub fn score_controllers_cpu(
 			plant,
 			att_ref,
 			alt_int,
+			stress,
 		};
 		cfg
 			.validate(num_episodes)
 			.map_err(pyo3::exceptions::PyValueError::new_err)?;
+		if let Some(m) = anchor_mass
+		{
+			cfg.anchor_at_mass(m).map_err(verr)?;
+		}
 		Some(cfg)
 	}
 	else

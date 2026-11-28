@@ -38,7 +38,7 @@ fn small(teacher: u8, use_est: bool, probe: Option<&mut RivalProbe>) -> pyo3::Py
 		2.0, 1.0, 0.25,
 		s1.init_x.clone(), s1.init_y.clone(), 1.0, 1.0, 0.5236,
 		0.20, true, 0.0, true, 10,
-		0, (0.0, 0.0), // alt_integral off
+		0, (0.0, 0.0), crate::stress_opts::StressKwargs::OFF, // alt_integral off
 		probe,
 	)
 	.map(crate::dagger_train::rival_first8)
@@ -170,6 +170,18 @@ impl Unit
 		self.v(k).clone().try_into().unwrap_or_else(|_| panic!("{k}: wrong length"))
 	}
 
+	/// CTRL-83 (ABI 66): the stress the fixture carries — each key present only when the
+	/// Python row set it (a stressed CTRL-83 cell), so every older fixture is OFF.
+	fn stress_kw(&self) -> crate::stress_opts::StressKwargs
+	{
+		let opt = |k: &str| self.f.get(k).map(|v| v[0] as f32);
+		crate::stress_opts::StressKwargs {
+			model_motor_lag_s: opt("model_motor_lag_s"),
+			payload_step_s: opt("payload_step_s"),
+			payload_mass_scale: opt("payload_mass_scale").unwrap_or(1.0),
+		}
+	}
+
 	fn episodes(&self) -> usize
 	{
 		self.v("init_qs").len() / 4
@@ -237,7 +249,7 @@ impl Unit
 			self.s("rotor_drag") as f32,
 			self.b("att_err_tilt_ref"),
 			self.s("ctbr_outer_hold") as usize,
-			tw.alt_integral, (0.0, 0.0),
+			tw.alt_integral, (0.0, 0.0), self.stress_kw(),
 			probe,
 		)
 		.map(crate::dagger_train::rival_first8)

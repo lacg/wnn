@@ -428,6 +428,12 @@ struct RolloutParams
 	// ABI-64 coefficient) and the plant's armed-idle floor (0 ⇒ none, the ABI-64 path).
 	motor_settling_time_down_s: f32,
 	pwm_min: f32,
+	// + 3 (ABI 66, CTRL-83), appended in lockstep with the shader twin: the actuator TWINS'
+	// design settling time (== motor_settling_time_s unless D1 holds the model nominal) and
+	// the D3 payload step (u32::MAX = off; scale 1.0).
+	twin_settling_time_s: f32,
+	payload_step_idx: u32,
+	payload_mass_scale: f32,
 }
 
 /// CTRL-38: the cascade feature blocks as the score kernel needs them, read off the
@@ -1362,6 +1368,9 @@ impl ControllerRolloutEvaluator
 				ylead_tau: controllers[0].yaw_lead_tau().unwrap_or(0.0),
 				motor_settling_time_down_s: stage1.map_or(0.0, |s| s.plant.motor_lag_down_s),
 				pwm_min: stage1.map_or(0.0, |s| s.plant.pwm_min),
+				twin_settling_time_s: stage1.map_or(motor_lag_s, |s| s.stress.design.lag_s(motor_lag_s)),
+				payload_step_idx: stage1.map_or(u32::MAX, |s| s.stress.payload.step),
+				payload_mass_scale: stage1.map_or(1.0, |s| s.stress.payload.mass_scale),
 			};
 
 			let b_q0 = self.buf(q0_chunk);
@@ -1728,6 +1737,9 @@ impl ControllerRolloutEvaluator
 	// CTRL-86 S1/S2 (ABI 65): the plant actuator's spin-down settling time (0 ⇒
 	// symmetric) and armed-idle floor (0 ⇒ none). Real-life plant (translation) only.
 	motor_lag_down_s = 0.0, pwm_min = 0.0,
+	// CTRL-83 (ABI 66): twin of score_controllers_cpu's — design-model lag (D1), payload
+	// step (D3), anchor mass (D2). All default-inert, translation-only.
+	model_motor_lag_s = None, payload_step_s = None, payload_mass_scale = 1.0, anchor_mass = None,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_controllers_metal(
@@ -1806,6 +1818,10 @@ pub fn score_controllers_metal(
 	tail_diverged_err_deg: f64,
 	motor_lag_down_s: f32,
 	pwm_min: f32,
+	model_motor_lag_s: Option<f32>,
+	payload_step_s: Option<f32>,
+	payload_mass_scale: f32,
+	anchor_mass: Option<f32>,
 ) -> PyResult<Vec<Vec<f64>>>
 {
 	let verr = pyo3::exceptions::PyValueError::new_err;
@@ -1821,6 +1837,10 @@ pub fn score_controllers_metal(
 	.map_err(verr)?;
 	let plant = plant.with_actuator(motor_lag_s, motor_lag_down_s, pwm_min).map_err(verr)?;
 	plant.require_translation(translation, "score_controllers_metal").map_err(verr)?;
+	let stress_kw = crate::stress_opts::StressKwargs { model_motor_lag_s, payload_step_s, payload_mass_scale };
+	let stress = crate::stress_opts::StressOpts::from_kwargs(stress_kw, plant.actuator(motor_lag_s), dt, steps).map_err(verr)?;
+	stress.require_translation(translation, "score_controllers_metal").map_err(verr)?;
+	crate::stage1::require_anchor_translation(anchor_mass, translation, "score_controllers_metal").map_err(verr)?;
 	if att_ref.is_tilt() && !translation
 	{
 		return Err(verr("score_controllers_metal: att_err_tilt_ref needs translation=True".to_string()));
@@ -1869,7 +1889,7 @@ pub fn score_controllers_metal(
 	// STAGE 1: built here, validated inside score() against num_episodes.
 	let stage1_cfg = if translation
 	{
-		Some(crate::stage1::Stage1Cfg {
+		let mut cfg = crate::stage1::Stage1Cfg {
 			target_altitude,
 			lambda_alt,
 			init_z,
@@ -1882,7 +1902,17 @@ pub fn score_controllers_metal(
 			plant,
 			att_ref,
 			alt_int,
-		})
+			stress,
+		};
+		// CTRL-83 D2: rebase the draws ONCE, host-side, so the kernel's in-shader hover
+		// reads the same anchor the CPU scorer does (validated first: the rebase divides
+		// by each mass draw).
+		if let Some(m) = anchor_mass
+		{
+			cfg.validate(num_episodes).map_err(verr)?;
+			cfg.anchor_at_mass(m).map_err(verr)?;
+		}
+		Some(cfg)
 	}
 	else
 	{
@@ -8605,7 +8635,8 @@ mod tests
 		// + 1 (ABI 63): delta_leak_yaw.
 		// + 1 (ABI 64): ylead_tau.
 		// + 2 (ABI 65, CTRL-86): motor_settling_time_down_s + pwm_min.
-		assert_eq!(mem::size_of::<RolloutParams>(), 203 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
+		// + 3 (ABI 66, CTRL-83): twin_settling_time_s + payload_step_idx + payload_mass_scale.
+		assert_eq!(mem::size_of::<RolloutParams>(), 206 * 4); // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============
@@ -10073,6 +10104,7 @@ mod tests
 			plant: crate::plant_opts::PlantOpts::OFF,
 			att_ref: crate::att_err_ref::AttErrRef::LEVEL,
 			alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
+			stress: crate::stress_opts::StressOpts::OFF,
 		};
 		s1.validate(num_eps).expect("fixture config must validate");
 
@@ -10156,6 +10188,7 @@ mod tests
 			plant: crate::plant_opts::PlantOpts::OFF,
 			att_ref: crate::att_err_ref::AttErrRef::LEVEL,
 			alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
+			stress: crate::stress_opts::StressOpts::OFF,
 		};
 		let gpu_noalt = ev
 			.score(
@@ -10247,6 +10280,7 @@ mod tests
 			plant: crate::plant_opts::PlantOpts::OFF,
 			att_ref: crate::att_err_ref::AttErrRef::LEVEL,
 			alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
+			stress: crate::stress_opts::StressOpts::OFF,
 		};
 		s2.validate(num_eps).expect("stage-2 fixture must validate");
 
@@ -10363,6 +10397,7 @@ mod tests
 			plant: crate::plant_opts::PlantOpts::OFF,
 			att_ref: crate::att_err_ref::AttErrRef::LEVEL,
 			alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
+			stress: crate::stress_opts::StressOpts::OFF,
 		};
 		let gpu_nopos = ev
 			.score(

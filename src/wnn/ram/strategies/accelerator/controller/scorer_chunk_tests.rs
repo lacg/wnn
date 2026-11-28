@@ -73,6 +73,7 @@ fn stage2_full() -> Stage1Cfg
 		plant: PlantOpts::new(true, 0.78).unwrap(),
 		att_ref: AttErrRef::tilt(G as f64, 1.0, 1.0, 0.5236).unwrap(),
 		alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
+		stress: crate::stress_opts::StressOpts::OFF,
 	};
 	c.validate(EPS).expect("chunk fixture must validate");
 	c

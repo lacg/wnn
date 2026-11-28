@@ -460,6 +460,7 @@ pub(crate) fn closed_loop_scorer(cfg: &RewardGatedConfigPacked, c: &WnnControlle
 		// G5: the run's own reference (tilt under --att-err-ref tilt, else LEVEL).
 		att_ref: crate::episode_regime::att_err_ref_for(cfg),
 		alt_int: crate::episode_regime::alt_integrator_for(cfg),
+		stress: crate::stress_opts::StressOpts::OFF,
 	};
 	let mut cc = c.clone();
 	let row = crate::cpu_score::rollout_one(

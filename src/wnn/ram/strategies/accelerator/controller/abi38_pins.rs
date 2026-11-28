@@ -176,6 +176,7 @@ pub(crate) fn stage2() -> Stage1Cfg
 		plant: crate::plant_opts::PlantOpts::OFF,
 		att_ref: crate::att_err_ref::AttErrRef::tilt(G as f64, 1.0, 1.0, 0.5236).unwrap(),
 		alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
+		stress: crate::stress_opts::StressOpts::OFF,
 	};
 	c.validate(EPS).expect("abi38 stage-2 fixture must validate");
 	c
@@ -254,7 +255,7 @@ pub(crate) fn rival(teacher: u8, lag: f32) -> (f64, f64, f64, f64, f64, f64, f64
 		true, 0.0, s1.init_z.clone(), s1.init_vz.clone(), s1.mass.clone(), s1.collective_frac.clone(),
 		2.0, 1.0, 0.25,
 		s1.init_x.clone(), s1.init_y.clone(), 1.0, 1.0, 0.5236,
-		lag, false, 0.0, true, 0, 0, None, 0.0, 0.0,
+		lag, false, 0.0, true, 0, 0, None, 0.0, 0.0, None, None, 1.0, // CTRL-83: stress off
 	)
 	.map(crate::dagger_train::rival_first8)
 	.expect("rival must score")
