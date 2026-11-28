@@ -1,0 +1,20 @@
+
+running 1 test
+test rival_probe_tests::test_units_rival_rows_rescore_f32_lineage ... [self-check] unit 99990101 est-fed shipped row reproduces the installed wheel: stable 1.0000 err 1.4288° steady 0.6405° pos 0.3613 m
+[rescore] row A NEW(f32): stable 97.83 err 1.827 steady 0.924 pos 0.362 fails 76/3500 pos_hold 0.317 | OLD(ABI 60): stable 100.00 err 1.352 steady 0.684 pos 0.341 | MPCOF>rate(h10) est-fed, no bias comp
+[rescore] row B NEW(f32): stable 99.54 err 1.027 steady 0.289 pos 0.375 fails 16/3500 pos_hold 0.344 | OLD(ABI 60): stable 100.00 err 0.691 steady 0.165 pos 0.357 | MPCOF>rate(h10) est-fed + bias comp (eq-info COMPARATOR)
+[rescore] row C NEW(f32): stable 99.51 err 1.029 steady 0.291 pos 0.375 fails 17/3500 pos_hold 0.344 | OLD(ABI 60): stable 100.00 err 0.690 steady 0.163 pos 0.357 | MPCOF>rate(h10) oracle-fed (bound, label law)
+
+CTRL-69 — MPCOF rows A/B/C re-scored on the f32 (ABI 61/62) lineage, TEST (35 units × 100 episodes)
+| arm | stable % | err ° | steady ° | pos m | fails /3500 | Δ steady vs shipped ° | units better/worse | hold roll ° | hold pitch ° | hold yaw ° | fed bias r/p ° | after comp r/p ° |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| A MPCOF>rate(h10) est-fed, no bias comp | 97.83 | 1.827 | 0.924 | 0.362 | 76 | +0.000 | 0/0 | 0.595 | 0.544 | 0.129 | 0.44 / 0.40 | 0.44 / 0.40 |
+| B MPCOF>rate(h10) est-fed + bias comp (eq-info COMPARATOR) | 99.54 | 1.027 | 0.289 | 0.375 | 16 | -0.635 | 35/0 | 0.168 | 0.142 | 0.127 | 0.15 / 0.13 | 0.02 / 0.02 |
+| C MPCOF>rate(h10) oracle-fed (bound, label law) | 99.51 | 1.029 | 0.291 | 0.375 | 17 | -0.633 | 35/0 | 0.172 | 0.143 | 0.125 | 0.00 / 0.00 | 0.00 / 0.00 |
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 516 filtered out; finished in 1.10s
+
+   Compiling ram_controller v2026.212.37 (/Users/lacg/wnn/src/wnn/ram/strategies/accelerator/controller)
+    Finished `release` profile [optimized] target(s) in 52.58s
+     Running unittests lib.rs (/Volumes/20260401-WDBlack-SN850X-2TB/cargo-target/release/deps/ram_controller-ccaa6824e83c78eb)

@@ -1,0 +1,30 @@
+{
+ "cell": "noise3",
+ "rows": {
+  "A": {
+   "stable": 100.0,
+   "err": 1.365,
+   "steady": 0.702,
+   "pos": 0.341,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "B": {
+   "stable": 100.0,
+   "err": 0.732,
+   "steady": 0.23,
+   "pos": 0.357,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "C": {
+   "stable": 100.0,
+   "err": 0.718,
+   "steady": 0.206,
+   "pos": 0.357,
+   "fails": 0,
+   "episodes": 3500
+  }
+ },
+ "abi_wheel": 65
+}

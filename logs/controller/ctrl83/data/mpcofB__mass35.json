@@ -1,0 +1,30 @@
+{
+ "cell": "mass35",
+ "rows": {
+  "A": {
+   "stable": 100.0,
+   "err": 1.401,
+   "steady": 0.769,
+   "pos": 0.431,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "B": {
+   "stable": 100.0,
+   "err": 0.794,
+   "steady": 0.331,
+   "pos": 0.443,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "C": {
+   "stable": 100.0,
+   "err": 0.8,
+   "steady": 0.334,
+   "pos": 0.443,
+   "fails": 0,
+   "episodes": 3500
+  }
+ },
+ "abi_wheel": 65
+}

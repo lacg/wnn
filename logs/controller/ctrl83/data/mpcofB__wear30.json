@@ -1,0 +1,30 @@
+{
+ "cell": "wear30",
+ "rows": {
+  "A": {
+   "stable": 97.83,
+   "err": 1.827,
+   "steady": 0.924,
+   "pos": 0.362,
+   "fails": 76,
+   "episodes": 3500
+  },
+  "B": {
+   "stable": 99.54,
+   "err": 1.027,
+   "steady": 0.289,
+   "pos": 0.375,
+   "fails": 16,
+   "episodes": 3500
+  },
+  "C": {
+   "stable": 99.51,
+   "err": 1.029,
+   "steady": 0.291,
+   "pos": 0.375,
+   "fails": 17,
+   "episodes": 3500
+  }
+ },
+ "abi_wheel": 65
+}
