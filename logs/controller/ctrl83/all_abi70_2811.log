@@ -1,0 +1,17 @@
+[ctrl83] 15 pending jobs, estimated 0.13 h serial
+[ctrl83] wnn_s1   all     stable 76.06 err 10.989 steady 10.352 pos 0.8819 fails 838/3500 worst-unit err 70.267 p99.9(cap 8) 8.000 | ABI 70 | 19.8s | G4 n/a (stressed cell)
+[ctrl83] wnn_s2   all     stable 76.97 err 9.567 steady 8.771 pos 0.8259 fails 806/3500 worst-unit err 61.644 p99.9(cap 8) 8.000 | ABI 70 | 20.1s | G4 n/a (stressed cell)
+[ctrl83] wnn_s3   all     stable 74.26 err 10.585 steady 10.768 pos 0.7692 fails 901/3500 worst-unit err 58.086 p99.9(cap 8) 8.000 | ABI 70 | 20.1s | G4 n/a (stressed cell)
+[ctrl83] wnn_s4   all     stable 71.91 err 12.534 steady 13.827 pos 0.8230 fails 983/3500 worst-unit err 57.421 p99.9(cap 8) 8.000 | ABI 70 | 19.8s | G4 n/a (stressed cell)
+[ctrl83] wnn_s5   all     stable 75.49 err 10.961 steady 10.943 pos 0.7428 fails 858/3500 worst-unit err 63.079 p99.9(cap 8) 8.000 | ABI 70 | 21.0s | G4 n/a (stressed cell)
+[ctrl83] l2bnm_s1 all     stable 75.63 err 9.754 steady 8.801 pos 0.9603 fails 853/3500 worst-unit err 67.751 p99.9(cap 8) 8.000 | ABI 70 | 20.8s | G4 n/a (stressed cell)
+[ctrl83] l2bnm_s2 all     stable 79.03 err 9.824 steady 8.577 pos 1.0196 fails 734/3500 worst-unit err 75.701 p99.9(cap 8) 8.000 | ABI 70 | 20.3s | G4 n/a (stressed cell)
+[ctrl83] l2bnm_s3 all     stable 78.77 err 10.262 steady 9.112 pos 1.0342 fails 743/3500 worst-unit err 77.699 p99.9(cap 8) 8.000 | ABI 70 | 20.0s | G4 n/a (stressed cell)
+[ctrl83] l2bnmw_s1 all     stable 81.20 err 9.197 steady 7.666 pos 0.8989 fails 658/3500 worst-unit err 71.226 p99.9(cap 8) 8.000 | ABI 70 | 26.1s | G4 n/a (stressed cell)
+[ctrl83] l2bnmw_s2 all     stable 81.74 err 9.754 steady 8.541 pos 0.8791 fails 639/3500 worst-unit err 69.349 p99.9(cap 8) 8.000 | ABI 70 | 20.7s | G4 n/a (stressed cell)
+[ctrl83] l2bnmw_s3 all     stable 81.89 err 9.911 steady 8.450 pos 0.9633 fails 634/3500 worst-unit err 76.507 p99.9(cap 8) 8.000 | ABI 70 | 20.4s | G4 n/a (stressed cell)
+[ctrl83] mpcofA   all     stable 77.37 err 7.998 steady 4.694 pos 0.5859 fails 792/3500 worst-unit err 58.165 p99.9(cap 8) 8.000 | ABI 70 | 75.0s | G4 n/a (stressed cell)
+[ctrl83] pid      all     stable 37.43 err 9.630 steady 6.630 pos 0.5758 fails 2190/3500 worst-unit err 48.887 p99.9(cap 8) 8.000 | ABI 70 | 64.2s | G4 n/a (stressed cell)
+[ctrl83] lqi      all     stable 5.20 err 18.540 steady 15.048 pos 0.9821 fails 3318/3500 worst-unit err 42.599 p99.9(cap 8) 8.000 | ABI 70 | 88.2s | G4 n/a (stressed cell)
+[ctrl83] mpcofB   all     stable 83.11 err 6.845 steady 3.202 pos 0.5870 fails 591/3500 (cargo probe; self-check ok)
+[ctrl83] grid complete
