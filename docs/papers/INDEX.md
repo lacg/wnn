@@ -65,3 +65,10 @@ agent (.claude/agents/paper-scout.md) and by hand.
 - [Mysore 2021 — How to Train your Quadrotor / RE+AL](mysore2021_how_to_train_your_quadrotor.md) — real rate-loop MAE 4.20 deg/s vs PID 5.01; 5.86 A vs 8.07 A.
 - [Cobo-Briesewitz 2026 — Learned INDI (L4DC'26)](cobobriesewitz2026_learned_indi.md) — 19→24→24→6 MLP = 203 µs on Crazyflie 2.1; hybrid NN+INDI.
 - [Survey — rate tracking error / inner-loop integrator as learned-controller input](rate_error_input_survey.md) — rate error fed only by policies that REPLACE the rate loop (GymFC/Neuroflight); none over a firmware PID; Saj 2026 GRU reads inner-loop PWM.
+
+### Robustness / model-mismatch protocols — added 28/11/2026
+- [Peng 2018 — Sim-to-Real with Dynamics Randomization](peng2018_sim_to_real_dynamics_randomization.md) — joint per-episode DR (log-uniform mass/damping), sim eval = training dist (100 eps, 4 seeds), OOD = real robot; Table III fixed-param TRAIN ablation.
+- [Tobin 2017 — Domain Randomization (visual)](tobin2017_domain_randomization.md) — textures/lighting/camera only; NO dynamics randomized.
+- [Wu 2023 — L1Quad](wu2023_l1quad.md) — 11 uncertainty types one at a time on real 0.62 kg quad; 100–500 g weight × speed RMSE sweep in appendix.
+- [Eschmann 2025 — RAPTOR foundation policy](eschmann2025_raptor_foundation_policy.md) — 1000 sampled quads (t2w U(1.5,5), T_m↓ U(0.03,0.3)); OOD = t2w≈12, flexible frame, mixed props.
+- Zhang 2022 + Molchanov 2019 notes: robustness-protocol addenda appended (Zhang Table I train vs test = endpoints ×0.8/×1.2, joint, 100 eps).

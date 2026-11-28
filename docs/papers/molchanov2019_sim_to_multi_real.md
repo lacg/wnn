@@ -28,3 +28,11 @@ controllers and directly control the motor thrusts").
 - Note: Table I DOES list motor settling time T = 0.15 s with randomization "∼ U (0.1, 0.2)" (verified
   06/11), and on-board "evaluation, EKF, control) is done at 500 Hz. Evaluating the neural network takes
   about 0.8 ms." — but the motor-lag-specific A/B in Table IV is only "with" vs "w/o delay".
+
+## Robustness protocol addendum (read 28/11/2026)
+- "During training, we sample dynamics parameters for each individual trajectory" (joint, per trajectory); two modes:
+  around nominal (CF2.0 estimates [8]) or "within a set of limits" (Table I: m ≤5 kg; l_body,w U(0.05,0.2) m;
+  T U(0.1,0.2) s; rt2w U(1.8,2.5); rt2t U(0.005,0.02)).
+- "In each scenario, we train five policies by varying the seed"; real test = best seed by training cost + visual pick.
+- Test = REAL vehicles (CF, Small, Medium; Table IV), hover 10 s at 100 Hz + figure-eight; no sim OOD sweep, no
+  widened-range sim test. Rows 6–8 = training DR level 10/20/30% (train-time sweep, main text).
