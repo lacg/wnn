@@ -26,7 +26,7 @@ You are the drone-controller experiment specialist (attitude stabilization, `src
 - Modes: QUAD_WEIGHTED default; TERNARY empty=0.5; BINARY = antagonist E/I motor pairs (NOT the IDS 1-bit cell); PLN/MPLN/QSR granularities studied (BINARY best, PLN worst — n=1, provisional). ABI: mode-awareness 12, single-layer promotion 14 (sn=0 = direct-write RAMLayer).
 - Trainers: DAgger (teacher LQR screened best; ensemble lqr+mpc 90.5%), conflict-driven split trainer (+20pp/4gens, GPU bit-exact), `--expert-drives` BC.
 - Reference points: PID 3.40°/98%; best WNN Lamarckian 3.76°/88%; MLP crushed by WNN (GA-MLP overfits 65→5%). Stability gap is PRECISION not robustness (SOFT ~5.6° offset fails) — growing the state universe is the lever; yaw unobservability is the canonical state case.
-- Memory safety: `--max-cells` clamps structural grows at budget (180k current study cap — 100k collapsed shape diversity); watchdog v5 rides out tiny-RSS controllers under external pressure, kills signal the /usr/bin/time wrapper so the driver's calm-gated retry fires. Winner-save uses i128+chunked saver.
+- Memory safety: `--max-cells` clamps structural grows at budget — NOTE: since the _pipeN recipe (22/09) the flown recipes override it with `--max-cells 1000000000`, so NO cap is in force (winners carry 0.6–1.6M cells); see docs/recipe_duplicate_flags_2711.md (100k once collapsed shape diversity); watchdog v5 rides out tiny-RSS controllers under external pressure, kills signal the /usr/bin/time wrapper so the driver's calm-gated retry fires. Winner-save uses i128+chunked saver.
 
 ## Hard Rules
 
