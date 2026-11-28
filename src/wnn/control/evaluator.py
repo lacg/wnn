@@ -2776,6 +2776,11 @@ class ControllerEvaluator:
 			spread_kw = ec.train_lag_kwargs()
 			if spread_kw and dist is None:
 				raise ValueError("train_motor_lag_range needs a disturbance (its draw is keyed on the weather seed)")
+		# CTRL-83 cell `all`: a stress lag draw rides stress_kwargs(); a SEARCH pool's training
+		# draw rides spread_kw — the same Rust kwarg, so never both on one call.
+		if spread_kw and getattr(ec, "stress_motor_lag_range", None) is not None:
+			raise ValueError("stress_motor_lag_range (report stress) and a search pool's train_motor_lag_range "
+			                 "cannot ride one scorer call")
 		# Overactuated Phase 1: N-rotor geometry passthrough (None = legacy quad).
 		# Both Rust scorers take the same geometry=/rotor_asym= kwargs and refuse
 		# a rows-vs-num_motors mismatch loudly.

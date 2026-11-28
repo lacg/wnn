@@ -189,3 +189,42 @@ firmware. The paper reports R2 against B and PID; A, C, LQI are context rows.
 - **D3 resolved.** `payload_step_s` / `payload_mass_scale`: at t_step the plant mass becomes draw × scale (inertia
   unchanged: point payload at the CoM), the identical event on the WNN CPU / Metal scorers and every rival; no model
   is told. SECONDARY cells `pay25`, `pay50`, `drop20` (t = 1.0 s) — added after the prereg, no rank claim.
+
+## 10. Amendment (Luiz 28/11) — the combined joint-OOD cell `all` is the single headline; controller ABI 69, branch `ctrl83-joint-ood`
+
+**Decision (Luiz, 28/11/2026):** one COMBINED out-of-distribution cell, `all`, becomes "the default standard golden
+value to pursue". From now on it is the **only robustness number on our tables**. The one-factor-at-a-time cells
+(§3: `wear30`, `mass25`, `lag30`, `lag10`, `noise2`, and the secondary levels / payload cells) are **diagnostic-only
+and are not reported**. §5.2's "rank preserved" read and §6's multiplicity budget apply to `all` alone; `nom` stays
+as the in-range reference row and as gate G4.
+
+**The cell.** Every episode draws ALL of these at once; everything else is the TEST preset (35 CF2.1 units × 100
+episodes, the same ICs / weather seeds / pool seeds as `nom`, so `all` is paired with `nom` per episode):
+
+```
+stress            | all                                         | TEST preset (= nom)
+------------------+---------------------------------------------+---------------------
+motor wear        | motor_asym_mag 0.30 (±30 %)                 | 0.20
+mass spread       | mass_jitter 0.25 (±25 %)                    | 0.15
+motor lag (plant) | T_e ~ U(0.15, 0.30) s, drawn PER EPISODE    | T = 0.20 s
+sensor noise      | gyro σ, gyro bias walk, accel σ ×2          | ×1 (ADIS16448)
+every MODEL       | T = 0.20 (D1: rival designs, observer twins, the WNN's actuator twin) | 0.20
+```
+
+**Identical plant for every scorer.** The per-episode lag is drawn in Rust by ONE function,
+`train_lag_range::scorer_episode_lags` (T_e from `disturbance_episode_seed(dist_seed, e)`, the ABI-68 CTRL-87 draw),
+from ONE kwarg, `train_motor_lag_range=(0.15, 0.30)`, which `EpisodeConfig.stress_motor_lag_range` hands to every
+scorer through `stress_kwargs()`: the WNN CPU / Metal scorers (ABI 68 already), `score_classical_baseline` (rows A,
+PID, LQI — **new in ABI 69**) and the row-B cargo probe (fixture key `train_motor_lag_range`, ABI 69). The trainer
+never sees it. Gates: G2 (`score_cell.plant_identity`) now also requires the lag-draw range to be equal on the WNN
+and rival calls — with the weather seed and episode count already gated, that fixes T_e per episode; G3 requires
+wear, mass, noise and the range to all reach the WNN call, the base lag (= the WNN twin) to stay 0.20 and
+`model_motor_lag_s` to be 0.20. Rust pins (`ctrl83_all_cell_tests`): a degenerate range [0.20, 0.20] is the ABI-68
+rival row bit for bit; a point range [T, T] on the 0.20 plant equals the fixed-T plant with the model held at 0.20,
+bit for bit, on the rival AND the WNN CPU scorer (T = 0.30, 0.15); WNN CPU == GPU under the joint draw; the spread
+moves every rival row. Every existing flag-off pin passes `None` and is unchanged.
+
+**Read caveat (written before any `all` result is reported).** l2bnmw was TRAINED with `--train-motor-asym-mag 0.30
+--train-motor-lag-range 0.15 0.30`, so for that arm the wear and lag axes of `all` are inside its training spread;
+only mass ±25 % and noise ×2 are out of distribution for it. l2b and l2bnm trained at wear 0.20 and a fixed T = 0.20.
+Any arm-vs-arm comparison on `all` must name this.

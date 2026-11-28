@@ -19,7 +19,9 @@ Gates (exit 2 on failure, nothing written):
   G1 re-issued WNN row == scored metrics (as wnn_units.py).
   G2 PLANT IDENTITY: per unit, every plant/episode kwarg the WNN call receives equals the one
      the rival call receives on the same stressed config (ICs, weather seed, motor wear, mass
-     draws, lag, noise, drag, IMU, airframe). Run in every WNN job.
+     draws, lag, noise, drag, IMU, airframe — and, cell `all`, the per-episode lag-draw range:
+     with the weather seed and episode count already equal, that fixes T_e per episode, since
+     both calls draw it with the same Rust function). Run in every WNN job.
   G3 the cell's stress actually reached the call (the stressed kwarg differs from nominal).
   G4 cell nom only: WNN reproduces its logged END headline (ctrl80/rescore_end.py tolerances);
      rivals reproduce the per-unit rival lines the run printed ("vs PID[est]",
@@ -51,14 +53,20 @@ PLANT_MAP = {
 	                  "translation", "imu_specific_force", "rotor_drag", "att_err_tilt_ref", "pos_zeta",
 	                  "pos_max_tilt_rad", "alt_integral",
 	                  # ABI 66 (CTRL-83 D1/D3): the design lag and the payload step reach both sides.
-	                  "model_motor_lag_s", "payload_step_s", "payload_mass_scale")},
+	                  "model_motor_lag_s", "payload_step_s", "payload_mass_scale",
+	                  # ABI 69 (cell `all`): the per-episode plant-lag range. Same range + same dist_seed +
+	                  # same episode count (init_qs) on both calls => the identical T_e per episode (one Rust
+	                  # draw function; pinned by ctrl83_all_cell_tests point-range == fixed-plant identities).
+	                  "train_motor_lag_range")},
 	"target_altitude": "s1_target_altitude", "init_z": "s1_init_z", "init_vz": "s1_init_vz",
 	"ep_mass": "s1_mass", "ep_collective_frac": "s1_collective_frac", "init_x": "s2_init_x",
 	"init_y": "s2_init_y", "pos_omega": "pos_omega_n",
 }
 # Which WNN kwarg each axis must move (G3).
-AXIS_KW = {"wear": "dist_motor_asym", "mass": "ep_mass", "lag": "motor_lag_s", "noise": "dist_gyro_sigma",
-           "payload": "payload_step_s"}
+AXIS_KW = {"wear": ("dist_motor_asym",), "mass": ("ep_mass",), "lag": ("motor_lag_s",), "noise": ("dist_gyro_sigma",),
+           "payload": ("payload_step_s",),
+           # cell `all`: every stressed parameter must reach the call at once.
+           "joint": ("dist_motor_asym", "ep_mass", "dist_gyro_sigma", "train_motor_lag_range")}
 
 
 def die(msg):
@@ -208,12 +216,19 @@ def score_wnn(controller, cell):
 		# G3: the stress reached the call.
 		if axis in AXIS_KW and unit == UNITS[0]:
 			nom_kw = _nominal_kw(a, ec0, unit)
-			got, nom = as_arr(wkw.get(AXIS_KW[axis])), as_arr(nom_kw.get(PLANT_MAP[AXIS_KW[axis]]))
-			if got is None or (nom is not None and np.allclose(got, nom)):
-				die(f"{cell}: {AXIS_KW[axis]} identical to nominal — the stress did not reach the WNN scorer")
+			for kw in AXIS_KW[axis]:
+				got, nom = as_arr(wkw.get(kw)), as_arr(nom_kw.get(PLANT_MAP[kw]))
+				if got is None or (nom is not None and got.shape == nom.shape and np.allclose(got, nom)):
+					die(f"{cell}: {kw} identical to nominal — the stress did not reach the WNN scorer")
 			# D1 (ABI 66): a lag cell holds every model at the nominal design lag.
-			if axis == "lag" and not np.allclose(as_arr(wkw.get("model_motor_lag_s")), C.NOMINAL["lag_T"]):
+			if axis in ("lag", "joint") and not np.allclose(as_arr(wkw.get("model_motor_lag_s")), C.NOMINAL["lag_T"]):
 				die(f"{cell}: model_motor_lag_s {wkw.get('model_motor_lag_s')} is not the nominal design lag")
+			# Cell `all`: the plant's BASE lag (= the WNN twin) is the nominal one; only the per-episode draw moves.
+			if axis == "joint":
+				if not np.allclose(as_arr(wkw.get("motor_lag_s")), C.NOMINAL["lag_T"]):
+					die(f"{cell}: motor_lag_s {wkw.get('motor_lag_s')} is not the nominal lag the twin keeps")
+				if not np.allclose(as_arr(wkw.get("train_motor_lag_range")), C.ALL_LEVELS["lag_range"]):
+					die(f"{cell}: train_motor_lag_range {wkw.get('train_motor_lag_range')} != {C.ALL_LEVELS['lag_range']}")
 		st = float(row[2])
 		U.append([unit, st, math.degrees(row[1]), math.degrees(row[5]), m.mean_position_error_m, m.mean_altitude_error_m,
 		          m.mean_position_hold_m, round((1 - st) * a.test_episodes)])

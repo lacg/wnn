@@ -110,6 +110,8 @@ mod ctrl86_actuator_tests; // CTRL-86 S1/S2 (ABI 65): asymmetric lag + idle floo
 #[cfg(test)]
 mod ctrl83_flag_off_pins; // CTRL-83 (ABI 66): every stress/info flag at its default is the ABI-65 cf21 rollout
 #[cfg(test)]
+mod ctrl83_all_cell_tests; // CTRL-83 cell `all` (ABI 69): rivals fly the WNN scorers' per-episode lag — pins, semantics, CPU/GPU parity
+#[cfg(test)]
 mod ctrl87_train_spread_tests; // CTRL-87 (ABI 68): training lag spread — [0.20,0.20] pin, hosts, CPU/GPU parity, draw, nominal twin
 #[cfg(test)]
 mod ctrl83_stress_tests; // CTRL-83 (ABI 66): D1 mismatch keeps the models nominal, D2 anchor, D3 payload CPU/GPU parity
@@ -711,7 +713,14 @@ mod metal_controller;
 ///   words). The teachers and the student's actuator twin stay at the nominal motor_lag_s.
 ///   TEST / VAL / report calls never pass it. Training wear spread (--train-motor-asym-mag)
 ///   is Python-only (dist_motor_asym_mag already takes any value in [0, 1)).
-pub const ABI_VERSION: u32 = 68;
+/// - 69 (28/11/2026, Luiz, CTRL-83 cell `all` = the single joint-OOD headline; additive, default
+///   = ABI 68 bit-identical): `train_motor_lag_range=None` on score_classical_baseline too, so
+///   the rivals (and the row-B cargo probe, fixture key `train_motor_lag_range`) fly the SAME
+///   per-episode plant lag T_e ~ U(lo, hi) the WNN scorers fly — one draw function
+///   (train_lag_range::scorer_episode_lags), episode e keyed on disturbance_episode_seed(dist_seed, e).
+///   The rival's model keeps motor_lag_s / model_motor_lag_s (D1). Used at REPORT time by the
+///   stress cell only; the trainer is untouched.
+pub const ABI_VERSION: u32 = 69;
 
 /// ABI 61: the precision of the WNN's own attitude estimator + heading ("f32"; a wheel
 /// without this constant runs the f64 estimator). Read by scripts/export_controller_c.py.

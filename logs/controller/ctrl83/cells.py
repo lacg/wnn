@@ -12,6 +12,17 @@ kwargs the two Rust calls receive are identical (plant_identity_gate).
 Do not add, drop or re-level a cell after the first scored result: the prereg fixes the
 grid, the primary cells and the read (§4).
 
+CELL `all` (ABI 69, Luiz 28/11/2026 — prereg Amendment 2): THE single joint-OOD headline,
+"the default standard golden value to pursue". Every episode draws ALL the stresses at once:
+wear ±30 %, mass spread ±25 %, a per-episode plant lag T_e ~ U(0.15, 0.30) s, sensor noise
+x2; everything else is the TEST preset (35 CF2.1 units x 100 episodes). The lag is drawn in
+Rust (train_lag_range::scorer_episode_lags, keyed on each episode's weather seed) by ALL
+three scorers — the WNN CPU/Metal scorers and score_classical_baseline (rivals, row-B probe) —
+from ONE kwarg, train_motor_lag_range, carried by EpisodeConfig.stress_motor_lag_range via
+stress_kwargs(). Every model (the WNN twin, the rivals' designs) stays at the nominal 0.20 (D1).
+From 28/11 `all` is the ONLY robustness number reported; the one-factor cells below are
+DIAGNOSTIC (kept, scorable, never reported). `nom` stays as the in-range reference + G4 gate.
+
 CTRL-83 fairness fixes (ABI 66, Luiz 28/11 "fix it properly"):
   D1  a lag cell changes the PLANT's lag only. Every controller's design-time model stays
       at the nominal T = 0.20 (EpisodeConfig.model_motor_lag_s): MPCOF / LQI are no longer
@@ -56,6 +67,21 @@ def _lag(T):
 	return f
 
 
+# CELL `all` levels (Amendment 2): the four one-factor PRIMARY levels, flown jointly.
+ALL_LEVELS = dict(wear=0.30, mass=0.25, lag_range=(0.15, 0.30), noise=2.0)
+
+
+def _all(ec):
+	if float(getattr(ec, "motor_lag_down_s", 0.0)) != 0.0 or float(getattr(ec, "pwm_min", 0.0)) != 0.0:
+		raise SystemExit("ctrl83: cell all on an asymmetric/floored actuator — not the amended plant")
+	if float(ec.motor_lag_s) != float(NOMINAL["lag_T"]):
+		raise SystemExit(f"ctrl83: cell all needs the nominal plant lag {NOMINAL['lag_T']} (got {ec.motor_lag_s})")
+	ec = _noise(ALL_LEVELS["noise"])(_mass(ALL_LEVELS["mass"])(_wear(ALL_LEVELS["wear"])(ec)))
+	# The plant lag is drawn PER EPISODE (Rust); every MODEL stays at the nominal design lag (D1).
+	return dc.replace(ec, model_motor_lag_s=float(NOMINAL["lag_T"]),
+	                  stress_motor_lag_range=tuple(float(x) for x in ALL_LEVELS["lag_range"]))
+
+
 def _payload(scale, t_s):
 	def f(ec):
 		return dc.replace(ec, payload_step_s=float(t_s), payload_mass_scale=float(scale))
@@ -71,13 +97,16 @@ def _noise(k):
 
 
 # (cell id, axis, level label, primary?, transform). Order = the interleaving order.
+# primary? (Amendment 2, 28/11): True ONLY for the reported cells — `all` (THE headline) and `nom`
+# (in-range reference + G4). The former primary one-factor cells (wear30 .. noise2) are diagnostic.
 CELLS = (
 	("nom", "anchor", "training values", True, lambda ec: ec),
-	("wear30", "wear", "motor_asym_mag 0.30", True, _wear(0.30)),
-	("mass25", "mass", "mass_jitter 0.25", True, _mass(0.25)),
-	("lag30", "lag", "motor_lag_s T 0.30", True, _lag(0.30)),
-	("lag10", "lag", "motor_lag_s T 0.10", True, _lag(0.10)),
-	("noise2", "noise", "sensor sigma x2", True, _noise(2.0)),
+	("all", "joint", "wear ±30% + mass ±25% + lag T_e~U(0.15,0.30) s + noise x2", True, _all),
+	("wear30", "wear", "motor_asym_mag 0.30", False, _wear(0.30)),
+	("mass25", "mass", "mass_jitter 0.25", False, _mass(0.25)),
+	("lag30", "lag", "motor_lag_s T 0.30", False, _lag(0.30)),
+	("lag10", "lag", "motor_lag_s T 0.10", False, _lag(0.10)),
+	("noise2", "noise", "sensor sigma x2", False, _noise(2.0)),
 	("wear25", "wear", "motor_asym_mag 0.25", False, _wear(0.25)),
 	("wear40", "wear", "motor_asym_mag 0.40", False, _wear(0.40)),
 	("mass35", "mass", "mass_jitter 0.35", False, _mass(0.35)),
@@ -89,6 +118,8 @@ CELLS = (
 	("drop20", "payload", "mass x0.80 at t = 1.0 s", False, _payload(0.80, 1.0)),
 )
 CELL = {c[0]: c for c in CELLS}
+PRIMARY = tuple(c[0] for c in CELLS if c[3])         # ("nom", "all") — the reported cells
+DIAGNOSTIC = tuple(c[0] for c in CELLS if not c[3])  # one-factor cells: diagnostic-only, not reported
 
 WNN_TAG = "C-S2-d_wposx2_a63_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2b_full_s{s}"
 WNN_SEEDS = (1, 2, 3, 4, 5)

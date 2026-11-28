@@ -18,7 +18,10 @@ sys.path.insert(0, "/Users/lacg/wnn/scripts")
 import numpy as np
 import cells as C
 
-ACC = "/Users/lacg/wnn/src/wnn/ram/strategies/accelerator"
+# The probe is built from THIS checkout's sources (repo-relative), so a branch's harness never scores row B with
+# another checkout's Rust (cell `all`: an ABI-68 probe would ignore the fixture's train_motor_lag_range and fly
+# the fixed lag). rival_probe_tests.self_check then ties this build to the installed wheel.
+ACC = os.path.abspath(os.path.join(HERE, "..", "..", "..", "src", "wnn", "ram", "strategies", "accelerator"))
 PY = "/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/bin/python"
 TEST = "rival_probe_tests::test_units_rival_rows_rescore_f32_lineage"
 RX = re.compile(r"\[rescore\] row (\w) NEW\(f32\): stable ([\d.]+) err ([\d.]+) steady ([\d.]+) pos ([\d.]+) fails (\d+)/(\d+)")

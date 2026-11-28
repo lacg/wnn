@@ -3994,6 +3994,11 @@ pub fn eval_ensemble_closed_loop(
 	// the plant's lag, ABI 65 — D1); payload_step_s / payload_mass_scale = the mid-episode
 	// payload step the WNN scorers fly identically (None ⇒ off — D3).
 	model_motor_lag_s = None, payload_step_s = None, payload_mass_scale = 1.0,
+	// CTRL-83 cell `all` (ABI 69, Luiz 28/11): the per-episode plant-lag draw (lo, hi) s —
+	// the SAME kwarg, draw and twin rule as the WNN scorers (train_lag_range.rs): episode e
+	// flies T_e from disturbance_episode_seed(dist_seed, e) while the rival's MODEL stays at
+	// motor_lag_s (or model_motor_lag_s). None (default) ⇒ the fixed lag, the ABI-68 row.
+	train_motor_lag_range = None,
 	))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_classical_baseline(
@@ -4056,6 +4061,7 @@ pub fn score_classical_baseline(
 	model_motor_lag_s: Option<f32>,
 	payload_step_s: Option<f32>,
 	payload_mass_scale: f32,
+	train_motor_lag_range: Option<(f32, f32)>,
 ) -> PyResult<(f64, f64, f64, f64, f64, f64, f64, f64, f64, f64)>
 {
 	let mut probe = axis_out.map(|_| crate::rival_probe::RivalProbe::measure_only());
@@ -4116,6 +4122,7 @@ pub fn score_classical_baseline(
 		alt_integral,
 		(motor_lag_down_s, pwm_min),
 		stress_kw,
+		train_motor_lag_range,
 		probe.as_mut(),
 	)?;
 	if let (Some(list), Some(p)) = (axis_out, probe.as_ref())
@@ -4199,6 +4206,8 @@ pub(crate) fn score_classical_baseline_probed(
 	actuator_extras: (f32, f32),
 	// CTRL-83 (ABI 66): design-model lag + payload step; StressKwargs::OFF ⇒ the ABI-65 row.
 	stress_kw: crate::stress_opts::StressKwargs,
+	// CTRL-83 cell `all` (ABI 69): the per-episode plant-lag range; None ⇒ the ABI-68 row.
+	ep_lag_range: Option<(f32, f32)>,
 	mut probe: Option<&mut crate::rival_probe::RivalProbe>,
 ) -> PyResult<(f64, f64, f64, f64, f64, f64, f64, f64, f64, f64)>
 {
@@ -4238,6 +4247,18 @@ pub(crate) fn score_classical_baseline_probed(
 		));
 	}
 	let num_episodes = init_qs.len() / 4;
+	// CTRL-83 cell `all` (ABI 69): the per-episode plant lags — the WNN scorers' function, so
+	// the draw is identical by construction (empty when off).
+	let ep_motor_lag = crate::train_lag_range::scorer_episode_lags(
+		ep_lag_range,
+		plant.actuator(motor_lag_s),
+		translation,
+		dist_enabled,
+		dist_seed,
+		num_episodes,
+		"score_classical_baseline",
+	)
+	.map_err(pyo3::exceptions::PyValueError::new_err)?;
 	// SCOPE C STAGE 1 (14/08/2026): fly the rival on the SAME randomized plant
 	// the WNN flies — per-episode mass draws, altitude offsets, the vehicle
 	// allowed to fall — with the SAME cascade DAgger trains with (attitude
@@ -4264,7 +4285,7 @@ pub(crate) fn score_classical_baseline_probed(
 			att_ref,
 			alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 			stress,
-			ep_motor_lag: Vec::new(),
+			ep_motor_lag,
 		};
 		cfg
 			.validate(num_episodes)
@@ -4446,6 +4467,12 @@ pub(crate) fn score_classical_baseline_probed(
 				.set_translation_core(cfg.mass[ep])
 				.map_err(pyo3::exceptions::PyValueError::new_err)?;
 			sim.set_vertical_state(cfg.init_z[ep], cfg.init_vz[ep]);
+			// CTRL-83 cell `all` (ABI 69): the episode's plant lag — cpu_score::rollout_one's
+			// order. The teacher (built above on the design airframe) keeps its model lag.
+			if let Some(t) = cfg.plant_lag(ep)
+			{
+				sim.set_motor_lag(t);
+			}
 			// STAGE 2: start DISPLACED from the target, at rest — the whole point
 			// of a position-hold measurement. Same order as position_score.
 			if !cfg.init_x.is_empty()
@@ -5056,7 +5083,7 @@ mod rival_plant_tests
 			0,
 			0, None, // alt_integral off
 			0.0, 0.0, // CTRL-86: actuator extras off
-			None, None, 1.0, // CTRL-83: stress off
+			None, None, 1.0, None, // CTRL-83: stress off; no per-episode lag
 		)
 		.map(rival_first8)
 		.expect("scorer must accept a well-formed plant")
@@ -5884,7 +5911,7 @@ mod motor_lag_axis_f_tests
 			false, 2.0, 0.1,
 			false, 0.0, vec![], vec![], vec![], vec![],
 			2.0, 1.0, 0.25, vec![], vec![], 1.0, 1.0, 0.5236,
-			motor_lag_s, false, 0.0, false, 0, 0, None, 0.0, 0.0, None, None, 1.0, // CTRL-83: stress off
+			motor_lag_s, false, 0.0, false, 0, 0, None, 0.0, 0.0, None, None, 1.0, None, // CTRL-83: stress off; no per-episode lag
 		)
 		.map(rival_first8)
 		.expect("baseline scores")

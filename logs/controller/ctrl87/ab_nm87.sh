@@ -20,7 +20,7 @@
 # asserted before every flight (ABI 68 flag-off == ABI 66, pinned: tests/controller_ctrl87_flag_off.py +
 # ctrl87_train_spread_tests.rs; the l2bnm tags keep their _a66_ lineage name, l2bnmw is _a68_); src/wnn/control must be clean; the prereg must be committed. A tag whose .out exists is never
 # reused. START/END in runs.log; block lines 'N87 ...'; ends 'N87 DONE' (abort 'N87 ABORT: why').
-# After each END (CPU, nice 15, report-only): the CTRL-83 stress grid's 6 PRIMARY cells on the new winner
+# After each END (CPU, nice 15, report-only): the CTRL-83 stress grid's PRIMARY cells (nom + all) on the new winner
 # (ctrl83/run_grid.py --controllers <arm>_sN --no-row-b); its nom cell re-checks the logged END (gate G4). A readout
 # failure is logged ('N87 STRESS FAIL') and does NOT stop the block.
 # Dry run: N87_DRY=1 prints, per arm, the token diff vs its l2b argv + both resolver lines; flies nothing, writes nothing.
@@ -50,7 +50,9 @@ WEAR_FLAG=--train-motor-asym-mag
 LAG_LO=0.15
 LAG_HI=0.30
 LAG_FLAG=--train-motor-lag-range
-PRIMARY=nom,wear30,mass25,lag30,lag10,noise2
+# Amendment 2 (Luiz 28/11): the reported cells are nom (in-range + G4) and `all` (THE joint-OOD headline;
+# needs controller ABI 69). The one-factor cells are diagnostic-only.
+PRIMARY=nom,all
 PFX=C-S2-d_wposx2
 MID=rf_c200_dc_biasin_ms01_P_both_L1_yld
 PP=${N87_PP:-$ROOT/src}
