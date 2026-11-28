@@ -218,6 +218,7 @@ fn recorder_draws(xy: Option<(f32, f32)>) -> Stage1Cfg
 		att_ref: crate::att_err_ref::AttErrRef::LEVEL,
 		alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 		stress: crate::stress_opts::StressOpts::OFF,
+		ep_motor_lag: Vec::new(),
 	}
 }
 

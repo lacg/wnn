@@ -112,6 +112,7 @@ pub(crate) fn cfg(plant: PlantOpts, att_ref: AttErrRef) -> Stage1Cfg
 		att_ref,
 		alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 		stress: crate::stress_opts::StressOpts::OFF,
+		ep_motor_lag: Vec::new(),
 	};
 	c.validate(EPS).expect("abi32 fixture must validate");
 	c

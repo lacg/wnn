@@ -103,6 +103,9 @@ class ControllerProvenance:
 	# CTRL-58: the staged-refinement config (refine_config.refine_token); "" = off and
 	# NOT printed, so every line without --refine-fitness/--refine-select is unchanged.
 	refine: str = ""
+	# CTRL-87 (ABI 68): the TRAINING motor-lag spread "uniform:<lo>,<hi>" (--train-motor-lag-range);
+	# "" = the fixed lag and NOT printed. The training wear spread rides train_asym above.
+	train_lag: str = ""
 
 	def line(self) -> str:
 		"""The single greppable line the ladder copies into the marker."""
@@ -130,7 +133,8 @@ class ControllerProvenance:
 		        + (f"ylead={self.ylead} " if self.ylead else "")
 		        + (f"actuator={self.actuator} " if self.actuator else "")
 		        + (f"anchor={self.anchor} " if self.anchor else "")
-		        + (f"refine={self.refine} " if self.refine else "") +
+		        + (f"refine={self.refine} " if self.refine else "")
+		        + (f"train_lag={self.train_lag} " if self.train_lag else "") +
 		        f"fitness_pools={self.fitness_pools}")
 
 
@@ -176,7 +180,8 @@ def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: st
                        abp: str = UNKNOWN, select: str = UNKNOWN,
                        train_ic: str = UNKNOWN, alt: str = "", yawref: str = "", pos_metric: str = "",
                        dmax_yaw: str = "", refine: str = "", dleak_yaw: str = "",
-                       ylead: str = "", actuator: str = "", anchor: str = "") -> ControllerProvenance:
+                       ylead: str = "", actuator: str = "", anchor: str = "",
+                       train_lag: str = "") -> ControllerProvenance:
 	"""Gather every field, never raising: each accessor degrades to UNKNOWN / 0."""
 	wheel, abi, sha = _wheel_identity()
 	return ControllerProvenance(
@@ -208,6 +213,7 @@ def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: st
 		actuator=actuator.replace(" ", "_").replace('"', ""),
 		anchor=anchor.replace(" ", "_").replace('"', ""),
 		refine=refine.replace(" ", "_").replace('"', ""),
+		train_lag=train_lag.replace(" ", "_").replace('"', ""),
 	)
 
 

@@ -432,6 +432,13 @@ pub struct RewardGatedConfigPacked
 	/// must be scored with anchor_mass = af_mass, and vice versa.
 	#[pyo3(get)]
 	pub anchor_nominal_mass: bool,
+	/// CTRL-87 (ABI 68, OPT-IN): the per-episode TRAINING motor-lag spread (lo, hi) in s —
+	/// every training episode's plant flies T ~ U(lo, hi) drawn from its weather seed
+	/// (train_lag_range.rs, armed in arm_cfg_disturbance: DAgger rollouts, per-round eval,
+	/// calibration sampler, recorder) while the teachers and the student's actuator twin
+	/// stay at the nominal `motor_lag_s`. None ⇒ the fixed lag, the ABI-66 trainer.
+	#[pyo3(get)]
+	pub train_motor_lag_range: Option<(f32, f32)>,
 }
 
 #[pymethods]
@@ -481,6 +488,7 @@ impl RewardGatedConfigPacked
 		alt_integral = 0,
 		motor_lag_down_s = 0.0, pwm_min = 0.0,
 		anchor_nominal_mass = false,
+		train_motor_lag_range = None,
 ))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -576,6 +584,7 @@ impl RewardGatedConfigPacked
 		motor_lag_down_s: f32,
 		pwm_min: f32,
 		anchor_nominal_mass: bool,
+		train_motor_lag_range: Option<(f32, f32)>,
 	) -> PyResult<Self>
 	{
 		let cfg = Self {
@@ -671,6 +680,7 @@ impl RewardGatedConfigPacked
 			motor_lag_down_s,
 			pwm_min,
 			anchor_nominal_mass,
+			train_motor_lag_range,
 		};
 		if anchor_nominal_mass && !translation
 		{
@@ -679,6 +689,7 @@ impl RewardGatedConfigPacked
 			));
 		}
 		cfg.validate_abi32().map_err(pyo3::exceptions::PyValueError::new_err)?;
+		cfg.validate_lag_range().map_err(pyo3::exceptions::PyValueError::new_err)?;
 		cfg.validate_alt_integral().map_err(pyo3::exceptions::PyValueError::new_err)?;
 		cfg.write_vote_share().map_err(pyo3::exceptions::PyValueError::new_err)?;
 		cfg.validate_init_vxy().map_err(pyo3::exceptions::PyValueError::new_err)?;
@@ -700,6 +711,28 @@ impl RewardGatedConfigPacked
 		crate::plant_opts::PlantOpts::new(self.imu_specific_force, self.rotor_drag)
 			.and_then(|p| p.with_actuator(self.motor_lag_s, self.motor_lag_down_s, self.pwm_min))
 			.expect("RewardGatedConfigPacked: plant options validated at construction")
+	}
+
+	/// CTRL-87 (ABI 68): the training lag spread, validated (None ⇒ the fixed lag).
+	pub(crate) fn lag_range(&self) -> Option<crate::train_lag_range::TrainLagRange>
+	{
+		crate::train_lag_range::TrainLagRange::from_kwarg(self.train_motor_lag_range)
+			.expect("RewardGatedConfigPacked: train_motor_lag_range validated at construction")
+	}
+
+	/// CTRL-87: a lag range needs a lag-on symmetric nominal actuator, translation and the weather.
+	pub(crate) fn validate_lag_range(&self) -> Result<(), String>
+	{
+		match crate::train_lag_range::TrainLagRange::from_kwarg(self.train_motor_lag_range)?
+		{
+			None => Ok(()),
+			Some(r) => r.require_host(
+				self.plant_opts().actuator(self.motor_lag_s),
+				self.translation,
+				self.dist_enabled,
+				"RewardGatedConfigPacked",
+			),
+		}
 	}
 
 	/// L3 (ABI 51): the altitude integrator needs the altitude loop it sits in front of
@@ -1627,6 +1660,14 @@ pub(crate) fn arm_cfg_disturbance(sim: &mut AttitudeSim, cfg: &RewardGatedConfig
 		cfg.dist_obs_delay_steps,
 		cfg.dist_torque_scale_jitter,
 	);
+	// CTRL-87 (ABI 68): this training episode's plant lag, from the SAME weather seed. The
+	// student's actuator twin and the teachers were armed from the nominal plant before any
+	// episode drew, so only the plant moves. set_motor_lag re-seeds the lag filter, which the
+	// episode's reset already did — None leaves the sim exactly as built.
+	if let Some(r) = cfg.lag_range()
+	{
+		sim.set_motor_lag(r.draw(ep_seed));
+	}
 }
 
 fn teacher_default(id: u8, cfg: &RewardGatedConfigPacked) -> Teacher
@@ -4223,6 +4264,7 @@ pub(crate) fn score_classical_baseline_probed(
 			att_ref,
 			alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 			stress,
+			ep_motor_lag: Vec::new(),
 		};
 		cfg
 			.validate(num_episodes)
@@ -5224,6 +5266,7 @@ mod d0_hover_anchor_tests
 			motor_lag_down_s: 0.0,
 			pwm_min: 0.0,
 			anchor_nominal_mass: false,
+			train_motor_lag_range: None,
 		}
 	}
 
@@ -5758,6 +5801,7 @@ mod motor_lag_axis_f_tests
 			motor_lag_down_s: 0.0,
 			pwm_min: 0.0,
 			anchor_nominal_mass: false,
+			train_motor_lag_range: None,
 		}
 	}
 

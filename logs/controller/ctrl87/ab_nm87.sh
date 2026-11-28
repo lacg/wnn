@@ -2,8 +2,11 @@
 # CTRL-87 (Luiz 28/11/2026): nominal-mass anchor (D2 option a) + wider training spread on the l2b base, prereg
 # docs/ctrl87_nominal_mass_wide_spread_prereg.md. Derived from the CTRL-80 driver (ctrl80/ab_ylead80.sh, same checks).
 #   l2bnm  = l2b + --anchor-mass nominal                          (the FAIRNESS base: the WNN loses the true-mass anchor)
-#   l2bnmw = l2bnm + the wider training spread (wear +-30%)       (PENDING CODE: phased_ga has no training-only wear
-#            flag yet — the arm is refused until --train-motor-asym-mag exists; the lag RANGE is a second, separate gap)
+#   l2bnmw = l2bnm + the wider TRAINING spread (prereg Amendment 1, ABI 68): wear +-30% (--train-motor-asym-mag 0.30)
+#            AND a per-episode plant lag T ~ U(0.15, 0.30) s (--train-motor-lag-range 0.15 0.30), coherent across every
+#            memory write (DAgger + per-round eval, calibration sampler, MEMORY recorder) and the GA-search scoring pools;
+#            the 35 TEST units, the VAL stage-select and every held-out row stay at L4C +-20% / lag 0.20, and the
+#            teachers + the WNN's actuator twin stay at the nominal 0.20 s.
 # Reference of every argv = the FLOWN l2b sN run (..._a63_..._gt_l2b_full_sN; ABI 63; never re-flown). Each arm argv
 # = that run's DEDUPED [argv] + ONLY the arm's flags + the two save paths (tag ..._a66_..._gt_<arm>_full_sN).
 # Fixed-text check: arm argv minus its flags, tag -> l2b tag == the l2b DEDUPED [argv] byte for byte (raw vs deduped
@@ -13,34 +16,42 @@
 # Pairing: l2bnm sN vs l2b sN (cost/fairness readout, no adopt/drop); l2bnmw sN vs l2bnm sN (rule A-D) — so l2bnmw sN
 # never flies before l2bnm sN is .done.
 # Stage-aware: N87_SEEDS (default "1 2 3") and N87_ARMS (default "l2bnm"; "l2bnm l2bnmw" once the flag lands).
-# Order: seed-major. One run at a time; waits for any other controller run. Wheel ram_controller + facade ABI 66 asserted
-# before every flight; src/wnn/control must be clean; the prereg must be committed. A tag whose .out exists is never
+# Order: seed-major. One run at a time; waits for any other controller run. Wheel ram_controller + facade ABI $ABI (68)
+# asserted before every flight (ABI 68 flag-off == ABI 66, pinned: tests/controller_ctrl87_flag_off.py +
+# ctrl87_train_spread_tests.rs; the l2bnm tags keep their _a66_ lineage name, l2bnmw is _a68_); src/wnn/control must be clean; the prereg must be committed. A tag whose .out exists is never
 # reused. START/END in runs.log; block lines 'N87 ...'; ends 'N87 DONE' (abort 'N87 ABORT: why').
 # After each END (CPU, nice 15, report-only): the CTRL-83 stress grid's 6 PRIMARY cells on the new winner
 # (ctrl83/run_grid.py --controllers <arm>_sN --no-row-b); its nom cell re-checks the logged END (gate G4). A readout
 # failure is logged ('N87 STRESS FAIL') and does NOT stop the block.
 # Dry run: N87_DRY=1 prints, per arm, the token diff vs its l2b argv + both resolver lines; flies nothing, writes nothing.
-cd /Users/lacg/wnn || exit 1
-ROOT=/Users/lacg/wnn
+# N87_ROOT / N87_PP (dry runs only: a worktree + an unpacked, never-installed wheel) default to the live checkout.
+ROOT=${N87_ROOT:-/Users/lacg/wnn}
+cd $ROOT || exit 1
 L=logs/controller/ctrl48
 RUNS=$L/runs.log
 VENV=/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv
-ABI=66
+ABI=68
 ALL_ARMS="l2bnm l2bnmw"
 SEEDS=${N87_SEEDS:-1 2 3}
-ARMS=${N87_ARMS:-l2bnm}
+ARMS=${N87_ARMS:-l2bnm l2bnmw}
 DRY=${N87_DRY:-0}
 PREREG=docs/ctrl87_nominal_mass_wide_spread_prereg.md
 PREREG_HDR="^## Rule"
-PINS="tests/controller_ctrl83_flag_off.py"
+PINS="tests/controller_ctrl83_flag_off.py tests/controller_ctrl87_flag_off.py"
 UNITS="--test-seeds $(seq -f %.0f 99990101 99990135 | tr "\n" " ")"
 CALIB="eps:200,regime:flown,ladder:quantile,yaw:dense,tilt:dense,gyroz:dense,gyroxy:dense_hold"
 WEAR_W=0.30
 WEAR_FLAG=--train-motor-asym-mag
+# The training lag range (s): the slow side reaches the lag30 stress cell (the WNN's failure mode: lag30 51 / lag40
+# 448 fails, lag10 0) and the fast side Molchanov's nominal 0.15; lag40 stays out of range (an honest extrapolation
+# cell) and the TEST units' 0.20 sits inside.
+LAG_LO=0.15
+LAG_HI=0.30
+LAG_FLAG=--train-motor-lag-range
 PRIMARY=nom,wear30,mass25,lag30,lag10,noise2
 PFX=C-S2-d_wposx2
 MID=rf_c200_dc_biasin_ms01_P_both_L1_yld
-PP=$ROOT/src
+PP=${N87_PP:-$ROOT/src}
 log() { echo "$(date -u +%FT%TZ) $*" >> $RUNS; }
 abort() { [ "$DRY" = 1 ] || log "N87 ABORT: $1"; echo "N87 ABORT: $1" >&2; exit 1; }
 row()
@@ -55,16 +66,18 @@ flags_of()
 {
 	local f=""
 	[ "$1" = l2bnm ] && f="--anchor-mass nominal"
-	[ "$1" = l2bnmw ] && f="--anchor-mass nominal $WEAR_FLAG $WEAR_W"
+	[ "$1" = l2bnmw ] && f="--anchor-mass nominal $WEAR_FLAG $WEAR_W $LAG_FLAG $LAG_LO $LAG_HI"
 	echo "$f"
 }
-asym_of() { [ "$1" = l2bnmw ] && { echo "per_episode:0.3"; return; }; echo "per_episode:0.2"; }
+asym_of() { [ "$1" = l2bnmw ] && { echo "per_episode:0.3 uniform:0.15,0.3"; return; }; echo "per_episode:0.2 fixed"; }
 what_of()
 {
 	[ "$1" = l2bnm ] && echo "l2b + collective anchor/coll_cmd at NOMINAL mass (fairness: the rivals' information; cost readout vs l2b)"
-	[ "$1" = l2bnmw ] && echo "l2bnm + training wear +-30% (was +-20%; scoring units unchanged): does a wider training spread buy OOD robustness at no nominal cost?"
+	[ "$1" = l2bnmw ] && echo "l2bnm + training/search spread wear +-30% and lag U(0.15,0.30) s (was +-20% / 0.20; TEST, VAL, twin, teachers unchanged): does a wider training spread cut the wear30 fails at no in-range cost (rule A')?"
 }
-tag_of() { echo ${PFX}_a${ABI}_${MID}_gt_$2_full_s$1; }
+# The tag's ABI is the arm's LINEAGE: l2bnm flew on ABI 66 (its seeds keep _a66_; 68 flag-off == 66, pinned), l2bnmw is 68.
+tag_abi_of() { [ "$1" = l2bnmw ] && echo 68 || echo 66; }
+tag_of() { echo ${PFX}_a$(tag_abi_of $2)_${MID}_gt_$2_full_s$1; }
 ref_of() { echo ${PFX}_a63_${MID}_gt_l2b_full_s$1; }
 count() { echo "$1" | grep -o -- "$2" | wc -l | tr -d ' '; }
 ctrl_busy() { pgrep -f "MacOS/Python -u -m wnn.control.phased_g[a]" >/dev/null; }
@@ -72,23 +85,17 @@ abi_ok()
 {
 	(cd /tmp && PYTHONPATH=$PP $VENV/bin/python -c "import ram_controller as c, wnn.control._accel as f; assert c.ABI_VERSION == $ABI and f.EXPECTED_ABI == $ABI")
 }
-wear_flag_exists()
-{
-	(cd /tmp && PYTHONPATH=$PP $VENV/bin/python -c "
-from wnn.control import phased_ga as p
-assert any('$WEAR_FLAG' in a.option_strings for a in p.build_arg_parser()._actions)" 2>/dev/null)
-}
 validate()
 {
 	(cd /tmp && PYTHONPATH=$PP $VENV/bin/python -c "
 import hashlib, shlex, sys
 from wnn.control import phased_ga as p
-from wnn.control.evaluator import train_asym_token
+from wnn.control.evaluator import train_asym_token, train_lag_token
 a = p.build_arg_parser().parse_args(shlex.split(sys.argv[1]))
 ec = p.episode_config_from_args(a); p._resolve_ctbr(a, ec); p.resolve_block10_args(a); c = a._ctbr
-skip = ('anchor_mass', 'train_motor_asym_mag', 'save_stage_checkpoints', 'save_winner')
+skip = ('anchor_mass', 'train_motor_asym_mag', 'train_motor_lag_range', 'save_stage_checkpoints', 'save_winner')
 rest = repr(sorted((k, repr(v)) for k, v in c.items())) + repr(sorted((k, repr(v)) for k, v in vars(a).items() if not k.startswith('_') and k not in skip))
-print('OK', a.base_seed, a.delta_max_yaw, a.delta_leak_yaw, a.gyro_xy_ladder, 'lag', ec.motor_lag_s, ec.model_motor_lag_s, 'test-wear', ec.disturbance.motor_asym_mag, '| anchor', a.anchor_mass, ec.anchor_mass, '| train', train_asym_token(ec), '|', p.calibration_from_args(a).token(), '|', a.num_eval_folds, len(a.test_seeds), a.test_seeds[0], a.test_seeds[-1], '|', hashlib.sha256(rest.encode()).hexdigest()[:16])" "$1" 2>&1 | tail -1)
+print('OK', a.base_seed, a.delta_max_yaw, a.delta_leak_yaw, a.gyro_xy_ladder, 'lag', ec.motor_lag_s, ec.model_motor_lag_s, 'test-wear', ec.disturbance.motor_asym_mag, '| anchor', a.anchor_mass, ec.anchor_mass, '| train', train_asym_token(ec), train_lag_token(ec) or 'fixed', '|', p.calibration_from_args(a).token(), '|', a.num_eval_folds, len(a.test_seeds), a.test_seeds[0], a.test_seeds[-1], '|', hashlib.sha256(rest.encode()).hexdigest()[:16])" "$1" 2>&1 | tail -1)
 }
 # build(s, arm) -> sets ARGV, CLINE, VAL_REF, VAL_ARM, or aborts
 build()
@@ -96,14 +103,13 @@ build()
 	local s=$1 arm=$2 tag ref flags back v vr want
 	tag=$(tag_of $s $arm); ref=$(ref_of $s); flags=$(flags_of $arm)
 	[ -n "$flags" ] || abort "$arm: no flags (unknown arm)"
-	[ "$arm" = l2bnmw ] && { wear_flag_exists || abort "$arm: PENDING CODE — phased_ga has no $WEAR_FLAG (training-only wear spread); see the prereg §Code gap"; }
 	[ -f $L/$ref.done ] || abort "s$s: the l2b reference $ref has not finished"
 	RAWLINE=$(grep -a '^\[argv\] ' $L/$ref.out | cut -c8-)
 	[ "$(echo "$RAWLINE" | grep -c .)" = 1 ] || abort "$ref: expected exactly one [argv] line"
 	CLINE=$($VENV/bin/python $L/rebuild_argv.py $L/$ref.out argv 2>/dev/null) || abort "$ref: argv dedupe failed"
 	[ "$(validate "$RAWLINE")" = "$(validate "$CLINE")" ] || abort "$ref: the deduped l2b argv does not resolve like the flown one"
 	[ "$(count "$CLINE" "--base-seed $((31337000 + s)) ")" = 1 ] || abort "$ref: does not carry --base-seed $((31337000 + s)) once"
-	echo "$CLINE" | grep -qE -- "--anchor-mass|$WEAR_FLAG|--obs-yaw-lead|--motor-lag-down-s|--model-motor-lag" && abort "$ref: the reference already carries an arm flag"
+	echo "$CLINE" | grep -qE -- "--anchor-mass|$WEAR_FLAG|$LAG_FLAG|--obs-yaw-lead|--motor-lag-down-s|--model-motor-lag" && abort "$ref: the reference already carries an arm flag"
 	ARGV=$($VENV/bin/python $L/rebuild_argv.py $L/$ref.out fly $L/ckpt_$tag $L/${tag}_winner.yaml.gz $flags 2>/dev/null) \
 		|| abort "argv rebuild failed for $tag"
 	[ "$(count "$ARGV" " $flags ")" = 1 ] || abort "$tag: the arm flags '$flags' not in the argv exactly once"
@@ -122,9 +128,9 @@ build()
 	echo "$ARGV" | grep -q -- "--num-eval-folds 5 " || abort "$tag: folds must be 5"
 	vr=$(validate "$CLINE"); v=$(validate "$ARGV")
 	VAL_REF=$vr; VAL_ARM=$v
-	case "$vr" in "OK $((31337000 + s)) "*" dense_hold lag 0.2 None test-wear 0.2 | anchor true true | train per_episode:0.2 | $CALIB | 5 35 99990101 99990135 | "*) ;;
+	case "$vr" in "OK $((31337000 + s)) "*" dense_hold lag 0.2 None test-wear 0.2 | anchor true true | train per_episode:0.2 fixed | $CALIB | 5 35 99990101 99990135 | "*) ;;
 		*) abort "$ref: l2b s$s does not resolve to the l2b base: $vr";; esac
-	want=${vr/| anchor true true | train per_episode:0.2 |/| anchor nominal nominal | train $(asym_of $arm) |}
+	want=${vr/| anchor true true | train per_episode:0.2 fixed |/| anchor nominal nominal | train $(asym_of $arm) |}
 	[ "$v" = "$want" ] || abort "$tag: phased_ga refuses / mis-resolves the arm (want '$want'): $v"
 }
 stress()

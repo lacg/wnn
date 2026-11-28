@@ -14,6 +14,7 @@ mod actuator_spec; // CTRL-86 S1/S2 (ABI 65): the plant actuator — asymmetric 
 mod design_model; // CTRL-83 D1 (ABI 66): the controllers' design-time actuator model, held apart from the plant
 mod payload_step; // CTRL-83 D3 (ABI 66): mid-episode payload (mass) step
 mod stress_opts; // CTRL-83 (ABI 66): D1 + D3 as ONE scorer-side value on Stage1Cfg
+mod train_lag_range; // CTRL-87 (ABI 68): per-episode TRAINING motor-lag spread (trainer + search scorers)
 mod altitude_integrator; // L3 (ABI 51): altitude integrator in front of the altitude PD (--alt-integral)
 mod altitude_pd; // scope C stage 1: outer altitude loop handing a collective to a teacher
 mod box_qp; // exact box-QP solver for the MPC teachers (PDAS + primal active-set)
@@ -108,6 +109,8 @@ mod ctrl86_flag_off_pins; // CTRL-86 S1/S2: cf21 flag-off byte-identity pins (ca
 mod ctrl86_actuator_tests; // CTRL-86 S1/S2 (ABI 65): asymmetric lag + idle floor — hand steps, CPU/GPU parity, reach, refusals
 #[cfg(test)]
 mod ctrl83_flag_off_pins; // CTRL-83 (ABI 66): every stress/info flag at its default is the ABI-65 cf21 rollout
+#[cfg(test)]
+mod ctrl87_train_spread_tests; // CTRL-87 (ABI 68): training lag spread — [0.20,0.20] pin, hosts, CPU/GPU parity, draw, nominal twin
 #[cfg(test)]
 mod ctrl83_stress_tests; // CTRL-83 (ABI 66): D1 mismatch keeps the models nominal, D2 anchor, D3 payload CPU/GPU parity
 #[cfg(test)]
@@ -697,7 +700,18 @@ mod metal_controller;
 ///   * D3 PAYLOAD STEP: payload_step_s / payload_mass_scale on both WNN scorers and the
 ///     rivals — the plant mass becomes draw × scale at that step (payload_step.rs).
 ///     Metal: Params.payload_step_idx / payload_mass_scale (RolloutParams 203 → 206 words).
-pub const ABI_VERSION: u32 = 66;
+/// - 68 (28/11/2026, Luiz, CTRL-87 l2bnmw; additive, default = ABI 66 bit-identical; 67 is
+///   claimed by the per-bank-width branch): the per-episode TRAINING motor-lag spread
+///   (train_lag_range.rs). `train_motor_lag_range=None` on RewardGatedConfigPacked — each
+///   training episode (DAgger rollouts, per-round eval, calibration sampler, recorder;
+///   arm_cfg_disturbance) flies T_e ~ U(lo, hi) from its weather seed — and on
+///   score_controllers_cpu / score_controllers_metal for the GA SEARCH pools (T_e drawn
+///   host-side from disturbance_episode_seed(dist_seed, e), Stage1Cfg.ep_motor_lag; Metal:
+///   buffer 30 widens to 7 floats/episode under the FC_EP_LAG(8) specialization; RolloutParams unchanged at 206
+///   words). The teachers and the student's actuator twin stay at the nominal motor_lag_s.
+///   TEST / VAL / report calls never pass it. Training wear spread (--train-motor-asym-mag)
+///   is Python-only (dist_motor_asym_mag already takes any value in [0, 1)).
+pub const ABI_VERSION: u32 = 68;
 
 /// ABI 61: the precision of the WNN's own attitude estimator + heading ("f32"; a wheel
 /// without this constant runs the f64 estimator). Read by scripts/export_controller_c.py.
@@ -1379,6 +1393,7 @@ fn recorder_stage1_cfg(
 				att_ref: att_err_ref::AttErrRef::LEVEL,
 				alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 				stress: crate::stress_opts::StressOpts::OFF,
+				ep_motor_lag: Vec::new(),
 			};
 			cfg
 				.validate(n_eps)

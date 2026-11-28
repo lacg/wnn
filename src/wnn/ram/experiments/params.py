@@ -285,6 +285,8 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	"controller_obs_yaw_lead_tau",  # ABI 64 (CTRL-80): its tau, s (default 0.10)
 	"controller_motor_lag_down_s",  # ABI 65 (CTRL-86 S1): motor-lag spin-down settling time, s (phased_ga-only, refused here)
 	"controller_pwm_min",           # ABI 65 (CTRL-86 S2): armed-idle pwm floor (phased_ga-only, refused here)
+	"controller_train_motor_asym_mag",   # CTRL-87: training + search wear spread ±M (phased_ga-only, refused here)
+	"controller_train_motor_lag_range",  # ABI 68 (CTRL-87): training + search lag spread [lo, hi] s (phased_ga-only, refused here)
 	"controller_delta_leak_yaw",  # ABI 63 (CTRL-74): the yaw bank's own output leak (None = --delta-leak)
 	"controller_delta_max_yaw",
 	"controller_yaw_trim_ff",  # ABI 58: yaw-rate feed-forward cT*cresid_z on the CTBR yaw setpoint  # ABI 57: the yaw bank's own delta_max (None = --delta-max)  # lever 1 (ABI 55): yaw heading from the student's Mahony estimate

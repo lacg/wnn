@@ -121,7 +121,8 @@ class ControllerGridSearch(GenericGridSearch):
 			episode_config=ec, thresholds=self.thresholds,
 			rg_config=self._rg_config(), max_train_workers=args.train_workers,
 			num_eval_folds=args.num_eval_folds,
-			score_crn=getattr(args, "score_crn", False))
+			score_crn=getattr(args, "score_crn", False),
+			train_spread=True)  # CTRL-87: the grid is a SEARCH evaluator
 		self._calc = default_controller_ga_config(
 			population_size=args.pop,
 			weight_err_sq=args.fit_weight_err_sq,

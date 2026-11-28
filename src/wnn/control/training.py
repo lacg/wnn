@@ -14,6 +14,7 @@ glue is the episode runner + fitness function that calls into Rust.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from dataclasses import dataclass, field
 from typing import Callable, Optional, TYPE_CHECKING
@@ -522,6 +523,65 @@ class EpisodeConfig:
 	# airframe's nominal mass, the information a real outer loop and the rivals have. A
 	# LINEAGE switch: trainer and scorers must agree (anchor_kwargs / _stage1_train_kwargs).
 	anchor_mass: str = "true"
+	# --- CTRL-87 (ABI 68, prereg docs/ctrl87_nominal_mass_wide_spread_prereg.md Amendment 1): the
+	# TRAINING spread. TRAINING = every memory write and everything that shapes one — the DAgger
+	# rollouts + per-round eval, the threshold-calibration sampler, the MEMORY recorder — AND the
+	# GA SEARCH's scoring pools (the evaluators phased_ga builds with train_spread=True), so
+	# selection optimises for the plant the memory is written on. REPORT = the TEST units, the
+	# VAL stage-select draws and every held-out row (_holdout_report / _shell_holdout_compact):
+	# they keep the disturbance preset's wear and the fixed motor_lag_s. None = off (the ABI-66
+	# run, byte-identical).
+	# The training wear magnitude ±mag in place of disturbance.motor_asym_mag (Python-only: the
+	# Rust trainer already takes any dist_motor_asym_mag in [0, 1)).
+	train_motor_asym_mag: float | None = None
+	# The per-episode plant motor-lag range (lo, hi) s, T_e ~ U(lo, hi) from the episode's
+	# weather seed (Rust train_lag_range.rs). The teachers and the WNN's actuator twin keep the
+	# nominal motor_lag_s (the design lag); TEST / VAL / report fly motor_lag_s.
+	train_motor_lag_range: tuple | None = None
+
+	def train_asym_mag(self) -> float:
+		"""The TRAINING plant's wear magnitude: --train-motor-asym-mag when set, else the
+		disturbance preset's (0 with no disturbance)."""
+		if self.train_motor_asym_mag is not None:
+			return float(self.train_motor_asym_mag)
+		return float(self.disturbance.motor_asym_mag) if self.disturbance is not None else 0.0
+
+	def train_lag_kwargs(self) -> dict:
+		"""`train_motor_lag_range=` for RewardGatedConfigPacked and the SEARCH scorers; empty
+		when off, so every existing call stays byte-identical."""
+		r = self.train_motor_lag_range
+		return {} if r is None else {"train_motor_lag_range": (float(r[0]), float(r[1]))}
+
+	def train_spread_on(self) -> bool:
+		return self.train_motor_asym_mag is not None or self.train_motor_lag_range is not None
+
+	def search_disturbance(self):
+		"""The disturbance a GA SEARCH pool flies: the preset with the training wear magnitude
+		(the same object when --train-motor-asym-mag is unset)."""
+		if self.disturbance is None or self.train_motor_asym_mag is None:
+			return self.disturbance
+		return dataclasses.replace(self.disturbance, motor_asym_mag=float(self.train_motor_asym_mag))
+
+	def validate_train_spread(self) -> None:
+		"""CTRL-87 refusals (the Rust hosts refuse the same lag-range hosts)."""
+		mag = self.train_motor_asym_mag
+		if mag is not None:
+			if self.disturbance is None:
+				raise ValueError("train_motor_asym_mag needs a disturbance (the wear rides on it)")
+			if not (math.isfinite(float(mag)) and 0.0 <= float(mag) < 1.0):
+				raise ValueError(f"train_motor_asym_mag must be in [0, 1), got {mag}")
+		r = self.train_motor_lag_range
+		if r is None:
+			return
+		lo, hi = (float(r[0]), float(r[1]))
+		if not (math.isfinite(lo) and math.isfinite(hi) and 0.0 < lo <= hi):
+			raise ValueError(f"train_motor_lag_range must be finite with 0 < lo <= hi (s), got ({lo}, {hi})")
+		if not float(self.motor_lag_s) > 0.0:
+			raise ValueError("train_motor_lag_range needs motor_lag_s > 0 (the nominal design lag the twins keep)")
+		if float(self.motor_lag_down_s) > 0.0 or float(self.pwm_min) > 0.0:
+			raise ValueError("train_motor_lag_range needs a symmetric, floor-free actuator (motor_lag_down_s / pwm_min set)")
+		if not self.translation or self.disturbance is None:
+			raise ValueError("train_motor_lag_range needs translation and a disturbance (its draw is keyed on the weather seed)")
 
 	def stress_kwargs(self) -> dict:
 		"""CTRL-83 D1 + D3 for the SCORERS (both WNN scorers and score_classical_baseline,
@@ -774,6 +834,10 @@ def refuse_python_abi32_plant(config, site: str) -> None:
 	if config is None:
 		return
 	real_life = ("rotor_drag", "motor_lag_down_s", "pwm_min")  # CTRL-86: + the actuator extras
+	# CTRL-87: the training spread lives only on the Rust hosts too.
+	if getattr(config, "train_motor_asym_mag", None) is not None or getattr(config, "train_motor_lag_range", None) is not None:
+		raise NotImplementedError(f"{site}: the CTRL-87 training spread (train_motor_asym_mag / "
+		                          "train_motor_lag_range) is flown by the Rust trainer and scorers only")
 	if getattr(config, "imu_specific_force", False) or any(
 			float(getattr(config, k, 0.0) or 0.0) > 0.0 for k in real_life):
 		raise NotImplementedError(

@@ -276,6 +276,12 @@ pub(crate) fn rollout_one(
 				.set_translation_core(s1.mass[ep])
 				.expect("validated stage1 mass");
 			sim.set_vertical_state(s1.init_z[ep], s1.init_vz[ep]);
+			// CTRL-87 (ABI 68): a search pool's per-episode plant lag (the twin, armed above
+			// from the nominal plant, keeps the design lag). None ⇒ the sim as built.
+			if let Some(t) = s1.plant_lag(ep)
+			{
+				sim.set_motor_lag(t);
+			}
 			// STAGE 2: horizontal start (displaced at rest; target = origin).
 			if s1.has_horizontal()
 			{
@@ -817,6 +823,10 @@ pub(crate) fn rollout_one(
 	// payload_mass_scale = the mid-episode payload step (None ⇒ off, D3); anchor_mass = the
 	// mass the collective anchor is computed at (None ⇒ each episode's TRUE mass, D2).
 	model_motor_lag_s = None, payload_step_s = None, payload_mass_scale = 1.0, anchor_mass = None,
+	// CTRL-87 (ABI 68): the GA SEARCH pool's per-episode plant-lag spread (lo, hi) s — each
+	// episode flies T_e drawn from its weather seed (train_lag_range.rs), the twin keeps
+	// motor_lag_s. None (default; every TEST / VAL / report call) ⇒ the fixed lag.
+	train_motor_lag_range = None,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_controllers_cpu(
@@ -888,6 +898,7 @@ pub fn score_controllers_cpu(
 	payload_step_s: Option<f32>,
 	payload_mass_scale: f32,
 	anchor_mass: Option<f32>,
+	train_motor_lag_range: Option<(f32, f32)>,
 ) -> PyResult<Vec<Vec<f64>>>
 {
 	if controllers.is_empty()
@@ -915,6 +926,16 @@ pub fn score_controllers_cpu(
 	let stress = crate::stress_opts::StressOpts::from_kwargs(stress_kw, plant.actuator(motor_lag_s), dt, steps).map_err(verr)?;
 	stress.require_translation(translation, "score_controllers_cpu").map_err(verr)?;
 	crate::stage1::require_anchor_translation(anchor_mass, translation, "score_controllers_cpu").map_err(verr)?;
+	let ep_motor_lag = crate::train_lag_range::scorer_episode_lags(
+		train_motor_lag_range,
+		plant.actuator(motor_lag_s),
+		translation,
+		dist_enabled,
+		dist_seed,
+		num_episodes,
+		"score_controllers_cpu",
+	)
+	.map_err(verr)?;
 	if att_ref.is_tilt() && !translation
 	{
 		return Err(verr("score_controllers_cpu: att_err_tilt_ref needs translation=True".to_string()));
@@ -953,6 +974,7 @@ pub fn score_controllers_cpu(
 			att_ref,
 			alt_int,
 			stress,
+			ep_motor_lag,
 		};
 		cfg
 			.validate(num_episodes)

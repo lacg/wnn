@@ -60,6 +60,11 @@ pub struct Stage1Cfg
 	/// CTRL-83 (ABI 66): the scorer-only stress — design-model override (D1) and the
 	/// mid-episode payload step (D3). StressOpts::OFF ⇒ the ABI-65 rollout, bit-identically.
 	pub stress: StressOpts,
+	/// CTRL-87 (ABI 68): the per-episode PLANT motor lag T_e (s) of a training-spread search
+	/// pool (train_lag_range.rs) — empty ⇒ every episode flies the fixed `motor_lag_s`, the
+	/// ABI-66 rollout. The actuator twins keep the nominal (design) lag either way. The GPU
+	/// twin is the 7th float of buffer 30's per-episode record.
+	pub ep_motor_lag: Vec<f32>,
 }
 
 /// ABI 32: the scorer kwargs (imu_specific_force, rotor_drag, att_err_tilt_ref +
@@ -148,6 +153,17 @@ impl Stage1Cfg
 				"Stage1Cfg.mass must be finite and > 0 kg, found {bad}"
 			));
 		}
+		if !self.ep_motor_lag.is_empty() && self.ep_motor_lag.len() != num_episodes
+		{
+			return Err(format!(
+				"Stage1Cfg.ep_motor_lag has {} entries but there are {num_episodes} episodes",
+				self.ep_motor_lag.len()
+			));
+		}
+		if let Some(bad) = self.ep_motor_lag.iter().find(|t| !t.is_finite() || **t <= 0.0)
+		{
+			return Err(format!("Stage1Cfg.ep_motor_lag must be finite and > 0 s, found {bad}"));
+		}
 		if !self.target_altitude.is_finite() || !self.lambda_alt.is_finite()
 		{
 			return Err("Stage1Cfg: target_altitude and lambda_alt must be finite".into());
@@ -187,6 +203,24 @@ impl Stage1Cfg
 		Ok(())
 	}
 
+	/// CTRL-87: whether the episodes carry their own plant lag (the GPU record is then 7 wide).
+	pub fn ep_lag_on(&self) -> bool
+	{
+		!self.ep_motor_lag.is_empty()
+	}
+
+	/// CTRL-87: episode `ep`'s plant lag, None when the pool flies the fixed lag.
+	pub fn plant_lag(&self, ep: usize) -> Option<f32>
+	{
+		self.ep_motor_lag.get(ep).copied()
+	}
+
+	/// The GPU record width: 6 floats, 7 under a training lag spread (the FC_EP_LAG specialization).
+	pub fn gpu_stride(&self) -> usize
+	{
+		6 + self.ep_lag_on() as usize
+	}
+
 	/// Flatten to the GPU's interleaved layout: 6 floats per episode,
 	/// [z0, vz0, mass, collective_frac, x0, y0] — buffer 30's contract
 	/// (widened 4→6 on 14/08/2026 for stage 2; host and shader ship together,
@@ -195,7 +229,7 @@ impl Stage1Cfg
 	pub fn to_gpu_blob(&self) -> Vec<f32>
 	{
 		let horiz = self.has_horizontal();
-		let mut out = Vec::with_capacity(self.init_z.len() * 6);
+		let mut out = Vec::with_capacity(self.init_z.len() * self.gpu_stride());
 		for ep in 0..self.init_z.len()
 		{
 			out.push(self.init_z[ep]);
@@ -204,6 +238,11 @@ impl Stage1Cfg
 			out.push(self.collective_frac[ep]);
 			out.push(if horiz { self.init_x[ep] } else { 0.0 });
 			out.push(if horiz { self.init_y[ep] } else { 0.0 });
+			// CTRL-87: [.., T_e] — only under a training lag spread (stride 7, FC_EP_LAG).
+			if let Some(t) = self.plant_lag(ep)
+			{
+				out.push(t);
+			}
 		}
 		out
 	}
@@ -230,6 +269,7 @@ mod tests
 			att_ref: AttErrRef::LEVEL,
 			alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 			stress: StressOpts::OFF,
+			ep_motor_lag: Vec::new(),
 		}
 	}
 
@@ -280,6 +320,7 @@ mod tests
 			att_ref: AttErrRef::LEVEL,
 			alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 			stress: StressOpts::OFF,
+			ep_motor_lag: Vec::new(),
 		};
 		// Stage-1 (horizontal off): stride 6 with zero-padded x0/y0.
 		assert_eq!(
