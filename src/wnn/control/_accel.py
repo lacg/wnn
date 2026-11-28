@@ -221,7 +221,13 @@ import os
 # train_motor_lag_range=None on score_classical_baseline too — the rivals fly the WNN scorers'
 # per-episode plant-lag draw. Carried at report time by EpisodeConfig.stress_kwargs()
 # (stress_motor_lag_range), never by the trainer.
-EXPECTED_ABI = 69
+# ABI 70 (28/11/2026, Luiz, CTRL-89; additive, on top of 69, default = ABI 69 bit-identical;
+# rebased as r69): inertia_jitter=0.0 / control_latency_ms=None on score_controllers_cpu/metal and
+# score_classical_baseline (the stress plant, EpisodeConfig.stress_kwargs(); a GA-search pool's
+# EpisodeConfig.search_jitter_kwargs() overrides it) and train_inertia_jitter=0.0 /
+# train_latency_ms=None on RewardGatedConfigPacked (EpisodeConfig.train_jitter_kwargs()).
+# Per-episode joint plant-inertia scale + command transport delay, drawn from the weather seed.
+EXPECTED_ABI = 70
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

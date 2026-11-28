@@ -160,7 +160,8 @@ def test_provenance_registry_adapter():
 
 def test_wheel():
 	import wnn.control._accel as ra
-	assert int(ra.EXPECTED_ABI) == 68 and int(ra.require_accel().ABI_VERSION) == 68
+	# train_motor_lag_range landed in ABI 68; this tree's wheel must be the ABI its _accel expects.
+	assert int(ra.require_accel().ABI_VERSION) == int(ra.EXPECTED_ABI) >= 68, (ra.EXPECTED_ABI,)
 	base = dict(translation=True, af_mass=0.0393, af_k_thrust=0.2, motor_lag_s=0.2, dist_enabled=True)
 	cfg = ra.RewardGatedConfigPacked(**base, train_motor_lag_range=(0.15, 0.3))
 	assert tuple(round(x, 6) for x in cfg.train_motor_lag_range) == (0.15, 0.3)
@@ -168,7 +169,7 @@ def test_wheel():
 	_raises(lambda: ra.RewardGatedConfigPacked(**{**base, "dist_enabled": False}, train_motor_lag_range=(0.15, 0.3)),
 	        ValueError, "weather", "no weather")
 	_raises(lambda: ra.RewardGatedConfigPacked(**base, train_motor_lag_range=(0.3, 0.15)), ValueError, "lo <= hi", "lo > hi")
-	print("✓ wheel ABI 68: RewardGatedConfigPacked(train_motor_lag_range=) accepted / refused")
+	print(f"✓ wheel ABI {ra.EXPECTED_ABI}: RewardGatedConfigPacked(train_motor_lag_range=) accepted / refused")
 
 
 if __name__ == "__main__":

@@ -279,3 +279,25 @@ ABI 69, 28/11: wnn_s1-5 (l2b), l2bnm_s1-3, l2bnmw_s1-3, MPCOF row A, PID, LQI, r
 axis fully and the wear axis only partly (the test range reaches 0.64 and 1.44). Mass and noise remain OOD for it.
 The CTRL-90 arm `l2bnmwz` is trained ON this cell's wear and lag ranges (docs/ctrl90_zhang_trained_prereg.md):
 for it, those axes are in-distribution and the read is covered-range robustness, not OOD generalization.
+
+## 12. Amendment 4 (Luiz 28/11): golden `all` now includes inertia ±20 % and latency 8-12 ms (controller ABI 70)
+
+**Decision (Luiz, 28/11/2026):** the two PENDING axes of §11 join the golden cell. From ABI 70, `all` = wear factor
+U(0.64, 1.44) + mass ±0.38 + T_e ~ U(0.16, 0.24) s + noise ×1.2 + **inertia ±20 %** (`EpisodeConfig.inertia_jitter`
+0.20: the whole inertia diagonal × s, s ~ U(0.8, 1.2), one joint draw per episode from its weather seed) + **latency
+8-12 ms** (`EpisodeConfig.control_latency_ms` (8, 12): the plant receives each command n steps late, n uniform over the
+integer physics steps in [round(8/dt), round(12/dt)], told to no controller). Every design model (teachers, MPCOF/LQI,
+the cascade d-hat constants) keeps the nominal inertia and no delay (D1 spirit). Both sides of G2 receive the same
+kwargs, so they fly the same draws.
+
+- **Caches.** The ABI-69 `all` (no inertia / latency) is kept, scorable, as the diagnostic cell **`all_a69`**; its caches
+  are renamed `ctrl83/data/<k>__all_a69.npz` / `mpcofB__all_a69.json` / `fixtures/all_a69` (their stored meta still reads
+  cell "all"). **Every "all" number scored on ABI 69 (log `all_zhang_abi69_2811.log`) is an `all_a69` number.** `all`
+  is re-scored on ABI 70 for every controller.
+- **Per-cell gate.** Each joint cell's levels live in ONE dict (`cells.CELL_LEVELS`) that both its transform and
+  score_cell.py's G3 read (`cells.CELL_LAG_RANGE`, `cells.jitter_levels`). G3 also refuses inertia / latency reaching
+  a cell that carries none. Pinned by `tests/controller_ctrl83_cells.py`. Per cell: `all` inertia 0.20 + latency
+  (8, 12) ms; `allz90` (CTRL-90 secondary) its own Zhang-derived inertia ±0.44 + latency (6.4, 14.4) ms; `all_v1`,
+  `all_a69` none.
+- **Read caveat.** l2b, l2bnm and l2bnmw trained at the nominal inertia with no delay: both new axes are OOD for them.
+  The CTRL-90 arm `l2bnmwz` trains the full cell (docs/ctrl90_zhang_trained_prereg.md Amendment 1).

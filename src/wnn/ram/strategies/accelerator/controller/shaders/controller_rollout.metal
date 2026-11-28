@@ -109,6 +109,17 @@ constant bool ACT_EXT = is_function_constant_defined(FC_ACTUATOR_EXT) ? FC_ACTUA
 constant bool FC_EP_LAG [[function_constant(8)]];
 constant bool EP_LAG = is_function_constant_defined(FC_EP_LAG) ? FC_EP_LAG : false;
 
+// ABI 70 (CTRL-89): the per-episode plant INERTIA scale s_e and CONTROL LATENCY n_e
+// (plant_jitter.rs, host-drawn) — the record gains a 2-float tail [s_e, n_e] after the
+// optional T_e. The plant's RK4 runs on inertia × s_e and the command reaches the plant
+// n_e steps late through a per-thread ring; every controller-side copy of the command
+// (pwm_applied, the actuator twin) is written BEFORE the ring. A specialization (same
+// reason as FC_EP_LAG): every other pipeline dead-strips it ⇒ the ABI-68 codegen.
+constant bool FC_EP_JIT [[function_constant(9)]];
+constant bool EP_JIT = is_function_constant_defined(FC_EP_JIT) ? FC_EP_JIT : false;
+// The ring's capacity — plant_jitter::MAX_LATENCY_STEPS (quad: 4 commands per slot).
+#define MAX_LAT_STEPS 32u
+
 // One rotor of the geometry buffer — 48 B, all-float, mirrors the Rust-side
 // RotorGpu upload. k_thrust is the EFFECTIVE coefficient (nominal x per-rotor
 // asym baked at upload; tilt/position error arrive as a perturbed table), so
@@ -1681,10 +1692,19 @@ kernel void controller_rollout(
 	// Indexing it by the chunk-local e (until 09/11/2026) replayed episodes
 	// 0..chunk-1's z/vz/mass/collective/x/y in every later chunk — the GPU scored
 	// only `chunk` (25) distinct translational draws, the CPU scorer all of them.
-	uint ep_v = (P.dist_ep_offset + e) * (EP_LAG ? 7u : 6u); // CTRL-87: 7 floats under a lag spread
+	uint ep_v = (P.dist_ep_offset + e) * ((EP_LAG ? 7u : 6u) + (EP_JIT ? 2u : 0u)); // CTRL-87 +1, CTRL-89 +2
 	// CTRL-87 (ABI 68): this episode's PLANT lag — the host-drawn T_e of a training-spread
 	// search pool (EP_LAG is only ever set with translation), else the fixed settling time.
 	float plant_settling_s = EP_LAG ? ep_vert[ep_v + 6u] : P.motor_settling_time_s;
+	// CTRL-89 (ABI 70): this episode's plant inertia scale s_e (applied in the RK4 below) and
+	// command delay n_e, plus the delay ring
+	// (episode-scoped, seeded with the first command — AttitudeSim::delay_command).
+	uint jit_v = ep_v + (EP_LAG ? 7u : 6u);
+	float ep_iscale = EP_JIT ? ep_vert[jit_v + 0u] : 1.0f;
+	uint lat_n = EP_JIT ? min((uint)ep_vert[jit_v + 1u], MAX_LAT_STEPS) : 0u;
+	float lat_ring[MAX_LAT_STEPS * 4u];
+	uint lat_pos = 0u;
+	bool lat_init = false;
 	float zpos = (P.translation_on != 0u) ? ep_vert[ep_v + 0u] : 0.0f;
 	float vz = (P.translation_on != 0u) ? ep_vert[ep_v + 1u] : 0.0f;
 	// STAGE 2 horizontal state (slots 4/5; zeros on a stage-1 dispatch).
@@ -2377,6 +2397,28 @@ kernel void controller_rollout(
 				dhat_ua[m] = dhat_ua_seeded ? (dhat_ua[m] + a_obs * (pwm_applied[m] - dhat_ua[m])) : pwm_applied[m];
 			dhat_ua_seeded = true;
 		}
+		// CTRL-89 (ABI 70): CONTROL LATENCY — the plant receives the command issued lat_n
+		// steps ago (the episode's first command before then); every controller-side copy of
+		// the command (pwm_applied, the twins above) is already written. Twin of
+		// AttitudeSim::delay_command. The extended-actuator path does the same inside its
+		// block, after its twin and before its floor.
+		if (EP_JIT && !ACT_EXT && lat_n > 0u)
+		{
+			if (!lat_init)
+			{
+				for (uint k = 0u; k < lat_n; k++)
+					for (uint m = 0u; m < 4u; m++)
+						lat_ring[k * 4u + m] = pwm[m];
+				lat_init = true;
+			}
+			for (uint m = 0u; m < 4u; m++)
+			{
+				float c = pwm[m];
+				pwm[m] = lat_ring[lat_pos * 4u + m];
+				lat_ring[lat_pos * 4u + m] = c;
+			}
+			lat_pos = (lat_pos + 1u == lat_n) ? 0u : lat_pos + 1u;
+		}
 		if (ACT_EXT)
 		{
 			// CTRL-86 S1/S2: the same twin with the plant's per-motor direction switch and
@@ -2392,6 +2434,24 @@ kernel void controller_rollout(
 					dhat_ua[m] = dhat_ua_seeded ? (dhat_ua[m] + a_m * (u - dhat_ua[m])) : u;
 				}
 				dhat_ua_seeded = true;
+			}
+			// CTRL-89: the command delay sits before the floor (AttitudeSim::actuate's order).
+			if (EP_JIT && lat_n > 0u)
+			{
+				if (!lat_init)
+				{
+					for (uint k = 0u; k < lat_n; k++)
+						for (uint m = 0u; m < 4u; m++)
+							lat_ring[k * 4u + m] = pwm[m];
+					lat_init = true;
+				}
+				for (uint m = 0u; m < 4u; m++)
+				{
+					float c = pwm[m];
+					pwm[m] = lat_ring[lat_pos * 4u + m];
+					lat_ring[lat_pos * 4u + m] = c;
+				}
+				lat_pos = (lat_pos + 1u == lat_n) ? 0u : lat_pos + 1u;
 			}
 			// The armed-idle floor, where the plant consumes the command and BEFORE the lag
 			// (twin of AttitudeSim::step's clamp(pwm_min, 1)).
@@ -2561,6 +2621,12 @@ kernel void controller_rollout(
 		float dt = P.dt;
 		float3 k1o, k2o, k3o, k4o;
 		float4 k1q, k2q, k3q, k4q;
+		// CTRL-89 (ABI 70): the plant's JOINT inertia scale s_e, in the algebraically identical
+		// torque form: with I' = s·I, I'⁻¹(τ − ω×I'ω) = I⁻¹(τ/s − ω×Iω) — the gyroscopic term is
+		// invariant to a joint scale. (A second derivatives() on I' moved the flag-off codegen;
+		// the CPU plant flies I' literally, AttitudeSim::set_inertia_scale_core.) Off: untouched.
+		if (EP_JIT)
+			torque = torque / ep_iscale;
 		derivatives(omega, q, torque, P, k1o, k1q);
 		derivatives(omega + k1o * (dt * 0.5f), q + k1q * (dt * 0.5f), torque, P, k2o, k2q);
 		derivatives(omega + k2o * (dt * 0.5f), q + k2q * (dt * 0.5f), torque, P, k3o, k3q);

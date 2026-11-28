@@ -106,6 +106,12 @@ class ControllerProvenance:
 	# CTRL-87 (ABI 68): the TRAINING motor-lag spread "uniform:<lo>,<hi>" (--train-motor-lag-range);
 	# "" = the fixed lag and NOT printed. The training wear spread rides train_asym above.
 	train_lag: str = ""
+	# CTRL-89 (ABI 70): the TRAINING plant jitter "inertia:<j>+latency:<lo>,<hi>ms"
+	# (--train-inertia-jitter / --train-latency-range); "" = off and NOT printed.
+	train_jitter: str = ""
+	# ABI 70: the golden-cell TRAINING ranges "mass:<m>+noise:x<k>+asym:<lo>,<hi>"
+	# (--train-mass-jitter / --train-noise-scale / --train-motor-asym-range); "" = off, NOT printed.
+	train_plant: str = ""
 
 	def line(self) -> str:
 		"""The single greppable line the ladder copies into the marker."""
@@ -134,7 +140,9 @@ class ControllerProvenance:
 		        + (f"actuator={self.actuator} " if self.actuator else "")
 		        + (f"anchor={self.anchor} " if self.anchor else "")
 		        + (f"refine={self.refine} " if self.refine else "")
-		        + (f"train_lag={self.train_lag} " if self.train_lag else "") +
+		        + (f"train_lag={self.train_lag} " if self.train_lag else "")
+		        + (f"train_jitter={self.train_jitter} " if self.train_jitter else "")
+		        + (f"train_plant={self.train_plant} " if self.train_plant else "") +
 		        f"fitness_pools={self.fitness_pools}")
 
 
@@ -181,7 +189,8 @@ def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: st
                        train_ic: str = UNKNOWN, alt: str = "", yawref: str = "", pos_metric: str = "",
                        dmax_yaw: str = "", refine: str = "", dleak_yaw: str = "",
                        ylead: str = "", actuator: str = "", anchor: str = "",
-                       train_lag: str = "") -> ControllerProvenance:
+                       train_lag: str = "", train_jitter: str = "",
+                       train_plant: str = "") -> ControllerProvenance:
 	"""Gather every field, never raising: each accessor degrades to UNKNOWN / 0."""
 	wheel, abi, sha = _wheel_identity()
 	return ControllerProvenance(
@@ -214,6 +223,8 @@ def collect_provenance(fitness_pools: str, motor_lag: str = UNKNOWN, obs_pwm: st
 		anchor=anchor.replace(" ", "_").replace('"', ""),
 		refine=refine.replace(" ", "_").replace('"', ""),
 		train_lag=train_lag.replace(" ", "_").replace('"', ""),
+		train_jitter=train_jitter.replace(" ", "_").replace('"', ""),
+		train_plant=train_plant.replace(" ", "_").replace('"', ""),
 	)
 
 

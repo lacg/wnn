@@ -72,6 +72,8 @@ fn regime(xy: f32, steps: usize, expert_drives: bool) -> RewardGatedConfigPacked
 		pwm_min: 0.0,
 		anchor_nominal_mass: false,
 		train_motor_lag_range: None,
+		train_inertia_jitter: 0.0,
+		train_latency_ms: None,
 	}
 }
 

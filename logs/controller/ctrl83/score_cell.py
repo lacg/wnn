@@ -19,7 +19,8 @@ Gates (exit 2 on failure, nothing written):
   G1 re-issued WNN row == scored metrics (as wnn_units.py).
   G2 PLANT IDENTITY: per unit, every plant/episode kwarg the WNN call receives equals the one
      the rival call receives on the same stressed config (ICs, weather seed, motor wear, mass
-     draws, lag, noise, drag, IMU, airframe — and, cell `all`, the per-episode lag-draw range:
+     draws, lag, noise, drag, IMU, airframe — and, joint cells, the per-episode lag-draw range + the
+     ABI-70 inertia / latency levels:
      with the weather seed and episode count already equal, that fixes T_e per episode, since
      both calls draw it with the same Rust function). Run in every WNN job.
   G3 the cell's stress actually reached the call (the stressed kwarg differs from nominal).
@@ -57,16 +58,37 @@ PLANT_MAP = {
 	                  # ABI 69 (cell `all`): the per-episode plant-lag range. Same range + same dist_seed +
 	                  # same episode count (init_qs) on both calls => the identical T_e per episode (one Rust
 	                  # draw function; pinned by ctrl83_all_cell_tests point-range == fixed-plant identities).
-	                  "train_motor_lag_range")},
+	                  "train_motor_lag_range",
+	                  # ABI 70 (CTRL-89): the per-episode joint inertia scale + control latency (cells `all`,
+	                  # `allz90`). Both sides draw them from dist_seed per episode, so equal kwargs = equal draws.
+	                  "inertia_jitter", "control_latency_ms")},
 	"target_altitude": "s1_target_altitude", "init_z": "s1_init_z", "init_vz": "s1_init_vz",
 	"ep_mass": "s1_mass", "ep_collective_frac": "s1_collective_frac", "init_x": "s2_init_x",
 	"init_y": "s2_init_y", "pos_omega": "pos_omega_n",
 }
 # Which WNN kwarg each axis must move (G3).
 AXIS_KW = {"wear": ("dist_motor_asym",), "mass": ("ep_mass",), "lag": ("motor_lag_s",), "noise": ("dist_gyro_sigma",),
+           "inertia": ("inertia_jitter",), "latency": ("control_latency_ms",),  # CTRL-89 (ABI 70)
            "payload": ("payload_step_s",),
-           # cell `all`: every stressed parameter must reach the call at once.
+           # joint cells: every stressed parameter must reach the call at once (+ the CTRL-89 ones,
+           # per cell from cells.jitter_levels — _gate_jitter below).
            "joint": ("dist_motor_asym", "ep_mass", "dist_gyro_sigma", "train_motor_lag_range")}
+
+
+def _gate_jitter(cell, wkw):
+	"""CTRL-89 (ABI 70): the inertia / latency a joint cell carries (cells.jitter_levels — the SAME
+	LEVELS dict its transform reads) reached the WNN call, and a cell carrying none sent none.
+	G2 already holds the rival to the same kwargs."""
+	want = C.jitter_levels(cell)
+	for kw in ("inertia_jitter", "control_latency_ms"):
+		got = as_arr(wkw.get(kw))
+		if kw not in want:
+			if got is not None and np.any(got != 0.0):
+				die(f"{cell}: {kw} {wkw.get(kw)} reached the call but the cell carries none")
+			continue
+		w = as_arr(want[kw])
+		if got is None or got.shape != w.shape or not np.allclose(got, w):
+			die(f"{cell}: {kw} {wkw.get(kw)} != the cell's level {want[kw]}")
 
 
 def die(msg):
@@ -229,6 +251,7 @@ def score_wnn(controller, cell):
 					die(f"{cell}: motor_lag_s {wkw.get('motor_lag_s')} is not the nominal lag the twin keeps")
 				if not np.allclose(as_arr(wkw.get("train_motor_lag_range")), C.CELL_LAG_RANGE[cell]):
 					die(f"{cell}: train_motor_lag_range {wkw.get('train_motor_lag_range')} != {C.CELL_LAG_RANGE[cell]}")
+				_gate_jitter(cell, wkw)
 		st = float(row[2])
 		U.append([unit, st, math.degrees(row[1]), math.degrees(row[5]), m.mean_position_error_m, m.mean_altitude_error_m,
 		          m.mean_position_hold_m, round((1 - st) * a.test_episodes)])

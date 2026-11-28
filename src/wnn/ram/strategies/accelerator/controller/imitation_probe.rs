@@ -462,6 +462,7 @@ pub(crate) fn closed_loop_scorer(cfg: &RewardGatedConfigPacked, c: &WnnControlle
 		alt_int: crate::episode_regime::alt_integrator_for(cfg),
 		stress: crate::stress_opts::StressOpts::OFF,
 		ep_motor_lag: Vec::new(),
+		ep_plant: crate::plant_jitter::EpisodePlant::OFF,
 	};
 	let mut cc = c.clone();
 	let row = crate::cpu_score::rollout_one(

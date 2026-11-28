@@ -93,7 +93,9 @@ def _train_asym_kwargs(ec) -> dict:
 		return {"dist_motor_asym_mag": 0.0}
 	mag = ec.train_asym_mag() if hasattr(ec, "train_asym_mag") else float(d.motor_asym_mag)
 	lag = ec.train_lag_kwargs() if hasattr(ec, "train_lag_kwargs") else {}
-	return {"dist_motor_asym_mag": float(mag), **lag}
+	# CTRL-89 (ABI 70): the training plant jitter (inertia / latency), absent when off.
+	jit = ec.train_jitter_kwargs() if hasattr(ec, "train_jitter_kwargs") else {}
+	return {"dist_motor_asym_mag": float(mag), **lag, **jit}
 
 
 def train_asym_token(ec) -> str:
@@ -107,6 +109,28 @@ def train_asym_token(ec) -> str:
 	return f"per_episode:{mag:g}" if mag > 0.0 else "fixed"
 
 
+def train_jitter_token(ec) -> str:
+	"""CTRL-89 provenance: 'inertia:<j>' and/or 'latency:<lo>,<hi>ms' under --train-inertia-jitter
+	/ --train-latency-range, else '' (not printed: every pre-CTRL-89 line is unchanged)."""
+	j = getattr(ec, "train_inertia_jitter", None)
+	r = getattr(ec, "train_latency_ms", None)
+	parts = ([f"inertia:{float(j):g}"] if j is not None else []) + (
+		[f"latency:{float(r[0]):g},{float(r[1]):g}ms"] if r is not None else [])
+	return "+".join(parts)
+
+
+def train_plant_token(ec) -> str:
+	"""Golden-cell training ranges (ABI 70) provenance: 'mass:<m>', 'noise:x<k>' and/or
+	'asym:<lo>,<hi>' under --train-mass-jitter / --train-noise-scale / --train-motor-asym-range,
+	else '' (not printed: every earlier line is unchanged)."""
+	m = getattr(ec, "train_mass_jitter", None)
+	k = getattr(ec, "train_noise_scale", None)
+	r = getattr(ec, "train_motor_asym_range", None)
+	parts = (([f"mass:{float(m):g}"] if m is not None else []) + ([f"noise:x{float(k):g}"] if k is not None else [])
+	         + ([f"asym:{float(r[0]):g},{float(r[1]):g}"] if r is not None else []))
+	return "+".join(parts)
+
+
 def train_lag_token(ec) -> str:
 	"""CTRL-87 provenance: 'uniform:<lo>,<hi>' under --train-motor-lag-range, else '' (the
 	token is then not printed: every pre-CTRL-87 line is unchanged)."""
@@ -116,8 +140,12 @@ def train_lag_token(ec) -> str:
 
 def _dist_packed_fields_ec(ec) -> tuple:
 	"""_dist_packed_fields for a bare EpisodeConfig (the reference rollouts —
-	calibration sampler, MEMORY recorder — have no RewardGatedConfig)."""
-	d = getattr(ec, "disturbance", None)
+	calibration sampler, MEMORY recorder — have no RewardGatedConfig).
+
+	Every caller is a TRAINING host, so it reads the training disturbance
+	(EpisodeConfig.search_disturbance(): --train-noise-scale / --train-motor-asym-range /
+	--train-motor-asym-mag applied; the preset object itself when none is set)."""
+	d = ec.search_disturbance() if hasattr(ec, "search_disturbance") else getattr(ec, "disturbance", None)
 	if d is None:
 		return (False, [0.0, 0.0, 0.0], 0.0, 0.1, [1.0, 1.0, 1.0, 1.0], 0.0, 0.0, 0.0,
 		        0.0, 0, 0, 0.0)
@@ -1633,7 +1661,9 @@ def _stage1_train_kwargs(ec) -> dict:
 		**anchor,
 		translation=True,
 		af_mass=float(af.mass),
-		mass_jitter=float(getattr(ec, "mass_jitter", 0.0)),
+		# --train-mass-jitter (TRAINING hosts only) else --mass-jitter.
+		mass_jitter=(float(ec.train_mass_jitter_value()) if hasattr(ec, "train_mass_jitter_value")
+		             else float(getattr(ec, "mass_jitter", 0.0))),
 		alt_offset=float(getattr(ec, "max_initial_alt_offset_m", 0.0)),
 		init_vz=float(getattr(ec, "max_initial_vz", 0.0)),
 		collective_jitter=float(getattr(ec, "collective_cmd_jitter", 0.0)),
@@ -2743,8 +2773,11 @@ class ControllerEvaluator:
 		s1_on = bool(getattr(ec, "translation", False))
 		z0 = vz0 = coll = mass = x0 = y0 = None
 		if s1_on:
+			# A SEARCH pool flies the training mass spread (--train-mass-jitter); a report pool
+			# mass_jitter. Unset: ec itself (byte-identical draws).
+			v_ec = ec.train_vertical_ec() if (self.train_spread and hasattr(ec, "train_vertical_ec")) else ec
 			z0, vz0, coll, mass = sample_vertical_ics_flat(
-				self._active_score_seed, self.num_eval, ec)
+				self._active_score_seed, self.num_eval, v_ec)
 			af_mass = float(ec.airframe.mass) if ec.airframe is not None else 1.0
 			# STAGE 2: horizontal starts from their OWN salted stream (all-zero
 			# when max_initial_xy_offset_m is 0, which the scorers treat as
@@ -2776,11 +2809,20 @@ class ControllerEvaluator:
 			spread_kw = ec.train_lag_kwargs()
 			if spread_kw and dist is None:
 				raise ValueError("train_motor_lag_range needs a disturbance (its draw is keyed on the weather seed)")
+			# CTRL-89 (ABI 70): the training plant jitter replaces the stress one on a SEARCH pool.
+			jit_kw = ec.search_jitter_kwargs() if hasattr(ec, "search_jitter_kwargs") else {}
+			if jit_kw and dist is None:
+				raise ValueError("train_inertia_jitter / train_latency_ms need a disturbance (their draws are keyed on the weather seed)")
+			spread_kw = {**spread_kw, **jit_kw}
 		# CTRL-83 cell `all`: a stress lag draw rides stress_kwargs(); a SEARCH pool's training
-		# draw rides spread_kw — the same Rust kwarg, so never both on one call.
-		if spread_kw and getattr(ec, "stress_motor_lag_range", None) is not None:
+		# draw rides spread_kw — the same Rust kwarg, so never both on one call (the merge below
+		# would otherwise let the training draw silently replace the report stress).
+		if "train_motor_lag_range" in spread_kw and getattr(ec, "stress_motor_lag_range", None) is not None:
 			raise ValueError("stress_motor_lag_range (report stress) and a search pool's train_motor_lag_range "
 			                 "cannot ride one scorer call")
+		# The scorer-side stress (CTRL-83 D1/D3, CTRL-89 inertia/latency), a search pool's training
+		# spread overriding it key by key. Off: exactly ec.stress_kwargs() (byte-identical call).
+		stress_kw = {**ec.stress_kwargs(), **spread_kw}
 		# Overactuated Phase 1: N-rotor geometry passthrough (None = legacy quad).
 		# Both Rust scorers take the same geometry=/rotor_asym= kwargs and refuse
 		# a rows-vs-num_motors mismatch loudly.
@@ -2829,7 +2871,7 @@ class ControllerEvaluator:
 					controllers, q0, omega0, self.num_eval, ec.steps_per_episode,
 					geometry=geo_rows, rotor_asym=geo_asym,
 					**ec.sim_kwargs(), **ec.motor_lag_kwargs(), **ec.alt_integral_scorer_kwargs(),
-					**ec.imu_kwargs(), **ec.att_ref_kwargs(), **ec.stress_kwargs(), **ec.anchor_kwargs(),
+					**ec.imu_kwargs(), **ec.att_ref_kwargs(), **stress_kw, **ec.anchor_kwargs(),
 					**alloc_kwargs, **stage1_kwargs)
 			else:
 				# W2: weather-on scoring. Base seed = dist.seed XOR the active
@@ -2856,8 +2898,8 @@ class ControllerEvaluator:
 					dist_torque_scale_jitter=float(dist.torque_scale_jitter),
 					geometry=geo_rows, rotor_asym=geo_asym,
 					**ec.sim_kwargs(), **ec.motor_lag_kwargs(), **ec.alt_integral_scorer_kwargs(),
-					**ec.imu_kwargs(), **ec.att_ref_kwargs(), **ec.stress_kwargs(), **ec.anchor_kwargs(),
-					**alloc_kwargs, **stage1_kwargs, **spread_kw)
+					**ec.imu_kwargs(), **ec.att_ref_kwargs(), **stress_kw, **ec.anchor_kwargs(),
+					**alloc_kwargs, **stage1_kwargs)
 		except Exception as e:
 			# Kept for score_population: a swallowed scorer error made dropconst s3's headline
 			# held-out die in the Python loop with the real cause lost (10/11/2026).

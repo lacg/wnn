@@ -65,6 +65,10 @@ pub struct Stage1Cfg
 	/// ABI-66 rollout. The actuator twins keep the nominal (design) lag either way. The GPU
 	/// twin is the 7th float of buffer 30's per-episode record.
 	pub ep_motor_lag: Vec<f32>,
+	/// CTRL-89 (ABI 70): the per-episode plant INERTIA scale and CONTROL LATENCY
+	/// (plant_jitter.rs) — EpisodePlant::OFF ⇒ the ABI-68 rollout. The models stay nominal.
+	/// The GPU twin is the 2-float [s_e, n_e] tail of buffer 30's record (FC_EP_JIT).
+	pub ep_plant: crate::plant_jitter::EpisodePlant,
 }
 
 /// ABI 32: the scorer kwargs (imu_specific_force, rotor_drag, att_err_tilt_ref +
@@ -164,6 +168,7 @@ impl Stage1Cfg
 		{
 			return Err(format!("Stage1Cfg.ep_motor_lag must be finite and > 0 s, found {bad}"));
 		}
+		self.ep_plant.validate(num_episodes)?;
 		if !self.target_altitude.is_finite() || !self.lambda_alt.is_finite()
 		{
 			return Err("Stage1Cfg: target_altitude and lambda_alt must be finite".into());
@@ -215,10 +220,18 @@ impl Stage1Cfg
 		self.ep_motor_lag.get(ep).copied()
 	}
 
-	/// The GPU record width: 6 floats, 7 under a training lag spread (the FC_EP_LAG specialization).
+	/// CTRL-89: whether the episodes carry a plant inertia scale / control latency (the GPU
+	/// record then ends in [s_e, n_e], the FC_EP_JIT specialization).
+	pub fn ep_jit_on(&self) -> bool
+	{
+		self.ep_plant.is_on()
+	}
+
+	/// The GPU record width: 6 floats, +1 under a training lag spread (FC_EP_LAG), +2 under
+	/// the CTRL-89 plant jitter (FC_EP_JIT).
 	pub fn gpu_stride(&self) -> usize
 	{
-		6 + self.ep_lag_on() as usize
+		6 + self.ep_lag_on() as usize + 2 * self.ep_jit_on() as usize
 	}
 
 	/// Flatten to the GPU's interleaved layout: 6 floats per episode,
@@ -242,6 +255,14 @@ impl Stage1Cfg
 			if let Some(t) = self.plant_lag(ep)
 			{
 				out.push(t);
+			}
+			// CTRL-89: [.., s_e, n_e] — only under the plant jitter (FC_EP_JIT). n_e <= 32 is
+			// exact in f32.
+			if self.ep_jit_on()
+			{
+				let (s, n) = self.ep_plant.at(ep);
+				out.push(s);
+				out.push(n as f32);
 			}
 		}
 		out
@@ -270,6 +291,7 @@ mod tests
 			alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 			stress: StressOpts::OFF,
 			ep_motor_lag: Vec::new(),
+			ep_plant: crate::plant_jitter::EpisodePlant::OFF,
 		}
 	}
 
@@ -321,6 +343,7 @@ mod tests
 			alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 			stress: StressOpts::OFF,
 			ep_motor_lag: Vec::new(),
+			ep_plant: crate::plant_jitter::EpisodePlant::OFF,
 		};
 		// Stage-1 (horizontal off): stride 6 with zero-padded x0/y0.
 		assert_eq!(

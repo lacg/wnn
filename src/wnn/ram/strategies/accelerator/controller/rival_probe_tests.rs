@@ -38,7 +38,7 @@ fn small(teacher: u8, use_est: bool, probe: Option<&mut RivalProbe>) -> pyo3::Py
 		2.0, 1.0, 0.25,
 		s1.init_x.clone(), s1.init_y.clone(), 1.0, 1.0, 0.5236,
 		0.20, true, 0.0, true, 10,
-		0, (0.0, 0.0), crate::stress_opts::StressKwargs::OFF, None, // alt_integral off; no per-episode lag
+		0, (0.0, 0.0), crate::stress_opts::StressKwargs::OFF, None, (0.0, None), // alt_integral off; no per-episode lag; CTRL-89 jitter off
 		probe,
 	)
 	.map(crate::dagger_train::rival_first8)
@@ -192,6 +192,20 @@ impl Unit
 		})
 	}
 
+	/// CTRL-89 (ABI 70): the plant jitter the fixture carries (inertia_jitter, control_latency_ms)
+	/// — written by rowb.py / ctrl_indi_val_fixture.py from the stressed config's stress_kwargs()
+	/// (control_latency_ms only when set); absent keys ⇒ OFF, so every older fixture is the
+	/// ABI-68 row.
+	fn jitter_kw(&self) -> (f32, Option<(f32, f32)>)
+	{
+		let j = self.f.get("inertia_jitter").map_or(0.0, |v| v[0] as f32);
+		let lat = self.f.get("control_latency_ms").map(|v| {
+			assert_eq!(v.len(), 2, "control_latency_ms needs (lo, hi) ms");
+			(v[0] as f32, v[1] as f32)
+		});
+		(j, lat)
+	}
+
 	fn episodes(&self) -> usize
 	{
 		self.v("init_qs").len() / 4
@@ -259,7 +273,7 @@ impl Unit
 			self.s("rotor_drag") as f32,
 			self.b("att_err_tilt_ref"),
 			self.s("ctbr_outer_hold") as usize,
-			tw.alt_integral, (0.0, 0.0), self.stress_kw(), self.ep_lag_range(),
+			tw.alt_integral, (0.0, 0.0), self.stress_kw(), self.ep_lag_range(), self.jitter_kw(),
 			probe,
 		)
 		.map(crate::dagger_train::rival_first8)
