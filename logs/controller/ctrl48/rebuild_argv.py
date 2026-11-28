@@ -10,11 +10,19 @@
   rebuild_argv.py <run.out> fly <ckpt_dir> <winner_path> [extra flags...]
       a NEW run on the same recipe (block 7: the block-6 dc control + one stack): the save
       paths are replaced by the new tag's, extra flags appended.
+  rebuild_argv.py <run.out> argv
+      the flown argv itself, renamed + DEDUPED (save paths kept): the form a driver's
+      fixed-text check compares an arm against (27/11/2026).
 
-The only other transformation is the 11/11 terminology cut-over rename
---report-seeds/--report-seed/--report-episodes -> --test-* (same values, same meaning).
-Prints the argv as one shell-quoted line. Refuses an .out without exactly one [argv] line,
-and an extra flag the original argv already carries (no silent last-wins override)."""
+Other transformations: the 11/11 terminology cut-over rename --report-seeds/--report-seed/
+--report-episodes -> --test-* (same values, same meaning), and (27/11/2026, Luiz "leave the
+last one") DEDUPE: a flag the flown argv carries more than once keeps only its LAST occurrence,
+at that occurrence's position. argparse is last-wins, so the resolved args are identical
+(docs/recipe_duplicate_flags_2711.md: the flown recipes carried --max-cells 180000 ...
+--max-cells 1000000000 etc.; the earlier values never applied). Each dropped occurrence is
+reported on stderr. Prints the argv as one shell-quoted line. Refuses an .out without exactly
+one [argv] line, an extra flag the original argv already carries (no silent last-wins
+override), and any output that still carries a flag twice or both --x and --no-x."""
 import shlex
 import sys
 
@@ -33,6 +41,41 @@ def argv_tokens(path):
 	if len(lines) != 1:
 		raise SystemExit(f"{path}: expected exactly one [argv] line, found {len(lines)}")
 	return lines[0][len("[argv] "):].split()
+
+
+def segments(toks):
+	"""[(flag, [values...]), ...] — a flag owns every following non-flag token (nargs='+' safe)."""
+	segs = []
+	for t in toks:
+		if t.startswith("--"):
+			segs.append((t, []))
+		elif not segs:
+			raise SystemExit(f"argv starts with a non-flag token {t!r}")
+		else:
+			segs[-1][1].append(t)
+	return segs
+
+
+def dedupe(toks, who="argv"):
+	"""Keep each flag's LAST occurrence only, at its own position (relative order of the
+	survivors is unchanged, so --x/--no-x pairs and every last-wins dest resolve the same)."""
+	segs = segments([RENAME.get(t, t) for t in toks])
+	last = {f: i for i, (f, _) in enumerate(segs)}
+	for i, (f, v) in enumerate(segs):
+		if last[f] != i:
+			keep = segs[last[f]][1]
+			print(f"[dedupe] {who}: dropped {f} {' '.join(v)!s} (effective: {f} {' '.join(keep)})".rstrip(),
+			      file=sys.stderr)
+	return [t for i, (f, v) in enumerate(segs) if last[f] == i for t in [f] + v]
+
+
+def refuse_dups(toks):
+	"""Guard (27/11/2026): never emit a recipe that passes a flag twice, or --x with --no-x."""
+	flags = [f for f, _ in segments(toks)]
+	twice = sorted({f for f in flags if flags.count(f) > 1})
+	both = sorted({f for f in flags if f.startswith("--no-") and "--" + f[5:] in flags})
+	if twice or both:
+		raise SystemExit(f"refusing a recipe with duplicated flags {twice} / contradictory --x/--no-x {both}")
 
 
 def strip_saves(toks, drop=SAVE_FLAGS):
@@ -68,8 +111,13 @@ def refuse_overlap(base, extra):
 
 
 def main(a):
+	flown = dedupe(argv_tokens(a[0]), a[0].rsplit("/", 1)[-1])
+	if a[1] == "argv":
+		refuse_dups(flown)
+		print(" ".join(shlex.quote(t) for t in flown))
+		return
 	recalc = a[1] in ("recalc", "stress")
-	base = strip_saves(argv_tokens(a[0]), SAVE_FLAGS + SELECT_FLAGS if recalc else SAVE_FLAGS)
+	base = strip_saves(flown, SAVE_FLAGS + SELECT_FLAGS if recalc else SAVE_FLAGS)
 	if a[1] == "stress":
 		base = strip_test_seeds(base)
 		units = [str(99990100 + i) for i in range(1, int(a[3]) + 1)]
@@ -79,8 +127,9 @@ def main(a):
 	elif a[1] == "fly":
 		head, extra = ["--save-stage-checkpoints", a[2], "--save-winner", a[3]], a[4:]
 	else:
-		raise SystemExit("mode must be recalc or fly")
+		raise SystemExit("mode must be recalc, stress, fly or argv")
 	refuse_overlap(base, extra + head)
+	refuse_dups(base + extra + head)
 	print(" ".join(shlex.quote(t) for t in base + extra + head))
 
 

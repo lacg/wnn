@@ -5,7 +5,8 @@
 # INSTALLED first: it refuses to run otherwise (pin + prereg must be committed in the tree, wheel + facade must be ABI 64).
 # Control of every pair = the FLOWN G+T sN run (..._a62_..._L1_yld_n0g3gz_full_sN; ABI 62; never re-flown). Each arm argv
 # = that run's [argv] line + ONLY the arm's flags + the two save paths (tag ..._a64_..._L1_yld_gt_ylead_full_sN).
-# Fixed-text check: arm argv minus its flags, tag -> control tag == the control's [argv] byte for byte. Resolver check
+# Fixed-text check: arm argv minus its flags, tag -> control tag == the control's DEDUPED [argv] byte for byte (27/11:
+# rebuild_argv.py keeps each repeated flag's last occurrence; raw vs deduped control must resolve identically). Resolver check
 # (phased_ga's own parser + _resolve_ctbr + resolve_block10_args + calibration token): the control resolves to G+T with
 # the lead OFF; the arm moves ONLY obs_yaw_lead (True, tau 0.1); the calibration token and the digest of everything else
 # are equal (the lead has its own fixed ladder and steals no cut: tests/controller_ctrl80_yaw_lead.py).
@@ -90,8 +91,14 @@ build()
 	[ -n "$flags" ] || abort "$arm: no flags (unknown arm)"
 	[ -f $L/$ctl.done ] || abort "s$s: the G+T control $ctl has not finished — never fly an arm without its control"
 	case $arm in l2bylead|l2byleadngz) true;; *) false;; esac && { [ -f $L/$(l2b_of $s).done ] || abort "s$s: the l2b base run $(l2b_of $s) (the pairing reference) has not finished"; }
-	CLINE=$(grep -a '^\[argv\] ' $L/$ctl.out | cut -c8-)
-	[ "$(echo "$CLINE" | grep -c .)" = 1 ] || abort "$ctl: expected exactly one [argv] line"
+	RAWLINE=$(grep -a '^\[argv\] ' $L/$ctl.out | cut -c8-)
+	[ "$(echo "$RAWLINE" | grep -c .)" = 1 ] || abort "$ctl: expected exactly one [argv] line"
+	# 27/11/2026 (Luiz "leave the last one", docs/recipe_duplicate_flags_2711.md): the flown [argv] repeats flags
+	# (--max-cells 180000 ... 1000000000, --skip-stages neurons,bits ... connections,bits, ...); argparse keeps the last.
+	# rebuild_argv.py now DEDUPES keeping the last occurrence, so the arm is compared against the DEDUPED control argv,
+	# and the raw and deduped control must resolve to the same args (full resolver line, digest included).
+	CLINE=$($VENV/bin/python $L/rebuild_argv.py $L/$ctl.out argv) || abort "$ctl: argv dedupe failed"
+	[ "$(validate "$RAWLINE")" = "$(validate "$CLINE")" ] || abort "$ctl: the deduped control argv does not resolve like the flown one"
 	[ "$(count "$CLINE" "--base-seed $((31337000 + s)) ")" = 1 ] || abort "$ctl: does not carry --base-seed $((31337000 + s)) once"
 	[ "$(count "$CLINE" "--delta-max-yaw $DMAX0 ")" = 1 ] || abort "$ctl: does not carry --delta-max-yaw $DMAX0 exactly once"
 	echo "$CLINE" | grep -qE -- "--delta-leak-yaw|--gyro-xy-ladder|--yaw-err-outer-cut|--yaw-integral-ladder|--obs-yaw-lead" && abort "$ctl: the control already carries a lever flag"
