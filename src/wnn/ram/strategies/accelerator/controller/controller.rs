@@ -249,6 +249,8 @@ fn q_scale(q: [f32; 4], s: f32) -> [f32; 4]
 //   5 = D5 sensor-freeze start draw      (axis 0, k 0; uniform per step)
 //   6 = D7 per-episode torque scale      (axis 0..2, k 0; step 0 only)
 //   7 = TRAINING per-episode motor asym δ (ram_core::counter_rng layer 7, index = motor)
+//   8 = TRAINING per-episode motor lag T  (ram_core::counter_rng layer 8; HOST-side only —
+//       the Metal scorer reads the drawn T from buffer 30, train_lag_range.rs, CTRL-87)
 //  15 = per-episode seed derivation      (axis 0, k 0; step = episode index)
 // =============================================================================
 
@@ -270,6 +272,9 @@ pub const DIST_CH_TORQUE_SCALE: u32 = 6;
 /// per-episode motor-asymmetry δ of a TRAINING episode, one uniform per motor —
 /// drawn on ram_core::counter_rng with this id as the layer (see train_motor_asym).
 pub const DIST_CH_MOTOR_ASYM: u32 = 7;
+/// CTRL-87 (ABI 68): the per-episode TRAINING motor-lag draw (train_lag_range.rs) — one
+/// uniform per episode on ram_core::counter_rng with this id as the layer. Host-side only.
+pub const DIST_CH_MOTOR_LAG: u32 = 8;
 pub const DIST_CH_EP_SEED: u32 = 15;
 
 // 2π as the SAME f32 literal used in the Metal twin (DIST_TWO_PI) so Box-Muller

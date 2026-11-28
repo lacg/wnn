@@ -211,7 +211,13 @@ import os
 # score_controllers_cpu/metal and score_classical_baseline, carried by
 # EpisodeConfig.stress_kwargs(); anchor_mass=None on both WNN scorers and
 # anchor_nominal_mass=False on RewardGatedConfigPacked (D2, --anchor-mass nominal).
-EXPECTED_ABI = 66
+# ABI 68 (28/11/2026, Luiz, CTRL-87 l2bnmw; additive, default = ABI 66 bit-identical; 67 is the
+# per-bank-width branch's): train_motor_lag_range=None on RewardGatedConfigPacked (every
+# training episode flies T ~ U(lo, hi), drawn from its weather seed; teachers + the student's
+# actuator twin stay at motor_lag_s) and on score_controllers_cpu/metal (the GA SEARCH pools,
+# drawn host-side; Metal FC_EP_LAG(8) + a 7-float buffer-30 record). Carried by
+# EpisodeConfig.train_lag_kwargs(); the wear spread (--train-motor-asym-mag) is Python-only.
+EXPECTED_ABI = 68
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

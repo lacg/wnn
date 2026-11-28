@@ -81,20 +81,37 @@ def _train_asym_kwargs(ec) -> dict:
 	RewardGatedConfigPacked — every training host (DAgger, per-round eval,
 	calibration sampler, MEMORY recorder) draws base·(1 + U(−mag, +mag)) per
 	episode from it. 0.0 (no disturbance, or motor_asym_mag 0) ⇒ the ABI-37
-	trainer bit for bit."""
+	trainer bit for bit.
+
+	CTRL-87 (ABI 68): the TRAINING spread rides here too, so every training host
+	gets it from one place — the wear magnitude is EpisodeConfig.train_asym_mag()
+	(--train-motor-asym-mag, else the preset's) and the per-episode plant-lag range
+	(--train-motor-lag-range) is `train_motor_lag_range=` (absent when off: the
+	ABI-66 config, byte-identical)."""
 	d = getattr(ec, "disturbance", None)
-	return {"dist_motor_asym_mag": float(d.motor_asym_mag) if d is not None else 0.0}
+	if d is None:
+		return {"dist_motor_asym_mag": 0.0}
+	mag = ec.train_asym_mag() if hasattr(ec, "train_asym_mag") else float(d.motor_asym_mag)
+	lag = ec.train_lag_kwargs() if hasattr(ec, "train_lag_kwargs") else {}
+	return {"dist_motor_asym_mag": float(mag), **lag}
 
 
 def train_asym_token(ec) -> str:
 	"""Provenance token for the training plant's motor asymmetry: 'per_episode'
 	(±mag drawn every training episode, ABI 38), 'fixed' (weather on, mag 0) or
-	'off' (no disturbance)."""
+	'off' (no disturbance). CTRL-87: the mag is the TRAINING one (--train-motor-asym-mag)."""
 	d = getattr(ec, "disturbance", None)
 	if d is None:
 		return "off"
-	mag = float(d.motor_asym_mag)
+	mag = ec.train_asym_mag() if hasattr(ec, "train_asym_mag") else float(d.motor_asym_mag)
 	return f"per_episode:{mag:g}" if mag > 0.0 else "fixed"
+
+
+def train_lag_token(ec) -> str:
+	"""CTRL-87 provenance: 'uniform:<lo>,<hi>' under --train-motor-lag-range, else '' (the
+	token is then not printed: every pre-CTRL-87 line is unchanged)."""
+	r = getattr(ec, "train_motor_lag_range", None)
+	return "" if r is None else f"uniform:{float(r[0]):g},{float(r[1]):g}"
 
 
 def _dist_packed_fields_ec(ec) -> tuple:
@@ -1973,8 +1990,15 @@ class ControllerEvaluator:
 		fitness_seeds: int = 1,
 		num_eval_folds: int = 1,
 		score_crn: bool = False,
+		train_spread: bool = False,
 	):
 		self.spec = spec
+		# CTRL-87 (ABI 68): True ONLY on the GA SEARCH evaluators (grid, arch stages, MEMORY):
+		# their scoring pools fly the TRAINING spread (EpisodeConfig.search_disturbance() wear,
+		# train_lag_kwargs() per-episode lag). False (default) = every report evaluator — TEST
+		# units, VAL stage-select, held-out rows — at the preset wear and the fixed lag. The
+		# TRAINING inside any evaluator always reads the spread (_train_asym_kwargs).
+		self.train_spread = bool(train_spread)
 		# CRN fitness (03/09/2026): score EVERY genome on ALL K pools EVERY generation
 		# (no rotation) and train every genome on the SAME fold seeds. Common random
 		# numbers make the during-search fitness a deterministic function of the
@@ -2665,6 +2689,10 @@ class ControllerEvaluator:
 				return res
 			self._refuse_device_switch("the Python per-step loop")
 			self._refuse_python_fallback()
+			# CTRL-87: the per-step loop cannot fly a search pool's training spread.
+			if self.train_spread and self.episode_config.train_spread_on():
+				raise RuntimeError("score_population: the CTRL-87 training spread is flown by the Rust "
+				                   f"scorers only ({getattr(self, '_rust_score_error', None)!r})")
 			# The Rust scorer failing → the slow Python per-step loop (10-50x). Warn once.
 			if not getattr(self, "_gpu_score_fallback_warned", False):
 				import sys
@@ -2740,6 +2768,14 @@ class ControllerEvaluator:
 		else:
 			stage1_kwargs = {}
 		dist = getattr(ec, "disturbance", None)
+		# CTRL-87: a SEARCH pool flies the training spread (wear + per-episode lag); a report
+		# pool the preset. Off (no flag) both are the preset: the call is byte-identical.
+		spread_kw = {}
+		if self.train_spread and hasattr(ec, "search_disturbance"):
+			dist = ec.search_disturbance()
+			spread_kw = ec.train_lag_kwargs()
+			if spread_kw and dist is None:
+				raise ValueError("train_motor_lag_range needs a disturbance (its draw is keyed on the weather seed)")
 		# Overactuated Phase 1: N-rotor geometry passthrough (None = legacy quad).
 		# Both Rust scorers take the same geometry=/rotor_asym= kwargs and refuse
 		# a rows-vs-num_motors mismatch loudly.
@@ -2816,7 +2852,7 @@ class ControllerEvaluator:
 					geometry=geo_rows, rotor_asym=geo_asym,
 					**ec.sim_kwargs(), **ec.motor_lag_kwargs(), **ec.alt_integral_scorer_kwargs(),
 					**ec.imu_kwargs(), **ec.att_ref_kwargs(), **ec.stress_kwargs(), **ec.anchor_kwargs(),
-					**alloc_kwargs, **stage1_kwargs)
+					**alloc_kwargs, **stage1_kwargs, **spread_kw)
 		except Exception as e:
 			# Kept for score_population: a swallowed scorer error made dropconst s3's headline
 			# held-out die in the Python loop with the real cause lost (10/11/2026).

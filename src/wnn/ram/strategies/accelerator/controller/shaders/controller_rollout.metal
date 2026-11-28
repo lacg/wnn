@@ -100,6 +100,15 @@ constant bool YLEAD = is_function_constant_defined(FC_YAW_LEAD) ? FC_YAW_LEAD : 
 constant bool FC_ACTUATOR_EXT [[function_constant(7)]];
 constant bool ACT_EXT = is_function_constant_defined(FC_ACTUATOR_EXT) ? FC_ACTUATOR_EXT : false;
 
+// ABI 68 (CTRL-87): a training-spread SEARCH pool — every episode's buffer-30 record is 7
+// floats and the 7th is its PLANT lag T_e (train_lag_range.rs; the twins keep
+// twin_settling_time_s). A specialization, not a Params flag: reading the plant lag from a
+// runtime-selected value changes the codegen of the lag filter even when it selects the
+// fixed lag (measured: the ctrl86 Metal pin moved), so FC_EP_LAG=true is set ONLY under a
+// spread and every other pipeline dead-strips it ⇒ the ABI-66 codegen.
+constant bool FC_EP_LAG [[function_constant(8)]];
+constant bool EP_LAG = is_function_constant_defined(FC_EP_LAG) ? FC_EP_LAG : false;
+
 // One rotor of the geometry buffer — 48 B, all-float, mirrors the Rust-side
 // RotorGpu upload. k_thrust is the EFFECTIVE coefficient (nominal x per-rotor
 // asym baked at upload; tilt/position error arrive as a perturbed table), so
@@ -1672,7 +1681,10 @@ kernel void controller_rollout(
 	// Indexing it by the chunk-local e (until 09/11/2026) replayed episodes
 	// 0..chunk-1's z/vz/mass/collective/x/y in every later chunk — the GPU scored
 	// only `chunk` (25) distinct translational draws, the CPU scorer all of them.
-	uint ep_v = (P.dist_ep_offset + e) * 6u;
+	uint ep_v = (P.dist_ep_offset + e) * (EP_LAG ? 7u : 6u); // CTRL-87: 7 floats under a lag spread
+	// CTRL-87 (ABI 68): this episode's PLANT lag — the host-drawn T_e of a training-spread
+	// search pool (EP_LAG is only ever set with translation), else the fixed settling time.
+	float plant_settling_s = EP_LAG ? ep_vert[ep_v + 6u] : P.motor_settling_time_s;
 	float zpos = (P.translation_on != 0u) ? ep_vert[ep_v + 0u] : 0.0f;
 	float vz = (P.translation_on != 0u) ? ep_vert[ep_v + 1u] : 0.0f;
 	// STAGE 2 horizontal state (slots 4/5; zeros on a stage-1 dispatch).
@@ -2390,9 +2402,9 @@ kernel void controller_rollout(
 		// plant sees it — twin of AttitudeSim::apply_motor_lag. T<=0 => skipped
 		// entirely (bit-identical legacy path). T is the 2% SETTLING time, so
 		// the coefficient carries the 4 (4dt/T == dt/tau).
-		if (P.motor_settling_time_s > 0.0f)
+		if (plant_settling_s > 0.0f)
 		{
-			float t_eff = max(P.motor_settling_time_s, 4.0f * P.dt);
+			float t_eff = max(plant_settling_s, 4.0f * P.dt);
 			float a_lag = 4.0f * P.dt / t_eff;
 			if (!motor_filt_init)
 			{

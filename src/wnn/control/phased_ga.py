@@ -361,6 +361,7 @@ from wnn.control.evaluator import (
 	collect_student_feature_samples,
 	calib_episode_config as _calib_ec,
 	train_asym_token,
+	train_lag_token,
 	resolve_output_decode,
 )
 from wnn.control.arch_strategy import (
@@ -1133,7 +1134,8 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	                         rg_config=_rg_config(args, ec, seed),
 	                         max_train_workers=args.train_workers,
 	                         num_eval_folds=args.num_eval_folds,
-	                         score_crn=args.score_crn)
+	                         score_crn=args.score_crn,
+	                         train_spread=True)  # CTRL-87: a SEARCH evaluator
 	# H4 axis curriculum. The 7-phase driver (_run_axis_curriculum) passes a FIXED
 	# per-sub-phase mask via fixed_axes → this evaluator trains+scores on exactly
 	# those axes for the whole sub-phase. (Legacy single-stage per-gen ramp is kept
@@ -1531,7 +1533,8 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	                         rg_config=_rg_config(args, ec, seed),
 	                         max_train_workers=args.train_workers,
 	                         num_eval_folds=args.num_eval_folds,
-	                         score_crn=args.score_crn)
+	                         score_crn=args.score_crn,
+	                         train_spread=True)  # CTRL-87: a SEARCH evaluator
 	arch_cfg = default_controller_arch_config(spec)
 	arch_cfg.max_state_neurons = max(arch_cfg.max_state_neurons,
 	                                 4 * max(args.grid_state_neurons))
@@ -3442,6 +3445,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "the lineage up to ABI 65; 'nominal' = the airframe's nominal mass, the "
 	                     "information a real outer loop and the classical rivals have. A LINEAGE "
 	                     "switch: it changes training and scoring together.")
+	ap.add_argument("--train-motor-asym-mag", type=float, default=None, metavar="M",
+	                help="CTRL-87 (prereg Amendment 1): the TRAINING motor-wear spread — every "
+	                     "training episode (DAgger rollouts + per-round eval, calibration sampler, "
+	                     "MEMORY recorder) AND every GA-search scoring pool flies wear ±M instead of "
+	                     "the --disturbance preset's; the TEST units, VAL stage-select and every "
+	                     "held-out row keep the preset (±0.20 under L4C). Unset = the preset (off).")
+	ap.add_argument("--train-motor-lag-range", type=float, nargs=2, default=None, metavar=("LO", "HI"),
+	                help="CTRL-87 (ABI 68): the TRAINING motor-lag spread — every training episode "
+	                     "and every GA-search scoring episode flies its own plant lag T ~ U(LO, HI) s "
+	                     "(2%% settling time, drawn from the episode's weather seed); the teachers and "
+	                     "the WNN's actuator twin keep the nominal --motor-lag-s, and TEST / VAL / "
+	                     "held-out fly --motor-lag-s. Needs --translation, a --disturbance and a "
+	                     "symmetric lag. Unset = the fixed lag (off).")
 	ap.add_argument("--target-altitude", type=float, default=0.0,
 	                help="Stage 1: the altitude every episode holds (m).")
 	ap.add_argument("--reward-lambda-alt", type=float, default=None,
@@ -4814,7 +4830,7 @@ def episode_config_from_args(args) -> EpisodeConfig:
 		apply_motor_fault(dist, args.motor_fault)
 		print(f"[FAULT] motor fault {args.motor_fault} armed for ALL rollouts "
 		      f"(training AND scoring): fixed motor_asym={dist.motor_asym}")
-	return EpisodeConfig(
+	ec = EpisodeConfig(
 		dt=0.001, steps_per_episode=args.steps,
 		max_initial_tilt_rad=math.radians(args.tilt),
 		max_initial_yaw_rad=math.radians(args.tilt),
@@ -4856,7 +4872,17 @@ def episode_config_from_args(args) -> EpisodeConfig:
 		att_err_ref=str(getattr(args, "att_err_ref", "level")),
 		# Block 10 L3 (ABI 51): the altitude integrator, "off" = bit-identical.
 		alt_integral=str(getattr(args, "alt_integral", "off")),
+		# CTRL-87 (ABI 68): the TRAINING spread (None = off, byte-identical).
+		train_motor_asym_mag=(None if getattr(args, "train_motor_asym_mag", None) is None
+		                      else float(args.train_motor_asym_mag)),
+		train_motor_lag_range=(None if getattr(args, "train_motor_lag_range", None) is None
+		                       else tuple(float(x) for x in args.train_motor_lag_range)),
 	)
+	try:
+		ec.validate_train_spread()
+	except ValueError as e:
+		raise SystemExit(f"--train-motor-asym-mag / --train-motor-lag-range: {e}")
+	return ec
 
 
 def _apply_bptt_device(args) -> None:
@@ -5091,6 +5117,13 @@ def main():
 		print(f"[W2] disturbance={args.disturbance} armed for ALL rollouts "
 		      f"(tau_bias={ec.disturbance.tau_bias[0]:.4f} N·m, gust_sigma={ec.disturbance.gust_sigma:.4f}, "
 		      f"asym_mag=±{ec.disturbance.motor_asym_mag:.0%}, gyro_sigma={ec.disturbance.gyro_sigma})")
+	if ec.train_spread_on():
+		# CTRL-87: one greppable line — what TRAINS and SEARCHES wide, what REPORTS at the preset.
+		_lag = ec.train_motor_lag_range
+		print(f"[TRAIN-SPREAD] training + GA-search pools: wear ±{ec.train_asym_mag():.0%}, lag "
+		      + (f"T~U({_lag[0]:g}, {_lag[1]:g}) s per episode" if _lag else f"{ec.motor_lag_s:g} s fixed")
+		      + f" (teachers + actuator twin at {ec.motor_lag_s:g} s) | TEST / VAL / held-out: wear "
+		        f"±{ec.disturbance.motor_asym_mag:.0%}, lag {ec.motor_lag_s:g} s", flush=True)
 
 	# Overactuated residual mode (Phase 2): TRUE-vehicle geometry + alloc baseline.
 	_geo_base = args.base_seed if args.base_seed is not None else args.seed
@@ -5146,7 +5179,8 @@ def main():
 	                         train_ic=train_ic_token(args), **ctrl46_tokens(args),
 	                         **block10_tokens(args), refine=refine_token(args),
 	                         actuator=actuator_token(args),
-	                         anchor="nominal" if getattr(args, "anchor_mass", "true") == "nominal" else "").line())
+	                         anchor="nominal" if getattr(args, "anchor_mass", "true") == "nominal" else "",
+	                         train_lag=train_lag_token(ec)).line())
 	from wnn.control.provenance import env_header_line
 	from wnn.control.evaluator import eval_mode_from_env
 	print(env_header_line(eval_mode_from_env()), flush=True)

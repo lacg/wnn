@@ -177,6 +177,7 @@ pub(crate) fn stage2() -> Stage1Cfg
 		att_ref: crate::att_err_ref::AttErrRef::tilt(G as f64, 1.0, 1.0, 0.5236).unwrap(),
 		alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 		stress: crate::stress_opts::StressOpts::OFF,
+		ep_motor_lag: Vec::new(),
 	};
 	c.validate(EPS).expect("abi38 stage-2 fixture must validate");
 	c
