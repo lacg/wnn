@@ -1,0 +1,19 @@
+cell `all` = every episode draws wear ±30% + mass spread ±25% + plant lag T_e ~ U(0.15, 0.30) s + sensor noise ×2 at once; every model (WNN twin, rival designs) stays at the nominal 0.20 s · TEST, 35 CF2.1 units × 100 eps
+WNN rows: seeds s1|s2|s3.. then the arm's mean μ / total Σ over the seeds scored (f = flying/not scored) · rival rows: one deterministic controller, one value
+cell / controller                  | stable %                                     | err °                             | steady °                          | fails /3500
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ALL joint-OOD · MPCOF eq-info      | 98.40                                        | 1.247                             | 0.407                             | 56
+ALL joint-OOD · WNN l2b            | 92.45|94.00|93.48|90.02|94.02  μ92.79        | 2.21|2.00|2.14|2.95|2.12  μ2.283  | 1.02|0.88|1.19|2.51|1.09  μ1.339  | 264|210|228|349|209  Σ1260
+ALL joint-OOD · WNN l2bnm          | 94.37|93.85|93.62  μ93.94                    | 1.99|2.06|2.05  μ2.035            | 0.90|0.95|0.87  μ0.909            | 197|215|223  Σ635
+ALL joint-OOD · WNN l2bnmw         | 96.85|97.20|96.40  μ96.81                    | 1.86|1.78|1.80  μ1.811            | 0.80|0.73|0.64  μ0.721            | 110|98|126  Σ334
+ALL joint-OOD · MPCOF est-fed      | 95.88                                        | 2.062                             | 1.064                             | 144
+ALL joint-OOD · PID firmware       | 61.82                                        | 4.777                             | 3.752                             | 1336
+ALL joint-OOD · LQI                | 52.28                                        | 5.507                             | 2.724                             | 1670
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+in range (TEST) · MPCOF eq-info    | 100.00                                       | 0.691                             | 0.165                             | 0
+in range (TEST) · WNN l2b          | 100.00|100.00|100.00|99.94|100.00  μ99.98    | 0.97|0.96|1.01|1.00|1.00  μ0.987  | 0.26|0.26|0.27|0.27|0.29  μ0.268  | 0|0|0|2|0  Σ2
+in range (TEST) · WNN l2bnm        | 100.00|100.00|100.00  μ100.00                | 1.00|1.05|0.98  μ1.011            | 0.31|0.32|0.29  μ0.305            | 0|0|0  Σ0
+in range (TEST) · WNN l2bnmw       | 100.00|99.97|100.00  μ99.99                  | 1.11|1.16|1.13  μ1.131            | 0.41|0.46|0.41  μ0.425            | 0|1|0  Σ1
+in range (TEST) · MPCOF est-fed    | 100.00                                       | 1.352                             | 0.684                             | 0
+in range (TEST) · PID firmware     | 91.14                                        | 3.332                             | 2.759                             | 310
+in range (TEST) · LQI              | 79.11                                        | 3.923                             | 2.063                             | 731
