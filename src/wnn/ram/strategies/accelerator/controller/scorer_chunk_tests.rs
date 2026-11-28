@@ -75,6 +75,7 @@ fn stage2_full() -> Stage1Cfg
 		alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 		stress: crate::stress_opts::StressOpts::OFF,
 		ep_motor_lag: Vec::new(),
+		ep_plant: crate::plant_jitter::EpisodePlant::OFF,
 	};
 	c.validate(EPS).expect("chunk fixture must validate");
 	c

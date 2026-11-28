@@ -251,6 +251,8 @@ fn q_scale(q: [f32; 4], s: f32) -> [f32; 4]
 //   7 = TRAINING per-episode motor asym δ (ram_core::counter_rng layer 7, index = motor)
 //   8 = TRAINING per-episode motor lag T  (ram_core::counter_rng layer 8; HOST-side only —
 //       the Metal scorer reads the drawn T from buffer 30, train_lag_range.rs, CTRL-87)
+//   9 = per-episode plant inertia scale    (counter_rng layer 9; host-side, plant_jitter.rs)
+//  10 = per-episode control latency steps  (counter_rng layer 10; host-side, plant_jitter.rs)
 //  15 = per-episode seed derivation      (axis 0, k 0; step = episode index)
 // =============================================================================
 
@@ -275,6 +277,10 @@ pub const DIST_CH_MOTOR_ASYM: u32 = 7;
 /// CTRL-87 (ABI 68): the per-episode TRAINING motor-lag draw (train_lag_range.rs) — one
 /// uniform per episode on ram_core::counter_rng with this id as the layer. Host-side only.
 pub const DIST_CH_MOTOR_LAG: u32 = 8;
+/// CTRL-89 (ABI 70): the per-episode plant INERTIA scale and CONTROL LATENCY draws
+/// (plant_jitter.rs) — one uniform each per episode on ram_core::counter_rng. Host-side only.
+pub const DIST_CH_INERTIA: u32 = 9;
+pub const DIST_CH_LATENCY: u32 = 10;
 pub const DIST_CH_EP_SEED: u32 = 15;
 
 // 2π as the SAME f32 literal used in the Metal twin (DIST_TWO_PI) so Box-Muller
@@ -464,8 +470,19 @@ pub struct AttitudeSim
 	arm_length: f32,   // motor-to-CG distance L (m)
 	k_thrust: f32,     // N per pwm² unit (so pwm=1.0 → k_thrust N per motor)
 	k_drag: f32,       // yaw-drag-torque to thrust ratio (dimensionless)
-	inertia: [f32; 3], // diagonal inertia tensor (Ixx, Iyy, Izz) in kg·m²
+	inertia: [f32; 3], // diagonal inertia tensor (Ixx, Iyy, Izz) in kg·m² — the PLANT's
 	gravity: f32,      // m/s² (default 9.81)
+	// CTRL-89 (ABI 70): the as-built inertia; set_inertia_scale_core flies nominal × s
+	// (absolute, so a reused sim never compounds episodes). Never read otherwise.
+	inertia_nominal: [f32; 3],
+	// CTRL-89 (ABI 70): CONTROL LATENCY — the plant receives the command issued
+	// `cmd_delay_steps` physics steps earlier (plant_jitter.rs). 0 ⇒ the ring is never
+	// touched (the ABI-68 actuator, bit-identical). The delay persists across reset like
+	// the motor lag; the ring is episode-scoped (re-seeded with the first command).
+	cmd_delay_steps: u32,
+	cmd_ring: [[f32; 4]; crate::plant_jitter::MAX_LATENCY_STEPS as usize],
+	cmd_ring_pos: u32,
+	cmd_ring_init: bool,
 
 	// STAGE 1 TRANSLATION (scope C, 13/08/2026): vertical DOF only — z, vz,
 	// mass. v̇z = (ΣT·cosθ)/m − g with cosθ = R33 = 1 − 2(qx² + qy²), integrated
@@ -1013,6 +1030,11 @@ impl AttitudeSim
 			k_drag,
 			inertia,
 			gravity,
+			inertia_nominal: inertia,
+			cmd_delay_steps: 0,
+			cmd_ring: [[0.0; 4]; crate::plant_jitter::MAX_LATENCY_STEPS as usize],
+			cmd_ring_pos: 0,
+			cmd_ring_init: false,
 			// Translation OFF by default ⇒ every pre-13/08 result reproduces bit-identically.
 			translation_enabled: false,
 			mass: 0.0,
@@ -1056,6 +1078,10 @@ impl AttitudeSim
 		// next episode (see apply_motor_lag), so no cross-episode carry.
 		self.motor_filt = [0.0; 8];
 		self.motor_filt_init = false;
+		// CTRL-89: the latency ring is episode-scoped like the lag filter (re-seeded with
+		// the next episode's first command); the delay itself persists.
+		self.cmd_ring_pos = 0;
+		self.cmd_ring_init = false;
 		// Vertical state is episode-scoped like q/omega; ICs via set_vertical_state().
 		// mass persists (a plant parameter, like inertia).
 		self.z = 0.0;
@@ -3458,9 +3484,67 @@ impl AttitudeSim
 	/// the clamped command unchanged, the bit-identical legacy path).
 	fn actuate(&mut self, motor_pwm: [f32; 4]) -> [f32; 4]
 	{
+		// CTRL-89 (ABI 70): the control latency sits FIRST — between the controller's
+		// command (which every controller has already recorded) and the actuator.
+		let motor_pwm = if self.cmd_delay_steps > 0 { self.delay_command(motor_pwm) } else { motor_pwm };
 		let cmd = motor_pwm.map(|p| p.clamp(self.pwm_min, 1.0));
 		let lagged = self.apply_motor_lag(&cmd, 4);
 		[lagged[0], lagged[1], lagged[2], lagged[3]]
+	}
+
+	/// CTRL-89: the command issued `cmd_delay_steps` steps ago (the episode's first command
+	/// before then). The ring holds exactly `cmd_delay_steps` commands: read the oldest slot,
+	/// overwrite it with this one, advance — a delay of exactly n steps.
+	fn delay_command(&mut self, cmd: [f32; 4]) -> [f32; 4]
+	{
+		let n = self.cmd_delay_steps as usize;
+		if !self.cmd_ring_init
+		{
+			for slot in self.cmd_ring[..n].iter_mut()
+			{
+				*slot = cmd;
+			}
+			self.cmd_ring_pos = 0;
+			self.cmd_ring_init = true;
+		}
+		let pos = self.cmd_ring_pos as usize;
+		let out = self.cmd_ring[pos];
+		self.cmd_ring[pos] = cmd;
+		self.cmd_ring_pos = if pos + 1 == n { 0 } else { (pos + 1) as u32 };
+		out
+	}
+
+	/// CTRL-89 (ABI 70): this episode's control latency in physics steps (plant_jitter.rs
+	/// validated it <= MAX_LATENCY_STEPS). Re-seeds the ring; 0 ⇒ no delay.
+	pub(crate) fn set_control_latency_core(&mut self, steps: u32)
+	{
+		debug_assert!(steps <= crate::plant_jitter::MAX_LATENCY_STEPS);
+		self.cmd_delay_steps = steps.min(crate::plant_jitter::MAX_LATENCY_STEPS);
+		self.cmd_ring_pos = 0;
+		self.cmd_ring_init = false;
+	}
+
+	/// CTRL-89: the configured control latency (steps). 0 = off.
+	#[cfg(test)]
+	pub(crate) fn control_latency_steps(&self) -> u32
+	{
+		self.cmd_delay_steps
+	}
+
+	/// CTRL-89 (ABI 70): fly the PLANT at the as-built inertia × s (joint diagonal scale).
+	/// Absolute, not cumulative. Every model of the vehicle keeps its own nominal inertia.
+	pub(crate) fn set_inertia_scale_core(&mut self, s: f32)
+	{
+		debug_assert!(s.is_finite() && s > 0.0);
+		let n = self.inertia_nominal;
+		self.inertia = [n[0] * s, n[1] * s, n[2] * s];
+	}
+
+	/// CTRL-89: the plant's current inertia diagonal (kg·m²).
+	#[cfg(test)]
+	pub(crate) fn plant_inertia(&self) -> [f32; 3]
+	{
+		self.inertia
 	}
 
 	/// TEST-ONLY: one actuator step (clamp + lag) without the physics.

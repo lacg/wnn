@@ -57,16 +57,35 @@ PLANT_MAP = {
 	                  # ABI 69 (cell `all`): the per-episode plant-lag range. Same range + same dist_seed +
 	                  # same episode count (init_qs) on both calls => the identical T_e per episode (one Rust
 	                  # draw function; pinned by ctrl83_all_cell_tests point-range == fixed-plant identities).
-	                  "train_motor_lag_range")},
+	                  "train_motor_lag_range",
+	                  # ABI 70 (CTRL-89): the per-episode joint inertia scale + control latency. Both
+	                  # sides draw them from dist_seed per episode, so equal kwargs = equal draws.
+	                  "inertia_jitter", "control_latency_ms")},
 	"target_altitude": "s1_target_altitude", "init_z": "s1_init_z", "init_vz": "s1_init_vz",
 	"ep_mass": "s1_mass", "ep_collective_frac": "s1_collective_frac", "init_x": "s2_init_x",
 	"init_y": "s2_init_y", "pos_omega": "pos_omega_n",
 }
 # Which WNN kwarg each axis must move (G3).
 AXIS_KW = {"wear": ("dist_motor_asym",), "mass": ("ep_mass",), "lag": ("motor_lag_s",), "noise": ("dist_gyro_sigma",),
+           "inertia": ("inertia_jitter",), "latency": ("control_latency_ms",),  # CTRL-89 (ABI 70)
            "payload": ("payload_step_s",),
-           # cell `all`: every stressed parameter must reach the call at once.
+           # cell `all`: every stressed parameter must reach the call at once (+ the CTRL-89 ones
+           # whenever cells.ALL_LEVELS carries them — _joint_jitter_levels below).
            "joint": ("dist_motor_asym", "ep_mass", "dist_gyro_sigma", "train_motor_lag_range")}
+
+
+def _joint_jitter_levels():
+	"""CTRL-89 (ABI 70): {WNN kwarg: level} of the inertia / latency stress cell `all` carries,
+	read from cells.ALL_LEVELS (empty while the cell does not stress them)."""
+	lv = C.ALL_LEVELS
+	out = {}
+	j = next((lv[k] for k in ("inertia", "inertia_jitter") if k in lv), None)
+	if j is not None and float(j) != 0.0:
+		out["inertia_jitter"] = float(j)
+	r = next((lv[k] for k in ("latency_ms", "latency", "control_latency_ms") if k in lv), None)
+	if r is not None:
+		out["control_latency_ms"] = tuple(float(x) for x in r)
+	return out
 
 
 def die(msg):
@@ -229,6 +248,12 @@ def score_wnn(controller, cell):
 					die(f"{cell}: motor_lag_s {wkw.get('motor_lag_s')} is not the nominal lag the twin keeps")
 				if not np.allclose(as_arr(wkw.get("train_motor_lag_range")), C.ALL_LEVELS["lag_range"]):
 					die(f"{cell}: train_motor_lag_range {wkw.get('train_motor_lag_range')} != {C.ALL_LEVELS['lag_range']}")
+				# CTRL-89 (ABI 70): the inertia / latency levels the cell carries reached the call
+				# (G2 above already holds the rival to the same kwargs).
+				for kw, want in _joint_jitter_levels().items():
+					got = as_arr(wkw.get(kw))
+					if got is None or got.shape != as_arr(want).shape or not np.allclose(got, as_arr(want)):
+						die(f"{cell}: {kw} {wkw.get(kw)} != the cell's level {want}")
 		st = float(row[2])
 		U.append([unit, st, math.degrees(row[1]), math.degrees(row[5]), m.mean_position_error_m, m.mean_altitude_error_m,
 		          m.mean_position_hold_m, round((1 - st) * a.test_episodes)])

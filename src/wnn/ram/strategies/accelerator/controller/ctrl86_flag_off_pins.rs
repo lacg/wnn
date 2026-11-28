@@ -238,7 +238,7 @@ pub(crate) fn rival_kw_lag(
 		2.0, 1.0, 0.25,
 		s1.init_x.clone(), s1.init_y.clone(), 1.0, 1.0, 0.5236,
 		lag, true, ROTOR_DRAG, true, if teacher == 3 { 0 } else { 10 }, 0, None, s1.plant.motor_lag_down_s, s1.plant.pwm_min,
-		kw.model_motor_lag_s, kw.payload_step_s, kw.payload_mass_scale, range,
+		kw.model_motor_lag_s, kw.payload_step_s, kw.payload_mass_scale, range, 0.0, None,
 	)
 	.map(crate::dagger_train::rival_first8)
 }

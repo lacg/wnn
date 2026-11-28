@@ -287,6 +287,11 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	"controller_pwm_min",           # ABI 65 (CTRL-86 S2): armed-idle pwm floor (phased_ga-only, refused here)
 	"controller_train_motor_asym_mag",   # CTRL-87: training + search wear spread ±M (phased_ga-only, refused here)
 	"controller_train_motor_lag_range",  # ABI 68 (CTRL-87): training + search lag spread [lo, hi] s (phased_ga-only, refused here)
+	"controller_train_inertia_jitter",   # ABI 70 (CTRL-89): training + search joint inertia spread ±J (phased_ga-only, refused here)
+	"controller_train_latency_range",    # ABI 70 (CTRL-89): training + search control latency [lo, hi] ms (phased_ga-only, refused here)
+	"controller_train_mass_jitter",      # ABI 70: training + search mass spread ±M (phased_ga-only, refused here)
+	"controller_train_noise_scale",      # ABI 70: training + search sensor-noise multiplier (phased_ga-only, refused here)
+	"controller_train_motor_asym_range", # ABI 70: training + search per-motor wear factor U(lo, hi) (phased_ga-only, refused here)
 	"controller_delta_leak_yaw",  # ABI 63 (CTRL-74): the yaw bank's own output leak (None = --delta-leak)
 	"controller_delta_max_yaw",
 	"controller_yaw_trim_ff",  # ABI 58: yaw-rate feed-forward cT*cresid_z on the CTBR yaw setpoint  # ABI 57: the yaw bank's own delta_max (None = --delta-max)  # lever 1 (ABI 55): yaw heading from the student's Mahony estimate

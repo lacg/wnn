@@ -544,13 +544,101 @@ class EpisodeConfig:
 	# both WNN scorers and score_classical_baseline — never to the trainer. Every controller's
 	# model (the WNN twin, the rivals' designs) stays at motor_lag_s. None = off (byte-identical).
 	stress_motor_lag_range: tuple | None = None
+	# --- CTRL-89 (ABI 70): per-episode plant INERTIA scaling and CONTROL LATENCY (Rust
+	# plant_jitter.rs). Inertia: ONE joint draw s_e ~ U(1 - j, 1 + j) scales the plant's whole
+	# diagonal; every design model (teachers, MPCOF/LQI, the cascade d-hat constants) keeps the
+	# nominal inertia. Latency: the plant receives the command issued n_e physics steps
+	# earlier, n_e uniform over the integers in [round(lo/dt), round(hi/dt)] (lo, hi in ms,
+	# <= 32 steps), after every controller's own record of its command — no controller is told.
+	# Both are drawn from the episode's weather seed, so the WNN and rival scorers (and CPU /
+	# Metal) fly identical draws. Need translation and a disturbance.
+	# The STRESS plant (scorer-side, like model_motor_lag_s / payload_step_s): every scorer —
+	# both WNN scorers and score_classical_baseline — flies it via stress_kwargs(); the trainer
+	# never does. 0.0 / None = off (byte-identical calls). A stress cell sets these two:
+	#   dataclasses.replace(ec, inertia_jitter=0.20, control_latency_ms=(8.0, 12.0))
+	# (the proposed golden-cell values: Zhang 2022's test = train x0.8 / x1.2 rule on the nominal
+	# inertia and on Zhang's own 10 ms latency). Score both sides from the SAME ec: the WNN via
+	# ControllerEvaluator.score_genomes, the rivals via classical_baseline.teacher_metrics.
+	inertia_jitter: float = 0.0
+	control_latency_ms: tuple | None = None
+	# The TRAINING spread (--train-inertia-jitter / --train-latency-range, the CTRL-87 pattern):
+	# every training host (train_jitter_kwargs -> RewardGatedConfigPacked) and every GA-search
+	# pool (search_jitter_kwargs, overriding the stress fields) fly it; TEST / VAL / held-out
+	# keep the fields above. None = off.
+	train_inertia_jitter: float | None = None
+	train_latency_ms: tuple | None = None
+	# --- Golden-cell training ranges (ABI 70, Python-only — the CTRL-87 pattern): the TRAINING
+	# plant (DAgger + per-round eval, calibration sampler, MEMORY recorder) and every GA-search
+	# pool fly these; TEST / VAL stage-select / held-out keep mass_jitter and the preset.
+	#   train_mass_jitter     the per-episode mass spread ±M in place of mass_jitter
+	#                         (--train-mass-jitter; --mass-jitter moves the report pools too).
+	#   train_noise_scale     a multiplier on the preset's sensor noise (gyro_sigma,
+	#                         gyro_bias_walk, accel_sigma — the stress cell's _noise(k)).
+	#   train_motor_asym_range  (lo, hi): per-motor wear factor U(lo, hi) x the preset base,
+	#                         spelled as base' = base * (lo + hi)/2, mag = (hi - lo)/(hi + lo)
+	#                         (the Rust draw is base' * (1 + U(-mag, +mag))); excludes
+	#                         train_motor_asym_mag.
+	# None = off (byte-identical).
+	train_mass_jitter: float | None = None
+	train_noise_scale: float | None = None
+	train_motor_asym_range: tuple | None = None
+
+	def train_jitter_kwargs(self) -> dict:
+		"""CTRL-89: `train_inertia_jitter=` / `train_latency_ms=` for RewardGatedConfigPacked, each
+		only when set (every existing config stays byte-identical)."""
+		out = {}
+		if self.train_inertia_jitter is not None:
+			out["train_inertia_jitter"] = float(self.train_inertia_jitter)
+		if self.train_latency_ms is not None:
+			out["train_latency_ms"] = (float(self.train_latency_ms[0]), float(self.train_latency_ms[1]))
+		return out
+
+	def search_jitter_kwargs(self) -> dict:
+		"""CTRL-89: the training jitter spelled as the SCORER kwargs (`inertia_jitter=` /
+		`control_latency_ms=`) for a GA-search pool; empty when off."""
+		out = {}
+		if self.train_inertia_jitter is not None:
+			out["inertia_jitter"] = float(self.train_inertia_jitter)
+		if self.train_latency_ms is not None:
+			out["control_latency_ms"] = (float(self.train_latency_ms[0]), float(self.train_latency_ms[1]))
+		return out
+
+	def _validate_jitter(self, j, r, what: str) -> None:
+		"""CTRL-89 refusals (the Rust hosts refuse the same: plant_jitter.rs)."""
+		if j is not None and not (math.isfinite(float(j)) and 0.0 <= float(j) < 1.0):
+			raise ValueError(f"{what} inertia jitter must be in [0, 1), got {j}")
+		if r is not None:
+			lo, hi = float(r[0]), float(r[1])
+			if not (math.isfinite(lo) and math.isfinite(hi) and 0.0 <= lo <= hi):
+				raise ValueError(f"{what} latency range must be finite with 0 <= lo <= hi (ms), got ({lo}, {hi})")
+			if round(hi * 1e-3 / float(self.dt)) > 32:
+				raise ValueError(f"{what} latency {hi} ms exceeds the 32-step command ring at dt {self.dt} s")
+		on = (j is not None and float(j) != 0.0) or r is not None
+		if on and (not self.translation or self.disturbance is None):
+			raise ValueError(f"{what} inertia jitter / latency need translation and a disturbance "
+			                 "(their draws are keyed on the weather seed)")
 
 	def train_asym_mag(self) -> float:
-		"""The TRAINING plant's wear magnitude: --train-motor-asym-mag when set, else the
-		disturbance preset's (0 with no disturbance)."""
+		"""The TRAINING plant's wear magnitude: --train-motor-asym-mag when set, the
+		--train-motor-asym-range half-width ratio when that is, else the disturbance preset's
+		(0 with no disturbance)."""
 		if self.train_motor_asym_mag is not None:
 			return float(self.train_motor_asym_mag)
+		if self.train_motor_asym_range is not None:
+			lo, hi = (float(x) for x in self.train_motor_asym_range)
+			return (hi - lo) / (hi + lo)
 		return float(self.disturbance.motor_asym_mag) if self.disturbance is not None else 0.0
+
+	def train_mass_jitter_value(self) -> float:
+		"""The TRAINING / search plant's mass spread: --train-mass-jitter, else mass_jitter."""
+		return float(self.mass_jitter if self.train_mass_jitter is None else self.train_mass_jitter)
+
+	def train_vertical_ec(self):
+		"""The config the TRAINING / search vertical draws (sample_vertical_ics_flat, the
+		trainer's mass_jitter) read: self when --train-mass-jitter is unset (byte-identical)."""
+		if self.train_mass_jitter is None:
+			return self
+		return dataclasses.replace(self, mass_jitter=float(self.train_mass_jitter))
 
 	def train_lag_kwargs(self) -> dict:
 		"""`train_motor_lag_range=` for RewardGatedConfigPacked and the SEARCH scorers; empty
@@ -559,23 +647,40 @@ class EpisodeConfig:
 		return {} if r is None else {"train_motor_lag_range": (float(r[0]), float(r[1]))}
 
 	def train_spread_on(self) -> bool:
-		return self.train_motor_asym_mag is not None or self.train_motor_lag_range is not None
+		return (self.train_motor_asym_mag is not None or self.train_motor_lag_range is not None
+		        or self.train_inertia_jitter is not None or self.train_latency_ms is not None
+		        or self.train_mass_jitter is not None or self.train_noise_scale is not None
+		        or self.train_motor_asym_range is not None)
 
 	def search_disturbance(self):
-		"""The disturbance a GA SEARCH pool flies: the preset with the training wear magnitude
-		(the same object when --train-motor-asym-mag is unset)."""
-		if self.disturbance is None or self.train_motor_asym_mag is None:
-			return self.disturbance
-		return dataclasses.replace(self.disturbance, motor_asym_mag=float(self.train_motor_asym_mag))
+		"""The disturbance the TRAINING plant and a GA SEARCH pool fly: the preset with the
+		training wear (magnitude or range) and the training noise scale (the same object when
+		none of --train-motor-asym-mag / --train-motor-asym-range / --train-noise-scale is set)."""
+		d = self.disturbance
+		if d is None:
+			return d
+		ch = {}
+		if self.train_motor_asym_mag is not None:
+			ch["motor_asym_mag"] = float(self.train_motor_asym_mag)
+		if self.train_motor_asym_range is not None:
+			lo, hi = (float(x) for x in self.train_motor_asym_range)
+			ch["motor_asym"] = tuple(float(b) * 0.5 * (lo + hi) for b in d.motor_asym)
+			ch["motor_asym_mag"] = (hi - lo) / (hi + lo)
+		if self.train_noise_scale is not None:
+			k = float(self.train_noise_scale)
+			ch.update(gyro_sigma=d.gyro_sigma * k, gyro_bias_walk=d.gyro_bias_walk * k, accel_sigma=d.accel_sigma * k)
+		return dataclasses.replace(d, **ch) if ch else d
 
 	def validate_train_spread(self) -> None:
-		"""CTRL-87 refusals (the Rust hosts refuse the same lag-range hosts)."""
+		"""CTRL-87 refusals (the Rust hosts refuse the same lag-range hosts) + CTRL-89's."""
+		self._validate_jitter(self.train_inertia_jitter, self.train_latency_ms, "train")
 		mag = self.train_motor_asym_mag
 		if mag is not None:
 			if self.disturbance is None:
 				raise ValueError("train_motor_asym_mag needs a disturbance (the wear rides on it)")
 			if not (math.isfinite(float(mag)) and 0.0 <= float(mag) < 1.0):
 				raise ValueError(f"train_motor_asym_mag must be in [0, 1), got {mag}")
+		self._validate_train_ranges()
 		r = self.train_motor_lag_range
 		if r is None:
 			return
@@ -588,6 +693,30 @@ class EpisodeConfig:
 			raise ValueError("train_motor_lag_range needs a symmetric, floor-free actuator (motor_lag_down_s / pwm_min set)")
 		if not self.translation or self.disturbance is None:
 			raise ValueError("train_motor_lag_range needs translation and a disturbance (its draw is keyed on the weather seed)")
+
+	def _validate_train_ranges(self) -> None:
+		"""Refusals for --train-mass-jitter / --train-noise-scale / --train-motor-asym-range."""
+		m = self.train_mass_jitter
+		if m is not None:
+			if not (math.isfinite(float(m)) and 0.0 <= float(m) < 1.0):
+				raise ValueError(f"train_mass_jitter must be in [0, 1), got {m}")
+			if not self.translation:
+				raise ValueError("train_mass_jitter needs translation (mass is a stage-1 plant draw)")
+		k = self.train_noise_scale
+		if k is not None:
+			if not (math.isfinite(float(k)) and float(k) >= 0.0):
+				raise ValueError(f"train_noise_scale must be finite and >= 0, got {k}")
+			if self.disturbance is None:
+				raise ValueError("train_noise_scale needs a disturbance (the sensor noise rides on it)")
+		r = self.train_motor_asym_range
+		if r is not None:
+			lo, hi = (float(x) for x in r)
+			if not (math.isfinite(lo) and math.isfinite(hi) and 0.0 < lo <= hi):
+				raise ValueError(f"train_motor_asym_range must be finite with 0 < lo <= hi, got ({lo}, {hi})")
+			if self.train_motor_asym_mag is not None:
+				raise ValueError("train_motor_asym_range and train_motor_asym_mag are exclusive (one wear spread)")
+			if self.disturbance is None:
+				raise ValueError("train_motor_asym_range needs a disturbance (the wear rides on it)")
 
 	def stress_kwargs(self) -> dict:
 		"""CTRL-83 D1 + D3 for the SCORERS (both WNN scorers and score_classical_baseline,
@@ -615,6 +744,13 @@ class EpisodeConfig:
 			out["train_motor_lag_range"] = (lo, hi)
 		if out and not self.translation:
 			raise ValueError("EpisodeConfig.model_motor_lag_s / payload_step_s require translation=True")
+		# CTRL-89 (ABI 70): the stress plant's inertia scale / control latency, each only when set.
+		if float(self.inertia_jitter) != 0.0 or self.control_latency_ms is not None:
+			self._validate_jitter(float(self.inertia_jitter), self.control_latency_ms, "EpisodeConfig")
+			if float(self.inertia_jitter) != 0.0:
+				out["inertia_jitter"] = float(self.inertia_jitter)
+			if self.control_latency_ms is not None:
+				out["control_latency_ms"] = (float(self.control_latency_ms[0]), float(self.control_latency_ms[1]))
 		return out
 
 	def anchor_nominal(self) -> bool:
@@ -852,9 +988,17 @@ def refuse_python_abi32_plant(config, site: str) -> None:
 		return
 	real_life = ("rotor_drag", "motor_lag_down_s", "pwm_min")  # CTRL-86: + the actuator extras
 	# CTRL-87: the training spread lives only on the Rust hosts too.
-	if getattr(config, "train_motor_asym_mag", None) is not None or getattr(config, "train_motor_lag_range", None) is not None:
+	if any(getattr(config, k, None) is not None for k in (
+			"train_motor_asym_mag", "train_motor_lag_range", "train_mass_jitter", "train_noise_scale",
+			"train_motor_asym_range")):
 		raise NotImplementedError(f"{site}: the CTRL-87 training spread (train_motor_asym_mag / "
-		                          "train_motor_lag_range) is flown by the Rust trainer and scorers only")
+		                          "train_motor_lag_range / train_mass_jitter / train_noise_scale / "
+		                          "train_motor_asym_range) is flown by the Rust trainer and scorers only")
+	# CTRL-89: so is the plant jitter (inertia scale / control latency), stress or training.
+	if (float(getattr(config, "inertia_jitter", 0.0) or 0.0) != 0.0 or getattr(config, "control_latency_ms", None) is not None
+			or getattr(config, "train_inertia_jitter", None) is not None or getattr(config, "train_latency_ms", None) is not None):
+		raise NotImplementedError(f"{site}: the CTRL-89 plant jitter (inertia_jitter / control_latency_ms / "
+		                          "train_inertia_jitter / train_latency_ms) is flown by the Rust trainer and scorers only")
 	if getattr(config, "imu_specific_force", False) or any(
 			float(getattr(config, k, 0.0) or 0.0) > 0.0 for k in real_life):
 		raise NotImplementedError(

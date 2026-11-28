@@ -111,6 +111,7 @@ pub(crate) fn pin_translation_cfg(xy: f32) -> RewardGatedConfigPacked
 		0.0, 0.0, // CTRL-86: motor_lag_down_s, pwm_min off
 		false, // CTRL-83 D2: anchor_nominal_mass off (true-mass anchor)
 		None, // CTRL-87: train_motor_lag_range off (the fixed lag)
+		0.0, None, // CTRL-89: train plant jitter off
 	)
 	.expect("pin config must validate");
 	c.teacher = 0;

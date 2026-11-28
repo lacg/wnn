@@ -86,7 +86,9 @@ def _recorder_plant_kwargs(ec, num_episodes: int, seed: int, teacher: str = "pid
 		return {}
 	from .training import sample_vertical_ics_flat
 	af = getattr(ec, "airframe", None)
-	z0, vz0, coll, mass = sample_vertical_ics_flat(seed, num_episodes, ec)
+	# The recorder is a TRAINING host: --train-mass-jitter when set (ec itself otherwise).
+	v_ec = ec.train_vertical_ec() if hasattr(ec, "train_vertical_ec") else ec
+	z0, vz0, coll, mass = sample_vertical_ics_flat(seed, num_episodes, v_ec)
 	af_mass = float(af.mass) if af is not None else 1.0
 	plant = dict(
 		s1_target_altitude=float(getattr(ec, "target_altitude", 0.0)),

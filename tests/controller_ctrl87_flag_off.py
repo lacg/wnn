@@ -1,8 +1,9 @@
-"""CTRL-87 (ABI 68): the cf21 FLAG-OFF pin vs ABI 66, measured across the two builds on the
+"""CTRL-87 (ABI 68): the cf21 FLAG-OFF pin vs the PREVIOUS build (ABI 66 when written), measured across the two builds on the
 flown l2b recipe — the CTRL-86 harness (tests/controller_ctrl86_flag_off.py: the same argv, the
 same shrink, the same dump), re-pointed two ABIs up (67 is the per-bank-width branch's):
-  ABI 66: $CTRL87_BASE_PYTHONPATH (the ABI-66 src tree; the ABI-66 wheel = the venv's);
-  ABI 68: this tree with the ABI-68 wheel first on PYTHONPATH.
+  previous: $CTRL87_BASE_PYTHONPATH (the previous src tree; its wheel = the venv's, or first on the
+            path); $CTRL87_BASE_ABI pins which ABI that must be (optional);
+  this:     this tree with its own wheel first on PYTHONPATH (ABI = this tree's EXPECTED_ABI).
 Every dump is EQUAL with neither --train-motor-asym-mag nor --train-motor-lag-range: feature
 names, fitted thresholds, calibration token, resolved ctbr, every parsed argument (minus the two
 new keys, which must resolve to None), the provenance tokens, 40 steps of features, the
@@ -31,7 +32,10 @@ import controller_ctrl86_flag_off as H  # noqa: E402  the CTRL-86 harness (argv,
 
 VARIANTS = {"off": [], "nominal": ["--train-motor-asym-mag", "0.2", "--train-motor-lag-range", "0.20", "0.20"],
             "spread": ["--train-motor-asym-mag", "0.30", "--train-motor-lag-range", "0.15", "0.30"]}
-NEW_KEYS = ("anchor_mass", "train_motor_asym_mag", "train_motor_lag_range")
+NEW_KEYS = ("anchor_mass", "train_motor_asym_mag", "train_motor_lag_range",
+            # later arguments a previous build may lack (they must resolve to None here).
+            "train_inertia_jitter", "train_latency_range", "train_mass_jitter", "train_noise_scale",
+            "train_motor_asym_range")
 
 
 def dump(variant: str) -> dict:
@@ -62,20 +66,20 @@ def _dump_in(pythonpath: str, variant: str, cpu: bool = False) -> dict:
 	return json.loads(r.stdout.strip().splitlines()[-1])
 
 
-def test_flag_off_is_abi66() -> dict:
+def test_flag_off_is_previous_build() -> dict:
+	from controller_ctrl89_flag_off import previous_build_pair
 	base_pp = os.environ.get("CTRL87_BASE_PYTHONPATH")
 	if not base_pp:
-		raise SystemExit("set CTRL87_BASE_PYTHONPATH to the ABI-66 src tree (its wheel = the venv's)")
+		raise SystemExit("set CTRL87_BASE_PYTHONPATH to the previous build's src tree (its wheel = the venv's)")
 	new_pp = os.environ.get("PYTHONPATH", H._here())
 	old, new = _dump_in(base_pp, "off"), _dump_in(new_pp, "off")
-	assert (old["_abi"], new["_abi"]) == (66, 68), (old["_abi"], new["_abi"])
-	assert old["_src"] != new["_src"], "both dumps imported the same source tree"
+	o, n = previous_build_pair(old, new, "CTRL87_BASE_ABI")
 	for key in old:
 		if not key.startswith("_"):
-			assert old[key] == new[key], f"off: {key} moved between ABI 66 and ABI 68"
+			assert old[key] == new[key], f"off: {key} moved between ABI {o} and ABI {n}"
 	assert new["_spread"] == "(None, None)", new["_spread"]
 	assert new["_new"]["train_motor_asym_mag"] == "None" and new["_new"]["train_motor_lag_range"] == "None", new["_new"]
-	print(f"✓ flag off == ABI 66: names ({len(new['names'])}), thresholds ({len(new['thresholds'])}), token, ctbr, "
+	print(f"✓ flag off == ABI {o} (this tree ABI {n}): names ({len(new['names'])}), thresholds ({len(new['thresholds'])}), token, ctbr, "
 	      f"args ({len(new['args'])}), provenance {new['prov'].get('train_asym')}, features ({len(new['features'])} steps), "
 	      f"train digest {new['train_digest']}, scorer rows {new['scorer_rows'][0]['mean_attitude_error_deg']}; "
 	      f"both new flags resolve to None")
@@ -118,7 +122,7 @@ if __name__ == "__main__":
 			d = dump(sys.argv[2])
 		print(json.dumps(d))
 		sys.exit(0)
-	off = test_flag_off_is_abi66()
+	off = test_flag_off_is_previous_build()
 	test_nominal_spelled_out()
 	test_spread_reaches_every_host(off)
-	print("\nCTRL-87: cf21 flag-off pin vs ABI 66 passed.")
+	print("\nCTRL-87: cf21 flag-off pin vs the previous build passed.")

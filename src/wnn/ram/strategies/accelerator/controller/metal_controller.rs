@@ -605,7 +605,8 @@ pub struct ControllerRolloutEvaluator
 	// the lead input needs neither the cascade blocks nor the bias predictor).
 	// ABI 65: keyed (.., act_ext) — FC_ACTUATOR_EXT(7) composes (and alone selects this map).
 	// ABI 68: keyed (.., ep_lag) — FC_EP_LAG(8) composes (and alone selects this map).
-	cascade_obs_pipeline: std::cell::RefCell<std::collections::HashMap<(bool, bool, bool, bool, bool, bool, bool), ComputePipelineState>>,
+	// ABI 70: keyed (.., ep_jit) — FC_EP_JIT(9) composes (and alone selects this map).
+	cascade_obs_pipeline: std::cell::RefCell<std::collections::HashMap<(bool, bool, bool, bool, bool, bool, bool, bool), ComputePipelineState>>,
 	/// TEST-ONLY (ABI 38 label-replay identity on the GPU): Some(firmware attitude
 	/// gains) ⇒ a CTBR population's outer setpoint is the in-kernel firmware attitude
 	/// half (ctbr_outer_pid) instead of the WNN decode.
@@ -694,9 +695,19 @@ impl ControllerRolloutEvaluator
 	/// CTRL-46: `abp` = FC_ATT_BIAS_PRED(3)=true; a constant is set ONLY when on, so the
 	/// (true, false) pipeline is the ABI-45 cascade pipeline exactly.
 	#[allow(clippy::too_many_arguments)]
-	fn cascade_obs_pipeline(&self, cas: bool, abp: bool, ytp: bool, rlo: bool, ylead: bool, act_ext: bool, ep_lag: bool) -> Result<ComputePipelineState, String>
+	fn cascade_obs_pipeline(
+		&self,
+		cas: bool,
+		abp: bool,
+		ytp: bool,
+		rlo: bool,
+		ylead: bool,
+		act_ext: bool,
+		ep_lag: bool,
+		ep_jit: bool,
+	) -> Result<ComputePipelineState, String>
 	{
-		let key = (cas, abp, ytp, rlo, ylead, act_ext, ep_lag);
+		let key = (cas, abp, ytp, rlo, ylead, act_ext, ep_lag, ep_jit);
 		if let Some(p) = self.cascade_obs_pipeline.borrow().get(&key)
 		{
 			return Ok(p.clone());
@@ -736,6 +747,11 @@ impl ControllerRolloutEvaluator
 		{
 			fcv.set_constant_value_at_index(&on as *const bool as *const _, MTLDataType::Bool, 8);
 		}
+		// ABI 70: the CTRL-89 plant jitter (set ONLY when on, so every ABI-68 key is the ABI-68 pipeline).
+		if ep_jit
+		{
+			fcv.set_constant_value_at_index(&on as *const bool as *const _, MTLDataType::Bool, 9);
+		}
 		let func = self
 			.library
 			.get_function("controller_rollout", Some(fcv))
@@ -743,7 +759,7 @@ impl ControllerRolloutEvaluator
 		let p = self
 			.device
 			.new_compute_pipeline_state_with_function(&func)
-			.map_err(|e| format!("obs pipeline creation (cascade {cas}, abp {abp}, ep_lag {ep_lag}) failed: {e}"))?;
+			.map_err(|e| format!("obs pipeline creation (cascade {cas}, abp {abp}, ep_lag {ep_lag}, ep_jit {ep_jit}) failed: {e}"))?;
 		self.cascade_obs_pipeline.borrow_mut().insert(key, p.clone());
 		Ok(p)
 	}
@@ -1105,12 +1121,28 @@ impl ControllerRolloutEvaluator
 		{
 			return Err("score_controllers_metal: train_motor_lag_range is not carried by the N-rotor geometry pipeline".into());
 		}
+		// ABI 70 (CTRL-89): per-episode plant inertia scale + control latency ([s_e, n_e] at the
+		// tail of buffer 30's record); translation-only, not on the N-rotor pipeline.
+		let ep_jit = stage1.is_some_and(|s| s.ep_jit_on());
+		if ep_jit && geometry.is_some()
+		{
+			return Err("score_controllers_metal: inertia_jitter / control_latency_ms are not carried by the N-rotor geometry pipeline".into());
+		}
 		let geom_pipeline = match geometry
 		{
 			Some(rotors) => Some(self.geometry_pipeline(rotors.len() as u32, abp_on)?),
-			None if cas_on || abp_on || ylead_on || act_ext || ep_lag =>
+			None if cas_on || abp_on || ylead_on || act_ext || ep_lag || ep_jit =>
 			{
-				Some(self.cascade_obs_pipeline(cas_on, abp_on, controllers[0].yaw_trim_p_kappa().is_some(), rlo, ylead_on, act_ext, ep_lag)?)
+				Some(self.cascade_obs_pipeline(
+					cas_on,
+					abp_on,
+					controllers[0].yaw_trim_p_kappa().is_some(),
+					rlo,
+					ylead_on,
+					act_ext,
+					ep_lag,
+					ep_jit,
+				)?)
 			}
 			None => None,
 		};
@@ -1757,6 +1789,12 @@ impl ControllerRolloutEvaluator
 	// CTRL-87 (ABI 68): twin of score_controllers_cpu's — the GA search pool's per-episode
 	// plant-lag spread (lo, hi) s, drawn host-side so CPU and Metal fly the same T_e.
 	train_motor_lag_range = None,
+	// CTRL-89 (ABI 70), translation + weather only, default-inert: inertia_jitter = the
+	// per-episode JOINT plant-inertia half-width j (s_e ~ U(1 − j, 1 + j)); control_latency_ms
+	// = the per-episode command transport delay range (lo, hi) ms, quantized to dt — both
+	// drawn host-side from the episode's weather seed (plant_jitter.rs), identically for the
+	// rivals (score_classical_baseline). Every model stays nominal. 0.0 / None ⇒ ABI 68.
+	inertia_jitter = 0.0, control_latency_ms = None,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_controllers_metal(
@@ -1840,6 +1878,8 @@ pub fn score_controllers_metal(
 	payload_mass_scale: f32,
 	anchor_mass: Option<f32>,
 	train_motor_lag_range: Option<(f32, f32)>,
+	inertia_jitter: f32,
+	control_latency_ms: Option<(f32, f32)>,
 ) -> PyResult<Vec<Vec<f64>>>
 {
 	let verr = pyo3::exceptions::PyValueError::new_err;
@@ -1862,6 +1902,17 @@ pub fn score_controllers_metal(
 	let ep_motor_lag = crate::train_lag_range::scorer_episode_lags(
 		train_motor_lag_range,
 		plant.actuator(motor_lag_s),
+		translation,
+		dist_enabled,
+		dist_seed,
+		num_episodes,
+		"score_controllers_metal",
+	)
+	.map_err(verr)?;
+	let ep_plant = crate::plant_jitter::scorer_episode_plant(
+		inertia_jitter,
+		control_latency_ms,
+		dt,
 		translation,
 		dist_enabled,
 		dist_seed,
@@ -1932,6 +1983,7 @@ pub fn score_controllers_metal(
 			alt_int,
 			stress,
 			ep_motor_lag,
+			ep_plant,
 		};
 		// CTRL-83 D2: rebase the draws ONCE, host-side, so the kernel's in-shader hover
 		// reads the same anchor the CPU scorer does (validated first: the rebase divides
@@ -10136,6 +10188,7 @@ mod tests
 			alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 			stress: crate::stress_opts::StressOpts::OFF,
 			ep_motor_lag: Vec::new(),
+			ep_plant: crate::plant_jitter::EpisodePlant::OFF,
 		};
 		s1.validate(num_eps).expect("fixture config must validate");
 
@@ -10221,6 +10274,7 @@ mod tests
 			alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 			stress: crate::stress_opts::StressOpts::OFF,
 			ep_motor_lag: Vec::new(),
+			ep_plant: crate::plant_jitter::EpisodePlant::OFF,
 		};
 		let gpu_noalt = ev
 			.score(
@@ -10314,6 +10368,7 @@ mod tests
 			alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 			stress: crate::stress_opts::StressOpts::OFF,
 			ep_motor_lag: Vec::new(),
+			ep_plant: crate::plant_jitter::EpisodePlant::OFF,
 		};
 		s2.validate(num_eps).expect("stage-2 fixture must validate");
 
@@ -10432,6 +10487,7 @@ mod tests
 			alt_int: crate::altitude_integrator::AltitudeIntegrator::OFF,
 			stress: crate::stress_opts::StressOpts::OFF,
 			ep_motor_lag: Vec::new(),
+			ep_plant: crate::plant_jitter::EpisodePlant::OFF,
 		};
 		let gpu_nopos = ev
 			.score(

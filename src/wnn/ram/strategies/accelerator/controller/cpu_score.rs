@@ -282,6 +282,9 @@ pub(crate) fn rollout_one(
 			{
 				sim.set_motor_lag(t);
 			}
+			// CTRL-89 (ABI 70): this episode's plant inertia scale + control latency (the models
+			// keep the nominal airframe). EpisodePlant::OFF ⇒ nothing is called.
+			s1.ep_plant.apply(&mut sim, ep);
 			// STAGE 2: horizontal start (displaced at rest; target = origin).
 			if s1.has_horizontal()
 			{
@@ -827,6 +830,12 @@ pub(crate) fn rollout_one(
 	// episode flies T_e drawn from its weather seed (train_lag_range.rs), the twin keeps
 	// motor_lag_s. None (default; every TEST / VAL / report call) ⇒ the fixed lag.
 	train_motor_lag_range = None,
+	// CTRL-89 (ABI 70), translation + weather only, default-inert: inertia_jitter = the
+	// per-episode JOINT plant-inertia half-width j (s_e ~ U(1 − j, 1 + j)); control_latency_ms
+	// = the per-episode command transport delay range (lo, hi) ms, quantized to dt — both
+	// drawn host-side from the episode's weather seed (plant_jitter.rs), identically for the
+	// rivals (score_classical_baseline). Every model stays nominal. 0.0 / None ⇒ ABI 68.
+	inertia_jitter = 0.0, control_latency_ms = None,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_controllers_cpu(
@@ -899,6 +908,8 @@ pub fn score_controllers_cpu(
 	payload_mass_scale: f32,
 	anchor_mass: Option<f32>,
 	train_motor_lag_range: Option<(f32, f32)>,
+	inertia_jitter: f32,
+	control_latency_ms: Option<(f32, f32)>,
 ) -> PyResult<Vec<Vec<f64>>>
 {
 	if controllers.is_empty()
@@ -929,6 +940,17 @@ pub fn score_controllers_cpu(
 	let ep_motor_lag = crate::train_lag_range::scorer_episode_lags(
 		train_motor_lag_range,
 		plant.actuator(motor_lag_s),
+		translation,
+		dist_enabled,
+		dist_seed,
+		num_episodes,
+		"score_controllers_cpu",
+	)
+	.map_err(verr)?;
+	let ep_plant = crate::plant_jitter::scorer_episode_plant(
+		inertia_jitter,
+		control_latency_ms,
+		dt,
 		translation,
 		dist_enabled,
 		dist_seed,
@@ -975,6 +997,7 @@ pub fn score_controllers_cpu(
 			alt_int,
 			stress,
 			ep_motor_lag,
+			ep_plant,
 		};
 		cfg
 			.validate(num_episodes)

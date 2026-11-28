@@ -362,6 +362,8 @@ from wnn.control.evaluator import (
 	calib_episode_config as _calib_ec,
 	train_asym_token,
 	train_lag_token,
+	train_jitter_token,
+	train_plant_token,
 	resolve_output_decode,
 )
 from wnn.control.arch_strategy import (
@@ -3458,6 +3460,36 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "the WNN's actuator twin keep the nominal --motor-lag-s, and TEST / VAL / "
 	                     "held-out fly --motor-lag-s. Needs --translation, a --disturbance and a "
 	                     "symmetric lag. Unset = the fixed lag (off).")
+	ap.add_argument("--train-inertia-jitter", type=float, default=None, metavar="J",
+	                help="CTRL-89 (ABI 70): the TRAINING inertia spread — every training episode and "
+	                     "every GA-search scoring episode flies the plant's whole inertia diagonal × s, "
+	                     "s ~ U(1-J, 1+J) (one joint draw from the episode's weather seed); every design "
+	                     "model (teachers, MPCOF/LQI, the cascade d-hat constants) keeps the nominal "
+	                     "inertia, and TEST / VAL / held-out fly the nominal plant. Needs --translation "
+	                     "and a --disturbance. Unset = the nominal inertia (off).")
+	ap.add_argument("--train-latency-range", type=float, nargs=2, default=None, metavar=("LO_MS", "HI_MS"),
+	                help="CTRL-89 (ABI 70): the TRAINING control-latency spread — every training and "
+	                     "GA-search episode's plant receives each command n steps late, n uniform over "
+	                     "the integer physics steps in [round(LO/dt), round(HI/dt)] (ms; <= 32 steps), "
+	                     "drawn from the episode's weather seed, the same for every controller and told "
+	                     "to none; TEST / VAL / held-out fly no added delay. Needs --translation and a "
+	                     "--disturbance. Unset = no added delay (off).")
+	ap.add_argument("--train-mass-jitter", type=float, default=None, metavar="M",
+	                help="ABI 70 (golden-cell training ranges): the TRAINING mass spread — every "
+	                     "training episode (DAgger rollouts + per-round eval, calibration sampler, "
+	                     "MEMORY recorder) and every GA-search scoring pool flies mass x (1 + U(-M, M)) "
+	                     "instead of --mass-jitter's; TEST / VAL stage-select / held-out keep "
+	                     "--mass-jitter. Needs --translation. Unset = --mass-jitter everywhere (off).")
+	ap.add_argument("--train-noise-scale", type=float, default=None, metavar="S",
+	                help="ABI 70: the TRAINING sensor-noise multiplier — training + GA-search pools fly "
+	                     "the --disturbance preset's gyro_sigma / gyro_bias_walk / accel_sigma x S "
+	                     "(the stress cell's noise axis); TEST / VAL / held-out keep the preset. Needs "
+	                     "a --disturbance. Unset = the preset (off).")
+	ap.add_argument("--train-motor-asym-range", type=float, nargs=2, default=None, metavar=("LO", "HI"),
+	                help="ABI 70: an ASYMMETRIC training wear spread — training + GA-search pools fly "
+	                     "per-motor factor U(LO, HI) x the preset base (spelled base x (LO+HI)/2 x "
+	                     "(1 +/- (HI-LO)/(HI+LO)), the stress cell's construction); TEST / VAL / held-out "
+	                     "keep the preset. Exclusive with --train-motor-asym-mag. Unset = off.")
 	ap.add_argument("--target-altitude", type=float, default=0.0,
 	                help="Stage 1: the altitude every episode holds (m).")
 	ap.add_argument("--reward-lambda-alt", type=float, default=None,
@@ -4877,11 +4909,25 @@ def episode_config_from_args(args) -> EpisodeConfig:
 		                      else float(args.train_motor_asym_mag)),
 		train_motor_lag_range=(None if getattr(args, "train_motor_lag_range", None) is None
 		                       else tuple(float(x) for x in args.train_motor_lag_range)),
+		# CTRL-89 (ABI 70): the training plant jitter (None = off, byte-identical).
+		train_inertia_jitter=(None if getattr(args, "train_inertia_jitter", None) is None
+		                      else float(args.train_inertia_jitter)),
+		train_latency_ms=(None if getattr(args, "train_latency_range", None) is None
+		                  else tuple(float(x) for x in args.train_latency_range)),
+		# ABI 70: the golden-cell training ranges (None = off, byte-identical).
+		train_mass_jitter=(None if getattr(args, "train_mass_jitter", None) is None
+		                   else float(args.train_mass_jitter)),
+		train_noise_scale=(None if getattr(args, "train_noise_scale", None) is None
+		                   else float(args.train_noise_scale)),
+		train_motor_asym_range=(None if getattr(args, "train_motor_asym_range", None) is None
+		                        else tuple(float(x) for x in args.train_motor_asym_range)),
 	)
 	try:
 		ec.validate_train_spread()
 	except ValueError as e:
-		raise SystemExit(f"--train-motor-asym-mag / --train-motor-lag-range: {e}")
+		raise SystemExit(f"--train-motor-asym-mag / --train-motor-lag-range / --train-inertia-jitter / "
+		                 f"--train-latency-range / --train-mass-jitter / --train-noise-scale / "
+		                 f"--train-motor-asym-range: {e}")
 	return ec
 
 
@@ -5122,8 +5168,11 @@ def main():
 		_lag = ec.train_motor_lag_range
 		print(f"[TRAIN-SPREAD] training + GA-search pools: wear ±{ec.train_asym_mag():.0%}, lag "
 		      + (f"T~U({_lag[0]:g}, {_lag[1]:g}) s per episode" if _lag else f"{ec.motor_lag_s:g} s fixed")
-		      + f" (teachers + actuator twin at {ec.motor_lag_s:g} s) | TEST / VAL / held-out: wear "
-		        f"±{ec.disturbance.motor_asym_mag:.0%}, lag {ec.motor_lag_s:g} s", flush=True)
+		      + f" (teachers + actuator twin at {ec.motor_lag_s:g} s)"
+		      + (f", plant jitter {train_jitter_token(ec)} (models nominal)" if train_jitter_token(ec) else "")
+		      + (f", ranges {train_plant_token(ec)}" if train_plant_token(ec) else "")
+		      + f" | TEST / VAL / held-out: wear "
+		        f"±{ec.disturbance.motor_asym_mag:.0%}, lag {ec.motor_lag_s:g} s, mass ±{ec.mass_jitter:g}", flush=True)
 
 	# Overactuated residual mode (Phase 2): TRUE-vehicle geometry + alloc baseline.
 	_geo_base = args.base_seed if args.base_seed is not None else args.seed
@@ -5180,7 +5229,9 @@ def main():
 	                         **block10_tokens(args), refine=refine_token(args),
 	                         actuator=actuator_token(args),
 	                         anchor="nominal" if getattr(args, "anchor_mass", "true") == "nominal" else "",
-	                         train_lag=train_lag_token(ec)).line())
+	                         train_lag=train_lag_token(ec),
+	                         train_jitter=train_jitter_token(ec),
+	                         train_plant=train_plant_token(ec)).line())
 	from wnn.control.provenance import env_header_line
 	from wnn.control.evaluator import eval_mode_from_env
 	print(env_header_line(eval_mode_from_env()), flush=True)
