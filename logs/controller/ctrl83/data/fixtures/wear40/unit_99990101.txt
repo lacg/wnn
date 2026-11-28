@@ -53,4 +53,5 @@ alt_pd_max_delta 0.25
 alt_integral 0.0
 motor_lag_down_s 0.0
 pwm_min 0.0
+payload_mass_scale 1.0
 expect_est_row 1.0 1.6461021434324044 0.6766262945384443 0.3874574045680823

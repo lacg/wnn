@@ -1,0 +1,30 @@
+{
+ "cell": "pay25",
+ "rows": {
+  "A": {
+   "stable": 100.0,
+   "err": 1.425,
+   "steady": 1.055,
+   "pos": 0.365,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "B": {
+   "stable": 100.0,
+   "err": 0.757,
+   "steady": 0.462,
+   "pos": 0.38,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "C": {
+   "stable": 100.0,
+   "err": 0.755,
+   "steady": 0.456,
+   "pos": 0.38,
+   "fails": 0,
+   "episodes": 3500
+  }
+ },
+ "abi_wheel": 66
+}

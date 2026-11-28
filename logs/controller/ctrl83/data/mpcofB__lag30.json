@@ -2,29 +2,29 @@
  "cell": "lag30",
  "rows": {
   "A": {
-   "stable": 98.94,
-   "err": 1.583,
-   "steady": 0.803,
-   "pos": 0.34,
-   "fails": 37,
+   "stable": 99.14,
+   "err": 1.454,
+   "steady": 0.723,
+   "pos": 0.341,
+   "fails": 30,
    "episodes": 3500
   },
   "B": {
    "stable": 99.91,
-   "err": 0.827,
-   "steady": 0.167,
-   "pos": 0.356,
+   "err": 0.761,
+   "steady": 0.164,
+   "pos": 0.357,
    "fails": 3,
    "episodes": 3500
   },
   "C": {
    "stable": 99.91,
-   "err": 0.826,
-   "steady": 0.166,
-   "pos": 0.356,
+   "err": 0.76,
+   "steady": 0.163,
+   "pos": 0.357,
    "fails": 3,
    "episodes": 3500
   }
  },
- "abi_wheel": 65
+ "abi_wheel": 66
 }

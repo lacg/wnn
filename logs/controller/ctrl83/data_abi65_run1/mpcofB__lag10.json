@@ -1,0 +1,30 @@
+{
+ "cell": "lag10",
+ "rows": {
+  "A": {
+   "stable": 100.0,
+   "err": 1.269,
+   "steady": 0.621,
+   "pos": 0.342,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "B": {
+   "stable": 100.0,
+   "err": 0.648,
+   "steady": 0.163,
+   "pos": 0.358,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "C": {
+   "stable": 100.0,
+   "err": 0.646,
+   "steady": 0.16,
+   "pos": 0.358,
+   "fails": 0,
+   "episodes": 3500
+  }
+ },
+ "abi_wheel": 65
+}

@@ -1,0 +1,30 @@
+{
+ "cell": "drop20",
+ "rows": {
+  "A": {
+   "stable": 100.0,
+   "err": 1.335,
+   "steady": 0.574,
+   "pos": 0.363,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "B": {
+   "stable": 100.0,
+   "err": 0.728,
+   "steady": 0.332,
+   "pos": 0.378,
+   "fails": 0,
+   "episodes": 3500
+  },
+  "C": {
+   "stable": 100.0,
+   "err": 0.726,
+   "steady": 0.321,
+   "pos": 0.378,
+   "fails": 0,
+   "episodes": 3500
+  }
+ },
+ "abi_wheel": 66
+}

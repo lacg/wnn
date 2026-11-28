@@ -3,28 +3,28 @@
  "rows": {
   "A": {
    "stable": 100.0,
-   "err": 1.269,
-   "steady": 0.621,
-   "pos": 0.342,
+   "err": 1.368,
+   "steady": 0.685,
+   "pos": 0.34,
    "fails": 0,
    "episodes": 3500
   },
   "B": {
    "stable": 100.0,
-   "err": 0.648,
-   "steady": 0.163,
-   "pos": 0.358,
+   "err": 0.717,
+   "steady": 0.165,
+   "pos": 0.357,
    "fails": 0,
    "episodes": 3500
   },
   "C": {
    "stable": 100.0,
-   "err": 0.646,
-   "steady": 0.16,
-   "pos": 0.358,
+   "err": 0.715,
+   "steady": 0.163,
+   "pos": 0.357,
    "fails": 0,
    "episodes": 3500
   }
  },
- "abi_wheel": 65
+ "abi_wheel": 66
 }

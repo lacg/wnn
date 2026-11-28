@@ -13,7 +13,7 @@ CTRL-69 — MPCOF rows A/B/C re-scored on the f32 (ABI 61/62) lineage, TEST (35 
 | C MPCOF>rate(h10) oracle-fed (bound, label law) | 100.00 | 0.702 | 0.182 | 0.357 | 0 | -0.508 | 35/0 | 0.097 | 0.085 | 0.095 | 0.00 / 0.00 | 0.00 / 0.00 |
 ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 516 filtered out; finished in 1.08s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 532 filtered out; finished in 1.09s
 
     Finished `release` profile [optimized] target(s) in 0.03s
      Running unittests lib.rs (/Volumes/20260401-WDBlack-SN850X-2TB/cargo-target/release/deps/ram_controller-ccaa6824e83c78eb)
