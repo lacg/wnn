@@ -1,0 +1,19 @@
+# CTRL-87 dry run 28/11/2026 (ABI 66, N87_DRY=1)
+## N87_ARMS=l2bnm
+DRY C-S2-d_wposx2_a66_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2bnm_full_s1  (reference C-S2-d_wposx2_a63_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2b_full_s1)
+> --anchor-mass > nominal 
+  validate l2b: OK 31337001 0.5 None dense_hold lag 0.2 None test-wear 0.2 | anchor true true | train per_episode:0.2 | eps:200,regime:flown,ladder:quantile,yaw:dense,tilt:dense,gyroz:dense,gyroxy:dense_hold | 5 35 99990101 99990135 | bccc19a0c051d13e
+  validate arm: OK 31337001 0.5 None dense_hold lag 0.2 None test-wear 0.2 | anchor nominal nominal | train per_episode:0.2 | eps:200,regime:flown,ladder:quantile,yaw:dense,tilt:dense,gyroz:dense,gyroxy:dense_hold | 5 35 99990101 99990135 | bccc19a0c051d13e
+DRY C-S2-d_wposx2_a66_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2bnm_full_s2  (reference C-S2-d_wposx2_a63_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2b_full_s2)
+> --anchor-mass > nominal 
+  validate l2b: OK 31337002 0.5 None dense_hold lag 0.2 None test-wear 0.2 | anchor true true | train per_episode:0.2 | eps:200,regime:flown,ladder:quantile,yaw:dense,tilt:dense,gyroz:dense,gyroxy:dense_hold | 5 35 99990101 99990135 | afcb0877a4d40562
+  validate arm: OK 31337002 0.5 None dense_hold lag 0.2 None test-wear 0.2 | anchor nominal nominal | train per_episode:0.2 | eps:200,regime:flown,ladder:quantile,yaw:dense,tilt:dense,gyroz:dense,gyroxy:dense_hold | 5 35 99990101 99990135 | afcb0877a4d40562
+DRY C-S2-d_wposx2_a66_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2bnm_full_s3  (reference C-S2-d_wposx2_a63_rf_c200_dc_biasin_ms01_P_both_L1_yld_gt_l2b_full_s3)
+> --anchor-mass > nominal 
+  validate l2b: OK 31337003 0.5 None dense_hold lag 0.2 None test-wear 0.2 | anchor true true | train per_episode:0.2 | eps:200,regime:flown,ladder:quantile,yaw:dense,tilt:dense,gyroz:dense,gyroxy:dense_hold | 5 35 99990101 99990135 | c6d2aed2cd41056c
+  validate arm: OK 31337003 0.5 None dense_hold lag 0.2 None test-wear 0.2 | anchor nominal nominal | train per_episode:0.2 | eps:200,regime:flown,ladder:quantile,yaw:dense,tilt:dense,gyroz:dense,gyroxy:dense_hold | 5 35 99990101 99990135 | c6d2aed2cd41056c
+DRY OK: 3 runs validated (seeds: 1 2 3; arms: l2bnm)
+## N87_ARMS='l2bnm l2bnmw' (tail)
+  validate l2b: OK 31337001 0.5 None dense_hold lag 0.2 None test-wear 0.2 | anchor true true | train per_episode:0.2 | eps:200,regime:flown,ladder:quantile,yaw:dense,tilt:dense,gyroz:dense,gyroxy:dense_hold | 5 35 99990101 99990135 | bccc19a0c051d13e
+  validate arm: OK 31337001 0.5 None dense_hold lag 0.2 None test-wear 0.2 | anchor nominal nominal | train per_episode:0.2 | eps:200,regime:flown,ladder:quantile,yaw:dense,tilt:dense,gyroz:dense,gyroxy:dense_hold | 5 35 99990101 99990135 | bccc19a0c051d13e
+N87 ABORT: l2bnmw: PENDING CODE — phased_ga has no --train-motor-asym-mag (training-only wear spread); see the prereg §Code gap
