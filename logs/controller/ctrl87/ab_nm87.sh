@@ -24,10 +24,11 @@
 # (ctrl83/run_grid.py --controllers <arm>_sN --no-row-b); its nom cell re-checks the logged END (gate G4). A readout
 # failure is logged ('N87 STRESS FAIL') and does NOT stop the block.
 # Dry run: N87_DRY=1 prints, per arm, the token diff vs its l2b argv + both resolver lines; flies nothing, writes nothing.
-# N87_ROOT / N87_PP (dry runs only: a worktree + an unpacked, never-installed wheel) default to the live checkout.
+# N87_ROOT / N87_PP / N87_L (dry runs only: a worktree, an unpacked never-installed wheel, the live run logs read-only)
+# default to the live checkout.
 ROOT=${N87_ROOT:-/Users/lacg/wnn}
 cd $ROOT || exit 1
-L=logs/controller/ctrl48
+L=${N87_L:-logs/controller/ctrl48}
 RUNS=$L/runs.log
 VENV=/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv
 ABI=68
