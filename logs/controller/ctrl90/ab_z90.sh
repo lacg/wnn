@@ -162,7 +162,7 @@ for s in $SEEDS; do
 		if [ "$DRY" = 1 ]; then
 			echo "DRY $tag  (reference $(ref_of $s))"
 			diff <(echo "$CLINE" | tr ' ' '\n') <(echo "$ARGV" | tr ' ' '\n') | grep '^[<>]' | grep -v -- "_full_s$s" | tr '\n' ' '; echo
-			echo "  validate l2b: $VAL_REF"
+			echo "  validate ref (l2bnmw): $VAL_REF"
 			echo "  validate arm: $VAL_ARM"
 		fi
 	done
